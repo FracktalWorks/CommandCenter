@@ -34,6 +34,7 @@ import {
   Plus,
   RefreshCw,
   ShieldOff,
+  Trash2,
   UserMinus,
   UserPlus,
   Users,
@@ -43,7 +44,7 @@ import FilterPills from "@/components/FilterPills";
 import Tabs from "@/components/Tabs";
 import { useAccess } from "@/components/AccessProvider";
 import { rowActions } from "./selfGuard";
-import type { AccessRequest, Member, Role } from "./types";
+import type { AccessRequest, Member, PurgeResult, Role } from "./types";
 
 const STATUS_STYLES: Record<Member["status"], string> = {
   active: "text-success",
@@ -67,6 +68,66 @@ const STATUS_LABELS: Record<Member["status"], string> = {
   suspended: "suspended",
   removed: "removed",
 };
+
+/**
+ * Human wording for the gateway's purge count keys (`members._PURGE_DELETES` /
+ * `_PURGE_KEEPS`).
+ *
+ * Unlabelled keys fall back to their own name with the underscores knocked
+ * out, so a table added on the gateway shows up here — badly worded, but
+ * visible — instead of disappearing from the report. Silence is the failure
+ * mode that matters for an irreversible action.
+ */
+const PURGE_LABELS: Record<string, string> = {
+  member_record: "member record",
+  role_grants: "role grant",
+  permission_overrides: "permission override",
+  group_memberships: "team membership",
+  room_participations: "room membership",
+  app_grants: "app grant",
+  app_tool_grants: "remembered tool approval",
+  email_accounts: "connected mailbox",
+  whatsapp_accounts: "connected WhatsApp number",
+  task_accounts: "connected task workspace",
+  private_chat_sessions: "private chat session",
+  sign_in_requests: "sign-in request",
+  audit_entries: "app audit entry",
+  audit_events: "audit event",
+  agent_runs: "agent run trace",
+  shared_rooms: "shared room",
+  apps: "app",
+  workflows: "workflow",
+  tasks: "task",
+  meetings: "meeting",
+};
+
+function purgeLabel(key: string, n: number): string {
+  const base = PURGE_LABELS[key] ?? key.replace(/_/g, " ");
+  return `${n} ${base}${n === 1 ? "" : "s"}`;
+}
+
+/** `{a: 2, b: 0}` → `["2 as"]` — zero rows are not news. */
+function purgeParts(counts: Record<string, number>): string[] {
+  return Object.entries(counts)
+    .filter(([, n]) => n > 0)
+    .map(([key, n]) => purgeLabel(key, n));
+}
+
+/**
+ * One line an admin can read after the fact: what was destroyed, what stayed.
+ *
+ * Both halves, always — "3 sessions and 1 mailbox deleted" on its own reads
+ * like the whole database went.
+ */
+function summarisePurge(result: PurgeResult): string {
+  const gone = purgeParts(result.deleted);
+  const stayed = purgeParts(result.kept);
+  return (
+    `${result.email} deleted permanently — ` +
+    `${gone.length ? gone.join(", ") : "nothing"} removed; ` +
+    `${stayed.length ? stayed.join(", ") : "nothing"} kept.`
+  );
+}
 
 /** Absolute date + time; a knock at 16:21 yesterday is a fact, not "a while ago". */
 function when(iso: string): string {
@@ -116,6 +177,13 @@ export default function MembersPage() {
    * goes through a step that names them (N7 done-when 6).
    */
   const [removing, setRemoving] = useState<Member | null>(null);
+  /**
+   * The person a **permanent deletion** is being confirmed for (N8). Separate
+   * state from `removing` on purpose: two destructive actions sharing one
+   * "which member" slot is one refactor away from the dialog and the fetch
+   * disagreeing about which one was clicked.
+   */
+  const [purging, setPurging] = useState<Member | null>(null);
 
   /**
    * Who is reading this screen. `/auth/me` returns it and the shell already
@@ -228,6 +296,37 @@ export default function MembersPage() {
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
       setError(body.detail ?? "Could not remove this member.");
+    }
+    await load();
+    await refreshAccess();
+  };
+
+  /**
+   * Delete somebody permanently: `DELETE /admin/members/{email}/purge` (N8).
+   *
+   * The identity, every credential and access grant, and their private
+   * sessions are destroyed in one transaction; what they authored and the
+   * audit trail are kept. The gateway answers with a count per table, and
+   * **those counts are shown** — a purge that reports only "ok" leaves the
+   * admin no way to tell one that removed a live OAuth token from one that
+   * matched nothing.
+   *
+   * Same two rules as `removeMember`: the refusal is surfaced (the guard is
+   * the server's), and there is no early return, because a refusal is about
+   * the row that was clicked and that row is the stale one.
+   */
+  const purgeMember = async (email: string) => {
+    setError("");
+    setNotice("");
+    const res = await fetch(
+      `/api/admin/members/${encodeURIComponent(email)}/purge`,
+      { method: "DELETE" }
+    );
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      setError(body.detail ?? "Could not delete this member.");
+    } else {
+      setNotice(summarisePurge(body as PurgeResult));
     }
     await load();
     await refreshAccess();
@@ -425,6 +524,7 @@ export default function MembersPage() {
                 viewerEmail={viewerEmail}
                 setStatus={setStatus}
                 onRemove={setRemoving}
+                onPurge={setPurging}
               />
             ))}
           </div>
@@ -453,6 +553,18 @@ export default function MembersPage() {
           }}
         />
       )}
+
+      {purging && (
+        <PurgeDialog
+          member={purging}
+          onClose={() => setPurging(null)}
+          onConfirm={async () => {
+            const target = purging;
+            setPurging(null);
+            await purgeMember(target.email);
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -473,6 +585,7 @@ function MemberRow({
   viewerEmail,
   setStatus,
   onRemove,
+  onPurge,
 }: {
   member: Member;
   roles: Role[];
@@ -481,6 +594,8 @@ function MemberRow({
   setStatus: (email: string, status: Member["status"]) => Promise<void>;
   /** Opens the confirmation; the DELETE is fired from there, never here. */
   onRemove: (member: Member) => void;
+  /** Likewise for the permanent one — this row never issues either request. */
+  onPurge: (member: Member) => void;
 }) {
   const actions = rowActions(viewerEmail, member);
 
@@ -577,6 +692,19 @@ function MemberRow({
             Remove
           </button>
         )}
+        {/* Visually distinct from Remove on purpose: Remove is an outline, this
+            is filled. They sit next to each other and only one of them can be
+            undone. */}
+        {actions.canPurge && (
+          <button
+            onClick={() => onPurge(member)}
+            title="Delete this person and every credential and access grant they hold. Their work and the audit trail are kept."
+            className="flex items-center gap-1 rounded-lg bg-destructive px-2.5 py-1.5 text-[11px] font-medium text-destructive-foreground tech-transition hover:opacity-90"
+          >
+            <Trash2 size={12} />
+            Delete permanently
+          </button>
+        )}
       </div>
     </div>
   );
@@ -638,6 +766,116 @@ function RemoveDialog({
           >
             {busy && <Loader2 size={14} className="animate-spin" />}
             Remove
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Confirm a **permanent deletion**, by name, and say what it costs (N8).
+ *
+ * "Are you sure?" is not informed consent for an irreversible act. Two rules
+ * shaped this copy:
+ *
+ * 1. **Both halves are named.** The deleted list alone reads as though the
+ *    whole database goes; the kept list is what makes the rest clickable, and
+ *    the audit trail is the item an admin most needs to know survives.
+ * 2. **The expensive items are named specifically**, not folded into "their
+ *    data". A connected mailbox takes everything synced from it, because the
+ *    schema cascades — an admin who did not expect that should find out here,
+ *    not from the count afterwards.
+ *
+ * The address has to be typed. It is the one action on this screen with no way
+ * back, and it sits next to a button (Remove) that looks similar and is
+ * reversible.
+ */
+function PurgeDialog({
+  member,
+  onClose,
+  onConfirm,
+}: {
+  member: Member;
+  onClose: () => void;
+  onConfirm: () => Promise<void>;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [typed, setTyped] = useState("");
+  const confirmed = typed.trim().toLowerCase() === member.email.toLowerCase();
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-black/60" onClick={onClose} />
+      <div className="relative w-full max-w-md rounded-xl border border-destructive/40 bg-card p-5 shadow-2xl">
+        <h2 className="flex items-center gap-2 text-sm font-semibold text-foreground">
+          <Trash2 size={15} className="text-destructive" />
+          Delete {member.display_name || member.email} permanently?
+        </h2>
+        <p className="mt-2 text-xs text-muted-foreground">
+          This cannot be undone.{" "}
+          <span className="font-mono text-foreground">{member.email}</span> stops
+          existing as a member; there is no row left to re-activate.
+        </p>
+
+        <p className="mt-3 text-[11px] font-medium text-destructive">Deleted</p>
+        <ul className="mt-1 list-disc space-y-0.5 pl-4 text-[11px] text-muted-foreground">
+          <li>Their member record, role grants and permission overrides</li>
+          <li>Team and room memberships, and app access grants</li>
+          <li>
+            Connected accounts and their stored credentials — mailbox, WhatsApp
+            number, task workspace. Everything synced from a mailbox goes with
+            it.
+          </li>
+          <li>Their private chat sessions, and any sign-in request on record</li>
+        </ul>
+
+        <p className="mt-3 text-[11px] font-medium text-success">Kept</p>
+        <ul className="mt-1 list-disc space-y-0.5 pl-4 text-[11px] text-muted-foreground">
+          <li>
+            The audit trail — every entry naming them stays, deliberately. An
+            audit log that disappears with the person is not an audit log.
+          </li>
+          <li>Apps, workflows, tasks and meetings they authored</li>
+          <li>
+            Shared rooms they started, so other participants keep the transcript
+          </li>
+        </ul>
+
+        <p className="mt-3 text-xs text-muted-foreground">
+          If you only want to end their access, use{" "}
+          <span className="text-foreground">Remove</span> — that one is
+          recoverable.
+        </p>
+
+        <label className="mt-4 mb-1 block text-[11px] font-medium text-muted-foreground">
+          Type <span className="font-mono text-foreground">{member.email}</span>{" "}
+          to confirm
+        </label>
+        <input
+          autoFocus
+          value={typed}
+          onChange={(e) => setTyped(e.target.value)}
+          className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground outline-none focus:border-destructive/50"
+        />
+
+        <div className="mt-5 flex justify-end gap-2">
+          <button
+            onClick={onClose}
+            className="rounded-lg border border-border px-4 py-2 text-sm text-muted-foreground tech-transition hover:text-foreground"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={() => {
+              setBusy(true);
+              void onConfirm();
+            }}
+            disabled={busy || !confirmed}
+            className="flex items-center gap-1.5 rounded-lg bg-destructive px-4 py-2 text-sm font-medium text-destructive-foreground tech-transition hover:opacity-90 disabled:opacity-50"
+          >
+            {busy && <Loader2 size={14} className="animate-spin" />}
+            Delete permanently
           </button>
         </div>
       </div>

@@ -14,9 +14,32 @@ touches Postgres.
 """
 from __future__ import annotations
 
+import re
 from typing import Any, ClassVar
 
 ORG = "00000000-0000-0000-0000-00000000000a"
+
+# ── Person-scoped counts and deletes (members.purge_member) ─────────────────
+#
+# The purge addresses twenty-odd tables with two statements each, built from
+# one `where` clause. Rather than a branch per table — twenty mirrors, twenty
+# chances to drift — the branch below reads the **real statement text** to
+# decide which seeded rows it addresses: which column the clause names, which
+# parameter it binds it to, and whether it filters on `visibility`. A route
+# that starts scoping to the wrong column, or drops the `visibility` filter,
+# changes what these return. That is a weaker mirror than a hand-written copy,
+# on purpose.
+
+#: ``SELECT count(*) FROM <table> WHERE`` / ``DELETE FROM <table> WHERE``, and
+#: nothing with a join or an alias (``FROM user_role ur JOIN …`` must fall
+#: through to `owner_count`'s own branch).
+_PERSON_STMT = re.compile(r"^(SELECT count\(\*\) FROM|DELETE FROM) (\w+) WHERE ")
+#: ``lower(<col>) = :email`` / ``lower(<col>) = :actor``
+_PERSON_ADDR = re.compile(r"lower\((\w+)\) = :(email|actor)")
+#: ``<col> = CAST(:uid AS uuid)``
+_PERSON_UID = re.compile(r"(\w+) = CAST\(:uid AS uuid\)")
+#: ``visibility = 'private'`` / ``visibility <> 'private'``
+_PERSON_VIS = re.compile(r"visibility (=|<>) 'private'")
 
 
 class _Scalars:
@@ -88,6 +111,14 @@ class _FakeDB:
     here is a genuine check on it. The discriminator to keep in mind there is
     that both of those raise **409**, so a test must assert the detail text or
     what was and was not written, never the bare status code.
+
+    The person-scoped branch at the bottom (``members.purge_member``) is the
+    least mirror-like part of this class: it reads the **statement text** to
+    decide which seeded rows a clause addresses, rather than restating the
+    predicate in Python. It still cannot prove *which tables* the purge names
+    or that it never names ``app_audit`` — those live in the route's constants
+    and are pinned structurally in
+    ``tests/unit/test_admin_member_purge.py``.
     """
 
     ROLE_RANKS: ClassVar[dict[str, int]] = {
@@ -111,10 +142,80 @@ class _FakeDB:
         self.users: dict[str, dict[str, Any]] = {}          # id → row
         self.user_roles: dict[str, list[str]] = {}          # uid → [slug]
         self.requests: dict[str, dict[str, Any]] = {}       # lower(email) → row
+        #: Everything else a person owns — one list per table name, rows as
+        #: plain dicts carrying whatever columns the purge's clauses name.
+        #: `user_role`, `app_user` and `access_request` are NOT here: they are
+        #: modelled above and the purge branch reads and writes those, so a
+        #: test sees one world rather than two.
+        self.rows: dict[str, list[dict[str, Any]]] = {}
         self.committed = 0
         self.invalidated: list[str] = []
+        #: Audit calls, in order, as ``(action, target)``. Ordered because the
+        #: purge must record BEFORE it commits, and a set cannot show that.
         self.audit: list[tuple[str, str]] = []
+        #: The same calls with their keyword payload, for the writes whose
+        #: audit entry has to carry more than "it happened" — a purge that
+        #: records no counts leaves nothing to reconcile against.
+        self.audit_payloads: list[dict[str, Any]] = []
         self.statements: list[str] = []
+        #: ``len(self.audit)`` at each ``commit()`` — how a test proves the
+        #: audit entry was written first rather than merely written.
+        self.audit_at_commit: list[int] = []
+
+    # helpers -----------------------------------------------------------
+    def seed_rows(self, table: str, *rows: dict[str, Any]) -> None:
+        """Seed person-scoped rows for a table the purge addresses."""
+        self.rows.setdefault(table, []).extend(rows)
+
+    def _person_rows(self, s: str, table: str, p: dict) -> list[dict[str, Any]]:
+        """The rows in `table` that THIS statement addresses.
+
+        Decided from the statement text: which column the clause names, which
+        parameter it is compared against, and the optional `visibility`
+        filter. Nothing here restates the route's predicate in Python, so a
+        clause that changes column or drops a filter changes the answer.
+        """
+        if table == "user_role":
+            return [{"user_id": p.get("uid"), "slug": slug}
+                    for slug in self.user_roles.get(p.get("uid", ""), [])]
+        if table == "app_user":
+            row = self.users.get(p.get("uid", ""))
+            return [row] if row else []
+        if table == "access_request":
+            want = str(p.get("email", "")).lower()
+            return [r for r in self.requests.values()
+                    if r["email"].lower() == want]
+
+        found = list(self.rows.get(table, []))
+        addr = _PERSON_ADDR.search(s)
+        if addr:
+            col, key = addr.group(1), addr.group(2)
+            want = str(p[key]).lower()
+            found = [r for r in found if str(r.get(col, "")).lower() == want]
+        uid = _PERSON_UID.search(s)
+        if uid:
+            col = uid.group(1)
+            found = [r for r in found if str(r.get(col, "")) == p["uid"]]
+        vis = _PERSON_VIS.search(s)
+        if vis:
+            wants_private = vis.group(1) == "="
+            found = [
+                r for r in found
+                if (r.get("visibility", "private") == "private") is wants_private
+            ]
+        return found
+
+    def _person_delete(self, table: str, matched: list[dict[str, Any]]) -> None:
+        if table == "app_user":
+            for row in matched:
+                self.users.pop(row["id"], None)
+                self.user_roles.pop(row["id"], None)
+        elif table == "access_request":
+            for row in matched:
+                self.requests.pop(row["email"].lower(), None)
+        else:
+            keep = [r for r in self.rows.get(table, []) if r not in matched]
+            self.rows[table] = keep
 
     # helpers -----------------------------------------------------------
     def seed_user(self, uid: str, email: str, *, status: str = "active",
@@ -150,6 +251,7 @@ class _FakeDB:
 
     async def commit(self) -> None:
         self.committed += 1
+        self.audit_at_commit.append(len(self.audit))
 
     async def execute(  # noqa: C901 — one branch per statement, by design
         self, sql: Any, params: dict | None = None
@@ -264,6 +366,23 @@ class _FakeDB:
                 for x in sorted(slugs, key=lambda y: self.ROLE_RANKS.get(y, 999))
             ])
 
+        # members.purge_member — ONE branch for every person-scoped count and
+        # delete, driven by the statement text (see the module header).
+        #
+        # Positioned here on purpose: **after** the specific branches whose
+        # statements it would otherwise swallow (`set_roles`' own DELETE FROM
+        # user_role) and **before** the `FROM access_request` reader, which
+        # matches on a substring and would answer a `SELECT count(*) FROM
+        # access_request` with a request ROW.
+        stmt = _PERSON_STMT.match(s)
+        if stmt:
+            table = stmt.group(2)
+            matched = self._person_rows(s, table, p)
+            if stmt.group(1).startswith("SELECT"):
+                return _Rows([{"count": len(matched)}])
+            self._person_delete(table, matched)
+            return _Rows([], rowcount=len(matched))
+
         if "UPDATE access_request SET" in s:
             row = self.requests.get(str(p["email"]).lower())
             # Mirrors `_DECIDE_SQL`'s `AND status = ANY(:allowed)` — the
@@ -305,7 +424,8 @@ def bind_admin_db(monkeypatch: Any, fake: _FakeDB, modules: tuple[Any, ...]) -> 
             module, "invalidate_for",
             lambda *e: fake.invalidated.extend(x for x in e if x),
         )
-        monkeypatch.setattr(
-            module, "record_admin_change",
-            lambda actor, action, target, **kw: fake.audit.append((action, target)),
-        )
+        def _record(actor: str, action: str, target: str, **kw: Any) -> None:
+            fake.audit.append((action, target))
+            fake.audit_payloads.append(kw)
+
+        monkeypatch.setattr(module, "record_admin_change", _record)

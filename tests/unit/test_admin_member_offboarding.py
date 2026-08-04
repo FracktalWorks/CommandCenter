@@ -239,21 +239,26 @@ async def test_removing_a_colleague_still_drops_their_row_and_their_roles(
     assert "priya@fracktal.in" in db.invalidated
 
 
-def test_both_off_boarding_doors_call_the_one_shared_guard() -> None:
-    """dw1, asserted against the *router* rather than against two names.
+def test_every_off_boarding_door_calls_the_one_shared_guard() -> None:
+    """dw1, asserted against the *router* rather than against a list of names.
 
-    The doors are found by asking the app which endpoints answer PATCH and
-    DELETE on ``/admin/members/{email}``, so a third one added later is
-    included automatically. Each must call the shared helper and must NOT
-    carry a comparison of its own: the version of this check that lived inside
-    `remove_member` alone is precisely why the other door never grew one.
+    Each door must call the shared helper and must NOT carry a comparison of
+    its own: the version of this check that lived inside `remove_member` alone
+    is precisely why the other door never grew one.
 
-    ⚠️ "Found automatically" was an over-claim in this test's first version:
-    it looks at **one path**, so the third door — ``PUT
-    /admin/members/{email}/roles``, which reaches the same lockout without
-    touching `status` — was invisible to it. That door is now included below,
-    with its own guard, and its absence is the reason to distrust "the test
-    finds them for us" as a substitute for enumerating them.
+    ⚠️ **The doors are ENUMERATED here, deliberately, and the enumeration is
+    the maintenance cost.** This test's first version claimed "a third one
+    added later is included automatically" — it looked at a single path, so
+    ``PUT /admin/members/{email}/roles`` was invisible to it. The claim was
+    retracted rather than repaired, and then N8 added a fourth door
+    (``DELETE …/purge``) on a *fifth* path, which would have been invisible
+    again. So: when you add a route that can take a caller's own access away,
+    add it to ``DOORS`` below. Nothing will do it for you.
+
+    The fifth route that reaches this outcome — ``PUT …/overrides`` — is
+    covered by its own inline comparison and is **not** listed, because it does
+    not go through the helper. That is recorded as a known inconsistency in
+    ``colleague_onboarding.md`` §2 Step 5, not asserted as correct here.
     """
     from gateway.routes.admin._common import (
         assert_not_self_demotion,
@@ -261,32 +266,27 @@ def test_both_off_boarding_doors_call_the_one_shared_guard() -> None:
         router,
     )
 
-    status_doors = [
-        route
-        for route in router.routes
-        if getattr(route, "path", "") == "/admin/members/{email}"
-        and {"PATCH", "DELETE"} & (getattr(route, "methods", set()) or set())
+    #: ``(path, method, the guard that door must call)``.
+    DOORS = [
+        ("/admin/members/{email}", "PATCH", "assert_not_self_lockout("),
+        ("/admin/members/{email}", "DELETE", "assert_not_self_lockout("),
+        ("/admin/members/{email}/purge", "DELETE", "assert_not_self_lockout("),
+        ("/admin/members/{email}/roles", "PUT", "assert_not_self_demotion("),
     ]
-    roles_door = [
-        route
-        for route in router.routes
-        if getattr(route, "path", "") == "/admin/members/{email}/roles"
-        and "PUT" in (getattr(route, "methods", set()) or set())
-    ]
-    assert len(status_doors) == 2, (
-        f"expected PATCH + DELETE, found {len(status_doors)}"
-    )
-    assert len(roles_door) == 1, "the roles door is missing"
 
-    expected = {id(r): "assert_not_self_lockout(" for r in status_doors}
-    expected.update({id(r): "assert_not_self_demotion(" for r in roles_door})
-
-    for route in status_doors + roles_door:
-        name = f"{sorted(route.methods)} {route.path}"
+    for path, method, guard in DOORS:
+        found = [
+            route
+            for route in router.routes
+            if getattr(route, "path", "") == path
+            and method in (getattr(route, "methods", set()) or set())
+        ]
+        assert len(found) == 1, f"expected exactly one {method} {path}"
+        route = found[0]
+        name = f"{method} {path}"
         src = inspect.getsource(route.endpoint)
-        assert expected[id(route)] in src, (
-            f"{name} does not call the shared self-guard "
-            f"({expected[id(route)][:-1]})"
+        assert guard in src, (
+            f"{name} does not call the shared self-guard ({guard[:-1]})"
         )
         for line in src.splitlines():
             if "admin.email" in line and "_log" not in line:
@@ -300,6 +300,35 @@ def test_both_off_boarding_doors_call_the_one_shared_guard() -> None:
         "the guard reads nothing from the database; keeping it synchronous is "
         "what makes it cheap to call from every door"
     )
+    assert inspect.iscoroutinefunction(assert_not_self_demotion) is True, (
+        "the roles door's guard reads the role permissions from the database"
+    )
+
+
+async def test_purging_yourself_is_refused_by_the_same_guard(db: _FakeDB) -> None:
+    """The fourth door, behaviourally — and it is the most destructive one.
+
+    Two owners, so `assert_owner_survives` has nothing to say and the refusal
+    can only be the self-guard. Discriminated by wording, because both guards
+    on this route answer 409 and asserting the bare code would pass against
+    either.
+    """
+    from gateway.routes.admin.members import purge_member
+
+    _second_owner(db)
+
+    with pytest.raises(HTTPException) as exc:
+        await purge_member("owner@fracktal.in", admin=OWNER)
+
+    assert exc.value.status_code == 409
+    detail = str(exc.value.detail)
+    assert "cannot permanently delete yourself" in detail
+    assert "no owner" not in detail, (
+        "the refusal came from assert_owner_survives, not from the self-guard"
+    )
+    assert db.users["u-owner"]["status"] == "active"
+    assert db.user_roles["u-owner"] == ["owner"]
+    _nothing_was_written(db)
 
 
 # ════════════════════════════════════════════════════════════════════════════

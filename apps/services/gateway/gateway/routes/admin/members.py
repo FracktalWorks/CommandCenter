@@ -11,6 +11,7 @@ trusting the model, so provenance is part of the API, not a debugging aid.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 
 from acb_auth import (
@@ -32,6 +33,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import text
 
 from gateway.routes.admin._common import (
+    PURGE_OUTCOME,
     _iso,
     _log,
     assert_not_self_demotion,
@@ -302,6 +304,253 @@ async def remove_member(
     record_admin_change(admin.email, "org.member_removed",
                         f"user:{member['email']}")
     return {"status": "removed", "email": member["email"]}
+
+
+# ── Permanent deletion ──────────────────────────────────────────────────────
+#
+# The decision this section implements, so it is not re-litigated by whoever
+# reads it next: **purge the person, keep their work.** Delete the identity and
+# everything that exists only to grant them access or to let the platform act
+# as them; leave what they authored readable. Purging their content too was
+# considered and rejected — it is unrecoverable, and in this schema it silently
+# takes shared artefacts (a room with other participants, an app other people
+# use) along with the private ones.
+#
+# ⚠️ **"Delete the identity" cannot mean "erase the address everywhere."** The
+# email address IS the join key across ~50 tables — `apps.owner_email`,
+# `gtd_items.user_id`, `workflows.owner_email`, `app_audit.user_email` — so
+# scrubbing it is not a redaction, it is a deletion of the rows it keys. That
+# is why nothing here is *anonymised*: an anonymised `owner_email` would not
+# hide a person, it would orphan their apps. What a purge deletes is the
+# `app_user` row (the org's member record) and every credential, grant, and
+# private session keyed to it.
+
+@dataclass(frozen=True)
+class _PersonRows:
+    """One table's worth of rows that belong to one person.
+
+    ``count_sql`` and ``delete_sql`` are derived from the **same** ``where``
+    clause, which is the only reason the counts in the response can be trusted:
+    the number reported and the rows destroyed are the same predicate by
+    construction, not by two statements that were written to agree.
+    """
+
+    #: How the count appears in the API response, and in the UI copy.
+    key: str
+    table: str
+    #: Bound against ``:uid`` (``app_user.id``), ``:email`` (lower-cased
+    #: address) and/or ``:actor`` (``user:<address>``, the audit-log form).
+    where: str
+
+    @property
+    def count_sql(self) -> str:
+        return f"SELECT count(*) FROM {self.table} WHERE {self.where}"
+
+    @property
+    def delete_sql(self) -> str:
+        return f"DELETE FROM {self.table} WHERE {self.where}"
+
+
+#: **Deleted.** Enumerated from `infra/postgres/` by grepping for every column
+#: that names a person — FKs to `app_user(id)` and the email-string columns
+#: (`owner_email`, `user_email`, `user_id`, `subject`, `*_by`) — not from
+#: memory. Ordered children-before-parent so the statements read as the
+#: dependency graph even though every count is taken first.
+#:
+#: Three of these rows own subtrees that go with them, by FKs the schema
+#: already declares `ON DELETE CASCADE`:
+#:
+#: * `email_accounts` → email_messages (→ email_attachments), email_folders,
+#:   email_sync_log, email_rules, email_senders, email_cold_senders,
+#:   email_contacts, email_newsletters, the assistant settings/voice/knowledge
+#:   rows, learned + rule patterns, reply tracking. The whole mirrored mailbox.
+#: * `wa_accounts` → wa_chats, wa_messages, wa_media, wa_contacts, templates,
+#:   categories, commitments, drafts, group summaries, saved replies, labels,
+#:   avatars.
+#: * `task_accounts` → the SYNCED half of `gtd_projects`/`gtd_items` (rows with
+#:   `account_id` set). LOCAL rows carry `account_id IS NULL` and survive.
+#:
+#: Those three carry `credentials_encrypted NOT NULL` — the live OAuth/API
+#: tokens. The credential cannot be deleted without the row, and leaving a
+#: departed colleague's tokens in the database is the hole a purge exists to
+#: close. The mirrors are mirrors: the source systems stay authoritative
+#: (root AGENTS.md, global constraint 8). The response reports every count so
+#: none of it is silent, and the UI names it before the admin confirms.
+_PURGE_DELETES: tuple[_PersonRows, ...] = (
+    # Access grants keyed to app_user.id. All three declare ON DELETE CASCADE,
+    # so deleting the member row would take them anyway — they are deleted
+    # explicitly so the counts are real and so the purge does not depend on a
+    # cascade a later migration could drop.
+    _PersonRows("role_grants", "user_role", "user_id = CAST(:uid AS uuid)"),
+    _PersonRows("permission_overrides", "user_permission_override",
+                "user_id = CAST(:uid AS uuid)"),
+    _PersonRows("group_memberships", "org_group_member",
+                "user_id = CAST(:uid AS uuid)"),
+    # Access grants keyed by address. `chat_session_participant.subject` and
+    # `app_grants.subject` share one vocabulary (email | group:<slug> | org),
+    # so an address matches exactly the person's own rows.
+    _PersonRows("room_participations", "chat_session_participant",
+                "lower(subject) = :email"),
+    _PersonRows("app_grants", "app_grants", "lower(subject) = :email"),
+    # A remembered "always allow this app to use this tool" confirm is a
+    # standing authorization to act as them, so it goes with the credentials.
+    _PersonRows("app_tool_grants", "app_tool_grants",
+                "lower(user_email) = :email"),
+    # Credentials.
+    _PersonRows("email_accounts", "email_accounts", "lower(user_id) = :email"),
+    _PersonRows("whatsapp_accounts", "wa_accounts", "lower(user_id) = :email"),
+    _PersonRows("task_accounts", "task_accounts", "lower(user_id) = :email"),
+    # Their own private conversations. ⚠️ `visibility = 'private'` is
+    # load-bearing and is the line the rejected "purge their content too"
+    # option would have crossed: a `people`/`org` room they created has OTHER
+    # participants, and deleting it cascades `chat_message` — one person's
+    # off-boarding would silently take a shared transcript with it. Shared
+    # rooms are kept and counted as kept; only their participant row goes.
+    _PersonRows("private_chat_sessions", "chat_session",
+                "lower(user_id) = :email AND visibility = 'private'"),
+    # The knock. A decided request is normally kept as the record of the
+    # decision, but a purged person must be a stranger again: leaving an
+    # `approved` row for somebody with no `app_user` row means their next
+    # sign-in bumps a row the Requests tab never renders (it shows `pending`
+    # only) — the invisible lockout §6 exists to end.
+    _PersonRows("sign_in_requests", "access_request", "lower(email) = :email"),
+    # The identity itself. LAST.
+    _PersonRows("member_record", "app_user", "id = CAST(:uid AS uuid)"),
+)
+
+#: **Kept**, and counted so the admin sees what survived rather than inferring
+#: it. The first three are the audit trail: **an audit trail that disappears
+#: when you delete the person is not an audit trail**, and `app_audit` says so
+#: in its own schema — it carries `app_id UUID` with *no* FK, commented "audit
+#: survives hard delete". The rest is authored work, kept per the decision
+#: above. Nothing in this table is anonymised; see the section header for why.
+_PURGE_KEEPS: tuple[_PersonRows, ...] = (
+    _PersonRows("audit_entries", "app_audit", "lower(user_email) = :email"),
+    _PersonRows("audit_events", "audit_event", "lower(actor) = :actor"),
+    _PersonRows("agent_runs", "agent_run", "lower(user_id) = :email"),
+    _PersonRows("shared_rooms", "chat_session",
+                "lower(user_id) = :email AND visibility <> 'private'"),
+    _PersonRows("apps", "apps", "lower(owner_email) = :email"),
+    _PersonRows("workflows", "workflows", "lower(owner_email) = :email"),
+    _PersonRows("tasks", "gtd_items", "lower(user_id) = :email"),
+    _PersonRows("meetings", "meeting", "lower(owner_email) = :email"),
+)
+
+
+def _purge_params(rows: _PersonRows, *, uid: str, email: str) -> dict[str, Any]:
+    """Bind only the placeholders this clause actually names."""
+    params: dict[str, Any] = {}
+    if ":uid" in rows.where:
+        params["uid"] = uid
+    if ":email" in rows.where:
+        params["email"] = email
+    if ":actor" in rows.where:
+        # How `record_admin_change` writes an actor, so the count matches the
+        # rows this package itself appends.
+        params["actor"] = f"user:{email}"
+    return params
+
+
+class PurgeResult(BaseModel):
+    """What a purge actually did, per table.
+
+    A destructive action that answers ``{"status": "ok"}`` is unauditable: the
+    admin has no way to tell a purge that removed three sessions and a live
+    OAuth token from one that matched nothing. Both halves are reported —
+    `deleted` because it is irreversible, `kept` because "your audit trail and
+    their apps are still there" is the reassurance that makes the irreversible
+    half safe to click.
+    """
+
+    status: str = PURGE_OUTCOME
+    email: str
+    deleted: dict[str, int]
+    kept: dict[str, int]
+
+
+@router.delete("/members/{email}/purge",
+               summary="Permanently delete a member",
+               dependencies=[require_permission("admin:members:manage")])
+async def purge_member(
+    email: str,
+    admin: UserContext = Depends(require_admin_user),
+) -> PurgeResult:
+    """Hard delete: the identity, every credential and grant, in one transaction.
+
+    A **second, harder action beside** ``DELETE /admin/members/{email}``, not a
+    flag on it. Remove stays exactly what it was and its reasoning stands: the
+    `app_user` row is kept because the rest of the schema refers to people by
+    address, and what matters for access is that the member resolves to
+    nothing. This route is for the other question — "delete them" — and it
+    answers it by destroying the identity rather than by parking it.
+
+    **The guards are the same two the other doors use.** Invariant 4 through
+    :func:`assert_not_self_lockout` (this is its most destructive door, and a
+    fourth private copy of the comparison is exactly how the first two came to
+    disagree), then invariant 1 through :func:`assert_owner_survives` — purging
+    the last owner is not a recoverable mistake, it is a permanently ownerless
+    org.
+
+    **One transaction.** Every statement runs on one session with a single
+    ``commit()`` at the end. A half-purge that deleted the credentials but left
+    the member active is worse than either outcome, and a half-purge that
+    deleted the member row but left an OAuth token behind is worse still.
+
+    **The audit entry is written before the commit.** ``acb_audit.record`` opens
+    its own session, so it is not inside this transaction and survives a
+    rollback. The trade-off is deliberate and this way round: an audit line for
+    a purge that then failed is a false positive an admin can reconcile against
+    a roster that still shows the person; a completed purge with no audit line
+    is unreconcilable, because every row that could have told you who it was
+    is gone.
+    """
+    db = await get_db()
+    async with db:
+        org_id = await get_org_id(db)
+        member = await get_member(db, email)
+
+        # Invariant 4, from the shared helper — same rule, fourth door. The
+        # outcome name is not an `app_user.status`; the helper's rule is
+        # "anything that is not `active`", which is what lets a door that
+        # DELETES the row be covered by the sentence written for ones that
+        # UPDATE it.
+        assert_not_self_lockout(admin, member, status=PURGE_OUTCOME)
+        # Invariant 1. Unlike a removal this cannot be undone by re-inviting:
+        # the org would have no owner and no row to promote back.
+        await assert_owner_survives(db, org_id, excluding_user_id=member["id"])
+
+        addr = (member["email"] or "").strip().lower()
+        uid = member["id"]
+
+        # Count everything BEFORE anything is deleted — including the kept
+        # side, which is the half that makes the report legible.
+        deleted: dict[str, int] = {}
+        for rows in _PURGE_DELETES:
+            result = await db.execute(
+                text(rows.count_sql), _purge_params(rows, uid=uid, email=addr)
+            )
+            deleted[rows.key] = int(result.scalar() or 0)
+        kept: dict[str, int] = {}
+        for rows in _PURGE_KEEPS:
+            result = await db.execute(
+                text(rows.count_sql), _purge_params(rows, uid=uid, email=addr)
+            )
+            kept[rows.key] = int(result.scalar() or 0)
+
+        for rows in _PURGE_DELETES:
+            await db.execute(
+                text(rows.delete_sql), _purge_params(rows, uid=uid, email=addr)
+            )
+
+        # Before the commit, on its own connection — see the docstring.
+        record_admin_change(admin.email, "org.member_purged", f"user:{addr}",
+                            deleted=deleted, kept=kept)
+        await db.commit()
+
+    invalidate_for(member["email"])
+    _log.info("member_purged", email=member["email"], by=admin.email,
+              deleted=deleted, kept=kept)
+    return PurgeResult(email=member["email"], deleted=deleted, kept=kept)
 
 
 # ── Role assignment ─────────────────────────────────────────────────────────

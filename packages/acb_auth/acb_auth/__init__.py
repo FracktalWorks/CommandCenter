@@ -11,9 +11,11 @@ from acb_auth.access import ensure_owner_bootstrap
 from acb_auth.access import invalidate as invalidate_access
 from acb_auth.access import resolve_access, resolve_session_access
 from acb_auth.deps import (
+    allowed_email_domain,
     assert_can_run_agent,
     assert_can_run_agent_in_session,
     get_current_user,
+    is_company_email,
     require_any_permission,
     require_authenticated,
     require_feature,
@@ -56,6 +58,9 @@ __all__ = [
     "require_llm_api_auth",
     "assert_can_run_agent",
     "assert_can_run_agent_in_session",
+    # identity domain (a label the UI renders, never a boundary)
+    "allowed_email_domain",
+    "is_company_email",
     # permission model
     "EffectiveAccess",
     "AccessDecision",

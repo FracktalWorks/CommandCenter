@@ -9,12 +9,36 @@ OWNER-GATE, and **it is still not safe to invite anybody.** G4 closed the holes
 that survive a *correct* identity; G1/G2 are about the identity itself, and an
 owner predicate applied to a forged one is not a control. §4 also mints **N5**
 (the rest of `routes/notes` — nine modules N1's table did not enumerate),
-deliberately outside G4 and awaiting an owner call. · **Board row:** WS-24 ·
+deliberately outside G4 and awaiting an owner call. **§6 is new (2026-08-04):
+N6, the provisioning gap** — an unprovisioned sign-in was logged and then
+discarded, so the owner could not see who was knocking. Motivated by a measured
+production incident: 53 refusals for one colleague over 18 hours, invisible in
+the UI. **N6a is BUILT + REPAIRED TWICE (2026-08-04, branch `ws-24-n6-signin-requests`)** —
+the knock is persisted, the owner answers it from a Requests tab, and approving
+provisions *and* activates in one action; a same-day adversarial review found a
+**P1 cross-gate escalation** (approve could reinstate an off-boarded member on
+the weaker `admin:members:invite`) and proved the test that claimed to fence it
+was a mirror of the code, not a check on it — both fixed, and the fence is now
+a structural assertion against the SQL itself (§6 *Repair round*). A second
+pass found the other half: the guard *declined* silently, so approve still
+answered **200**, marked the request `approved`, and re-granted roles — which
+took the still-locked-out person out of a queue that renders only `pending`.
+**Approve now either fully succeeds or refuses with a 409, per the approve
+matrix in §6 *Repair round 2*.** A third pass found the same shape once more —
+this time a race, not a sequence — and with it the reason it kept recurring:
+**approve verified by prediction, never by reading back what it wrote.** It now
+requires the member to be `active` before the decision is stamped (§6 *Repair
+round 3*).
+**N6b needs no code** (§2 Step 1b shipped the fix) and leaves one recorded
+owner question. **Merging N6a is
+OWNER-GATE**: `deploy.yml:202-203` replays every migration on deploy, so the
+merge arms an auth-behaviour deploy. · **Board row:** WS-24 ·
 **Owner:** vjvarada · **Date:** 2026-08-04 ·
 **Verified against code on 2026-08-04** (branch `ws-24-onboarding-readiness`,
 cut from `ws-14-doc-remediation` @ `ed785bea`; repair round @ `8b6dcdd3`;
 N4 built on `ws-24-n4-people-scoping`, cut from `007caae2`; N1–N3 on
-`ws-24-n1n3-notes-scoping`, cut from `891903de`).
+`ws-24-n1n3-notes-scoping`, cut from `891903de`; N6a on
+`ws-24-n6-signin-requests`, cut from `5beeabbe`).
 
 **What this doc is for.** Exactly one person is signed in to this deployment
 (**owner-reported, not measured** — see the note below). The question "is it
@@ -28,6 +52,8 @@ parts:
 | §2 | **The onboarding runbook** — invite → role → Center group → verify | procedure, grounded in real endpoints |
 | §3 | **The capability matrix** — what a colleague on each role can actually see | evidence table, every cell carries `file:line` |
 | §4 | **The four open owner-scoping holes** — blocking items with sizes | tickets |
+| §5 | **Verification** — the exact commands, and what must never be run | commands |
+| §6 | **The provisioning gap** — nobody could see who was knocking (N6) | ticket — **N6a built 2026-08-04**, N6b needs no code |
 
 **Executable half.** `scripts/onboarding_preflight.py` implements §1's
 machine-checkable criteria. Run it **on the box** before inviting anyone; run
@@ -82,7 +108,7 @@ the owner loses work that has no backup.
 
 | # | Item | Gate | Done when |
 |---|---|---|---|
-| **G1** | **Caddy strips inbound identity headers on the API vhost** | 🔴 **OWNER-GATE** (installing it on the box changes auth behaviour — `work_plan.md` §6) | `deploy/hostinger/caddy/Caddyfile`'s `api.*` `reverse_proxy` block contains **both** `header_up -X-User-Email` and `header_up -X-User-Role`; the same is true of `/etc/caddy/Caddyfile`; and `scripts/onboarding_preflight.py` reports `[PASS] Caddy strips inbound identity headers`. Writing the repo file is AGENT-SAFE; installing + reloading is not. |
+| **G1** | **Caddy strips inbound identity headers on the API vhost** | 🔴 **OWNER-GATE** (installing it on the box changes auth behaviour — `work_plan.md` §6) | `deploy/hostinger/caddy/Caddyfile`'s `api.*` `reverse_proxy` block contains **both** `header_up -X-User-Email` and `header_up -X-User-Role`; the same is true of `/etc/caddy/Caddyfile`; and `scripts/onboarding_preflight.py` reports `[PASS] Caddy strips inbound identity headers`. Writing the repo file is AGENT-SAFE; installing + reloading is not. **⚠️ HALF-DONE 2026-08-04:** the owner applied both directives to `/etc/caddy/Caddyfile` and they are live — verified by `caddy adapt` per vhost (`api.*` strips, the UI vhost correctly does not, since it *sets* them). **`deploy/hostinger/caddy/Caddyfile` is still unpatched, so the two have drifted**, and `deploy.yml:496-501` reinstalls the repo copy only when the live one fails validation — meaning a future config break silently removes the protection. G1 is not green until the repo file matches. Note also that `systemctl reload caddy` **has never worked on this box** (`admin off` ⇒ no admin API on :2019); only `restart` applies config. |
 | **G2** | **`GATEWAY_INTERNAL_TOKEN` is provisioned in BOTH files and is not `LITELLM_MASTER_KEY`** | 🔴 **OWNER-GATE** (a credential provisioned on the box, in two places) | The preflight reports `[PASS] Service identity is its own secret` in **box** mode, which now requires all three of: set in `/opt/acb/app/.env`; set in `workbench/control_plane/.env.local`; **the two byte-identical**; and different from the LLM key. ⚠️ **Setting only the first is a total lockout, not a partial fix** — see the warning below. |
 | **G3** | **A restore path exists** (BO-23) | 🟢 **AGENT-SAFE** to write the scripts + runbook; 🔴 **OWNER-GATE** to run any of them, install a schedule, or point anything at prod data | The preflight reports `[PASS] A restore path exists and backups are recent`. Its repo half is **BO-23's own done-when 1–4, verbatim** (`FOUNDATION_BUILDOUT_CHECKLIST.md` §BO-23): `scripts/backup_db.sh` taking a data-inclusive `pg_dump -Fc` (**not** `--schema-only`), `scripts/restore_db.sh` calling `pg_restore`, a runbook that states the *verification* step, and a pre-migration hook. Its box half: an artefact under `/opt/acb/backups` newer than 48h containing a dump above the size floor. **Nothing of this exists on this branch** — the only DB script that dumps anything is `scripts/dump_schema.sh` (`pg_dump --schema-only` — structure, zero rows). `scripts/backup_db.sh` and `restore_db.sh` are proposed on the **independent** PR #347 (`ws-0-bo23-backup-restore`) and are not here; G3 goes green when that lands and is scheduled, not before. See `work_plan.md` §2 exception 2. |
 | **G4** | **§4's four owner-scoping holes are closed** | 🟢 **AGENT-SAFE**, four tickets (§4) — ✅ **4 of 4 CLOSED 2026-08-04** | Each of §4's **four** tickets meets its own done-when; `tests/unit/test_notes_owner_scoping.py` (57 cases) covers N1–N3 and `tests/unit/test_tasks_people_scoping.py` (35) covers N4. **N4** — the Tasks people directory is "directory open, HR fields restricted" with all four writes on `admin:members:manage` (§4 N4's DECISION block). **N1–N3** (`ws-24-n1n3-notes-scoping`) — fifteen of sixteen Notes routes in the six named files load through `core.load_owned_meeting` / `OWNED_MEETING_PREDICATE` and answer 404 never 403, the sixteenth (`live.py:256`) is machine-authed by recorded decision; `actions._load_action` joins `meeting` so a member can no longer approve a colleague's item into their own GTD list; `bot_join`'s attach branch binds the predicate into the `UPDATE`. ⚠️ **This gate going green does not make WS-24 green** — G1/G2/G3 are untouched, and G4 closes the holes that survive a *correct* identity, not the ones that begin with a forged one. ⚠️ §4's new **N5** (nine further `routes/notes` modules N1's table never enumerated) is deliberately **outside** this gate and needs an owner call. |
@@ -154,6 +180,31 @@ directory identity into a member**.
 > answer for a new employee. Read §3 first — `manager` is not "member plus a
 > bit"; it hands over the entire member directory and both org-memory rights.
 
+### Step 1b — Activate · ⚠️ **the step this runbook was missing, and its absence is the 2026-08-04 incident**
+
+    PATCH /admin/members/{email}     { "status": "active" }
+
+* Gate: `admin:members:manage` — `members.py:202-203`.
+* UI: the **Activate** button on any `invited` row —
+  `settings/members/page.tsx:252-258`.
+* Behaviour: sets `status` and stamps `joined_at` with
+  `COALESCE(joined_at, now())` (`members.py:227-230`), so re-activating a
+  returning member keeps their original join date.
+* Allow up to 60 seconds before they retry — their refusal is cached
+  (`access.py:34`).
+
+> **Step 1 alone does not let anybody in, and nothing says so at the time.**
+> Invite writes `status = 'invited'` (`members.py:172`); `is_active` is
+> `status == "active"` **exactly** (`access.py:288`). An invited colleague sees
+> the identical "Your account is not active" screen as a total stranger, while
+> the admin who invited them sees a row in the Members list and reasonably
+> believes the job is done. Sign-in is Entra SSO — there is no invitation email
+> and therefore no acceptance event that could promote them. **Steps 1 and 1b
+> are one operation performed in two clicks.**
+>
+> Whether that should stay two clicks is an open question, recorded in §6 as
+> N6b rather than decided here.
+
 ### Step 2 — Assign the role (if it is not the default)
 
     PUT /admin/members/{email}/roles     { "roles": ["member"] }
@@ -217,6 +268,12 @@ directory identity into a member**.
 `resolve_access` treats status as a property of the *result*, not a filter on
 the query, so a suspended member resolves to no access within the 60s cache TTL
 at worst (`acb_auth/access.py:209-215`).
+
+**Bringing somebody back is `admin:members:manage`, and only that.** Neither
+Invite nor approving a sign-in request can turn a `removed` or `suspended` row
+back into `active` — both hold the weaker `admin:members:invite`. Invite
+returns a removed member to `invited`; the activation is still Step 1b. See §6
+*Repair round* for why that boundary is enforced in two places.
 
 ---
 
@@ -781,3 +838,613 @@ carries a case per route; and `fetch_people_for_clarify` is unchanged.
 
 **Never** run the preflight against production from an agent session. The DB
 checks read the live database; `--mode local` is the agent's only mode.
+
+---
+
+## 6. The provisioning gap — nobody can see who is knocking
+
+§2's runbook is **push-only**: the only way an `app_user` row is ever created is
+an admin typing an address into Invite (`routes/admin/members.py:168-183`).
+Somebody arriving at the front door creates nothing an admin can see. The
+refusal *is* logged — `access.py:264-272` emits `access_unprovisioned_signin`
+with the email — but it goes to journald, nothing reads it back, and it is gone
+at the next rotation. So the owner's only way to learn that a colleague is
+locked out is for that colleague to tell them out of band.
+
+**Measured on the box 2026-08-04, and this is the ticket's motivation rather
+than a hypothetical:** `journalctl -u acb-gateway` (retained back to
+2026-07-28) carries **53** `access_unprovisioned_signin` events for exactly one
+address, `ishaanpilar@fracktal.in`, first at `2026-08-03T16:21:15Z` and still
+recurring at `2026-08-04T10:46:56Z`. One colleague spent eighteen hours telling
+the system he wanted in, fifty-three times, and the system told nobody.
+
+### N6 — capture the knock, and let the owner answer it · size: M (migration + one route file + one page) · 🟢 **AGENT-SAFE**
+
+**Status: N6a ✅ BUILT 2026-08-04, + TWO repair rounds the same day**
+(`ws-24-n6-signin-requests`) — all eleven done-whens met, fenced by
+`tests/unit/test_signin_requests.py` (50 cases). Round 1 closed a **P1
+cross-gate escalation** (approve reinstated an off-boarded member) and replaced
+the fence that had missed it. Round 2 closed the half it left: the refusal was
+**silent**, so approve still answered **200**, still marked the request
+`approved`, and still re-granted roles — taking the locked-out person out of a
+queue that renders only `pending`. **Read *Repair round 2* before reading dw7:
+it carries the approve matrix, which is the binding contract for what approve
+does about an address that already has an `app_user` row, and dw7's
+"idempotent: approving twice is not an error" is superseded.** Round 3 closed
+the concurrent instance of the same shape and named its structural cause —
+approve predicted the write instead of verifying it. **52 cases.**
+**N6b: nothing to build**; one owner question remains open below. **Merging is
+OWNER-GATE** — see the note at the end of this section.
+
+Two defects, deliberately in one ticket because shipping either alone leaves a
+half-working door.
+
+**N6a — the request queue.** Persist the unprovisioned sign-in instead of
+discarding it, and give `/settings/members` a **Requests** tab where the owner
+approves with roles in one action.
+
+**N6b — invite does not admit anybody, and the runbook never said so.**
+🔴 **NOT DISPATCHABLE — held for an owner re-read.** `POST /admin/members`
+inserts `status = 'invited'` (`members.py:172`) and `is_active` is
+`status == "active"` exactly (`access.py:288`), so Step 1 on its own leaves the
+colleague at the same dead-end screen as a stranger. That much is real, and it
+is what the owner hit on 2026-08-04.
+
+> ### ⚠️ RETRACTED — this ticket was first written on a false premise
+>
+> The first draft of N6b claimed *"there is no `invited → active` transition
+> anywhere in the codebase."* **That is wrong, and the spec-auditor caught it.**
+> `PATCH /admin/members/{email}` accepts `status: "active"` from
+> `VALID_STATUSES` (`members.py:50`) and stamps `joined_at` with
+> `COALESCE(joined_at, now())` (`members.py:224-233`) — the exact behaviour the
+> retracted draft proposed to build. It is already surfaced as an **Activate**
+> button on every `invited` row (`settings/members/page.tsx:252-258`).
+>
+> The real defect is **documentary**: §2's runbook went Invite → Roles → Group
+> → Verify and never once said "activate". Step 4 then verifies with
+> `GET /admin/members/{email}/access`, which faithfully reports `is_active=false`
+> while the row is still `invited` — so the runbook could be followed exactly,
+> the verification step could be performed exactly, and the colleague would
+> still be locked out with nothing appearing to be wrong. **That omission is
+> now fixed: §2 Step 1b.** No code was needed for it.
+
+What remains genuinely open is narrower, and is a **question, not a ticket**:
+
+**Should activation be automatic on first sign-in?** An invited member could be
+promoted on their first IdP-verified resolve — a guarded
+`UPDATE … WHERE status = 'invited'` in `access.py` — which would make Invite
+mean "let them in" and reduce the two clicks to one. Against it: it puts a
+second write on the auth path for a problem a documentation fix has already
+solved, and `invited` currently carries real information ("provisioned, never
+signed in") that the Members UI could surface instead of discarding.
+
+🔴 **OWNER DECISION:** (a) leave it at two clicks, now that the runbook says so;
+(b) auto-promote on first sign-in; or (c) make Invite insert `active` directly
+(a one-line change at `members.py:172`). **This spec recommends (a)** — the
+measured failure was a missing sentence, and (b) and (c) both spend an auth-path
+change on it. Nothing downstream is blocked either way; **N6a does not depend on
+this.**
+
+If (b) is ever chosen, one non-obvious guard must come with it: `suspended` and
+`removed` must **not** be promoted. The natural implementation
+(`status != 'active'` → activate) silently un-suspends people.
+
+#### DECISION — a separate table `agent-proposed, owner may overrule`
+
+**Chosen: a new `access_request` table, not a fifth `app_user.status`.** The
+one-table version is tempting — the Members page already lists `app_user` — but
+an `app_user` row is *the org's member record*: it carries `org_id`, it is what
+`user_role` and the member/people listings join against, and `is_active=False`
+protects the **auth** path only, not every query that reads the roster. A
+stranger who merely knocked must not acquire a row that a future join can
+surface. Approval creates the real `app_user` through the **same helper**
+`POST /admin/members` uses, so there is one provisioning path, not two.
+
+**Precondition that makes auto-capture safe, recorded so it is re-checked:**
+`AUTH_MICROSOFT_ENTRA_ID_TENANT` is set to the Fracktal directory GUID on the
+box (verified 2026-08-04 in both `/opt/acb/app/.env` and
+`workbench/control_plane/.env.local`), so `auth.ts`'s issuer is tenant-pinned
+and only **directory members** can reach the branch that writes. **If that
+variable is ever unset the issuer falls back to `organizations`**
+(`src/auth.ts:22`) and any Microsoft work account on earth can append a row.
+
+> ### ⚠️ CORRECTED (repair round, 2026-08-04) — "directory member" ≠ "colleague"
+>
+> This block previously implied the tenant pin bounds the table to people who
+> work here. **It does not, and two separate mechanisms say so:**
+>
+> 1. **Entra B2B guests are directory members.** A guest invited into the
+>    Fracktal tenant authenticates against the pinned issuer exactly like an
+>    employee. The pin bounds who can **authenticate**; it says nothing about
+>    who **belongs to the company**.
+> 2. **`ALLOWED_EMAIL_DOMAIN` does not refuse them either.** On the branch that
+>    matters (`acb_auth/deps.py`, branch 1a — Bearer + identity headers, i.e.
+>    every browser call), an off-domain address is **logged**
+>    (`auth.identity_domain_mismatch`) and passed through, deliberately: the
+>    internal-token holder is trusted to say who it is acting for, and refusing
+>    would lock out any member whose sign-in address is off-domain.
+>
+> So an off-domain identity can and does reach the write, Approve provisions
+> `active` immediately, and the row was the only place left where the
+> difference could be seen. **Fixed:** the queue entry now carries
+> `is_external` — resolved by the gateway through
+> `acb_auth.is_company_email()`, because the domain is server policy and the
+> browser must not re-derive it — and the Requests tab marks such a row
+> "outside the company domain". It is a **label for the admin**, not a
+> refusal; refusing here would re-create the lockout branch 1a avoids.
+
+Rows stay bounded by the directory either way, but the table is a list of
+everyone who knocked, not a list of colleagues.
+
+**Done when — N6a**
+
+1. A migration at **the next free number at build time** creates
+   `access_request`: `email` (unique on `lower(email)`), `display_name`,
+   `first_seen_at`, `last_seen_at`, `attempt_count`, `status`
+   (`pending` | `approved` | `denied`), `decided_by`, `decided_at`. Idempotent
+   (`IF NOT EXISTS`), like every migration in `infra/postgres/`.
+2. `resolve_access`'s `row is None` branch (`access.py:257-276`) upserts the
+   request — insert on first sight, otherwise bump `attempt_count` and
+   `last_seen_at`. **Best-effort:** the upsert is wrapped so that a failing
+   write changes neither the returned `EffectiveAccess(is_active=False)` nor
+   the log line, and never raises into the request. Pinned by a test that makes
+   the write raise and asserts the refusal is still returned unchanged.
+3. **🔴 The write fires only on the sign-in path.** `resolve_access` is **not**
+   a sign-in-only function: `routes/rooms.py:215` calls it in a fan-out over
+   *room participants'* emails, and `access.py:433` folds it over session
+   subjects. Neither is a knock, and dw4 does not exclude them — a participant
+   with no `app_user` row would silently be filed as a "sign-in request",
+   putting people in the queue who never tried to sign in, which is precisely
+   the harm the DECISION cites to justify a separate table. **Done when** the
+   upsert is reached only from the request path — e.g. a keyword-only
+   `record_request: bool = False` passed solely by `acb_auth/deps.py:231` — and
+   a test asserts `rooms.py`'s fan-out over three unknown emails writes
+   **nothing**.
+4. It never records an email that already has an `app_user` row in **any**
+   status — the branch only runs when the row is absent, and a test pins that a
+   suspended member does not generate a request.
+5. Write volume is bounded by the existing 60-second resolution cache
+   (`access.py:34`), not per-request. A test asserts a second resolve inside
+   the TTL performs no second write.
+6. `GET /admin/members/requests` lists pending requests, newest `last_seen_at`
+   first. **⚠️ The `/admin` floor is per-route, not a package property** —
+   `_common.py:31` creates the router with **no** `dependencies=`, and every
+   existing route declares `Depends(require_admin_user)` in its own signature
+   (`_common.py:77-91`). A new route that omits it inherits no floor at all.
+   Each new route below must declare it explicitly, and a wiring test must pin
+   that. **No new permission slug** — a new slug is nobody's grant until an
+   admin creates it (the N4 lesson).
+7. `POST /admin/members/requests/{email}/approve` with an optional `roles` body
+   (defaulting to `["member"]`, as `members.py:165` does) **provisions the
+   member and activates them in one action** — `status = 'active'`, not
+   `'invited'`, because an approval *is* the admin's decision to let them in
+   and the person is already at the door (this is where §2's two-click problem
+   must not be re-created). It marks the request `approved` with
+   `decided_by`/`decided_at` and calls `invalidate_for(email)` so the cached
+   refusal does not outlive the approval. **`invalidate_for` lives at
+   `admin/_common.py:218`, not in `acb_auth`** — `members.py:43` already
+   imports it from there. Gated on `admin:members:invite`. ~~Idempotent:
+   approving twice is not an error and does not create two members.~~
+   ⚠️ **SUPERSEDED by the repair rounds — do not quote this sentence in
+   isolation.** A second approve is now a **409** naming the decision; the
+   invariant it cared about (never two members) is unchanged and stronger.
+   ⚠️ **This done-when also says nothing about an address that already has an
+   `app_user` row, which is the gap both repair rounds were spent closing.**
+   The answer is the approve matrix in *Repair round 2* below; it is the
+   binding contract, not this line.
+8. The provisioning insert is **extracted from `invite_member`
+   (`members.py:168-183`) into a plain `async def _provision_member(db, org_id,
+   *, email, display_name, roles, admin, status)` helper that both routes
+   call** — one provisioning path, not two. Left outside the helper:
+   `invalidate_for`, `record_admin_change` (the audit action differs —
+   `org.member_invited` vs an approve action), and the `MemberEntry`
+   construction. ⚠️ **`invite_member` has no test coverage today.** Write the
+   characterisation test for the existing invite behaviour **first**, watch it
+   pass, then refactor — this is an unfenced route on the auth path.
+9. `POST /admin/members/requests/{email}/deny` sets `denied`. A denied address
+   that keeps signing in updates `last_seen_at`/`attempt_count` but **does not**
+   return to `pending`.
+10. `/settings/members` grows a **Requests** tab showing address, first seen,
+    last seen, attempt count, with Approve (role picker) and Deny. Approved and
+    denied rows leave the tab. The tab shows a count badge when anything is
+    pending — the whole point is that the owner learns without being told.
+11. The existing Members list labels an `invited` row **"invited — never signed
+    in"** rather than rendering it as though it were live. (Carried over from
+    the retracted N6b; it is a label change, independent of the open question.)
+
+**Done when — N6b:** nothing to build. §2 Step 1b shipped the fix; the
+remaining question is the owner's (a)/(b)/(c) above.
+
+#### As built (2026-08-04) — where each done-when landed, and what the ticket got wrong
+
+| dw | Where it landed |
+|---|---|
+| 1 | `infra/postgres/143_access_request.sql` (143 was the next free number at build time; 142 was the highest) |
+| 2 | `acb_auth/access.py` — `_ACCESS_REQUEST_UPSERT_SQL` + `_record_signin_request`, called AFTER the log line inside the `row is None` branch |
+| 3 | `resolve_access(..., record_request: bool = False)`; the only caller passing `True` is `acb_auth/deps.py::_with_resolved_access` |
+| 4/5 | Properties of the existing branch + cache; pinned, not coded |
+| 6/7/9 | `gateway/routes/admin/access_requests.py` — three routes, each declaring `Depends(require_admin_user)`; both writes on `admin:members:invite`. `_load_request` takes the statuses it may act on as a required keyword (repair round); `APPROVE_MATRIX` + `_disposition_for` decide what approve does about an address that already has a row, and `_DECIDE_SQL` binds the same status filter into the write (repair round 2) |
+| 8 | `_common.provision_member` (see below), which also enforces invariant 1 (repair round) |
+| 10/11 | `settings/members/page.tsx` — `Tabs` (Members · Requests + badge), `RequestsTab`/`RequestRow`, `STATUS_LABELS` |
+
+Four things this ticket stated imprecisely, corrected here rather than
+silently deviated from:
+
+* **dw1's column list has no primary key.** The table ships with
+  `id UUID PRIMARY KEY DEFAULT gen_random_uuid()`, matching every other table
+  in `infra/postgres/`. Uniqueness is still the `lower(email)` index the
+  upsert's `ON CONFLICT` infers on.
+* **dw3's list of non-knock callers is incomplete — and so was the correction.**
+  The first draft named two callers; the as-built note added a third
+  (`routes/chat.py:605`) and there is a **fourth**,
+  `apps/services/orchestrator/orchestrator/executor.py:1644`. That is twice this
+  list has been wrong, which is the point: **the safety property is "the default
+  is `False`", enforced by the tree-scan test — it is not "we enumerated the
+  callers".** `test_the_signin_path_is_the_only_caller_that_opts_in` reads every
+  `.py` in the tree and asserts exactly one file contains `record_request=True`,
+  so a fifth caller cannot appear quietly and no enumeration needs maintaining.
+  Any caller list in this spec or in an `AGENTS.md` is illustrative.
+* **dw8 puts the helper in `members.py`; it ships in `_common.py` as
+  `provision_member`.** `admin/__init__.py`'s contract is that feature modules
+  import from `_common`, never from each other, and `access_requests.py` is a
+  feature module. `resolve_assignable_roles` and `set_roles` moved with it —
+  they implement invariant 2 ("nobody grants above themselves"), which
+  `_common.py` already documents as its own. `MemberEntry` stayed in
+  `members.py`; approve returns its own `ApproveResult`.
+* **dw7 does not say what approve does to somebody who already has a row.**
+  It matters: approve is gated on `admin:members:invite`, which is **weaker**
+  than the `admin:members:manage` needed to suspend or off-board. The general
+  rule this ticket needed and never stated: **no path holding the weaker
+  permission may reverse a decision taken under the stronger one.** See the
+  repair block below for how the first attempt at that guard failed.
+
+#### Repair round (2026-08-04) — the guard was half a guard
+
+An adversarial review of the built branch found a **P1** and proved the fence
+around it was not one. Both are fixed on `ws-24-n6-signin-requests`; recorded
+here because the failure is more instructive than the fix.
+
+**The P1 — approve reinstated a REMOVED member.** The claim "approve can never
+reverse a decision taken under the stronger permission" was true for
+`suspended` and false for `removed`:
+
+1. Someone knocks → is approved → becomes a member.
+2. They are off-boarded via `DELETE /admin/members/{email}`
+   (`members.py:251-252`, gated `admin:members:manage`): `status='removed'`,
+   `user_role` rows dropped.
+3. Their `access_request` row **survives** — decided rows are kept on purpose
+   (dw9) and the tab renders only `pending`, so the row is invisible in the UI
+   *and* still addressable by the API.
+4. A caller holding only `admin:members:invite` re-POSTs approve. The old
+   `CASE WHEN app_user.status IN ('removed','invited')` matched `'removed'`,
+   applied `:status='active'`, `set_roles` re-granted, `joined_at` was
+   re-stamped and `invalidate_for` made it immediate.
+
+On `main` that transition always required `admin:members:manage`. No seeded
+role splits invite from manage today — but the Roles page exists to create
+exactly such a role, at which point it is a straight cross-gate escalation.
+
+**Fixed with two independent locks**, because each covers a sequence the other
+does not:
+
+| Lock | Where | Covers |
+|---|---|---|
+| A decided request cannot be decided again | `access_requests._load_request(db, email, *, allowed_statuses)` — keyword-only, **no default**, the `_row_to_person` shape from N4 | the sequence above (the request row is `approved`) |
+| Provisioning never activates a row that is not `invited` | `_common._PROVISION_MEMBER_SQL`'s `ON CONFLICT` arms | a **pending** request whose address was invited and then removed in between — lock A does not fire there |
+
+The SQL rule, stated so it is not "tidied" back: **the guard names the statuses
+it rewrites and never negates.** `invited` → the caller's status (the one door
+to `active`); `removed` → the caller's status **only when it is not `'active'`**
+(so invite still returns an off-boarded person as `invited`, byte-for-byte as
+before, while approve cannot reinstate them); `active` and `suspended` are never
+touched. `IN (…)` and `<> 'active'` are both "…and everything else that
+qualifies", which is how a row set under a stronger permission gets rewritten.
+
+**dw7's "idempotent: approving twice is not an error" is superseded.** A second
+approve now answers **409**, naming the decision and who made it. The invariant
+dw7 actually cared about — never two members — is unchanged and stronger; what
+went away is a 200 that silently did nothing, which was indistinguishable from
+a 200 that provisioned, and which *was* the vehicle for the escalation above.
+Deny stays replayable (`("pending", "denied")`): it provisions nobody and
+revokes nothing, so re-denying changes only `decided_by`/`decided_at`. Denying
+an *approved* request is refused — it cannot touch the live member it created,
+so it could only produce a queue record that contradicts the roster.
+
+**The fence that let it through, and what replaced it.**
+`tests/unit/test_signin_requests.py`'s `_FakeDB` re-implements the
+`ON CONFLICT DO UPDATE` arms in Python. **A mirror can only agree with itself:**
+the verifier mutated `_common.py`'s guard to `app_user.status <> 'active'` —
+the exact escalation — and all 28 tests passed.
+`test_approving_never_un_suspends_somebody` did not test what its docstring
+said. The repair adds `test_provisioning_only_ever_rewrites_a_status_it_names`,
+which asserts **against the statement string**: every comparison against
+`app_user.status` must be `=` against a literal we chose, the only two literals
+are `'invited'` and `'removed'`, the `removed` arm must carry
+`AND :status <> 'active'`, and no unaccounted reference to `app_user.status`
+may appear. Re-applying the verifier's mutation now fails that test **and only
+that test** — 39 behavioural cases stayed green, which is the demonstration.
+
+> **⚠️ What the fake-DB suite does and does not prove — read before adding a
+> case.** These tests never touch Postgres: routes are called directly with the
+> DB seam monkeypatched, SQL is matched on normalised substrings, `ORDER BY` is
+> ignored and `ON CONFLICT` is re-implemented. A behavioural case therefore
+> proves *the route issues the right statement with the right parameters* — it
+> cannot prove the statement says what we think. **These claims rest on
+> structural assertions instead, and would be unfalsifiable without them:**
+>
+> | Claim | Asserted by |
+> |---|---|
+> | Which statuses provisioning may rewrite (both halves of the P1) | `test_provisioning_only_ever_rewrites_a_status_it_names` |
+> | dw6's "newest `last_seen_at` first" | `test_the_pending_list_asks_the_database_for_the_order_it_promises` — the behavioural case compares a **set** and was renamed to say so |
+> | dw9's "a denial is not undone by the next sign-in" | `test_a_denied_address_that_keeps_knocking_never_returns_to_pending` (reads `_ACCESS_REQUEST_UPSERT_SQL`; this one always worked and is the model the others copy) |
+>
+> Everything else here — the auth floor, the permission gates, invariants 1
+> and 2, the decided-row refusal — is real Python and is genuinely exercised.
+
+**Also fixed in the same round:**
+
+* **`provision_member` never called `assert_owner_survives`** while `set_roles`
+  wipes assignments first, so inviting *or approving* the address that is the
+  last `owner` deleted the org's only owner grant and left it ownerless —
+  recoverable only with SQL on the box. Every sibling write in `members.py`
+  checks (`:209-210`, `:273`, `:311-315`); the helper now does too, narrowed to
+  fire only when the target actually holds `owner` and the new set does not, so
+  it cannot block provisioning in an org that has no owner yet. Pre-existing
+  inside invite on `main`; the extraction hung a second route off it.
+* **The queue could fail and look like success.**
+  `setRequests(q.ok ? await q.json() : [])` swallowed a failed fetch, so a
+  deployment where migration 143 had not run rendered *"Nobody is waiting."* —
+  **the broken state was indistinguishable from the working one, which is the
+  exact failure this ticket exists to fix.** (`_record_signin_request` swallows
+  the same error into a journald warning nobody reads, by dw2's design.) The
+  page now keeps a separate `queueError`, shows a non-dismissible warning
+  banner without taking the roster down, drops the badge count rather than
+  showing a false `0`, and never renders the empty-state copy unless the queue
+  actually answered.
+* **`143_access_request.sql` gained `CHECK (status IN (…))`.** The vocabulary
+  was enforced only in `_decide`. Safe to edit in place *only* because the
+  migration has never been applied anywhere — `CREATE TABLE IF NOT EXISTS`
+  silently skips a constraint added after the fact.
+
+#### Repair round 2 (2026-08-04) — a 200 that did not admit anybody
+
+The first repair round stopped approve from **activating** a row it must not
+touch. It did not stop approve from **reporting success** about it. A second
+adversarial pass measured the built branch by executing it, and found the
+refusal was silent on both sides:
+
+    AFTER OFFBOARD:   status=removed  roles=[]         request=pending
+    APPROVE RETURNED: HTTP 200        status=removed   roles=['member']
+    AFTER APPROVE:    status=removed  roles=['member'] request=approved
+
+`_load_request` admitted the row (it is `pending`, so lock A does not fire),
+`_PROVISION_MEMBER_SQL` correctly declined the activation (lock B) — and then
+`_decide(…, "approved")` ran anyway. Three consequences, in order of severity:
+
+1. **The person was lost from the queue for good.** `_PENDING_REQUESTS_SQL`
+   filters `status = 'pending'`, and the resolver's upsert deliberately never
+   rewrites `status` (dw9), so every subsequent knock bumped `last_seen_at` on
+   an `approved` row the tab will never render again. **That is the 53-knock
+   incident, recreated by its own fix.**
+2. The owner saw success, the row left the tab, and the colleague was still
+   locked out with no message.
+3. `set_roles` re-granted `['member']` to an off-boarded member on
+   `admin:members:invite`, partially undoing the role-strip that
+   `DELETE /admin/members/{email}` performs under `admin:members:manage`.
+
+The same shape applied to a **pending** request over a live member: approve
+replaced an `admin`'s entire role set with the picker's default on the weaker
+permission, while roles are otherwise governed by
+`PUT /admin/members/{email}/roles` on `admin:members:manage`.
+
+**THE APPROVE MATRIX — as built.** `access_requests.APPROVE_MATRIX`, read by
+`_disposition_for` **before anything is written**, so a refusal leaves both the
+member row and the request untouched:
+
+| existing `app_user` | approve does | request row |
+|---|---|---|
+| **absent** | provisions `active` with the chosen roles — the normal path | → `approved` |
+| **`invited`** | activates them and assigns the chosen roles — that is what approving means (and it is §2 Step 1b in one click) | → `approved` |
+| **`active`** | **nothing.** They already have access; their roles are left exactly as they are, and `ApproveResult.detail` says so | → `approved` (truthful: they *do* have access) |
+| **`suspended`** | **409.** Lifting a suspension is `admin:members:manage` | stays `pending` |
+| **`removed`** | **409.** Reinstating an off-boarded member is `admin:members:manage` | stays `pending` |
+
+The invariant, stated so it is not tidied away: **approve never rewrites the
+roles of a member who already exists in a state other than `invited`.**
+`provision_member` ends in `set_roles`, which REPLACES assignments wholesale.
+
+Two properties of the refusals are load-bearing and easy to lose:
+
+* **The request stays `pending`.** Filing it as `approved` is what took the
+  person out of the owner's sight permanently. A refused approval must leave
+  them visible in the queue.
+* **The refusal is a 409 that names the off-boarding or the suspension and
+  sends the admin to the roster** — a silent decline is what let a 200 stand
+  for it. An `app_user.status` nobody has decided about also refuses
+  (`APPROVE_MATRIX.get(status, "refuse")`): fail closed is the only direction
+  that cannot let somebody in by accident, and
+  `test_the_approve_matrix_answers_every_member_status` pins the matrix
+  against `members.VALID_STATUSES` so a fifth status cannot appear without
+  somebody deciding what approving one means.
+
+**The non-atomicity is closed, not just recorded.** `_load_request` read and
+`_decide` wrote as two statements, so two concurrent approves both passed the
+read. `_DECIDE_SQL` now carries `AND status = ANY(:allowed) … RETURNING id`,
+binding the read's own filter into the write; zero rows updated raises 409
+**before `db.commit()`**, so the loser's provisioning is discarded with its
+transaction rather than half-applied. Each route hands `_decide` the same tuple
+it handed `_load_request` (`("pending",)` for approve, `("pending","denied")`
+for deny), and a test asserts that from the source, because the two agreeing is
+the whole of the lock.
+
+**Also in this round:**
+
+* **The `assert_owner_survives` narrowing was unfenced.** The `db` fixture
+  always seeds `u-owner`, so deleting the `"owner" in roles_for_user(…)`
+  condition at `_common.provision_member` left all 40 tests green.
+  `test_provisioning_is_not_blocked_in_an_org_that_has_no_owner` deletes the
+  owner and mirrors that probe.
+* **`allowed_email_domain()`'s docstring overclaimed.** It said "one reader for
+  `ALLOWED_EMAIL_DOMAIN`"; `acb_common/settings.py:78` independently declares
+  `allowed_email_domain: str = "fracktal.in"` with zero consumers. Corrected to
+  "the one **live** reader", naming the duplicate.
+* **The tab did not reload on a 409**, so a refused row lingered until Refresh.
+  With three new refusal paths that is now the common case: `decide()` has no
+  early return and `load()` runs on every response. A 200 carrying `detail`
+  (the `already-a-member` path) is rendered as a notice, because an approval
+  that ignored the role picker must not look like one that honoured it.
+* **Two tests were rewritten because they asserted less than they claimed.**
+  `test_approving_never_reinstates_a_removed_member` checked only `out.status`
+  and `joined_at` — never the request row, never the role grant — which is why
+  it was green against the trace above. Same for
+  `test_approving_never_un_suspends_somebody`. Both now assert the refusal, the
+  role set, the request status, and (for `removed`) that no audit record was
+  written.
+
+**Verification**
+
+    uv run pytest tests/unit/test_signin_requests.py -q
+    # 50 passed after repair round 2 (40 after round 1, 28 as first built).
+    # Every case red-first against pre-fix behaviour.
+    uv run pytest tests/unit/test_default_deny_auth.py \
+                  tests/unit/test_org_access_control.py \
+                  tests/unit/test_org_access_enforcement.py -q
+    # test_org_access_enforcement.py is the route-wiring sweep -- run it
+    # because N6a adds routes under /admin, where the auth floor is per-route.
+    uv run ruff check . --select F821,F601,F602,F502,F7,B006
+    cd workbench/control_plane && npx tsc --noEmit
+
+✅ **The unprovisioned branch now HAS a DB-free regression fence.** Before N6a
+the only test exercising `access.py`'s `row is None` branch was
+`test_owner_bootstrap.py::test_unprovisioned_signin_is_cached`, which is
+`@_needs_db` and unrunnable by an agent (`work_plan.md` §6 forbids pointing it
+at prod). `test_signin_requests.py` builds the fence it was missing:
+`resolve_access` runs against a fake session factory, so the whole branch —
+refusal, log line, write, and the four cases where there must be **no** write —
+is covered without Postgres. An earlier draft of this block claimed
+`test_default_deny_auth.py` pinned the branch; it does not — that file never
+calls `resolve_access`.
+
+**Measured runs (2026-08-04, `ws-24-n6-signin-requests`, after repair round
+2):**
+
+    tests/unit/test_signin_requests.py ................. 50 passed  (was 40)
+    the three sweeps above ............................. 97 passed
+    ruff (blocking select) ............................. All checks passed!
+    npx tsc --noEmit ................................... clean
+
+Mutation evidence, taken in this tree and restored byte-identically afterwards
+(sha256 verified each time). Round 1's two guards:
+
+    _common.py CASE -> `app_user.status <> 'active'`
+      => 1 failed, 39 passed — and the ONLY failure is the structural test.
+         The behavioural cases cannot see it; that is why it is there.
+    access_requests._load_request status guard disabled
+      => 3 failed, 37 passed (approve-twice, the decided-row replay, deny-an-
+         approved-request). With lock A disabled, lock B still held the member
+         at `removed` — verified by probe, then discarded.
+
+Round 2, one mutation per claim:
+
+    APPROVE_MATRIX["removed"] -> "provision"           (the F1 defect, exactly)
+      => 2 failed, 48 passed. `..._never_reinstates_a_removed_member` and the
+         matrix test. The log line under the failure is the original trace:
+         `access_request_approved … roles=['member'] email=gone@fracktal.in`.
+    APPROVE_MATRIX["active"|"suspended"] -> "provision"       (the F2 defect)
+      => 4 failed, 46 passed: the active-roles case (`['admin']` rewritten to
+         `['member']`), the un-suspend case, the active-owner case, the matrix.
+    _DECIDE_SQL drops `AND status = ANY(:allowed)`
+      => 1 failed, 49 passed — and ONLY the structural test, because the fake
+         re-implements the condition in Python. The mirror problem again; the
+         structural assertion is the fence, exactly as for the CASE arms.
+    _decide swallows a zero-row update (the 409 removed)
+      => 1 failed, 49 passed (the lost-race case).
+    _common.provision_member's `"owner" in roles_for_user(…)` deleted
+      => 1 failed, 49 passed (the ownerless-org case, which did not exist
+         before this round — the probe that motivated it left 40/40 green).
+    page.tsx `decide()` returns early on !res.ok
+      => 2 failed, 48 passed. ⚠️ Only ONE failed on the first attempt: the
+         notice test asserted `"setNotice" in page`, which the declaration
+         satisfies on its own. Strengthened to assert `setNotice(body.detail)`
+         inside `decide` and `{notice && (` in the render, then re-measured.
+
+Red-first, at commit `cf28f4af` (signatures scaffolded so each red is the claim
+and not a `TypeError`): **16 failed, 12 passed.** The 12 already-green are dw8's
+characterisation of the pre-existing `invite_member` — written and watched pass
+*before* the extraction, because it was an unfenced route on the auth path —
+plus the four dw3/dw4 no-write guards, which assert the ABSENCE of a write and
+therefore cannot be red before the write exists.
+
+⚠️ **OWNER-GATE is the merge, not a separate apply step.**
+`scripts/apply_migrations.sh` replays every numbered migration on **every**
+deploy (`deploy.yml:202-203`), so there is no agent-reachable "apply" to gate —
+merging this arms a deploy that changes auth behaviour (`work_plan.md` §6,
+supervised window). Writing the migration and the routes is AGENT-SAFE.
+
+**Not in scope:** notifying the owner out-of-band (email/push on a new
+request), self-service role requests, and any auto-approval rule. Capture and
+answer, nothing else.
+
+#### Repair round 3 (2026-08-04) — approve predicted the write instead of verifying it
+
+**The same shape, a third time — and this round found *why* it kept coming
+back.** Rounds 1 and 2 each fixed one instance of "approve returns 200 for
+somebody it never let in". Round 2's fix was `APPROVE_MATRIX`, read **before**
+the write. That closes the two *sequential* holes. It does not close the
+*concurrent* one:
+
+`_PROVISION_MEMBER_SQL`'s `CASE` arms are re-evaluated by Postgres against the
+latest **committed** row — `ON CONFLICT DO UPDATE` waits on a concurrent writer
+and then re-reads. So a second admin off-boarding or suspending the same person
+between approve's `find_member` and its upsert lands every arm on
+`ELSE app_user.status`. The provisioning declines **in silence**, and approve
+went on to stamp `approved` and record an `org.access_request_approved` for it.
+Measured, with the SUT unpatched — only the world underneath it moved:
+
+    RESULT         : HTTP 200  status='removed'  roles=['member']  detail=''
+    app_user.status: removed        can they sign in? NO
+    request.status : approved       still in the owner's queue? NO, GONE
+
+Three consequences, the same three as both earlier rounds: the owner is shown
+success, the person is still locked out, and — because the queue renders only
+`pending` and the resolver's upsert deliberately never rewrites `status`
+(done-when 9) — **they can never reappear.** Every future knock bumps
+`last_seen_at` on a row nobody will ever see again.
+
+**The structural cause, stated plainly so it is not rediscovered a fourth
+time:** `_DECIDE_SQL` was made race-safe in round 2, but that hardened the
+`access_request` row only. The `app_user` row stayed a read-then-write with no
+write-side guard. Approve verified by **prediction** — it read the row, decided
+what *would* happen, and never read back what *did*. Every instance of this bug
+has been a variation on that one omission.
+
+**The fix:** before `_decide` stamps anything, the member must actually be
+`active`, or the whole transaction is abandoned (nothing has been committed
+yet, so the provisioning goes with it). Predicting is now only an optimisation;
+the read-back is the authority.
+
+**Also fenced:** the matrix's sixth row — "an unrecognised `app_user.status`
+fails closed" — had no test. Flipping `APPROVE_MATRIX.get(status, "refuse")` to
+`"provision"` left all 50 cases green.
+
+> ⚠️ **A note on the fence for that one, because the first attempt at it was
+> wrong in the way this section keeps warning about.** Asserting only
+> `status_code == 409` is *not* enough: with the fallback flipped to
+> `provision`, the provisioning runs, declines the unknown status silently, and
+> the **new terminal read-back check** then raises its own 409 — so the test
+> passed while the matrix was wide open. The two refusals are told apart by
+> *when* they fire: the matrix refuses before anything is written, so the
+> discriminator is that no role was granted (`set_roles` runs inside
+> `provision_member`). Both assertions are now in the test. This is the third
+> time in this ticket that a test asserted less than its docstring claimed;
+> treat a bare status-code assertion here as a smell.
+
+**Mutation evidence** (each applied, measured, reverted; the tree restored
+byte-identical by sha256 — `250ab021…`):
+
+| Mutation | Result |
+|---|---|
+| terminal read-back check disabled | **1 failed** — and the captured log under it is the trace above verbatim, `access_request_approved … disposition=provision` |
+| `APPROVE_MATRIX.get(status, "refuse")` → `"provision"` | **1 failed**, on the "came from somewhere further down" assertion — the weak first version of the same test **survived** this |
+
+`tests/unit/test_signin_requests.py`: **50 → 52 passed.**

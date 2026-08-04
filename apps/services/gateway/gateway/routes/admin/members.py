@@ -11,7 +11,6 @@ trusting the model, so provenance is part of the API, not a debugging aid.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from typing import Any
 
 from acb_auth import (
@@ -33,18 +32,20 @@ from pydantic import BaseModel, Field
 from sqlalchemy import text
 
 from gateway.routes.admin._common import (
-    NON_ASSIGNABLE_ROLES,
+    _iso,
     _log,
     assert_owner_survives,
-    caller_rank,
     get_db,
     get_member,
     get_org_id,
     invalidate_for,
+    provision_member,
     record_admin_change,
     require_admin_user,
+    resolve_assignable_roles,
     roles_for_user,
     router,
+    set_roles,
 )
 
 VALID_STATUSES = ("invited", "active", "suspended", "removed")
@@ -94,12 +95,6 @@ class OverrideRequest(BaseModel):
     """
 
     overrides: list[OverrideEntry]
-
-
-def _iso(value: Any) -> str:
-    if isinstance(value, datetime):
-        return value.astimezone(timezone.utc).isoformat()
-    return "" if value is None else str(value)
 
 
 # ── Roster ──────────────────────────────────────────────────────────────────
@@ -154,35 +149,28 @@ async def invite_member(
     provisioning the row that turns a directory identity into a member with
     access. Until that row exists, an authenticated stranger resolves to no
     access (``resolve_access`` returns inactive for an unknown email).
+
+    ⚠️ **This alone does not let anybody in.** `invited` is not `active`, and
+    `is_active` is `status == "active"` exactly — the invited colleague sees
+    the same dead-end screen as a stranger until somebody clicks Activate
+    (`PATCH /admin/members/{email}`). That is §2 Step 1b of
+    ``colleague_onboarding.md``, and the fact that the runbook did not say so
+    is the whole of the 2026-08-04 incident. Approving a *sign-in request*
+    does both at once, on purpose.
     """
     email = (req.email or "").strip().lower()
-    if "@" not in email or len(email) > 254:
-        raise HTTPException(status_code=400, detail="A valid email is required.")
 
     db = await get_db()
     async with db:
         org_id = await get_org_id(db)
-        wanted = req.roles or ["member"]
-        role_ids = await _resolve_assignable_roles(db, org_id, wanted, admin)
-
-        await db.execute(
-            text(
-                "INSERT INTO app_user (email, display_name, organization_id, "
-                "                      status, invited_by, invited_at) "
-                "VALUES (:email, :name, CAST(:org AS uuid), 'invited', :by, now()) "
-                "ON CONFLICT (email) DO UPDATE "
-                "   SET organization_id = EXCLUDED.organization_id, "
-                "       display_name    = COALESCE(NULLIF(EXCLUDED.display_name, ''), "
-                "                                  app_user.display_name), "
-                "       status          = CASE WHEN app_user.status = 'removed' "
-                "                              THEN 'invited' ELSE app_user.status END, "
-                "       updated_at      = now()"
-            ),
-            {"email": email, "name": req.display_name or "", "org": org_id,
-             "by": admin.email},
+        member, _assigned = await provision_member(
+            db, org_id,
+            email=email,
+            display_name=req.display_name or "",
+            roles=req.roles,
+            admin=admin,
+            status="invited",
         )
-        member = await get_member(db, email)
-        await _set_roles(db, member["id"], role_ids, admin.email)
         await db.commit()
         roles = await roles_for_user(db, member["id"])
 
@@ -305,67 +293,12 @@ async def remove_member(
 
 
 # ── Role assignment ─────────────────────────────────────────────────────────
-
-async def _resolve_assignable_roles(
-    db: Any, org_id: str, slugs: list[str], admin: UserContext
-) -> list[tuple[str, str]]:
-    """Validate role slugs and return ``[(role_id, slug)]``.
-
-    Enforces invariant 2: an admin cannot assign a role more privileged than
-    their own, so `admin` cannot mint an `owner` and escalate laterally.
-    """
-    if not slugs:
-        raise HTTPException(status_code=400, detail="At least one role is required.")
-
-    rows = (
-        await db.execute(
-            text(
-                "SELECT id::text AS id, slug, rank FROM org_role "
-                " WHERE organization_id = CAST(:org AS uuid) AND slug = ANY(:slugs)"
-            ),
-            {"org": org_id, "slugs": list(slugs)},
-        )
-    ).mappings().all()
-
-    found = {r["slug"]: r for r in rows}
-    missing = [s for s in slugs if s not in found]
-    if missing:
-        raise HTTPException(status_code=400, detail=f"Unknown role(s): {missing}.")
-
-    blocked = [s for s in slugs if s in NON_ASSIGNABLE_ROLES]
-    if blocked:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Role(s) {blocked} are internal and cannot be assigned to people.",
-        )
-
-    my_rank = await caller_rank(db, org_id, admin)
-    too_high = [s for s in slugs if int(found[s]["rank"]) < my_rank]
-    if too_high:
-        raise HTTPException(
-            status_code=403,
-            detail=f"You cannot assign role(s) {too_high} — they outrank you.",
-        )
-    return [(found[s]["id"], s) for s in slugs]
-
-
-async def _set_roles(
-    db: Any, user_id: str, role_ids: list[tuple[str, str]], assigned_by: str | None
-) -> None:
-    await db.execute(
-        text("DELETE FROM user_role WHERE user_id = CAST(:uid AS uuid)"),
-        {"uid": user_id},
-    )
-    for role_id, _slug in role_ids:
-        await db.execute(
-            text(
-                "INSERT INTO user_role (user_id, role_id, assigned_by) "
-                "VALUES (CAST(:uid AS uuid), CAST(:rid AS uuid), :by) "
-                "ON CONFLICT DO NOTHING"
-            ),
-            {"uid": user_id, "rid": role_id, "by": assigned_by},
-        )
-
+#
+# The two helpers this section used to define — `_resolve_assignable_roles` and
+# `_set_roles` — now live in `_common.py` as `resolve_assignable_roles` /
+# `set_roles`. They enforce invariant 2 ("nobody grants above themselves") and
+# are shared by BOTH provisioning callers via `provision_member`, so the leaf is
+# their home; a second copy is a second place for the invariant to be missed.
 
 @router.put("/members/{email}/roles", summary="Set a member's roles",
             dependencies=[require_permission("admin:members:manage")])
@@ -378,13 +311,13 @@ async def set_member_roles(
     async with db:
         org_id = await get_org_id(db)
         member = await get_member(db, email)
-        role_ids = await _resolve_assignable_roles(db, org_id, req.roles, admin)
+        role_ids = await resolve_assignable_roles(db, org_id, req.roles, admin)
 
         # Demoting the last owner is the same lockout as removing them.
         if "owner" not in req.roles:
             await assert_owner_survives(db, org_id, excluding_user_id=member["id"])
 
-        await _set_roles(db, member["id"], role_ids, admin.email)
+        await set_roles(db, member["id"], role_ids, admin.email)
 
         # Keep the legacy coarse column truthful so require_role() and any
         # not-yet-migrated route agree with the new model (spec §7).

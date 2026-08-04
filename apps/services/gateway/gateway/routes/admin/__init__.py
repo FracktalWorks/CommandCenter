@@ -9,6 +9,7 @@ invariants) and the feature modules import from it, never from each other.
 """
 
 # Importing the modules attaches their routes to the shared `router`.
+from gateway.routes.admin import access_requests as _access_requests  # noqa: F401
 from gateway.routes.admin import groups as _groups  # noqa: F401
 from gateway.routes.admin import members as _members  # noqa: F401
 from gateway.routes.admin import roles as _roles  # noqa: F401

@@ -200,11 +200,64 @@ _ACCESS_SQL = """
 """
 
 
+#: One row per address, bumped on every repeat knock. ``status`` is deliberately
+#: NOT in the DO UPDATE arm: a denied address that keeps signing in must move
+#: ``last_seen_at``/``attempt_count`` without returning to the owner's queue
+#: (spec §6 done-when 9). ``first_seen_at`` is likewise never rewritten — "first
+#: locked out at 16:21 yesterday" is the fact that makes the row legible.
+_ACCESS_REQUEST_UPSERT_SQL = """
+    INSERT INTO access_request (email, display_name)
+    VALUES (:email, :name)
+    ON CONFLICT (lower(email)) DO UPDATE
+       SET last_seen_at  = now(),
+           attempt_count = access_request.attempt_count + 1,
+           display_name  = COALESCE(NULLIF(EXCLUDED.display_name, ''),
+                                    access_request.display_name)
+"""
+
+
+async def _record_signin_request(email: str, display_name: str = "") -> None:
+    """File an unprovisioned sign-in in ``access_request``. Best-effort.
+
+    Spec: ``ai-company-brain/specs/colleague_onboarding.md`` §6 (N6a).
+
+    **Never raises, never changes the caller's answer.** The queue is a
+    convenience for the owner; the refusal above it is the security answer, and
+    a missing table, a full disk or a lock timeout must not turn "you have no
+    access" into a 500. It opens its own short session rather than reusing the
+    resolution one so a failed write cannot poison the read that produced it.
+
+    Deliberately does **not** touch ``_tables_missing``: that flag means "the
+    access model is not deployed" and permanently degrades every resolution.
+    A deployment on which migration 143 has not run yet has a perfectly working
+    access model and merely no queue, so it logs once per TTL and carries on.
+
+    ``display_name`` is accepted and stored but the resolver has none to give —
+    ``UserContext`` carries an email only. The column exists so an approval
+    path (or a future IdP claim) can fill it; the UI falls back to the address.
+    """
+    try:
+        from sqlalchemy import text  # noqa: PLC0415
+
+        factory = _get_session_factory()
+        async with factory() as session:
+            await session.execute(
+                text(_ACCESS_REQUEST_UPSERT_SQL),
+                {"email": email, "name": display_name},
+            )
+            await session.commit()
+    except Exception as exc:  # noqa: BLE001
+        _log.warning(
+            "access_request_record_failed", email=email, error=str(exc)[:200],
+        )
+
+
 async def resolve_access(
     email: str | None,
     *,
     legacy_role: str | None = None,
     use_cache: bool = True,
+    record_request: bool = False,
 ) -> EffectiveAccess:
     """Resolve a member's effective access by email.
 
@@ -212,6 +265,15 @@ async def resolve_access(
     resolves to no access regardless of the roles still on their row — the
     status check is not a filter on the query but a property of the result, so
     a stale cache entry can never outlive a suspension by more than the TTL.
+
+    ``record_request`` opts the caller into filing an unprovisioned email as a
+    sign-in request. It defaults to **False** and must stay that way: this
+    function is not sign-in-only. ``routes/rooms.py`` fans it out over room
+    participants' emails and :func:`resolve_session_access` folds it over
+    session subjects — neither is somebody knocking at the front door, and
+    filing them would fill the owner's queue with people who never tried to
+    sign in. Exactly one caller passes it: ``acb_auth.deps._with_resolved_access``,
+    which runs per authenticated request. See spec §6 done-when 3.
     """
     global _tables_missing
 
@@ -270,6 +332,12 @@ async def resolve_access(
                 "ensure_owner_bootstrap if NOBODY holds owner)"
             ),
         )
+        # The log line above is what the 2026-07-30 lockout needed and what
+        # 2026-08-04 proved insufficient: 53 of them for one address over 18
+        # hours, and nothing read them back. AFTER the log, never instead of
+        # it, and only for a real sign-in (see the docstring).
+        if record_request:
+            await _record_signin_request(key)
         refused = EffectiveAccess(is_active=False)
         if use_cache:
             _cache_put(key, refused)

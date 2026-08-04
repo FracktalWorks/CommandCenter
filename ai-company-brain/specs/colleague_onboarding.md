@@ -345,8 +345,12 @@ unguarded one.
    → `_common.assert_not_self_lockout` (`_common.py:248`), called from
    `members.py:214` (PATCH) and `:283` (DELETE). Neither route compares
    addresses itself any more, and
-   `test_both_off_boarding_doors_call_the_one_shared_guard` finds the doors
-   from the **router** — a third one added later is included automatically.
+   `test_both_off_boarding_doors_call_the_one_shared_guard` finds them from
+   the **router**. ⚠️ **This bullet first claimed "a third one added later is
+   included automatically." It does not** — the test looked at a single path,
+   which is exactly why the third door below was invisible to it. It now
+   enumerates `PUT …/roles` as well, and the claim is retracted rather than
+   repaired: enumerate the doors, do not trust a test to find them.
 2. ✅ It fires on `PATCH` for **`suspended` and `removed`**, and not on
    `active` — an owner re-activating their own row is harmless — nor on
    `display_name`. → Shipped as the wider rule (see the note above);
@@ -356,7 +360,9 @@ unguarded one.
    casing between sessions must not turn the guard off (the same property
    `load_owned_meeting` preserves for Notes). → Both sides `.strip().lower()`;
    four parametrised cases, and an empty address on either side matches
-   nothing. Mutation-checked: dropping the `.lower()` fails exactly those four.
+   nothing. Mutation-checked: dropping `.lower()` fails **three** of the four —
+   the fourth is a whitespace case and dies only when `.strip()` goes. (The
+   original "exactly those four" was measured wrong.)
 4. ✅ It is independent of `assert_owner_survives`: a test seeds **two** owners and
    asserts self-suspension is still refused, because the old refusal was that
    invariant firing by accident and would disappear the moment a second owner
@@ -366,10 +372,17 @@ unguarded one.
    world, same route, only the identity differs. The two 409s are told apart by
    their detail text *and* by what was written — deleting the guard from
    `update_member` fails the first test (the PATCH goes through).
-5. ✅ The Members page learns the viewer's identity (`GET /admin/me` already
-   returns `email` — `me.py:76`) and renders **no destructive control** on that
-   row, labelling it as the viewer's own instead. → `access.email` →
-   `rowActions()`; the row renders **This is you** in place of Suspend/Remove.
+5. ✅ The Members page learns the viewer's identity (**`GET /auth/me`** already
+   returns `email` — `routes/admin/me.py:76`, mounted at `/auth`, **not**
+   `/admin/me` as this bullet first said) and renders **no destructive
+   control** on that row, labelling it as the viewer's own instead. →
+   `access.email` → `rowActions()`; the row renders **This is you** in place
+   of Suspend/Remove. ⚠️ The wiring test first asserted only that the guard was
+   *mentioned before* the call site — which `void actions.canSuspend;` above a
+   `{true && (` satisfies while the control renders on your own row. It now
+   asserts the JSX condition itself. That is the **fourth** test in this
+   workstream to assert less than its docstring claimed; see §6 *Repair round
+   3*.
 6. ✅ A **Remove** control appears on other rows, calling the existing `DELETE`
    route, with a confirmation step naming the person — it drops every role
    assignment and is not a toggle. → `RemoveDialog`; the row only *opens* it,
@@ -380,6 +393,71 @@ unguarded one.
    → `removeMember` sets `error` from the gateway's `detail` and re-reads the
    roster on **every** response, refusals included (the N6a rule: a refusal is
    about the row that was clicked, so that row is the stale one).
+
+#### The third door — `PUT /admin/members/{email}/roles` · ✅ **CLOSED 2026-08-04**
+
+**Done-whens 1–7 close the two doors that set `status`. There is a third, and
+it was reachable — verified by driving the real route, not by reading it.**
+
+In the two-owner world §2 Step 2 exists to create:
+
+    PUT /admin/members/owner@fracktal.in/roles  {"roles": ["member"]}
+    as owner@fracktal.in                        -> ACCEPTED
+
+The caller kept `status = 'active'` and lost `admin:members:manage` — which is
+the floor for undoing it, so recovery was the other owner or hand-run SQL on
+prod. With a *single* owner the same call was refused, but by
+`assert_owner_survives` and in its wording: the same coincidence of org size
+that invariant 4 exists to stop relying on.
+
+This route never touches `status`, so `assert_not_self_lockout` cannot see it.
+The lockout is reached by taking the **permission** instead of the state.
+
+**`{"roles": []}` is not the sequence** — a separate check rejects an empty
+set with *"At least one role is required."* The reachable one is a
+self-demotion to any role that does not carry the recovery permission.
+
+**Closed by `_common.assert_not_self_demotion`**, called from
+`set_member_roles` **before** `assert_owner_survives`, so the caller hears the
+true reason rather than being told to assign another owner and then hitting the
+real wall.
+
+It decides on **the permissions the new roles actually grant**
+(`_ROLE_PERMISSIONS_SQL` → `permission_matches`), not on an allowlist of role
+slugs. A slug allowlist would refuse a custom role that legitimately carries
+`admin:members:manage`, and would enforce a rule nobody wrote down. An owner
+holding `*` passes through `permission_matches`.
+
+The distinction that keeps it honest: **the guard is about the permission, not
+about self-editing.** An owner moving themselves to `admin` still holds the
+recovery permission and is allowed — pinned by
+`test_a_self_edit_that_keeps_the_rights_is_allowed`. A blanket "you may not
+touch your own roles" would have been simpler and wrong.
+
+⚠️ The fake answers `_ROLE_PERMISSIONS_SQL` from a Python mapping
+(`_FakeDB.ROLE_PERMISSIONS`), so every behavioural case here would stay green
+if the real statement started reading slugs. The structural assertion is the
+fence — the same lesson as `_PROVISION_MEMBER_SQL` in §6.
+
+Mutation: deleting the call from `set_member_roles` fails **3** —
+`test_self_demotion_is_refused_even_when_another_owner_survives`,
+`test_the_last_owner_demoting_themselves_hears_the_self_refusal`, and the
+door-enumeration test.
+
+**A fourth door exists and is already guarded — measured, not assumed.**
+`PUT /admin/members/{email}/overrides` (`members.py:524-575`) refuses a caller
+who denies themselves `admin:access:manage`: *"This would revoke your own
+access management permission."* So the self-lockout rule now holds on all four
+routes that can reach it.
+
+⚠️ **But it holds by a fourth, independent inline comparison**, not through the
+shared helper — the exact shape that let the first two doors disagree, and it
+is invisible to the door-enumeration test because that test covers three
+specific paths. It also guards a *different* permission (`admin:access:manage`,
+its own gate) than the roles door does (`admin:members:manage`), which may be
+right and has never been stated as a decision. **Worth one consolidating pass**
+— four guards, one rule — before a second admin exists. Not done here: it is a
+refactor of working code, and this ticket's scope was the doors that were open.
 
 **Verification**
 

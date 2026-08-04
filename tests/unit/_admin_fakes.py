@@ -36,6 +36,11 @@ ORG = "00000000-0000-0000-0000-00000000000a"
 _PERSON_STMT = re.compile(r"^(SELECT count\(\*\) FROM|DELETE FROM) (\w+) WHERE ")
 #: ``lower(<col>) = :email`` / ``lower(<col>) = :actor``
 _PERSON_ADDR = re.compile(r"lower\((\w+)\) = :(email|actor)")
+#: The same comparison **without** ``lower()``. Modelled deliberately rather
+#: than left unrecognised: an unparsed clause used to fall through to "every
+#: seeded row matches", which made dropping ``lower()`` — the mutation that
+#: leaves a departed colleague's credentials behind — look like a pass.
+_PERSON_ADDR_CS = re.compile(r"(?<!lower\()\b(\w+) = :(email|actor)")
 #: ``<col> = CAST(:uid AS uuid)``
 _PERSON_UID = re.compile(r"(\w+) = CAST\(:uid AS uuid\)")
 #: ``visibility = 'private'`` / ``visibility <> 'private'``
@@ -187,15 +192,33 @@ class _FakeDB:
                     if r["email"].lower() == want]
 
         found = list(self.rows.get(table, []))
+        scoped = False
         addr = _PERSON_ADDR.search(s)
         if addr:
+            scoped = True
             col, key = addr.group(1), addr.group(2)
             want = str(p[key]).lower()
             found = [r for r in found if str(r.get(col, "")).lower() == want]
+        else:
+            # No `lower()`. Postgres would compare byte-for-byte, and so does
+            # this — modelling it is what makes "drop the lower()" a failing
+            # test rather than a clause the fake shrugs at.
+            raw = _PERSON_ADDR_CS.search(s)
+            if raw:
+                scoped = True
+                col, key = raw.group(1), raw.group(2)
+                want = str(p[key])
+                found = [r for r in found if str(r.get(col, "")) == want]
         uid = _PERSON_UID.search(s)
         if uid:
+            scoped = True
             col = uid.group(1)
             found = [r for r in found if str(r.get(col, "")) == p["uid"]]
+        if not scoped:
+            # A clause this fake cannot read must never mean "every row".
+            # Matching everything is exactly what a person-scoped DELETE must
+            # not do, so an unreadable predicate is an error, not a pass.
+            raise AssertionError(f"unscoped person clause in fake: {s}")
         vis = _PERSON_VIS.search(s)
         if vis:
             wants_private = vis.group(1) == "="

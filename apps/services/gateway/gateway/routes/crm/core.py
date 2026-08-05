@@ -309,6 +309,14 @@ class Entity:
     #: Child tables a DELETE takes with it, as ``(table, fk_column)``. Reported
     #: in the delete response — R7/R8: a destructive route names what cascaded.
     cascades: tuple[tuple[str, str], ...] = field(default_factory=tuple)
+    #: The Zoho module this entity's rows live in (WS-26b, §7.1's mapping
+    #: table). Declared HERE rather than in a second dict beside the sync
+    #: engine so "which Zoho module is a deal" has one answer that the
+    #: importer, the sync engine and the delete path all read.
+    zoho_module: str | None = None
+    #: What ``crm_zoho_tombstones.entity_type`` calls this entity — singular,
+    #: matching ``crm_status_changes``' vocabulary rather than the URL slug.
+    zoho_entity_type: str | None = None
 
 
 _TIMESTAMP_SORTS = {
@@ -329,6 +337,9 @@ ORGANIZATIONS = Entity(
     default_sort="last_activity_at",
     search=("name", "email", "website"),
     cascades=(("crm_activities", "organization_id"),),
+    # Zoho calls an organization an Account — the one place that rename lives.
+    zoho_module="Accounts",
+    zoho_entity_type="organization",
 )
 
 CONTACTS = Entity(
@@ -349,6 +360,8 @@ CONTACTS = Entity(
         ("crm_activities", "contact_id"),
         ("crm_deal_contacts", "contact_id"),
     ),
+    zoho_module="Contacts",
+    zoho_entity_type="contact",
 )
 
 LEADS = Entity(
@@ -369,6 +382,8 @@ LEADS = Entity(
     status_table="crm_lead_statuses",
     hides_converted=True,
     cascades=(("crm_activities", "lead_id"),),
+    zoho_module="Leads",
+    zoho_entity_type="lead",
 )
 
 DEALS = Entity(
@@ -392,6 +407,8 @@ DEALS = Entity(
         ("crm_activities", "deal_id"),
         ("crm_deal_contacts", "deal_id"),
     ),
+    zoho_module="Deals",
+    zoho_entity_type="deal",
 )
 
 #: URL segment → entity. The segment is matched against this dict, never
@@ -671,7 +688,52 @@ def _bindable(values: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+#: The four tables the Zoho sync dirty-tracks (§7.1, migration 145). Statuses,
+#: activities and the change log are deliberately absent: pipeline vocabulary
+#: flows DOWN only, and an activity carries its own push signal (a NULL
+#: ``zoho_id``), so a dirty column there would be a second answer to one
+#: question.
+ZOHO_TRACKED_TABLES: frozenset[str] = frozenset({
+    "crm_organizations", "crm_contacts", "crm_leads", "crm_deals",
+})
+
+
+def mark_dirty_on_insert(table: str, values: dict[str, Any]) -> dict[str, Any]:
+    """A new tracked row starts dirty **unless it came from Zoho** (§7.1).
+
+    "Came from Zoho" is read off the values themselves: the importer and the
+    pull both carry a ``zoho_id``, a native create never does. That is the
+    create half of echo suppression, and keying it on the payload rather than
+    on a flag the caller must remember means a pull path added later cannot
+    accidentally push everything it just read back up.
+    """
+    if table not in ZOHO_TRACKED_TABLES or "zoho_dirty" in values:
+        return values
+    return {**values, "zoho_dirty": values.get("zoho_id") is None}
+
+
+def mark_dirty_on_update(
+    table: str, values: dict[str, Any], *, touch: bool,
+) -> dict[str, Any]:
+    """A native update dirties a tracked row; a pull-applied one never does.
+
+    ``touch`` is the seam, and it is the seam on purpose: it already means
+    "this is a real edit, bump ``updated_at``". A pull applies its writes with
+    ``touch=False`` (so LWW keeps comparing Zoho's ``Modified_Time`` against a
+    timestamp Zoho itself produced), and the same flag therefore answers
+    "should this row be pushed back". One switch, not two that can disagree.
+
+    An explicit ``zoho_dirty`` in *values* wins — that is how the push phase
+    clears the flag and how a conflict resolved in Zoho's favour discards the
+    native edit.
+    """
+    if not touch or table not in ZOHO_TRACKED_TABLES or "zoho_dirty" in values:
+        return values
+    return {**values, "zoho_dirty": True}
+
+
 async def insert_row(db: Any, table: str, values: dict[str, Any]) -> Any:
+    values = mark_dirty_on_insert(table, values)
     columns = list(values)
     placeholders = ", ".join(_placeholder(c) for c in columns)
     return (await db.execute(
@@ -687,6 +749,7 @@ async def update_row(
     db: Any, table: str, record_id: str, values: dict[str, Any],
     *, touch: bool = True,
 ) -> Any:
+    values = mark_dirty_on_update(table, values, touch=touch)
     assignments = [f"{c} = {_placeholder(c)}" for c in values]
     if touch:
         assignments.append("updated_at = now()")
@@ -697,6 +760,71 @@ async def update_row(
         ),
         {**_bindable(values), "record_id": record_id},
     )).fetchone()
+
+
+async def upsert_by_zoho_id(db: Any, table: str, values: dict[str, Any]) -> Any:
+    """Write a row keyed on its Zoho provenance — §7.1's ``ON CONFLICT (zoho_id)``.
+
+    One statement, so a backfill replayed after a partial failure (or two
+    cycles racing) cannot produce a second copy of the same Zoho record. The
+    ``UNIQUE`` on every ``zoho_id`` column is what makes the arm reachable.
+
+    ⚠️ It deliberately does **not** touch ``updated_at`` on the conflict arm.
+    ``updated_at`` is the timestamp last-writer-wins compares against Zoho's
+    ``Modified_Time``, so it has to keep meaning "when a HUMAN last changed
+    this here". Bumping it on every pull would make the native side look
+    perpetually newer and turn LWW into always-native-wins. (It also could not
+    be applied generically: ``crm_activities`` has no such column.)
+    """
+    values = mark_dirty_on_insert(table, values)
+    columns = list(values)
+    placeholders = ", ".join(_placeholder(c) for c in columns)
+    assignments = ", ".join(
+        f"{c} = EXCLUDED.{c}" for c in columns if c != "zoho_id"
+    )
+    return (await db.execute(
+        text(
+            f"INSERT INTO {table} ({', '.join(columns)}) "
+            f"VALUES ({placeholders}) "
+            f"ON CONFLICT (zoho_id) DO UPDATE SET {assignments} "
+            f"RETURNING *"
+        ),
+        _bindable(values),
+    )).fetchone()
+
+
+async def load_by_zoho_id(db: Any, table: str, zoho_id: str) -> Any | None:
+    """The native row a Zoho record already maps to, if there is one."""
+    return (await db.execute(
+        text(f"SELECT * FROM {table} WHERE zoho_id = :zoho_id"),
+        {"zoho_id": zoho_id},
+    )).fetchone()
+
+
+async def record_zoho_tombstone(
+    db: Any, entity: Entity, record: Any, *, deleted_by: str,
+) -> bool:
+    """Remember a zoho-linked record we are about to delete (§7.1).
+
+    Called from inside the delete transaction, **before** the ``DELETE``, and
+    returns whether a tombstone was written. A tombstone cannot be a column on
+    a row that no longer exists, and it cannot be written afterwards either:
+    the ``zoho_id`` it needs disappears with the row.
+
+    Returns ``False`` — writing nothing — for a record Zoho has never seen.
+    There is nothing upstream to delete, and a tombstone with no ``zoho_id``
+    would be a permanent un-pushable row in the backlog.
+    """
+    zoho_id = (getattr(record, "zoho_id", None) or "").strip()
+    if not zoho_id or not entity.zoho_module:
+        return False
+    await insert_row(db, "crm_zoho_tombstones", {
+        "module": entity.zoho_module,
+        "zoho_id": zoho_id,
+        "entity_type": entity.zoho_entity_type,
+        "deleted_by": deleted_by,
+    })
+    return True
 
 
 async def load_default_status(db: Any, table: str) -> Any:

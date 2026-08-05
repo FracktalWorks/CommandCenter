@@ -65,6 +65,12 @@ _LITERAL_EQ = re.compile(r"\b(\w+)\s*=\s*'([^']*)'")
 _IS_NULL = re.compile(r"\b(\w+)\s+IS\s+(NOT\s+)?NULL", re.I)
 #: ``<col> ILIKE :q``
 _ILIKE = re.compile(r"(\w+)\s+ILIKE\s+:(\w+)", re.I)
+#: ``<col> IN ('a', 'b')`` — a closed literal vocabulary. Added for WS-26b's
+#: activity push, whose whole safety property is the ``type IN ('note','task')``
+#: predicate that keeps ``status_change`` rows out of Zoho: without a reader
+#: for it the fake would answer with every activity and the test would pass
+#: against a query that pushes the funnel's own history upstream.
+_IN_LITERALS = re.compile(r"\b(\w+)\s+IN\s*\(\s*'([^)]*)'\s*\)", re.I)
 
 
 def _table(sql: str) -> str:
@@ -115,7 +121,20 @@ _DEFAULTS: dict[str, dict[str, Any]] = {
     "crm_deal_contacts": {"is_primary": False},
     "crm_activities": {},
     "crm_status_changes": {},
+    # Migration 145 (WS-26b). `zoho_dirty` defaults false on the four record
+    # tables too — see `_ZOHO_TRACKED` below, which cannot live here because
+    # those tables already have entries.
+    "crm_zoho_tombstones": {"pushed_at": None},
+    "crm_sync_cursors": {
+        "last_pulled_at": None, "last_run_at": None, "last_status": None,
+    },
 }
+
+#: Migration 145's column defaults on the four record tables. A row seeded
+#: without them must read back as Postgres would: `zoho_dirty = false`, not
+#: `None` — otherwise "is this row dirty" is answered by a missing key and the
+#: push phase's predicate looks correct while matching nothing.
+_ZOHO_TRACKED: dict[str, Any] = {"zoho_dirty": False, "zoho_synced_at": None}
 
 #: Tables whose rows carry the timestamp trio.
 _TIMESTAMPED = {
@@ -146,6 +165,8 @@ class FakeCrmDB:
             row.setdefault("created_at", _now() - timedelta(days=1))
             row.setdefault("updated_at", _now() - timedelta(days=1))
             row.setdefault("last_activity_at", None)
+            for column, default in _ZOHO_TRACKED.items():
+                row.setdefault(column, default)
         self.tables.setdefault(table, []).append(row)
         return SimpleNamespace(**row)
 
@@ -194,6 +215,8 @@ class FakeCrmDB:
             row.setdefault("created_at", _now())
             row.setdefault("updated_at", _now())
             row.setdefault("last_activity_at", None)
+            for column, default in _ZOHO_TRACKED.items():
+                row.setdefault(column, default)
         if table == "crm_deals":
             row.setdefault("status_changed_at", _now())
             row.setdefault("closed_at", None)
@@ -275,6 +298,10 @@ class FakeCrmDB:
         for column, negated in _IS_NULL.findall(where):
             seen = True
             rows = [r for r in rows if (r.get(column) is not None) is bool(negated)]
+        for column, listed in _IN_LITERALS.findall(where):
+            seen = True
+            wanted = {v.strip().strip("'") for v in f"'{listed}'".split(",")}
+            rows = [r for r in rows if str(r.get(column)) in wanted]
         ilike = _ILIKE.findall(where)
         if ilike:
             seen = True

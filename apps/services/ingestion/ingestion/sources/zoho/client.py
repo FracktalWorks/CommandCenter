@@ -79,6 +79,26 @@ async def _headers() -> dict[str, str]:
     }
 
 
+def _with_modified_since(
+    headers: dict[str, str], since: datetime | None,
+) -> dict[str, str]:
+    """Add Zoho's ``If-Modified-Since`` header, in the RFC 1123 form it wants.
+
+    One helper because the record modules and the deleted-records endpoint
+    both take the same cursor: a second copy of this formatting is a second
+    place for the incremental read to quietly stop being incremental.
+    """
+    if since is None:
+        return headers
+    if since.tzinfo is None:
+        since = since.replace(tzinfo=timezone.utc)
+    # e.g. "Tue, 01 Jan 2026 00:00:00 +0000".
+    return {
+        **headers,
+        "If-Modified-Since": since.strftime("%a, %d %b %Y %H:%M:%S %z"),
+    }
+
+
 async def _list_module(
     module: str,
     *,
@@ -94,15 +114,7 @@ async def _list_module(
     s = get_settings()
     out: list[dict[str, Any]] = []
     page = 1
-    headers = await _headers()
-    if modified_since is not None:
-        # Zoho expects RFC 1123, e.g. "Tue, 01 Jan 2026 00:00:00 +0000".
-        if modified_since.tzinfo is None:
-            modified_since = modified_since.replace(tzinfo=timezone.utc)
-        headers = {
-            **headers,
-            "If-Modified-Since": modified_since.strftime("%a, %d %b %Y %H:%M:%S %z"),
-        }
+    headers = _with_modified_since(await _headers(), modified_since)
     async with httpx.AsyncClient(timeout=60.0) as http:
         while True:
             r = await http.get(
@@ -135,6 +147,17 @@ async def list_contacts(*, modified_since: "datetime | None" = None) -> list[dic
     return await _list_module("Contacts", modified_since=modified_since)
 
 
+async def list_leads(*, modified_since: datetime | None = None) -> list[dict[str, Any]]:
+    """Zoho Leads — the module the Phase-0 graph mirror never pulled.
+
+    Added for the native CRM (spec ``crm_app.md`` §7.1): ``crm_leads`` is the
+    entry point of the whole funnel, so a backfill without it starts the
+    pipeline at conversion. Same single ``GET`` as every sibling here — this
+    module still reads and never writes; writes live in ``writer.py``.
+    """
+    return await _list_module("Leads", modified_since=modified_since)
+
+
 async def list_notes(*, modified_since: "datetime | None" = None) -> list[dict[str, Any]]:
     """Notes are first-class activity rows in Zoho CRM (WBS 1.1)."""
     return await _list_module("Notes", modified_since=modified_since)
@@ -143,6 +166,52 @@ async def list_notes(*, modified_since: "datetime | None" = None) -> list[dict[s
 async def list_tasks(*, modified_since: "datetime | None" = None) -> list[dict[str, Any]]:
     """Zoho CRM Tasks (not to be confused with ClickUp tasks)."""
     return await _list_module("Tasks", modified_since=modified_since)
+
+
+async def list_deleted(
+    module: str,
+    *,
+    since: datetime | None = None,
+    kind: str = "all",
+    per_page: int = 200,
+) -> list[dict[str, Any]]:
+    """Records Zoho has DELETED in ``module`` — ``GET /crm/v2/{module}/deleted``.
+
+    A record removed in Zoho simply stops appearing in ``_list_module``, so an
+    incremental pull can never see it: the only honest way to propagate a Zoho
+    delete is to ask for the tombstones. Rows look like
+    ``{"id", "display_name", "type", "deleted_time", "deleted_by": {...}}``.
+
+    ``kind`` is Zoho's ``type`` filter — ``all`` (default), ``recycle`` (still
+    restorable) or ``permanent``. ``since`` is sent as ``If-Modified-Since``,
+    the same incremental lever the record modules use, so a cycle asks only
+    about deletions after its cursor.
+
+    Read-only, like every other function in this module.
+    """
+    s = get_settings()
+    out: list[dict[str, Any]] = []
+    page = 1
+    headers = _with_modified_since(await _headers(), since)
+    async with httpx.AsyncClient(timeout=60.0) as http:
+        while True:
+            r = await http.get(
+                f"{s.zoho_api_domain}/crm/v2/{module}/deleted",
+                headers=headers,
+                params={"type": kind, "page": page, "per_page": per_page},
+            )
+            # 204 = nothing deleted; 304 = nothing deleted since the cursor.
+            if r.status_code in (204, 304):
+                break
+            r.raise_for_status()
+            body = r.json()
+            rows = body.get("data") or []
+            out.extend(rows)
+            info = body.get("info") or {}
+            if not info.get("more_records") or len(rows) == 0:
+                break
+            page += 1
+    return out
 
 
 async def list_users() -> list[dict[str, Any]]:
@@ -162,6 +231,8 @@ __all__ = [
     "list_accounts",
     "list_contacts",
     "list_deals",
+    "list_deleted",
+    "list_leads",
     "list_notes",
     "list_tasks",
     "list_users",

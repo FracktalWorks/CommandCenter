@@ -396,3 +396,241 @@ def test_the_catalog_row_matches_the_features_tuple() -> None:
     from acb_auth import FEATURES
 
     assert "crm" in FEATURES
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# The Zoho-sync migration (WS-26b done-when 3)
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# 26a's fence, extended to the second CRM migration rather than duplicated
+# into a second file: the rules are the same rules, and two copies of an
+# idempotency fence drift until one of them stops failing.
+#
+# Found by CONTENT, exactly like the first one. R1 forbids writing an absolute
+# future migration number anywhere, and a test pinned to `145_` would be that
+# same mistake in a different file — the WS-26a verifier already measured the
+# "it is the highest in the repo" variant red the moment a later workstream
+# landed, so there are deliberately no highest-number assertions here either.
+
+
+def _sync_migration() -> Path:
+    """The migration that creates ``crm_zoho_tombstones``, whatever its number."""
+    found = [
+        path for path in sorted(MIGRATIONS.glob("*.sql"))
+        if path.name != "schema.generated.sql"
+        and "CREATE TABLE IF NOT EXISTS crm_zoho_tombstones" in path.read_text(
+            encoding="utf-8",
+        )
+    ]
+    assert len(found) == 1, (
+        f"expected exactly one migration creating crm_zoho_tombstones, found "
+        f"{[p.name for p in found]}"
+    )
+    return found[0]
+
+
+@pytest.fixture(scope="module")
+def sync_sql() -> str:
+    return _sync_migration().read_text(encoding="utf-8")
+
+
+@pytest.fixture(scope="module")
+def sync_bare(sync_sql: str) -> str:
+    return "\n".join(re.sub(r"--.*$", "", line) for line in sync_sql.splitlines())
+
+
+# ── Placement ───────────────────────────────────────────────────────────────
+
+def test_the_sync_migration_takes_a_free_number_after_the_crm_spine() -> None:
+    """Same two forever-true properties as the spine's: nobody shares its
+    number, and the ladder has no gap below it. Plus one this migration needs
+    on its own — it ALTERs tables 144 creates, and `apply_migrations.sh`
+    replays in filename order, so running first would abort the ladder.
+    """
+    numbers = sorted(
+        int(path.name.split("_", 1)[0])
+        for path in MIGRATIONS.glob("*.sql")
+        if path.name.split("_", 1)[0].isdigit()
+    )
+    mine = int(_sync_migration().name.split("_", 1)[0])
+    spine = int(_crm_migration().name.split("_", 1)[0])
+
+    assert numbers.count(mine) == 1, (
+        f"two migrations share number {mine} — the ladder replays them in "
+        "filename order, so one of them runs against the wrong schema"
+    )
+    assert mine - 1 in numbers, "the ladder has a gap below the CRM sync migration"
+    assert mine > spine, (
+        "the sync migration ALTERs the tables the CRM spine creates, so it must "
+        "sort after it"
+    )
+
+
+def test_the_sync_header_says_what_why_and_what_it_depends_on() -> None:
+    lines = _sync_migration().read_text(encoding="utf-8").splitlines()
+    header = "\n".join(
+        line for line in lines[: next(
+            i for i, line in enumerate(lines)
+            if line.strip() and not line.lstrip().startswith("--")
+        )]
+    )
+    for required in ("What:", "Why:", "Depends on:"):
+        assert required in header, f"the sync migration header has no '{required}'"
+    assert "144_crm.sql" in header, (
+        "a migration that ALTERs another one's tables must name it as a dependency"
+    )
+
+
+# ── Idempotency ─────────────────────────────────────────────────────────────
+
+def test_the_sync_migration_guards_every_create(sync_bare: str) -> None:
+    for keyword in ("TABLE", "INDEX"):
+        unguarded = [
+            m.group(0)
+            for m in re.finditer(rf"CREATE\s+{keyword}\s+(\S+)", sync_bare, re.I)
+            if not m.group(1).upper().startswith("IF")
+        ]
+        assert not unguarded, f"CREATE {keyword} without IF NOT EXISTS: {unguarded}"
+
+
+def test_every_added_column_is_guarded(sync_bare: str) -> None:
+    """``ADD COLUMN`` — unlike ``ADD CONSTRAINT`` — takes ``IF NOT EXISTS``
+    directly, so no ``DO $$`` wrapper is needed and none should appear."""
+    adds = re.findall(r"ADD\s+COLUMN(\s+IF\s+NOT\s+EXISTS)?", sync_bare, re.I)
+    assert adds, "no ADD COLUMN found — this check went vacuous"
+    assert all(guard for guard in adds), (
+        "ADD COLUMN without IF NOT EXISTS: apply_migrations.sh replays every "
+        "migration on every deploy"
+    )
+
+
+def test_the_sync_migration_adds_no_constraint_needing_a_do_block(
+    sync_bare: str,
+) -> None:
+    assert "ADD CONSTRAINT" not in sync_bare.upper()
+
+
+def test_any_sync_seed_carries_an_on_conflict_arm(sync_bare: str) -> None:
+    """Stated as a rule rather than a count: this migration seeds nothing
+    today, and the check must still bind the day somebody adds a row."""
+    statements = [
+        s for s in sync_bare.split(";")
+        if re.search(r"\bINSERT\s+INTO\b", s, re.I)
+    ]
+    naked = [
+        re.search(r"INSERT\s+INTO\s+(\w+)", s, re.I).group(1)
+        for s in statements
+        if not re.search(r"ON\s+CONFLICT", s, re.I)
+    ]
+    assert not naked, f"INSERT without ON CONFLICT into: {naked}"
+
+
+def test_the_sync_migration_drops_or_truncates_nothing(sync_bare: str) -> None:
+    for forbidden in ("DROP TABLE", "DROP COLUMN", "TRUNCATE", "DELETE FROM"):
+        assert forbidden not in sync_bare.upper(), (
+            f"the sync migration contains {forbidden} — a replayed migration "
+            "that destroys data destroys a live deployment"
+        )
+
+
+# ── §7.1's shape ────────────────────────────────────────────────────────────
+
+@pytest.mark.parametrize(
+    "table",
+    ["crm_organizations", "crm_contacts", "crm_leads", "crm_deals"],
+)
+def test_the_four_record_tables_gain_the_dirty_pair(
+    sync_bare: str, table: str,
+) -> None:
+    """§7.1's whole state machine is these two columns. `zoho_dirty` must
+    default FALSE: applying this migration to a populated database must not
+    mean "push every row that already exists to Zoho"."""
+    body = sync_bare.split(f"ALTER TABLE {table}", 1)[1].split(";", 1)[0]
+    assert "zoho_dirty" in body
+    assert "BOOLEAN NOT NULL DEFAULT false" in body
+    assert "zoho_synced_at" in body
+    assert "TIMESTAMPTZ" in body
+
+
+def test_the_statuses_and_the_activity_spine_are_not_dirty_tracked(
+    sync_bare: str,
+) -> None:
+    """Vocabulary flows DOWN only, and an activity carries its own push signal
+    (a NULL ``zoho_id``). A dirty column there would be a second answer to one
+    question — and `crm_activities` has no `updated_at` for LWW to read."""
+    altered = set(re.findall(r"ALTER TABLE\s+(\w+)", sync_bare, re.I))
+    assert altered == {
+        "crm_organizations", "crm_contacts", "crm_leads", "crm_deals",
+    }, altered
+
+
+def test_the_tombstone_table_carries_everything_a_push_needs(
+    sync_bare: str,
+) -> None:
+    """§7.1 — a tombstone cannot be a column on a row that no longer exists,
+    so it is a table, and it must be self-sufficient: after the record is gone
+    nothing else can supply the module or the id."""
+    body = sync_bare.split(
+        "CREATE TABLE IF NOT EXISTS crm_zoho_tombstones", 1,
+    )[1].split(");", 1)[0]
+    for column in ("module", "zoho_id", "entity_type", "deleted_by", "deleted_at"):
+        assert column in body, column
+    assert "module      TEXT NOT NULL" in body or "module TEXT NOT NULL" in body
+    # `pushed_at` NULL until pushed is the retry contract: a failed push is
+    # simply found again next cycle rather than lost.
+    assert re.search(r"pushed_at\s+TIMESTAMPTZ\s*$", body, re.M), body
+
+
+def test_the_tombstone_table_has_no_foreign_keys(sync_bare: str) -> None:
+    """Deliberate: the row it describes is gone by the time anybody reads it.
+    An FK would make the tombstone undeletable-with or deleted-alongside the
+    very deletion it exists to record."""
+    body = sync_bare.split(
+        "CREATE TABLE IF NOT EXISTS crm_zoho_tombstones", 1,
+    )[1].split(");", 1)[0]
+    assert "REFERENCES" not in body.upper()
+
+
+def test_the_tombstone_entity_vocabulary_is_check_constrained(
+    sync_bare: str,
+) -> None:
+    """`infra/postgres/README.md` prefers a CHECK for a status-like column, and
+    `core.record_zoho_tombstone` writes `Entity.zoho_entity_type` — so the two
+    vocabularies have to be the same one."""
+    from gateway.routes.crm.core import ENTITIES
+
+    body = sync_bare.split("CHECK (entity_type IN", 1)[1].split(")", 1)[0]
+    for entity in ENTITIES.values():
+        assert f"'{entity.zoho_entity_type}'" in body, entity.slug
+
+
+def test_the_unpushed_backlog_index_is_partial(sync_bare: str) -> None:
+    """The only query this table serves. A full index would be read by
+    nothing: every row is pushed within a cycle and stays forever."""
+    assert "ON crm_zoho_tombstones (deleted_at) WHERE pushed_at IS NULL" in sync_bare
+
+
+def test_the_dirty_indexes_are_partial(sync_bare: str) -> None:
+    """The push phase asks one question — "what is dirty" — against a table
+    that is almost entirely clean."""
+    for table in ("crm_organizations", "crm_contacts", "crm_leads", "crm_deals"):
+        assert f"ON {table} (zoho_dirty) WHERE zoho_dirty" in sync_bare
+
+
+def test_the_cursor_table_is_keyed_on_the_module(sync_bare: str) -> None:
+    """§7.1 — "``crm_sync_cursors`` (``module`` PK…)". A second cursor row for
+    one module is not a second opinion; it lets the pull silently rewind."""
+    body = sync_bare.split(
+        "CREATE TABLE IF NOT EXISTS crm_sync_cursors", 1,
+    )[1].split(");", 1)[0]
+    assert "module         TEXT PRIMARY KEY" in body or "module TEXT PRIMARY KEY" in body
+    for column in ("last_pulled_at", "last_run_at", "last_status"):
+        assert column in body, column
+
+
+def test_the_sync_migration_adds_no_new_source_value(sync_bare: str) -> None:
+    """§7.1 — pulled rows carry the EXISTING `'import'` value, so the CHECK
+    vocabulary in the spine needs no new member and no ALTER. An ALTER of a
+    CHECK constraint here would be the thing this test exists to catch."""
+    assert "CHECK (source" not in sync_bare
+    assert "DROP CONSTRAINT" not in sync_bare.upper()

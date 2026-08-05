@@ -309,6 +309,18 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     except Exception as exc:
         _log.warning("gateway.ingestion_consumer_skipped", error=str(exc))
 
+    # Start the CRM ⟷ Zoho two-way sync loop (routes/crm/sync_zoho.py; spec
+    # crm_app.md §7.1, D-CRM-7). Gated OFF by default on CRM_ZOHO_SYNC: with
+    # the flag off this registers NO loop at all. Flipping it on is an
+    # OWNER-GATE because the loop then WRITES the live Zoho tenant unattended.
+    # POST /crm/sync/zoho runs one cycle on demand either way.
+    try:
+        from gateway.routes.crm.sync_zoho import start_crm_zoho_sync
+        crm_sync_started = await start_crm_zoho_sync()
+        _log.info("gateway.crm_zoho_sync", started=crm_sync_started)
+    except Exception as exc:
+        _log.warning("gateway.crm_zoho_sync_skipped", error=str(exc))
+
     # Anthropic prompt-cache warming (specs/llm_caching_memory.md Phase 6).
     # Fire the orchestrator's stable prefix at any Anthropic-backed tier with
     # max_tokens=0 so the first real user request is a cache HIT, not a cold
@@ -338,6 +350,15 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     try:
         from gateway.routes.tasks.calendar import stop_auto_rollover
         await stop_auto_rollover()
+    except Exception:
+        pass
+
+    # Stop the CRM ⟷ Zoho sync loop. Unconditional, like every other
+    # supervised loop here: a flag-gated loop that never started is still
+    # stopped, so the shutdown path never has to know why it is absent.
+    try:
+        from gateway.routes.crm.sync_zoho import stop_crm_zoho_sync
+        await stop_crm_zoho_sync()
     except Exception:
         pass
 
@@ -992,6 +1013,17 @@ try:
     from gateway.routes.tasks.broker_handlers import register_task_broker_handlers
 
     register_task_broker_handlers()
+except Exception:  # pragma: no cover
+    pass
+
+try:
+    # D-CRM-8 — every Zoho sync push routes through the Action-Broker gate, so
+    # the three `crm.zoho_*` actions need handlers that really execute when a
+    # queued push is approved. Unlike the ClickUp set (BO-1a: six gated, four
+    # registered), ALL THREE gated CRM actions are registered here.
+    from gateway.routes.crm.broker_handlers import register_crm_broker_handlers
+
+    register_crm_broker_handlers()
 except Exception:  # pragma: no cover
     pass
 

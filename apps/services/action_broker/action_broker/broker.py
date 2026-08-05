@@ -15,15 +15,20 @@ This module now provides the real decision + execution core:
   handler, and an action with no handler is REFUSED (never silently applied).
 
 This module itself registers nothing — handlers are wired in by the gateway at
-startup / import (five sites as of 2026-08-03: ClickUp task writes, workflow
-resume, WhatsApp broadcast, and two app-tool actions). It is therefore **live**,
-not inert: ``pending_actions`` persistence, the Control Plane approval binding
+startup / import (six sites as of 2026-08-05: ClickUp task writes, workflow
+resume, WhatsApp broadcast, two app-tool actions, and the CRM's three
+``crm.zoho_*`` sync pushes). It is therefore **live**, not inert:
+``pending_actions`` persistence, the Control Plane approval binding
 (gateway ``routes/actions.py``) and the ClickUp task-write reroute all shipped
 2026-07-13. Remaining per FOUNDATION_BUILDOUT_CHECKLIST §BO-1: two gated ClickUp
 actions still have no handler (BO-1a), the queued-write ``sync_state`` marker is
 ignored (BO-1b), and email writes do not route through here at all (BO-1c).
-There is no Zoho write client anywhere in the repo, so the ``"zoho.email"``
-example below is illustrative, not a pointer to real code.
+
+⚠️ **A Zoho write client now exists** (2026-08-05, WS-26b —
+``ingestion/sources/zoho/writer.py``), so the ``"zoho.email"`` example below is
+no longer purely illustrative. It is reached only through
+``gateway/routes/crm/broker_handlers.py``'s gate, all three of its actions have
+registered handlers, and it is dormant until ``CRM_ZOHO_SYNC`` is turned on.
 """
 from __future__ import annotations
 

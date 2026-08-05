@@ -1,8 +1,11 @@
 # Backup & Restore — BO-23
 
-**Status:** scripts SHIPPED (agent-safe); scheduling + off-box copy OWNER-GATE
+**Status:** scripts SHIPPED · **scheduling CLOSED 2026-08-05** (timer installed,
+enabled, and proven by a real run) · **off-box copy still OWNER-GATE and now the
+largest remaining hole**
 **Owner row:** FOUNDATION_BUILDOUT_CHECKLIST.md §BO-23
-**Last measured:** 2026-08-03 against the live VPS (srv1747539)
+**Last measured:** 2026-08-05 against the live VPS (srv1747539); §1's recovery
+position was measured 2026-08-03 and is unchanged
 
 ---
 
@@ -119,21 +122,70 @@ These could not be completed by an agent. Two independent guards refused:
 `plan-guard` blocks writes under `deploy/`, and the runtime classifier blocks
 live VPS configuration changes. Both refusals were correct.
 
-### 4.1 Schedule it (nothing runs automatically yet)
+### 4.1 Schedule it — ✅ CLOSED 2026-08-05
 
-`scripts/backup_db.sh` exists but **no timer invokes it**. Until these two unit
-files land in `deploy/hostinger/` and are enabled, backups happen only when
-someone runs the script by hand. Contents are in §5 of this document.
+The two units were written **directly to `/etc/systemd/system/`** from §5's
+contents, not installed from `deploy/hostinger/` — those repo files were never
+committed, so the `install` command below pointed at nothing. The timer is
+enabled and nightly at 02:30 UTC with `Persistent=true`.
 
 ```bash
-sudo install -m 0644 /opt/acb/app/deploy/hostinger/acb-backup.{service,timer} /etc/systemd/system/
+# The units are in §5. Write them to /etc/systemd/system/ directly.
 sudo systemctl daemon-reload
 sudo systemctl enable --now acb-backup.timer
 sudo systemctl start acb-backup.service   # prove it works now, do not wait for 02:30
 sudo systemctl status acb-backup.service
 ```
 
-### 4.2 Off-box copy — the gap that still matters most
+⚠️ **That last line is not ceremony, and this is the durable lesson from BO-23.**
+The first real run **failed**, on a bug nothing else would have surfaced:
+
+```
+/opt/acb/app/scripts/backup_db.sh: line 142: /tmp/verify_restore.log: Permission denied
+!! pg_restore FAILED — acb-backup.service: Failed with result 'exit-code'
+```
+
+`--verify-restore` wrote pg_restore output to `/tmp/verify_restore.log`. Ubuntu
+sets `fs.protected_regular=2`, which forbids opening an existing file in a sticky
+world-writable directory owned by a **different** user — and unlike ordinary
+permissions, **root is not exempt**. An earlier hand-run as `acb` created the
+file; every root-run unit invocation after that hit EACCES. The dump itself was
+always fine, so the failure mode was the worst available shape: a nightly unit
+reporting FAILURE while the data it produced was perfectly good — discovered
+during an incident, when the operator most needs to trust the backup.
+
+Fixed in PR #359 (`$DEST/verify_restore.log`, beside the dump it describes). **A
+timer that has never been fired is not a schedule; it is a plan.**
+
+Verified after the fix:
+
+```
+Result=success   ExecMainStatus=0
+public tables: live=228 restored=228
+restore verified
+4 backup(s) retained, 90M total
+```
+
+### 4.2 Off-box copy — DEFERRED by owner decision, 2026-08-05
+
+> **DECISION (owner-answered, 2026-08-05): leave `BACKUP_REMOTE` unset for now.**
+>
+> The accepted risk, stated plainly so nobody has to re-derive it: backups
+> protect against a bad migration, a dropped table, or a botched release. They
+> do **not** survive losing the disk, the box, or the Hostinger account. If the
+> VPS goes, recovery falls back to the Hostinger VM image — §1's measured
+> position: weekly, two retained, up to 7 days of loss, ~58 minutes, whole
+> machine.
+>
+> This is a deliberate deferral, not an oversight, and `backup_db.sh` keeps
+> warning on every run. Do not "fix" the warning by silencing it. Revisit when
+> the data in this deployment is worth more than a week of it — the options
+> considered were an S3-compatible bucket (cheapest, provider-independent), an
+> rsync target on a machine already owned, or Hostinger storage (simplest, but
+> shares the account with the thing it protects, so it covers disk failure and
+> not account loss).
+
+The original analysis follows.
 
 `BACKUP_REMOTE` is unset, so backups sit on the same disk as the database they
 protect. That covers bad migrations and dropped tables. It does **not** cover

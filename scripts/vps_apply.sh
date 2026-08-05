@@ -1,0 +1,437 @@
+set -e
+APP_DIR="${APP_DIR:-/opt/acb/app}"
+cd "$APP_DIR"
+
+echo "==> Pulling latest from origin/main"
+# Preserve runtime-managed state that lives in tracked files but is
+# mutated on the VPS (agents.json = Control-Plane agent registry).
+# git reset --hard would otherwise wipe agents registered via the UI.
+cp apps/services/gateway/agents.json /tmp/acb-agents.json.bak 2>/dev/null || true
+git fetch origin main
+git reset --hard origin/main
+if [ -s /tmp/acb-agents.json.bak ]; then
+  cp /tmp/acb-agents.json.bak apps/services/gateway/agents.json
+  echo "    restored runtime agents.json ($(wc -l < apps/services/gateway/agents.json) lines)"
+fi
+
+echo "==> Skipping deprecated LiteLLM proxy cleanup (already removed)"
+
+echo "==> Ensuring memory-layer env vars (Neo4j disabled for low-memory VPS)"
+ENV_FILE="/opt/acb/app/.env"
+for _var in MEM0_ENABLED GRAPHITI_ENABLED; do
+  if ! grep -qE "^${_var}=" "$ENV_FILE" 2>/dev/null; then
+    case "$_var" in
+      MEM0_ENABLED)       echo "MEM0_ENABLED=true" >> "$ENV_FILE" ;;
+      GRAPHITI_ENABLED)   echo "GRAPHITI_ENABLED=false" >> "$ENV_FILE" ;;
+    esac
+    echo "    + added $_var to .env"
+  fi
+done
+# Ensure GRAPHITI stays off for this VPS size (idempotent)
+if grep -qE '^GRAPHITI_ENABLED=true' "$ENV_FILE" 2>/dev/null; then
+  sed -i 's/^GRAPHITI_ENABLED=true/GRAPHITI_ENABLED=false/' "$ENV_FILE"
+  echo "    Disabled GRAPHITI (Neo4j) — saves ~500MB RAM"
+fi
+
+echo "==> Ensuring OAuth env vars"
+for _var in MICROSOFT_TENANT_ID AUTH_MICROSOFT_ENTRA_ID_TENANT GATEWAY_PUBLIC_URL WORKBENCH_PUBLIC_URL; do
+  if ! grep -qE "^${_var}=" "$ENV_FILE" 2>/dev/null; then
+    case "$_var" in
+      MICROSOFT_TENANT_ID)             echo "MICROSOFT_TENANT_ID=3a83c19d-ef37-4934-b61a-0d33750ca82e" >> "$ENV_FILE" ;;
+      AUTH_MICROSOFT_ENTRA_ID_TENANT)   echo "AUTH_MICROSOFT_ENTRA_ID_TENANT=3a83c19d-ef37-4934-b61a-0d33750ca82e" >> "$ENV_FILE" ;;
+      GATEWAY_PUBLIC_URL)              echo "GATEWAY_PUBLIC_URL=https://api.commandcenter.fracktal.in" >> "$ENV_FILE" ;;
+      WORKBENCH_PUBLIC_URL)            echo "WORKBENCH_PUBLIC_URL=https://commandcenter.fracktal.in" >> "$ENV_FILE" ;;
+    esac
+    echo "    + added $_var to .env"
+  fi
+done
+
+# The workbench (Next.js, systemd unit acb-workbench) is a SEPARATE
+# service that reads its OWN env file (control_plane/.env.local) via
+# process.env — NOT the shared .env above. Its server routes forward
+# GATEWAY_INTERNAL_TOKEN to the gateway's require_internal_auth. If the
+# two files' tokens drift, every workbench->gateway internal call
+# (/memory, /v1/chat/completions for orchestrator chat) 401s while the
+# backend agents (which share .env) keep working — a confusing
+# partial outage. So make .env the single source of truth: reconcile
+# GATEWAY_INTERNAL_TOKEN in .env.local to EXACTLY match .env here,
+# in-place, idempotently, preserving every other key in .env.local.
+echo "==> Reconciling workbench internal token (.env.local <- .env)"
+WB_ENV="/opt/acb/app/workbench/control_plane/.env.local"
+SHARED_TOKEN="$(grep -E '^GATEWAY_INTERNAL_TOKEN=' "$ENV_FILE" 2>/dev/null | head -1 | cut -d= -f2-)"
+if [ -z "$SHARED_TOKEN" ]; then
+  echo "    ! GATEWAY_INTERNAL_TOKEN not set in $ENV_FILE — skipping (backend also relies on it; fix the secret)"
+elif [ ! -f "$WB_ENV" ]; then
+  echo "    ! $WB_ENV missing — creating with the token only (other workbench keys must be provisioned separately)"
+  printf 'GATEWAY_INTERNAL_TOKEN=%s\n' "$SHARED_TOKEN" > "$WB_ENV"
+else
+  CURRENT="$(grep -E '^GATEWAY_INTERNAL_TOKEN=' "$WB_ENV" 2>/dev/null | head -1 | cut -d= -f2-)"
+  if [ "$CURRENT" = "$SHARED_TOKEN" ]; then
+    echo "    already in sync (sha8=$(printf %s "$SHARED_TOKEN" | sha256sum | cut -c1-8))"
+  else
+    cp -a "$WB_ENV" "$WB_ENV.bak.$(date +%s)"
+    # Rewrite the line without a sed s/// (token may contain / & etc.):
+    # drop any existing line, then append the authoritative value.
+    grep -vE '^GATEWAY_INTERNAL_TOKEN=' "$WB_ENV" > "$WB_ENV.tmp" || true
+    printf 'GATEWAY_INTERNAL_TOKEN=%s\n' "$SHARED_TOKEN" >> "$WB_ENV.tmp"
+    mv "$WB_ENV.tmp" "$WB_ENV"
+    echo "    updated .env.local token to match .env (sha8=$(printf %s "$SHARED_TOKEN" | sha256sum | cut -c1-8)); backup written"
+  fi
+fi
+
+echo "==> Bootstrapping Docker Compose stack (core only)"
+docker compose -f infra/docker-compose.yml --profile core up -d --remove-orphans
+
+echo "==> Waiting for healthchecks (up to 90s)"
+deadline=$(( $(date +%s) + 90 ))
+while [ $(date +%s) -lt $deadline ]; do
+  unhealthy=$(docker ps --filter "label=com.docker.compose.project=acb" --format '{{.Names}}\t{{.Status}}' \
+    | awk '$0 ~ /unhealthy|starting/ {print $1}')
+  if [ -z "$unhealthy" ]; then break; fi
+  sleep 3
+done
+docker ps --filter "label=com.docker.compose.project=acb" --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
+
+echo "==> Applying database migrations (02+ — init only mounts 00/01)"
+APP_DIR="$APP_DIR" bash scripts/apply_migrations.sh
+
+echo "==> Syncing Python deps"
+if ! command -v uv >/dev/null; then
+  curl -LsSf https://astral.sh/uv/install.sh | sh
+  export PATH="$HOME/.local/bin:$PATH"
+fi
+uv sync
+
+# ── [TRIAL] Free local diarization (sherpa-onnx) ──────────────────
+# Adds free CPU-only speaker separation for Whisper transcripts.
+# Fully reversible: set LOCAL_DIAR=0 below (or NOTES_LOCAL_DIARIZATION=0
+# in .env) + redeploy to fall back to the Deepgram/Whisper path. The
+# app is fail-safe — if any of this is missing it silently no-ops.
+LOCAL_DIAR="1"
+MODELS_DIR="$APP_DIR/models/sherpa"
+SEG_MODEL="$MODELS_DIR/segmentation.onnx"
+EMB_MODEL="$MODELS_DIR/embedding.onnx"
+upsert_env() {  # key value — set-or-replace in $ENV_FILE (paths ok)
+  if grep -qE "^$1=" "$ENV_FILE" 2>/dev/null; then
+    sed -i "s|^$1=.*|$1=$2|" "$ENV_FILE"
+  else
+    echo "$1=$2" >> "$ENV_FILE"
+  fi
+}
+echo "==> [trial] Local diarization (sherpa-onnx), LOCAL_DIAR=$LOCAL_DIAR"
+if [ "$LOCAL_DIAR" = "1" ]; then
+  mkdir -p "$MODELS_DIR"
+  # ffmpeg decodes the meeting audio → 16kHz PCM for sherpa. The VPS
+  # never needed it before (cloud STT decodes server-side), so install
+  # it on demand; without it the diarization pass silently no-ops.
+  if ! command -v ffmpeg >/dev/null; then
+    echo "    installing ffmpeg (needed to decode audio for diarization)…"
+    (sudo apt-get update -qq && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq ffmpeg) >/dev/null 2>&1 \
+      && echo "    + ffmpeg installed" || echo "    ! ffmpeg install failed — decode will no-op"
+  fi
+  uv pip install -q 'sherpa-onnx>=1.10' 'numpy>=1.24' \
+    || echo "    ! sherpa-onnx install failed — local diar will no-op"
+  if [ ! -f "$SEG_MODEL" ]; then
+    curl -fsSL -o /tmp/seg.tar.bz2 "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-segmentation-models/sherpa-onnx-pyannote-segmentation-3-0.tar.bz2" \
+      && tar xjf /tmp/seg.tar.bz2 -C /tmp \
+      && cp /tmp/sherpa-onnx-pyannote-segmentation-3-0/model.int8.onnx "$SEG_MODEL" \
+      && echo "    + segmentation model (int8, ~6MB)" || echo "    ! seg download failed"
+  fi
+  if [ ! -f "$EMB_MODEL" ]; then
+    curl -fsSL -o "$EMB_MODEL" "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/3dspeaker_speech_campplus_sv_zh-cn_16k-common.onnx" \
+      && echo "    + speaker-embedding model (CAM++, ~27MB)" || echo "    ! emb download failed"
+  fi
+  if [ -f "$SEG_MODEL" ] && [ -f "$EMB_MODEL" ]; then
+    upsert_env NOTES_LOCAL_DIARIZATION 1
+    upsert_env SHERPA_SEG_MODEL "$SEG_MODEL"
+    upsert_env SHERPA_EMB_MODEL "$EMB_MODEL"
+    grep -qE "^SHERPA_DIAR_THRESHOLD=" "$ENV_FILE" || echo "SHERPA_DIAR_THRESHOLD=0.7" >> "$ENV_FILE"
+    echo "    local diarization ENABLED (Whisper transcripts get free speakers)"
+  else
+    upsert_env NOTES_LOCAL_DIARIZATION 0
+    echo "    models missing — left OFF; Deepgram/Whisper path unaffected"
+  fi
+else
+  upsert_env NOTES_LOCAL_DIARIZATION 0
+  echo "    LOCAL_DIAR=0 — local diarization OFF"
+fi
+
+# ── WhatsApp bridge (whatsmeow, personal-number QR) ───────────────
+# A localhost-only Go service that links a PERSONAL number by QR and
+# streams messages to the gateway's /whatsapp/bridge/ingest (same
+# triage brain as a Cloud API number). Env is added BEFORE the gateway
+# restart below so the gateway picks up WHATSAPP_BRIDGE_URL/SECRET.
+# Opt out any time with WHATSAPP_BRIDGE_ENABLED=0 in .env. Fail-safe:
+# a build/start hiccup only skips the bridge, never the whole deploy.
+# NOTE: unofficial multi-device is outside WhatsApp's ToS — the number
+# can be banned; idle is harmless, risk begins when a number is paired.
+echo "==> WhatsApp bridge (whatsmeow, personal-number QR)"
+grep -qE '^WHATSAPP_BRIDGE_ENABLED=' "$ENV_FILE" || echo "WHATSAPP_BRIDGE_ENABLED=1" >> "$ENV_FILE"
+grep -qE '^WHATSAPP_BRIDGE_URL='         "$ENV_FILE" || echo "WHATSAPP_BRIDGE_URL=http://localhost:8790" >> "$ENV_FILE"
+grep -qE '^WHATSAPP_BRIDGE_GATEWAY_URL=' "$ENV_FILE" || echo "WHATSAPP_BRIDGE_GATEWAY_URL=http://localhost:8080" >> "$ENV_FILE"
+grep -qE '^WHATSAPP_BRIDGE_ADDR='        "$ENV_FILE" || echo "WHATSAPP_BRIDGE_ADDR=127.0.0.1:8790" >> "$ENV_FILE"
+grep -qE '^WHATSAPP_BRIDGE_STORE='       "$ENV_FILE" || echo "WHATSAPP_BRIDGE_STORE=/opt/acb/data/whatsapp_bridge/bridge-store.db" >> "$ENV_FILE"
+# Voice calls: recorded audio lands beside the session store and is
+# swept after RETENTION_DAYS (recording runs ~115 MB per call-hour,
+# so unbounded would fill the VPS). Blank RECORD_DIR = no recording.
+grep -qE '^WHATSAPP_BRIDGE_CALL_RECORD_DIR='    "$ENV_FILE" || echo "WHATSAPP_BRIDGE_CALL_RECORD_DIR=/opt/acb/data/whatsapp_bridge/call-recordings" >> "$ENV_FILE"
+grep -qE '^WHATSAPP_BRIDGE_CALL_RETENTION_DAYS=' "$ENV_FILE" || echo "WHATSAPP_BRIDGE_CALL_RETENTION_DAYS=7" >> "$ENV_FILE"
+# Generate a strong shared secret once (used by BOTH gateway + bridge).
+if ! grep -qE '^WHATSAPP_BRIDGE_SECRET=.+' "$ENV_FILE"; then
+  _wbsecret="$(openssl rand -hex 32 2>/dev/null || head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+  grep -vE '^WHATSAPP_BRIDGE_SECRET=' "$ENV_FILE" > "$ENV_FILE.wb.tmp" && mv "$ENV_FILE.wb.tmp" "$ENV_FILE"
+  echo "WHATSAPP_BRIDGE_SECRET=$_wbsecret" >> "$ENV_FILE"
+  echo "    + generated WHATSAPP_BRIDGE_SECRET"
+fi
+
+WB_ENABLED="$(grep -E '^WHATSAPP_BRIDGE_ENABLED=' "$ENV_FILE" | head -1 | cut -d= -f2-)"
+if [ "$WB_ENABLED" = "1" ]; then
+  mkdir -p /opt/acb/data/whatsapp_bridge
+  # Ensure a Go >=1.24 toolchain (pure-Go / CGO-free build). Install to
+  # /usr/local/go on demand; cached across deploys.
+  GO=""
+  if command -v go >/dev/null 2>&1 && go version 2>/dev/null | grep -qE 'go1\.(2[4-9]|[3-9][0-9])'; then
+    GO="$(command -v go)"
+  elif [ -x /usr/local/go/bin/go ] && /usr/local/go/bin/go version | grep -qE 'go1\.(2[4-9]|[3-9][0-9])'; then
+    GO="/usr/local/go/bin/go"
+  else
+    echo "    installing Go 1.24.7…"
+    if curl -fsSL -o /tmp/go.tgz https://go.dev/dl/go1.24.7.linux-amd64.tar.gz; then
+      sudo rm -rf /usr/local/go && sudo tar -C /usr/local -xzf /tmp/go.tgz && GO="/usr/local/go/bin/go" && echo "    + Go installed"
+    fi
+  fi
+  if [ -n "$GO" ] && ( cd "$APP_DIR/apps/services/whatsapp_bridge" && GOFLAGS=-mod=mod CGO_ENABLED=0 "$GO" build -o whatsapp_bridge . ); then
+    sudo cp "$APP_DIR/deploy/hostinger/acb-whatsapp-bridge.service" /etc/systemd/system/acb-whatsapp-bridge.service || true
+    sudo systemctl daemon-reload || true
+    sudo systemctl enable acb-whatsapp-bridge >/dev/null 2>&1 || true
+    sudo systemctl restart acb-whatsapp-bridge || true
+    sleep 2
+    if systemctl is-active --quiet acb-whatsapp-bridge; then
+      echo "    WhatsApp bridge is active (localhost:8790)"
+    else
+      echo "    ! WhatsApp bridge not active (non-fatal) — journalctl -u acb-whatsapp-bridge"
+    fi
+  else
+    echo "    ! bridge build/toolchain unavailable (non-fatal) — personal-number linking stays offline"
+  fi
+else
+  echo "    WHATSAPP_BRIDGE_ENABLED != 1 — ensuring bridge is stopped"
+  sudo systemctl disable --now acb-whatsapp-bridge >/dev/null 2>&1 || true
+fi
+
+# ── Self-hosted meeting bot (Note Taker §3.13) ────────────────────
+# A headless-Chrome participant that joins a Meet link, records the
+# call, and feeds the normal transcribe → diarize → notes pipeline.
+# Runs as a Docker service (profile "meetingbot") because each in-call
+# bot is a real Chrome (~1-3 GB RAM + up to 2 CPU) — it needs a box
+# with headroom, which is why this is opt-out-able rather than core.
+# Env is written BEFORE the gateway restart so the gateway picks up
+# MEETING_BOT_URL/TOKEN. Fail-safe: a build or start hiccup skips the
+# bot only — the rest of the deploy (and the whole app) is unaffected.
+echo "==> Meeting bot (self-hosted, headless Chrome)"
+grep -qE '^MEETING_BOT_ENABLED=' "$ENV_FILE" || echo "MEETING_BOT_ENABLED=1" >> "$ENV_FILE"
+# The gateway talks to the worker over the host-published port; the
+# worker calls back to the gateway from inside its container.
+upsert_env MEETING_BOT_URL "http://127.0.0.1:8095"
+upsert_env NOTES_BOT_PROVIDER "selfhosted"
+upsert_env NOTES_LIVE_CALLBACK_BASE "http://host.docker.internal:8080"
+# Where the worker fetches streaming-ASR credentials. Without this
+# the bot records fine but produces no live captions — the failure
+# mode is silent, so it is wired by default rather than left opt-in.
+upsert_env NOTES_LIVE_TOKEN_URL \
+  "http://host.docker.internal:8080/notes/stt/bot-live-token"
+# Persistent Chrome profile for the bot. Meet AUTO-DECLINES
+# anonymous participants (they never get to knock) whenever the
+# host isn't in the call yet or link-guests can't ask in — a
+# signed-in profile is the only unattended fix. The dir is inside
+# the container (its own volume); sign in once via
+# POST /google-login. Defaults preserved on re-deploy.
+grep -qE '^MEET_PROFILE_DIR=' "$ENV_FILE" || \
+  echo "MEET_PROFILE_DIR=/profile" >> "$ENV_FILE"
+# Live VNC view of the bot's browser (loopback only). Default off.
+grep -qE '^MEET_VNC=' "$ENV_FILE" || echo "MEET_VNC=0" >> "$ENV_FILE"
+# One shared secret, both directions (gateway -> worker, and the
+# worker's live-segment callback). Generated once, then reused.
+if ! grep -qE '^MEETING_BOT_TOKEN=.+' "$ENV_FILE"; then
+  _mbtoken="$(openssl rand -hex 32 2>/dev/null || head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+  grep -vE '^MEETING_BOT_TOKEN=' "$ENV_FILE" > "$ENV_FILE.mb.tmp" && mv "$ENV_FILE.mb.tmp" "$ENV_FILE"
+  echo "MEETING_BOT_TOKEN=$_mbtoken" >> "$ENV_FILE"
+  echo "    + generated MEETING_BOT_TOKEN"
+fi
+
+MB_ENABLED="$(grep -E '^MEETING_BOT_ENABLED=' "$ENV_FILE" | head -1 | cut -d= -f2-)"
+# Never recreate the worker while a bot is in a live call — each
+# bot is a Chrome inside the container, so `up --build` mid-meeting
+# kills the notetaker someone is relying on (this happened). The
+# skipped rebuild simply lands on the next deploy.
+MB_ACTIVE="$(curl -fsS --max-time 5 http://127.0.0.1:8095/health 2>/dev/null \
+  | grep -o '"active":[0-9]*' | cut -d: -f2 || true)"
+if [ "$MB_ENABLED" = "1" ] && [ -n "$MB_ACTIVE" ] && [ "$MB_ACTIVE" -gt 0 ] 2>/dev/null; then
+  echo "    ~ $MB_ACTIVE bot(s) in a call right now — keeping the running worker; rebuild deferred to the next deploy"
+elif [ "$MB_ENABLED" = "1" ]; then
+  # --build is cheap after the first run (layer cache); the first
+  # deploy pulls the Playwright base image, which is large.
+  # --env-file is explicit on purpose: compose resolves a bare .env
+  # against the project directory (infra/), not the app root.
+  #
+  # `timeout` and </dev/null are both scar tissue: an apt postinst
+  # that prompts (tzdata asking "Geographic area:") hung this build
+  # for 15 minutes until the deploy's SSH session died, and the
+  # deploy then reported success from gateway health while the OLD
+  # bot image stayed live. Bounded + no tty means a prompt fails
+  # fast instead of eating the deploy.
+  MB_IMAGE_BEFORE="$(docker images -q acb-meeting-bot:latest 2>/dev/null || true)"
+  if timeout 900 docker compose --env-file "$ENV_FILE" \
+       -f infra/docker-compose.yml --profile meetingbot \
+       up -d --build meeting-bot </dev/null 2>&1 | tail -5; then
+    sleep 5
+    if curl -fsS --max-time 10 http://127.0.0.1:8095/health >/dev/null 2>&1; then
+      MB_IMAGE_AFTER="$(docker images -q acb-meeting-bot:latest 2>/dev/null || true)"
+      if [ -n "$MB_IMAGE_BEFORE" ] && \
+         [ "$MB_IMAGE_BEFORE" = "$MB_IMAGE_AFTER" ]; then
+        echo "    meeting bot UP on 127.0.0.1:8095 (image unchanged — nothing to rebuild)"
+      else
+        echo "    meeting bot UP on 127.0.0.1:8095 (image rebuilt)"
+      fi
+    else
+      echo "    !! meeting bot started but /health not answering — join-by-link is DOWN"
+      docker logs --tail 20 acb-meeting-bot 2>&1 | sed 's/^/      /' || true
+    fi
+  else
+    # Loud and specific: the old container is probably still serving,
+    # which is exactly the state that reads as "deployed" but isn't.
+    echo "    !! meeting bot build/start FAILED or timed out — join-by-link is running the PREVIOUS image"
+    tail -20 /tmp/mb-build.log 2>/dev/null | sed 's/^/      /' || true
+  fi
+else
+  echo "    MEETING_BOT_ENABLED=0 — meeting bot OFF (join-by-link unavailable)"
+  docker compose --env-file "$ENV_FILE" -f infra/docker-compose.yml \
+    --profile meetingbot rm -sf meeting-bot >/dev/null 2>&1 || true
+fi
+
+echo "==> Restarting gateway (systemd)"
+# `restart` alone does NOT survive a reboot — without the enable
+# symlink the box comes back with the gateway down until the next
+# deploy. Install + enable the unit every time so boot is covered.
+sudo cp "$APP_DIR/deploy/hostinger/acb-gateway.service" /etc/systemd/system/acb-gateway.service
+sudo systemctl daemon-reload
+sudo systemctl enable acb-gateway >/dev/null 2>&1 || true
+sudo systemctl restart acb-gateway
+sleep 3
+systemctl is-active --quiet acb-gateway || { echo "GATEWAY FAILED TO START"; exit 1; }
+echo "Gateway is active"
+
+# ── App Workshop T2 (React) build vendor cache ────────────────────
+# Shared, pinned react/react-dom/esbuild/lucide-react the
+# app-builder agent's build script
+# (apps/agents/agent-app-builder/build/build_t2.mjs) resolves
+# against via esbuild's nodePaths — installed ONCE here, never
+# per-app. Same default-resolution as CUSTOM_APPS_ROOT (already
+# proven in production for the App Workshop): read an override
+# from .env, else {AGENTS_CLONE_DIR:-$HOME/.acb/agents}.
+# lucide-react: zero runtime deps of its own (only a react peer
+# dep, already here) — pinned to the exact version
+# workbench/control_plane itself uses, so every T2 app gets real
+# icon components for free instead of hand-rolled SVGs.
+echo "==> Provisioning T2 (React) vendor cache for the App Workshop builder"
+T2_VENDOR_DIR="$(grep -E '^CUSTOM_APPS_T2_VENDOR_DIR=' "$ENV_FILE" 2>/dev/null | head -1 | cut -d= -f2-)"
+if [ -z "$T2_VENDOR_DIR" ]; then
+  CLONE_DIR="$(grep -E '^AGENTS_CLONE_DIR=' "$ENV_FILE" 2>/dev/null | head -1 | cut -d= -f2-)"
+  T2_VENDOR_DIR="${CLONE_DIR:-$HOME/.acb/agents}/vendor/t2-react"
+fi
+mkdir -p "$T2_VENDOR_DIR"
+printf '%s\n' \
+  '{ "name": "cc-app-workshop-t2-vendor", "private": true,' \
+  '  "dependencies": { "react": "18.3.1", "react-dom": "18.3.1", "esbuild": "0.24.0", "lucide-react": "1.17.0" } }' \
+  > "$T2_VENDOR_DIR/package.json"
+if [ ! -d "$T2_VENDOR_DIR/node_modules/react" ] || [ ! -d "$T2_VENDOR_DIR/node_modules/esbuild" ] || [ ! -d "$T2_VENDOR_DIR/node_modules/lucide-react" ]; then
+  (cd "$T2_VENDOR_DIR" && npm install --no-audit --no-fund --omit=dev) \
+    && echo "    + T2 vendor cache installed ($T2_VENDOR_DIR)" \
+    || echo "    ! T2 vendor install failed — T2 (React) apps will fail to build; T1 apps unaffected"
+else
+  echo "    vendor cache already present, skipping install ($T2_VENDOR_DIR)"
+fi
+
+echo "==> Rebuilding + restarting workbench (Next.js)"
+cd "$APP_DIR/workbench/control_plane"
+if [ -f package-lock.json ] || [ -f package.json ]; then
+  npm ci --prefer-offline 2>/dev/null || npm install
+  # Clean build avoids stale client-reference-manifest errors (Next.js Turbopack)
+  rm -rf .next
+  # Limit Node heap to 1GB to avoid OOM on 4GB VPS
+  NODE_OPTIONS="--max-old-space-size=1024" npm run build
+fi
+# Reload systemd unit in case acb-workbench.service changed (adds PATH for uv etc.)
+sudo cp "$APP_DIR/deploy/hostinger/acb-workbench.service" /etc/systemd/system/acb-workbench.service
+sudo systemctl daemon-reload
+# See the gateway note above — enable so the workbench survives reboots.
+sudo systemctl enable acb-workbench >/dev/null 2>&1 || true
+sudo systemctl restart acb-workbench
+sleep 3
+systemctl is-active --quiet acb-workbench || { echo "WORKBENCH FAILED TO START"; exit 1; }
+echo "Workbench is active"
+
+echo "==> Ensuring Caddy is serving"
+# Caddy fronts BOTH public hostnames — if it is down, the whole app
+# is unreachable no matter how healthy gateway/workbench are. The
+# old `reload || true` silently swallowed a chronically failing
+# reload (broken on-disk config), which turns any later Caddy
+# restart into a full outage. Recover deterministically instead:
+#   1. surface Caddy's current state + recent journal in the log;
+#   2. validate the live config — if invalid, back it up and
+#      reinstall the repo's known-good Caddyfile;
+#   3. reload if running, restart if dead;
+#   4. fail LOUDLY if Caddy still is not active.
+CADDY_LIVE=/etc/caddy/Caddyfile
+CADDY_REPO="$APP_DIR/deploy/hostinger/caddy/Caddyfile"
+echo "    caddy state: $(systemctl is-active caddy 2>&1 || true)"
+sudo journalctl -u caddy --no-pager -n 25 || true
+if ! sudo caddy validate --config "$CADDY_LIVE"; then
+  echo "    ! live Caddyfile INVALID — reinstalling repo config (backup kept)"
+  sudo cp -a "$CADDY_LIVE" "$CADDY_LIVE.broken.$(date +%s)" || true
+  sudo install -m 0644 "$CADDY_REPO" "$CADDY_LIVE"
+  sudo caddy validate --config "$CADDY_LIVE"
+fi
+sudo systemctl enable caddy >/dev/null 2>&1 || true
+if systemctl is-active --quiet caddy; then
+  sudo systemctl reload caddy || sudo systemctl restart caddy
+else
+  echo "    caddy is DOWN — restarting"
+  sudo systemctl restart caddy
+fi
+sleep 2
+systemctl is-active --quiet caddy || {
+  echo "CADDY FAILED TO START"
+  sudo journalctl -u caddy --no-pager -n 40 || true
+  exit 1
+}
+echo "Caddy is active"
+
+echo "==> Installing health watchdog (systemd timer)"
+# Self-heals services between deploys and captures network forensics
+# every 10 min. Deliberately installed here so it can never drift
+# from the repo. See deploy/hostinger/health-watchdog.sh.
+# The script is already in place via git reset; just make sure it is
+# executable. (Do NOT `install` it onto itself — src == dest is an
+# error, which is how it ended up non-executable the first time.)
+sudo chmod 0755 "$APP_DIR/deploy/hostinger/health-watchdog.sh" || true
+sudo cp "$APP_DIR/deploy/hostinger/acb-health-watchdog.service" /etc/systemd/system/
+sudo cp "$APP_DIR/deploy/hostinger/acb-health-watchdog.timer"   /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now acb-health-watchdog.timer || true
+if systemctl is-active --quiet acb-health-watchdog.timer; then
+  echo "    watchdog timer active — next: $(systemctl show acb-health-watchdog.timer -p NextElapseUSecRealtime --value 2>/dev/null || echo '?')"
+else
+  # Non-fatal: a missing watchdog must never block shipping the app.
+  echo "    ! watchdog timer NOT active (non-fatal)"
+  sudo systemctl status acb-health-watchdog.timer --no-pager 2>&1 | head -15 || true
+fi
+
+echo "==> Running infra health probe"
+cd "$APP_DIR"
+uv run python scripts/check_infra.py || {
+  echo "INFRA PROBE FAILED — check logs: docker compose -f infra/docker-compose.yml logs --tail=100"
+  exit 1
+}
+
+echo "==> Deployment complete"

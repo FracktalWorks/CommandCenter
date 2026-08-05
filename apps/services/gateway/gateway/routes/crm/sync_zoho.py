@@ -339,21 +339,49 @@ def advance_cursor(
     *,
     fetched: int,
     fallback: datetime | None,
+    failures: int = 0,
+    oldest_failed: datetime | None = None,
 ) -> datetime | None:
-    """The module's new watermark. Forward-only, and never past a failure.
+    """The module's new watermark. Forward-only, and never over a failure.
+
+    ``If-Modified-Since`` is a single instant, so the cursor can only express
+    "everything up to here is reconciled". A record that failed to apply is
+    therefore only retryable while the cursor stays **strictly below** it —
+    which is why the ceiling is the OLDEST failure, not the newest. Advancing
+    to the newest success while an older record failed drops that record
+    permanently: the next incremental pull never asks for it again.
 
     * Nothing fetched → move to the cycle's start, so a module Zoho never
       changes stops re-reading its whole table every ten minutes.
-    * Records fetched but **none applied** → do not move at all. Every one of
-      them is either a failure or a deliberate conflict skip, and the next
-      cycle has to be able to ask for them again.
-    * Otherwise → the newest record that actually landed, and never backwards:
-      a cursor that rewinds re-reads a window it has already reconciled.
+    * Records fetched but **none applied** → do not move at all.
+    * Something failed and we cannot place it in time (no readable
+      ``Modified_Time``) → do not move. "We do not know" must not read as
+      "nothing failed".
+    * Something failed and the newest success is not strictly older than it →
+      do not move.
+    * Otherwise → the newest record that landed, and never backwards: a cursor
+      that rewinds re-reads a window it has already reconciled.
+
+    ⚠️ **Accepted cost:** a record that fails *every* cycle pins this module's
+    cursor, so the same window is re-read every ten minutes until it applies or
+    Zoho stops returning it. That is deliberate — the pull is idempotent, so a
+    repeated window is wasted work, while an advanced cursor is lost data — and
+    it is never silent: ``SyncCycleReport.pull_record_errors`` is non-zero on
+    every one of those cycles and the module's ``last_status`` stays
+    ``'partial'``.
     """
     if not fetched:
         return previous or fallback
     if newest_applied is None:
         return previous
+    if failures:
+        if oldest_failed is None:
+            return previous
+        try:
+            if not newest_applied < oldest_failed:
+                return previous
+        except TypeError:
+            return previous
     if previous is None:
         return newest_applied
     try:
@@ -392,10 +420,11 @@ async def pull_phase(
         # The importer owns the field mapping for BOTH directions of read, so a
         # backfill and a pull can never map `Deal_Name` differently.
         carrier = ImportReport(dry_run=False, modules={})
-        module_report, newest_applied = await apply_module(
+        outcome = await apply_module(
             db, module, applicable,
             owners=owners, fallback_owner=actor_email, report=carrier,
         )
+        module_report = outcome.report
         module_report.fetched = len(records)
         module_report.skipped += len(records) - len(applicable)
         report.pulled[module] = module_report
@@ -407,8 +436,9 @@ async def pull_phase(
         await write_cursor(
             db, module,
             pulled_at=advance_cursor(
-                cursor, newest_applied,
+                cursor, outcome.newest_applied,
                 fetched=len(records), fallback=report_started(report),
+                failures=outcome.failures, oldest_failed=outcome.oldest_failed,
             ),
             status="ok" if not module_report.errors else "partial",
         )

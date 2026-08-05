@@ -469,37 +469,99 @@ async def test_every_module_reads_its_delete_cursor_from_one_snapshot(
     assert len(reads) == 1, db.statements_touching("crm_sync_cursors")
 
 
-# ── The watermark never advances past a record that failed ─────────────────
+# ── The watermark never advances OVER a record that failed ─────────────────
+#
+# `If-Modified-Since` is a single instant, so a failed record is only
+# retryable while the cursor stays strictly BELOW it. The ceiling is therefore
+# the OLDEST failure, not the newest — advancing to the newest success while
+# an older record failed drops that record permanently.
 
 @pytest.mark.parametrize(
-    ("previous", "newest_applied", "fetched", "expected"),
+    ("previous", "newest_applied", "fetched", "failures", "oldest_failed",
+     "expected"),
     [
         # Nothing fetched → adopt the cycle start, or a module Zoho never
         # changes re-reads its whole table every ten minutes forever.
-        (None, None, 0, "fallback"),
+        (None, None, 0, 0, None, "fallback"),
         # Fetched but nothing landed → stand still, so the next cycle retries.
-        ("t1", None, 3, "t1"),
-        (None, None, 3, None),
-        # Normal: the newest record that actually landed.
-        ("t1", "t2", 3, "t2"),
+        ("t1", None, 3, 1, "t1", "t1"),
+        (None, None, 3, 1, "t1", None),
+        # Normal, no failures: the newest record that actually landed.
+        ("t1", "t2", 3, 0, None, "t2"),
         # Never backwards — a rewound cursor re-reads a reconciled window.
-        ("t2", "t1", 3, "t2"),
+        ("t2", "t1", 3, 0, None, "t2"),
+        # ⚠️ The case the re-verification caught: the FAILURE IS OLDER than the
+        # success. Advancing to t3 would put the cursor past t1, and t1 would
+        # never be offered again.
+        ("t0", "t3", 3, 1, "t1", "t0"),
+        # Equal instants are also unsafe: `If-Modified-Since` at t2 need not
+        # return a record modified exactly at t2.
+        ("t0", "t2", 3, 1, "t2", "t0"),
+        # A failure NEWER than every success is fine to advance under.
+        ("t0", "t1", 3, 1, "t3", "t1"),
+        # A failure we cannot place in time → stand still. "We do not know"
+        # must not read as "nothing failed".
+        ("t0", "t3", 3, 1, None, "t0"),
     ],
 )
-def test_advance_cursor_is_forward_only_and_never_past_a_failure(
-    previous: Any, newest_applied: Any, fetched: int, expected: Any,
+def test_advance_cursor_is_forward_only_and_never_over_a_failure(
+    previous: Any, newest_applied: Any, fetched: int, failures: int,
+    oldest_failed: Any, expected: Any,
 ) -> None:
     stamps = {
+        "t0": _instant("2026-07-31T00:00:00+00:00"),
         "t1": _instant("2026-08-01T00:00:00+00:00"),
         "t2": _instant("2026-08-02T00:00:00+00:00"),
+        "t3": _instant("2026-08-03T00:00:00+00:00"),
         "fallback": _instant("2026-08-09T00:00:00+00:00"),
         None: None,
     }
     result = crm_sync.advance_cursor(
         stamps[previous], stamps[newest_applied],
         fetched=fetched, fallback=stamps["fallback"],
+        failures=failures, oldest_failed=stamps[oldest_failed],
     )
     assert result == stamps[expected]
+
+
+async def test_an_older_failure_holds_the_cursor_below_a_newer_success(
+    db: FakeCrmDB, zoho: FakeZoho, writer: FakeWriter, audit: list,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """End to end, in the order Zoho actually returns records: the OLD one
+    fails, a NEWER one succeeds. Watermarking on the newest success would step
+    over the failure and the record would never be offered again."""
+    real = crm_import.map_account
+
+    def _explode(record: dict) -> dict:
+        if record.get("id") == "z-acc-old-bad":
+            raise ValueError("bad account")
+        return real(record)
+
+    monkeypatch.setitem(crm_import.MAPPERS, "Accounts", _explode)
+    db.seed(
+        "crm_sync_cursors", module="Accounts",
+        last_pulled_at=_instant("2026-07-31T00:00:00+00:00"),
+    )
+    zoho.data["Accounts"] = [
+        {"id": "z-acc-old-bad", "Account_Name": "Bad",
+         "Modified_Time": "2026-08-01T00:00:00+00:00"},
+        {"id": "z-acc-new-ok", "Account_Name": "Good",
+         "Modified_Time": "2026-08-05T00:00:00+00:00"},
+    ]
+
+    report = await crm_sync.run_cycle()
+
+    [written] = [
+        p for s, p in db.calls
+        if s.startswith("INSERT INTO crm_sync_cursors") and p["module"] == "Accounts"
+    ]
+    assert written["last_pulled_at"] == _instant("2026-07-31T00:00:00+00:00")
+    assert written["last_status"] == "partial"
+    # …and the good record still landed. Standing still costs a re-read, not a
+    # skipped write.
+    assert report.pulled["Accounts"].created == 1
+    assert report.pull_record_errors == 1
 
 
 async def test_the_cursor_stops_short_of_a_record_that_failed_to_apply(
@@ -776,6 +838,61 @@ async def test_a_pull_does_not_write_our_own_padding_back_into_a_native_null(
     assert _stored(db, CONTACTS.table, row.id)["last_name"] is None
 
 
+async def test_a_lead_round_trip_does_not_double_its_own_name(
+    db: FakeCrmDB, zoho: FakeZoho, writer: FakeWriter, audit: list,
+) -> None:
+    """The one the re-verification caught: "Asha" came back as "Asha Asha".
+
+    A lead's display name is DERIVED from the very fields the push has to pad
+    (§3.3's chain reads first/last/organization_name, and Zoho requires both
+    ``Last_Name`` and ``Company``). Deriving it inside the mapper folded our
+    own padding into the name, and ``lead_name`` is on the upsert's conflict
+    arm — so every cycle wrote the corruption back, growing nothing but
+    getting the name permanently wrong. The derivation now runs AFTER the
+    padding strip.
+
+    A full round trip, not a hand-built dict: the existing lead-mapping test
+    passes values straight to the mapper and never exercises this ordering.
+    """
+    lead_status, _ = _seed_pipeline(db)
+    row = db.seed(
+        LEADS.table, lead_name="Asha", first_name="Asha", last_name=None,
+        organization_name=None, status_id=lead_status.id, zoho_dirty=True,
+    )
+
+    await crm_sync.run_cycle()
+    [(module, payload)] = [c for c in writer.creates if c[0] == "Leads"]
+    # Both required fields were padded from the display name.
+    assert (module, payload["Last_Name"], payload["Company"]) == (
+        "Leads", "Asha", "Asha",
+    )
+
+    db.calls.clear()
+    await crm_sync.run_cycle()
+
+    applied = [p for s, p in db.calls if s.startswith("INSERT INTO crm_leads (")]
+    assert applied, "cycle 2 never pulled the lead back"
+    for params in applied:
+        assert params["lead_name"] == "Asha"
+        assert "last_name" not in params
+        assert "organization_name" not in params
+    stored = _stored(db, LEADS.table, row.id)
+    assert stored["lead_name"] == "Asha"
+    assert stored["last_name"] is None
+    assert stored["organization_name"] is None
+
+
+def test_the_lead_mapper_does_not_derive_the_display_name_itself() -> None:
+    """The ordering above is only safe while the mapper leaves `lead_name`
+    alone — putting the derivation back in `map_lead` would restore the bug
+    while every round-trip assertion above still described the right rule."""
+    mapped = crm_import.map_lead(
+        {"id": "z-1", "First_Name": "Asha", "Last_Name": "Asha",
+         "Company": "Asha"},
+    )
+    assert "lead_name" not in mapped
+
+
 def test_the_padding_guard_only_fires_on_a_native_null(
     db: FakeCrmDB,
 ) -> None:
@@ -814,19 +931,90 @@ def test_the_padding_guard_only_fires_on_a_native_null(
     ) == {"email": "a@b.in"}
 
 
-def test_the_padding_map_covers_every_field_the_push_pads() -> None:
-    """The guard and the padder must stay in step; a pad added to
-    `to_zoho_*` without an entry here silently resumes the echo."""
+def _row_attribute(node: Any) -> str | None:
+    """The native column an expression reads off ``row``, if it is exactly that.
+
+    Matches the two forms the payload builders use: ``row.last_name`` and
+    ``getattr(row, "last_name", None)``.
+    """
+    import ast
+
+    if (
+        isinstance(node, ast.Attribute)
+        and isinstance(node.value, ast.Name)
+        and node.value.id == "row"
+    ):
+        return node.attr
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "getattr"
+        and len(node.args) >= 2
+        and isinstance(node.args[0], ast.Name)
+        and node.args[0].id == "row"
+        and isinstance(node.args[1], ast.Constant)
+    ):
+        return str(node.args[1].value)
+    return None
+
+
+def _pads_declared_in(builder: Any) -> set[tuple[str, str]]:
+    """``(column, padded-from)`` pairs a ``to_zoho_*`` builder fills by fallback.
+
+    Read from the SOURCE, by AST: a pad is an ``or`` between two different
+    columns of the same row — "use the real value, else borrow this one".
+    """
+    import ast
+    import inspect
+    import textwrap
+
+    tree = ast.parse(textwrap.dedent(inspect.getsource(builder)))
+    found: set[tuple[str, str]] = set()
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.BoolOp) and isinstance(node.op, ast.Or)):
+            continue
+        columns = [_row_attribute(value) for value in node.values]
+        if len(columns) == 2 and all(columns) and columns[0] != columns[1]:
+            found.add((str(columns[0]), str(columns[1])))
+    return found
+
+
+def test_the_padding_map_matches_what_the_push_actually_pads() -> None:
+    """`PADDED_FROM` is DERIVED from the payload builders' source, not restated.
+
+    The previous version of this test asserted the map against a literal copy
+    of itself and read nothing from ``to_zoho_*`` — so a pad added to
+    ``to_zoho_deal`` would have left it green, which is the exact drift its
+    own docstring claimed to catch. This walks each builder's AST for the
+    ``or``-fallback that IS a pad, and fails when the two disagree in either
+    direction: a new pad with no guard entry (the echo resumes) or a stale
+    guard entry (a real Zoho value silently discarded).
+    """
     from gateway.routes.crm.import_zoho import PADDED_FROM
 
-    assert PADDED_FROM["contacts"] == (("last_name", "first_name"),)
-    assert PADDED_FROM["leads"] == (
+    builders = {
+        "organizations": crm_sync.to_zoho_account,
+        "contacts": crm_sync.to_zoho_contact,
+        "leads": crm_sync.to_zoho_lead,
+        "deals": crm_sync.to_zoho_deal,
+    }
+    for slug, builder in builders.items():
+        declared = set(PADDED_FROM.get(slug, ()))
+        actual = _pads_declared_in(builder)
+        assert declared == actual, (
+            f"{slug}: the guard says {sorted(declared)} but "
+            f"{builder.__name__} pads {sorted(actual)}"
+        )
+
+    # The fence is only worth anything if it currently SEES something — an AST
+    # walk that silently matched nothing would agree with an empty map.
+    assert _pads_declared_in(crm_sync.to_zoho_lead) == {
         ("last_name", "lead_name"), ("organization_name", "lead_name"),
-    )
-    # Organizations and deals pad nothing — their required fields are NOT NULL
-    # on our side too, so there is nothing to invent.
-    assert "organizations" not in PADDED_FROM
-    assert "deals" not in PADDED_FROM
+    }
+    # …and organizations/deals genuinely pad nothing: their Zoho-required
+    # fields are NOT NULL on our side too, so there is nothing to invent.
+    assert _pads_declared_in(crm_sync.to_zoho_account) == set()
+    assert _pads_declared_in(crm_sync.to_zoho_deal) == set()
 
 
 def test_the_dirty_flag_is_set_at_the_one_write_choke_point() -> None:

@@ -395,13 +395,21 @@ faithful until cutover:
      missed **permanently**: the cursor only moves forward, so no later cycle asks about
      that window again. `read_cursors()` snapshots once and both phases take it as an
      argument.
-  2. **The watermark is the newest record that actually APPLIED**, never the newest
-     fetched. A record whose apply failed is counted in `errors[]` and the batch continues;
-     advancing past it would mean the next incremental pull never asks for it again and the
-     record is dropped until a human happens to touch it in Zoho. Nothing fetched ⇒ adopt
-     the cycle start (so an unchanged module stops re-reading its table); nothing applied ⇒
-     stand still; never backwards. Per-record apply failures are also folded into the cycle
-     summary count — a cycle that dropped nine records must not log `errors=0`.
+  2. **The watermark is the newest record that APPLIED, capped below the OLDEST that
+     failed.** `If-Modified-Since` is a single instant, so a failed record stays retryable
+     only while the cursor is strictly below it — and the failure may well be *older* than
+     a success in the same batch, which is why the ceiling is the oldest failure and not
+     simply "don't use the newest fetched". Full rule: nothing fetched ⇒ adopt the cycle
+     start (so an unchanged module stops re-reading its table); nothing applied ⇒ stand
+     still; a failure we cannot place in time (no readable `Modified_Time`) ⇒ stand still,
+     because "we do not know" must not read as "nothing failed"; otherwise the newest
+     applied, never backwards. **Accepted cost:** a record that fails every cycle pins that
+     module's cursor and its window is re-read every ten minutes until it applies. That is
+     the deliberate direction — the pull is idempotent, so a repeated window is wasted work
+     while an advanced cursor is lost data — and it is never silent: `pull_record_errors`
+     is non-zero and `last_status` stays `'partial'` on every such cycle. Per-record apply
+     failures are also folded into the cycle summary count; a cycle that dropped nine
+     records must not log `errors=0`.
 - **Conflicts:** record-level last-writer-wins comparing Zoho `Modified_Time` against
   native `updated_at`; both-changed conflicts are counted and logged per cycle, never
   silent. No field-level merge in v1 (D-CRM-6 amended).
@@ -419,7 +427,15 @@ faithful until cutover:
     the native column is NULL *and* the value is exactly what we would have padded it from.
     Accepted cost, stated: a human in Zoho who genuinely types `Last_Name` = the first name
     onto a contact whose native surname is blank is indistinguishable from our padding, and
-    the native column stays NULL. `PADDED_FROM` must be kept in step with `to_zoho_*`.
+    the native column stays NULL. `PADDED_FROM` is held to `to_zoho_*` by a test that reads
+    the builders' **source** (AST-walks each for the `or`-fallback that IS a pad) rather
+    than restating the map — a pad added without a guard entry fails there.
+  - **Anything DERIVED from a padded field is derived after the strip, never inside the
+    mapper.** `crm_leads.lead_name` is §3.3's fallback chain over first/last/organization —
+    two of which the push pads — so deriving it in `map_lead` folded our own padding into
+    the display name: a lead called "Asha" came back "Asha Asha", and `lead_name` is on the
+    conflict arm, so every cycle rewrote it. `map_lead` therefore does **not** emit
+    `lead_name`; `apply_record` computes it after `strip_padding_echo`.
   - **A native field CLEAR does not reach Zoho, and the next pull restores the old value.**
     The push prunes `None` (sending it would CLEAR the field at Zoho, so a column we simply
     do not carry would blank the tenant's copy every cycle) — which means "user emptied
@@ -630,12 +646,19 @@ no cycle has ever executed against the tenant.)*
 - **V2** — the pull cursor advanced to the newest *fetched* record even when some records
   failed to apply, dropping them permanently; and the cycle summary counted only the
   cycle-level and push-level error lists, logging `errors=0` over a batch that lost rows.
-  Now `advance_cursor()` watermarks on the newest successfully **applied** record
-  (forward-only, stands still when nothing applied), and `SyncCycleReport.pull_record_errors`
-  folds the per-record failures into the summary.
-- **V3** — two echo mutations. `source` is now insert-only (see §7.1); the push's padding of
-  Zoho's required fields is now stripped on the way back in (`strip_padding_echo`), with the
-  one indistinguishable case recorded in §7.1 rather than hidden.
+  Now `advance_cursor()` watermarks on the newest successfully **applied** record and
+  `SyncCycleReport.pull_record_errors` folds the per-record failures into the summary.
+  *(Re-verification: the first repair was still wrong when the failure was **older** than a
+  success — `apply_module` now returns a `ModulePass` carrying both `newest_applied` and
+  `oldest_failed`, and the cursor may only move strictly below the oldest failure. The
+  pinned-cursor cost of that is recorded in §7.1.)*
+- **V3** — three echo mutations. `source` is now insert-only (see §7.1); the push's padding
+  of Zoho's required fields is stripped on the way back in (`strip_padding_echo`), with the
+  one indistinguishable case recorded in §7.1 rather than hidden; and `lead_name` — which is
+  DERIVED from two padded fields — is computed after the strip instead of inside `map_lead`,
+  which had it round-tripping "Asha" into "Asha Asha" on the conflict arm.
+  *(Re-verification found that third one, and that the map-vs-padder drift test restated
+  `PADDED_FROM` instead of reading `to_zoho_*`; it now AST-walks the builders.)*
 - **V4** — a native field clear never reaching Zoho is **documented as an accepted cost** of
   D-CRM-6's no-field-level-merge (§7.1), not changed.
 - **V5** — `writer.upsert_record` was exported and never called (`execute_push` branches the

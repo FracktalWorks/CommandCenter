@@ -27,6 +27,7 @@ against a live tenant before doing it.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
@@ -251,7 +252,17 @@ def map_contact(record: dict[str, Any]) -> dict[str, Any]:
 
 
 def map_lead(record: dict[str, Any]) -> dict[str, Any]:
-    values = {
+    """Zoho Lead → native columns — **without** ``lead_name``.
+
+    ⚠️ The display name is deliberately NOT derived here. §3.3's fallback chain
+    reads ``first_name``/``last_name``/``organization_name``, and on a pull two
+    of those three are fields the push had to PAD because Zoho requires them
+    (see ``PADDED_FROM``). Deriving the name from the padded values folds our
+    own padding into it — a lead called "Asha" comes back as "Asha Asha", and
+    ``lead_name`` IS on the upsert's conflict arm, so every cycle rewrites it.
+    :func:`apply_record` derives it AFTER :func:`strip_padding_echo` instead.
+    """
+    return {
         "first_name": _text(record.get("First_Name")),
         "last_name": _text(record.get("Last_Name")),
         # §3.3 — Zoho's Company is free text here and becomes a real
@@ -267,8 +278,6 @@ def map_lead(record: dict[str, Any]) -> dict[str, Any]:
         "lead_source": _text(record.get("Lead_Source")),
         "description": _text(record.get("Description")),
     }
-    values["lead_name"] = compute_lead_name(values)
-    return values
 
 
 def map_deal(record: dict[str, Any]) -> dict[str, Any]:
@@ -452,6 +461,13 @@ async def apply_record(
         return None
 
     values = strip_padding_echo(entity, MAPPERS[module](record), existing)
+    if entity is LEADS:
+        # §3.3's fallback chain, derived AFTER the strip and never inside
+        # `map_lead`. Two of the three fields it reads are ones the push had to
+        # pad for Zoho; deriving first turns a lead called "Asha" into
+        # "Asha Asha" on its first round trip, and `lead_name` is on the
+        # conflict arm, so the corruption is written back every cycle.
+        values["lead_name"] = compute_lead_name(values)
     owner, guessed = owner_email(record, owners, fallback_owner)
     values["owner_email"] = owner
     if guessed:
@@ -609,6 +625,30 @@ _TABLE_BY_COLUMN: dict[str, str] = {
 
 # ── One module's pass ───────────────────────────────────────────────────────
 
+@dataclass(frozen=True)
+class ModulePass:
+    """One module's apply pass, and how far the pull cursor may move after it.
+
+    The two instants are separate on purpose. ``newest_applied`` is the
+    furthest the cursor could go if everything had worked; ``oldest_failed``
+    is the ceiling that stops it stepping over a record it did not land.
+    Keeping "the newest success" and "the oldest failure" apart is what makes
+    a failure OLDER than a success visible — a single "watermark" value cannot
+    express it, and the version that tried dropped those records silently.
+    """
+
+    report: ModuleReport
+    #: Newest Zoho ``Modified_Time`` among the records that actually landed.
+    newest_applied: datetime | None = None
+    #: How many records raised. Counted separately from ``oldest_failed``
+    #: because a record can fail while carrying no readable timestamp, and
+    #: "something failed but we cannot place it in time" must not read as
+    #: "nothing failed".
+    failures: int = 0
+    #: Oldest ``Modified_Time`` among the records that raised.
+    oldest_failed: datetime | None = None
+
+
 async def apply_module(
     db: Any,
     module: str,
@@ -617,20 +657,11 @@ async def apply_module(
     owners: dict[str, str],
     fallback_owner: str,
     report: ImportReport,
-) -> tuple[ModuleReport, datetime | None]:
+) -> ModulePass:
     """Apply every fetched record of one module. The shared pull/backfill body.
 
-    Returns ``(report, newest_applied)`` — the second being the newest Zoho
-    ``Modified_Time`` among the records that actually **landed**.
-
-    ⚠️ That second value is the pull cursor's watermark, and it is deliberately
-    NOT "the newest record we fetched". A record that failed to apply is
-    counted in ``errors[]`` and the batch continues (an import that aborts on
-    row 900 of 3 000 is one nobody can finish) — but if the cursor advanced
-    past it anyway, the next incremental pull would never ask for it again and
-    the record would be dropped permanently, until some human happened to touch
-    it in Zoho. Watermarking on what succeeded means a failure is retried next
-    cycle instead of being silently abandoned.
+    Returns a :class:`ModulePass` — the counts, plus the two instants the pull
+    cursor needs to decide how far it may move.
 
     ``created`` vs ``updated`` is decided by a read BEFORE the upsert, because
     ``ON CONFLICT`` cannot tell the caller which arm it took without a second
@@ -641,6 +672,8 @@ async def apply_module(
     module_report = ModuleReport(fetched=len(records))
     entity = dict(RECORD_MODULES).get(module)
     newest_applied: datetime | None = None
+    oldest_failed: datetime | None = None
+    failures = 0
     for record in records:
         zoho_id = _text(record.get("id"))
         table = entity.table if entity is not None else "crm_activities"
@@ -667,12 +700,17 @@ async def apply_module(
                 module_report.created += 1
             newest_applied = _newer(newest_applied, modified_time(record))
         except Exception as exc:  # one bad record must not lose the batch
+            failures += 1
+            oldest_failed = _older(oldest_failed, modified_time(record))
             module_report.errors.append(f"{zoho_id or '?'}: {str(exc)[:200]}")
             _log.warning(
                 "crm.import.record_failed", module=module,
                 zoho_id=zoho_id, error=str(exc)[:200],
             )
-    return module_report, newest_applied
+    return ModulePass(
+        report=module_report, newest_applied=newest_applied,
+        failures=failures, oldest_failed=oldest_failed,
+    )
 
 
 def _newer(left: datetime | None, right: datetime | None) -> datetime | None:
@@ -685,6 +723,18 @@ def _newer(left: datetime | None, right: datetime | None) -> datetime | None:
         return right if right > left else left
     except TypeError:
         # naive vs aware — refuse to guess, and keep the one we already had.
+        return left
+
+
+def _older(left: datetime | None, right: datetime | None) -> datetime | None:
+    """``min`` over two instants that may be missing or mutually incomparable."""
+    if left is None:
+        return right
+    if right is None:
+        return left
+    try:
+        return right if right < left else left
+    except TypeError:
         return left
 
 
@@ -729,12 +779,12 @@ async def import_from_zoho(
     db = await _get_db()
     try:
         for module in ALL_MODULES:
-            # The backfill has no cursor to advance, so the watermark the pull
-            # phase needs is discarded here.
-            report.modules[module], _ = await apply_module(
+            # The backfill has no cursor to advance, so the watermark half of
+            # the pass is discarded here.
+            report.modules[module] = (await apply_module(
                 db, module, fetched[module],
                 owners=owners, fallback_owner=who, report=report,
-            )
+            )).report
         await db.commit()
     finally:
         await db.close()
@@ -775,6 +825,7 @@ __all__ = [
     "RECORD_MODULES",
     "ImportReport",
     "ImportRequest",
+    "ModulePass",
     "ModuleReport",
     "apply_module",
     "guess_status_type",

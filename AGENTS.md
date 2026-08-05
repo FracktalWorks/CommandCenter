@@ -100,7 +100,7 @@ Copilot SDK sandboxes.
 7. No Theia / browser IDE
 8. Source systems are authoritative -- CommandCenter is a read-mostly mirror
 9. New event-driven / specialist-agent execution features default to MAF paths; the Copilot-SDK runtime is reserved for interactive chat + mutation (both gateway-routed), not new autonomous execution entrypoints
-10. All gateway endpoints require auth (Bearer token + optional user identity)
+10. **All gateway endpoints require auth, by construction rather than by opting in.** `require_authenticated` is attached app-wide at the `FastAPI(dependencies=[…])` level, so a route added tomorrow is covered without anyone remembering; `PUBLIC_ROUTES` is the exemption list and every entry authenticates itself another way. **Before building or modifying ANY app, read `ai-company-brain/specs/user_management_contract.md`** — the ten binding rules for identity, membership and authorization, each one learned by breaking it. In particular: never navigate the browser directly at the gateway (it carries no credentials), never add a route to `PUBLIC_ROUTES` to make it reachable, and never take the acting identity from a query parameter or request body.
 
 ## Global Conventions
 

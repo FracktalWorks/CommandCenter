@@ -94,6 +94,33 @@ Control Plane (Next.js browser UI) and local development tools.
 - Generated images display inline in chat messages
 - Artifact cards appear for files written by agents
 
+## Identity — the BFF is not optional, it is where identity comes from
+
+Contract: `ai-company-brain/specs/user_management_contract.md`. Two rules bind
+every page in this app.
+
+**Never point the browser at the gateway.** A top-level navigation to
+`api.commandcenter.fracktal.in` carries **no** Bearer and **no** `X-User-Email`
+— session cookies live on the workbench origin and a navigation cannot add
+headers. `/email/oauth/{provider}/authorize` was reached that way and answered
+"Authentication required" to every user for six days.
+
+So: if a flow needs a real navigation (OAuth consent, a provider redirect, a
+download), add a route under `src/app/api/**` that authenticates, calls the
+gateway with `gatewayHeaders()` from `src/lib/gateway.ts`, and re-issues the
+redirect itself. Read that file's "THE RULE" comment first —
+`gatewayHeaders()` needs a person and throws without one; `serviceHeaders()` is
+bearer-only and takes a written reason.
+
+⚠️ **A `fetch` through the `[...path]` catch-all cannot replace it** for a
+redirecting route: the catch-all *follows* the redirect server-side and returns
+the provider's consent page as HTML instead of navigating to it.
+
+**Hiding a control is a courtesy, not a boundary** (`lib/access.ts` says so).
+Ship the server-side refusal first; then hide the button. A refusal must surface
+in the UI and re-read the list — a control that silently no-ops reads as broken,
+and a stale row after a 409 reads as success.
+
 ## HITL (Human-in-the-Loop)
 - ConfirmationCard.tsx — Approve/Reject prompt for agent confirmation requests
 - ElicitationCard.tsx — Structured question card (VS Code ask_questions parity):

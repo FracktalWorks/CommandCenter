@@ -13,7 +13,13 @@ import yaml
 
 _ROOT = pathlib.Path(__file__).resolve().parents[2]
 _COMPOSE = _ROOT / "infra/docker-compose.yml"
-_DEPLOY = _ROOT / ".github/workflows/deploy.yml"
+_WORKFLOW = _ROOT / ".github/workflows/deploy.yml"
+# WS-25: the remote deploy script used to be 437 lines inside deploy.yml's
+# `env:` block, so these guards read the workflow. It now lives in a versioned
+# file that BOTH delivery paths execute — the workflow copies it over SSH, and
+# scripts/vps_pull.sh runs it when the box updates itself. The assertions below
+# are about the script's content, so they follow the script.
+_APPLY = _ROOT / "scripts/vps_apply.sh"
 
 # The gateway's own port on the VPS (deploy/hostinger/acb-gateway.service).
 _GATEWAY_PORT = "8080"
@@ -62,9 +68,31 @@ def test_recordings_survive_a_container_restart() -> None:
 
 # ── deploy step ──────────────────────────────────────────────────────────────
 
+def test_both_delivery_paths_execute_the_same_apply_script() -> None:
+    """Every guard below reads scripts/vps_apply.sh. That is only meaningful
+    while something actually RUNS that file — otherwise the assertions pass
+    against an orphan while the real deploy logic lives somewhere else, which is
+    exactly the drift WS-25 extracted the script to prevent.
+
+    Two consumers, both pinned: the workflow (push path) and the box's poller
+    (pull path). If either stops using it, this fails loudly rather than letting
+    the other tests certify a file nobody executes.
+    """
+    assert _APPLY.exists(), "the apply script must exist for these guards to mean anything"
+
+    workflow = _WORKFLOW.read_text(encoding="utf-8")
+    assert "scripts/vps_apply.sh" in workflow, "the workflow must run the versioned script"
+    # The 437 lines must not have been re-inlined alongside it — two copies is
+    # worse than either one alone, because they drift silently.
+    assert "DEPLOY_SCRIPT" not in workflow, "the script must not be inlined again"
+
+    puller = (_ROOT / "scripts/vps_pull.sh").read_text(encoding="utf-8")
+    assert "vps_apply.sh" in puller, "the box's poller must run the same script"
+
+
 def test_deploy_wires_the_gateway_to_the_worker() -> None:
     """Without these the bot would run but the gateway couldn't dispatch to it."""
-    deploy = _DEPLOY.read_text(encoding="utf-8")
+    deploy = _APPLY.read_text(encoding="utf-8")
     assert 'upsert_env MEETING_BOT_URL "http://127.0.0.1:8095"' in deploy
     assert 'upsert_env NOTES_BOT_PROVIDER "selfhosted"' in deploy
     # The worker calls back from inside its container, so localhost won't do.
@@ -72,7 +100,7 @@ def test_deploy_wires_the_gateway_to_the_worker() -> None:
 
 
 def test_deploy_generates_the_shared_secret_once() -> None:
-    deploy = _DEPLOY.read_text(encoding="utf-8")
+    deploy = _APPLY.read_text(encoding="utf-8")
     assert "MEETING_BOT_TOKEN=$_mbtoken" in deploy
     # Only generated when absent — regenerating each deploy would break the
     # gateway/worker pair until both restarted.
@@ -82,7 +110,7 @@ def test_deploy_generates_the_shared_secret_once() -> None:
 def test_deploy_passes_the_app_env_file_explicitly() -> None:
     """Compose resolves a bare .env against the project dir (infra/), not the
     app root — so the substitutions would silently come out empty."""
-    deploy = _DEPLOY.read_text(encoding="utf-8")
+    deploy = _APPLY.read_text(encoding="utf-8")
     assert 'docker compose --env-file "$ENV_FILE" -f infra/docker-compose.yml' in deploy
 
 
@@ -90,7 +118,7 @@ def test_meeting_bot_failure_cannot_fail_the_deploy() -> None:
     """A bot build hiccup must skip the bot, never take down a deploy — and it
     must SAY SO loudly, because the old container keeps serving and that reads
     as a successful deploy (exactly what happened on 2026-07-30)."""
-    deploy = _DEPLOY.read_text(encoding="utf-8")
+    deploy = _APPLY.read_text(encoding="utf-8")
     assert "meeting bot build/start FAILED" in deploy
     assert "PREVIOUS image" in deploy, "must name the stale-image state"
 
@@ -103,7 +131,7 @@ def test_meeting_bot_build_cannot_hang_the_deploy() -> None:
     Two independent guards, both required: no tty for a prompt to read, and a
     hard timeout so a hang can never consume the deploy.
     """
-    deploy = _DEPLOY.read_text(encoding="utf-8")
+    deploy = _APPLY.read_text(encoding="utf-8")
     build = [
         ln for ln in deploy.splitlines()
         if "up -d --build meeting-bot" in ln
@@ -133,7 +161,7 @@ def test_live_caption_credentials_are_wired_by_default() -> None:
     env = _service()["environment"]
     assert "LIVE_TOKEN_URL" in env, "compose must pass the token URL to the worker"
 
-    deploy = _DEPLOY.read_text(encoding="utf-8")
+    deploy = _APPLY.read_text(encoding="utf-8")
     assert "NOTES_LIVE_TOKEN_URL" in deploy
     assert "/notes/stt/bot-live-token" in deploy
     # The worker calls the gateway from inside its container, so it can't use

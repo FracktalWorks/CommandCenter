@@ -290,6 +290,26 @@ read as "nothing to do" rather than "never attempted".
 
 ### 8.3 The timer — OWNER-GATE to install
 
+⚠️ **The first version of this unit was wrong twice, and both failures only
+appeared on a real run.** Corrected version below; the two defects are recorded
+because each looks fine on the page.
+
+**Defect 1 — it could not bootstrap.** `ExecStart` installed the poller *from the
+checkout*: `install /opt/acb/app/scripts/vps_pull.sh …`. A box older than the
+poller has no such file — it arrives only via the update the poller is supposed
+to perform. First run: `install: cannot stat … No such file or directory`. The
+fix reads the script from `origin/release` with `git show`, which needs nothing
+in the working tree and *also* solves the self-rewrite problem the original
+comment was worried about.
+
+**Defect 2 — `User=root` breaks git auth.** Second run:
+`Host key verification failed`. The remote is `git@github.com:…`; the deploy key
+and `known_hosts` belong to `acb`, and root has neither. The push path has always
+run this script as `ssh acb@host 'bash -s'`, and the applied script calls `sudo`
+~30 times — it is written to *start unprivileged and elevate*. `acb` has
+passwordless sudo. So `User=acb` is not a workaround; running it as root was the
+deviation.
+
 ```ini
 # /etc/systemd/system/acb-pull.service
 [Unit]
@@ -299,11 +319,18 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
-User=root
-# Run from a COPY. vps_apply.sh synchronises the checkout, which can rewrite
-# scripts/vps_pull.sh while bash is still reading this very file.
-ExecStart=/bin/bash -c 'install -m 0700 /opt/acb/app/scripts/vps_pull.sh /tmp/acb-pull-run.sh && exec /tmp/acb-pull-run.sh'
+# NOT root — see Defect 2 above.
+User=acb
+# Read from origin/release, not the working tree — see Defects 1 and 2.
+ExecStart=/bin/bash -c 'set -e; cd /opt/acb/app; git fetch -q origin release; git show origin/release:scripts/vps_pull.sh > /tmp/acb-pull-run.sh; chmod 700 /tmp/acb-pull-run.sh; exec /tmp/acb-pull-run.sh'
 TimeoutStartSec=1800
+```
+
+The state directory must exist and be writable by `acb`, or the poller silently
+skips its last-success marker (it degrades with `|| true` rather than failing):
+
+```bash
+sudo mkdir -p /var/lib/acb && sudo chown acb:acb /var/lib/acb
 ```
 
 ```ini

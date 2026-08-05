@@ -108,10 +108,11 @@ Any pull-based scheme must therefore either duplicate those 435 lines on the box
 producing two deploy paths that silently drift, which is worse than the outage this
 spec is fixing — or the script must first be extracted into a real file in the repo.
 
-**D1 — extract `DEPLOY_SCRIPT` to a versioned file. AGENT-SAFE to author,
-OWNER-GATE to merge.** This pays for itself regardless of which option below is
-chosen: a 435-line script embedded in YAML cannot be shellchecked, cannot be run by
-hand during an incident, and cannot be diffed meaningfully.
+**D1 — extract `DEPLOY_SCRIPT` to a versioned file. ✅ DONE — `scripts/vps_apply.sh`,
+byte-identical (sha256 prefix `a779724d089319f6` before and after).** OWNER-GATE to
+merge. This pays for itself regardless of which option below is chosen: a 437-line
+script embedded in YAML cannot be shellchecked, cannot be run by hand during an
+incident, and cannot be diffed meaningfully.
 
 **Trap:** the script's first act is `git fetch && git reset --hard origin/main`
 (`deploy.yml:117-118`). If the box runs the script *from the checkout*, the reset
@@ -123,15 +124,21 @@ stable bootstrap that fetches, then `exec`s the fresh script.
 
 ## 4. Options
 
-### Option A — pull-based deploy timer (RECOMMENDED)
+### Option A — pull-based deploy timer (RECOMMENDED — **BUILT, see §8**)
 
-A systemd timer on the box polls `git ls-remote origin main`, and when it differs
-from local `HEAD`, runs the deploy. Depends only on outbound git, which is proven
-working.
+A systemd timer on the box fetches a **`release` ref** and, when it differs from
+local `HEAD`, applies it. Depends only on outbound git, which is proven working.
+
+**Not `main`.** The deploy job runs only after `lint` and `test` pass; a poller
+watching `main` would install commits whose tests failed — trading an outage for a
+worse and quieter one. CI publishes `release` once the gates pass, so gating
+survives the inversion and the box needs no GitHub credential to check it.
+(Earlier drafts of this section said "polls `git ls-remote origin main`". That was
+the naive version and it silently dropped CI gating; corrected when built.)
 
 - **For:** no new inbound dependency; no daemon executing remote-authored jobs on
-  the production host; ~40 lines the operator can read in full; survives GitHub
-  Actions outages as well as this network fault.
+  the production host; short enough for the operator to read in full; survives
+  GitHub Actions outages as well as this network fault.
 - **Against:** deploys lag by the poll interval; loses the Actions log as the
   audit trail (mitigate: log to journald, which is where every other box-side unit
   already reports); requires D1 first.
@@ -231,7 +238,113 @@ gh run list --workflow deploy.yml --limit 10
 
 ---
 
-## 8. Related
+## 8. Option A as built
+
+Three parts. The first two are in the repo; the third is an owner install.
+
+### 8.1 `scripts/vps_apply.sh` — D1, the extraction
+
+The 437-line script moved out of `deploy.yml`'s `env:` block into a versioned
+file, **byte-identical** (sha256 prefix `a779724d089319f6` before and after — a
+move, not a rewrite). `deploy.yml` gained `actions/checkout` and now does
+`cp scripts/vps_apply.sh /tmp/deploy_remote.sh`; everything downstream is
+unchanged.
+
+This is what makes one script serve both delivery paths. A poller that carried
+its own copy would drift from the workflow's, and the drift would only surface
+during an incident.
+
+### 8.2 `scripts/vps_pull.sh` — the poller
+
+Three decisions in it are load-bearing:
+
+**It polls `release`, never `main`.** The deploy job runs only after `lint` and
+`test` pass; a poller watching `main` would install commits whose tests failed,
+trading an outage for a worse and quieter one. So `publish-release` fast-forwards
+a `release` ref once the gates pass, and the box applies only that.
+
+**`publish-release` is gated on lint+test and NOT on the deploy job.** This looks
+wrong until you remember the failure: when GitHub cannot reach the VPS the deploy
+job *fails*. Gating the ref on deploy success would withhold it exactly when the
+box's own pull is the only path left. `release` asserts "this commit passed the
+gates and is safe to install", not "GitHub managed to install it".
+
+**Two-stage bootstrap.** `vps_apply.sh`'s first act is to synchronise the
+checkout, which rewrites files under `$APP_DIR` — including `scripts/`. bash
+reads a script incrementally by byte offset, so a script that rewrites itself
+mid-run executes garbage from that offset on. The poller therefore reads the
+target's copy out of the object database with `git show "$TARGET:…"`, which does
+not touch the working tree, and runs it from a temp path nothing is about to
+overwrite.
+
+Also: `flock` so a slow apply cannot have the next tick start a second one;
+`safe.directory` because the unit runs as root against an `acb`-owned checkout;
+and a non-zero exit on failure so `systemctl --failed` shows it.
+
+**`paths-ignore` was removed from `deploy.yml`** in the same change. It skipped
+the whole workflow for `**.md` and `ai-company-brain/**` — and a workflow-level
+path filter skips the jobs too, so a docs-only merge would never move `release`
+and the box would never converge. It also made this outage harder to see: #357
+was documentation-only, so **no run was ever queued for it**, and "no failed run"
+read as "nothing to do" rather than "never attempted".
+
+### 8.3 The timer — OWNER-GATE to install
+
+```ini
+# /etc/systemd/system/acb-pull.service
+[Unit]
+Description=CommandCenter pull-based delivery (apply origin/release)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+# Run from a COPY. vps_apply.sh synchronises the checkout, which can rewrite
+# scripts/vps_pull.sh while bash is still reading this very file.
+ExecStart=/bin/bash -c 'install -m 0700 /opt/acb/app/scripts/vps_pull.sh /tmp/acb-pull-run.sh && exec /tmp/acb-pull-run.sh'
+TimeoutStartSec=1800
+```
+
+```ini
+# /etc/systemd/system/acb-pull.timer
+[Unit]
+Description=Poll for released CommandCenter commits
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=5min
+AccuracySec=30s
+Unit=acb-pull.service
+
+[Install]
+WantedBy=timers.target
+```
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now acb-pull.timer
+sudo systemctl start acb-pull.service    # prove it now — see BO-23's lesson
+journalctl -u acb-pull -n 40 --no-pager
+```
+
+⚠️ **Start it by hand before trusting the timer.** BO-23's timer was installed,
+looked correct, and failed on its first real run for a reason no amount of
+reading would have found. A timer that has never fired is not a schedule.
+
+### 8.4 What is still unverified
+
+`vps_apply.sh` cannot be proven by the push path while the network fault
+persists — but it does not need to be: **the poller is what verifies it.** The
+first successful `acb-pull.service` run exercises the identical file the
+workflow would have piped.
+
+Until `publish-release` runs once, `origin/release` does not exist and the poller
+exits 1 saying so. That is the intended first-run state, not a fault.
+
+---
+
+## 9. Related
 
 - `backup_and_restore.md` — the rollback path this spec's stopgap depends on
 - `user_management_contract.md` — what #354/#355/#356 change, and why shipping them

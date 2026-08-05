@@ -3,9 +3,25 @@
 **Status: 🔴 BROKEN — diagnosed and measured 2026-08-05, verified against code and
 against the running deployment on 2026-08-05.**
 
-Five merged PRs are not live. `main` is `d7d5c79b`; the box is `74082882` (#347).
-**#354, #355, #356, #357, #358 exist only on GitHub** — including #355, the OAuth
-authorize fix, which is why mailbox connection still fails for a second member.
+`main` is `d7d5c79b`; the box is `74082882` (#347).
+
+> **⚠️ CORRECTED 2026-08-05, same day.** This spec first claimed five PRs were
+> stranded, "including #355, the OAuth authorize fix, which is why mailbox
+> connection still fails for a second member." **That was wrong.** #354, #355 and
+> #356 are all **live**: the deploy does `git reset --hard origin/main`, so #347's
+> successful 04:40 run carried everything merged before it — and those three had
+> merged by 01:18. Only what merged *after* 04:40 was stranded.
+>
+> The error came from reading the box's HEAD (`#347`'s merge commit) as if delivery
+> were PR-by-PR. It is not: **one successful deploy lands every commit merged up to
+> that instant**, so "the box is on PR n" says nothing about PR n+1 — only about
+> *when* the last success ran. Verified per PR with `git log --grep`, and by the
+> BFF OAuth route existing on disk dated 04:42.
+
+**Actually stranded: #357 and #358 — eight files, all documentation plus
+`scripts/backup_db.sh`. Zero executable app code, zero migrations.** So the broken
+delivery path has had **no production impact** to date. Its cost is entirely
+forward-looking: the next app change to merge will not ship, and nothing will say so.
 
 This spec owns the *delivery path* only: how a commit on `main` becomes running code
 on the VPS. It does not own what the deploy script does once it runs
@@ -155,7 +171,7 @@ a network problem for a standing security property that has to hold forever.
 | D1 | `DEPLOY_SCRIPT` lives in a versioned file; `deploy.yml` references it; a deploy runs green through the new path; the two-stage bootstrap is proven by deploying a commit that *modifies the deploy script itself* | OWNER-GATE |
 | D2 | Chosen option installed; a push to `main` reaches the box with no human action; `git -C /opt/acb/app rev-parse HEAD` equals `origin/main` within the stated interval | OWNER-GATE |
 | D3 | Failure is visible: a deploy that does not land raises something the operator sees, rather than a workflow that goes red where nobody looks | OWNER-GATE |
-| D4 | The five stranded PRs are live: box `HEAD` == `d7d5c79b` or later, and `/health` answers 200 | OWNER-GATE |
+| D4 | The stranded commits are live: box `HEAD` == `d7d5c79b` or later, and `/health` answers 200. **Today this needs no deploy** — the eight files are documentation plus `scripts/backup_db.sh`, no service reads them at runtime, so a `git fetch && git reset --hard origin/main` in `/opt/acb/app` is sufficient and needs no restart (`agents.json` is clean; only untracked `models/` is present, which a reset leaves alone) | OWNER-GATE |
 
 D3 is not optional. The reason this ran for two days is that the only signal was a
 red tick on a page nobody was watching, while the app stayed up and looked fine.

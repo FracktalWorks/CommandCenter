@@ -762,6 +762,17 @@ async def update_row(
     )).fetchone()
 
 
+#: Columns an ``ON CONFLICT (zoho_id)`` upsert writes on INSERT and never
+#: rewrites on the conflict arm.
+#:
+#: ``zoho_id`` is the key it matched on. ``source`` is **provenance**: a row
+#: typed into this app is ``'manual'`` forever, even after the sync pushes it
+#: to Zoho and pulls it back. Rewriting it would flip every native-origin row
+#: to ``'import'`` on its first echo — a silent, one-way rewrite of the column
+#: the `source` filter and every "where did this come from" question read.
+INSERT_ONLY_COLUMNS: frozenset[str] = frozenset({"zoho_id", "source"})
+
+
 async def upsert_by_zoho_id(db: Any, table: str, values: dict[str, Any]) -> Any:
     """Write a row keyed on its Zoho provenance — §7.1's ``ON CONFLICT (zoho_id)``.
 
@@ -775,12 +786,14 @@ async def upsert_by_zoho_id(db: Any, table: str, values: dict[str, Any]) -> Any:
     this here". Bumping it on every pull would make the native side look
     perpetually newer and turn LWW into always-native-wins. (It also could not
     be applied generically: ``crm_activities`` has no such column.)
+
+    ⚠️ Nor does it rewrite :data:`INSERT_ONLY_COLUMNS` — see that constant.
     """
     values = mark_dirty_on_insert(table, values)
     columns = list(values)
     placeholders = ", ".join(_placeholder(c) for c in columns)
     assignments = ", ".join(
-        f"{c} = EXCLUDED.{c}" for c in columns if c != "zoho_id"
+        f"{c} = EXCLUDED.{c}" for c in columns if c not in INSERT_ONLY_COLUMNS
     )
     return (await db.execute(
         text(

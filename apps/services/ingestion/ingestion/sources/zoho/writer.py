@@ -129,20 +129,6 @@ async def update_record(
         return _require_success(_first(r.json()), f"update {module}/{record_id}")
 
 
-async def upsert_record(
-    module: str, payload: dict[str, Any], *, record_id: str | None = None,
-) -> dict[str, Any]:
-    """Upsert **by id**: update when we hold a ``zoho_id``, else create.
-
-    The one entry point the sync engine's push phase uses for records, so
-    "create acquires an id, update writes onto it" is one decision in one
-    place rather than a branch at every call site.
-    """
-    if record_id:
-        return await update_record(module, record_id, payload)
-    return await create_record(module, payload)
-
-
 async def delete_record(module: str, record_id: str) -> dict[str, Any]:
     """``DELETE /crm/v2/{module}/{id}`` — propagate a native delete.
 
@@ -159,6 +145,11 @@ async def delete_record(module: str, record_id: str) -> dict[str, Any]:
         return _require_success(_first(r.json()), f"delete {module}/{record_id}")
 
 
+#: Three verbs, deliberately. "Upsert by id" is a DECISION, not a verb — it
+#: lives in ``sync_zoho.push_records`` ("update when we hold a ``zoho_id``,
+#: else create"), where the acquired id is stamped back onto the native row in
+#: the same breath. A convenience wrapper here would be a fourth entry on the
+#: write surface with no caller, and this surface should stay countable.
 __all__ = [
     "WRITABLE_MODULES",
     "ZohoWriteError",
@@ -166,5 +157,4 @@ __all__ = [
     "delete_record",
     "record_id_of",
     "update_record",
-    "upsert_record",
 ]

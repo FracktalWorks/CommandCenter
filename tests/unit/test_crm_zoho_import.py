@@ -404,6 +404,47 @@ async def test_a_deals_contact_becomes_its_primary_deal_contact(
     assert "ON CONFLICT DO NOTHING" in insert
 
 
+async def test_the_import_can_never_create_a_second_primary_contact(
+    db: FakeCrmDB, zoho: FakeZoho,
+) -> None:
+    """`is_primary` is COMPUTED inside the INSERT, never the literal `true`.
+
+    The failure this closes: a deal already carries a hand-set primary
+    (contact A), its Zoho record names contact B, and the import adds B as a
+    *second* primary. "At most one primary per deal" is enforced by code — no
+    constraint catches it — so the row simply exists and both cards render as
+    primary.
+
+    Structural, against the statement text, for the reason this package
+    documents everywhere: the fake models no foreign keys, no CHECKs and no
+    computed columns, so it would happily record two primaries and agree that
+    nothing was wrong. Deciding it inside the statement rather than reading
+    first also means two racing cycles cannot both observe "no primary yet".
+    """
+    _seed_pipeline(db)
+    zoho.data["Contacts"] = [{"id": "z-con-1", "First_Name": "Asha"}]
+    zoho.data["Deals"] = [{
+        "id": "z-deal-1", "Deal_Name": "Printer",
+        "Contact_Name": {"id": "z-con-1"},
+    }]
+    await _run()
+
+    [insert] = db.statements_touching("INSERT INTO crm_deal_contacts")
+    assert "NOT EXISTS" in insert
+    assert "SELECT 1 FROM crm_deal_contacts" in insert
+    assert "AND is_primary" in insert
+    # The scope of the NOT EXISTS is THIS deal — a primary on some other deal
+    # must not stop this one acquiring its first.
+    assert "WHERE deal_id = CAST(:deal_id AS uuid)" in insert
+    # …and the literal it replaced is gone: no hardcoded `true`, and no
+    # is_primary bound from Python either — the database decides it.
+    assert ", true)" not in insert.lower()
+    [(_, params)] = [
+        (s, p) for s, p in db.calls if s.startswith("INSERT INTO crm_deal_contacts")
+    ]
+    assert set(params) == {"deal_id", "contact_id"}
+
+
 # ── Statuses auto-created (§7.1: vocabulary flows DOWN) ─────────────────────
 
 async def test_an_unseen_stage_becomes_a_new_lane_appended_at_the_end(

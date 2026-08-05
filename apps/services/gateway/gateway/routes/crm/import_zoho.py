@@ -381,6 +381,44 @@ async def resolve_status(
     return status_id
 
 
+# ── The push's padding, coming back (§7.1) ──────────────────────────────────
+#
+# Zoho makes fields NOT NULL that we allow to be blank: a Contact must have a
+# Last_Name, a Lead must have a Last_Name and a Company. `sync_zoho`'s push
+# therefore PADS them from a field that is always populated. The next pull sees
+# that padding as real data and, without this, writes it back into the native
+# NULL — the sync mutating native data purely by echoing itself.
+#
+# The guard is deliberately narrow and provable rather than clever: it fires
+# only when the native column is NULL *and* the pulled value is exactly the
+# value we would have padded it from. The one case it declines is a human in
+# Zoho genuinely typing Last_Name = the first name onto a contact whose native
+# last name is blank — which leaves the column as it already was.
+
+#: entity slug → ((padded column, the native column it is padded FROM), …).
+#: Must stay in step with ``sync_zoho.to_zoho_contact`` / ``to_zoho_lead``.
+PADDED_FROM: dict[str, tuple[tuple[str, str], ...]] = {
+    "contacts": (("last_name", "first_name"),),
+    "leads": (("last_name", "lead_name"), ("organization_name", "lead_name")),
+}
+
+
+def strip_padding_echo(
+    entity: Entity, values: dict[str, Any], existing: Any,
+) -> dict[str, Any]:
+    """Drop pulled values that are only our own push's padding coming home."""
+    rules = PADDED_FROM.get(entity.slug)
+    if existing is None or not rules:
+        return values
+    out = dict(values)
+    for column, padded_from in rules:
+        if getattr(existing, column, None) is not None:
+            continue  # the native column has a real value; the pull may change it
+        if out.get(column) and out[column] == getattr(existing, padded_from, None):
+            out.pop(column)
+    return out
+
+
 # ── Applying one record ─────────────────────────────────────────────────────
 
 async def apply_record(
@@ -393,19 +431,27 @@ async def apply_record(
     fallback_owner: str,
     report: ImportReport,
     module_report: ModuleReport,
+    existing: Any = None,
 ) -> Any | None:
     """Map and write one Zoho record. Shared by the backfill and the pull.
 
     Returns the written row, or ``None`` when the record was skipped. Rows
     carry ``source='import'`` — §7.1: the existing CHECK vocabulary needs no
-    new value and migration 144 needs no ALTER.
+    new value and migration 144 needs no ALTER. On a row that already exists
+    ``source`` is written but never applied: ``core.INSERT_ONLY_COLUMNS`` keeps
+    it off the conflict arm, so a row typed into this app stays ``'manual'``
+    after its first round trip through Zoho.
+
+    ``existing`` is the native row this record already maps to, when there is
+    one. It is what :func:`strip_padding_echo` needs to tell our own push's
+    padding apart from a real Zoho value.
     """
     zoho_id = _text(record.get("id"))
     if not zoho_id:
         module_report.skipped += 1
         return None
 
-    values = MAPPERS[module](record)
+    values = strip_padding_echo(entity, MAPPERS[module](record), existing)
     owner, guessed = owner_email(record, owners, fallback_owner)
     values["owner_email"] = owner
     if guessed:
@@ -453,10 +499,19 @@ async def _link_primary_contact(
     contact_id = await _linked_native_id(db, CONTACTS, record.get("Contact_Name"))
     if not contact_id:
         return
+    # ⚠️ `is_primary` is COMPUTED, not the literal `true` the first draft sent:
+    # a deal that already has a hand-set primary (contact A) whose Zoho record
+    # names contact B would otherwise end up with TWO primaries, and "at most
+    # one primary per deal" is enforced by code, not by a constraint. Deciding
+    # it inside the INSERT rather than reading first also means two racing
+    # cycles cannot both observe "no primary yet".
     await db.execute(
         text(
             "INSERT INTO crm_deal_contacts (deal_id, contact_id, is_primary) "
-            "VALUES (CAST(:deal_id AS uuid), CAST(:contact_id AS uuid), true) "
+            "SELECT CAST(:deal_id AS uuid), CAST(:contact_id AS uuid), "
+            "       NOT EXISTS (SELECT 1 FROM crm_deal_contacts "
+            "                    WHERE deal_id = CAST(:deal_id AS uuid) "
+            "                      AND is_primary) "
             "ON CONFLICT DO NOTHING"
         ),
         {"deal_id": str(deal.id), "contact_id": contact_id},
@@ -562,30 +617,42 @@ async def apply_module(
     owners: dict[str, str],
     fallback_owner: str,
     report: ImportReport,
-) -> ModuleReport:
+) -> tuple[ModuleReport, datetime | None]:
     """Apply every fetched record of one module. The shared pull/backfill body.
+
+    Returns ``(report, newest_applied)`` — the second being the newest Zoho
+    ``Modified_Time`` among the records that actually **landed**.
+
+    ⚠️ That second value is the pull cursor's watermark, and it is deliberately
+    NOT "the newest record we fetched". A record that failed to apply is
+    counted in ``errors[]`` and the batch continues (an import that aborts on
+    row 900 of 3 000 is one nobody can finish) — but if the cursor advanced
+    past it anyway, the next incremental pull would never ask for it again and
+    the record would be dropped permanently, until some human happened to touch
+    it in Zoho. Watermarking on what succeeded means a failure is retried next
+    cycle instead of being silently abandoned.
 
     ``created`` vs ``updated`` is decided by a read BEFORE the upsert, because
     ``ON CONFLICT`` cannot tell the caller which arm it took without a second
     round trip, and reporting every row as "created" on a re-run would make the
     report useless exactly when somebody is checking whether the import is
-    idempotent.
+    idempotent. That same read supplies ``apply_record``'s ``existing``.
     """
     module_report = ModuleReport(fetched=len(records))
     entity = dict(RECORD_MODULES).get(module)
+    newest_applied: datetime | None = None
     for record in records:
         zoho_id = _text(record.get("id"))
         table = entity.table if entity is not None else "crm_activities"
         try:
-            existed = (
-                await load_by_zoho_id(db, table, zoho_id)
-                if zoho_id else None
-            ) is not None
+            existing = (
+                await load_by_zoho_id(db, table, zoho_id) if zoho_id else None
+            )
             if entity is not None:
                 row = await apply_record(
                     db, module, entity, record, owners=owners,
                     fallback_owner=fallback_owner, report=report,
-                    module_report=module_report,
+                    module_report=module_report, existing=existing,
                 )
             else:
                 row = await apply_activity(
@@ -594,17 +661,31 @@ async def apply_module(
                 )
             if row is None:
                 continue
-            if existed:
+            if existing is not None:
                 module_report.updated += 1
             else:
                 module_report.created += 1
+            newest_applied = _newer(newest_applied, modified_time(record))
         except Exception as exc:  # one bad record must not lose the batch
             module_report.errors.append(f"{zoho_id or '?'}: {str(exc)[:200]}")
             _log.warning(
                 "crm.import.record_failed", module=module,
                 zoho_id=zoho_id, error=str(exc)[:200],
             )
-    return module_report
+    return module_report, newest_applied
+
+
+def _newer(left: datetime | None, right: datetime | None) -> datetime | None:
+    """``max`` over two instants that may be missing or mutually incomparable."""
+    if left is None:
+        return right
+    if right is None:
+        return left
+    try:
+        return right if right > left else left
+    except TypeError:
+        # naive vs aware — refuse to guess, and keep the one we already had.
+        return left
 
 
 # ── The endpoint ────────────────────────────────────────────────────────────
@@ -648,7 +729,9 @@ async def import_from_zoho(
     db = await _get_db()
     try:
         for module in ALL_MODULES:
-            report.modules[module] = await apply_module(
+            # The backfill has no cursor to advance, so the watermark the pull
+            # phase needs is discarded here.
+            report.modules[module], _ = await apply_module(
                 db, module, fetched[module],
                 owners=owners, fallback_owner=who, report=report,
             )
@@ -688,6 +771,7 @@ async def _fetch(
 __all__ = [
     "ACTIVITY_MODULES",
     "ALL_MODULES",
+    "PADDED_FROM",
     "RECORD_MODULES",
     "ImportReport",
     "ImportRequest",
@@ -697,4 +781,5 @@ __all__ = [
     "import_from_zoho",
     "modified_time",
     "owner_index",
+    "strip_padding_echo",
 ]

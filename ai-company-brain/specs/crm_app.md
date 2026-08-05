@@ -387,9 +387,46 @@ faithful until cutover:
   re-reads the world after every restart. Both new tables + the dirty columns land in one
   migration at the next free number (landed as `145_crm_zoho_sync.sql`), with 26a's static
   idempotency fence extended to it — found by CONTENT, never by number (R1).
+  **Two rules the cursor has to obey, both found by the 26b verifier:**
+  1. **One snapshot per cycle, read before anything moves.** The pull phase writes cursors
+     as it goes, so a deleted-records read that fetched the cursor *afterwards* would get
+     the watermark that very cycle just wrote — and Zoho would answer "nothing deleted"
+     for every deletion older than this cycle's newest `Modified_Time`. Those deletions are
+     missed **permanently**: the cursor only moves forward, so no later cycle asks about
+     that window again. `read_cursors()` snapshots once and both phases take it as an
+     argument.
+  2. **The watermark is the newest record that actually APPLIED**, never the newest
+     fetched. A record whose apply failed is counted in `errors[]` and the batch continues;
+     advancing past it would mean the next incremental pull never asks for it again and the
+     record is dropped until a human happens to touch it in Zoho. Nothing fetched ⇒ adopt
+     the cycle start (so an unchanged module stops re-reading its table); nothing applied ⇒
+     stand still; never backwards. Per-record apply failures are also folded into the cycle
+     summary count — a cycle that dropped nine records must not log `errors=0`.
 - **Conflicts:** record-level last-writer-wins comparing Zoho `Modified_Time` against
   native `updated_at`; both-changed conflicts are counted and logged per cycle, never
   silent. No field-level merge in v1 (D-CRM-6 amended).
+- **The sync must not mutate native data by echoing itself.** Three rules, all learned
+  from the 26b verifier's round-trip reading:
+  - **`source` is provenance and is written on INSERT only.** It is deliberately excluded
+    from the `ON CONFLICT` arm (`core.INSERT_ONLY_COLUMNS`), so a row typed into this app
+    stays `'manual'` after the sync pushes it up and pulls it back. Rewriting it would flip
+    every native-origin row to `'import'` on its first echo — a silent one-way rewrite of
+    the column the `?source=` filter reads.
+  - **Zoho's required fields are PADDED on push and un-padded on pull.** Zoho makes fields
+    NOT NULL that §3.2/§3.3 allow to be blank (a Contact needs `Last_Name`; a Lead needs
+    `Last_Name` and `Company`), so the push fills them from a field that is always
+    populated. `import_zoho.strip_padding_echo` drops a pulled value when — and only when —
+    the native column is NULL *and* the value is exactly what we would have padded it from.
+    Accepted cost, stated: a human in Zoho who genuinely types `Last_Name` = the first name
+    onto a contact whose native surname is blank is indistinguishable from our padding, and
+    the native column stays NULL. `PADDED_FROM` must be kept in step with `to_zoho_*`.
+  - **A native field CLEAR does not reach Zoho, and the next pull restores the old value.**
+    The push prunes `None` (sending it would CLEAR the field at Zoho, so a column we simply
+    do not carry would blank the tenant's copy every cycle) — which means "user emptied
+    this field" and "we have nothing for this field" are the same wire state, and Zoho's
+    surviving value comes back on the next pull. **Accepted, not fixed:** distinguishing
+    them needs per-field dirty tracking, i.e. exactly the field-level merge D-CRM-6 rules
+    out for v1. Clearing a field on both sides, or clearing it in Zoho, both work.
 - **Pipeline vocabulary flows DOWN only** while sync is on: stage/status picklists are
   managed in Zoho and auto-created natively (as backfill already does); native status
   creation is not pushed (Zoho picklist mutation needs settings-API writes — out of scope,
@@ -552,7 +589,7 @@ blockers 1–9 folded in below. Landed on branch `ws-26b-zoho-sync` as
 `infra/postgres/145_crm_zoho_sync.sql` +
 `apps/services/gateway/gateway/routes/crm/{import_zoho,sync_zoho,broker_handlers}.py` +
 the `core.py` dirty-marking choke point and `records.py` tombstone-in-delete, fenced by
-`tests/unit/test_crm_zoho_{import,sync}.py` — 80 new cases, zero DB and zero network, plus
+`tests/unit/test_crm_zoho_{import,sync}.py` — 95 new cases, zero DB and zero network, plus
 26a's migration fence extended to the second migration. **Built, not run:** no backfill and
 no cycle has ever executed against the tenant.)*
 
@@ -582,6 +619,34 @@ no cycle has ever executed against the tenant.)*
   reported it — an echo in the most destructive direction available.
 - **C7** — `DELETE /crm/<entity>/{id}` now takes the acting user (for `deleted_by`) and its
   response gained `zoho_delete_queued`, so a caller is told the deletion leaves this app.
+
+**Verifier repairs (2026-08-05, same branch — five findings, all taken):**
+- **V1 (was a FAIL)** — the deleted-records read took its cursor *after* `pull_phase` had
+  already advanced it, so any Zoho deletion older than that cycle's newest `Modified_Time`
+  was silently and **permanently** missed. Cursors are now snapshotted once
+  (`read_cursors()`) before either phase and passed to both. Pinned by a test asserting the
+  `<module>/deleted` read's `since` equals the PRE-cycle cursor and is strictly older than
+  the cursor the same cycle wrote.
+- **V2** — the pull cursor advanced to the newest *fetched* record even when some records
+  failed to apply, dropping them permanently; and the cycle summary counted only the
+  cycle-level and push-level error lists, logging `errors=0` over a batch that lost rows.
+  Now `advance_cursor()` watermarks on the newest successfully **applied** record
+  (forward-only, stands still when nothing applied), and `SyncCycleReport.pull_record_errors`
+  folds the per-record failures into the summary.
+- **V3** — two echo mutations. `source` is now insert-only (see §7.1); the push's padding of
+  Zoho's required fields is now stripped on the way back in (`strip_padding_echo`), with the
+  one indistinguishable case recorded in §7.1 rather than hidden.
+- **V4** — a native field clear never reaching Zoho is **documented as an accepted cost** of
+  D-CRM-6's no-field-level-merge (§7.1), not changed.
+- **V5** — `writer.upsert_record` was exported and never called (`execute_push` branches the
+  verb itself). Deleted: the single write surface should stay countable, and "upsert by id"
+  is a decision in `push_records`, not a verb.
+- **Also, from 26c's verifier** — `import_zoho`'s deal-contact link inserted a literal
+  `is_primary = true`, so a deal with a hand-set primary A whose Zoho record names B ended
+  up with **two** primaries (the one-primary rule is code, not a constraint). `is_primary` is
+  now computed inside the INSERT from `NOT EXISTS (… WHERE deal_id = :deal_id AND
+  is_primary)`, which also closes the read-then-write race and stays correct under the
+  one-primary seam WS-26c adds.
 
 Done when:
 1. `list_leads` **and a deleted-records read function** added to the client; Zoho **write**

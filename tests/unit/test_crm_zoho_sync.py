@@ -189,6 +189,32 @@ def test_the_engine_reaches_zoho_only_through_execute_push() -> None:
     assert sorted(named) == ["_writer", "execute_push"], named
 
 
+def test_the_write_surface_is_three_verbs_and_every_one_has_a_caller() -> None:
+    """The whole point of a single write client is that it stays countable.
+
+    Three verbs, and each is reachable from ``execute_push``. An exported
+    convenience wrapper with no caller (``upsert_record`` was one) is a fourth
+    entry on the surface that the single-caller grep still passes over — and
+    "upsert by id" is a DECISION, made in ``push_records`` where the acquired
+    id is stamped back onto the native row, not a verb.
+    """
+    import inspect
+
+    from ingestion.sources.zoho import writer as zoho_writer
+
+    verbs = {"create_record", "update_record", "delete_record"}
+    exported = {
+        name for name in zoho_writer.__all__
+        if inspect.iscoroutinefunction(getattr(zoho_writer, name, None))
+    }
+    assert exported == verbs, exported
+    assert not hasattr(zoho_writer, "upsert_record")
+
+    body = inspect.getsource(crm_sync.execute_push)
+    for verb in verbs:
+        assert f"writer.{verb}(" in body, verb
+
+
 async def test_every_push_goes_through_the_broker_gate(
     db: FakeCrmDB, zoho: FakeZoho, writer: FakeWriter, audit: list,
 ) -> None:
@@ -395,6 +421,140 @@ async def test_the_cursor_upsert_is_keyed_on_the_module(
     assert "ON CONFLICT (module) DO UPDATE SET" in inserts[0]
 
 
+async def test_the_deleted_records_read_uses_the_PRE_cycle_cursor(
+    db: FakeCrmDB, zoho: FakeZoho, writer: FakeWriter, audit: list,
+) -> None:
+    """The cursor snapshot, and the reason it exists.
+
+    ``pull_phase`` WRITES cursors as it goes. A deleted-records read that
+    fetched the cursor afterwards would receive the watermark this very cycle
+    just wrote, so Zoho would answer "nothing deleted since then" for every
+    deletion older than this cycle's newest change — and those deletions are
+    **permanently** missed, because the cursor only ever moves forward and no
+    later cycle asks about that window again.
+    """
+    db.seed(
+        "crm_sync_cursors", module="Accounts",
+        last_pulled_at=_instant("2026-08-01T00:00:00+00:00"),
+    )
+    zoho.data["Accounts"] = [{
+        "id": "z-acc-1", "Account_Name": "Fracktal",
+        "Modified_Time": "2026-08-04T00:00:00+00:00",
+    }]
+
+    await crm_sync.run_cycle()
+
+    [(_, deleted_since)] = [
+        (m, since) for m, since in zoho.reads if m == "Accounts/deleted"
+    ]
+    assert deleted_since == _instant("2026-08-01T00:00:00+00:00")
+
+    # And the pull really did move the cursor past it in the same cycle —
+    # without which this test could pass against a version that never advances.
+    [written] = [
+        p for s, p in db.calls
+        if s.startswith("INSERT INTO crm_sync_cursors") and p["module"] == "Accounts"
+    ]
+    assert written["last_pulled_at"] == _instant("2026-08-04T00:00:00+00:00")
+    assert deleted_since < written["last_pulled_at"]
+
+
+async def test_every_module_reads_its_delete_cursor_from_one_snapshot(
+    db: FakeCrmDB, zoho: FakeZoho, writer: FakeWriter, audit: list,
+) -> None:
+    """One `SELECT * FROM crm_sync_cursors` per cycle, not one per module per
+    phase: a per-phase read is exactly how the stale-watermark bug returns."""
+    await crm_sync.run_cycle()
+    reads = [s for s in db.statements if s == "SELECT * FROM crm_sync_cursors"]
+    assert len(reads) == 1, db.statements_touching("crm_sync_cursors")
+
+
+# ── The watermark never advances past a record that failed ─────────────────
+
+@pytest.mark.parametrize(
+    ("previous", "newest_applied", "fetched", "expected"),
+    [
+        # Nothing fetched → adopt the cycle start, or a module Zoho never
+        # changes re-reads its whole table every ten minutes forever.
+        (None, None, 0, "fallback"),
+        # Fetched but nothing landed → stand still, so the next cycle retries.
+        ("t1", None, 3, "t1"),
+        (None, None, 3, None),
+        # Normal: the newest record that actually landed.
+        ("t1", "t2", 3, "t2"),
+        # Never backwards — a rewound cursor re-reads a reconciled window.
+        ("t2", "t1", 3, "t2"),
+    ],
+)
+def test_advance_cursor_is_forward_only_and_never_past_a_failure(
+    previous: Any, newest_applied: Any, fetched: int, expected: Any,
+) -> None:
+    stamps = {
+        "t1": _instant("2026-08-01T00:00:00+00:00"),
+        "t2": _instant("2026-08-02T00:00:00+00:00"),
+        "fallback": _instant("2026-08-09T00:00:00+00:00"),
+        None: None,
+    }
+    result = crm_sync.advance_cursor(
+        stamps[previous], stamps[newest_applied],
+        fetched=fetched, fallback=stamps["fallback"],
+    )
+    assert result == stamps[expected]
+
+
+async def test_the_cursor_stops_short_of_a_record_that_failed_to_apply(
+    db: FakeCrmDB, zoho: FakeZoho, writer: FakeWriter, audit: list,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failed record is counted and the batch continues (an import that
+    aborts on row 900 of 3 000 is one nobody can finish) — but if the cursor
+    advanced past it anyway, the next incremental pull would never ask for it
+    again and the record would be dropped for good."""
+    real = crm_import.map_account
+
+    def _explode(record: dict) -> dict:
+        if record.get("id") == "z-acc-bad":
+            raise ValueError("bad account")
+        return real(record)
+
+    monkeypatch.setitem(crm_import.MAPPERS, "Accounts", _explode)
+    zoho.data["Accounts"] = [
+        {"id": "z-acc-ok", "Account_Name": "Good",
+         "Modified_Time": "2026-08-01T00:00:00+00:00"},
+        {"id": "z-acc-bad", "Account_Name": "Bad",
+         "Modified_Time": "2026-08-05T00:00:00+00:00"},
+    ]
+
+    report = await crm_sync.run_cycle()
+
+    [written] = [
+        p for s, p in db.calls
+        if s.startswith("INSERT INTO crm_sync_cursors") and p["module"] == "Accounts"
+    ]
+    assert written["last_pulled_at"] == _instant("2026-08-01T00:00:00+00:00")
+    assert written["last_status"] == "partial"
+    assert report.pulled["Accounts"].created == 1
+
+
+async def test_a_failed_record_is_counted_in_the_cycle_summary(
+    db: FakeCrmDB, zoho: FakeZoho, writer: FakeWriter, audit: list,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The per-record errors live inside each ModuleReport; the cycle summary
+    is what a human reads. A cycle that dropped rows while reporting zero
+    errors is the report that hides the outage."""
+    def _explode(record: dict) -> dict:
+        raise ValueError("bad account")
+
+    monkeypatch.setitem(crm_import.MAPPERS, "Accounts", _explode)
+    zoho.data["Accounts"] = [{"id": "z-acc-1", "Account_Name": "Bad"}]
+
+    report = await crm_sync.run_cycle()
+
+    assert len(report.pulled["Accounts"].errors) == 1
+    assert report.pull_record_errors == 1
+
+
 async def test_a_module_whose_pull_fails_is_reported_and_does_not_stop_the_rest(
     db: FakeCrmDB, zoho: FakeZoho, writer: FakeWriter, audit: list,
     monkeypatch: pytest.MonkeyPatch,
@@ -557,6 +717,116 @@ async def test_two_cycles_converge_to_zero_pushes(
     assert second.pushed.created == 0
     assert second.pushed.updated == 0
     assert second.pulled["Accounts"].fetched == 1
+
+
+async def test_a_pull_never_rewrites_the_source_provenance(
+    db: FakeCrmDB, zoho: FakeZoho, writer: FakeWriter, audit: list,
+) -> None:
+    """A row typed into this app is `source='manual'` FOREVER — including
+    after the sync pushes it to Zoho and pulls it straight back.
+
+    Without `source` on the insert-only list, the conflict arm rewrote it to
+    `'import'` on the first echo: a silent, one-way rewrite of the column the
+    `?source=` filter and every "where did this come from" question read.
+    Statement-text, because the fake models no conflict arm at all.
+    """
+    db.seed(ORGANIZATIONS.table, name="Fracktal", zoho_id="z-acc-1", source="manual")
+    zoho.data["Accounts"] = [{
+        "id": "z-acc-1", "Account_Name": "Fracktal",
+        "Modified_Time": "2026-08-04T00:00:00+00:00",
+    }]
+
+    await crm_sync.run_cycle()
+
+    [statement] = db.statements_touching("INSERT INTO crm_organizations (")
+    arm = statement.split("DO UPDATE SET", 1)[1]
+    assert "source = EXCLUDED.source" not in arm
+    assert "zoho_id = EXCLUDED.zoho_id" not in arm
+    # …while the ordinary columns still are rewritten, or this would pass by
+    # the upsert having no conflict arm at all.
+    assert "name = EXCLUDED.name" in arm
+    # `source` is still SENT — it is what a genuinely new row is created with.
+    assert "source" in statement.split("DO UPDATE SET", 1)[0]
+    assert set(crm_core.INSERT_ONLY_COLUMNS) == {"zoho_id", "source"}
+
+
+async def test_a_pull_does_not_write_our_own_padding_back_into_a_native_null(
+    db: FakeCrmDB, zoho: FakeZoho, writer: FakeWriter, audit: list,
+) -> None:
+    """Zoho requires Last_Name; §3.2 does not. The push therefore pads it from
+    the first name — and without a guard the next pull writes that padding
+    into the native NULL, the sync mutating native data purely by echoing
+    itself. Full round trip: cycle 1 pushes, cycle 2 pulls the same record."""
+    row = db.seed(
+        CONTACTS.table, first_name="Vijay", last_name=None, zoho_dirty=True,
+    )
+
+    await crm_sync.run_cycle()
+    [(module, payload)] = writer.creates
+    assert (module, payload["Last_Name"]) == ("Contacts", "Vijay")  # the padding
+
+    db.calls.clear()
+    await crm_sync.run_cycle()
+
+    applied = [
+        p for s, p in db.calls if s.startswith("INSERT INTO crm_contacts (")
+    ]
+    assert applied, "cycle 2 never pulled the record back"
+    assert all("last_name" not in p for p in applied)
+    assert _stored(db, CONTACTS.table, row.id)["last_name"] is None
+
+
+def test_the_padding_guard_only_fires_on_a_native_null(
+    db: FakeCrmDB,
+) -> None:
+    """Narrow and provable rather than clever: it drops a pulled value only
+    when the native column is NULL *and* the value is exactly what we would
+    have padded it from. A real Zoho edit to a populated column is untouched."""
+    from types import SimpleNamespace
+
+    from gateway.routes.crm.import_zoho import strip_padding_echo
+
+    blank = SimpleNamespace(first_name="Vijay", last_name=None)
+    assert "last_name" not in strip_padding_echo(
+        CONTACTS, {"first_name": "Vijay", "last_name": "Vijay"}, blank,
+    )
+    # A different surname is a real value and survives.
+    assert strip_padding_echo(
+        CONTACTS, {"last_name": "Varada"}, blank,
+    ) == {"last_name": "Varada"}
+    # A populated native column is Zoho's to change.
+    populated = SimpleNamespace(first_name="Vijay", last_name="Varada")
+    assert strip_padding_echo(
+        CONTACTS, {"last_name": "Vijay"}, populated,
+    ) == {"last_name": "Vijay"}
+    # A brand-new record has nothing to protect.
+    assert strip_padding_echo(
+        CONTACTS, {"last_name": "Vijay"}, None,
+    ) == {"last_name": "Vijay"}
+    # Leads pad TWO columns, both from lead_name.
+    lead = SimpleNamespace(
+        lead_name="Asha Rao", last_name=None, organization_name=None,
+    )
+    assert strip_padding_echo(
+        LEADS,
+        {"last_name": "Asha Rao", "organization_name": "Asha Rao", "email": "a@b.in"},
+        lead,
+    ) == {"email": "a@b.in"}
+
+
+def test_the_padding_map_covers_every_field_the_push_pads() -> None:
+    """The guard and the padder must stay in step; a pad added to
+    `to_zoho_*` without an entry here silently resumes the echo."""
+    from gateway.routes.crm.import_zoho import PADDED_FROM
+
+    assert PADDED_FROM["contacts"] == (("last_name", "first_name"),)
+    assert PADDED_FROM["leads"] == (
+        ("last_name", "lead_name"), ("organization_name", "lead_name"),
+    )
+    # Organizations and deals pad nothing — their required fields are NOT NULL
+    # on our side too, so there is nothing to invent.
+    assert "organizations" not in PADDED_FROM
+    assert "deals" not in PADDED_FROM
 
 
 def test_the_dirty_flag_is_set_at_the_one_write_choke_point() -> None:

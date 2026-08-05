@@ -179,6 +179,11 @@ class SyncCycleReport(BaseModel):
     pulled: dict[str, ModuleReport] = {}
     #: Rows a pull skipped because a pending native edit won (§7.1's LWW).
     pull_skipped_native_newer: int = 0
+    #: Per-RECORD failures during the pull's apply step, summed across modules.
+    #: Surfaced here and not only inside each ``ModuleReport.errors`` because
+    #: the cycle summary is what a human reads, and a cycle that dropped nine
+    #: records while reporting zero errors is the report that hides the outage.
+    pull_record_errors: int = 0
     zoho_deletes: DeleteReport = DeleteReport()
     pushed: PushReport = PushReport()
     #: §7.1 — "both-changed conflicts are counted and logged per cycle, never
@@ -193,13 +198,24 @@ class SyncCycleReport(BaseModel):
 
 # ── Cursors (§7.1: "pull cursors are schema too") ───────────────────────────
 
-async def read_cursor(db: Any, module: str) -> datetime | None:
-    """The watermark the next pull of ``module`` sends as If-Modified-Since."""
-    row = (await db.execute(
-        text("SELECT * FROM crm_sync_cursors WHERE module = :module"),
-        {"module": module},
-    )).fetchone()
-    return getattr(row, "last_pulled_at", None) if row is not None else None
+async def read_cursors(db: Any) -> dict[str, datetime | None]:
+    """Every module's watermark, read **once** at the top of a cycle.
+
+    ⚠️ Read once and passed to both phases, never re-read per phase. The pull
+    phase WRITES cursors as it goes; a deleted-records read that fetched the
+    cursor afterwards would receive the watermark this very cycle just wrote,
+    and Zoho would answer "nothing deleted since then" for every deletion older
+    than this cycle's newest ``Modified_Time``. Those deletions are then
+    **permanently** missed: the cursor only ever moves forward, so no later
+    cycle asks about that window again. One snapshot, taken before anything
+    moves, is the whole fix.
+    """
+    rows = (await db.execute(text("SELECT * FROM crm_sync_cursors"), {})).fetchall()
+    return {
+        str(row.module): getattr(row, "last_pulled_at", None)
+        for row in rows
+        if getattr(row, "module", None)
+    }
 
 
 async def write_cursor(
@@ -317,19 +333,49 @@ async def resolve_conflicts(
 
 # ── Phase 1: pull ───────────────────────────────────────────────────────────
 
-def _newest(records: list[dict[str, Any]]) -> datetime | None:
-    stamps = [t for t in (modified_time(r) for r in records) if t is not None]
-    return max(stamps) if stamps else None
+def advance_cursor(
+    previous: datetime | None,
+    newest_applied: datetime | None,
+    *,
+    fetched: int,
+    fallback: datetime | None,
+) -> datetime | None:
+    """The module's new watermark. Forward-only, and never past a failure.
+
+    * Nothing fetched → move to the cycle's start, so a module Zoho never
+      changes stops re-reading its whole table every ten minutes.
+    * Records fetched but **none applied** → do not move at all. Every one of
+      them is either a failure or a deliberate conflict skip, and the next
+      cycle has to be able to ask for them again.
+    * Otherwise → the newest record that actually landed, and never backwards:
+      a cursor that rewinds re-reads a window it has already reconciled.
+    """
+    if not fetched:
+        return previous or fallback
+    if newest_applied is None:
+        return previous
+    if previous is None:
+        return newest_applied
+    try:
+        return newest_applied if newest_applied > previous else previous
+    except TypeError:
+        # naive vs aware — refuse to guess; standing still is the safe move.
+        return previous
 
 
 async def pull_phase(
     db: Any, zoho: Any, owners: dict[str, str], actor_email: str,
-    report: SyncCycleReport,
+    report: SyncCycleReport, cursors: dict[str, datetime | None],
 ) -> None:
-    """Zoho → native, one module at a time, incrementally from the cursors."""
+    """Zoho → native, one module at a time, incrementally from the cursors.
+
+    ``cursors`` is the cycle's snapshot (:func:`read_cursors`), not a live
+    read: this phase writes cursors as it goes and the delete phase must not
+    see its own cycle's advances.
+    """
     entities = dict(RECORD_MODULES)
     for module in ALL_MODULES:
-        cursor = await read_cursor(db, module)
+        cursor = cursors.get(module)
         try:
             records = await _fetch(zoho, module, modified_since=cursor)
         except Exception as exc:
@@ -346,7 +392,7 @@ async def pull_phase(
         # The importer owns the field mapping for BOTH directions of read, so a
         # backfill and a pull can never map `Deal_Name` differently.
         carrier = ImportReport(dry_run=False, modules={})
-        module_report = await apply_module(
+        module_report, newest_applied = await apply_module(
             db, module, applicable,
             owners=owners, fallback_owner=actor_email, report=carrier,
         )
@@ -355,9 +401,15 @@ async def pull_phase(
         report.pulled[module] = module_report
         report.statuses_created += carrier.statuses_created
         report.unmatched_owners += carrier.unmatched_owners
+        # Loud, in the RESPONSE and not only in the log: a cycle that dropped
+        # nine records must not report zero errors.
+        report.pull_record_errors += len(module_report.errors)
         await write_cursor(
             db, module,
-            pulled_at=_newest(records) or cursor or report_started(report),
+            pulled_at=advance_cursor(
+                cursor, newest_applied,
+                fetched=len(records), fallback=report_started(report),
+            ),
             status="ok" if not module_report.errors else "partial",
         )
 
@@ -377,6 +429,7 @@ def report_started(report: SyncCycleReport) -> datetime | None:
 
 async def apply_zoho_deletes(
     db: Any, zoho: Any, report: SyncCycleReport,
+    cursors: dict[str, datetime | None],
 ) -> None:
     """Zoho deletions become native deletions, loudly counted (§7.1).
 
@@ -385,12 +438,18 @@ async def apply_zoho_deletes(
     straight back at the tenant that just told us about it — an echo, in the
     most destructive direction available.
 
+    ⚠️ ``cursors`` is the cycle's PRE-pull snapshot, passed in rather than
+    re-read. The pull phase has already advanced these cursors by the time this
+    runs, and asking Zoho "what was deleted since <the watermark I just wrote>"
+    hides every deletion older than this cycle's newest change — permanently,
+    because the cursor never goes back.
+
     The cascade (``crm_activities``, ``crm_deal_contacts``) is Postgres's, per
     the FK graph; the activity count is read BEFORE the delete because
     afterwards the honest number is unobtainable.
     """
     for module, entity in RECORD_MODULES:
-        cursor = await read_cursor(db, module)
+        cursor = cursors.get(module)
         try:
             deleted = await zoho.list_deleted(module, since=cursor)
         except Exception as exc:
@@ -786,8 +845,12 @@ async def run_cycle(*, actor_email: str = "crm:zoho-sync") -> SyncCycleReport:
 
     db = await _get_db()
     try:
-        await pull_phase(db, zoho, owners, actor_email, report)
-        await apply_zoho_deletes(db, zoho, report)
+        # ONE snapshot, before anything moves. `pull_phase` writes cursors as it
+        # goes, so a delete phase that read them afterwards would ask Zoho about
+        # a window this cycle had already closed — see `read_cursors`.
+        cursors = await read_cursors(db)
+        await pull_phase(db, zoho, owners, actor_email, report, cursors)
+        await apply_zoho_deletes(db, zoho, report, cursors)
         await push_records(db, report)
         await push_activities(db, report)
         await push_tombstones(db, report)
@@ -804,7 +867,13 @@ async def run_cycle(*, actor_email: str = "crm:zoho-sync") -> SyncCycleReport:
         conflicts=report.conflicts,
         conflicts_zoho_won=report.conflicts_zoho_won,
         conflicts_native_won=report.conflicts_native_won,
-        errors=len(report.errors) + len(report.pushed.errors),
+        # Per-record apply failures are folded in: they live inside each
+        # ModuleReport, and a summary that counted only the cycle-level and
+        # push-level lists logged errors=0 over a batch that dropped rows.
+        errors=(
+            len(report.errors) + len(report.pushed.errors)
+            + report.pull_record_errors
+        ),
     )
     return report
 
@@ -901,10 +970,11 @@ __all__ = [
     "SYNC_INTERVAL_SECS",
     "PushReport",
     "SyncCycleReport",
+    "advance_cursor",
     "build_payload",
     "execute_push",
     "push_one",
-    "read_cursor",
+    "read_cursors",
     "resolve_conflicts",
     "run_cycle",
     "start_crm_zoho_sync",

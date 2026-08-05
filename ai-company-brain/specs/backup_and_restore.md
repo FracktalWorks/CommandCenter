@@ -166,7 +166,26 @@ restore verified
 4 backup(s) retained, 90M total
 ```
 
-### 4.2 Off-box copy — the gap that still matters most
+### 4.2 Off-box copy — DEFERRED by owner decision, 2026-08-05
+
+> **DECISION (owner-answered, 2026-08-05): leave `BACKUP_REMOTE` unset for now.**
+>
+> The accepted risk, stated plainly so nobody has to re-derive it: backups
+> protect against a bad migration, a dropped table, or a botched release. They
+> do **not** survive losing the disk, the box, or the Hostinger account. If the
+> VPS goes, recovery falls back to the Hostinger VM image — §1's measured
+> position: weekly, two retained, up to 7 days of loss, ~58 minutes, whole
+> machine.
+>
+> This is a deliberate deferral, not an oversight, and `backup_db.sh` keeps
+> warning on every run. Do not "fix" the warning by silencing it. Revisit when
+> the data in this deployment is worth more than a week of it — the options
+> considered were an S3-compatible bucket (cheapest, provider-independent), an
+> rsync target on a machine already owned, or Hostinger storage (simplest, but
+> shares the account with the thing it protects, so it covers disk failure and
+> not account loss).
+
+The original analysis follows.
 
 `BACKUP_REMOTE` is unset, so backups sit on the same disk as the database they
 protect. That covers bad migrations and dropped tables. It does **not** cover

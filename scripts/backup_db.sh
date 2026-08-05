@@ -1,0 +1,190 @@
+#!/usr/bin/env bash
+# BO-23 — application-level Postgres backup.
+#
+# Why this exists
+# ---------------
+# Until this script, the ONLY recovery path was Hostinger's VM image backup.
+# Measured on 2026-08-03, that path is:
+#   - weekly, with exactly TWO images retained (then 2026-07-22 and 2026-07-29)
+#   - therefore an RPO of up to 7 days
+#   - ~58 minutes to restore, and it reverts the WHOLE MACHINE — code, .env,
+#     Docker volumes, everything — so "recover one dropped table" is not a
+#     thing it can do
+# Meanwhile 140+ migrations replay forward-only on every deploy. A migration
+# that corrupts data is therefore unrecoverable in any granular way.
+#
+# This gives us a per-database, point-in-day logical backup that can be
+# restored into a SCRATCH database and inspected before anything live is
+# touched. See deploy/hostinger/BACKUP-RESTORE.md for the runbook.
+#
+# Where backups are written, and why NOT under the app dir
+# --------------------------------------------------------
+# BACKUP_DIR defaults to /opt/acb/backups — deliberately OUTSIDE
+# /opt/acb/app. The deploy pipeline runs `git reset --hard`, which has already
+# destroyed tracked runtime state in this repo's history. Anything written
+# under the app dir is one deploy away from being gone.
+#
+# Usage:
+#   scripts/backup_db.sh                  # dump + cheap integrity check
+#   scripts/backup_db.sh --verify-restore # ALSO restore into a scratch DB
+#
+# Env:
+#   BACKUP_DIR      (default /opt/acb/backups)
+#   PG_CONTAINER    (default acb-postgres)
+#   APP_DIR         (default /opt/acb/app)
+#   KEEP_DAILY      (default 14)
+#   BACKUP_REMOTE   optional rsync destination for an off-box copy, e.g.
+#                   user@host:/srv/cc-backups . UNSET BY DEFAULT, and the
+#                   script says so loudly — see "Off-box" below.
+set -euo pipefail
+
+BACKUP_DIR="${BACKUP_DIR:-/opt/acb/backups}"
+PG_CONTAINER="${PG_CONTAINER:-acb-postgres}"
+APP_DIR="${APP_DIR:-/opt/acb/app}"
+KEEP_DAILY="${KEEP_DAILY:-14}"
+BACKUP_REMOTE="${BACKUP_REMOTE:-}"
+VERIFY_RESTORE=0
+[ "${1:-}" = "--verify-restore" ] && VERIFY_RESTORE=1
+
+say()  { printf "\n==> %s\n" "$*"; }
+warn() { printf "  !! %s\n" "$*" >&2; }
+
+# Credentials come from the same place apply_migrations.sh reads them, so the
+# two can never disagree about which cluster is "the" database.
+ENV_FILE="$APP_DIR/.env"
+PG_USER="acb"
+if [ -f "$ENV_FILE" ]; then
+  PG_USER="$(grep -E '^POSTGRES_USER=' "$ENV_FILE" | tail -1 | cut -d= -f2- || true)"
+  PG_USER="${PG_USER:-acb}"
+fi
+
+if ! docker ps --format '{{.Names}}' | grep -qx "$PG_CONTAINER"; then
+  echo "ERROR: Postgres container '$PG_CONTAINER' is not running." >&2
+  exit 1
+fi
+
+STAMP="$(date -u '+%Y-%m-%dT%H%M%SZ')"
+DEST="$BACKUP_DIR/$STAMP"
+mkdir -p "$DEST"
+
+say "Backing up cluster '$PG_CONTAINER' as '$PG_USER' -> $DEST"
+
+# --- Globals first -----------------------------------------------------------
+# Roles and their passwords live in the CLUSTER, not in any one database. A
+# per-database dump restored into a fresh cluster comes up with no roles, and
+# every GRANT in it fails. Dump globals separately so a bare-metal rebuild is
+# actually possible rather than only theoretically possible.
+say "Globals (roles, grants)"
+docker exec "$PG_CONTAINER" pg_dumpall -U "$PG_USER" --globals-only > "$DEST/globals.sql"
+
+# --- Every non-template database --------------------------------------------
+# Enumerated rather than hardcoded: `litellm_proxy` holds API keys and spend
+# records and would have been silently missed by an acb-only backup, and any
+# database added later is picked up without editing this script.
+DBS="$(docker exec "$PG_CONTAINER" psql -U "$PG_USER" -d postgres -tAc \
+  "select datname from pg_database where datistemplate = false and datname <> 'postgres' order by datname")"
+
+for db in $DBS; do
+  printf "    - %-16s ... " "$db"
+  # -Fc (custom format) is compressed AND selectively restorable: pg_restore
+  # can pull a single table out of it. A plain .sql dump can only be replayed
+  # whole, which is useless for the "recover one table" case that motivates
+  # this script.
+  docker exec "$PG_CONTAINER" pg_dump -U "$PG_USER" -d "$db" -Fc > "$DEST/$db.dump"
+  # Cheap integrity check on EVERY run: pg_restore --list parses the archive's
+  # table of contents, so a truncated or half-written dump fails here rather
+  # than at 3am during an incident. This is the difference between having a
+  # backup and believing you have one.
+  if ! docker exec -i "$PG_CONTAINER" pg_restore --list > /dev/null < "$DEST/$db.dump" 2>/dev/null; then
+    echo "CORRUPT"
+    warn "pg_restore could not read $db.dump — treating this backup as FAILED"
+    exit 1
+  fi
+  echo "ok ($(du -h "$DEST/$db.dump" | cut -f1))"
+done
+
+# --- Manifest ----------------------------------------------------------------
+# Records enough to answer "what was true when this was taken" without
+# restoring it: checksums, the migration high-water mark, and row counts for
+# the tables whose loss would be noticed first.
+say "Manifest"
+{
+  echo "taken_utc:        $STAMP"
+  echo "host:             $(hostname)"
+  echo "pg_container:     $PG_CONTAINER"
+  echo "pg_version:       $(docker exec "$PG_CONTAINER" psql -U "$PG_USER" -d postgres -tAc 'show server_version' | tr -d ' ')"
+  echo "app_commit:       $(git -C "$APP_DIR" -c safe.directory="$APP_DIR" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+  echo "migration_files:  $(ls "$APP_DIR"/infra/postgres/[0-9][0-9]*_*.sql 2>/dev/null | wc -l)"
+  echo "databases:        $(echo "$DBS" | tr '\n' ' ')"
+  echo ""
+  echo "# anchor row counts (a restore that does not reproduce these is wrong)"
+  for t in app_user email_message gtd_task meeting agent_run; do
+    n="$(docker exec "$PG_CONTAINER" psql -U "$PG_USER" -d acb -tAc \
+         "select count(*) from $t" 2>/dev/null || echo "n/a")"
+    printf "%-20s %s\n" "$t:" "$n"
+  done
+  echo ""
+  echo "# sha256"
+  (cd "$DEST" && sha256sum ./*.dump ./globals.sql)
+} > "$DEST/MANIFEST.txt"
+cat "$DEST/MANIFEST.txt" | sed 's/^/    /'
+
+# --- Optional deep verify ----------------------------------------------------
+# The cheap check proves the file is READABLE. This proves it is RESTORABLE,
+# which is a different claim — and the one everybody assumes without testing.
+if [ "$VERIFY_RESTORE" = "1" ]; then
+  say "Deep verify — restoring acb.dump into a scratch database"
+  SCRATCH="acb_verify_$(date -u +%s)"
+  docker exec "$PG_CONTAINER" createdb -U "$PG_USER" "$SCRATCH"
+  # Trap so a failure part-way through cannot leave a stray multi-hundred-MB
+  # database behind on a box with finite disk.
+  trap 'docker exec "$PG_CONTAINER" dropdb -U "$PG_USER" --if-exists "$SCRATCH" >/dev/null 2>&1 || true' EXIT
+  if docker exec -i "$PG_CONTAINER" pg_restore -U "$PG_USER" -d "$SCRATCH" --no-owner --no-acl \
+       < "$DEST/acb.dump" > /tmp/verify_restore.log 2>&1; then
+    live="$(docker exec "$PG_CONTAINER" psql -U "$PG_USER" -d acb -tAc \
+            "select count(*) from information_schema.tables where table_schema='public'")"
+    rest="$(docker exec "$PG_CONTAINER" psql -U "$PG_USER" -d "$SCRATCH" -tAc \
+            "select count(*) from information_schema.tables where table_schema='public'")"
+    echo "    public tables: live=$live restored=$rest"
+    if [ "$live" != "$rest" ]; then
+      warn "table count MISMATCH — backup is not a faithful copy"
+      exit 1
+    fi
+    echo "    restore verified"
+  else
+    warn "pg_restore FAILED — see /tmp/verify_restore.log"
+    tail -20 /tmp/verify_restore.log >&2
+    exit 1
+  fi
+  docker exec "$PG_CONTAINER" dropdb -U "$PG_USER" --if-exists "$SCRATCH" >/dev/null 2>&1 || true
+  trap - EXIT
+fi
+
+# --- Off-box copy ------------------------------------------------------------
+# A backup on the same disk as the database survives `DROP TABLE`. It does not
+# survive the disk, the box, or the provider account. Until BACKUP_REMOTE is
+# set this is a same-box backup and the script refuses to pretend otherwise.
+if [ -n "$BACKUP_REMOTE" ]; then
+  say "Copying off-box -> $BACKUP_REMOTE"
+  rsync -a --delete-after "$DEST" "$BACKUP_REMOTE/" && echo "    off-box copy ok"
+else
+  warn "BACKUP_REMOTE is unset — this backup exists ONLY on this box."
+  warn "It protects against bad migrations and dropped tables, NOT against"
+  warn "losing the VPS. Set BACKUP_REMOTE to close that gap."
+fi
+
+# --- Retention ---------------------------------------------------------------
+say "Retention (keeping $KEEP_DAILY most recent)"
+cd "$BACKUP_DIR"
+# `ls -1d` over timestamped dirs sorts correctly because the stamp is
+# ISO-8601 UTC with a fixed width — lexical order IS chronological order.
+total="$(ls -1d [0-9]*Z 2>/dev/null | wc -l)"
+if [ "$total" -gt "$KEEP_DAILY" ]; then
+  ls -1d [0-9]*Z | head -n "-$KEEP_DAILY" | while read -r old; do
+    echo "    pruning $old"
+    rm -rf "$old"
+  done
+fi
+echo "    $(ls -1d [0-9]*Z 2>/dev/null | wc -l) backup(s) retained, $(du -sh "$BACKUP_DIR" | cut -f1) total"
+
+say "Backup complete: $DEST"

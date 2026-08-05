@@ -40,6 +40,36 @@ if ! docker ps --format '{{.Names}}' | grep -qx "$PG_CONTAINER"; then
   exit 1
 fi
 
+# --- Take a backup BEFORE replaying the ladder (BO-23 done-when 4) ----------
+# The migrations below are idempotent but forward-only: there are no down
+# migrations, and they run under ON_ERROR_STOP=1. A migration that corrupts
+# data rather than failing outright leaves nothing to roll back to. Taking the
+# dump here — rather than in the deploy YAML — means it also covers anyone who
+# runs this script by hand, which is exactly when it is most likely to matter.
+#
+# Fail CLOSED: if the backup cannot be taken, the migrations do not run. The
+# escape hatch is explicit and has to be typed on purpose.
+BACKUP_SCRIPT="$APP_DIR/scripts/backup_db.sh"
+if [ "${SKIP_PRE_MIGRATION_BACKUP:-0}" = "1" ]; then
+  say "Pre-migration backup SKIPPED (SKIP_PRE_MIGRATION_BACKUP=1)"
+elif [ -x "$BACKUP_SCRIPT" ] || [ -f "$BACKUP_SCRIPT" ]; then
+  say "Pre-migration backup"
+  # No --verify-restore here: the deploy path is latency-sensitive and the
+  # nightly timer already carries the deep check. The cheap pg_restore --list
+  # integrity check inside backup_db.sh still runs on every dump.
+  if ! bash "$BACKUP_SCRIPT"; then
+    echo "ERROR: pre-migration backup FAILED — refusing to apply migrations." >&2
+    echo "       Fix the backup, or re-run with SKIP_PRE_MIGRATION_BACKUP=1 if" >&2
+    echo "       you accept replaying 140+ forward-only migrations with no" >&2
+    echo "       restore point." >&2
+    exit 1
+  fi
+else
+  # Not fatal only because this script predates backup_db.sh and may be run
+  # from an older checkout; say so loudly rather than passing silently.
+  echo "  !! $BACKUP_SCRIPT not found — applying migrations WITHOUT a backup." >&2
+fi
+
 say "Applying migrations to db '$PG_DB' as '$PG_USER' (container: $PG_CONTAINER)"
 
 # Apply 02+ in numeric order. Only NUMBERED migration files (NN_*.sql) are

@@ -55,8 +55,14 @@ system of record, Zoho becomes an import source, then Zoho is retired.**
 - Telephony SDKs (Twilio/Exotel). Manual call logging only.
 - A saved-views table. v1 view state lives in the URL (trycompai pattern); canned views are
   code.
-- Zoho **write** support. There is deliberately no Zoho write path in the repo (WS-1 struck
-  it); we are leaving, not deepening.
+- Zoho write support **outside the sync engine**. *(Amended 2026-08-05, owner-directed —
+  D-CRM-7.)* The original non-goal ("no Zoho write path at all; we are leaving, not
+  deepening") is overruled: while Zoho is still in use, WS-26b runs a **faithful two-way
+  sync**, which requires a write client. The boundary that survives: the sync engine is the
+  **single writer** — no route handler, agent tool, or skill calls Zoho directly, the write
+  client has exactly one caller (grep-asserted), and the whole write path retires with
+  WS-26e. WS-1's "no Zoho write path exists" clause becomes stale the day this merges; the
+  WS-26b PR updates that clause in the same PR (board Authority rule: fix the mirror).
 
 ---
 
@@ -304,9 +310,13 @@ icon names as strings, `useViewMode()` for mobile. State: zustand store + pure h
 
 ## 7. The Zoho migration path
 
-### 7.1 Import (Phase B — building AGENT-SAFE, running OWNER-GATE)
-`POST /crm/import/zoho {dry_run: bool}` pulls via the **existing read-only client** (adding
-`list_leads`; still zero write functions), maps:
+### 7.1 Backfill + two-way sync (Phase B — building AGENT-SAFE; enabling against prod OWNER-GATE)
+
+*(Re-scoped 2026-08-05, owner-directed — D-CRM-7: "while we are using Zoho, ensure we do a
+faithful two-way sync, until we do away with Zoho entirely.")*
+
+**Bootstrap:** `POST /crm/import/zoho {dry_run: bool}` performs the initial backfill —
+pulls via the existing client (adding `list_leads`), maps:
 
 | Zoho | Native | Notes |
 |---|---|---|
@@ -318,19 +328,51 @@ icon names as strings, `useViewMode()` for mobile. State: zustand store + pure h
 | Tasks | `crm_activities type='task'` | Subject, Due_Date, What_Id/Who_Id |
 | Users | owner mapping | Zoho owner id → email via `list_users`; unmatched → import actor |
 
-Idempotent: upsert `ON CONFLICT (zoho_id)`. **Last-import-wins on Zoho-sourced rows** —
-during coexistence Zoho stays the system of record; a re-import overwrites native edits to
-imported rows, by design, until cutover (§7.3). Report:
+Idempotent: upsert `ON CONFLICT (zoho_id)`. Report:
 `{module: {fetched, created, updated, skipped, errors[]}}`; `dry_run` fetches and reports
 without writing.
 
+**Continuous sync (the coexistence mode):** after backfill, a sync engine keeps both sides
+faithful until cutover:
+
+- **Single-writer seam:** all Zoho writes live in one writer module beside the client
+  (`ingestion/sources/zoho/`), called from exactly one place — the sync engine in
+  `routes/crm/sync_zoho.py`. Grep-asserted. No agent tool, route handler or skill reaches
+  Zoho directly; agents write the native CRM and the sync propagates (the Action Broker
+  governs agent-*proposed* outward actions, not this mirror of already-committed state —
+  the same posture as the tasks app's ClickUp sync).
+- **Zoho → native:** incremental pull (`If-Modified-Since`, which the client already
+  supports) for the four record modules + Notes/Tasks; deleted records via Zoho's
+  deleted-records API become native deletes (cascading activities per the FK graph, loudly
+  counted in the sync report).
+- **Native → Zoho:** dirty-tracking on the four record tables (columns added at the next
+  free migration number: `zoho_dirty` set by native writes to zoho-linked and native-new
+  rows, `zoho_synced_at`); the engine pushes dirty rows (create ⇒ acquires `zoho_id`,
+  update ⇒ upsert by id), native deletes of linked rows write a tombstone pushed as a Zoho
+  delete. Native `note`/`task` activities push as Zoho Notes/Tasks; `status_change`/
+  `system` activities never push (no Zoho analog — Zoho keeps its own stage history).
+- **Conflicts:** record-level last-writer-wins comparing Zoho `Modified_Time` against
+  native `updated_at`; both-changed conflicts are counted and logged per cycle, never
+  silent. No field-level merge in v1 (D-CRM-6 amended).
+- **Pipeline vocabulary flows DOWN only** while sync is on: stage/status picklists are
+  managed in Zoho and auto-created natively (as backfill already does); native status
+  creation is not pushed (Zoho picklist mutation needs settings-API writes — out of scope,
+  and the vocabulary dies with Zoho anyway).
+- **Cadence + switches:** the scheduled loop runs only when **`CRM_ZOHO_SYNC=1`** (ships
+  OFF; flip is OWNER-GATE, §6) — scheduler entry beside `_run_zoho`, interval ~10 min;
+  `POST /crm/sync/zoho` (same `admin:access:manage` floor) runs one cycle on demand and
+  works regardless of the flag, because a hand-run cycle is an explicit admin act. The
+  nightly graph-mirror sync keeps running untouched either way (Phase E retires it).
+
 ### 7.2 Coexistence (Phases B–D)
-Nightly graph sync keeps running untouched. Native records (`zoho_id IS NULL`) are never
-touched by import. Team works in Zoho until the UI (Phase C) is judged usable.
+Both sides stay writable and faithful (§7.1). Native records without a `zoho_id` exist in
+Zoho within one sync cycle of creation. The team can move to the native UI (Phase C) at
+its own pace instead of on a cutover day.
 
 ### 7.3 Cutover (Phase E, OWNER-GATE)
-Final import → parity check (per-module Zoho counts vs `crm_*` counts, plus owner spot
-checks) → team stops writing to Zoho → import endpoint disabled.
+Final sync cycle → parity check (per-module Zoho counts vs `crm_*` counts, plus owner spot
+checks) → `CRM_ZOHO_SYNC` off → team stops writing to Zoho → sync engine, writer and
+backfill endpoint retired with the rest of §7.4.
 
 ### 7.4 Retirement inventory (Phase E — exact paths, verified 2026-08-05)
 `ingestion/sources/zoho/` (client kept if any consumer remains, else all four files) ·
@@ -371,8 +413,16 @@ WS-2 (the standing "rotate Zoho token" P0 becomes "revoke", strictly better).
 - **D-CRM-5 — Email binding is a read-time address join, no link table in v1.** One account,
   modest volume; a link table adds a sync obligation with no v1 payoff. Cost: no manual
   "attach this thread to that deal" — deferred with the link table.
-- **D-CRM-6 — Import is last-import-wins until cutover** (§7.1). Rejected: field-level merge
-  rules — complexity without a customer until colleagues are in the app.
+- **D-CRM-6 — ~~Import is last-import-wins until cutover~~ superseded by D-CRM-7's sync;
+  the surviving half:** conflicts resolve at record level (last-writer-wins on modified
+  timestamps), never field-level merge — complexity without a customer until colleagues
+  are in the app.
+- **D-CRM-7 — `DECISION (owner-answered 2026-08-05)`: coexistence is a faithful TWO-WAY
+  sync, not a one-way import.** Owner's words: *"while we are using Zoho, ensure we do a
+  faithful two way sync, until we do away with Zoho entirely."* This overrules the
+  original §1 non-goal (no Zoho write path) and re-scopes WS-26b per §7.1. The agent-held
+  boundary that survives: **the sync engine is the single Zoho writer** and the whole
+  write path retires with WS-26e. Retirement stays the end state.
 
 **Build-time decisions, recorded post-hoc (WS-26a implementer, 2026-08-05 — owner may
 overrule any of them):**
@@ -444,13 +494,29 @@ Done when:
    (`tests/unit/test_org_access_enforcement.py`), added deliberately — that registry is
    the test's opinion, not the router's.
 
-### WS-26b — Zoho importer · 🟢 build / 🔴 **OWNER-GATE to run against prod**
-Done when: `list_leads` added (client still has zero write functions — grep-assertable);
-`POST /crm/import/zoho` per §7.1 behind `admin:access:manage` (see §4's warning — the
-`integrations:use:*` family is member-wide); `dry_run` writes
-nothing (asserted); statuses auto-created once (idempotent re-import: second run reports
-`created: 0`); `tests/unit/test_crm_zoho_import.py` covers mapping/idempotency/owner-mapping
-against a fake client, no network. **Running it against prod Zoho+DB is registered in §6.**
+### WS-26b — Zoho two-way sync · 🟢 build / 🔴 **OWNER-GATE to enable against prod**
+*(Re-scoped 2026-08-05 per D-CRM-7.)*
+Done when:
+1. `list_leads` added; Zoho **write** functions exist in one writer module beside the
+   client (create/update/delete per module), and the writer has exactly **one** caller —
+   the sync engine — grep-asserted the way §9 WS-26a's seam checks are.
+2. Backfill `POST /crm/import/zoho` per §7.1 behind `admin:access:manage` (see §4's
+   warning — `integrations:use:*` is member-wide); `dry_run` writes nothing (asserted);
+   statuses auto-created idempotently (second run reports `created: 0`).
+3. The sync engine implements §7.1's five bullets: dirty-push (native create acquires
+   `zoho_id`), incremental pull, tombstone deletes both directions with loud counts,
+   record-level LWW with a per-cycle conflict count, vocabulary down-only. Dirty-tracking
+   columns land at the next free migration number with the same static idempotency fence
+   as 26a.
+4. `CRM_ZOHO_SYNC` ships OFF; OFF-state is asserted (no scheduler registration, no
+   push-on-write side effects); the manual cycle endpoint works without it.
+5. `tests/unit/test_crm_zoho_import.py` + `tests/unit/test_crm_zoho_sync.py` cover
+   mapping, idempotency, owner-mapping, dirty-push, LWW both directions, tombstones, and
+   the single-writer seam — against a fake client, no network.
+6. The WS-1 board row's "there is no Zoho write path anywhere in the repo" clause is
+   updated in the same PR (it becomes stale the moment the writer lands).
+**Enabling the flag, and the first backfill/sync against prod Zoho+DB, are registered in
+§6 — the sync WRITES the live Zoho tenant.**
 
 ### WS-26c — UI · 🟢 AGENT-SAFE
 Note: until an admin grants `feature:crm`, the UI is visible to owner/admin only (§5) —

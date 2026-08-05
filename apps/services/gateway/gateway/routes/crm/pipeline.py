@@ -33,7 +33,6 @@ from gateway.routes.crm.core import (
     StatusModel,
     _get_db,
     actor,
-    bump_last_activity,
     has_column,
     insert_row,
     load_default_status,
@@ -147,7 +146,6 @@ async def apply_status_transition(
         target_id=str(record.id),
         subject=f"{getattr(previous, 'name', None) or '—'} → {status.name}",
     )
-    await bump_last_activity(db, entity.table, str(record.id))
 
     updates: dict[str, Any] = {"status_id": new_status_id}
     if has_column(entity, "status_changed_at"):
@@ -293,16 +291,18 @@ async def convert_lead(
 ) -> ConvertResponse:
     """Turn a lead into contact + organization + deal (§3.7).
 
-    Converting an already-converted lead is a **409**, not a second deal: the
-    conversion stamps are provenance, and a lead that produced two deals cannot
-    say which one it became.
+    Converting a lead whose deal still exists is a **409**, not a second deal:
+    the conversion stamps are provenance, and a lead that produced two deals
+    cannot say which one it became. The guard keys on ``converted_deal_id``,
+    not ``converted_at`` (B6): deleting the deal SET-NULLs the link, and the
+    lead becomes convertible again instead of being stranded forever.
     """
     body = body or ConvertRequest()
     who = actor(user)
     db = await _get_db()
     try:
         lead = await require_row(db, LEADS.table, lead_id, "Lead")
-        if getattr(lead, "converted_at", None):
+        if getattr(lead, "converted_deal_id", None):
             raise HTTPException(
                 status_code=409,
                 detail="This lead has already been converted.",

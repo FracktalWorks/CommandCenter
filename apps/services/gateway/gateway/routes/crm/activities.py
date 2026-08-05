@@ -304,6 +304,17 @@ async def patch_activity(
     db = await _get_db()
     try:
         row = await require_row(db, "crm_activities", activity_id, "Activity")
+        if row.type in ("status_change", "system"):
+            # Same guard as delete_activity: one rule, both verbs. An edited
+            # status_change would disagree with crm_status_changes with no way
+            # to tell which one is lying.
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Platform-written activities cannot be edited — a funnel "
+                    "with editable history is not a record of anything."
+                ),
+            )
         if not values:
             return row_to_dict(row, ActivityModel)
         # `crm_activities` has no `updated_at` — an activity is a log entry.

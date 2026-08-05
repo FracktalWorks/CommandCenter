@@ -123,8 +123,10 @@ names → organization_name → email local-part → 'Unnamed lead') · `email` 
 SET NULL` · `lost_note TEXT` · conversion provenance: `converted_at TIMESTAMPTZ` ·
 `converted_contact_id / converted_organization_id / converted_deal_id` (each `UUID … ON DELETE
 SET NULL`) · `source` · `zoho_id TEXT UNIQUE` · `last_activity_at` · `created_at` · `updated_at`.
-Index: `status_id`, `owner_email`, `lower(email)`, `last_activity_at`. Default lists filter
-`converted_at IS NULL`.
+Index: `status_id`, `lower(owner_email)`, `lower(email)`, `last_activity_at`. Default lists
+filter `converted_deal_id IS NULL` (**B6** — the FK link, not the timestamp: deleting the
+deal SET-NULLs the link and the lead returns to the working list; `converted_at` survives
+as history).
 
 ### 3.4 `crm_deals` (Zoho: Deals)
 `id` · `name TEXT NOT NULL` · `organization_id UUID REFERENCES crm_organizations ON DELETE SET
@@ -388,6 +390,18 @@ overrule any of them):**
   `routes/tasks/core.py::_parse_jsonb`.
 - **B5** — `crm_status_changes.entity_type`/`changed_at` and the `crm_activities` target
   CHECK gained NOT NULL where §3.8/§3.9 were silent (strengthening only).
+- **B6** *(adversarial review P1, 2026-08-05)* — "converted" is keyed on
+  `converted_deal_id IS NOT NULL`, never on `converted_at`: both the lead-list filter and
+  the re-convert 409. The timestamp version stranded a lead invisibly forever when its deal
+  was deleted (FK SET-NULLs the link, the timestamp survives), with SQL as the only
+  recovery. Deleting a converted deal now returns its lead to the working list,
+  re-convertible.
+- **Review repairs, same pass** — `record_activity` keeps its own docstring's promise and
+  bumps the target's `last_activity_at` itself (the next caller — WS-26b's importer,
+  WS-26d's agent tools — cannot ship records that sort as never-touched);
+  `PATCH /crm/activities/{id}` refuses `status_change`/`system` rows exactly as DELETE does
+  (one rule, both verbs); the three `owner_email` indexes are `lower(owner_email)` to match
+  the only predicate that reads them (R10), and contacts gained the missing one.
 - **Open question for the owner (deliberately unimplemented):** reopening a won/lost deal
   leaves `closed_at` stale — §3.4 stamps and never clears. Clearing on a move back to a
   non-terminal type is one line in `apply_status_transition` once decided.
@@ -441,6 +455,12 @@ against a fake client, no network. **Running it against prod Zoho+DB is register
 ### WS-26c — UI · 🟢 AGENT-SAFE
 Note: until an admin grants `feature:crm`, the UI is visible to owner/admin only (§5) —
 demonstrating it to a `member` requires a grant first.
+Review residuals to pick up here (noted non-blocking, 2026-08-05): `?status_id` is
+silently ignored for contacts/organizations (no status table — should 422 like an unknown
+sort key); an explicit body `null` on a defaulted NOT NULL column (`source`, status
+`color`) reaches the driver as a 500 instead of a 422; PATCHing any name input re-derives
+`lead_name`, discarding a hand-edited custom name; `crm_deal_contacts` one-primary-per-deal
+needs enforcement when contact management arrives.
 Done when: the five registration places (§5) updated; the four surfaces + convert modal
 render against the API through the BFF proxy; kanban drag persists a status change;
 `?deal=` deep link opens the sheet; pure helpers tested in colocated vitest

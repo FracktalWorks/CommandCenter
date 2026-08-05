@@ -135,24 +135,46 @@ async def test_paging_offsets_by_whole_pages(db: FakeCrmDB) -> None:
 
 
 async def test_leads_hide_converted_rows_by_default(db: FakeCrmDB) -> None:
-    """§3.3 — a converted lead has become a deal; listing it double-counts."""
-    db.seed(LEADS.table, lead_name="Open one", converted_at=None)
-    db.seed(LEADS.table, lead_name="Already a deal", converted_at="2026-08-01")
+    """§3.3/B6 — a lead is converted while the deal it became still EXISTS.
+
+    The filter keys on the FK link, not the timestamp: if the deal is deleted,
+    SET NULL clears the link and the lead returns to the working list instead
+    of being stranded invisible (review finding, 2026-08-05).
+    """
+    deal = db.seed(DEALS.table, name="Printer order")
+    db.seed(LEADS.table, lead_name="Open one", converted_deal_id=None)
+    db.seed(
+        LEADS.table, lead_name="Already a deal",
+        converted_at="2026-08-01", converted_deal_id=str(deal.id),
+    )
 
     default = await crm_records._list(LEADS, _params())
     included = await crm_records._list(LEADS, _params(include_converted=True))
 
     assert default.total == 1
     assert included.total == 2
-    assert any("converted_at IS NULL" in s for s in db.statements)
+    assert any("converted_deal_id IS NULL" in s for s in db.statements)
+
+
+async def test_a_lead_whose_deal_was_deleted_returns_to_the_list(
+    db: FakeCrmDB,
+) -> None:
+    """The post-delete state: converted_at survives as history, the FK link is
+    NULL. Keying the filter on converted_at would hide this lead forever."""
+    db.seed(
+        LEADS.table, lead_name="Deal was deleted",
+        converted_at="2026-08-01", converted_deal_id=None,
+    )
+    default = await crm_records._list(LEADS, _params())
+    assert default.total == 1
 
 
 async def test_the_converted_filter_is_leads_only(db: FakeCrmDB) -> None:
-    """Deals have no `converted_at`; a shared clause applied to all four would
-    be a column that does not exist."""
+    """Deals have no `converted_deal_id`; a shared clause applied to all four
+    would be a column that does not exist."""
     db.seed(DEALS.table, name="Printer order")
     await crm_records._list(DEALS, _params())
-    assert not any("converted_at" in s for s in db.statements)
+    assert not any("converted_deal_id" in s for s in db.statements)
 
 
 async def test_the_owner_filter_compares_case_insensitively(db: FakeCrmDB) -> None:
@@ -545,6 +567,38 @@ async def test_a_platform_activity_cannot_be_deleted(db: FakeCrmDB) -> None:
     with pytest.raises(HTTPException) as exc:
         await crm_activities.delete_activity(str(entry.id), USER)
     assert exc.value.status_code == 409
+
+
+@pytest.mark.parametrize("kind", ["status_change", "system"])
+async def test_a_platform_activity_cannot_be_edited_either(
+    db: FakeCrmDB, kind: str,
+) -> None:
+    """Review finding 2026-08-05: one rule, both verbs. An edited
+    status_change disagrees with crm_status_changes with no way to tell which
+    one is lying — so PATCH refuses exactly what DELETE refuses."""
+    entry = db.seed(
+        "crm_activities", type=kind, created_by="a@b.in",
+        deal_id=str(db.seed(DEALS.table, name="d").id),
+    )
+    with pytest.raises(HTTPException) as exc:
+        await crm_activities.patch_activity(
+            str(entry.id), crm_activities.ActivityPatch(subject="rewritten"), USER,
+        )
+    assert exc.value.status_code == 409
+    assert not db.statements_touching("UPDATE crm_activities SET")
+
+
+async def test_record_activity_bumps_the_target_itself(db: FakeCrmDB) -> None:
+    """Review finding 2026-08-05: the docstring promised the bump and the body
+    didn't do it — correct for today's callers, wrong for the next one (the
+    WS-26b importer, WS-26d's agent tools). Now the function keeps its own
+    promise."""
+    deal = db.seed(DEALS.table, name="Printer order")
+    await crm_core.record_activity(
+        db, activity_type="note", created_by="a@b.in",
+        target_column="deal_id", target_id=str(deal.id),
+    )
+    assert db.statements_touching("UPDATE crm_deals SET last_activity_at = now()")
 
 
 async def test_completing_a_task_writes_completed_at(db: FakeCrmDB) -> None:

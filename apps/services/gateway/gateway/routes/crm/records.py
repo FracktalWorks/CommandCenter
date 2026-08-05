@@ -108,9 +108,11 @@ class DeleteResponse(BaseModel):
 async def _list(entity: Entity, params: ListParams) -> ListResponse:
     extra: tuple[str, ...] = ()
     if entity.hides_converted and not params.include_converted:
-        # §3.3 — a converted lead has become a deal; showing it in the working
-        # list double-counts the pipeline.
-        extra = ("converted_at IS NULL",)
+        # §3.3/B6 — a lead is "converted" while the deal it became still
+        # exists. Keying on converted_at instead would strand the lead
+        # invisibly forever if that deal were deleted (the FK SET-NULLs the
+        # link; the timestamp survives as history).
+        extra = ("converted_deal_id IS NULL",)
     query = list_contract(
         entity,
         q=params.q, sort=params.sort, direction=params.direction,

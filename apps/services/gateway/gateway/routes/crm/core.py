@@ -400,16 +400,11 @@ ENTITIES: dict[str, Entity] = {
     e.slug: e for e in (LEADS, DEALS, CONTACTS, ORGANIZATIONS)
 }
 
-
-def resolve_entity(slug: str) -> Entity:
-    """URL segment → :class:`Entity`, or 404."""
-    entity = ENTITIES.get(slug)
-    if entity is None:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Unknown CRM entity '{slug}'. One of: {sorted(ENTITIES)}.",
-        )
-    return entity
+#: Activity target column → the table whose recency that target drives.
+#: :func:`record_activity` bumps through this, so no caller can forget to.
+TABLE_BY_ACTIVITY_TARGET: dict[str, str] = {
+    e.activity_column: e.table for e in ENTITIES.values()
+}
 
 
 # ── Wire conversion ─────────────────────────────────────────────────────────
@@ -785,7 +780,12 @@ async def record_activity(
     }
     if occurred_at_now:
         values.setdefault("occurred_at", _now())
-    return await insert_row(db, "crm_activities", values)
+    row = await insert_row(db, "crm_activities", values)
+    # The docstring's promise, kept HERE so the next caller (the WS-26b
+    # importer, WS-26d's agent tools) cannot ship a record that sorts as
+    # never-touched by trusting it.
+    await bump_last_activity(db, TABLE_BY_ACTIVITY_TARGET[target_column], target_id)
+    return row
 
 
 def _now() -> datetime:

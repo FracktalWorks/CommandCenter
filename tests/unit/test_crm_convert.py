@@ -353,8 +353,14 @@ async def test_converting_an_already_converted_lead_is_409(
     db: FakeCrmDB,
 ) -> None:
     """The stamps are provenance: a lead that produced two deals cannot say
-    which one it became."""
-    lead = _lead(db, converted_at="2026-08-01T00:00:00+00:00")
+    which one it became. The guard keys on the deal LINK, not the timestamp
+    (B6)."""
+    deal = db.seed("crm_deals", name="The deal it became")
+    lead = _lead(
+        db,
+        converted_at="2026-08-01T00:00:00+00:00",
+        converted_deal_id=str(deal.id),
+    )
 
     with pytest.raises(HTTPException) as exc:
         await convert_lead(str(lead.id), ConvertRequest(), USER)
@@ -362,15 +368,35 @@ async def test_converting_an_already_converted_lead_is_409(
     assert exc.value.status_code == 409
 
 
+async def test_a_lead_whose_deal_was_deleted_can_convert_again(
+    db: FakeCrmDB,
+) -> None:
+    """B6 (review finding 2026-08-05): deleting the deal SET-NULLs
+    converted_deal_id while converted_at survives as history. The old
+    converted_at guard made this state a permanent 409 — a lead with zero
+    deals refused because of one it no longer has."""
+    lead = _lead(db, converted_at="2026-08-01T00:00:00+00:00")
+
+    result = await convert_lead(str(lead.id), ConvertRequest(), USER)
+
+    assert result.deal["id"]
+    assert result.lead["converted_deal_id"] == result.deal["id"]
+
+
 async def test_a_refused_re_conversion_creates_nothing(db: FakeCrmDB) -> None:
     """The 409 lands before any write, so a double-click does not leave an
     orphan deal and a second contact behind."""
-    lead = _lead(db, converted_at="2026-08-01T00:00:00+00:00")
+    prior = db.seed("crm_deals", name="The deal it became")
+    lead = _lead(
+        db,
+        converted_at="2026-08-01T00:00:00+00:00",
+        converted_deal_id=str(prior.id),
+    )
 
     with pytest.raises(HTTPException):
         await convert_lead(str(lead.id), ConvertRequest(), USER)
 
-    assert db.rows("crm_deals") == []
+    assert len(db.rows("crm_deals")) == 1  # only the seeded prior deal
     assert db.rows("crm_contacts") == []
     assert db.rows("crm_organizations") == []
     assert db.committed == 0

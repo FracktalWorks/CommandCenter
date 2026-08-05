@@ -54,8 +54,10 @@ CREATE TABLE IF NOT EXISTS crm_organizations (
 
 CREATE INDEX IF NOT EXISTS idx_crm_organizations_name
     ON crm_organizations (name);
+-- The query predicate is lower(owner_email) = :owner (R10), so the index must
+-- fold case too — a plain column index can never serve it.
 CREATE INDEX IF NOT EXISTS idx_crm_organizations_owner_email
-    ON crm_organizations (owner_email);
+    ON crm_organizations (lower(owner_email));
 CREATE INDEX IF NOT EXISTS idx_crm_organizations_last_activity_at
     ON crm_organizations (last_activity_at);
 
@@ -89,6 +91,8 @@ CREATE INDEX IF NOT EXISTS idx_crm_contacts_email
     ON crm_contacts (lower(email));
 CREATE INDEX IF NOT EXISTS idx_crm_contacts_organization_id
     ON crm_contacts (organization_id);
+CREATE INDEX IF NOT EXISTS idx_crm_contacts_owner_email
+    ON crm_contacts (lower(owner_email));
 CREATE INDEX IF NOT EXISTS idx_crm_contacts_last_activity_at
     ON crm_contacts (last_activity_at);
 
@@ -179,7 +183,7 @@ CREATE TABLE IF NOT EXISTS crm_leads (
 CREATE INDEX IF NOT EXISTS idx_crm_leads_status_id
     ON crm_leads (status_id);
 CREATE INDEX IF NOT EXISTS idx_crm_leads_owner_email
-    ON crm_leads (owner_email);
+    ON crm_leads (lower(owner_email));
 CREATE INDEX IF NOT EXISTS idx_crm_leads_email
     ON crm_leads (lower(email));
 CREATE INDEX IF NOT EXISTS idx_crm_leads_last_activity_at
@@ -227,7 +231,7 @@ CREATE INDEX IF NOT EXISTS idx_crm_deals_status_id
 CREATE INDEX IF NOT EXISTS idx_crm_deals_organization_id
     ON crm_deals (organization_id);
 CREATE INDEX IF NOT EXISTS idx_crm_deals_owner_email
-    ON crm_deals (owner_email);
+    ON crm_deals (lower(owner_email));
 CREATE INDEX IF NOT EXISTS idx_crm_deals_expected_close_date
     ON crm_deals (expected_close_date);
 CREATE INDEX IF NOT EXISTS idx_crm_deals_last_activity_at

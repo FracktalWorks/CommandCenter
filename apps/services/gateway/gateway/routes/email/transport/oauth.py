@@ -25,6 +25,16 @@ class OAuthCallbackRequest(BaseModel):
     state: str
 
 
+#: In-flight authorize→callback state, keyed by the CSRF nonce.
+#:
+#: ⚠️ KNOWN DEFECT (recorded, not fixed here — email_app_master_plan.md §7 Tier 1
+#: item 1): this is a module-level, in-process dict. Every deploy restarts the
+#: gateway, so any OAuth flow in flight when a deploy lands loses its state and
+#: the callback fails `state not in _oauth_states` → the user is bounced to
+#: /email/oauth/callback?error=invalid_state with no explanation. It is also not
+#: shared across workers (a second worker answering the callback has never seen
+#: the state) and entries are never expired, so an abandoned flow leaks forever.
+#: Fix is Redis + TTL, alongside signing the state.
 _oauth_states: dict[str, dict[str, str]] = {}
 
 
@@ -37,10 +47,17 @@ async def oauth_authorize(
 ):
     """Start OAuth flow for an email provider.
 
-    Accepts an optional ``user_email`` query parameter so the workbench can
-    pass the authenticated user's email when the browser navigates directly
-    to the gateway (bypassing the Next.js proxy).  Falls back to the
-    ``X-User-Email`` header (proxy path) or ``"anonymous"``.
+    **This route is gated and stays gated.** It is reached through the workbench
+    BFF (``/api/email/oauth/{provider}/authorize``), which holds the session,
+    attaches the internal bearer plus ``X-User-Email``, and re-issues the 302 it
+    gets back so the browser lands on the provider's consent screen. Adding it to
+    ``main.PUBLIC_ROUTES`` would be the dangerous repair: the state below binds
+    the mailbox to ``user_id``, so an anonymous authorize leg would let anyone
+    attach a mailbox to somebody else's account.
+
+    ``user_email`` is a **fallback only**, retained for the legacy
+    direct-navigation shape. The authenticated identity always wins — a query
+    parameter must never be able to name whose account the mailbox lands on.
     """
     state = secrets.token_urlsafe(32)
     redirect_uri = _build_redirect_uri(provider)
@@ -114,9 +131,14 @@ async def oauth_authorize(
             detail=f"Unknown provider: {provider}"
         )
 
+    # The AUTHENTICATED identity wins. This used to read
+    # ``user_email or user.email``, i.e. a query parameter outranked the person
+    # the request was actually authenticated as — anyone who could reach the
+    # route could bind a mailbox to a colleague's account. `user_email` survives
+    # only as the fallback for a caller that has no header identity at all.
     _oauth_states[state] = {
         "provider": provider,
-        "user_id": user_email or user.email or "anonymous",
+        "user_id": user.email or user_email or "anonymous",
         "redirect_after": redirect_after,
     }
 

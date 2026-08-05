@@ -43,7 +43,12 @@ from gateway.routes.notes.copilot_policy import (
     gate,
     is_duplicate,
 )
-from gateway.routes.notes.core import _get_db, _log, router
+from gateway.routes.notes.core import (
+    _get_db,
+    _log,
+    load_owned_meeting,
+    router,
+)
 from sqlalchemy import text
 
 _RING = 100          # recent copilot events kept per session for late viewers
@@ -484,9 +489,18 @@ async def _sse(meeting_id: str) -> AsyncIterator[bytes]:
 @router.get("/meetings/{meeting_id}/copilot/stream")
 async def copilot_stream(
     meeting_id: str,
-    _user: UserContext = Depends(get_current_user),
+    user: UserContext = Depends(get_current_user),
 ) -> StreamingResponse:
-    """SSE of the copilot's suggestions/questions/status for the console."""
+    """SSE of the copilot's suggestions/questions/status for the console.
+
+    Owner only, and checked BEFORE the response starts: the bus replays its
+    ring buffer to every late subscriber, so an unscoped stream handed a
+    colleague's meeting id both the recent suggestions and — because
+    ``refs.window`` carries up to 400 characters of what was just said — the
+    live transcript underneath them. A 404 raised inside an already-started
+    ``StreamingResponse`` would arrive as a broken stream, not a refusal."""
+    async with await _get_db() as db:
+        await load_owned_meeting(db, meeting_id, user.email, columns="m.id")
     return StreamingResponse(
         _sse(meeting_id),
         media_type="text/event-stream",
@@ -501,10 +515,14 @@ async def copilot_stream(
 @router.get("/meetings/{meeting_id}/copilot/events")
 async def copilot_events(
     meeting_id: str,
-    _user: UserContext = Depends(get_current_user),
+    user: UserContext = Depends(get_current_user),
 ) -> dict:
-    """Persisted copilot history for this meeting (audit + post-hoc review)."""
+    """Persisted copilot history for this meeting (audit + post-hoc review).
+
+    Owner only — the same content as the stream, durable and without needing
+    to be there while it happened."""
     async with await _get_db() as db:
+        await load_owned_meeting(db, meeting_id, user.email, columns="m.id")
         rows = (
             await db.execute(
                 text(

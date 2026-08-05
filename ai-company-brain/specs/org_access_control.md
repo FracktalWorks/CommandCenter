@@ -1,7 +1,7 @@
 # Organization Access Control — implementation spec
 
 > **Status:** 🟢 Phase 1 shipped. **Multi-tenant user management now hands off to the multiplayer agent collaboration workstream — see [§10](#10-handoff-multiplayer-agent-collaboration).** §10.4's requested spec exists: [`groups_sessions_authority.md`](groups_sessions_authority.md) decides the group primitive, `chat_session_participant`, and the authority rule (intersection).
-> **Created:** 2026-07-29 · **Handed off:** 2026-07-29
+> **Created:** 2026-07-29 · **Handed off:** 2026-07-29 · **Verified against code:** 2026-08-03 (WS-14 doc remediation — §8 Phase 2 row and §9 Q2 only; the rest keeps its earlier stamps). That pass found **`email_account_member` does not exist** (0 hits repo-wide in `*.sql` and `*.py`) and that §9 Q2 gates `department_centers.md` Phase C4 — both annotated in place. **Repair round the same day (off `264f881e`):** the Q2 annotation's claim that `pending_actions.actor` "is the proposing *agent* … not the human behind it, and no group is derivable from any existing column" was **false** and is corrected in §9 Q2 — two of `actor`'s six writers embed the requesting human's email. Q2 remains OWNER-DECISION on the corrected evidence.
 > **Scope:** Turning the single-tenant deployment into a real multi-user organization: named members, roles, per-user feature/agent access, and one enforcement path the whole platform shares.
 > **Parent research:** [`multi_user_organization_research.md`](multi_user_organization_research.md) — the *why* and the long-horizon (SaaS, memory scoping, entity-graph RLS) design. This document is the *what we are building now*, and it deliberately implements a subset.
 > **Companion:** [`permissions_sandbox_b6.md`](permissions_sandbox_b6.md) (tool-level risk gating — orthogonal: that answers "may this *tool call* proceed", this answers "may this *person* reach this feature at all").
@@ -78,13 +78,21 @@ A role is a named bundle of permissions, scoped to an organization. Five are see
 |---|---|---|
 | `owner` | The person who owns the deployment. | `*` |
 | `admin` | Runs the platform day to day. | `admin:*`, `feature:*`, `agents:*`, `apps:*`, `integrations:*`, `data:org:read` |
-| `manager` | Sees org-wide data, cannot change platform config. | all `feature:*` except `build.*`, `agents:run:*`, `apps:use:*`, `data:org:read`, `admin:members:read` |
+| `manager` | Reads the member directory; cannot change platform config. | `feature:` chat, email, whatsapp, tasks, notes, memory, dashboard, observability, artifacts, approvals; `agents:run:*`; `apps:use:*`, `apps:create`; `data:org:read`; `admin:members:read` |
 | `member` | Default for a new employee. | `feature:` chat, email, tasks, notes, memory, artifacts, dashboard; `agents:run:*`; `apps:use:*` |
 | `guest` | Contractor / external collaborator. | `feature:chat`, `apps:use:*` |
 
 Plus one non-assignable service role, `agent_service`, for the internal bearer path.
 
 A member may hold several roles; grants are the **union**. Note what `member` deliberately omits: WhatsApp, Approvals, Integrations, Models, and both Build panes. The default is the conservative one, and access is added rather than taken away.
+
+> ⚠️ **This table is incomplete and one cell of it is stale — measured 2026-08-04, see `colleague_onboarding.md` §3.0.**
+> **(a)** These are `130_org_access_control.sql`'s grants only. `131_integration_memory_permissions.sql` adds more to four of the six roles — notably `member` also gets `integrations:use:*` **and `memory:read_org`** (`131:70-78`), while `guest` gets nothing (`131:80`). Quoting this table alone gets `member` wrong.
+> **(b)** `manager`'s former *"Sees org-wide data"* intent is **not true as written**: `data:org:read` has **zero consumers** — nothing in the repository ever checks it (`permissions.py:132` declares it, `130:205, 221, 258` grant it, `access.py:148` lists it, and no route, query or predicate reads it). What actually widens a `manager` is `admin:members:read`, which is the auth floor for the **whole** `/admin` package (`routes/admin/_common.py:77-91`), plus `feature:approvals`/`observability`/`whatsapp` and `memory:write_org`. Recorded as **D14** in `work_plan.md` §3 (`agent-proposed, owner may overrule`). Do not write acceptance criteria against `data:org:read` until it has a consumer.
+>
+> **(c)** `manager`'s **Grants** cell used to read *"all `feature:*` except `build.*`"*. That was wrong in five slugs, not one: the seeded list (`130:216-221`) omits `feature:workflows`, `feature:integrations`, `feature:models`, `feature:agents` **and every `center.*`**, on top of both Build panes. The cell above is now the literal array, and `manager`'s **Intent** was reworded for the same reason as (b) — what it actually has is `admin:members:read`, not org-wide data.
+>
+> The role × app capability matrix — what each role can *actually see*, per app, with the `file:line` that settles each cell — lives in [`colleague_onboarding.md`](colleague_onboarding.md) §3, not here.
 
 ### 3.3 Permission vocabulary
 
@@ -308,7 +316,7 @@ Deploy order makes fail-closed safe: `apply_migrations.sh` runs before the gatew
 | Phase | Content | State |
 |---|---|---|
 | **1** | Schema, permission engine, admin API, member/role/access UI, nav + route gating, agent-run gate | 🔄 this spec |
-| **2** | Modules/teams (research §5) — team-scoped visibility; shared mailboxes; `email_account_member` | 🔲 — in progress as Centers Phases B/C (`specs/department_centers.md` §3 + `work_plan.md` WS-13/WS-14); `org_group` shipped (mig 138), admin UI + scoping remain |
+| **2** | Modules/teams (research §5) — team-scoped visibility; shared mailboxes; ~~`email_account_member`~~ | 🔲 — in progress as Centers Phases B/C (`specs/department_centers.md` §3 + `work_plan.md` WS-13/WS-14); `org_group` shipped (mig 138), admin UI + scoping remain. ⚠️ **`email_account_member` is vapour — struck 2026-08-03.** It has **zero** occurrences repo-wide across `*.sql` and `*.py`; it was never built and this row's phrasing made it read as existing Phase-2 content. Do not cite it as a table. The settled shape for shared mailboxes is a grant on the `email_accounts` **row** (`17_email_accounts.sql:16` is the `user_id` it widens) using the `email \| group:<slug> \| org` vocabulary — `tenancy_and_visibility.md` §5. See also `department_centers.md` C2: the assigned owner (`email_app_master_plan.md`, per `work_plan.md` D5) contains **zero** occurrences of "shared mailbox", so this work has no dispatchable home until that spec gains a section or §4 reassigns it. |
 | **3** | Memory + credential scoping (research §7–§8) — the real seam-3 work | 🔄 authorization done (below); isolation deferred to BO-7 |
 | **4** | Entity-graph visibility + RLS safety net (research §9, §16.5) | 🔲 |
 | **5** | Consent records, access reviews, audit completeness (research §11.3) | 🔲 |
@@ -402,7 +410,14 @@ Two things keep the list honest, both tested: a `PUBLIC_ROUTES` entry matching n
 ## 9. Open questions
 
 1. **Agent visibility vs. runnability.** Phase 1 gates *running* an agent. Should a member also be unable to *see* that an agent exists? Listing is currently a weaker signal than running, but agent names leak org structure.
-2. **Approval routing.** When a member lacking `admin:*` triggers an action needing approval, who is asked? Phase 1 routes to anyone with `feature:approvals`; per-module approvers is a Phase 2 question.
+2. **Approval routing.** 🔴 **OWNER-DECISION — still open, and it gates work.** When a member lacking `admin:*` triggers an action needing approval, who is asked? Phase 1 routes to anyone with `feature:approvals`; per-module approvers is a Phase 2 question.
+
+   > **Annotated 2026-08-03 (WS-14).** `department_centers.md` Phase C4 ("per-Center approvals routing") depends on this question and cannot be dispatched until it is answered — that bullet is labelled **OWNER-DECISION** for this reason. Two facts an answerer should have:
+   >
+   > - **It is a policy call, not a UI call.** "Who may approve an outward write or a spend on another Center's behalf" is exactly the kind of thing an agent must not decide.
+   > - **There is no column you can route on today.** `infra/postgres/66_pending_actions.sql:13-38` is the complete row — `id`, `actor`, `action`, `target`, `payload`, `authority`, `destructive`, `disposition`, `status`, `result`, `reviewed_by`, `reviewed_at`, `created_at`. **No requesting-member column, no group column, no Center column.** So the follow-on ticket is "answer this, then add a column" — at the next free migration number resolved at build time (R1) — not "add a filter".
+   >
+   >   ⚠️ **Corrected 2026-08-03.** This bullet used to add *"`actor` is the proposing agent … not the human behind it, and no group is derivable from any existing column."* **That absolute is false.** `pending_actions.actor` has six writers, and two of them carry the requesting human: `routes/apps/tools.py:393` and `routes/apps/actions.py:345` both write `actor=f"app:{slug}:{email}"` with `email = _uid(user)`, from which a group **is** derivable (parse the email, join `org_group_member`). The `"agent:sales"` in the column comment is an example no shipped call site produces. The five real shapes are `app:<slug>:<email>` · `app:<slug>` (`apps/publish.py:211`) · `workflow:<name-or-id>` (`workflows/service.py:668`, threaded into `workflows/tools.py:190`) · `tasks:<provider>` (`tasks/providers.py:127-130`) · `tasks:clickup:ws:<id>` (`providers.py:314-317`); `system:action_broker` is an *audit-event* actor (`action_broker/broker.py:151/161/172/225/233`), never a `pending_actions` row. **The conclusion is unchanged and better supported:** `actor` is free text with five shapes, no grammar, and a human in only two of six proposers — routing on it would silently show an empty Center inbox for every workflow-, publish- and provider-originated proposal. The new column must be *written by every proposer*, not parsed by the reader. Full evidence: `department_centers.md` C4.
 3. **Departure.** A removed member's private apps, chat sessions, and agent workspaces currently persist unowned. Transfer-on-removal is unbuilt (research §13 Q4).
 4. **Guest scope.** Does `guest` ever need email or tasks, or is chat-plus-shared-apps the whole product surface for externals?
 5. **Custom role ceiling.** Clerk caps at 10. Unbounded custom roles tend to produce one role per person, which is what overrides are for.

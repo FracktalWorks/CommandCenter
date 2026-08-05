@@ -15,7 +15,13 @@ from uuid import uuid4
 
 from acb_auth import UserContext, get_current_user
 from fastapi import Depends, HTTPException
-from gateway.routes.notes.core import _get_db, _log, router
+from gateway.routes.notes.core import (
+    OWNED_MEETING_PREDICATE,
+    _get_db,
+    _log,
+    load_owned_meeting,
+    router,
+)
 from pydantic import BaseModel
 from sqlalchemy import text
 
@@ -59,15 +65,27 @@ async def _create_task_from_action(db, user_email: str, action) -> str:
     return task_id
 
 
-async def _load_action(db, action_id: str):
+async def _load_action(db, action_id: str, owner_email: str | None):
+    """The action item — if its meeting belongs to ``owner_email``. 404 else.
+
+    An ``action_item`` has no owner of its own; it inherits the one on its
+    meeting, so the scope is a join rather than a column. Written here, at the
+    loader both single-item routes share, so neither can acquire the hole
+    separately — the same shape ``load_owned_meeting`` has for meetings.
+
+    404 and the same "action item not found" detail either way, matching
+    ``dispatch.dispatch_action`` (``dispatch.py:614-622``): "exists but is not
+    yours" confirms an id to whoever guessed it.
+    """
     row = (
         await db.execute(
             text(
-                "SELECT id, meeting_id, description, confidence, status, "
-                "due_hint, segment_ids, resulting_task_id "
-                "FROM action_item WHERE id = :id"
+                "SELECT a.id, a.meeting_id, a.description, a.confidence, "
+                "a.status, a.due_hint, a.segment_ids, a.resulting_task_id "
+                "FROM action_item a JOIN meeting m ON m.id = a.meeting_id "
+                f"WHERE a.id = :id AND {OWNED_MEETING_PREDICATE}"
             ),
-            {"id": action_id},
+            {"id": action_id, "owner": owner_email or ""},
         )
     ).fetchone()
     if row is None:
@@ -80,8 +98,16 @@ async def approve_action(
     action_id: str,
     user: UserContext = Depends(get_current_user),
 ) -> ApproveResponse:
+    """Promote a draft action item into a real GTD task.
+
+    Owner only. Two distinct harms, both closed by the loader: approving
+    somebody else's item flips THEIR triage state to ``created``, and the
+    task it writes is filed under ``user_id = the caller`` with the
+    colleague's ``description`` copied into its title — an exfiltration with
+    a durable row to show for it, not just a nuisance edit.
+    """
     async with await _get_db() as db:
-        action = await _load_action(db, action_id)
+        action = await _load_action(db, action_id, user.email)
         if action.resulting_task_id:  # idempotent
             return ApproveResponse(
                 action_id=action_id, status=action.status,
@@ -114,10 +140,12 @@ async def approve_action(
 @router.post("/actions/{action_id}/reject")
 async def reject_action(
     action_id: str,
-    _user: UserContext = Depends(get_current_user),
+    user: UserContext = Depends(get_current_user),
 ) -> ApproveResponse:
+    """Dismiss a draft action item. Owner only — the item is the owner's
+    triage queue, and a rejection is not reversible through this API."""
     async with await _get_db() as db:
-        action = await _load_action(db, action_id)
+        action = await _load_action(db, action_id, user.email)
         if action.resulting_task_id:
             raise HTTPException(
                 status_code=409, detail="already created as a task; cannot reject"
@@ -145,11 +173,25 @@ async def approve_all(
     user: UserContext = Depends(get_current_user),
 ) -> BulkApproveResponse:
     """Dispatch every draft action item at or above a confidence threshold —
-    each to its kind's system (task / email / document), not all to tasks."""
+    each to its kind's system (task / email / document), not all to tasks.
+
+    Already safe at the seam — every item goes through ``_dispatch``, which
+    refuses a cross-owner actor (PR #346) — so a colleague could never make
+    this send anything. What it *could* do was read a colleague's draft items
+    and get a 200 back, which said "your meeting, nothing qualified" where the
+    truth was "not your meeting". The load is owner-scoped here so the answer
+    is the same 404 the single-item routes give, and the item rows are never
+    read at all. The ``_dispatch`` refusal stays: it is the seam, and this
+    check is a second lock on one of its doors, not a replacement for it."""
     # Deferred import: dispatch imports helpers from this module.
     from gateway.routes.notes import dispatch as notes_dispatch
 
     async with await _get_db() as db:
+        meeting = await load_owned_meeting(
+            db, meeting_id, user.email,
+            columns="m.id, m.title, m.owner_email, m.attendees, "
+                    "m.summary_md, m.start_at",
+        )
         rows = (
             await db.execute(
                 text(
@@ -161,9 +203,6 @@ async def approve_all(
                 {"mid": meeting_id, "min": body.min_confidence},
             )
         ).fetchall()
-        meeting = await notes_dispatch._load_meeting(db, meeting_id)
-    if meeting is None:
-        raise HTTPException(status_code=404, detail="meeting not found")
     created: list[str] = []
     for action in rows:
         ref, error = await notes_dispatch._dispatch(

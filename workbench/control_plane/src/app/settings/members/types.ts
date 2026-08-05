@@ -12,6 +12,55 @@ export type Member = {
   last_login_at?: string;
 };
 
+/**
+ * What `DELETE /admin/members/{email}/purge` reports back (N8).
+ *
+ * Both halves, per table. `deleted` because it is irreversible and the admin
+ * has no other way to see how much it was; `kept` because "your audit trail
+ * and their apps are still there" is the reassurance that makes the
+ * irreversible half safe to click. Keys are the gateway's
+ * (`members._PURGE_DELETES` / `_PURGE_KEEPS`) and are rendered as-is, so a
+ * table added there shows up here without a UI change.
+ */
+export type PurgeResult = {
+  status: "purged";
+  email: string;
+  deleted: Record<string, number>;
+  kept: Record<string, number>;
+};
+
+/**
+ * A sign-in request — somebody who authenticated against the directory and
+ * found no `app_user` row (gateway `routes/admin/access_requests.py`,
+ * migration 143; spec colleague_onboarding.md §6).
+ *
+ * This is deliberately NOT a `Member` with a fifth status: an `app_user` row is
+ * the org's member record and a stranger who merely knocked must not acquire
+ * one. Approving turns a request into a real member; until then it is just a
+ * record that the door was tried.
+ */
+export type AccessRequest = {
+  email: string;
+  display_name: string;
+  first_seen_at: string;
+  last_seen_at: string;
+  /** How many times they tried. "53" reads as stuck; "1" reads as curious. */
+  attempt_count: number;
+  status: "pending" | "approved" | "denied";
+  /**
+   * The address is outside the company's own sign-in domain
+   * (`ALLOWED_EMAIL_DOMAIN`). Resolved by the gateway, never in the browser —
+   * the domain is server policy.
+   *
+   * It is NOT a rejection: the gateway logs an off-domain identity and carries
+   * on (`acb_auth/deps.py`, branch 1a), and an Entra B2B guest is a directory
+   * member like anybody else, so the tenant pin does not exclude them. Approve
+   * provisions `active` immediately, so this row is the last place the
+   * difference is visible.
+   */
+  is_external: boolean;
+};
+
 /** org_group membership row, as the groups API returns it. */
 export type GroupMember = {
   email: string;
@@ -52,7 +101,9 @@ export type Feature = {
   label: string;
   description: string;
   nav_href: string;
-  category: "apps" | "configure" | "build";
+  /** feature_catalog.category, passed through verbatim by the gateway.
+   *  `centers` was added by 140_center_features.sql. */
+  category: "apps" | "configure" | "build" | "centers";
   sort_order: number;
   is_default: boolean;
   permission: string;

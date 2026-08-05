@@ -26,7 +26,7 @@ from typing import Any
 from acb_auth import UserContext, get_current_user
 from acb_common import get_logger
 from fastapi import Depends
-from gateway.routes.tasks.core import _get_db, router
+from gateway.routes.tasks.core import _get_db, require_people_write, router
 from sqlalchemy import text
 
 _log = get_logger("gateway.tasks.capability")
@@ -222,13 +222,17 @@ async def semantic_scores(db: Any, task_text: str) -> dict[str, float]:
         return {}
 
 
-@router.post("/people/embed")
+@router.post("/people/embed", dependencies=[require_people_write()])
 async def backfill_people_embeddings(
     _user: UserContext = Depends(get_current_user),
 ):
     """Embed the roster's capability vectors (idempotent, hash-gated). No-op with
     a clear message when semantic matching is disabled. Run after connecting HR
-    data or turning the flag on."""
+    data or turning the flag on.
+
+    Admin-only (`admin:members:manage`) — it is the fourth write route on the
+    people directory (N4), and it reads every person's résumé summary and
+    skills to build the vectors."""
     if not _semantic_enabled():
         return {"enabled": False, "embedded": 0,
                 "detail": "task_semantic_match_enabled is off."}

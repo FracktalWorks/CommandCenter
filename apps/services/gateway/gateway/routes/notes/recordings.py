@@ -15,6 +15,7 @@ from acb_auth import UserContext, get_current_user
 from fastapi import Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
 from gateway.routes.notes.core import (
+    OWNED_MEETING_PREDICATE,
     _get_db,
     _log,
     load_owned_meeting,
@@ -72,6 +73,11 @@ async def upload_recording(
 
     Returns ``{recording_id, run_id}``; progress is visible on the meeting's
     ``runs`` (poll ``GET /notes/meetings/{id}`` — SSE arrives with slice 1).
+
+    Owner only. The upload becomes a transcription run, which chains notes
+    generation and ``auto_dispatch`` — the same reach ``retranscribe`` is
+    guarded for. Unscoped it also let any member write audio into a
+    colleague's meeting and flip its status.
     """
     if channel not in ("mic", "system", "mixed", "upload"):
         raise HTTPException(status_code=400, detail="invalid channel")
@@ -97,12 +103,11 @@ async def upload_recording(
     dest.write_bytes(content)
 
     async with await _get_db() as db:
-        meeting = (
-            await db.execute(text("SELECT id FROM meeting WHERE id = :id"), {"id": meeting_id})
-        ).fetchone()
-        if meeting is None:
+        try:
+            await load_owned_meeting(db, meeting_id, user.email, columns="m.id")
+        except HTTPException:
             dest.unlink(missing_ok=True)
-            raise HTTPException(status_code=404, detail="meeting not found")
+            raise
         await db.execute(
             text(
                 """
@@ -164,7 +169,11 @@ async def start_recording(
 ) -> dict:
     """Open a live recording: create the row + empty file, mark the meeting
     'recording'. The client then streams MediaRecorder chunks to ``/chunk`` and
-    finalizes with ``/complete``."""
+    finalizes with ``/complete``.
+
+    Owner only — it flips the meeting to ``status='recording'`` and opens a
+    writable recording on it, the same mutation ``bot_join``'s attach branch
+    performs from the other direction."""
     if body.channel not in ("mic", "system", "mixed"):
         raise HTTPException(status_code=400, detail="invalid channel")
     base = _base_mime(body.mime)
@@ -179,12 +188,11 @@ async def start_recording(
     dest.touch()
 
     async with await _get_db() as db:
-        meeting = (
-            await db.execute(text("SELECT id FROM meeting WHERE id=:id"), {"id": meeting_id})
-        ).fetchone()
-        if meeting is None:
+        try:
+            await load_owned_meeting(db, meeting_id, user.email, columns="m.id")
+        except HTTPException:
             dest.unlink(missing_ok=True)
-            raise HTTPException(status_code=404, detail="meeting not found")
+            raise
         await db.execute(
             text(
                 "INSERT INTO meeting_recording (id, meeting_id, channel, "
@@ -209,15 +217,29 @@ async def start_recording(
     return {"recording_id": recording_id}
 
 
-async def _recording_path(recording_id: str, meeting_id: str):
+async def _recording_path(recording_id: str, meeting_id: str, owner_email: str | None):
+    """The file behind a recording — if its meeting belongs to ``owner_email``.
+
+    The owner scope is joined in rather than checked after the load, so the
+    two routes that share this helper (``/chunk`` and ``/complete``) cannot
+    each acquire the hole separately, and ``/chunk`` — which runs every few
+    seconds for the whole meeting — pays no extra round trip for it.
+
+    404 with the same "recording not found" detail either way: a recording id
+    that belongs to a colleague must be indistinguishable from one that does
+    not exist.
+    """
     async with await _get_db() as db:
         row = (
             await db.execute(
                 text(
-                    "SELECT artifact_path FROM meeting_recording "
-                    "WHERE id=:id AND meeting_id=:mid"
+                    "SELECT r.artifact_path FROM meeting_recording r "
+                    "JOIN meeting m ON m.id = r.meeting_id "
+                    "WHERE r.id=:id AND r.meeting_id=:mid "
+                    f"AND {OWNED_MEETING_PREDICATE}"
                 ),
-                {"id": recording_id, "mid": meeting_id},
+                {"id": recording_id, "mid": meeting_id,
+                 "owner": owner_email or ""},
             )
         ).fetchone()
     if row is None:
@@ -231,18 +253,22 @@ async def append_chunk(
     recording_id: str,
     request: Request,
     seq: int,
-    _user: UserContext = Depends(get_current_user),
+    user: UserContext = Depends(get_current_user),
 ) -> dict:
     """Append one ordered MediaRecorder blob to the recording file.
 
     Idempotent + gap-checked via the in-memory cursor: a re-sent chunk (ack
     lost) is a no-op; an out-of-order chunk is rejected so the client can
     resync. The concatenation of a single MediaRecorder session's timeslice
-    blobs is a valid container, so ordered append reconstructs the file."""
+    blobs is a valid container, so ordered append reconstructs the file.
+
+    Owner only, via ``_recording_path`` — appending arbitrary bytes to a
+    colleague's recording corrupts what is being transcribed as their meeting.
+    """
     data = await request.body()
     if not data:
         raise HTTPException(status_code=400, detail="empty chunk")
-    path = await _recording_path(recording_id, meeting_id)
+    path = await _recording_path(recording_id, meeting_id, user.email)
 
     last = _REC_SEQ.get(recording_id)
     if last is None:
@@ -271,8 +297,12 @@ async def complete_recording(
     body: CompleteRecordingRequest,
     user: UserContext = Depends(get_current_user),
 ) -> dict:
-    """Finalize a live recording and start transcription."""
-    path = await _recording_path(recording_id, meeting_id)
+    """Finalize a live recording and start transcription.
+
+    Owner only, via ``_recording_path``: this is a second entry into the
+    transcription pipeline → notes generation → ``auto_dispatch``, the reach
+    ``retranscribe`` is guarded for."""
+    path = await _recording_path(recording_id, meeting_id, user.email)
     size = path.stat().st_size if path.exists() else 0
     _REC_SEQ.pop(recording_id, None)
     if size == 0:
@@ -377,10 +407,15 @@ async def retranscribe(
 @router.get("/meetings/{meeting_id}/audio")
 async def get_audio(
     meeting_id: str,
-    _user: UserContext = Depends(get_current_user),
+    user: UserContext = Depends(get_current_user),
 ) -> FileResponse:
-    """Serve the meeting's audio for the seek-player (mixed > upload > mic)."""
+    """Serve the meeting's audio for the seek-player (mixed > upload > mic).
+
+    Owner only: this is the raw recording — the verbatim audio of a
+    conversation nobody chose to publish, and the one asset the transcript is
+    only a lossy rendering of."""
     async with await _get_db() as db:
+        await load_owned_meeting(db, meeting_id, user.email, columns="m.id")
         rows = (
             await db.execute(
                 text("SELECT * FROM meeting_recording WHERE meeting_id = :id"),

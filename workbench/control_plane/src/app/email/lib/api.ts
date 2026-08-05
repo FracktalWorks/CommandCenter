@@ -9,7 +9,10 @@ import {
   ContactCard, SenderStatus,
 } from "./types";
 
-const GATEWAY_URL = process.env.NEXT_PUBLIC_GATEWAY_URL || "http://localhost:8000";
+// No NEXT_PUBLIC_GATEWAY_URL here on purpose: every call from this module goes
+// through the Next BFF at /api/**, which is the only path that carries the
+// caller's identity to the gateway. A browser-side gateway URL only ever
+// produced unauthenticated requests.
 
 async function gatewayFetch<T>(
   path: string,
@@ -1015,8 +1018,14 @@ const WORKBENCH_URL =
   process.env.NEXT_PUBLIC_WORKBENCH_URL ||
   "http://localhost:3001";
 
+// Both helpers return a BFF path, never a gateway URL. `/email/oauth/…` on the
+// gateway is gated (deliberately — the handler binds the mailbox to the caller),
+// and a top-level browser navigation cannot carry the Bearer or X-User-Email
+// that gate needs. api/email/oauth/[provider]/authorize authenticates the
+// caller server-side and re-issues the provider's 302.
+
 export function getOAuthUrl(provider: "gmail" | "microsoft"): string {
-  return `${GATEWAY_URL}/email/oauth/${provider}/authorize`;
+  return `/api/email/oauth/${provider}/authorize`;
 }
 
 export function getOAuthAuthorizeUrl(
@@ -1026,7 +1035,7 @@ export function getOAuthAuthorizeUrl(
   const params = new URLSearchParams();
   if (redirectAfter) params.set("redirect_after", redirectAfter);
   const qs = params.toString();
-  return `${GATEWAY_URL}/email/oauth/${provider}/authorize${qs ? `?${qs}` : ""}`;
+  return `/api/email/oauth/${provider}/authorize${qs ? `?${qs}` : ""}`;
 }
 
 export function getOAuthCallbackUrl(): string {

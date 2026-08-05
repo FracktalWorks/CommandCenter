@@ -92,7 +92,8 @@ All tables in one migration at the **next free number at build time** (R1 — re
 `infra/postgres/`, never from a spec; 144 was free on 2026-08-05). Idempotent per
 `infra/postgres/README.md`: `CREATE TABLE IF NOT EXISTS`, `INSERT … ON CONFLICT DO NOTHING`,
 guarded `DO $$`. PKs `UUID DEFAULT gen_random_uuid()`, timestamps `TIMESTAMPTZ DEFAULT now()`,
-indexes `idx_<table>_<cols>`. Refresh `schema.generated.sql` in the same PR.
+indexes `idx_<table>_<cols>`. ~~Refresh `schema.generated.sql` in the same PR~~ — **struck by
+the 2026-08-05 audit** (needs a migrated live DB; stays an owner-run chore, see §9 dw 1).
 
 The spine is Frappe's four-entity shape (battle-tested; maps 1:1 onto Zoho's modules) with
 trycompai's activity spine and provenance columns.
@@ -370,6 +371,24 @@ WS-2 (the standing "rotate Zoho token" P0 becomes "revoke", strictly better).
   "attach this thread to that deal" — deferred with the link table.
 - **D-CRM-6 — Import is last-import-wins until cutover** (§7.1). Rejected: field-level merge
   rules — complexity without a customer until colleagues are in the app.
+
+**Build-time decisions, recorded post-hoc (WS-26a implementer, 2026-08-05 — owner may
+overrule any of them):**
+- **B1** — `POST` defaults `owner_email` to the acting user when the field is absent
+  (explicit `null` stays unassigned); without this the `owner` filter matches nothing and
+  WS-26a ships no owner picker.
+- **B2** — lead `dwell_seconds` derives from `max(crm_status_changes.changed_at)` falling
+  back to `created_at` (leads deliberately carry no `status_changed_at` column).
+- **B3** — the lost-reason requirement applies on **create into** a lost-type status, not
+  only on transition — the rule belongs to the status type.
+- **B4** — `insert_row`/`update_row` coerce JSONB + temporal params explicitly (bare
+  `text()` declares no column types to asyncpg); read half mirrors
+  `routes/tasks/core.py::_parse_jsonb`.
+- **B5** — `crm_status_changes.entity_type`/`changed_at` and the `crm_activities` target
+  CHECK gained NOT NULL where §3.8/§3.9 were silent (strengthening only).
+- **Open question for the owner (deliberately unimplemented):** reopening a won/lost deal
+  leaves `closed_at` stale — §3.4 stamps and never clears. Clearing on a move back to a
+  non-terminal type is one line in `apply_status_transition` once decided.
 
 ---
 

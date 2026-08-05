@@ -118,9 +118,21 @@ say "Manifest"
   echo "databases:        $(echo "$DBS" | tr '\n' ' ')"
   echo ""
   echo "# anchor row counts (a restore that does not reproduce these is wrong)"
-  for t in app_user email_message gtd_task meeting agent_run; do
+  # The names must be REAL tables. Two of the original five were not
+  # (`email_message`, `gtd_task`; the tables are `email_messages` and
+  # `gtd_items`), so they printed "n/a" on every backup — and "n/a" reads as
+  # benign. A restore could have lost the entire email mirror, the largest
+  # dataset here, without contradicting a single anchor. A wrong anchor is
+  # worse than no anchor: it occupies the slot where the check should be.
+  # So an unresolvable name is now reported as MISSING, loudly.
+  for t in app_user email_messages gtd_items meeting agent_run; do
+    if ! docker exec "$PG_CONTAINER" psql -U "$PG_USER" -d acb -tAc \
+         "select to_regclass('public.$t')" 2>/dev/null | grep -q .; then
+      printf "%-20s %s\n" "$t:" "MISSING — anchor names a table that does not exist"
+      continue
+    fi
     n="$(docker exec "$PG_CONTAINER" psql -U "$PG_USER" -d acb -tAc \
-         "select count(*) from $t" 2>/dev/null || echo "n/a")"
+         "select count(*) from $t" 2>/dev/null || echo "QUERY FAILED")"
     printf "%-20s %s\n" "$t:" "$n"
   done
   echo ""

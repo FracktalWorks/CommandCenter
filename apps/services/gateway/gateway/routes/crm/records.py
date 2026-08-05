@@ -28,6 +28,7 @@ from typing import Any
 from acb_auth import UserContext, get_current_user
 from fastapi import Depends, HTTPException, Query
 from gateway.routes.crm.core import (
+    CLOSING_TYPES,
     CONTACTS,
     DEALS,
     LEADS,
@@ -48,6 +49,7 @@ from gateway.routes.crm.core import (
     insert_row,
     list_contract,
     load_default_status,
+    now,
     require_row,
     router,
     row_to_dict,
@@ -160,6 +162,14 @@ async def _resolve_status(
     if has_column(entity, "probability") and values.get("probability") is None:
         # §3.4 — a deal with no stated probability inherits its stage's default.
         values["probability"] = getattr(status, "probability", None)
+    if (
+        status.type in CLOSING_TYPES
+        and has_column(entity, "closed_at")
+        and not values.get("closed_at")
+    ):
+        # §3.6 — entering a won/lost status stamps closed_at, and creating a
+        # record directly in one IS entering it (same reach as the lost gate).
+        values["closed_at"] = now()
     return status
 
 

@@ -63,9 +63,11 @@ def bare(sql: str) -> str:
 def test_the_migration_takes_the_next_free_number() -> None:
     """R1 — resolved from the directory at build time, never from a spec.
 
-    Asserted as a property (it is the highest, and it is exactly one past the
-    previous highest) rather than as the literal '144', so this stays true if
-    the file is renumbered because another workstream landed first.
+    Asserted as the two properties that stay true forever: no other migration
+    shares this number, and the ladder has no gap immediately below it. NOT
+    asserted as "it is the highest in the repo" — that version was measured
+    red the moment any later workstream's migration landed (verifier probe,
+    2026-08-05), and a red unit test silently blocks deploy.
     """
     numbers = sorted(
         int(path.name.split("_", 1)[0])
@@ -73,11 +75,13 @@ def test_the_migration_takes_the_next_free_number() -> None:
         if path.name.split("_", 1)[0].isdigit()
     )
     mine = int(_crm_migration().name.split("_", 1)[0])
-    assert mine == numbers[-1], (
-        f"the CRM migration is {mine} but {numbers[-1]} exists — it must be the "
-        "next free number, or the ladder replays it out of dependency order"
+    assert numbers.count(mine) == 1, (
+        f"two migrations share number {mine} — the ladder replays them in "
+        "filename order, so one of them runs against the wrong schema"
     )
-    assert mine == numbers[-2] + 1, "the ladder has a gap at the CRM migration"
+    assert mine - 1 in numbers, (
+        "the ladder has a gap immediately below the CRM migration"
+    )
 
 
 def test_the_header_says_what_why_and_what_it_depends_on() -> None:

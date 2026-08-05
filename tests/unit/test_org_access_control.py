@@ -442,8 +442,8 @@ def _catalog_slugs() -> set[str]:
 
 
 #: Slugs allowed to exist on exactly one side. **Empty, and that is a
-#: measurement**: as of 2026-08-05 the 22 catalog rows across migrations 130,
-#: 132 and 140 match the 22 FEATURES entries exactly. It is a commented literal
+#: measurement**: as of 2026-08-05 the 23 catalog rows across migrations 130,
+#: 132, 140 and 144 match the 23 FEATURES entries exactly. It is a commented literal
 #: rather than a filter inside the assertion so that adding an exception is an
 #: edit somebody has to justify in review — a silent `if slug.startswith(...)`
 #: would have hidden the migration-140 defect that motivated this file's Center

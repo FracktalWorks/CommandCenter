@@ -208,6 +208,26 @@ async def test_a_stated_probability_is_not_overwritten(db: FakeCrmDB) -> None:
     assert deal["probability"] == 90
 
 
+async def test_a_deal_created_directly_into_a_terminal_status_gets_closed_at(
+    db: FakeCrmDB,
+) -> None:
+    """Verifier finding 2026-08-05: PATCH into Closed Won stamped closed_at
+    while POST straight into it stored NULL — §3.6's rule belongs to the
+    status type, so it must reach both verbs (the same reach as the lost gate).
+    """
+    _seed_pipeline(db)
+    won = db.seed(
+        "crm_deal_statuses", name="Closed Won", position=60, type="won",
+        is_default=False, probability=100,
+    )
+    deal = await crm_records.create_record(
+        DEALS,
+        crm_core.DealIn(name="Printer order", status_id=str(won.id)),
+        USER,
+    )
+    assert deal["closed_at"] is not None
+
+
 async def test_an_absent_owner_defaults_to_the_acting_user(db: FakeCrmDB) -> None:
     """Identity comes from the authenticated context (R3), never a body field."""
     _seed_pipeline(db)

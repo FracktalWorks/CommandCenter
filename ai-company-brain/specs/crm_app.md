@@ -380,7 +380,9 @@ overrule any of them):**
 - **B2** — lead `dwell_seconds` derives from `max(crm_status_changes.changed_at)` falling
   back to `created_at` (leads deliberately carry no `status_changed_at` column).
 - **B3** — the lost-reason requirement applies on **create into** a lost-type status, not
-  only on transition — the rule belongs to the status type.
+  only on transition — the rule belongs to the status type. *(Verifier addendum
+  2026-08-05: the sibling §3.6 rule follows the same reach — creating a deal directly in a
+  won/lost status stamps `closed_at`, matching what the transition path does.)*
 - **B4** — `insert_row`/`update_row` coerce JSONB + temporal params explicitly (bare
   `text()` declares no column types to asyncpg); read half mirrors
   `routes/tasks/core.py::_parse_jsonb`.

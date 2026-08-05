@@ -37,6 +37,13 @@ export type RowActions = {
   canActivate: boolean;
   canSuspend: boolean;
   canRemove: boolean;
+  /**
+   * Hard delete — `DELETE /admin/members/{email}/purge` (N8). Offered on
+   * anybody else's row **including an already-removed one**: "remove, then
+   * delete once you are sure" is the ordinary sequence, and a control that
+   * vanished at the moment it became safest to use would be the wrong shape.
+   */
+  canPurge: boolean;
 };
 
 /**
@@ -45,7 +52,10 @@ export type RowActions = {
  * Activation is not destructive, so it is offered on any dormant row —
  * including, in principle, the viewer's own (the gateway allows it too: a
  * status of `active` is the one that gives access rather than taking it).
- * Suspend and Remove are never offered on the viewer's own row.
+ * Suspend, Remove and Delete permanently are never offered on the viewer's
+ * own row — the gateway refuses all three through the one shared guard
+ * (`_common.assert_not_self_lockout`), and this file only spares the viewer
+ * the click.
  */
 export function rowActions(viewerEmail: string, member: Member): RowActions {
   const self = isSelf(viewerEmail, member.email);
@@ -55,5 +65,6 @@ export function rowActions(viewerEmail: string, member: Member): RowActions {
     canActivate: dormant,
     canSuspend: !self && !dormant && member.status !== "removed",
     canRemove: !self && member.status !== "removed",
+    canPurge: !self,
   };
 }

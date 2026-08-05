@@ -13,6 +13,23 @@ export type Member = {
 };
 
 /**
+ * What `DELETE /admin/members/{email}/purge` reports back (N8).
+ *
+ * Both halves, per table. `deleted` because it is irreversible and the admin
+ * has no other way to see how much it was; `kept` because "your audit trail
+ * and their apps are still there" is the reassurance that makes the
+ * irreversible half safe to click. Keys are the gateway's
+ * (`members._PURGE_DELETES` / `_PURGE_KEEPS`) and are rendered as-is, so a
+ * table added there shows up here without a UI change.
+ */
+export type PurgeResult = {
+  status: "purged";
+  email: string;
+  deleted: Record<string, number>;
+  kept: Record<string, number>;
+};
+
+/**
  * A sign-in request — somebody who authenticated against the directory and
  * found no `app_user` row (gateway `routes/admin/access_requests.py`,
  * migration 143; spec colleague_onboarding.md §6).

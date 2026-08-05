@@ -40,6 +40,22 @@ describe("rowActions", () => {
     expect(a.isSelf).toBe(true);
     expect(a.canSuspend).toBe(false);
     expect(a.canRemove).toBe(false);
+    // Hard delete is the most destructive of the three, so it is the one this
+    // must never soften: the gateway refuses it through the same guard.
+    expect(a.canPurge).toBe(false);
+  });
+
+  it("never offers the hard delete on your own row, whatever your status", () => {
+    // The one status that made `canRemove` false for everybody is `removed`,
+    // and `canPurge` deliberately stays true there — so "self" has to be
+    // carrying the refusal on its own, in every state.
+    for (const status of ["active", "invited", "suspended", "removed"] as const) {
+      const a = rowActions(
+        "owner@fracktal.in",
+        member({ email: "owner@fracktal.in", status })
+      );
+      expect(a.canPurge).toBe(false);
+    }
   });
 
   it("offers both on somebody else's active row", () => {
@@ -47,6 +63,7 @@ describe("rowActions", () => {
     expect(a.isSelf).toBe(false);
     expect(a.canSuspend).toBe(true);
     expect(a.canRemove).toBe(true);
+    expect(a.canPurge).toBe(true);
     expect(a.canActivate).toBe(false);
   });
 
@@ -63,6 +80,14 @@ describe("rowActions", () => {
     const a = rowActions("owner@fracktal.in", member({ status: "removed" }));
     expect(a.canRemove).toBe(false);
     expect(a.canSuspend).toBe(false);
+  });
+
+  it("still offers the hard delete on an already-removed row", () => {
+    // "Remove, then delete once you are sure" is the ordinary sequence. A
+    // control that disappeared exactly when it became safest to use would
+    // leave the only way to finish the job outside the product.
+    const a = rowActions("owner@fracktal.in", member({ status: "removed" }));
+    expect(a.canPurge).toBe(true);
   });
 
   it("still offers to re-activate the viewer's own dormant row", () => {

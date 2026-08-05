@@ -42,15 +42,31 @@ The Members page drew the button, because it never learned who the viewer was.
 Both doors now call one guard (`_common.assert_not_self_lockout`), the rule is
 "any status that is not `active`" so `invited` is covered too, and the roster
 renders **This is you** where the destructive controls were. **No migration, no
-new slug** — so unlike N6a this one is not a deploy-behaviour gate. ·
+new slug** — so unlike N6a this one is not a deploy-behaviour gate.
+**§2 Step 5 gained N8, BUILT + REPAIRED 2026-08-05 (`ws-24-n8-purge-member`):
+deleting a member permanently.** Remove is soft by design and stays so; `DELETE
+/admin/members/{email}/purge` is a second, harder action beside it that
+destroys the identity and every credential and access grant keyed to it,
+**keeps what the person authored, and keeps the audit trail** — the table map,
+the FK cascade map, and the one place the person/content split is not clean are
+all recorded in §2 Step 5. It goes through the *same* self-guard (a fourth
+door) plus `assert_owner_survives`, runs in one transaction, and reports a
+count per table so the irreversible half is auditable. ⚠️ **The first version
+reported destroyed rows as *kept*** — `task_accounts` cascades the SYNCED half
+of `gtd_items`, which the keep clause counted anyway, so 847 synced tasks came
+back as `kept: {"tasks": 847}` with all 847 gone; `gtd_projects` was on neither
+list. Fixed, and three fences that did not exist were the reason: the delete
+route's permission, the type-to-confirm rule, and any cross-table claim at all
+(§2 Step 5 *Repair round 1*). **No migration, no new slug.** ·
 **Board row:** WS-24 ·
-**Owner:** vjvarada · **Date:** 2026-08-04 ·
-**Verified against code on 2026-08-04** (branch `ws-24-onboarding-readiness`,
+**Owner:** vjvarada · **Date:** 2026-08-05 ·
+**Verified against code on 2026-08-05** (branch `ws-24-onboarding-readiness`,
 cut from `ws-14-doc-remediation` @ `ed785bea`; repair round @ `8b6dcdd3`;
 N4 built on `ws-24-n4-people-scoping`, cut from `007caae2`; N1–N3 on
 `ws-24-n1n3-notes-scoping`, cut from `891903de`; N6a on
 `ws-24-n6-signin-requests`, cut from `5beeabbe`; N7 on
-`ws-24-n7-self-removal-guard`, cut from `2a41099b`).
+`ws-24-n7-self-removal-guard`, cut from `2a41099b`; N8 on
+`ws-24-n8-purge-member`, cut from `e911e9d2`).
 
 **What this doc is for.** Exactly one person is signed in to this deployment
 (**owner-reported, not measured** — see the note below). The question "is it
@@ -61,7 +77,7 @@ parts:
 | § | Section | Kind |
 |---|---|---|
 | §1 | **The readiness gate** — what must be true before colleague #1 | checklist with per-item done-whens + gate labels |
-| §2 | **The onboarding runbook** — invite → role → Center group → verify, and off-boarding (Step 5, incl. **N7 — built**) | procedure, grounded in real endpoints |
+| §2 | **The onboarding runbook** — invite → role → Center group → verify, and off-boarding (Step 5, incl. **N7 and N8 — both built**) | procedure, grounded in real endpoints |
 | §3 | **The capability matrix** — what a colleague on each role can actually see | evidence table, every cell carries `file:line` |
 | §4 | **The four open owner-scoping holes** — blocking items with sizes | tickets |
 | §5 | **Verification** — the exact commands, and what must never be run | commands |
@@ -274,25 +290,35 @@ directory identity into a member**.
 
 ### Step 5 — Off-boarding (the other half, recorded here so it is not invented later)
 
-    PATCH  /admin/members/{email}   { "status": "suspended" }   # members.py:191-192
-    DELETE /admin/members/{email}                               # members.py:262-263
+    PATCH  /admin/members/{email}   { "status": "suspended" }   # reversible
+    DELETE /admin/members/{email}                               # soft: status → removed
+    DELETE /admin/members/{email}/purge                         # hard: N8, irreversible
 
 `resolve_access` treats status as a property of the *result*, not a filter on
 the query, so a suspended member resolves to no access within the 60s cache TTL
 at worst (`acb_auth/access.py:209-215`).
 
-**You cannot off-board yourself, by either door.** Both routes call the one
-shared guard `_common.assert_not_self_lockout` (`_common.py:248`;
-`members.py:214` and `:283`) — a caller may not put their own row into any
-status other than `active`. It is stated that way, rather than as a list of
-destructive statuses, because `is_active` is `status == "active"` exactly, so
-`invited` locks you out exactly as `suspended` does. Renaming yourself and
-re-activating your own row are unaffected. This is **not**
-`assert_owner_survives`: that one is about the *org* keeping an owner and would
-let either of two owners suspend themselves. The Members page reads
-`/auth/me`'s `email` and renders **This is you** where the destructive controls
-would be (`settings/members/selfGuard.ts`) — a courtesy, since the guard above
-is the boundary.
+**Three actions, and the difference between them is the point.** Suspend is
+reversible from this screen. Remove drops every role grant and keeps the
+`app_user` row, because ~every user-scoped table refers to people by address —
+the way back is a fresh invite plus an activation. **Delete permanently (N8)**
+destroys the identity and every credential and grant keyed to it, and cannot be
+undone by anything short of a database restore.
+
+**You cannot off-board yourself, by any door.** All three call the one shared
+guard `_common.assert_not_self_lockout` — a caller may not put their own row
+into any status other than `active`, and the purge passes the outcome name
+`_common.PURGE_OUTCOME` through the same helper. The rule is stated as "anything
+that is not `active`", rather than as a list of destructive statuses, because
+`is_active` is `status == "active"` exactly — so `invited` locks you out exactly
+as `suspended` does, and a door that *deletes* the row falls under the same
+sentence as the two that write the column. Renaming yourself and re-activating
+your own row are unaffected. This is **not** `assert_owner_survives`: that one
+is about the *org* keeping an owner and would let either of two owners suspend
+themselves. The Members page reads `/auth/me`'s `email` and renders **This is
+you** where the destructive controls would be
+(`settings/members/selfGuard.ts`) — a courtesy, since the guard above is the
+boundary.
 
 **Bringing somebody back is `admin:members:manage`, and only that.** Neither
 Invite nor approving a sign-in request can turn a `removed` or `suspended` row
@@ -483,6 +509,288 @@ test may assert the bare status code.
 
 **No migration.** No new permission slug — both routes keep
 `admin:members:manage`.
+
+### N8 — deleting a member permanently · size: M (one route + one page + the table map) · ✅ **BUILT + REPAIRED 2026-08-05**
+
+> **Built** on `ws-24-n8-purge-member` (cut from `main` @ `e911e9d2`), then
+> **repaired on the same branch** after verification returned FAIL — see
+> *Repair round 1* at the end of this section, which is where the numbers and
+> the new fences are.
+> Fenced by `tests/unit/test_admin_member_purge.py` (39 cases), one new case in
+> `test_admin_member_offboarding.py`, 2 new cases in `selfGuard.test.ts`, and
+> 5 in `confirmPurge.test.ts`.
+
+**The owner's words:** *"allow the owner to be able to remove and completely
+delete everyone else apart from themselves."* Remove was the only off-boarding
+that existed, and it is soft by design.
+
+**A second, harder action beside Remove — not a flag on it.** `DELETE
+/admin/members/{email}` is unchanged, and its reasoning stands: the `app_user`
+row is kept because ~every user-scoped table refers to people by address, and
+what matters for access is that the member resolves to nothing. A `?hard=true`
+on that route would have put the irreversible path one typo from the reversible
+one, so the purge is its own route: `DELETE /admin/members/{email}/purge`, on
+the same `admin:members:manage`.
+
+#### The decision: purge the person, keep their work
+
+Delete the identity and everything that exists only to grant access or let the
+platform act as them; leave what they authored readable, and leave the audit
+trail alone. **Purging their content too was considered and rejected** — it is
+unrecoverable and, in this schema, it silently takes shared artefacts (a room
+with other participants) along with the private ones.
+
+⚠️ **"Delete the identity" cannot mean "erase the address everywhere."** The
+email address IS the join key across ~50 tables (`apps.owner_email`,
+`gtd_items.user_id`, `workflows.owner_email`, `app_audit.user_email`), so
+scrubbing it is not a redaction — it is a deletion of the rows it keys. **That
+is why nothing is anonymised:** an anonymised `owner_email` would not hide a
+person, it would orphan their apps.
+
+**The table map**, enumerated from `infra/postgres/` — every FK to
+`app_user(id)` and every email-string column — and held in
+`members._PURGE_DELETES` / `_PURGE_KEEPS`:
+
+| Verdict | Tables | Why |
+|---|---|---|
+| **deleted** | `user_role`, `user_permission_override`, `org_group_member` | access grants (FK to `app_user.id`, all `ON DELETE CASCADE`; deleted explicitly anyway so the counts are real and the purge does not depend on a cascade a later migration could drop) |
+| **deleted** | `chat_session_participant`, `app_grants`, `app_tool_grants` | access grants keyed by address; a remembered "always allow this app to use this tool" is a standing authorization to act as them |
+| **deleted** | `email_accounts`, `wa_accounts`, `task_accounts` | `credentials_encrypted NOT NULL` — the live OAuth/API tokens. See the cascade note below |
+| **deleted** | `gtd_items`, `gtd_projects` **where `account_id IS NOT NULL`** | the SYNCED half, which `task_accounts` cascades away regardless. Deleted *explicitly* and counted on this side, because the alternative — letting the cascade take them silently — is what made the response report them as kept |
+| **deleted** | `chat_session` **where `visibility = 'private'`** | their own conversations |
+| **deleted** | `access_request` | they become a stranger again. Leaving an `approved` row for somebody with no `app_user` row means their next sign-in bumps a row the Requests tab never renders (it shows `pending` only) — the invisible lockout §6 exists to end |
+| **deleted** | `app_user` | the member record, last |
+| **kept** | `app_audit`, `audit_event`, `agent_run`, `agent_file_history`, `pending_actions`, `pending_commit` | **an audit trail that disappears when you delete the person is not an audit trail.** `app_audit` already says so in its own schema: `app_id UUID` with *no* FK, commented "audit survives hard delete" |
+| **kept** | `apps`, `app_versions`, `app_data`, `app_pins`, `workflows*`, `meeting*`, `notes_glossary`, `gtd_people`, `org_group.created_by`, `person` | authored work and org records |
+| **kept** | `gtd_items`, `gtd_projects` **where `account_id IS NULL`** | the LOCAL half — outcomes and actions they wrote here, not a mirror of anybody's provider. ⚠️ **The `account_id` predicate is load-bearing, not decoration:** without it this row counts the SYNCED rows the line above destroys, and reports them as survivors |
+| **kept** | `chat_session` **where `visibility <> 'private'`** | a shared room has other participants and cascades `chat_message`; one person's off-boarding must not take a shared transcript |
+| **anonymised** | *(none)* | see above — the address is the join key, not a display attribute |
+
+#### ⚠️ The cascade map — a naive delete takes far more than it looks like
+
+Three of the deleted rows own subtrees the schema already declares
+`ON DELETE CASCADE`. **Counts below are derived from the numbered migrations,
+not remembered** — the first version of this list understated every one of them
+(see *Repair round 1*), which on a route whose whole safety argument is "the
+admin is told the blast radius before clicking" is the wrong direction of
+error. The map now lives as data in `members._CREDENTIAL_CASCADES` and is
+pinned against `infra/postgres/` by
+`test_the_cascade_map_is_the_one_the_schema_declares`; it is hand-maintained
+and says so.
+
+* **`email_accounts` → 17 direct children, 20 with transitives.** `email_actions`,
+  `email_ai_drafts`, `email_assistant_settings`, `email_attachments`†,
+  `email_cold_senders`, `email_contacts`, `email_embeddings`†,
+  `email_executed_rules`, `email_folders`, `email_knowledge`,
+  `email_learned_patterns`, `email_messages`, `email_newsletters`,
+  `email_rule_guidance`, `email_rule_patterns`, `email_rules`, `email_senders`,
+  `email_sync_log`, `email_thread_status`, `email_voice_profiles`.
+  **The whole mirrored mailbox.** († via `email_messages`; `email_actions` via
+  `email_rules`.)
+* **`wa_accounts` → 14 direct, 16 with transitives.** `wa_ai_drafts`,
+  `wa_categories`, `wa_chat_avatars`, `wa_chat_labels`, `wa_chat_status`,
+  `wa_chats`, `wa_commitments`, `wa_contacts`, `wa_group_summaries`,
+  `wa_labels`, `wa_media`†, `wa_message_embeddings`†, `wa_messages`,
+  `wa_saved_replies`, `wa_sync_log`, `wa_templates`. († via `wa_messages` —
+  `wa_media` is **not** a direct child, and the earlier list said it was.)
+* **`task_accounts` → `gtd_items`, `gtd_projects` (2 direct) + `gtd_waiting`.**
+  The **SYNCED** half only: rows with `account_id` set. LOCAL rows carry
+  `account_id IS NULL` and survive.
+
+⚠️ **`gtd_items` and `gtd_projects` are the ONLY tables in that whole blast
+radius that carry a `user_id` of their own.** Everything else is keyed by
+`account_id` alone — it is mirror-of-a-credential and nothing more, which is
+why "the whole mailbox goes" is an honest summary for it and a per-table count
+would be noise. The two GTD tables are *dual-source*: the same table holds rows
+the person wrote here, which the purge is not entitled to take. That is the
+rule the fence enforces, and it is what forces both halves of both tables onto
+the report (`test_every_person_keyed_cascade_child_is_reported_on_one_side_or_other`).
+
+**The credential cannot be deleted without the row** — it is a `NOT NULL`
+column on it — and leaving a departed colleague's live tokens in the database
+is precisely the hole a purge exists to close. The mirrors are mirrors: source
+systems stay authoritative (root `AGENTS.md`, global constraint 8).
+
+> **The one place the person/content split is NOT clean, recorded rather than
+> hidden:** `task_accounts → gtd_items` means a purge deletes the person's
+> *SYNCED* tasks while keeping their *LOCAL* ones. Unlike a mailbox, GTD items
+> are the product's own work objects, and that asymmetry was not decided by
+> anybody — it falls out of where the FK happens to sit. It is made visible
+> rather than resolved: **counts on both sides of the response**
+> (`synced_tasks` / `synced_projects` deleted, `tasks` / `projects` kept) and
+> named in the confirmation, which says the mirrored rows go with the account
+> and the ones created here stay. ⚠️ **That sentence was false when it was
+> first written** — the response reported the destroyed rows as kept and the
+> confirmation's Kept list said "tasks they authored" without qualification.
+> **Open owner question, unchanged:** should a purge disconnect the account and
+> null the credential instead of deleting the row, so the synced mirror
+> survives?
+
+#### The guards, and the report
+
+1. **Invariant 4 through the shared helper.** `assert_not_self_lockout` is
+   called with `_common.PURGE_OUTCOME` (`"purged"`), which is deliberately *not*
+   a member of `VALID_STATUSES` — a purge deletes the row rather than writing
+   the column. The helper's rule ("anything that is not `active`") is what lets
+   a delete-shaped door fall under a sentence written for update-shaped ones,
+   and it is the reason the rule was never written as a list.
+2. **Invariant 1.** `assert_owner_survives` — purging the last owner is not a
+   recoverable mistake; there would be no owner left to invite anybody and no
+   row to promote back.
+3. **The response says what happened, per table**: `{"deleted": {...},
+   "kept": {...}}`. A purge that answers `{"status": "ok"}` is unauditable — the
+   admin cannot tell one that destroyed a live OAuth token from one that matched
+   nothing. `count_sql` and `delete_sql` are derived from the **same** `where`
+   clause, so the number reported and the rows destroyed are one predicate by
+   construction.
+4. **Audited before it commits.** `acb_audit.record` opens its own session, so
+   the entry survives a rollback of the purge. The trade-off is deliberate and
+   this way round: an audit line for a purge that then failed is a false
+   positive an admin can reconcile against a roster that still shows the
+   person; a *completed* purge with no audit line is unreconcilable, because
+   every row that could say who it was is gone.
+   ⚠️ **"The audit entry survives a rollback" is true. "A completed purge
+   always leaves an audit row" is NOT.** `acb_audit/log.py:49` wraps the write
+   in `except Exception` and logs `audit.persist_failed`, so an audit DB that
+   is down turns the call into a no-op and the purge still commits. That
+   default is right for every other caller (a webhook must not 5xx over an
+   audit write) and is deliberately not overridden here, because refusing
+   would leave the credentials in place — but it means the only **guaranteed**
+   record of a purge is the `member_purged` structlog line. Recorded, not
+   fixed: making one caller strict is a change to `acb_audit`'s contract.
+5. **One transaction**, one `commit()`, at the end. A half-purge that deleted
+   the credentials but left the account active is worse than either outcome.
+6. **The permission is `admin:members:manage`, and it is pinned.** Deleting the
+   `require_permission` dependency leaves `Depends(require_admin_user)`, whose
+   floor is `admin:members:read` — a permission `manager` holds (D14, §3.0) —
+   so the mutation silently hands hard-delete of any member to every manager.
+   The slug is read out of the dependency's closure and asserted exactly, so
+   *widening* it fails too.
+7. **UI:** a filled-destructive **Delete permanently** beside the outlined
+   **Remove**, gated by `rowActions().canPurge` (never on the viewer's own row;
+   *offered* on an already-removed row, because "remove, then delete once you
+   are sure" is the ordinary sequence). The confirmation names both halves and
+   requires the address to be typed; the counts come back and are shown. **The
+   typed-confirm rule is `confirmPurge.ts`**, not an inline comparison: it is
+   unit-tested by vitest (case-insensitive, whitespace-tolerant, and an empty
+   address confirms *nothing* rather than everything) and the page's wiring is
+   asserted from pytest. Inline, it was fenced only by a grep for the copy
+   around it.
+
+#### The door enumeration, again
+
+`test_both_off_boarding_doors_call_the_one_shared_guard` is now
+`test_every_off_boarding_door_calls_the_one_shared_guard` and lists **four**
+doors explicitly. N7 already retracted "a third one added later is included
+automatically" — and N8 proved the retraction right by adding a fourth door on
+a *fifth path*, which the old test could not have seen. **Enumerate the doors;
+nothing will do it for you.** The fifth route that reaches this outcome (`PUT
+…/overrides`) still guards it with its own inline comparison and is
+deliberately not listed — that inconsistency is recorded above, not asserted as
+correct.
+
+#### Repair round 1 (2026-08-05) — the response reported destroyed rows as kept
+
+Verification returned **FAIL**. Every finding below was established by reading
+the schema and running mutations, not by review.
+
+**F1 — the hard one, and the shape is worth keeping.** `_PURGE_KEEPS` counted
+`gtd_items` on `lower(user_id) = :email` with no exclusion, while
+`_PURGE_DELETES` took `task_accounts`, whose FK cascades that very table
+(`48_task_manager_gtd.sql:93`) — and `sync.py:141-149` stamps **both**
+`user_id` and `account_id` on every SYNCED row, so those rows matched the keep
+clause *and* were destroyed. A member with 847 synced tasks got
+`kept: {"tasks": 847}` with all 847 gone. **The response did not merely miss a
+destruction — it reported it as a survival**, in the half an admin reads for
+reassurance. `gtd_projects` (same cascade, `:73`) was on neither list.
+
+> The discipline already existed one line up: `shared_rooms` carries
+> `AND visibility <> 'private'` precisely so the keep count excludes what the
+> delete side takes. It simply was not applied to the table where the taking
+> is done by a *cascade* three entries away rather than by a statement.
+
+**Why nothing caught it — the missing fence.** Every structural assertion
+compared a row-spec to itself (`count_sql` vs `delete_sql`) or to its own
+table's other half. Nothing asserted that a KEEP clause's row set is disjoint
+from what the DELETE side *cascades* away, and **`_FakeDB` models no foreign
+keys at all**, so no behavioural case over it could see a cascade either. The
+gap was cross-table by nature and is now fenced structurally:
+
+* `tests/unit/_schema_cascade.py` derives the FK cascade graph from the
+  numbered migrations (`schema.generated.sql` is skipped — it predates
+  migration 130).
+* `test_no_keep_clause_survives_a_cascade_on_the_delete_side` — a KEEP clause
+  inside the delete side's blast radius must be the **exact complement** of a
+  matching DELETE clause on the same table.
+* `test_every_person_keyed_cascade_child_is_reported_on_one_side_or_other` —
+  every cascade descendant carrying its own person column must appear on the
+  report at all. This is what forces `gtd_projects` on.
+* `test_the_cascade_map_is_the_one_the_schema_declares` — `_CREDENTIAL_CASCADES`
+  is re-derived and compared.
+* `_admin_fakes._FakeDB` now states in its own docstring that it models no
+  cascades, and why that makes the claim structural rather than behavioural.
+
+**F2 — the gate on the most destructive route was unfenced.** Deleting
+`dependencies=[require_permission("admin:members:manage")]` left **162 tests
+green**; the fallback floor is `admin:members:read`, which a seeded `manager`
+holds. The nearest existing wiring test filters on
+`path.startswith("/admin/members/requests")` and could not see this route.
+Pinned now, by reading the slug out of the dependency's closure.
+
+**F3 — the type-to-confirm gate was unfenced.** `const confirmed = true;` left
+**32 pytest + 173 vitest green**; done-when 6 was tested by grepping the dialog
+for the word "Type". The rule moved to `confirmPurge.ts` with its own vitest
+cases and a pytest wiring assertion.
+
+**F4 — the cascade map was understated, in the dangerous direction.** 15 of 20
+email tables named; `wa_media` listed as a direct child of `wa_accounts` when
+it hangs off `wa_messages`; `wa_chat_status` and `wa_sync_log` missing;
+"labels" standing in for two tables. Corrected against the migrations, moved
+out of prose into `_CREDENTIAL_CASCADES`, marked hand-maintained, and pinned.
+
+**F5 — recorded, not fixed.** `acb_audit/log.py:49` swallows every exception,
+so a failed audit write still lets the purge commit. Stated at guard 4 above
+and in the route docstring.
+
+**Mutants measured red and reverted** (`git status` clean after each):
+
+| Mutation | Result |
+|---|---|
+| `tasks` KEEP clause back to `lower(user_id) = :email` | **5 red** — incl. the complement fence naming `gtd_items` and its cascade parent |
+| `synced_projects` delete-side row-spec removed | **5 red** — the complement fence: "reported as KEPT, but the purge cascades it away" |
+| `gtd_projects` removed from **both** lists (the shipped state) | **5 red** — the person-keyed-child fence names it |
+| `require_permission(...)` deleted from the purge route | **1 red** (of 219 across all six admin files; previously **0**) |
+| purge route widened to `admin:members:read` | **1 red** |
+| `const confirmed = true;` in `PurgeDialog` | **1 red** pytest; vitest stays 178 green — no jsdom, the wiring test is the fence |
+| `purgeConfirmed` empty-address guard dropped | **1 red** vitest |
+| `email_embeddings` removed from `_CREDENTIAL_CASCADES` | **1 red** — the map vs the migrations, both lists printed |
+| `_FakeDB` stops modelling `IS [NOT] NULL` | **3 red** — the fake cannot silently widen a clause |
+
+**Verification** (measured 2026-08-05, branch `ws-24-n8-purge-member`, after
+the repair)
+
+    uv run pytest tests/unit/test_admin_member_purge.py -q          # 39 passed (was 32)
+    uv run pytest tests/unit/test_admin_member_offboarding.py -q    # 28 passed
+    uv run pytest tests/unit/test_signin_requests.py \
+                  tests/unit/test_org_access_control.py \
+                  tests/unit/test_org_access_enforcement.py \
+                  tests/unit/test_admin_groups.py -q               # 152 passed, = main
+    uv run ruff check . --select F821,F601,F602,F502,F7,B006        # All checks passed!
+    cd workbench/control_plane && npx tsc --noEmit && npx vitest run # clean, 178 passed (was 173)
+
+⚠️ `tsc` fails on stale `.next/types` / `.next/dev/types` validator files left
+by another branch's routes. `rm -rf` those two directories first; it is not a
+defect in this change.
+
+**No migration, no new permission slug.** The purge is `admin:members:manage`,
+the same gate Remove holds — deleting somebody who is already off-boarded is
+not a *stronger* decision than off-boarding them, and a new slug is nobody's
+grant until an admin creates it.
+
+⚠️ **`infra/postgres/schema.generated.sql` is stale** — it predates migration
+130 and contains no `user_role`, `org_group`, or `access_request`. The table map
+above was derived from the numbered migrations, which are the schema of record.
+Re-running `scripts/dump_schema.sh` is owed, independently of this ticket.
 
 ---
 

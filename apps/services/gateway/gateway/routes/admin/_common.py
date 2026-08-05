@@ -14,16 +14,22 @@ an access model and an outage:
 3. **System roles are immutable.** The five seeded roles are the floor the
    bootstrap path depends on; custom roles are where admins express local
    policy.
-4. **Nobody locks themselves out**, by any of the **three** doors that reach it.
+4. **Nobody locks themselves out**, by any of the **four** doors that reach it.
    A caller may not put their own row into any status other than `active`
-   (:func:`assert_not_self_lockout`, called by both ``PATCH`` and ``DELETE`` on
-   ``/admin/members/{email}``), and may not strip their own row of
-   ``admin:members:manage`` (:func:`assert_not_self_demotion`, called by ``PUT
-   /members/{email}/roles``) — the third door leaves `status` alone and takes
-   the *permission* instead, reaching the same lockout without touching the
-   column the first two guard. Invariant 1 is not a substitute for any of
-   them: it refuses only while the caller is the *last* owner, which is a
-   coincidence of org size, not a rule.
+   (:func:`assert_not_self_lockout`, called by ``PATCH`` and ``DELETE`` on
+   ``/admin/members/{email}`` **and by ``DELETE /members/{email}/purge``**),
+   and may not strip their own row of ``admin:members:manage``
+   (:func:`assert_not_self_demotion`, called by ``PUT /members/{email}/roles``)
+   — that door leaves `status` alone and takes the *permission* instead,
+   reaching the same lockout without touching the column the others guard.
+   Invariant 1 is not a substitute for any of them: it refuses only while the
+   caller is the *last* owner, which is a coincidence of org size, not a rule.
+
+   ⚠️ A **fifth** route reaches the same outcome and guards it with its own
+   inline comparison: ``PUT /members/{email}/overrides`` refuses a caller who
+   denies themselves ``admin:access:manage``. It is not routed through the
+   helper below and is therefore invisible to the door-enumeration test.
+   Recorded, not fixed here — see ``colleague_onboarding.md`` §2 Step 5.
 """
 
 from __future__ import annotations
@@ -242,14 +248,25 @@ async def assert_owner_survives(
         )
 
 
-#: How the refusal reads back to the caller who asked for it. Only the two
-#: statuses a human actually chooses are worded; anything else falls through to
-#: the generic message, because the RULE below is ``status != "active"`` and not
+#: The outcome name a purge passes to :func:`assert_not_self_lockout`. It is
+#: deliberately **not** a member of ``members.VALID_STATUSES``: a purge does not
+#: set ``app_user.status``, it deletes the row. The helper's rule is "anything
+#: that is not `active`", so a door that reaches ``is_active = False`` by
+#: destroying the row is covered by the same sentence as one that writes a
+#: column — which is the entire reason the rule was written that way and not as
+#: a list of destructive statuses. Held as a constant so the route and the
+#: wording table below cannot drift to two different spellings.
+PURGE_OUTCOME = "purged"
+
+#: How the refusal reads back to the caller who asked for it. Only the outcomes
+#: a human actually chooses are worded; anything else falls through to the
+#: generic message, because the RULE below is ``status != "active"`` and not
 #: this table — a fifth `app_user.status` is guarded the day it is added rather
 #: than the day somebody remembers to list it here.
 _SELF_LOCKOUT_WORDING = {
     "removed": "You cannot remove yourself.",
     "suspended": "You cannot suspend yourself.",
+    PURGE_OUTCOME: "You cannot permanently delete yourself.",
 }
 
 _SELF_LOCKOUT_ADVICE = "Ask another owner or admin to do it."

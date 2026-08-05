@@ -16,7 +16,6 @@ import {
   Loader2,
   ArrowRight,
 } from "lucide-react";
-import { useSession } from "next-auth/react";
 import { useViewMode } from "@/components/ViewModeProvider";
 import { useMobileDrawer } from "@/components/AppShell";
 import { AccountSidebar } from "./components/AccountSidebar";
@@ -57,9 +56,6 @@ export default function EmailPage() {
     useState<AutomationFeature | null>(null);
 
   const { open: openDrawer, close: closeDrawer } = useMobileDrawer();
-
-  // ── Session (for passing user email to OAuth) ──
-  const { data: session } = useSession();
 
   // ── Zustand store ──
   const {
@@ -247,13 +243,20 @@ export default function EmailPage() {
     if (provider === "imap") {
       window.location.href = "/email?addAccount=imap";
     } else {
-      const gatewayUrl = process.env.NEXT_PUBLIC_GATEWAY_URL || "http://localhost:8000";
-      const redirectAfter = encodeURIComponent(window.location.href);
-      const params = new URLSearchParams({ redirect_after: redirectAfter });
-      if (session?.user?.email) params.set("user_email", session.user.email);
-      window.location.href = `${gatewayUrl}/email/oauth/${provider}/authorize?${params.toString()}`;
+      // Navigate to the BFF, never straight at the gateway host. A top-level
+      // navigation carries no Bearer and no X-User-Email (the session cookie is
+      // on this origin, not api.*), so the gated authorize route 401s every
+      // caller. api/email/oauth/[provider]/authorize runs server-side, attaches
+      // the identity, and re-issues the provider redirect. Identity now comes
+      // from the session on the server — never from a `user_email` parameter.
+      //
+      // URLSearchParams already percent-encodes values — don't pre-encode with
+      // encodeURIComponent or redirect_after ends up double-encoded and the
+      // callback treats it as a relative path (→ /email/oauth/https%3A%2F%2F… 404).
+      const params = new URLSearchParams({ redirect_after: window.location.href });
+      window.location.href = `/api/email/oauth/${provider}/authorize?${params.toString()}`;
     }
-  }, [session]);
+  }, []);
 
   const handleAddAccount = useCallback(() => {
     setShowAddModal(true);

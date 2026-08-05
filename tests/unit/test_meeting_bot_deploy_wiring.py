@@ -81,7 +81,16 @@ def test_both_delivery_paths_execute_the_same_apply_script() -> None:
     assert _APPLY.exists(), "the apply script must exist for these guards to mean anything"
 
     workflow = _WORKFLOW.read_text(encoding="utf-8")
-    assert "scripts/vps_apply.sh" in workflow, "the workflow must run the versioned script"
+    # Must be a RUNNABLE reference, not a mention. The first version of this
+    # assertion was a bare substring check, and it stayed green when the
+    # workflow was mutated to copy a different file — because the header
+    # comments discuss vps_apply.sh by name. A guard satisfied by prose is not
+    # a guard; it certifies the documentation, not the wiring.
+    wired = [
+        ln for ln in workflow.splitlines()
+        if "vps_apply.sh" in ln and not ln.strip().startswith("#")
+    ]
+    assert wired, "the workflow must EXECUTE scripts/vps_apply.sh, not just mention it"
     # The 437 lines must not have been re-inlined alongside it — two copies is
     # worse than either one alone, because they drift silently.
     assert "DEPLOY_SCRIPT" not in workflow, "the script must not be inlined again"

@@ -607,7 +607,10 @@ only mode is `--mode local`, which refuses the box-only checks by design ·
 **(a) running `POST /crm/import/zoho` against production** — building the
 importer is AGENT-SAFE; executing it reads the live Zoho tenant and writes the
 live DB, and during coexistence a re-import is **last-import-wins over native
-edits** on Zoho-sourced rows (spec §7.1), so the run is the owner's act ·
+edits** on Zoho-sourced rows (spec §7.1), so the run is the owner's act. The
+**code floor is `admin:access:manage`**, not `integrations:use:zoho-crm` —
+audit finding 2026-08-05: migration 131 grants `member` `integrations:use:*`,
+so the integration slug gates nothing ·
 **(b) flipping `CRM_AUTO_LEAD`** — ships OFF; ON turns unknown inbound email
 senders into CRM lead rows, a live change to email-app behaviour ·
 **(c) the WS-26e cutover + retirement** — the final import + parity check,

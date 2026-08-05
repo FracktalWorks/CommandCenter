@@ -66,7 +66,7 @@ Zoho agent tool that calls the API, no write path, and no `lead` table anywhere.
 | Mirror tables (`zoho_id TEXT UNIQUE` on each) | `person`, `customer`, `deal` in `infra/postgres/01_schema.sql`; ORM `packages/acb_graph/acb_graph/models.py`; upserts `acb_graph/repo.py` |
 | Mirror consumers | `apps/services/orchestrator/orchestrator/sales_views.py` (customer-360/pipeline read models) · `scripts/reconciler.py` (quiet-deal escalation) · `acb_graph/resolver.py` (entity resolution) · six `skills/sales|reconciler/*` skills (all `rollout_stage: shadow`, read the graph, never Zoho) |
 | Credentials/config | `acb_common/settings.py` (`zoho_*`) · `.env.example` · `acb_llm/key_store.py` (`zoho-crm`) · `acb_skills/integrations.py` (`_zoho_crm`) · `gateway/routes/integrations.py` (catalog card, health check) · `gateway/routes/oauth.py` (`zoho-crm` provider) |
-| Permission (existing, reused by §7.1) | `integrations:use:zoho-crm` — `packages/acb_auth/acb_auth/permissions.py` |
+| Feature gating helper | `require_feature_router` — `packages/acb_auth/acb_auth/deps.py` (re-exported from `acb_auth`); FEATURES tuple in `acb_auth/permissions.py` |
 | Frontend | **No Zoho data rendered anywhere.** `lib/centers.ts` Sales Center lists "Pipeline (Zoho CRM)" `status:"planned"`, no href |
 
 Consequences that shape this plan:
@@ -217,7 +217,7 @@ Modules and endpoints (all under `feature:crm` unless noted):
 | `pipeline.py` | `GET /crm/pipeline` (deals grouped by status: rows ordered per-lane, count + `SUM(amount)` per lane) · `POST /crm/leads/{id}/convert` (§3.7) · status transition inside `PATCH` writes dwell log + activity + `status_changed_at` + probability default |
 | `activities.py` | `GET /crm/<entity>/{id}/timeline` (merged: activities ∪ status changes ∪ — Phase D — linked email threads; a deal's timeline unions its `lead_id`'s history, labeled) · `POST /crm/<entity>/{id}/activities` · `PATCH/DELETE /crm/activities/{aid}` (complete task, edit note) |
 | `admin.py` | `GET/POST/PATCH/DELETE /crm/statuses/{lead,deal}` + `/crm/lost-reasons` (reorder = PATCH `position`). Gated `feature:crm` (v1 decision D-CRM-3: the sales team manages its own pipeline; revisit when WS-24 admits colleague #1). `DELETE` on an in-use status → 409 (FK RESTRICT surfaces it). |
-| `import_zoho.py` | `POST /crm/import/zoho` — **gated `require_permission("integrations:use:zoho-crm")`** (existing slug, semantically exact; minting nothing per `user_management_contract.md` §3). §7.1. |
+| `import_zoho.py` | `POST /crm/import/zoho` — **gated `require_permission("admin:access:manage")`** (existing admin capability; minting nothing per `user_management_contract.md` §3). ⚠️ `integrations:use:zoho-crm` was the first choice and is **wrong**: `131_integration_memory_permissions.sql` grants `member` `integrations:use:*`, so under `permission_matches` every member would hold it — the code floor must be an admin capability; the §6 owner gate governs the *run* on top of it. §7.1. |
 
 Rules that bind (from `user_management_contract.md`): identity from
 `X-User-Email` only (R3); no `PUBLIC_ROUTES` additions — the BFF proxies everything (R2);
@@ -233,8 +233,12 @@ line-item counts).
 `src/app/api/crm/[...path]/route.ts` (the `tasks` proxy pattern: `gatewayHeaders()`,
 `force-dynamic`, 30s timeout). Registration (the five-place checklist,
 `department_centers.md` §2): `FEATURES` += `"crm"` (`acb_auth/permissions.py`) ·
-`feature_catalog` row (`'crm','CRM','Pipeline, leads and customers','/crm','apps'`) in the
-Phase-A migration · `nav.ts` pane (Personal→no; **Centers**: it is the Sales Center's
+`feature_catalog` row — **all seven columns** per `130_org_access_control.sql`'s insert
+shape: `('crm','CRM','Pipeline, leads and customers','/crm','apps', 55, false)` —
+`sort_order` 55 (beside Tasks at 50, not defaulted to last), `is_default` **false**
+deliberately: `feature:crm` reaches only `*`-holders (owner) and `admin` (`feature:*`)
+until an admin grants it, because `manager`/`member` feature grants are enumerated in 130.
+That is consistent with D-CRM-3 and stated again in WS-26c · `nav.ts` pane (Personal→no; **Centers**: it is the Sales Center's
 module; also a flat `PANES` entry `/crm`) · `access.ts` `HREF_FEATURES` `["/crm","crm"]` ·
 `centers.ts`: Sales Center's "Pipeline (Zoho CRM)" `planned` entry becomes
 `{label:"CRM", status:"live", href:"/crm"}` · `test_org_access_control.py` invariants extend.
@@ -364,11 +368,21 @@ WS-2 (the standing "rotate Zoho token" P0 becomes "revoke", strictly better).
 ## 9. Tickets — WS-26a…e (every item AGENT-SAFE unless labeled)
 
 ### WS-26a — Schema + feature registration + core API · 🟢 AGENT-SAFE
+*(Audited GO-NARROWED 2026-08-05; blockers A/B folded in below.)*
 Done when:
-1. The Phase-A migration (next free number) creates §3.1–§3.10 idempotently — applying it
-   twice is a no-op — and `schema.generated.sql` is refreshed in the same PR.
-2. `"crm"` is in `FEATURES`, the `feature_catalog` row exists, and
-   `tests/unit/test_org_access_control.py`'s invariants cover it.
+1. The Phase-A migration (next free number) creates §3.1–§3.10; idempotency is **statically
+   asserted** in `tests/unit/test_crm_migration.py` (every `CREATE TABLE`/`CREATE INDEX`
+   carries `IF NOT EXISTS`, every seed `INSERT` carries `ON CONFLICT`) — §10 runs no DB, so
+   inspection-only idempotency doesn't count. **`schema.generated.sql` is out of scope**:
+   its resync needs a migrated live DB (`scripts/dump_schema.sh`), it is ~43 migrations
+   stale repo-wide, and regenerating it here would bundle an unrelated schema resync into
+   this PR — it is a separate owner-run chore.
+2. `"crm"` is in `FEATURES` and the `feature_catalog` row exists — fenced by a **new**
+   invariant in `tests/unit/test_org_access_control.py` that derives every
+   `feature_catalog` INSERT slug from `infra/postgres/*.sql` (the `_schema_cascade.py`
+   technique) and pins it against `FEATURES` both ways; any pre-existing drift goes in an
+   explicit commented exceptions literal, never a silent filter. The existing invariants
+   are `center.*`-only by construction and fence nothing for an `apps`-category slug.
 3. `routes/crm/` exists per §4, registered fail-soft in `main.py`; `gateway/db.py` exists;
    `routes/crm` contains **zero** `create_async_engine` calls and `routes/tasks/core.py`
    consumes `gateway.db` (grep-assertable both ways).
@@ -379,16 +393,21 @@ Done when:
 5. Convert implements §3.7 including email-match dedup, 409 on re-convert.
 6. `tests/unit/test_crm_routes.py`, `tests/unit/test_crm_pipeline.py`,
    `tests/unit/test_crm_convert.py` pass **named** (never bare `tests/unit/`), no
-   DB/network; a wiring test asserts the router's feature dependency (contract R4-style).
+   DB/network; the wiring fence is a `"gateway.routes.crm"` entry in `GATED_ROUTERS`
+   (`tests/unit/test_org_access_enforcement.py`), added deliberately — that registry is
+   the test's opinion, not the router's.
 
 ### WS-26b — Zoho importer · 🟢 build / 🔴 **OWNER-GATE to run against prod**
 Done when: `list_leads` added (client still has zero write functions — grep-assertable);
-`POST /crm/import/zoho` per §7.1 behind `integrations:use:zoho-crm`; `dry_run` writes
+`POST /crm/import/zoho` per §7.1 behind `admin:access:manage` (see §4's warning — the
+`integrations:use:*` family is member-wide); `dry_run` writes
 nothing (asserted); statuses auto-created once (idempotent re-import: second run reports
 `created: 0`); `tests/unit/test_crm_zoho_import.py` covers mapping/idempotency/owner-mapping
 against a fake client, no network. **Running it against prod Zoho+DB is registered in §6.**
 
 ### WS-26c — UI · 🟢 AGENT-SAFE
+Note: until an admin grants `feature:crm`, the UI is visible to owner/admin only (§5) —
+demonstrating it to a `member` requires a grant first.
 Done when: the five registration places (§5) updated; the four surfaces + convert modal
 render against the API through the BFF proxy; kanban drag persists a status change;
 `?deal=` deep link opens the sheet; pure helpers tested in colocated vitest
@@ -412,9 +431,11 @@ PR (R4).
 
 ## 10. Verification
 
+    # WS-26a (test_crm_zoho_import.py exists only from WS-26b onward — add it then):
     uv run pytest tests/unit/test_crm_routes.py tests/unit/test_crm_pipeline.py \
-                  tests/unit/test_crm_convert.py tests/unit/test_crm_zoho_import.py \
-                  tests/unit/test_org_access_control.py -q
+                  tests/unit/test_crm_convert.py tests/unit/test_crm_migration.py \
+                  tests/unit/test_org_access_control.py \
+                  tests/unit/test_org_access_enforcement.py -q
 
     cd workbench/control_plane && npx tsc --noEmit && npm test
 

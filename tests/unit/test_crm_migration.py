@@ -396,3 +396,62 @@ def test_the_catalog_row_matches_the_features_tuple() -> None:
     from acb_auth import FEATURES
 
     assert "crm" in FEATURES
+
+
+# ── The defaulted-NOT-NULL map (WS-26c done-when 3) ─────────────────────────
+#
+# `core.NOT_NULL_DEFAULTED` decides which columns answer 422 for an explicit
+# `null` instead of handing the caller a driver error. It is hand-kept, so it
+# is derived from the migration here and pinned BOTH ways — a column that
+# gains NOT NULL DEFAULT in SQL and not in the map keeps its 500, and one that
+# leaves SQL and not the map refuses a request Postgres would have accepted.
+
+#: ``source  TEXT NOT NULL DEFAULT 'manual'`` → ``source``. Deliberately does
+#: NOT match ``NOT NULL`` without a DEFAULT: that is a missing *required*
+#: field, which the route-level checks already answer.
+_NOT_NULL_DEFAULT_RE = re.compile(
+    r"^\s*(\w+)\s+[A-Za-z]+[^,\n]*?\bNOT\s+NULL\b[^,\n]*?\bDEFAULT\b",
+    re.MULTILINE,
+)
+
+
+def _declared_not_null_defaults(bare: str, table: str) -> set[str]:
+    body = bare.split(f"CREATE TABLE IF NOT EXISTS {table}", 1)[1]
+    body = body.split(");", 1)[0]
+    return set(_NOT_NULL_DEFAULT_RE.findall(body))
+
+
+#: The columns the platform stamps itself and no request body may name, so
+#: they are outside the guard's remit even though the SQL declares them.
+_PLATFORM_STAMPED: frozenset[str] = frozenset({"created_at", "updated_at"})
+
+
+def test_the_defaulted_not_null_map_matches_the_migration(bare: str) -> None:
+    from gateway.routes.crm.core import NOT_NULL_DEFAULTED
+
+    for table, declared_map in NOT_NULL_DEFAULTED.items():
+        declared = _declared_not_null_defaults(bare, table) - _PLATFORM_STAMPED
+        assert declared == set(declared_map), (
+            f"{table}: the migration declares NOT NULL DEFAULT on "
+            f"{sorted(declared)} but core.NOT_NULL_DEFAULTED says "
+            f"{sorted(declared_map)}. A column missing from the map answers a "
+            "driver 500 for an explicit null; one that is only in the map "
+            "refuses a request Postgres would have taken."
+        )
+
+
+def test_every_crm_table_with_such_a_column_is_in_the_map(bare: str) -> None:
+    """The map is a dict keyed by table, so a table left out of it is silently
+    unguarded rather than loudly wrong."""
+    from gateway.routes.crm.core import NOT_NULL_DEFAULTED
+
+    tables = re.findall(r"CREATE TABLE IF NOT EXISTS (crm_\w+)", bare)
+    missing = [
+        table for table in tables
+        if (_declared_not_null_defaults(bare, table) - _PLATFORM_STAMPED)
+        and table not in NOT_NULL_DEFAULTED
+    ]
+    assert not missing, (
+        f"{missing} declare a defaulted NOT NULL column but have no entry in "
+        "core.NOT_NULL_DEFAULTED, so an explicit null there is still a 500."
+    )

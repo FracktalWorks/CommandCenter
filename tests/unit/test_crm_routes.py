@@ -17,11 +17,14 @@ behavioural assertion is a genuine check on it.
 
 from __future__ import annotations
 
+from uuid import uuid4
+
 import pytest
 from fastapi import HTTPException
 from gateway.routes.crm import activities as crm_activities
 from gateway.routes.crm import admin as crm_admin
 from gateway.routes.crm import core as crm_core
+from gateway.routes.crm import deal_contacts as crm_deal_contacts
 from gateway.routes.crm import records as crm_records
 from gateway.routes.crm.core import CONTACTS, DEALS, ENTITIES, LEADS, ORGANIZATIONS
 
@@ -33,7 +36,10 @@ USER = crm_user()
 @pytest.fixture
 def db(monkeypatch: pytest.MonkeyPatch) -> FakeCrmDB:
     fake = FakeCrmDB()
-    bind_db(monkeypatch, fake, (crm_core, crm_records, crm_activities, crm_admin))
+    bind_db(
+        monkeypatch, fake,
+        (crm_core, crm_records, crm_activities, crm_admin, crm_deal_contacts),
+    )
     return fake
 
 
@@ -743,3 +749,420 @@ def test_every_entity_sort_allowlist_names_real_columns() -> None:
         unknown = {v for v in entity.sorts.values()} - fields
         assert not unknown, f"{entity.slug} sorts by unknown column(s): {unknown}"
         assert entity.default_sort in entity.sorts
+
+
+# ── WS-26c · review residuals (spec §9 WS-26c done-when 3) ──────────────────
+#
+# Three ways a request is answered wrongly-but-quietly today. Each is a 200 or
+# a driver 500 before these, and a 422 after.
+
+@pytest.mark.parametrize("slug", ["contacts", "organizations"])
+async def test_a_status_filter_on_an_entity_without_a_pipeline_is_422(
+    db: FakeCrmDB, slug: str,
+) -> None:
+    """Not silently ignored: ignoring it answers 200 with the WHOLE table to a
+    caller who asked for one lane — and the shared list component the UI
+    reuses across all four entities is exactly what sends it."""
+    entity = ENTITIES[slug]
+    db.seed(entity.table, **{f: "x" for f in ("name", "first_name")
+                             if f in entity.model.model_fields})
+    with pytest.raises(HTTPException) as raised:
+        await crm_records._list(entity, _params(status_id="not-a-lane"))
+    assert raised.value.status_code == 422
+    assert "status" in str(raised.value.detail).lower()
+
+
+@pytest.mark.parametrize("slug", ["leads", "deals"])
+async def test_a_status_filter_still_works_where_there_is_a_pipeline(
+    db: FakeCrmDB, slug: str,
+) -> None:
+    """The other half of the rule — a guard that refuses everything is not a
+    guard, and this pair is what tells the two apart."""
+    lead_status, deal_status = _seed_pipeline(db)
+    entity = ENTITIES[slug]
+    wanted = lead_status if slug == "leads" else deal_status
+    db.seed(
+        entity.table, name="Bosch RFQ", lead_name="Bosch RFQ",
+        status_id=wanted.id,
+    )
+    db.seed(
+        entity.table, name="Other", lead_name="Other", status_id=str(uuid4()),
+    )
+    result = await crm_records._list(entity, _params(status_id=str(wanted.id)))
+
+    assert result.total == 1
+
+
+@pytest.mark.parametrize("slug", sorted(ENTITIES))
+async def test_an_explicit_null_source_is_422_not_a_driver_error(
+    db: FakeCrmDB, slug: str,
+) -> None:
+    """``source`` is NOT NULL DEFAULT 'manual'. Omitting it asks for the
+    default; sending ``null`` asks Postgres to violate the constraint — and
+    ``clean_payload`` keeps an explicit null on purpose, because that is how a
+    client clears a NULLABLE field. Without the guard the caller reads their
+    own bad request as a server fault."""
+    _seed_pipeline(db)
+    entity = ENTITIES[slug]
+    payload = entity.payload.model_validate(
+        {"source": None, **{f: "Bosch" for f in entity.required}}
+    )
+    with pytest.raises(HTTPException) as raised:
+        await crm_records.create_record(entity, payload, USER)
+    assert raised.value.status_code == 422
+    assert "source" in str(raised.value.detail)
+
+
+async def test_an_explicit_null_status_colour_is_422(db: FakeCrmDB) -> None:
+    """The same rule reached from the admin surface — ``color`` is NOT NULL
+    DEFAULT 'gray'. One guard, on the shared write path, so both reach it."""
+    with pytest.raises(HTTPException) as raised:
+        await crm_admin.create_status(
+            "deal",
+            crm_admin.StatusIn.model_validate(
+                {"name": "Proposal", "color": None},
+            ),
+            USER,
+        )
+    assert raised.value.status_code == 422
+    assert "color" in str(raised.value.detail)
+
+
+async def test_the_null_guard_reaches_the_patch_path_too(
+    db: FakeCrmDB,
+) -> None:
+    seeded = db.seed(
+        "crm_deal_statuses", name="Proposal", position=30, type="ongoing",
+    )
+    with pytest.raises(HTTPException) as raised:
+        await crm_admin.patch_status(
+            "deal", str(seeded.id),
+            crm_admin.StatusIn.model_validate({"color": None}), USER,
+        )
+    assert raised.value.status_code == 422
+
+
+async def test_a_nullable_column_can_still_be_cleared(db: FakeCrmDB) -> None:
+    """The guard must not become a blanket refusal of ``null``: clearing
+    ``next_step`` is the ordinary way a client empties a field, and collapsing
+    'unset' and 'clear' is the bug ``clean_payload`` exists to avoid."""
+    _, deal_status = _seed_pipeline(db)
+    seeded = db.seed(
+        DEALS.table, name="Bosch printer", status_id=deal_status.id,
+        next_step="call Anitha",
+    )
+    patched = await crm_records.patch_record(
+        DEALS, str(seeded.id),
+        crm_core.DealIn.model_validate({"next_step": None}), USER,
+    )
+    assert patched["next_step"] is None
+
+
+async def test_a_lead_status_rejects_a_null_probability_too(
+    db: FakeCrmDB,
+) -> None:
+    """``crm_lead_statuses`` has no probability column at all, so an explicit
+    null would reach an INSERT naming a column that does not exist. The rule
+    is keyed on the field being PRESENT, not on it being non-null."""
+    with pytest.raises(HTTPException) as raised:
+        await crm_admin.create_status(
+            "lead",
+            crm_admin.StatusIn.model_validate(
+                {"name": "Nurture", "probability": None},
+            ),
+            USER,
+        )
+    assert raised.value.status_code == 422
+    assert "deal-only" in str(raised.value.detail)
+
+
+def test_the_null_guard_sits_on_the_shared_write_path() -> None:
+    """Structural, because a behavioural case only ever proves the two routes
+    it exercised. The claim is that a route added tomorrow inherits the guard,
+    and that is a property of insert_row/update_row, not of any test."""
+    from pathlib import Path
+
+    source = Path(crm_core.__file__).read_text(encoding="utf-8")
+    for function in ("async def insert_row(", "async def update_row("):
+        body = source.split(function, 1)[1].split("\nasync def ", 1)[0]
+        assert "reject_null_on_defaulted(table, values)" in body, (
+            f"{function.strip()} no longer rejects an explicit null on a "
+            "defaulted NOT NULL column — every write in the package goes "
+            "through this pair, which is why the guard lives here."
+        )
+
+
+async def test_a_hand_edited_lead_name_survives_a_name_field_change(
+    db: FakeCrmDB,
+) -> None:
+    """The residual: WS-26a re-derived on ANY name-input change, so correcting
+    a lead's email address silently renamed the lead."""
+    lead_status, _ = _seed_pipeline(db)
+    seeded = db.seed(
+        LEADS.table, lead_name="Bosch — printer RFQ", first_name="Anitha",
+        email="anitha@bosch.in", status_id=lead_status.id,
+    )
+    patched = await crm_records.patch_record(
+        LEADS, str(seeded.id),
+        crm_core.LeadIn(email="anitha.kumar@bosch.in"), USER,
+    )
+    assert patched["lead_name"] == "Bosch — printer RFQ"
+    assert patched["email"] == "anitha.kumar@bosch.in"
+
+
+async def test_a_derived_lead_name_still_follows_its_inputs(
+    db: FakeCrmDB,
+) -> None:
+    """The other half — a name nobody typed belongs to the chain that made it,
+    so renaming the company renames the lead."""
+    lead_status, _ = _seed_pipeline(db)
+    seeded = db.seed(
+        LEADS.table, lead_name="Bosch India", organization_name="Bosch India",
+        status_id=lead_status.id,
+    )
+    patched = await crm_records.patch_record(
+        LEADS, str(seeded.id),
+        crm_core.LeadIn(organization_name="Bosch Rexroth"), USER,
+    )
+    assert patched["lead_name"] == "Bosch Rexroth"
+
+
+async def test_an_explicit_lead_name_always_wins(db: FakeCrmDB) -> None:
+    lead_status, _ = _seed_pipeline(db)
+    seeded = db.seed(
+        LEADS.table, lead_name="Anitha", first_name="Anitha",
+        status_id=lead_status.id,
+    )
+    patched = await crm_records.patch_record(
+        LEADS, str(seeded.id),
+        crm_core.LeadIn(lead_name="Bosch — printer RFQ"), USER,
+    )
+    assert patched["lead_name"] == "Bosch — printer RFQ"
+
+
+# ── WS-26c · organization_name on deal payloads (done-when 2) ───────────────
+
+async def test_a_listed_deal_carries_its_organization_name(
+    db: FakeCrmDB,
+) -> None:
+    """A kanban card prints the account name. Serving it from the join is the
+    difference between a board that renders and a browser that client-side
+    joins a ≤100-row page of organizations against it."""
+    _, deal_status = _seed_pipeline(db)
+    org = db.seed(ORGANIZATIONS.table, name="Bosch India")
+    db.seed(
+        DEALS.table, name="Bosch printer", status_id=deal_status.id,
+        organization_id=org.id,
+    )
+    result = await crm_records._list(DEALS, _params())
+
+    assert result.rows[0]["organization_name"] == "Bosch India"
+
+
+async def test_a_deal_with_no_organization_still_lists(db: FakeCrmDB) -> None:
+    """LEFT, not INNER: an individual buyer has no company and must not drop
+    out of the pipeline because of it."""
+    _, deal_status = _seed_pipeline(db)
+    db.seed(DEALS.table, name="Walk-in filament", status_id=deal_status.id)
+    result = await crm_records._list(DEALS, _params())
+
+    assert result.total == 1
+    assert result.rows[0]["organization_name"] is None
+
+
+async def test_the_join_wraps_the_page_rather_than_the_table(
+    db: FakeCrmDB,
+) -> None:
+    """Structural: filter, order and limit stay INSIDE the derived table the
+    join wraps. Inlining the join would put crm_organizations' own
+    ``owner_email``, ``source`` and ``name`` in scope for every unqualified
+    predicate list_contract renders — in all four entities, to serve one."""
+    _, deal_status = _seed_pipeline(db)
+    db.seed(DEALS.table, name="Bosch printer", status_id=deal_status.id)
+    await crm_records._list(DEALS, _params(owner="VJ@Fracktal.in"))
+
+    joined = db.statements_touching("LEFT JOIN crm_organizations")
+    assert joined, "the deal list lost its organization-name projection"
+    inner = joined[0].split(") base")[0]
+    assert "lower(owner_email) = :owner" in inner
+    assert "LIMIT :limit OFFSET :offset" in inner
+    # A join over an ordered subquery does not preserve its order.
+    assert joined[0].rstrip().endswith("base.id DESC")
+
+
+def test_only_deals_declare_a_projection() -> None:
+    """The other three statements stay byte-identical to the un-joined form —
+    a projection nobody asked for is a join on every list in the app."""
+    for slug in ("leads", "contacts", "organizations"):
+        assert not ENTITIES[slug].joined_columns, f"{slug} grew a join"
+    assert DEALS.joined_columns == (("organization_name", "org.name"),)
+
+
+# ── WS-26c · deal contacts (done-when 2) ────────────────────────────────────
+#
+# `crm_deal_contacts` shipped in 26a with exactly one writer (convert) and no
+# reader at all, so "at most one primary per deal" held only because there was
+# never a second row.
+
+def _deal_with_contacts(db: FakeCrmDB) -> tuple:
+    _, deal_status = _seed_pipeline(db)
+    deal = db.seed(DEALS.table, name="Bosch printer", status_id=deal_status.id)
+    anitha = db.seed(CONTACTS.table, first_name="Anitha", last_name="Kumar")
+    priya = db.seed(CONTACTS.table, first_name="Priya", last_name="Nair")
+    return deal, anitha, priya
+
+
+async def _link(db: FakeCrmDB, deal: object, contact: object, **over) -> object:
+    return await crm_deal_contacts.add_deal_contact(
+        str(deal.id),
+        crm_deal_contacts.DealContactIn(contact_id=str(contact.id), **over),
+        USER,
+    )
+
+
+async def test_a_contact_can_be_added_to_a_deal(db: FakeCrmDB) -> None:
+    deal, anitha, _ = _deal_with_contacts(db)
+    added = await _link(db, deal, anitha, role="Procurement", is_primary=True)
+
+    assert added.contact["first_name"] == "Anitha"
+    assert added.role == "Procurement"
+    assert added.is_primary is True
+
+
+async def test_the_deal_contacts_read_returns_whole_contacts(
+    db: FakeCrmDB,
+) -> None:
+    """Ids would make the record sheet issue one request per person just to
+    print a name and a phone number."""
+    deal, anitha, priya = _deal_with_contacts(db)
+    await _link(db, deal, anitha)
+    await _link(db, deal, priya, is_primary=True)
+
+    listed = await crm_deal_contacts.list_deal_contacts(str(deal.id), USER)
+
+    assert [r.contact["first_name"] for r in listed.rows] == ["Priya", "Anitha"]
+    assert listed.rows[0].is_primary is True
+    assert listed.rows[0].contact["last_name"] == "Nair"
+
+
+async def test_promoting_a_primary_demotes_the_incumbent(
+    db: FakeCrmDB,
+) -> None:
+    """THE rule §3.5 delegates to code — and the one 26a had by convention
+    only. The migration deliberately carries no partial unique index (the
+    WS-26b importer sets primaries in a pass that would fight one), so this
+    path IS the enforcement."""
+    deal, anitha, priya = _deal_with_contacts(db)
+    await _link(db, deal, anitha, is_primary=True)
+    await _link(db, deal, priya, is_primary=True)
+
+    primaries = [r for r in db.rows("crm_deal_contacts") if r.get("is_primary")]
+    assert len(primaries) == 1
+    assert str(primaries[0]["contact_id"]) == str(priya.id)
+
+
+async def test_the_demotion_precedes_the_promotion(db: FakeCrmDB) -> None:
+    """Order matters: demote-then-promote passes through "no primary";
+    the other way round passes through "two", and a concurrent reader sees a
+    deal with two primary contacts."""
+    deal, anitha, _ = _deal_with_contacts(db)
+    await _link(db, deal, anitha, is_primary=True)
+
+    writes = [
+        statement for statement, _ in db.calls
+        if "crm_deal_contacts" in statement
+        and statement.split()[0] in ("UPDATE", "INSERT")
+    ]
+    assert "SET is_primary = false" in writes[0]
+
+
+async def test_re_adding_a_linked_contact_updates_the_link(
+    db: FakeCrmDB,
+) -> None:
+    """The PK is (deal_id, contact_id): "make Priya the primary" is the same
+    request whether or not she is already on the deal, so this is an update
+    rather than a 409 the UI has to special-case."""
+    deal, anitha, _ = _deal_with_contacts(db)
+    await _link(db, deal, anitha, role="Procurement")
+    await _link(db, deal, anitha, role="Procurement", is_primary=True)
+
+    links = db.rows("crm_deal_contacts")
+    assert len(links) == 1
+    assert links[0]["is_primary"] is True
+    assert links[0]["role"] == "Procurement"
+
+
+async def test_removing_a_contact_says_whether_it_was_the_primary(
+    db: FakeCrmDB,
+) -> None:
+    """A deal whose primary was just removed has none; saying so lets the
+    sheet prompt for a new one instead of showing a deal nobody owns."""
+    deal, anitha, _ = _deal_with_contacts(db)
+    await _link(db, deal, anitha, is_primary=True)
+
+    removed = await crm_deal_contacts.remove_deal_contact(
+        str(deal.id), str(anitha.id), USER,
+    )
+    assert removed["was_primary"] is True
+    assert db.rows("crm_deal_contacts") == []
+
+
+async def test_removing_a_contact_that_is_not_on_the_deal_is_404(
+    db: FakeCrmDB,
+) -> None:
+    """A cheerful 200 makes the UI re-render the person it just removed."""
+    deal, anitha, _ = _deal_with_contacts(db)
+    with pytest.raises(HTTPException) as raised:
+        await crm_deal_contacts.remove_deal_contact(
+            str(deal.id), str(anitha.id), USER,
+        )
+    assert raised.value.status_code == 404
+
+
+async def test_the_deal_contact_routes_404_on_an_unknown_deal(
+    db: FakeCrmDB,
+) -> None:
+    _deal_with_contacts(db)
+    with pytest.raises(HTTPException) as raised:
+        await crm_deal_contacts.list_deal_contacts(str(uuid4()), USER)
+    assert raised.value.status_code == 404
+    with pytest.raises(HTTPException) as raised:
+        await crm_deal_contacts.remove_deal_contact(
+            str(uuid4()), str(uuid4()), USER,
+        )
+    assert raised.value.status_code == 404
+
+
+async def test_adding_an_unknown_contact_is_404(db: FakeCrmDB) -> None:
+    deal, _, _ = _deal_with_contacts(db)
+    with pytest.raises(HTTPException) as raised:
+        await crm_deal_contacts.add_deal_contact(
+            str(deal.id),
+            crm_deal_contacts.DealContactIn(contact_id=str(uuid4())),
+            USER,
+        )
+    assert raised.value.status_code == 404
+    assert "Contact" in str(raised.value.detail)
+
+
+def test_the_primary_rule_has_exactly_one_implementation() -> None:
+    """Structural, and the point of the whole addendum: a second writer of
+    ``is_primary`` is a second opinion about how many primaries a deal has."""
+    from pathlib import Path
+
+    package = Path(crm_core.__file__).parent
+    assert "async def link_deal_contact(" in (
+        package / "core.py"
+    ).read_text(encoding="utf-8")
+
+    offenders = [
+        path.name for path in sorted(package.glob("*.py"))
+        if path.name != "core.py"
+        and 'insert_row(db, "crm_deal_contacts"' in path.read_text(
+            encoding="utf-8",
+        )
+    ]
+    assert not offenders, (
+        f"{offenders} write crm_deal_contacts directly — every writer must go "
+        "through core.link_deal_contact so there is one primary rule."
+    )

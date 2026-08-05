@@ -200,6 +200,12 @@ class DealModel(BaseModel):
     id: str
     name: str
     organization_id: str | None = None
+    #: NOT a column — projected by the LEFT JOIN in :func:`project_joined` so a
+    #: kanban card can print the account name without the browser client-side
+    #: joining a paged organization list against it (WS-26c done-when 2). A row
+    #: read straight from ``crm_deals`` leaves it None, which is the honest
+    #: answer for a deal with no organization.
+    organization_name: str | None = None
     status_id: str | None = None
     status_changed_at: str | None = None
     amount: float | None = None
@@ -309,6 +315,15 @@ class Entity:
     #: Child tables a DELETE takes with it, as ``(table, fk_column)``. Reported
     #: in the delete response — R7/R8: a destructive route names what cascaded.
     cascades: tuple[tuple[str, str], ...] = field(default_factory=tuple)
+    #: Display columns that live on a *related* table and are projected onto
+    #: every listed row by :func:`project_joined`, as
+    #: ``(output_name, "<alias>.<column>")``. Empty for entities that need no
+    #: join — the statement is then byte-identical to the un-joined one.
+    joined_columns: tuple[tuple[str, str], ...] = field(default_factory=tuple)
+    #: The ``LEFT JOIN`` that supplies :attr:`joined_columns`. Written against
+    #: the derived table ``base`` (see :func:`project_joined`) so the join can
+    #: never make an unqualified column in a WHERE clause ambiguous.
+    join_sql: str = ""
 
 
 _TIMESTAMP_SORTS = {
@@ -391,6 +406,14 @@ DEALS = Entity(
     cascades=(
         ("crm_activities", "deal_id"),
         ("crm_deal_contacts", "deal_id"),
+    ),
+    # A kanban card prints the account name. Serving it here rather than in the
+    # browser is not an optimisation: the org list the client would join
+    # against is paged at 100, so a board with the 101st organization on it
+    # would render blank labels that look like missing data (WS-26c dw 2).
+    joined_columns=(("organization_name", "org.name"),),
+    join_sql=(
+        " LEFT JOIN crm_organizations org ON org.id = base.organization_id"
     ),
 )
 
@@ -493,6 +516,24 @@ def compute_lead_name(values: dict[str, Any]) -> str:
     return email or "Unnamed lead"
 
 
+def lead_name_is_derived(values: dict[str, Any]) -> bool:
+    """Does this lead's stored ``lead_name`` still equal its computed one?
+
+    The question a PATCH has to answer before re-deriving: a name the fallback
+    chain produced is the chain's to update, and a name somebody typed is not.
+    Answered by recomputing rather than by a ``lead_name_is_custom`` column,
+    because a flag has to be maintained by every writer — the importer, the
+    agent tools, the sync engine — and the one that forgets it silently turns
+    a hand-edited name back into "Unnamed lead" (WS-26c dw 3).
+
+    The one accepted cost: hand-typing exactly what the chain would have
+    produced leaves the name derived, and a later name change re-derives it.
+    That produces the same string, so nobody can tell.
+    """
+    stored = (values.get("lead_name") or "").strip()
+    return stored == compute_lead_name({**values, "lead_name": None})
+
+
 # ── The list contract ───────────────────────────────────────────────────────
 
 DIRECTIONS: dict[str, str] = {"asc": "ASC", "desc": "DESC"}
@@ -552,7 +593,20 @@ def list_contract(
         params["q"] = f"%{q.strip()}%"
         matches = " OR ".join(f"{col} ILIKE :q" for col in entity.search)
         clauses.append(f"({matches})")
-    if status_id and entity.status_table:
+    if status_id:
+        if not entity.status_table:
+            # Contacts and organizations have no pipeline. Ignoring the filter
+            # would answer 200 with the WHOLE table for a caller who asked for
+            # one lane — the same class of silent-wrong-answer as falling back
+            # to the default sort key, and the one a UI reuses the shared list
+            # component into (WS-26c dw 3).
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"{entity.slug} have no status pipeline, so '?status_id' "
+                    "cannot filter them. Drop the parameter."
+                ),
+            )
         clauses.append("status_id = CAST(:status_id AS uuid)")
         params["status_id"] = status_id
     if owner:
@@ -576,16 +630,59 @@ def list_contract(
     )
 
 
+def project_joined(entity: Entity, inner: str, order_by: str) -> str:
+    """Wrap a base-table SELECT so its rows carry their joined display names.
+
+    The join is applied to a **derived table** rather than inlined into the
+    base ``FROM``:
+
+    .. code-block:: sql
+
+        SELECT base.*, org.name AS organization_name
+        FROM (SELECT * FROM crm_deals WHERE … ORDER BY … LIMIT …) base
+        LEFT JOIN crm_organizations org ON org.id = base.organization_id
+        ORDER BY base.…
+
+    Inlining it would put two relations in scope for the WHERE clause, and
+    ``crm_organizations`` carries ``owner_email``, ``source``, ``name`` and the
+    timestamp trio too — so every unqualified predicate
+    :func:`list_contract` renders would become ambiguous, and the fix would be
+    to qualify all of them, in all four entities, for one entity's benefit.
+    Filtering first also means the join runs over one page of deals, not the
+    whole table.
+
+    The outer ``ORDER BY`` is not decoration: a join over an ordered subquery
+    does not preserve its order.
+    """
+    if not entity.joined_columns:
+        return inner
+    projected = ", ".join(f"{expr} AS {name}" for name, expr in entity.joined_columns)
+    return (
+        f"SELECT base.*, {projected} FROM ({inner}) base{entity.join_sql} "
+        f"ORDER BY {order_by}"
+    )
+
+
+def qualify(order_by: str, prefix: str) -> str:
+    """``created_at DESC NULLS LAST, id DESC`` → the same, prefixed.
+
+    Only the column names :func:`list_contract` itself emitted are rewritten —
+    each is an allowlist value or the literal ``id``, never caller text.
+    """
+    return ", ".join(f"{prefix}.{term.strip()}" for term in order_by.split(","))
+
+
 async def run_list(db: Any, entity: Entity, query: ListQuery) -> ListResponse:
     """Execute a :class:`ListQuery` and return the ``{rows, total}`` shape."""
     total = (await db.execute(
         text(f"SELECT count(*) FROM {entity.table}{query.where}"), query.params,
     )).scalar() or 0
+    inner = (
+        f"SELECT * FROM {entity.table}{query.where} "
+        f"ORDER BY {query.order_by} LIMIT :limit OFFSET :offset"
+    )
     rows = (await db.execute(
-        text(
-            f"SELECT * FROM {entity.table}{query.where} "
-            f"ORDER BY {query.order_by} LIMIT :limit OFFSET :offset"
-        ),
+        text(project_joined(entity, inner, qualify(query.order_by, "base"))),
         {**query.params, "limit": query.limit, "offset": query.offset},
     )).fetchall()
     return ListResponse(
@@ -647,6 +744,57 @@ def coerce_write_values(values: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+#: Table → the columns migration 144 declares ``NOT NULL DEFAULT <x>``.
+#:
+#: These are the columns where **omitting** the field and **sending it as
+#: ``null``** are two different requests and only one of them is legal:
+#: omitting asks for the default, ``null`` asks Postgres to violate a NOT NULL
+#: constraint. ``clean_payload`` keeps an explicit ``null`` on purpose (it is
+#: how a client clears a nullable field), so without this the driver answers
+#: with an IntegrityError the caller reads as a 500 — a client bug reported as
+#: a server fault (WS-26c dw 3).
+#:
+#: Hand-kept against the migration and pinned against it by
+#: ``test_crm_migration.py``. Only NOT NULL columns **with a default** belong
+#: here: a NOT NULL column without one is a missing *required* field, which
+#: ``Entity.required`` and the route-level checks already answer.
+NOT_NULL_DEFAULTED: dict[str, frozenset[str]] = {
+    "crm_organizations": frozenset({"source"}),
+    "crm_contacts": frozenset({"source"}),
+    "crm_leads": frozenset({"source"}),
+    "crm_deals": frozenset({"source", "currency", "status_changed_at"}),
+    "crm_lead_statuses": frozenset({"color", "is_default"}),
+    "crm_deal_statuses": frozenset({"color", "is_default", "probability"}),
+    "crm_lost_reasons": frozenset({"position"}),
+    "crm_deal_contacts": frozenset({"is_primary"}),
+    # Platform-written only (pipeline.apply_status_transition), and named here
+    # anyway: the map is keyed by table, so a table left out is silently
+    # unguarded rather than loudly wrong.
+    "crm_status_changes": frozenset({"changed_at"}),
+}
+
+
+def reject_null_on_defaulted(table: str, values: dict[str, Any]) -> None:
+    """422 for an explicit ``null`` on a defaulted NOT NULL column.
+
+    Called from :func:`insert_row` and :func:`update_row` — the package's only
+    two write paths — so a route added later inherits it rather than having to
+    remember it.
+    """
+    nulled = sorted(
+        column for column in NOT_NULL_DEFAULTED.get(table, frozenset())
+        if column in values and values[column] is None
+    )
+    if nulled:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"{nulled} cannot be set to null on {table} — the column is "
+                "NOT NULL with a default. Omit the field to take the default."
+            ),
+        )
+
+
 def _parse(parser: Any, value: str, column: str, what: str) -> Any:
     try:
         return parser(value)
@@ -672,6 +820,7 @@ def _bindable(values: dict[str, Any]) -> dict[str, Any]:
 
 
 async def insert_row(db: Any, table: str, values: dict[str, Any]) -> Any:
+    reject_null_on_defaulted(table, values)
     columns = list(values)
     placeholders = ", ".join(_placeholder(c) for c in columns)
     return (await db.execute(
@@ -687,6 +836,7 @@ async def update_row(
     db: Any, table: str, record_id: str, values: dict[str, Any],
     *, touch: bool = True,
 ) -> Any:
+    reject_null_on_defaulted(table, values)
     assignments = [f"{c} = {_placeholder(c)}" for c in values]
     if touch:
         assignments.append("updated_at = now()")
@@ -797,6 +947,67 @@ def _now() -> datetime:
 def now() -> datetime:
     """The one clock this package reads, so tests can freeze it in one place."""
     return _now()
+
+
+async def link_deal_contact(
+    db: Any,
+    deal_id: str,
+    contact_id: str,
+    *,
+    role: str | None = None,
+    is_primary: bool = False,
+) -> Any:
+    """Attach a contact to a deal, keeping "one primary per deal" true.
+
+    §3.5 says the rule is enforced *in code* — the migration deliberately has
+    no partial unique index, because the WS-26b importer sets primaries in a
+    pass that would fight one. "In code" was WS-26a's convention and nothing
+    else: the only writer was the convert path, and it wrote ``is_primary``
+    straight into an INSERT. This function is the enforcement WS-26c owes
+    (dw 2), and it is on the **shared** seam rather than on the route, so the
+    convert path and the deal-contacts endpoints cannot disagree about it.
+
+    Promoting a contact demotes the incumbent in the same transaction, before
+    the promotion — the intermediate state is "no primary", never "two".
+    """
+    if is_primary:
+        await db.execute(
+            text(
+                "UPDATE crm_deal_contacts SET is_primary = false "
+                "WHERE deal_id = CAST(:deal_id AS uuid)"
+            ),
+            {"deal_id": deal_id},
+        )
+    existing = (await db.execute(
+        text(
+            "SELECT * FROM crm_deal_contacts "
+            "WHERE deal_id = CAST(:deal_id AS uuid) "
+            "AND contact_id = CAST(:contact_id AS uuid)"
+        ),
+        {"deal_id": deal_id, "contact_id": contact_id},
+    )).fetchone()
+    if existing is None:
+        return await insert_row(db, "crm_deal_contacts", {
+            "deal_id": deal_id,
+            "contact_id": contact_id,
+            "role": role,
+            "is_primary": is_primary,
+        })
+    # The PK is (deal_id, contact_id), so re-adding a linked contact is an
+    # update of its role/primary flag rather than a 409: "make Priya the
+    # primary" is the same request whether or not she is already on the deal.
+    return (await db.execute(
+        text(
+            "UPDATE crm_deal_contacts SET role = :role, is_primary = :is_primary "
+            "WHERE deal_id = CAST(:deal_id AS uuid) "
+            "AND contact_id = CAST(:contact_id AS uuid) RETURNING *"
+        ),
+        {
+            "deal_id": deal_id, "contact_id": contact_id,
+            "role": role if role is not None else getattr(existing, "role", None),
+            "is_primary": is_primary,
+        },
+    )).fetchone()
 
 
 def clean_payload(payload: BaseModel) -> dict[str, Any]:

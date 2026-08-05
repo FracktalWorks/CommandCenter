@@ -13,11 +13,14 @@ list can never change which handler answers a request. ``records`` imports
 ``pipeline`` for the status-transition semantics, which is why Python loads
 ``pipeline`` first either way.
 
-``import_zoho.py`` is WS-26b and is deliberately absent.
+``import_zoho.py`` is WS-26b and is deliberately absent. ``deal_contacts.py``
+is WS-26c's API addendum — the read/write surface for ``crm_deal_contacts``,
+which 26a created and only the convert path ever wrote to.
 """
 
 from gateway.routes.crm import activities as _activities  # noqa: F401
 from gateway.routes.crm import admin as _admin  # noqa: F401
+from gateway.routes.crm import deal_contacts as _deal_contacts  # noqa: F401
 from gateway.routes.crm import pipeline as _pipeline  # noqa: F401
 from gateway.routes.crm import records as _records  # noqa: F401
 from gateway.routes.crm.core import router

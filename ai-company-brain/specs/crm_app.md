@@ -335,22 +335,39 @@ without writing.
 **Continuous sync (the coexistence mode):** after backfill, a sync engine keeps both sides
 faithful until cutover:
 
-- **Single-writer seam:** all Zoho writes live in one writer module beside the client
-  (`ingestion/sources/zoho/`), called from exactly one place — the sync engine in
-  `routes/crm/sync_zoho.py`. Grep-asserted. No agent tool, route handler or skill reaches
-  Zoho directly; agents write the native CRM and the sync propagates (the Action Broker
-  governs agent-*proposed* outward actions, not this mirror of already-committed state —
-  the same posture as the tasks app's ClickUp sync).
-- **Zoho → native:** incremental pull (`If-Modified-Since`, which the client already
-  supports) for the four record modules + Notes/Tasks; deleted records via Zoho's
-  deleted-records API become native deletes (cascading activities per the FK graph, loudly
-  counted in the sync report).
-- **Native → Zoho:** dirty-tracking on the four record tables (columns added at the next
-  free migration number: `zoho_dirty` set by native writes to zoho-linked and native-new
-  rows, `zoho_synced_at`); the engine pushes dirty rows (create ⇒ acquires `zoho_id`,
-  update ⇒ upsert by id), native deletes of linked rows write a tombstone pushed as a Zoho
-  delete. Native `note`/`task` activities push as Zoho Notes/Tasks; `status_change`/
-  `system` activities never push (no Zoho analog — Zoho keeps its own stage history).
+- **Single-writer seam, THROUGH the broker gate (D-CRM-8):** all Zoho write calls live in
+  one writer module beside the client (`ingestion/sources/zoho/writer.py`), called from
+  exactly one place — the sync engine in `routes/crm/sync_zoho.py` — grep-asserted. Every
+  push routes through an Action-Broker gate exactly the way the tasks app's ClickUp writes
+  do (`routes/tasks/providers.py::_broker_gate` — *"the single audited chokepoint for
+  source-of-truth writes"*, default disposition auto-applies while `ACTION_BROKER_ENFORCE`
+  is off): registered `crm.zoho_*` broker handlers, an audit row per push. This satisfies
+  root `AGENTS.md` constraints #4/#8 instead of departing from them. Consequence, accepted
+  deliberately: if the owner ever flips broker enforcement ON, sync pushes queue for
+  approval and the sync becomes supervised rather than continuous. No agent tool, route
+  handler or skill reaches Zoho directly; agents write the native CRM and the sync
+  propagates.
+- **Zoho → native:** incremental pull (`If-Modified-Since` — `client._list_module` already
+  takes `modified_since`) for the four record modules + Notes/Tasks, plus Zoho's
+  **deleted-records API** (a new read function beside `list_*`); Zoho deletes become
+  native deletes (cascading activities per the FK graph, loudly counted in the sync
+  report). Pulled rows carry `source='import'` — the existing CHECK vocabulary needs **no**
+  new value and no ALTER. **Echo suppression is a stated rule:** a pull-applied write goes
+  through `update_row(..., touch=False)` and never sets `zoho_dirty` — a two-cycle
+  fake-client test must converge to zero pushes.
+- **Native → Zoho:** dirty-tracking on the four record tables (`zoho_dirty` set by native
+  writes to zoho-linked and native-new rows; `zoho_synced_at`); the engine pushes dirty
+  rows (create ⇒ acquires `zoho_id`, update ⇒ upsert by id). Native deletes of
+  zoho-linked rows write a **`crm_zoho_tombstones` row inside the delete transaction**
+  (`module`, `zoho_id`, `entity_type`, `deleted_by`, `deleted_at`, `pushed_at NULL until
+  pushed`) — a tombstone cannot be a column on a row that no longer exists. Native
+  `note`/`task` activities push as Zoho Notes/Tasks; `status_change`/`system` activities
+  never push (no Zoho analog — Zoho keeps its own stage history).
+- **Pull cursors are schema too:** `crm_sync_cursors` (`module` PK, `last_pulled_at`,
+  `last_run_at`, `last_status`) — incremental pull without a persisted per-module cursor
+  re-reads the world after every restart. Both new tables + the dirty columns land in one
+  migration at the next free number (145 free as of this audit), with 26a's static
+  idempotency fence extended to it.
 - **Conflicts:** record-level last-writer-wins comparing Zoho `Modified_Time` against
   native `updated_at`; both-changed conflicts are counted and logged per cycle, never
   silent. No field-level merge in v1 (D-CRM-6 amended).
@@ -359,10 +376,17 @@ faithful until cutover:
   creation is not pushed (Zoho picklist mutation needs settings-API writes — out of scope,
   and the vocabulary dies with Zoho anyway).
 - **Cadence + switches:** the scheduled loop runs only when **`CRM_ZOHO_SYNC=1`** (ships
-  OFF; flip is OWNER-GATE, §6) — scheduler entry beside `_run_zoho`, interval ~10 min;
+  OFF; flip is OWNER-GATE, §6; the flag reads from `acb_common` settings like its
+  siblings). The loop follows the **gateway's own in-process scheduler pattern**
+  (`routes/workflows/scheduler.py` / `routes/tasks/scheduler.py`, started in `main.py`'s
+  lifespan) — NOT `ingestion/scheduler.py`: ingestion's pyproject cannot depend on the
+  gateway, so a `routes/crm/` engine cannot be driven from there. Interval ~10 min.
   `POST /crm/sync/zoho` (same `admin:access:manage` floor) runs one cycle on demand and
   works regardless of the flag, because a hand-run cycle is an explicit admin act. The
-  nightly graph-mirror sync keeps running untouched either way (Phase E retires it).
+  nightly graph-mirror sync in `ingestion/scheduler.py::_run_zoho` is untouched either way
+  (Phase E retires it) — ⚠️ audit note 2026-08-05: no `deploy/` unit references the
+  ingestion scheduler, so whether that 02:50 job actually runs on the box is unverified
+  from the repo.
 
 ### 7.2 Coexistence (Phases B–D)
 Both sides stay writable and faithful (§7.1). Native records without a `zoho_id` exist in
@@ -423,6 +447,14 @@ WS-2 (the standing "rotate Zoho token" P0 becomes "revoke", strictly better).
   original §1 non-goal (no Zoho write path) and re-scopes WS-26b per §7.1. The agent-held
   boundary that survives: **the sync engine is the single Zoho writer** and the whole
   write path retires with WS-26e. Retirement stays the end state.
+- **D-CRM-8 — sync pushes route through the Action-Broker gate** (agent-proposed,
+  audit-forced 2026-08-05). The first draft claimed the ClickUp sync bypasses the broker
+  as precedent — **the audit measured the opposite**: `_broker_gate` is the tasks app's
+  single audited chokepoint and auto-applies while enforcement is off. The Zoho writer
+  follows it: `crm.zoho_*` broker handlers, one audit row per push, auto-apply default.
+  This also re-opens WS-1's struck clause on our terms — the "Zoho write client" its row
+  said didn't exist is now specced here, and its broker handlers are WS-26b's, not BO-1's.
+  Accepted consequence: broker enforcement ON turns the sync supervised.
 
 **Build-time decisions, recorded post-hoc (WS-26a implementer, 2026-08-05 — owner may
 overrule any of them):**
@@ -495,43 +527,77 @@ Done when:
    the test's opinion, not the router's.
 
 ### WS-26b — Zoho two-way sync · 🟢 build / 🔴 **OWNER-GATE to enable against prod**
-*(Re-scoped 2026-08-05 per D-CRM-7.)*
+*(Re-scoped 2026-08-05 per D-CRM-7; audited GO-NARROWED the same day and repaired —
+blockers 1–9 folded in below.)*
 Done when:
-1. `list_leads` added; Zoho **write** functions exist in one writer module beside the
-   client (create/update/delete per module), and the writer has exactly **one** caller —
-   the sync engine — grep-asserted the way §9 WS-26a's seam checks are.
+1. `list_leads` **and a deleted-records read function** added to the client; Zoho **write**
+   functions exist only in `ingestion/sources/zoho/writer.py` (create/update/delete per
+   module), the writer has exactly **one** caller — the sync engine — and every push
+   routes through the registered `crm.zoho_*` broker handlers (D-CRM-8). All
+   grep-asserted the way §9 WS-26a's seam checks are.
 2. Backfill `POST /crm/import/zoho` per §7.1 behind `admin:access:manage` (see §4's
    warning — `integrations:use:*` is member-wide); `dry_run` writes nothing (asserted);
-   statuses auto-created idempotently (second run reports `created: 0`).
-3. The sync engine implements §7.1's five bullets: dirty-push (native create acquires
-   `zoho_id`), incremental pull, tombstone deletes both directions with loud counts,
-   record-level LWW with a per-cycle conflict count, vocabulary down-only. Dirty-tracking
-   columns land at the next free migration number with the same static idempotency fence
-   as 26a.
-4. `CRM_ZOHO_SYNC` ships OFF; OFF-state is asserted (no scheduler registration, no
-   push-on-write side effects); the manual cycle endpoint works without it.
+   statuses auto-created idempotently — **pinned statically against the statement text**
+   (`ON CONFLICT` present on the status upserts, the `test_crm_migration.py` technique):
+   `_crm_fakes.py` models no `ON CONFLICT`, so a fake-only "second run creates 0" is a
+   mirror agreeing with itself.
+3. The sync engine implements §7.1's **seven** sync bullets: broker-gated dirty-push
+   (native create acquires `zoho_id`), incremental pull with **persisted `crm_sync_cursors`**,
+   **`crm_zoho_tombstones`** written inside the native delete transaction and pushed as
+   Zoho deletes, Zoho deletes applied natively with loud counts, record-level LWW with a
+   per-cycle conflict count, **echo suppression** (pull-applied writes never set
+   `zoho_dirty`; a two-cycle fake-client test converges to zero pushes), vocabulary
+   down-only. The migration (next free number, 145 free at audit time) carries the two new
+   tables + the dirty columns under 26a's static idempotency fence.
+4. `CRM_ZOHO_SYNC` ships OFF, and the OFF-state assertion **fails against today's tree**:
+   with the flag off, the gateway lifespan registers no CRM sync loop AND a native write
+   sets `zoho_dirty` while leaving `zoho_synced_at` NULL (both asserted). The manual cycle
+   endpoint works without the flag.
 5. `tests/unit/test_crm_zoho_import.py` + `tests/unit/test_crm_zoho_sync.py` cover
-   mapping, idempotency, owner-mapping, dirty-push, LWW both directions, tombstones, and
-   the single-writer seam — against a fake client, no network.
-6. The WS-1 board row's "there is no Zoho write path anywhere in the repo" clause is
-   updated in the same PR (it becomes stale the moment the writer lands).
-**Enabling the flag, and the first backfill/sync against prod Zoho+DB, are registered in
-§6 — the sync WRITES the live Zoho tenant.**
+   mapping, idempotency, owner-mapping, dirty-push, LWW both directions, tombstones, echo
+   suppression, and the single-writer + broker seams — against a fake client, no network.
+6. **Both** stale mirrors are updated in the same PR: the WS-1 row's *"There is no Zoho
+   write path anywhere in the repo to route through the broker…"* sentence, and the §4
+   registry row's *"the CRM never adds one"* clause (already softened 2026-08-05; finish
+   it when the writer lands).
+**Enabling the flag, the first backfill, and any hand-run cycle against prod Zoho+DB are
+registered in §6 — the sync WRITES the live Zoho tenant.** ⚠️ `.env.example` cannot
+document the new flag (plan-guard protects it); the PR body must carry the var for the
+owner. Also owed by this ticket: add `CRM_ZOHO_SYNC` (and `CRM_AUTO_LEAD`) to
+`.claude/hooks/plan-guard.mjs` OWNER_GATES per that file's own "§6 changes update
+OWNER_GATES in the same PR" rule — noting `.claude/` is untracked, so this lands on the
+box-side copy, not in the PR.
 
-### WS-26c — UI · 🟢 AGENT-SAFE
-Note: until an admin grants `feature:crm`, the UI is visible to owner/admin only (§5) —
-demonstrating it to a `member` requires a grant first.
-Review residuals to pick up here (noted non-blocking, 2026-08-05): `?status_id` is
-silently ignored for contacts/organizations (no status table — should 422 like an unknown
-sort key); an explicit body `null` on a defaulted NOT NULL column (`source`, status
-`color`) reaches the driver as a 500 instead of a 422; PATCHing any name input re-derives
-`lead_name`, discarding a hand-edited custom name; `crm_deal_contacts` one-primary-per-deal
-needs enforcement when contact management arrives.
-Done when: the five registration places (§5) updated; the four surfaces + convert modal
-render against the API through the BFF proxy; kanban drag persists a status change;
-`?deal=` deep link opens the sheet; pure helpers tested in colocated vitest
-(`src/app/crm/lib/*.test.ts`); `tsc` and `npm test` green; the `centers.ts` Sales entry
-flips to `live` (its vocabulary invariant test keeps passing).
+### WS-26c — UI (+ the API addendum the surfaces need) · 🟢 AGENT-SAFE
+*(Audited GO-NARROWED 2026-08-05; blockers folded in below.)*
+Notes: until an admin grants `feature:crm`, the UI is visible to owner/admin only (§5).
+**Migration 144 has not been applied anywhere**, so live rendering, drag persistence and
+deep links are **owner-verified after the migration applies** — the agent builds and
+tests against fixtures and must not reach for a DB. Registration is **three** frontend
+files, not five — `FEATURES` and the `feature_catalog` row already shipped with 26a.
+The `test_centers_registry_matches_the_feature_vocabulary` invariant reads only each
+Center's `feature:` field — it CANNOT detect a mistake in the apps[] flip, so don't cite
+it as a fence; the real fence to add is `live ⇒ href` on `CenterApp`.
+Done when:
+1. `nav.ts` pane, `access.ts` `HREF_FEATURES` `["/crm","crm"]`, and the `centers.ts`
+   Sales "Pipeline (Zoho CRM)" entry flipped to `{label:"CRM", status:"live",
+   href:"/crm"}` — plus a `live ⇒ href` invariant (type-level or a small test) so a live
+   entry without an href cannot ship.
+2. **API addendum (gateway, small):** deal-contacts endpoints exist
+   (`GET /crm/deals/{id}/contacts`, `POST`/`DELETE .../contacts/{contact_id}` with
+   `is_primary` handling enforcing one primary per deal — closing the "by convention
+   only" gap 26a recorded), and deal list/pipeline payloads carry `organization_name`
+   via LEFT JOIN (kanban cards must not client-side-join a ≤100-page org list).
+3. **Review residuals closed, each with a test:** `?status_id` on contacts/organizations
+   → 422 (not silently ignored); an explicit body `null` on a defaulted NOT NULL column
+   (`source`, status `color`) → 422 (not a driver 500); PATCH preserves a hand-edited
+   `lead_name` (re-derive only when the name fields change AND `lead_name` wasn't
+   custom-set).
+4. The four surfaces + convert modal render through the BFF proxy against fixture data;
+   kanban drag issues the `PATCH`; `?deal=` deep link opens the sheet (fixture-level
+   assertions; live behavior owner-verified post-migration).
+5. Pure helpers tested in colocated vitest (`src/app/crm/lib/*.test.ts`); `tsc` and
+   `npm test` green; the gateway addendum's tests join the named `test_crm_*.py` files.
 
 ### WS-26d — Integrations · 🟢 AGENT-SAFE except the flag
 Done when: email threads appear in contact/lead/deal timelines by address join;

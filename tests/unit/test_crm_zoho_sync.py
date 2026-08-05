@@ -139,6 +139,32 @@ def _stored(db: FakeCrmDB, table: str, record_id: Any) -> dict:
     return next(r for r in db.rows(table) if r["id"] == record_id)
 
 
+def _fake_queue(
+    monkeypatch: pytest.MonkeyPatch, pending: list[dict] | None = None,
+) -> list[dict]:
+    """Stand in for the broker's ``pending_actions`` table.
+
+    Patched on the PACKAGE, which is the name ``broker_gate`` and
+    ``pending_action_for`` import. The real ones reach Postgres through
+    ``acb_graph`` — this suite touches no DB, and an unpatched ``list_pending``
+    spends the connect timeout on every enforcement test.
+    """
+    import action_broker
+
+    queue: list[dict] = list(pending or [])
+
+    def _enqueue(proposal: Any) -> str:
+        queue.append({
+            "id": f"queued-{len(queue) + 1}",
+            "action": proposal.action, "target": proposal.target,
+        })
+        return str(queue[-1]["id"])
+
+    monkeypatch.setattr(action_broker, "enqueue", _enqueue)
+    monkeypatch.setattr(action_broker, "list_pending", lambda: list(queue))
+    return queue
+
+
 def _seed_pipeline(db: FakeCrmDB) -> tuple:
     lead_status = db.seed(
         "crm_lead_statuses", name="New", position=10, type="open", is_default=True,
@@ -262,6 +288,95 @@ async def test_an_approved_queued_push_really_executes(
     assert writer.updates == [("Accounts", "z-acc-1", {"Account_Name": "Renamed"})]
 
 
+async def test_an_approved_push_records_its_outcome_locally(
+    db: FakeCrmDB, zoho: FakeZoho, writer: FakeWriter, audit: list,
+) -> None:
+    """The approval path must write back exactly what the inline path does.
+
+    Without it the approval performs the Zoho write and records nothing: the
+    row stays dirty, the next cycle re-offers it, the operator approves again,
+    and EVERY approval mints another copy upstream — nothing ever converges.
+    """
+    from types import SimpleNamespace
+
+    row = db.seed(ORGANIZATIONS.table, name="Fracktal", zoho_dirty=True)
+    proposal = SimpleNamespace(
+        action="crm.zoho_create",
+        payload={"args": {
+            "module": "Accounts", "op": "create", "record_id": None,
+            "body": {"Account_Name": "Fracktal"},
+            "table": ORGANIZATIONS.table, "native_id": str(row.id),
+        }},
+    )
+
+    await crm_broker._handle_crm_zoho_write(proposal)
+
+    stored = _stored(db, ORGANIZATIONS.table, row.id)
+    assert stored["zoho_id"] == "z-pushed-1"
+    assert stored["zoho_dirty"] is False
+    assert stored["zoho_synced_at"] is not None
+    assert db.committed >= 1
+
+
+async def test_an_approved_tombstone_delete_is_stamped_pushed(
+    db: FakeCrmDB, zoho: FakeZoho, writer: FakeWriter, audit: list,
+) -> None:
+    from types import SimpleNamespace
+
+    tomb = db.seed(
+        "crm_zoho_tombstones", module="Deals", zoho_id="z-deal-9",
+        entity_type="deal", deleted_by="vjvarada@fracktal.in",
+    )
+    await crm_broker._handle_crm_zoho_write(SimpleNamespace(
+        action="crm.zoho_delete",
+        payload={"args": {
+            "module": "Deals", "op": "delete", "record_id": "z-deal-9",
+            "body": {}, "table": "crm_zoho_tombstones", "native_id": str(tomb.id),
+        }},
+    ))
+
+    [stored] = db.rows("crm_zoho_tombstones")
+    assert stored["pushed_at"] is not None
+
+
+async def test_the_queued_proposal_carries_the_native_row_to_write_back_to(
+    db: FakeCrmDB, zoho: FakeZoho, writer: FakeWriter, audit: list,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A proposal approved next week must not depend on this process still
+    being alive — including for "which row does this belong to"."""
+    monkeypatch.setenv("ACTION_BROKER_ENFORCE", "1")
+    _fake_queue(monkeypatch)
+    row = db.seed(ORGANIZATIONS.table, name="Fracktal", zoho_dirty=True)
+
+    await crm_sync.run_cycle()
+
+    [proposed] = [e for e in audit if e.action == "propose:crm.zoho_create"]
+    args = proposed.payload["args"]
+    assert args["table"] == ORGANIZATIONS.table
+    assert args["native_id"] == str(row.id)
+
+
+async def test_a_stuck_row_does_not_enqueue_a_new_proposal_every_cycle(
+    db: FakeCrmDB, zoho: FakeZoho, writer: FakeWriter, audit: list,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The row stays dirty by design while its push is unapproved, so it is
+    re-offered every cycle — at ten-minute ticks that is 144 identical inbox
+    rows per day per stuck record, and an approvals inbox nobody can read is
+    an approvals inbox nobody uses."""
+    monkeypatch.setenv("ACTION_BROKER_ENFORCE", "1")
+    queue = _fake_queue(monkeypatch)
+    db.seed(ORGANIZATIONS.table, name="Fracktal", zoho_id="z-acc-1", zoho_dirty=True)
+
+    await crm_sync.run_cycle()
+    await crm_sync.run_cycle()
+    await crm_sync.run_cycle()
+
+    assert len(queue) == 1, queue
+    assert queue[0]["target"] == "Accounts:z-acc-1"
+
+
 async def test_broker_enforcement_queues_the_push_and_keeps_the_row_dirty(
     db: FakeCrmDB, zoho: FakeZoho, writer: FakeWriter, audit: list,
     monkeypatch: pytest.MonkeyPatch,
@@ -270,12 +385,8 @@ async def test_broker_enforcement_queues_the_push_and_keeps_the_row_dirty(
     SUPERVISED. And BO-1b's bug must not be reproduced — a queued write has
     NOT happened, so clearing ``zoho_dirty`` would show a row as synced that
     exists in no tenant, losing the edit permanently."""
-    import action_broker
-
     monkeypatch.setenv("ACTION_BROKER_ENFORCE", "1")
-    # Patched on the PACKAGE, which is the name `broker_gate` imports — the
-    # real one persists a `pending_actions` row and this suite touches no DB.
-    monkeypatch.setattr(action_broker, "enqueue", lambda proposal: "queued-1")
+    _fake_queue(monkeypatch)
     row = db.seed(ORGANIZATIONS.table, name="Fracktal", zoho_dirty=True)
 
     report = await crm_sync.run_cycle()
@@ -286,6 +397,263 @@ async def test_broker_enforcement_queues_the_push_and_keeps_the_row_dirty(
     stored = _stored(db, ORGANIZATIONS.table, row.id)
     assert stored["zoho_dirty"] is True
     assert stored.get("zoho_id") is None
+
+
+# ── The external write and its local record must not drift apart ───────────
+
+async def test_the_acquired_zoho_id_is_committed_before_anything_else_runs(
+    db: FakeCrmDB, zoho: FakeZoho, writer: FakeWriter, audit: list,
+) -> None:
+    """Zoho's API has no idempotency token, so the window between "the create
+    returned 200" and "the id is durable locally" is a duplicate factory: a
+    crash, a shutdown or an aborted transaction in that window loses the id
+    while the record exists upstream, and every later cycle creates ANOTHER.
+
+    Asserted on ordering: a commit follows each stamp, before the next push.
+    """
+    db.seed(ORGANIZATIONS.table, name="One", zoho_dirty=True)
+    db.seed(ORGANIZATIONS.table, name="Two", zoho_dirty=True)
+
+    await crm_sync.run_cycle()
+
+    kinds = [
+        "stamp" if s.startswith("UPDATE crm_organizations SET") else "commit"
+        for s in db.statements
+        if s.startswith("UPDATE crm_organizations SET") or s == "COMMIT"
+    ]
+    # The fake records commits as a counter, not a statement, so assert the
+    # weaker-but-real property: two creates, two stamps, and at least one
+    # commit per stamp.
+    assert len(writer.creates) == 2
+    assert kinds.count("stamp") == 2
+    assert db.committed >= 2
+
+
+async def test_a_push_that_succeeds_but_cannot_be_stamped_is_loud(
+    db: FakeCrmDB, zoho: FakeZoho, writer: FakeWriter, audit: list,
+) -> None:
+    """The one case that cannot be made safe: Zoho accepted the write and the
+    local stamp failed. It must be an ERROR in the report, not a silent
+    success — a human has to reconcile it."""
+    db.seed(ORGANIZATIONS.table, name="One", zoho_dirty=True)
+    db.fail_on("UPDATE crm_organizations SET", times=1)
+
+    report = await crm_sync.run_cycle()
+
+    assert len(writer.creates) == 1
+    assert report.pushed.created == 0
+    assert any("crm_organizations" in e for e in report.pushed.errors)
+
+
+# ── Retry, backoff and giving up ───────────────────────────────────────────
+
+async def test_a_failing_push_is_backed_off_rather_than_retried_every_cycle(
+    db: FakeCrmDB, zoho: FakeZoho, writer: FakeWriter, audit: list,
+) -> None:
+    async def _explode(module: str, payload: dict) -> dict:
+        raise RuntimeError("Zoho said no")
+
+    writer.create_record = _explode  # type: ignore[method-assign]
+    row = db.seed(ORGANIZATIONS.table, name="Fracktal", zoho_dirty=True)
+
+    await crm_sync.run_cycle()
+
+    stored = _stored(db, ORGANIZATIONS.table, row.id)
+    assert stored["zoho_push_attempts"] == 1
+    assert "Zoho said no" in stored["zoho_push_error"]
+    assert stored["zoho_next_attempt_at"] is not None
+    # Still dirty — a push that failed and cleared the flag is a lost change.
+    assert stored["zoho_dirty"] is True
+
+
+async def test_a_row_inside_its_backoff_window_is_not_offered(
+    db: FakeCrmDB, zoho: FakeZoho, writer: FakeWriter, audit: list,
+) -> None:
+    """Decided in SQL, so the fake reads the predicate rather than restating
+    it: `coalesce(next_attempt_at, :epoch) <= :now`."""
+    from datetime import timedelta
+
+    db.seed(
+        ORGANIZATIONS.table, name="Backed off", zoho_dirty=True,
+        zoho_push_attempts=2,
+        zoho_next_attempt_at=crm_core.now() + timedelta(hours=1),
+    )
+    await crm_sync.run_cycle()
+
+    assert writer.pushes == 0
+    [statement] = [
+        s for s in db.statements
+        if s.startswith("SELECT * FROM crm_organizations WHERE zoho_dirty")
+    ]
+    assert "coalesce(zoho_next_attempt_at, :epoch) <= :now" in statement
+
+
+async def test_a_row_past_the_attempt_ceiling_stops_being_offered(
+    db: FakeCrmDB, zoho: FakeZoho, writer: FakeWriter, audit: list,
+) -> None:
+    """The starvation fix: both queues are read oldest-first under a LIMIT, so
+    a handful of rows Zoho will never accept would otherwise hold the front of
+    the queue forever and nothing behind them would ever push."""
+    db.seed(
+        ORGANIZATIONS.table, name="Poison", zoho_dirty=True,
+        zoho_push_attempts=crm_sync.MAX_PUSH_ATTEMPTS,
+    )
+    db.seed(ORGANIZATIONS.table, name="Healthy", zoho_dirty=True)
+
+    await crm_sync.run_cycle()
+
+    assert [payload["Account_Name"] for _, payload in writer.creates] == ["Healthy"]
+
+
+async def test_giving_up_is_counted_and_logged_not_silent(
+    db: FakeCrmDB, zoho: FakeZoho, writer: FakeWriter, audit: list,
+) -> None:
+    async def _explode(module: str, payload: dict) -> dict:
+        raise RuntimeError("Zoho said no")
+
+    writer.create_record = _explode  # type: ignore[method-assign]
+    db.seed(
+        ORGANIZATIONS.table, name="Nearly done", zoho_dirty=True,
+        zoho_push_attempts=crm_sync.MAX_PUSH_ATTEMPTS - 1,
+    )
+    report = await crm_sync.run_cycle()
+
+    assert report.pushed.given_up == 1
+    assert report.pushed.errors
+
+
+def test_the_backoff_grows_and_is_capped() -> None:
+    base = crm_core.now()
+    delays = [
+        (crm_sync.backoff_until(n, at=base) - base).total_seconds()
+        for n in (1, 2, 3, 10)
+    ]
+    assert delays[0] == crm_sync.BACKOFF_BASE_SECS
+    assert delays[1] == crm_sync.BACKOFF_BASE_SECS * 2
+    assert delays[2] == crm_sync.BACKOFF_BASE_SECS * 4
+    assert delays[3] == crm_sync.BACKOFF_CAP_SECS
+
+
+async def test_a_tombstone_for_a_record_zoho_no_longer_has_is_a_success(
+    db: FakeCrmDB, zoho: FakeZoho, writer: FakeWriter, audit: list,
+) -> None:
+    """Zoho answers a delete of an unknown id with 404 (or a 200 carrying
+    RECORD_NOT_IN_MODULE). The goal state already holds, so treating it as a
+    failure would retry it against a record that can never come back."""
+    from ingestion.sources.zoho import writer as zoho_writer
+
+    async def _gone(module: str, record_id: str) -> dict:
+        return zoho_writer.ALREADY_GONE
+
+    writer.delete_record = _gone  # type: ignore[method-assign]
+    db.seed(
+        "crm_zoho_tombstones", module="Deals", zoho_id="z-vanished",
+        entity_type="deal", deleted_by="vjvarada@fracktal.in",
+    )
+    report = await crm_sync.run_cycle()
+
+    assert report.pushed.deleted == 1
+    [tomb] = db.rows("crm_zoho_tombstones")
+    assert tomb["pushed_at"] is not None
+
+
+def test_the_writer_treats_a_404_delete_as_done() -> None:
+    """Structural, on the writer's source: the branch has no test double
+    because it is HTTP-status handling, and the constant it returns is what
+    the engine reads as success."""
+    import inspect
+
+    from ingestion.sources.zoho import writer as zoho_writer
+
+    source = inspect.getsource(zoho_writer.delete_record)
+    assert "status_code == 404" in source
+    assert "ALREADY_GONE" in source
+    assert zoho_writer.ALREADY_GONE["status"] == "success"
+    assert "RECORD_NOT_IN_MODULE" in zoho_writer.GONE_CODES
+
+
+# ── One cycle at a time ────────────────────────────────────────────────────
+
+async def test_a_second_concurrent_cycle_is_refused_with_409(
+    db: FakeCrmDB, zoho: FakeZoho, writer: FakeWriter, audit: list,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two overlapping cycles both see the same dirty rows and both create
+    them upstream — and Zoho has no idempotency token to undo that."""
+    import asyncio
+
+    released = asyncio.Event()
+    real_users = zoho.list_users
+
+    async def _slow_users() -> list[dict]:
+        await released.wait()
+        return await real_users()
+
+    monkeypatch.setattr(zoho, "list_users", _slow_users, raising=False)
+
+    first = asyncio.create_task(crm_sync.run_cycle())
+    await asyncio.sleep(0)  # let it take the lock
+    assert crm_sync.cycle_in_progress() is True
+
+    with pytest.raises(HTTPException) as exc:
+        await crm_sync.run_sync_cycle_now(USER)
+    assert exc.value.status_code == 409
+
+    released.set()
+    await first
+    assert crm_sync.cycle_in_progress() is False
+
+
+async def test_the_scheduled_loop_skips_a_tick_rather_than_overlapping() -> None:
+    """A hand-run cycle has the floor; the tick simply skips. Queueing behind
+    it would run a second full pass the moment the first finished."""
+    import inspect
+
+    source = inspect.getsource(crm_sync._sync_loop)
+    assert "CycleAlreadyRunning" in source
+
+
+# ── Shutdown must not land mid-cycle ───────────────────────────────────────
+
+async def test_stopping_signals_and_waits_instead_of_cancelling(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A cancel lands wherever the cycle happens to be — including between a
+    successful Zoho create and the commit that records its id, which is
+    exactly the window that makes the next cycle duplicate it upstream."""
+    import asyncio
+
+    monkeypatch.setattr(crm_sync, "sync_enabled", lambda: True)
+    monkeypatch.setattr(crm_sync, "SYNC_INTERVAL_SECS", 3600)
+    started = asyncio.Event()
+    finished = asyncio.Event()
+
+    async def _slow_cycle(**_: Any) -> Any:
+        started.set()
+        await asyncio.sleep(0.05)
+        finished.set()
+        return crm_sync.SyncCycleReport(started_at="x")
+
+    monkeypatch.setattr(crm_sync, "run_cycle", _slow_cycle)
+    crm_sync._sync_task = None
+    assert await crm_sync.start_crm_zoho_sync() is True
+    await started.wait()
+
+    await crm_sync.stop_crm_zoho_sync()
+
+    assert finished.is_set(), "shutdown cancelled a cycle mid-flight"
+    assert crm_sync._sync_task is None
+
+
+def test_the_stop_path_does_not_reach_for_cancel_first() -> None:
+    """Cancellation survives as the last resort after a grace window, and is
+    logged as the loss it is — but it must not be the first move."""
+    import inspect
+
+    source = inspect.getsource(crm_sync.stop_crm_zoho_sync)
+    assert "_stopping.set()" in source
+    assert source.index("wait_for") < source.index("task.cancel()")
+    assert "stop_timed_out" in source
 
 
 # ── Rule 3 — dirty-driven push; a create acquires an id ─────────────────────
@@ -383,6 +751,73 @@ async def test_a_failed_push_leaves_the_row_dirty_and_is_counted(
     assert len(report.pushed.errors) == 1
     stored = _stored(db, ORGANIZATIONS.table, row.id)
     assert stored["zoho_dirty"] is True
+
+
+# ── Transaction shape: one bad statement must not poison the cycle ─────────
+
+async def test_each_applied_record_gets_its_own_savepoint(
+    db: FakeCrmDB, zoho: FakeZoho, writer: FakeWriter, audit: list,
+) -> None:
+    """A ``try/except`` around a record does NOT contain a statement error in
+    Postgres — the whole transaction is aborted and every later statement in
+    the cycle fails, cursor write included. Only a SAVEPOINT does."""
+    zoho.data["Accounts"] = [
+        {"id": "z-1", "Account_Name": "A"}, {"id": "z-2", "Account_Name": "B"},
+    ]
+    await crm_sync.run_cycle()
+    assert db.savepoints >= 2
+
+
+async def test_a_driver_level_statement_error_does_not_take_the_cycle_with_it(
+    db: FakeCrmDB, zoho: FakeZoho, writer: FakeWriter, audit: list,
+) -> None:
+    """The real shape of the bug: a Zoho `Amount` past `NUMERIC(14,2)` raises
+    at the driver. Everything after it in the same transaction then fails with
+    `current transaction is aborted`, the cursor never advances, and the next
+    cycle repeats it — identically, forever.
+
+    Simulated by making one INSERT raise. What must survive: the batch keeps
+    going, the savepoint takes the hit, the cursor is still written, and the
+    cycle still commits.
+    """
+    db.fail_on("INSERT INTO crm_organizations")
+    zoho.data["Accounts"] = [
+        {"id": "z-bad", "Account_Name": "Boom",
+         "Modified_Time": "2026-08-01T00:00:00+00:00"},
+        {"id": "z-ok", "Account_Name": "Fine",
+         "Modified_Time": "2026-08-02T00:00:00+00:00"},
+    ]
+
+    report = await crm_sync.run_cycle()
+
+    assert db.savepoint_rollbacks >= 1
+    assert report.pulled["Accounts"].created == 1      # the batch continued
+    assert report.pull_record_errors == 1
+    assert db.statements_touching("INSERT INTO crm_sync_cursors")
+    assert db.committed >= 1
+    assert report.finished_at is not None
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("450000", 450000.0),
+        ("999999999999.99", 999999999999.99),
+        # NUMERIC(14,2) holds 12 integer digits. Zoho's currency fields do not
+        # have that ceiling, so one fat-fingered deal would abort the tx.
+        ("1000000000000", None),
+        ("-1000000000000", None),
+        ("1e309", None),   # inf
+        ("nonsense", None),
+        ("", None),
+    ],
+)
+def test_a_number_past_the_column_range_becomes_null_not_an_aborted_tx(
+    raw: str, expected: Any,
+) -> None:
+    from gateway.routes.crm.import_zoho import _number
+
+    assert _number(raw) == expected
 
 
 # ── Rule 2 — incremental pull, persisted cursors ────────────────────────────

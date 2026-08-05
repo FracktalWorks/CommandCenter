@@ -53,6 +53,22 @@ WRITABLE_MODULES: frozenset[str] = frozenset({
 })
 
 
+#: Zoho's ways of saying "there is no such record here" — a 404, or a 200
+#: carrying one of these codes. For a DELETE they all mean the goal state
+#: already holds, so they are successes.
+GONE_CODES: frozenset[str] = frozenset({
+    "RECORD_NOT_IN_MODULE", "INVALID_DATA", "RESOURCE_NOT_FOUND",
+})
+
+#: The envelope an already-absent record answers a delete with. ``details`` is
+#: empty on purpose: there is no id to hand back, and no caller may mistake
+#: this for a create.
+ALREADY_GONE: dict[str, Any] = {
+    "status": "success", "code": "ALREADY_GONE", "details": {},
+    "message": "record is not present in Zoho; nothing to delete",
+}
+
+
 class ZohoWriteError(RuntimeError):
     """A Zoho write did not succeed. Carries the upstream detail verbatim."""
 
@@ -134,6 +150,13 @@ async def delete_record(module: str, record_id: str) -> dict[str, Any]:
 
     Irreversible upstream (Zoho drops it into its own recycle bin), which is
     exactly why the caller must have taken it through the broker gate first.
+
+    ⚠️ **A record Zoho no longer has is a SUCCESS, not a failure.** Zoho answers
+    a delete of an unknown id with 404, or with a 200 carrying
+    ``RECORD_NOT_IN_MODULE`` / ``INVALID_DATA``. The goal state — "this record
+    is not in Zoho" — already holds, so reporting an error would leave the
+    tombstone in the queue being retried forever against a record that can
+    never come back. Every other failure still raises.
     """
     s = get_settings()
     async with httpx.AsyncClient(timeout=60.0) as http:
@@ -141,8 +164,13 @@ async def delete_record(module: str, record_id: str) -> dict[str, Any]:
             f"{s.zoho_api_domain}/crm/v2/{_check_module(module)}/{record_id}",
             headers=await _headers(),
         )
+        if r.status_code == 404:
+            return ALREADY_GONE
         r.raise_for_status()
-        return _require_success(_first(r.json()), f"delete {module}/{record_id}")
+        result = _first(r.json())
+        if str(result.get("code") or "") in GONE_CODES:
+            return ALREADY_GONE
+        return _require_success(result, f"delete {module}/{record_id}")
 
 
 #: Three verbs, deliberately. "Upsert by id" is a DECISION, not a verb — it
@@ -151,6 +179,8 @@ async def delete_record(module: str, record_id: str) -> dict[str, Any]:
 #: the same breath. A convenience wrapper here would be a fourth entry on the
 #: write surface with no caller, and this surface should stay countable.
 __all__ = [
+    "ALREADY_GONE",
+    "GONE_CODES",
     "WRITABLE_MODULES",
     "ZohoWriteError",
     "create_record",

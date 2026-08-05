@@ -120,7 +120,21 @@ async def _list_module(
             r = await http.get(
                 f"{s.zoho_api_domain}/crm/v2/{module}",
                 headers=headers,
-                params={"page": page, "per_page": per_page},
+                params={
+                    "page": page,
+                    "per_page": per_page,
+                    # Stable pagination. Zoho's default order is by
+                    # Modified_Time DESCENDING, so a record edited (by anyone,
+                    # including our own push) between page 1 and page 2 jumps
+                    # to the front and shifts every later record back one slot
+                    # — the record that was at the page boundary is never
+                    # returned. Ascending by the same key we cursor on makes
+                    # the sequence append-only for the duration of the pull:
+                    # a concurrent edit lands at the END, past the pages we
+                    # have already read, and the next cycle picks it up.
+                    "sort_by": "Modified_Time",
+                    "sort_order": "asc",
+                },
             )
             if r.status_code == 204 or r.status_code == 304:
                 break

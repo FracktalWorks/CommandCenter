@@ -30,6 +30,8 @@ other without changing the decision first.
 from __future__ import annotations
 
 import json
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from decimal import Decimal
@@ -615,6 +617,32 @@ async def run_list(db: Any, entity: Entity, query: ListQuery) -> ListResponse:
 # Every identifier reaching an f-string below is one of ours: a table name from
 # the registry, or a key of a dict this module built from a Pydantic model's
 # declared fields. Caller values are always bound parameters.
+
+@asynccontextmanager
+async def savepoint(db: Any) -> AsyncIterator[None]:
+    """A nested transaction around ONE unit of work (WS-26b).
+
+    ⚠️ **Postgres aborts the entire transaction on any statement error.** Not
+    the statement — the transaction. After one `numeric field overflow` every
+    later statement answers `current transaction is aborted, commands ignored
+    until end of transaction block`, so a loop with a per-record
+    ``try/except`` looks like it survived one bad row while in fact it lost
+    every row after it, plus the cursor write, plus the commit. The next cycle
+    then reads the same data and dies identically — forever.
+
+    A ``SAVEPOINT`` is the only thing that makes "one bad record must not lose
+    the batch" true against a real database. The test fakes have no nested
+    transactions, so this degrades to a pass-through there and the seam stays
+    unit-testable; that is also why the tests that matter assert the savepoint
+    was *taken*, not that the fake rolled anything back.
+    """
+    begin_nested = getattr(db, "begin_nested", None)
+    if begin_nested is None:  # pragma: no cover — only the fakes lack it
+        yield
+        return
+    async with begin_nested():
+        yield
+
 
 async def load_row(db: Any, table: str, record_id: str) -> Any | None:
     return (await db.execute(

@@ -557,11 +557,56 @@ def test_the_statuses_and_the_activity_spine_are_not_dirty_tracked(
 ) -> None:
     """Vocabulary flows DOWN only, and an activity carries its own push signal
     (a NULL ``zoho_id``). A dirty column there would be a second answer to one
-    question — and `crm_activities` has no `updated_at` for LWW to read."""
+    question — and `crm_activities` has no `updated_at` for LWW to read.
+
+    ``crm_activities`` IS altered, but only for the retry trio: its push is a
+    third queue with the same starvation failure mode as the other two.
+    """
     altered = set(re.findall(r"ALTER TABLE\s+(\w+)", sync_bare, re.I))
     assert altered == {
         "crm_organizations", "crm_contacts", "crm_leads", "crm_deals",
+        "crm_activities",
     }, altered
+
+    activities = sync_bare.split("ALTER TABLE crm_activities", 1)[1].split(";", 1)[0]
+    assert "zoho_dirty" not in activities
+    assert "zoho_synced_at" not in activities
+    for column in ("zoho_push_attempts", "zoho_push_error", "zoho_next_attempt_at"):
+        assert column in activities, column
+    # No status table is touched at all — the vocabulary is Zoho's while the
+    # sync is on, so there is nothing here to push back.
+    assert "crm_lead_statuses" not in altered
+    assert "crm_deal_statuses" not in altered
+
+
+@pytest.mark.parametrize(
+    "table",
+    ["crm_organizations", "crm_contacts", "crm_leads", "crm_deals",
+     "crm_activities"],
+)
+def test_every_push_queue_can_back_off_and_give_up(
+    sync_bare: str, table: str,
+) -> None:
+    """Without the trio a row Zoho will NEVER accept — an amount past its
+    field's range, a picklist value it rejects — is retried every cycle
+    forever, and because every queue is read oldest-first under a LIMIT a
+    handful of them starve everything behind."""
+    body = sync_bare.split(f"ALTER TABLE {table}", 1)[1].split(";", 1)[0]
+    assert "zoho_push_attempts   INT NOT NULL DEFAULT 0" in body, (
+        "attempts must default to 0, not NULL: the `< :max_attempts` gate "
+        "would exclude every row that has never failed"
+    )
+    assert "zoho_push_error" in body
+    assert "zoho_next_attempt_at TIMESTAMPTZ" in body
+
+
+def test_the_tombstone_queue_can_back_off_and_give_up(sync_bare: str) -> None:
+    body = sync_bare.split(
+        "CREATE TABLE IF NOT EXISTS crm_zoho_tombstones", 1,
+    )[1].split(");", 1)[0]
+    assert "attempts        INT NOT NULL DEFAULT 0" in body
+    assert "last_error" in body
+    assert "next_attempt_at TIMESTAMPTZ" in body
 
 
 def test_the_tombstone_table_carries_everything_a_push_needs(
@@ -577,8 +622,10 @@ def test_the_tombstone_table_carries_everything_a_push_needs(
         assert column in body, column
     assert "module      TEXT NOT NULL" in body or "module TEXT NOT NULL" in body
     # `pushed_at` NULL until pushed is the retry contract: a failed push is
-    # simply found again next cycle rather than lost.
-    assert re.search(r"pushed_at\s+TIMESTAMPTZ\s*$", body, re.M), body
+    # simply found again next cycle rather than lost. No NOT NULL and no
+    # DEFAULT — either would mark every tombstone as already delivered.
+    assert re.search(r"pushed_at\s+TIMESTAMPTZ\s*,?\s*$", body, re.M), body
+    assert not re.search(r"pushed_at\s+TIMESTAMPTZ[^\n]*(NOT NULL|DEFAULT)", body)
 
 
 def test_the_tombstone_table_has_no_foreign_keys(sync_bare: str) -> None:

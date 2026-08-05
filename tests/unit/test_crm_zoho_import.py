@@ -706,6 +706,22 @@ def test_the_client_gained_list_leads_and_a_deleted_records_reader() -> None:
     assert "list_deleted" in client.__all__
 
 
+def test_the_pull_asks_for_a_stable_ascending_order() -> None:
+    """Zoho's default order is ``Modified_Time`` DESCENDING, so a record edited
+    between page 1 and page 2 — by anyone, our own push included — jumps to the
+    front and shifts every later record back one slot. The record that was at
+    the page boundary is then never returned at all. Sorting ASCENDING by the
+    same key we cursor on makes the sequence append-only for the duration of
+    the pull: a concurrent edit lands past the pages already read."""
+    import inspect
+
+    from ingestion.sources.zoho import client
+
+    source = inspect.getsource(client._list_module)
+    assert '"sort_by": "Modified_Time"' in source
+    assert '"sort_order": "asc"' in source
+
+
 def test_the_read_client_still_contains_no_write_verbs() -> None:
     """§7.1's boundary: ``client.py`` reads, ``writer.py`` writes. The one
     POST in the client is the OAuth token refresh, which is why the check is

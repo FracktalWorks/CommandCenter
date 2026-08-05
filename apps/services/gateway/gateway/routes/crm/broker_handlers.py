@@ -105,6 +105,18 @@ async def broker_gate(
         return await do_write()
 
     if disposition == Disposition.NEEDS_APPROVAL:
+        existing = pending_action_for(action, target)
+        if existing is not None:
+            # ⚠️ Do NOT enqueue a second proposal for the same write. The row
+            # stays dirty by design while its push is unapproved, so it is
+            # re-offered every cycle — at a ten-minute interval that is 144
+            # identical rows per day per stuck record, and an approvals inbox
+            # nobody can read is an approvals inbox nobody uses.
+            _log.info(
+                "crm.broker.push_already_queued",
+                action=action, target=target, action_id=existing,
+            )
+            return {"pending": True, "pending_action_id": existing}
         action_id = None
         with contextlib.suppress(Exception):
             action_id = enqueue(proposal)
@@ -115,30 +127,79 @@ async def broker_gate(
     return await do_write()
 
 
+def pending_action_for(action: str, target: str) -> str | None:
+    """The id of an already-queued proposal for this exact write, if any.
+
+    ``(action, target)`` identifies the write: ``crm.zoho_update`` +
+    ``Deals:5540…001`` is the same intent no matter how many cycles re-offer
+    it. Best-effort — a broker/DB failure answers "none", which at worst
+    duplicates one inbox row and never blocks a push.
+    """
+    try:
+        from action_broker import list_pending
+
+        for row in list_pending():
+            if row.get("action") == action and row.get("target") == target:
+                return str(row.get("id"))
+    except Exception as exc:  # pragma: no cover — best-effort by design
+        _log.warning("crm.broker.pending_lookup_failed", error=str(exc)[:200])
+    return None
+
+
 async def _handle_crm_zoho_write(proposal: Any) -> dict[str, Any]:
     """Execute a queued Zoho push on approval (the registered handler).
 
     The proposal's payload is the whole spec of the write — module, verb, the
-    Zoho id when there is one, and the field body — so approving it months
-    later needs nothing that was only in memory. Nothing sensitive is stored:
-    the OAuth token is re-derived by the client at call time and is never
-    persisted on the proposal.
+    Zoho id when there is one, the field body, **and the native row to record
+    the outcome on** — so approving it months later needs nothing that was
+    only in memory. Nothing sensitive is stored: the OAuth token is re-derived
+    by the client at call time and is never persisted on the proposal.
+
+    ⚠️ **It writes the local state back, exactly as the inline path does.**
+    Without that the approval performs the Zoho write and records nothing: the
+    row stays dirty, the next cycle offers it again, the operator approves
+    again, and every approval mints another copy upstream. The two paths share
+    ``sync_zoho.apply_push_result`` so they cannot converge differently.
     """
-    from gateway.routes.crm.sync_zoho import execute_push
+    from gateway.routes.crm.core import _get_db
+    from gateway.routes.crm.sync_zoho import apply_push_result, execute_push
 
     spec = proposal.payload or {}
     args = spec.get("args") or {}
     if proposal.action not in CRM_ZOHO_ACTIONS:
         raise RuntimeError(f"no Zoho writer for action {proposal.action!r}")
+    op = args.get("op")
     result = await execute_push(
         module=args.get("module"),
-        op=args.get("op"),
+        op=op,
         record_id=args.get("record_id"),
         body=args.get("body") or {},
     )
+
+    table, native_id = args.get("table"), args.get("native_id")
+    if not (table and native_id):
+        # An older proposal from before the payload carried them. Say so
+        # loudly: the write HAPPENED, and the row it belongs to is now out of
+        # sync in a way only a human can reconcile.
+        _log.error(
+            "crm.broker.push_applied_unrecorded",
+            action=proposal.action, module=args.get("module"),
+            reason="proposal carries no native row reference",
+        )
+        return result
+
+    db = await _get_db()
+    try:
+        await apply_push_result(
+            db, table=table, native_id=native_id, op=op, result=result,
+        )
+        await db.commit()
+    finally:
+        await db.close()
     _log.info(
         "crm.broker.push_applied",
         action=proposal.action, module=args.get("module"),
+        table=table, record_id=native_id,
     )
     return result
 
@@ -161,5 +222,6 @@ __all__ = [
     "CRM_ZOHO_ACTIONS",
     "broker_enforced",
     "broker_gate",
+    "pending_action_for",
     "register_crm_broker_handlers",
 ]

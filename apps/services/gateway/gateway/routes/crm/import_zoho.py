@@ -49,6 +49,7 @@ from gateway.routes.crm.core import (
     load_by_zoho_id,
     load_default_status,
     router,
+    savepoint,
     upsert_by_zoho_id,
 )
 from pydantic import BaseModel
@@ -132,13 +133,31 @@ def _text(value: Any) -> str | None:
     return str(value)
 
 
+#: `NUMERIC(14,2)` holds 12 integer digits: |value| must stay under 10^12.
+#: §3.1/§3.4 size `annual_revenue` and `amount` that way and Zoho does not —
+#: its currency fields accept far larger numbers, and a tenant with one
+#: fat-fingered ₹9,999,999,999,999 deal would otherwise raise
+#: `numeric field overflow` at the driver. That is not a bad row, it is a
+#: **poisoned transaction**: Postgres aborts the whole tx, every later
+#: statement in the cycle fails with `current transaction is aborted`, and the
+#: cursor write rolls back so the next cycle re-reads the same record and dies
+#: identically — forever. Clamping to NULL here keeps the value out of the
+#: statement entirely; the record still lands, missing one field.
+NUMERIC_14_2_CEILING = 10 ** 12
+
+
 def _number(value: Any) -> float | None:
     if value in (None, ""):
         return None
     try:
-        return float(value)
+        number = float(value)
     except (TypeError, ValueError):
         return None
+    if number != number or abs(number) >= NUMERIC_14_2_CEILING:
+        # NaN/inf included: neither is storable, and both abort the tx.
+        _log.warning("crm.import.numeric_out_of_range", value=str(value)[:64])
+        return None
+    return number
 
 
 def _integer(value: Any) -> int | None:
@@ -678,20 +697,25 @@ async def apply_module(
         zoho_id = _text(record.get("id"))
         table = entity.table if entity is not None else "crm_activities"
         try:
-            existing = (
-                await load_by_zoho_id(db, table, zoho_id) if zoho_id else None
-            )
-            if entity is not None:
-                row = await apply_record(
-                    db, module, entity, record, owners=owners,
-                    fallback_owner=fallback_owner, report=report,
-                    module_report=module_report, existing=existing,
+            # ⚠️ A SAVEPOINT per record, not just a try/except. Postgres aborts
+            # the whole transaction on a statement error, so without this the
+            # first bad row silently takes every row after it, the cursor
+            # write and the commit with it — see `core.savepoint`.
+            async with savepoint(db):
+                existing = (
+                    await load_by_zoho_id(db, table, zoho_id) if zoho_id else None
                 )
-            else:
-                row = await apply_activity(
-                    db, module, record, created_by=fallback_owner,
-                    module_report=module_report,
-                )
+                if entity is not None:
+                    row = await apply_record(
+                        db, module, entity, record, owners=owners,
+                        fallback_owner=fallback_owner, report=report,
+                        module_report=module_report, existing=existing,
+                    )
+                else:
+                    row = await apply_activity(
+                        db, module, record, created_by=fallback_owner,
+                        module_report=module_report,
+                    )
             if row is None:
                 continue
             if existing is not None:

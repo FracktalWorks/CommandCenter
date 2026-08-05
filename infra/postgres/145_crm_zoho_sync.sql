@@ -45,21 +45,54 @@
 -- means "never pushed", which is also the honest state of a row that is dirty
 -- and has not had a cycle yet.
 
+-- The retry trio is the same shape on both queues (here and on
+-- crm_zoho_tombstones below). Without it a row Zoho will NEVER accept — an
+-- amount that overflows its field, a picklist value it rejects — is retried
+-- every ten minutes forever, and because both queues are read oldest-first
+-- under a LIMIT, a handful of those starve everything behind them.
+--   `*_attempts`        counts consecutive failures; the reader skips rows
+--                       past the give-up threshold (loudly, once).
+--   `*_error`           the last upstream message, so the give-up is
+--                       diagnosable without reading a week of logs.
+--   `*_next_attempt_at` exponential backoff; NULL = eligible now.
+
 ALTER TABLE crm_organizations
-    ADD COLUMN IF NOT EXISTS zoho_dirty     BOOLEAN NOT NULL DEFAULT false,
-    ADD COLUMN IF NOT EXISTS zoho_synced_at TIMESTAMPTZ;
+    ADD COLUMN IF NOT EXISTS zoho_dirty           BOOLEAN NOT NULL DEFAULT false,
+    ADD COLUMN IF NOT EXISTS zoho_synced_at       TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS zoho_push_attempts   INT NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS zoho_push_error      TEXT,
+    ADD COLUMN IF NOT EXISTS zoho_next_attempt_at TIMESTAMPTZ;
 
 ALTER TABLE crm_contacts
-    ADD COLUMN IF NOT EXISTS zoho_dirty     BOOLEAN NOT NULL DEFAULT false,
-    ADD COLUMN IF NOT EXISTS zoho_synced_at TIMESTAMPTZ;
+    ADD COLUMN IF NOT EXISTS zoho_dirty           BOOLEAN NOT NULL DEFAULT false,
+    ADD COLUMN IF NOT EXISTS zoho_synced_at       TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS zoho_push_attempts   INT NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS zoho_push_error      TEXT,
+    ADD COLUMN IF NOT EXISTS zoho_next_attempt_at TIMESTAMPTZ;
 
 ALTER TABLE crm_leads
-    ADD COLUMN IF NOT EXISTS zoho_dirty     BOOLEAN NOT NULL DEFAULT false,
-    ADD COLUMN IF NOT EXISTS zoho_synced_at TIMESTAMPTZ;
+    ADD COLUMN IF NOT EXISTS zoho_dirty           BOOLEAN NOT NULL DEFAULT false,
+    ADD COLUMN IF NOT EXISTS zoho_synced_at       TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS zoho_push_attempts   INT NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS zoho_push_error      TEXT,
+    ADD COLUMN IF NOT EXISTS zoho_next_attempt_at TIMESTAMPTZ;
 
 ALTER TABLE crm_deals
-    ADD COLUMN IF NOT EXISTS zoho_dirty     BOOLEAN NOT NULL DEFAULT false,
-    ADD COLUMN IF NOT EXISTS zoho_synced_at TIMESTAMPTZ;
+    ADD COLUMN IF NOT EXISTS zoho_dirty           BOOLEAN NOT NULL DEFAULT false,
+    ADD COLUMN IF NOT EXISTS zoho_synced_at       TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS zoho_push_attempts   INT NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS zoho_push_error      TEXT,
+    ADD COLUMN IF NOT EXISTS zoho_next_attempt_at TIMESTAMPTZ;
+
+-- The activity push is a THIRD queue with the same failure mode: its rows are
+-- selected by `zoho_id IS NULL` and drained by stamping one, so a note Zoho
+-- keeps rejecting sits at the front of an oldest-first LIMIT forever. Same
+-- trio, same contract. (No `zoho_dirty` here: an activity is a log entry, so
+-- "has it changed" and "has it been pushed" are the same question — §7.1.)
+ALTER TABLE crm_activities
+    ADD COLUMN IF NOT EXISTS zoho_push_attempts   INT NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS zoho_push_error      TEXT,
+    ADD COLUMN IF NOT EXISTS zoho_next_attempt_at TIMESTAMPTZ;
 
 -- Partial: the push phase asks exactly one question — "what is dirty" — and
 -- the dirty set is a handful of rows against a table that is almost entirely
@@ -94,7 +127,13 @@ CREATE TABLE IF NOT EXISTS crm_zoho_tombstones (
     -- NULL until the delete has actually been accepted by Zoho. The push phase
     -- reads `WHERE pushed_at IS NULL`, so a failed push is simply retried next
     -- cycle instead of being lost.
-    pushed_at   TIMESTAMPTZ
+    pushed_at   TIMESTAMPTZ,
+    -- The retry trio, same contract as the record tables above. A tombstone
+    -- for a record Zoho 404s is NOT one of these: an absent record means the
+    -- delete already achieved its goal, and the writer reports it as success.
+    attempts        INT NOT NULL DEFAULT 0,
+    last_error      TEXT,
+    next_attempt_at TIMESTAMPTZ
 );
 
 -- The only query this table serves: the unpushed backlog, oldest first.

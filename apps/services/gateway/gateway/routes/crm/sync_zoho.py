@@ -54,13 +54,13 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from functools import partial
 from typing import Any
 
 from acb_auth import UserContext, get_current_user, require_permission
 from acb_common import get_logger, get_settings
-from fastapi import Depends
+from fastapi import Depends, HTTPException
 from gateway.routes.crm.broker_handlers import broker_gate
 from gateway.routes.crm.core import (
     CONTACTS,
@@ -74,6 +74,7 @@ from gateway.routes.crm.core import (
     load_row,
     now,
     router,
+    savepoint,
     update_row,
 )
 from gateway.routes.crm.import_zoho import (
@@ -99,6 +100,38 @@ MIN_INTERVAL_SECS = 60
 #: Ceiling on how much one cycle pushes, so a first cycle after a large import
 #: cannot run for an unbounded time holding one transaction open.
 PUSH_BATCH_LIMIT = 500
+
+#: How many consecutive failures before a row is parked (loudly) instead of
+#: retried. Without a ceiling a row Zoho will NEVER accept — an amount past its
+#: field's range, a picklist value it rejects — is retried every cycle forever,
+#: and because every queue here is read oldest-first under ``PUSH_BATCH_LIMIT``
+#: a handful of them starve everything behind them.
+MAX_PUSH_ATTEMPTS = 8
+#: Exponential backoff between attempts: 1, 2, 4 … minutes, capped. Keeps a
+#: transient Zoho outage from burning the attempt budget in one hour.
+BACKOFF_BASE_SECS = 60
+BACKOFF_CAP_SECS = 6 * 3600
+
+#: The retry trio's column names per queue (migration 145). The record tables
+#: and ``crm_activities`` share one spelling; the tombstone queue is its own
+#: table and uses the short one.
+_RETRY_COLUMNS: dict[str, tuple[str, str, str]] = {
+    "crm_zoho_tombstones": ("attempts", "last_error", "next_attempt_at"),
+}
+_DEFAULT_RETRY_COLUMNS = (
+    "zoho_push_attempts", "zoho_push_error", "zoho_next_attempt_at",
+)
+
+
+def retry_columns(table: str) -> tuple[str, str, str]:
+    return _RETRY_COLUMNS.get(table, _DEFAULT_RETRY_COLUMNS)
+
+
+def backoff_until(attempts: int, *, at: datetime | None = None) -> datetime:
+    """When a row that has failed ``attempts`` times may be tried again."""
+    delay = min(BACKOFF_BASE_SECS * (2 ** max(0, attempts - 1)), BACKOFF_CAP_SECS)
+    return (at or now()) + timedelta(seconds=delay)
+
 
 #: The activity types that have a Zoho analog (§7.1). ``status_change`` and
 #: ``system`` deliberately never push: Zoho keeps its own stage history, and a
@@ -160,6 +193,11 @@ class PushReport(BaseModel):
     #: Pushes the broker QUEUED for approval because ``ACTION_BROKER_ENFORCE``
     #: is on. They have NOT happened: the rows stay dirty for the next cycle.
     queued: int = 0
+    #: Rows parked after ``MAX_PUSH_ATTEMPTS`` consecutive failures. They stop
+    #: being offered so the queue behind them keeps moving, and they are
+    #: logged at ERROR with the last upstream message — a give-up must be
+    #: something somebody can find without reading a week of logs.
+    given_up: int = 0
     errors: list[str] = []
 
 
@@ -351,8 +389,11 @@ def advance_cursor(
     to the newest success while an older record failed drops that record
     permanently: the next incremental pull never asks for it again.
 
-    * Nothing fetched → move to the cycle's start, so a module Zoho never
-      changes stops re-reading its whole table every ten minutes.
+    * Nothing fetched → keep the watermark we already had, and adopt the
+      cycle's start only when there ISN'T one, so a module Zoho has never
+      changed stops re-reading its whole table every ten minutes. (Keeping the
+      previous value matters: a module whose window is momentarily empty must
+      not have its cursor dragged forward to now.)
     * Records fetched but **none applied** → do not move at all.
     * Something failed and we cannot place it in time (no readable
       ``Modified_Time``) → do not move. "We do not know" must not read as
@@ -442,6 +483,10 @@ async def pull_phase(
             ),
             status="ok" if not module_report.errors else "partial",
         )
+        # Commit each module WITH its own cursor, so a later module's failure
+        # cannot roll back both the records this one landed and the watermark
+        # that says so.
+        await db.commit()
 
 
 def report_started(report: SyncCycleReport) -> datetime | None:
@@ -477,6 +522,16 @@ async def apply_zoho_deletes(
     The cascade (``crm_activities``, ``crm_deal_contacts``) is Postgres's, per
     the FK graph; the activity count is read BEFORE the delete because
     afterwards the honest number is unobtainable.
+
+    ⚠️ **Iterates ``RECORD_MODULES`` only — Notes and Tasks are deliberately
+    absent.** Activity *creates* sync (``push_activities``) while activity
+    *deletes* sync in NEITHER direction: a note deleted in Zoho survives here,
+    and one deleted here survives in Zoho. That asymmetry is an accepted v1
+    cost recorded in §7.1, not an oversight — an activity is an append-mostly
+    log entry whose stale copy misleads nobody about the pipeline, Zoho is
+    being retired, and closing it means a second tombstone path plus a delete
+    predicate over a table with four nullable parents. Records, where a stale
+    copy IS misleading, are handled in both directions.
     """
     for module, entity in RECORD_MODULES:
         cursor = cursors.get(module)
@@ -677,51 +732,215 @@ async def execute_push(
 
 async def push_one(
     *, module: str, op: str, record_id: str | None, body: dict[str, Any] | None,
-    target: str,
+    target: str, table: str, native_id: str,
 ) -> dict[str, Any]:
     """Take one push through the Action-Broker gate, then execute it (D-CRM-8).
 
     The audit payload carries everything a later approval needs — module, verb,
-    id, body — because a proposal approved next week must not depend on this
-    process still being alive.
+    Zoho id, body, **and the native row the result must be written back onto**
+    — because a proposal approved next week must not depend on this process
+    still being alive. Without ``table``/``native_id`` the approval path can
+    perform the write and then have nowhere to record that it did, so every
+    approval mints another copy in Zoho and nothing ever converges.
     """
-    args = {"module": module, "op": op, "record_id": record_id, "body": body or {}}
+    args = {
+        "module": module, "op": op, "record_id": record_id, "body": body or {},
+        "table": table, "native_id": native_id,
+    }
     return await broker_gate(
         f"crm.zoho_{op}", target, {"args": args},
         partial(execute_push, module=module, op=op, record_id=record_id, body=body),
     )
 
 
+# ── Recording that a push happened (or didn't) ──────────────────────────────
+#
+# Both of these are called from TWO places: the inline auto-apply path below,
+# and `broker_handlers._handle_crm_zoho_write` when an operator approves a
+# queued push. One implementation, so the two paths cannot converge differently
+# — the approval path having no state write at all was exactly that bug.
+
+async def apply_push_result(
+    db: Any, *, table: str, native_id: str, op: str, result: dict[str, Any],
+) -> None:
+    """Record that a Zoho write succeeded, on whichever queue it came from."""
+    attempts, error, next_at = retry_columns(table)
+    if table == "crm_zoho_tombstones":
+        await db.execute(
+            text(
+                f"UPDATE crm_zoho_tombstones SET pushed_at = :pushed_at, "
+                f"{error} = NULL, {next_at} = NULL "
+                f"WHERE id = CAST(:id AS uuid)"
+            ),
+            {"pushed_at": now(), "id": native_id},
+        )
+        return
+
+    updates: dict[str, Any] = {attempts: 0, error: None, next_at: None}
+    if table != "crm_activities":
+        updates["zoho_dirty"] = False
+        updates["zoho_synced_at"] = now()
+    acquired = result.get("zoho_id")
+    if op == "create":
+        if not acquired:
+            raise RuntimeError("Zoho returned no id on create")
+        updates["zoho_id"] = str(acquired)
+    await update_row(db, table, native_id, updates, touch=False)
+
+
+async def record_push_failure(
+    db: Any, *, table: str, native_id: str, attempts_so_far: int, error: str,
+) -> bool:
+    """Back a failed push off, and park it once it has failed enough times.
+
+    Returns whether the row was PARKED (gave up). The row is never cleaned or
+    marked synced — a push that failed and cleared its flag is a change
+    silently dropped — it simply stops being offered, loudly, so the rows
+    behind it in an oldest-first queue are not starved forever by it.
+    """
+    attempts_col, error_col, next_col = retry_columns(table)
+    attempts = int(attempts_so_far or 0) + 1
+    parked = attempts >= MAX_PUSH_ATTEMPTS
+    await db.execute(
+        text(
+            f"UPDATE {table} SET {attempts_col} = :attempts, "
+            f"{error_col} = :error, {next_col} = :next_attempt_at "
+            f"WHERE id = CAST(:id AS uuid)"
+        ),
+        {
+            "attempts": attempts,
+            "error": error[:500],
+            "next_attempt_at": backoff_until(attempts),
+            "id": native_id,
+        },
+    )
+    if parked:
+        _log.error(
+            "crm.sync.push_given_up", table=table, record_id=native_id,
+            attempts=attempts, error=error[:200],
+        )
+    return parked
+
+
+def _due_clause(table: str) -> str:
+    """The retry gate every push queue's SELECT carries.
+
+    ``coalesce`` rather than ``IS NULL OR <=`` so the predicate is one
+    comparison: a row that has never failed sorts as due-since-the-epoch.
+    """
+    attempts_col, _, next_col = retry_columns(table)
+    return (
+        f" AND {attempts_col} < :max_attempts"
+        f" AND coalesce({next_col}, :epoch) <= :now"
+    )
+
+
+#: Bound parameters `_due_clause` needs. ``epoch`` is any instant older than
+#: every row; it exists only so the coalesce has something to fall back to.
+def _due_params() -> dict[str, Any]:
+    return {
+        "max_attempts": MAX_PUSH_ATTEMPTS,
+        "epoch": datetime(1970, 1, 1, tzinfo=UTC),
+        "now": now(),
+    }
+
+
 # ── Phase 3: push ───────────────────────────────────────────────────────────
 
+async def _settle(
+    db: Any, report: SyncCycleReport, *, table: str, native_id: str,
+    op: str, result: dict[str, Any], attempts_so_far: int,
+) -> bool:
+    """Record one push's outcome and **commit it immediately**. Applied?
+
+    ⚠️ The commit is the point, and it is why this is not deferred to the end
+    of the cycle. The Zoho write has already happened and Zoho's API has no
+    idempotency token — so between the HTTP 200 and a durable local stamp
+    there is a window in which a crash, a shutdown or an aborted transaction
+    loses the ``zoho_id`` while the record exists upstream. The next cycle then
+    sees a native row with no ``zoho_id`` and CREATES A DUPLICATE, every cycle,
+    forever. Write → stamp → commit, per record, closes it to the width of one
+    statement.
+    """
+    try:
+        async with savepoint(db):
+            await apply_push_result(
+                db, table=table, native_id=native_id, op=op, result=result,
+            )
+        await db.commit()
+        return True
+    except Exception as exc:
+        await db.rollback()
+        report.pushed.errors.append(f"{table}/{native_id}: {str(exc)[:200]}")
+        _log.error(
+            "crm.sync.stamp_failed", table=table, record_id=native_id,
+            op=op, error=str(exc)[:200],
+        )
+        with contextlib.suppress(Exception):
+            await record_push_failure(
+                db, table=table, native_id=native_id,
+                attempts_so_far=attempts_so_far, error=str(exc),
+            )
+            await db.commit()
+        return False
+
+
+async def _fail(
+    db: Any, report: SyncCycleReport, *, table: str, native_id: str,
+    attempts_so_far: int, exc: Exception,
+) -> None:
+    """One push failed: count it, back it off, commit that much."""
+    report.pushed.errors.append(f"{table}/{native_id}: {str(exc)[:200]}")
+    _log.warning(
+        "crm.sync.push_failed", table=table, record_id=native_id,
+        error=str(exc)[:200],
+    )
+    try:
+        async with savepoint(db):
+            parked = await record_push_failure(
+                db, table=table, native_id=native_id,
+                attempts_so_far=attempts_so_far, error=str(exc),
+            )
+        await db.commit()
+        if parked:
+            report.pushed.given_up += 1
+    except Exception:  # the backoff write itself failed — never fatal
+        await db.rollback()
+
+
 async def push_records(db: Any, report: SyncCycleReport) -> None:
-    """Every dirty row in the four record tables, created or updated upstream."""
+    """Every dirty row in the four record tables, created or updated upstream.
+
+    Rows past the attempt ceiling or inside their backoff window are not
+    offered (``_due_clause``), so one record Zoho will never accept cannot
+    starve the queue behind it.
+    """
     for module, entity in RECORD_MODULES:
         rows = (await db.execute(
             text(
-                f"SELECT * FROM {entity.table} WHERE zoho_dirty = :dirty "
+                f"SELECT * FROM {entity.table} WHERE zoho_dirty = :dirty"
+                f"{_due_clause(entity.table)} "
                 f"ORDER BY updated_at LIMIT :limit"
             ),
-            {"dirty": True, "limit": PUSH_BATCH_LIMIT},
+            {"dirty": True, "limit": PUSH_BATCH_LIMIT, **_due_params()},
         )).fetchall()
         for row in rows:
             zoho_id = (getattr(row, "zoho_id", None) or "").strip() or None
             op = "update" if zoho_id else "create"
+            attempts = int(getattr(row, "zoho_push_attempts", 0) or 0)
             try:
                 body = await build_payload(db, entity, row)
                 result = await push_one(
                     module=module, op=op, record_id=zoho_id, body=body,
                     target=f"{module}:{zoho_id or 'new'}",
+                    table=entity.table, native_id=str(row.id),
                 )
             except Exception as exc:
                 # Left dirty on purpose: the next cycle retries. A push that
                 # failed and cleared the flag is a change silently dropped.
-                report.pushed.errors.append(
-                    f"{entity.table}/{row.id}: {str(exc)[:200]}"
-                )
-                _log.warning(
-                    "crm.sync.push_failed", table=entity.table,
-                    record_id=str(row.id), error=str(exc)[:200],
+                await _fail(
+                    db, report, table=entity.table, native_id=str(row.id),
+                    attempts_so_far=attempts, exc=exc,
                 )
                 continue
 
@@ -731,19 +950,14 @@ async def push_records(db: Any, report: SyncCycleReport) -> None:
                 report.pushed.queued += 1
                 continue
 
-            updates: dict[str, Any] = {"zoho_dirty": False, "zoho_synced_at": now()}
-            if op == "create":
-                acquired = result.get("zoho_id")
-                if not acquired:
-                    report.pushed.errors.append(
-                        f"{entity.table}/{row.id}: Zoho returned no id on create"
-                    )
-                    continue
-                updates["zoho_id"] = str(acquired)
-                report.pushed.created += 1
-            else:
-                report.pushed.updated += 1
-            await update_row(db, entity.table, str(row.id), updates, touch=False)
+            if await _settle(
+                db, report, table=entity.table, native_id=str(row.id),
+                op=op, result=result, attempts_so_far=attempts,
+            ):
+                if op == "create":
+                    report.pushed.created += 1
+                else:
+                    report.pushed.updated += 1
 
 
 async def push_activities(db: Any, report: SyncCycleReport) -> None:
@@ -760,10 +974,11 @@ async def push_activities(db: Any, report: SyncCycleReport) -> None:
     rows = (await db.execute(
         text(
             "SELECT * FROM crm_activities "
-            "WHERE zoho_id IS NULL AND type IN ('note', 'task') "
+            "WHERE zoho_id IS NULL AND type IN ('note', 'task')"
+            f"{_due_clause('crm_activities')} "
             "ORDER BY created_at LIMIT :limit"
         ),
-        {"limit": PUSH_BATCH_LIMIT},
+        {"limit": PUSH_BATCH_LIMIT, **_due_params()},
     )).fetchall()
     module_of = {value: key for key, value in ACTIVITY_MODULES.items()}
     for row in rows:
@@ -780,26 +995,28 @@ async def push_activities(db: Any, report: SyncCycleReport) -> None:
             # next cycle finds it once the record push has given it an id.
             continue
         module = module_of[row.type]
-        body = _activity_payload(row, module, parent_zoho_id, column)
+        attempts = int(getattr(row, "zoho_push_attempts", 0) or 0)
         try:
+            body = _activity_payload(row, module, parent_zoho_id, column)
             result = await push_one(
                 module=module, op="create", record_id=None, body=body,
                 target=f"{module}:new",
+                table="crm_activities", native_id=str(row.id),
             )
         except Exception as exc:
-            report.pushed.errors.append(f"crm_activities/{row.id}: {str(exc)[:200]}")
+            await _fail(
+                db, report, table="crm_activities", native_id=str(row.id),
+                attempts_so_far=attempts, exc=exc,
+            )
             continue
         if result.get("pending"):
             report.pushed.queued += 1
             continue
-        acquired = result.get("zoho_id")
-        if not acquired:
-            continue
-        await update_row(
-            db, "crm_activities", str(row.id),
-            {"zoho_id": str(acquired)}, touch=False,
-        )
-        report.pushed.activities += 1
+        if await _settle(
+            db, report, table="crm_activities", native_id=str(row.id),
+            op="create", result=result, attempts_so_far=attempts,
+        ):
+            report.pushed.activities += 1
 
 
 def _activity_payload(
@@ -832,37 +1049,69 @@ async def push_tombstones(db: Any, report: SyncCycleReport) -> None:
     """
     rows = (await db.execute(
         text(
-            "SELECT * FROM crm_zoho_tombstones WHERE pushed_at IS NULL "
+            "SELECT * FROM crm_zoho_tombstones WHERE pushed_at IS NULL"
+            f"{_due_clause('crm_zoho_tombstones')} "
             "ORDER BY deleted_at LIMIT :limit"
         ),
-        {"limit": PUSH_BATCH_LIMIT},
+        {"limit": PUSH_BATCH_LIMIT, **_due_params()},
     )).fetchall()
     for row in rows:
+        attempts = int(getattr(row, "attempts", 0) or 0)
         try:
             result = await push_one(
                 module=row.module, op="delete", record_id=row.zoho_id, body=None,
                 target=f"{row.module}:{row.zoho_id}",
+                table="crm_zoho_tombstones", native_id=str(row.id),
             )
         except Exception as exc:
-            report.pushed.errors.append(f"tombstone/{row.id}: {str(exc)[:200]}")
+            await _fail(
+                db, report, table="crm_zoho_tombstones", native_id=str(row.id),
+                attempts_so_far=attempts, exc=exc,
+            )
             continue
         if result.get("pending"):
             report.pushed.queued += 1
             continue
-        await db.execute(
-            text(
-                "UPDATE crm_zoho_tombstones SET pushed_at = :pushed_at "
-                "WHERE id = CAST(:id AS uuid)"
-            ),
-            {"pushed_at": now(), "id": str(row.id)},
-        )
-        report.pushed.deleted += 1
+        if await _settle(
+            db, report, table="crm_zoho_tombstones", native_id=str(row.id),
+            op="delete", result=result, attempts_so_far=attempts,
+        ):
+            report.pushed.deleted += 1
 
 
 # ── One cycle ───────────────────────────────────────────────────────────────
 
+#: One cycle at a time, process-wide. Two overlapping cycles both see the same
+#: dirty rows and both create them in Zoho — the duplicate this engine has no
+#: idempotency token to undo. An in-process lock is the right scope because the
+#: gateway runs as a single worker; a second worker would need
+#: ``pg_advisory_xact_lock`` on the same key, which is the note in §7.1.
+_cycle_lock = asyncio.Lock()
+
+
+class CycleAlreadyRunning(RuntimeError):
+    """A cycle was requested while one was already in flight."""
+
+
+def cycle_in_progress() -> bool:
+    return _cycle_lock.locked()
+
+
 async def run_cycle(*, actor_email: str = "crm:zoho-sync") -> SyncCycleReport:
-    """Pull, apply Zoho's deletes, push. The whole engine, in one call."""
+    """Pull, apply Zoho's deletes, push. The whole engine, in one call.
+
+    Refuses to overlap: a second concurrent call raises
+    :class:`CycleAlreadyRunning` rather than queueing behind the first, because
+    the useful answer to "run a cycle" when one is already running is "one is
+    already running", not a second full pass ten minutes later.
+    """
+    if _cycle_lock.locked():
+        raise CycleAlreadyRunning("a Zoho sync cycle is already in progress")
+    async with _cycle_lock:
+        return await _run_cycle_locked(actor_email)
+
+
+async def _run_cycle_locked(actor_email: str) -> SyncCycleReport:
     report = SyncCycleReport(started_at=now().isoformat())
     zoho = _client()
     try:
@@ -879,8 +1128,12 @@ async def run_cycle(*, actor_email: str = "crm:zoho-sync") -> SyncCycleReport:
         # goes, so a delete phase that read them afterwards would ask Zoho about
         # a window this cycle had already closed — see `read_cursors`.
         cursors = await read_cursors(db)
+        # Each phase commits its own work (and the push phases commit per
+        # record). A single cycle-wide commit meant one statement error
+        # discarded everything the cycle had done, including cursors.
         await pull_phase(db, zoho, owners, actor_email, report, cursors)
         await apply_zoho_deletes(db, zoho, report, cursors)
+        await db.commit()
         await push_records(db, report)
         await push_activities(db, report)
         await push_tombstones(db, report)
@@ -918,16 +1171,26 @@ async def run_cycle(*, actor_email: str = "crm:zoho-sync") -> SyncCycleReport:
 _sync_task: asyncio.Task | None = None
 
 
+#: Set on shutdown. The loop checks it between cycles and returns, so a stop
+#: never lands in the middle of a cycle.
+_stopping = asyncio.Event()
+
+
 async def _sync_loop() -> None:
     interval = max(SYNC_INTERVAL_SECS, MIN_INTERVAL_SECS)
-    while True:
+    while not _stopping.is_set():
         try:
             await run_cycle()
+        except CycleAlreadyRunning:
+            pass  # a hand-run cycle has the floor; this tick simply skips
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # never let one bad cycle kill the loop
             _log.warning("crm.sync.cycle_failed", error=str(exc)[:200])
-        await asyncio.sleep(interval)
+        # Sleep interruptibly: a shutdown must not wait out the interval, and
+        # cancelling the SLEEP is safe in a way cancelling a cycle is not.
+        with contextlib.suppress(TimeoutError):
+            await asyncio.wait_for(_stopping.wait(), timeout=interval)
 
 
 async def start_crm_zoho_sync() -> bool:
@@ -943,6 +1206,7 @@ async def start_crm_zoho_sync() -> bool:
         return False
     if _sync_task is not None and not _sync_task.done():
         return True
+    _stopping.clear()
     _sync_task = asyncio.get_running_loop().create_task(
         _sync_loop(), name="crm-zoho-sync",
     )
@@ -950,16 +1214,37 @@ async def start_crm_zoho_sync() -> bool:
     return True
 
 
+#: How long shutdown waits for an in-flight cycle before giving up on it.
+STOP_GRACE_SECS = 30.0
+
+
 async def stop_crm_zoho_sync() -> None:
-    """Cancel the loop. Called unconditionally on shutdown — a flag-gated loop
+    """Stop the loop. Called unconditionally on shutdown — a flag-gated loop
     that may never have started is still stopped, the same contract the other
-    six supervised loops keep."""
+    supervised loops keep.
+
+    ⚠️ **Signals and waits; it does not cancel a running cycle.** A cancel
+    lands wherever the cycle happens to be — including between a successful
+    Zoho create and the commit that records its id, which is precisely the
+    window that makes the next cycle create a DUPLICATE upstream. The loop
+    sleeps on an interruptible event, so a stop between cycles is immediate;
+    a stop mid-cycle waits ``STOP_GRACE_SECS`` for it to finish. Cancellation
+    remains the last resort, and is logged as the loss it is.
+    """
     global _sync_task
+    _stopping.set()
     task, _sync_task = _sync_task, None
-    if task is not None and not task.done():
+    if task is None or task.done():
+        return
+    try:
+        await asyncio.wait_for(asyncio.shield(task), timeout=STOP_GRACE_SECS)
+    except TimeoutError:
+        _log.warning("crm.sync.stop_timed_out", grace_secs=STOP_GRACE_SECS)
         task.cancel()
         with contextlib.suppress(asyncio.CancelledError, Exception):
             await task
+    except Exception:  # a loop that died on its own is already stopped
+        pass
 
 
 def sync_status() -> dict[str, Any]:
@@ -967,6 +1252,7 @@ def sync_status() -> dict[str, Any]:
     return {
         "enabled": sync_enabled(),
         "running": _sync_task is not None and not _sync_task.done(),
+        "cycle_in_progress": cycle_in_progress(),
         "interval_secs": SYNC_INTERVAL_SECS,
     }
 
@@ -988,20 +1274,33 @@ async def run_sync_cycle_now(
     unattended. Same ``admin:access:manage`` floor as the backfill, and the
     same warning: against the production tenant this WRITES live Zoho and is
     an OWNER-GATE act (``work_plan.md`` §6).
+
+    **409 while a cycle is already running.** Two overlapping cycles see the
+    same dirty rows and both create them upstream, and Zoho's API offers no
+    idempotency token to undo that. Refusing is the honest answer — the
+    scheduled loop, or a later click, will do the work.
     """
     from gateway.routes.crm.core import actor
 
-    return await run_cycle(actor_email=actor(user))
+    try:
+        return await run_cycle(actor_email=actor(user))
+    except CycleAlreadyRunning as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 __all__ = [
+    "MAX_PUSH_ATTEMPTS",
     "PUSHABLE_ACTIVITY_TYPES",
     "PUSH_BATCH_LIMIT",
     "SYNC_INTERVAL_SECS",
+    "CycleAlreadyRunning",
     "PushReport",
     "SyncCycleReport",
     "advance_cursor",
+    "apply_push_result",
+    "backoff_until",
     "build_payload",
+    "cycle_in_progress",
     "execute_push",
     "push_one",
     "read_cursors",

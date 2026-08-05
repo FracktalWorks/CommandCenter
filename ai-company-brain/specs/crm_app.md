@@ -399,8 +399,10 @@ faithful until cutover:
      failed.** `If-Modified-Since` is a single instant, so a failed record stays retryable
      only while the cursor is strictly below it — and the failure may well be *older* than
      a success in the same batch, which is why the ceiling is the oldest failure and not
-     simply "don't use the newest fetched". Full rule: nothing fetched ⇒ adopt the cycle
-     start (so an unchanged module stops re-reading its table); nothing applied ⇒ stand
+     simply "don't use the newest fetched". Full rule: nothing fetched ⇒ **keep** the
+     existing watermark, adopting the cycle start only when there isn't one (so an unchanged
+     module stops re-reading its table, while a momentarily empty window does not drag the
+     cursor forward to now); nothing applied ⇒ stand
      still; a failure we cannot place in time (no readable `Modified_Time`) ⇒ stand still,
      because "we do not know" must not read as "nothing failed"; otherwise the newest
      applied, never backwards. **Accepted cost:** a record that fails every cycle pins that
@@ -410,6 +412,44 @@ faithful until cutover:
      is non-zero and `last_status` stays `'partial'` on every such cycle. Per-record apply
      failures are also folded into the cycle summary count; a cycle that dropped nine
      records must not log `errors=0`.
+  3. **The pull asks for `sort_by=Modified_Time&sort_order=asc`.** Zoho's default order is
+     that key DESCENDING, so a record edited between page 1 and page 2 — by anyone, our own
+     push included — jumps to the front and shifts every later record back one slot, and the
+     record that sat on the page boundary is never returned. Ascending makes the sequence
+     append-only for the duration of the pull.
+- **Transaction shape — one bad record must not lose the batch, and Postgres does not
+  agree by default.** A statement error aborts the whole transaction, not the statement, so
+  a per-record `try/except` "survives" a bad row while in fact losing every row after it,
+  the cursor write and the commit — and the next cycle repeats it identically forever.
+  Every applied record and every push therefore runs inside a **SAVEPOINT**
+  (`core.savepoint`), each phase commits its own work, and each pull module commits WITH its
+  cursor. `_number()` additionally clamps values outside `NUMERIC(14,2)` to NULL, because
+  Zoho's currency fields have no such ceiling and one fat-fingered amount is otherwise a
+  poisoned transaction rather than a bad row.
+- **The external write is committed before anything else runs.** Zoho's API has no
+  idempotency token, so the window between "the create returned 200" and "the `zoho_id` is
+  durable locally" is a duplicate factory: a crash or an aborted transaction in it loses the
+  id while the record exists upstream, and every later cycle creates ANOTHER. Push → stamp →
+  **commit**, per record. For the same reason `stop_crm_zoho_sync` signals and waits
+  (`STOP_GRACE_SECS`) rather than cancelling: a cancel lands wherever the cycle happens to
+  be, including inside that window.
+- **One cycle at a time.** `run_cycle` takes a process-wide lock and a second caller gets
+  **409** (`POST /crm/sync/zoho`) or skips (the loop). Two overlapping cycles see the same
+  dirty rows and both create them upstream. ⚠️ The lock is in-process, which is correct only
+  while the gateway runs as a single worker — a second worker needs
+  `pg_advisory_xact_lock` on the same key.
+- **Failure has a ceiling.** Both push queues (records + activities, and tombstones) carry
+  `attempts` / `last_error` / `next_attempt_at`: exponential backoff, and after
+  `MAX_PUSH_ATTEMPTS` the row is parked, counted in `pushed.given_up` and logged at ERROR.
+  Without it a row Zoho will never accept sits at the front of an oldest-first `LIMIT` queue
+  forever and starves everything behind it. A tombstone whose record Zoho no longer has
+  (404, or a 200 carrying `RECORD_NOT_IN_MODULE`) is a **success** — the goal state holds.
+- **Approval writes state back.** Under broker enforcement the queued push, when approved,
+  runs through the same `apply_push_result` the inline path uses — otherwise every approval
+  performs the write and records nothing, so the row stays dirty and each approval mints
+  another copy upstream. The gate also refuses to enqueue a second proposal for an
+  `(action, target)` already pending: the row is re-offered every cycle by design, which at
+  ten-minute ticks is 144 identical inbox rows per day per stuck record.
 - **Conflicts:** record-level last-writer-wins comparing Zoho `Modified_Time` against
   native `updated_at`; both-changed conflicts are counted and logged per cycle, never
   silent. No field-level merge in v1 (D-CRM-6 amended).
@@ -436,6 +476,15 @@ faithful until cutover:
     the display name: a lead called "Asha" came back "Asha Asha", and `lead_name` is on the
     conflict arm, so every cycle rewrote it. `map_lead` therefore does **not** emit
     `lead_name`; `apply_record` computes it after `strip_padding_echo`.
+  - **Activity DELETES sync in NEITHER direction, while activity creates do.** A note
+    deleted here survives in Zoho; one deleted in Zoho survives here. **Accepted v1 cost**
+    (P2, 2026-08-05 review): an activity is an append-mostly log entry whose stale copy
+    misleads nobody about the pipeline, Zoho is being retired, and closing it means a second
+    tombstone path plus a delete predicate over a table with four nullable parents. Records —
+    where a stale copy IS misleading — propagate deletes both ways. `apply_zoho_deletes`
+    iterates `RECORD_MODULES` only and says so; `activities.delete_activity` says so too.
+    ⚠️ Do not close one direction alone: a native tombstone without the matching Zoho→native
+    delete makes the two sides disagree in a NEW way.
   - **A native field CLEAR does not reach Zoho, and the next pull restores the old value.**
     The push prunes `None` (sending it would CLEAR the field at Zoho, so a column we simply
     do not carry would blank the tenant's copy every cycle) — which means "user emptied
@@ -605,7 +654,7 @@ blockers 1–9 folded in below. Landed on branch `ws-26b-zoho-sync` as
 `infra/postgres/145_crm_zoho_sync.sql` +
 `apps/services/gateway/gateway/routes/crm/{import_zoho,sync_zoho,broker_handlers}.py` +
 the `core.py` dirty-marking choke point and `records.py` tombstone-in-delete, fenced by
-`tests/unit/test_crm_zoho_{import,sync}.py` — 95 new cases, zero DB and zero network, plus
+`tests/unit/test_crm_zoho_{import,sync}.py` — 129 new cases, zero DB and zero network, plus
 26a's migration fence extended to the second migration. **Built, not run:** no backfill and
 no cycle has ever executed against the tenant.)*
 
@@ -664,6 +713,36 @@ no cycle has ever executed against the tenant.)*
 - **V5** — `writer.upsert_record` was exported and never called (`execute_push` branches the
   verb itself). Deleted: the single write surface should stay countable, and "upsert by id"
   is a decision in `push_records`, not a verb.
+
+**Adversarial-review repairs (2026-08-05, same branch — six findings, all real
+Postgres/Zoho semantics the unit fakes cannot see):**
+- **A1 (P1)** — the cycle was ONE transaction with no savepoints, so a single statement
+  error (a Zoho amount overflowing `NUMERIC(14,2)`) aborted it, took every later statement,
+  rolled back the cursor, and made the next cycle die identically forever. Now: a SAVEPOINT
+  per applied record and per push (`core.savepoint`), a commit per phase and per pull
+  module, and `_number()` clamps out-of-range values to NULL.
+- **A2 (P1)** — Zoho writes happened inside the transaction that recorded them, so an abort
+  after a successful create discarded the stamped `zoho_id` and the next cycle made a
+  DUPLICATE (Zoho has no idempotency token). Now: write → stamp → **commit** per record, and
+  `stop_crm_zoho_sync` signals + waits instead of cancelling mid-cycle.
+- **A3 (P1)** — the broker approval path never wrote state back, so under enforcement every
+  approval minted another duplicate and nothing converged; and nothing deduped the queue.
+  Now: the handler shares `apply_push_result` with the inline path, and the gate skips
+  enqueueing when an identical `(action, target)` is already pending.
+- **A4 (P1)** — no failure ceiling: poison rows starved both oldest-first queues forever.
+  Now: `attempts`/`last_error`/`next_attempt_at` on all three push queues (migration 145,
+  edited in place — still unapplied), exponential backoff, a give-up threshold counted in
+  `pushed.given_up` and logged at ERROR, and a tombstone whose Zoho record is already gone
+  counts as success.
+- **A5 (P1)** — `POST /crm/sync/zoho` had no reentrancy guard, so overlapping cycles
+  double-created. Now a process-wide lock: 409 for a second caller, skip for the loop.
+- **A6 (P2)** — activity deletes sync in neither direction while creates do. **Documented as
+  an accepted v1 cost** (§7.1) rather than built, with both `apply_zoho_deletes` and
+  `activities.delete_activity` stating it; closing one direction alone would be worse.
+- Mirror nits taken with them: the "adopt cycle start" prose now matches the code (nothing
+  fetched KEEPS the previous watermark), the RFC-1123-vs-ISO `If-Modified-Since` question is
+  recorded as an owner pre-flip `curl`, and the pull asks for
+  `sort_by=Modified_Time&sort_order=asc` to close the page-shift window.
 - **Also, from 26c's verifier** — `import_zoho`'s deal-contact link inserted a literal
   `is_primary = true`, so a deal with a hand-set primary A whose Zoho record names B ended
   up with **two** primaries (the one-primary rule is code, not a constraint). `is_primary` is
@@ -703,7 +782,23 @@ Done when:
    registry row's *"the CRM never adds one"* clause (already softened 2026-08-05; finish
    it when the writer lands).
 **Enabling the flag, the first backfill, and any hand-run cycle against prod Zoho+DB are
-registered in §6 — the sync WRITES the live Zoho tenant.** ⚠️ `.env.example` cannot
+registered in §6 — the sync WRITES the live Zoho tenant.**
+
+⚠️ **Owner pre-flip check, one `curl` (unverifiable from the repo).** The client sends
+`If-Modified-Since` in **RFC 1123** (`Tue, 01 Jan 2026 00:00:00 +0000`) — the form the
+existing `_list_module` has always used. Zoho's v2 docs also describe an **ISO-8601**
+`If-Modified-Since`, and the two are not interchangeable: if the tenant ignores an
+unparseable header it returns EVERYTHING, and the pull is silently full rather than
+incremental (correct, idempotent, and far more expensive) — while if it errors, the pull
+fails loudly and is caught. Before the first enable, confirm which form the tenant honours:
+
+    curl -sD- -o/dev/null "$ZOHO_API_DOMAIN/crm/v2/Accounts?per_page=1" \
+      -H "Authorization: Zoho-oauthtoken $TOKEN" \
+      -H "If-Modified-Since: $(date -R -d '1 hour ago')"
+
+A `304` (or a short body) means RFC 1123 is honoured. A full first page means it is being
+ignored — switch the format in `client._with_modified_since`, which is the single place
+both readers build it. ⚠️ `.env.example` cannot
 document the new flag (plan-guard protects it); the PR body must carry the var for the
 owner. Also owed by this ticket: add `CRM_ZOHO_SYNC` (and `CRM_AUTO_LEAD`) to
 `.claude/hooks/plan-guard.mjs` OWNER_GATES per that file's own "§6 changes update

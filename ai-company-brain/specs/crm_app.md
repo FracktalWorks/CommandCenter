@@ -1,8 +1,16 @@
 # CRM App — Master Plan (native CRM; Zoho CRM retirement path)
 
 > **Product:** CommandCenter · **Feature:** CRM (Sales Center's primary module) · **Created:** 2026-08-05
-> **Status:** 🟡 SPEC — nothing built. Anchors verified against code on 2026-08-05 (full-tree
-> sweep on `main` @ `402a0299`). · **Owner:** vjvarada · **Board row:** WS-26
+> **Status:** 🟢 **WS-26a BUILT** (2026-08-05, branch `ws-26-crm-app`) — migration `144_crm.sql`
+> (§3.1–§3.10), `feature:crm` registered on both sides, `gateway/db.py` engine seam with
+> `routes/tasks/core.py` converted as its proof, and the `routes/crm/` API (§4 minus
+> `import_zoho.py`) live behind the feature gate. **Not deployed** — the migration has not been
+> applied anywhere. · **WS-26b–e: 🟡 SPEC, nothing built.** · **Owner:** vjvarada · **Board row:** WS-26
+>
+> **Not in WS-26a, on purpose:** `schema.generated.sql` was NOT regenerated (struck from
+> done-when 1 by the 2026-08-05 audit — it needs a migrated live DB and is ~43 migrations stale
+> repo-wide, so refreshing it here would bundle an unrelated resync into this change). It stays
+> an owner-run chore.
 >
 > **Research provenance (2026-08-05):**
 > - `frappe/crm` @ develop — **AGPL-3.0: no code may be copied.** Data-model facts, enum
@@ -367,8 +375,12 @@ WS-2 (the standing "rotate Zoho token" P0 becomes "revoke", strictly better).
 
 ## 9. Tickets — WS-26a…e (every item AGENT-SAFE unless labeled)
 
-### WS-26a — Schema + feature registration + core API · 🟢 AGENT-SAFE
-*(Audited GO-NARROWED 2026-08-05; blockers A/B folded in below.)*
+### WS-26a — Schema + feature registration + core API · ✅ **BUILT 2026-08-05**
+*(Audited GO-NARROWED 2026-08-05; blockers A/B folded in below. Landed as
+`infra/postgres/144_crm.sql` + `apps/services/gateway/gateway/db.py` +
+`apps/services/gateway/gateway/routes/crm/{core,records,pipeline,activities,admin}.py`,
+fenced by `tests/unit/test_crm_{routes,pipeline,convert,migration}.py` — 185 cases, zero DB
+and zero network. **Built, not deployed:** applying the migration is the owner's move.)*
 Done when:
 1. The Phase-A migration (next free number) creates §3.1–§3.10; idempotency is **statically
    asserted** in `tests/unit/test_crm_migration.py` (every `CREATE TABLE`/`CREATE INDEX`

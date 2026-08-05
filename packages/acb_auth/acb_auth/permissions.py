@@ -77,6 +77,11 @@ FEATURES: tuple[str, ...] = (
     "memory",
     "tasks",
     "notes",
+    # Native CRM — leads, deals, contacts, organizations (144_crm.sql,
+    # category `apps`, sort_order 55: beside Tasks). NOT a member default:
+    # `feature:crm` reaches `*`-holders and `admin`'s `feature:*` until an
+    # admin grants it (D-CRM-3, specs/crm_app.md §5).
+    "crm",
     "dashboard",
     "observability",
     "artifacts",

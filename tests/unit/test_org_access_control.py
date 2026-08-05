@@ -387,6 +387,117 @@ def test_centers_registry_matches_the_feature_vocabulary() -> None:
     )
 
 
+# ── FEATURES ⟷ feature_catalog ──────────────────────────────────────────────
+#
+# The two Center checks above are `center.*`-only by construction: they parse
+# `lib/centers.ts`, so they fence nothing for an `apps`-category slug like
+# `tasks` or `crm`. This pair closes that gap by deriving the catalog's slugs
+# from the migrations themselves — the `_schema_cascade.py` technique — rather
+# than from a hand-kept list, and pinning them against FEATURES BOTH ways.
+#
+# The two directions fail for different reasons and both are silent in
+# production:
+#   catalog → FEATURES: `allowed_features()` iterates FEATURES, so a seeded row
+#     with no tuple entry is invisible to /auth/me for EVERY principal,
+#     owners included. That is the live defect migration 140 shipped.
+#   FEATURES → catalog: a grantable feature with no catalog row never appears
+#     in the admin access editor, which renders from the table — so nobody can
+#     grant it through the product.
+
+#: ``INSERT INTO feature_catalog (…) VALUES`` up to its ``ON CONFLICT`` tail.
+#: Cut at ON CONFLICT so the `(slug)` conflict target is not read as a row.
+_CATALOG_INSERT_RE = re.compile(
+    r"INSERT\s+INTO\s+feature_catalog\b(.*?)(?:ON\s+CONFLICT|;)", re.I | re.S
+)
+#: The opening of one VALUES tuple: ``('crm',`` → ``crm``. Every row in this
+#: table starts with its slug, so the first quoted literal after a ``(`` is it.
+_CATALOG_SLUG_RE = re.compile(r"\(\s*'([^']+)'\s*,")
+
+MIGRATIONS = Path(__file__).resolve().parents[2] / "infra" / "postgres"
+
+
+def _catalog_slugs() -> set[str]:
+    """Every ``feature_catalog`` slug seeded anywhere in ``infra/postgres/``.
+
+    Derived, never retyped. ``schema.generated.sql`` is skipped for the same
+    reason ``_schema_cascade.py`` skips it: that dump is ~43 migrations stale
+    and predates several of these rows, so trusting it would make this check
+    agree with a snapshot instead of with the ladder that actually runs.
+
+    The parser is small and syntactic. If a future migration writes the insert
+    in a shape it cannot read, the derived set SHRINKS — and a shrunken set
+    fails the FEATURES → catalog direction below rather than passing quietly.
+    Failing that way round is the point.
+    """
+    slugs: set[str] = set()
+    for path in sorted(MIGRATIONS.glob("*.sql")):
+        if path.name == "schema.generated.sql":
+            continue
+        sql = path.read_text(encoding="utf-8", errors="replace")
+        for insert in _CATALOG_INSERT_RE.finditer(sql):
+            body = insert.group(1)
+            values = body.split("VALUES", 1)[-1] if "VALUES" in body.upper() else ""
+            slugs.update(_CATALOG_SLUG_RE.findall(values))
+    return slugs
+
+
+#: Slugs allowed to exist on exactly one side. **Empty, and that is a
+#: measurement**: as of 2026-08-05 the 22 catalog rows across migrations 130,
+#: 132 and 140 match the 22 FEATURES entries exactly. It is a commented literal
+#: rather than a filter inside the assertion so that adding an exception is an
+#: edit somebody has to justify in review — a silent `if slug.startswith(...)`
+#: would have hidden the migration-140 defect that motivated this file's Center
+#: checks in the first place.
+CATALOG_DRIFT_EXCEPTIONS: frozenset[str] = frozenset()
+
+
+def test_the_parser_actually_reads_the_catalog() -> None:
+    """A derivation that returns nothing makes both directions below vacuous."""
+    slugs = _catalog_slugs()
+    assert len(slugs) >= 20, (
+        f"Only {len(slugs)} feature_catalog slugs parsed out of {MIGRATIONS} — "
+        "the INSERT shape has changed and the pinning below is now vacuous. "
+        "Teach _CATALOG_INSERT_RE / _CATALOG_SLUG_RE the new shape."
+    )
+    # Anchors from three different migrations, so a parser that only reads
+    # 130's multi-row insert cannot pass.
+    for anchor in ("chat", "workflows", "center.sales", "crm"):
+        assert anchor in slugs, f"'{anchor}' not parsed out of the migrations"
+
+
+def test_every_seeded_feature_is_in_the_features_tuple() -> None:
+    """Catalog → FEATURES. A row absent here is unreachable, owners included."""
+    unreachable = _catalog_slugs() - set(FEATURES) - CATALOG_DRIFT_EXCEPTIONS
+    assert not unreachable, (
+        f"feature_catalog seeds {sorted(unreachable)} but acb_auth.FEATURES "
+        "does not list them. `allowed_features()` iterates FEATURES, so "
+        "/auth/me never emits these and the nav drops them for every "
+        "principal — including an owner holding `*`, since the wildcard is "
+        "only ever matched against those literals."
+    )
+
+
+def test_every_feature_has_a_catalog_row() -> None:
+    """FEATURES → catalog. A grantable feature nobody can grant is not one."""
+    ungrantable = set(FEATURES) - _catalog_slugs() - CATALOG_DRIFT_EXCEPTIONS
+    assert not ungrantable, (
+        f"acb_auth.FEATURES lists {sorted(ungrantable)} with no "
+        "feature_catalog row in infra/postgres/. The admin access editor "
+        "renders from that table, so an admin cannot grant these through the "
+        "product. Add the row in a migration (next free number)."
+    )
+
+
+def test_crm_is_registered_on_both_sides() -> None:
+    """WS-26a's own registration, named rather than left to the pair above.
+
+    The generic checks pass when BOTH sides are missing a slug; this one says
+    which slug this change was supposed to add.
+    """
+    assert "crm" in FEATURES
+    assert "crm" in _catalog_slugs()
+
+
 def test_agent_service_is_not_assignable_to_people() -> None:
     assert "agent_service" in SYSTEM_ROLES
     assert "agent_service" not in ASSIGNABLE_SYSTEM_ROLES

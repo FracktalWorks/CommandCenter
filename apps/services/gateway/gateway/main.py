@@ -963,6 +963,15 @@ except Exception:  # pragma: no cover
     pass
 
 try:
+    # WS-26 — native CRM (spec: ai-company-brain/specs/crm_app.md). Leads,
+    # deals, contacts, organizations, the pipeline and one activity timeline.
+    from gateway.routes.crm import router as _crm_router
+
+    app.include_router(_crm_router)
+except Exception:  # pragma: no cover
+    pass
+
+try:
     from gateway.routes.settings import router as _settings_router
 
     app.include_router(_settings_router)

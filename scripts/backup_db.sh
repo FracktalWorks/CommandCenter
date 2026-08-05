@@ -151,8 +151,16 @@ if [ "$VERIFY_RESTORE" = "1" ]; then
   # Trap so a failure part-way through cannot leave a stray multi-hundred-MB
   # database behind on a box with finite disk.
   trap 'docker exec "$PG_CONTAINER" dropdb -U "$PG_USER" --if-exists "$SCRATCH" >/dev/null 2>&1 || true' EXIT
+  # The log goes in $DEST, NOT /tmp. Two reasons, one of which already bit us:
+  # `fs.protected_regular=2` (Ubuntu default) forbids opening an existing file
+  # in a sticky world-writable dir owned by another user — and that applies to
+  # ROOT TOO. So once a manual run as `acb` had created /tmp/verify_restore.log,
+  # the root-run systemd unit could no longer write it and every nightly backup
+  # failed at the verify step. Keeping it beside the dump also means the
+  # evidence for a backup travels with that backup instead of being overwritten
+  # by the next run.
   if docker exec -i "$PG_CONTAINER" pg_restore -U "$PG_USER" -d "$SCRATCH" --no-owner --no-acl \
-       < "$DEST/acb.dump" > /tmp/verify_restore.log 2>&1; then
+       < "$DEST/acb.dump" > "$DEST/verify_restore.log" 2>&1; then
     live="$(docker exec "$PG_CONTAINER" psql -U "$PG_USER" -d acb -tAc \
             "select count(*) from information_schema.tables where table_schema='public'")"
     rest="$(docker exec "$PG_CONTAINER" psql -U "$PG_USER" -d "$SCRATCH" -tAc \

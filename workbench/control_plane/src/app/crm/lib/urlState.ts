@@ -39,6 +39,17 @@ export type CrmView = {
   /** Restrict to one owner's records. `owner_email` is assignment, not an
    *  ACL (D-CRM-3), so this is a filter and never a permission. */
   owner: string | null;
+  /**
+   * The column a list is ordered by, or null for the entity's default.
+   *
+   * In the URL with everything else, not in component state: a sorted list is
+   * exactly the thing somebody links to ("the deals closing soonest"), and
+   * holding it locally is how a header click changes the arrow and nothing
+   * else — the load effect keys on the view, so a filter the view does not
+   * carry cannot re-fetch.
+   */
+  sort: string | null;
+  dir: "asc" | "desc";
 };
 
 export const DEFAULT_VIEW: CrmView = {
@@ -48,6 +59,8 @@ export const DEFAULT_VIEW: CrmView = {
   statusId: null,
   includeConverted: false,
   owner: null,
+  sort: null,
+  dir: "desc",
 };
 
 function isEntity(value: string | null): value is EntitySlug {
@@ -73,6 +86,11 @@ export function parseView(search: string | URLSearchParams): CrmView {
     statusId: params.get("status") || null,
     includeConverted: params.get("converted") === "1",
     owner: params.get("owner") || null,
+    sort: params.get("sort") || null,
+    // Anything that is not "asc" is descending: the gateway allows exactly
+    // two directions and 422s a third, so a hand-edited `dir=sideways` should
+    // render a list rather than an error.
+    dir: params.get("dir") === "asc" ? "asc" : "desc",
   };
 }
 
@@ -105,6 +123,12 @@ export function serializeView(view: CrmView): string {
   if (view.statusId) params.set("status", view.statusId);
   if (view.includeConverted) params.set("converted", "1");
   if (view.owner) params.set("owner", view.owner);
+  if (view.sort) {
+    params.set("sort", view.sort);
+    // `dir` only travels with a stated `sort`: on its own it means nothing,
+    // and writing it would put a parameter in every URL that changes nothing.
+    if (view.dir === "asc") params.set("dir", "asc");
+  }
   if (view.record) params.set(view.record.param, view.record.id);
   return params.toString();
 }
@@ -129,8 +153,15 @@ export function closeRecord(view: CrmView): CrmView {
   return { ...view, record: null };
 }
 
-/** Switching tabs closes the sheet and drops the filters that do not travel:
- *  a status lane from the deal pipeline means nothing on the leads list. */
+/**
+ * Switching tabs closes the sheet and drops the filters that do not travel: a
+ * status lane from the deal pipeline means nothing on the leads list.
+ *
+ * ⚠️ `sort` is one of them, and for a harder reason than the others: each
+ * entity's sort keys are a server-side ALLOWLIST and an unknown key is a 422,
+ * never a silent fall back. Carrying `amount` from the deals list onto leads
+ * would not merely sort oddly — it would empty the list with a refusal.
+ */
 export function selectTab(view: CrmView, tab: CrmView["tab"]): CrmView {
   if (tab === view.tab) return view;
   return {
@@ -139,5 +170,22 @@ export function selectTab(view: CrmView, tab: CrmView["tab"]): CrmView {
     record: null,
     statusId: null,
     includeConverted: false,
+    sort: null,
+    dir: "desc",
   };
+}
+
+/**
+ * A header click: the same column flips direction, a new column starts
+ * descending.
+ *
+ * Descending first because every default this app has is "newest / biggest /
+ * most recently touched" — ascending on the first click would open the list
+ * on the oldest and smallest rows.
+ */
+export function applySort(view: CrmView, key: string): CrmView {
+  if (view.sort === key) {
+    return { ...view, dir: view.dir === "asc" ? "desc" : "asc" };
+  }
+  return { ...view, sort: key, dir: "desc" };
 }

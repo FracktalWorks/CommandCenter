@@ -108,7 +108,14 @@ export default function KanbanBoard({
                     key={deal.id}
                     deal={deal}
                     warnLost={needsLostReason(deal, lane.status)}
-                    onDragStart={() => setDragging(deal)}
+                    onDragStart={(e) => {
+                      // ⚠️ Firefox refuses to START a drag unless dragstart
+                      // sets something on the dataTransfer — without this the
+                      // board is inert there while working everywhere else.
+                      e.dataTransfer.setData("text/plain", deal.id);
+                      e.dataTransfer.effectAllowed = "move";
+                      setDragging(deal);
+                    }}
                     onDragEnd={() => setDragging(null)}
                     onOpen={() => onOpen(deal.id)}
                   />
@@ -143,7 +150,7 @@ function DealCard({
 }: {
   deal: Deal;
   warnLost: boolean;
-  onDragStart: () => void;
+  onDragStart: (e: React.DragEvent<HTMLElement>) => void;
   onDragEnd: () => void;
   onOpen: () => void;
 }) {

@@ -40,6 +40,12 @@ export type ListQuery = {
  * Drops `status_id` for an entity without a pipeline rather than sending it
  * and handling the 422: the refusal is the server's job, and asking anyway
  * would put a red toast on a list the user filtered by accident.
+ *
+ * `sort`/`dir` are sent whenever the view states them. ⚠️ They must actually
+ * reach the wire: a column header that flips its own arrow and issues an
+ * unchanged request is worse than no sorting at all, because it looks like it
+ * worked. (`selectTab` clears `sort` when the collection changes — the keys
+ * are a per-entity server allowlist and a stale one is a 422.)
  */
 export function listQuery(
   entity: EntitySlug,
@@ -57,7 +63,22 @@ export function listQuery(
   if (entity === "leads" && view.includeConverted) {
     query.include_converted = true;
   }
+  if (view.sort && canSortBy(entity, view.sort)) {
+    query.sort = view.sort;
+    query.dir = view.dir;
+  }
   return query;
+}
+
+/**
+ * Is this a sort key the gateway will accept for this entity?
+ *
+ * Belt-and-braces behind `selectTab`'s clear: an unknown key is a 422 that
+ * empties the list, and the one way a stale key survives is a hand-edited or
+ * shared URL — `?tab=leads&sort=amount` is one paste away.
+ */
+export function canSortBy(entity: EntitySlug, key: string): boolean {
+  return SORTS[entity].some((option) => option.key === key);
 }
 
 /** A query object → `?a=1&b=2`, dropping empties so the URL stays readable. */

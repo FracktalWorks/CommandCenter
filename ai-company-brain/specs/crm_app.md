@@ -288,15 +288,20 @@ icon names as strings, `useViewMode()` for mobile. State: zustand store + pure h
 `lib/` with colocated vitest tests (the `tasks` layout).
 
 **As built (WS-26c).** `lib/` holds everything server-shaped and pure, and each file is
-unit-tested: `urlState.ts` (the URL grammar — `?deal=` opens the sheet over the list, and
-`selectTab` drops the filters that do not travel), `board.ts` (lane order, tone, the move
-plan, the optimistic re-tally, and `needsLostReason`), `filters.ts` (the list contract,
+unit-tested: `urlState.ts` (the URL grammar — `?deal=` opens the sheet over the list,
+`?sort=`/`?dir=` make a sorted list shareable, and `selectTab` drops the filters that do not
+travel, `sort` included because the keys are a **per-entity server allowlist** and a stale
+one is a 422 that empties the list), `board.ts` (lane order, tone, the move plan, the
+optimistic re-tally, and `needsLostReason`), `filters.ts` (the list contract,
 including *never* sending `?status_id` to an entity without a pipeline), `convert.ts`
 (§3.7's match rules, mirrored so the modal pre-selects what the server would do),
 `format.ts` (₹ in `en-IN` lakh/crore grouping, stage age, dwell) and `api.ts` (the BFF
 client; refusals keep their status so a 409 can be explained rather than reported as a
-failure). `store.ts` is a thin zustand store whose one rule is that a refusal surfaces AND
-the row is re-read — a stale row after a 409 reads as success.
+failure). `store.ts` is a thin zustand store whose one rule is that a **write re-reads what is on
+screen, whatever the response was** — a stale row after a 409 reads as success, and a
+created record that is invisible until somebody hits refresh is the same lie told the other
+way round. It keeps the last loaded view so `refreshCollection()` can re-read the board or
+the list without every caller threading the view back in.
 `components/` is composition only. ⚠️ `CenterApp` in `lib/centers.ts` is a union
 discriminated on `status`, so a `live` entry without an `href` is a **compile** error: the
 existing `test_centers_registry_matches_the_feature_vocabulary` reads each Center's
@@ -553,6 +558,36 @@ overrule any of them):**
   before writing any of the transition's three effects, and the reason travels *with* the
   `PATCH` rather than in a second request, so the move either lands whole or not at all.
 
+**Adversarial-review repairs, same branch (2026-08-05 → 06). Three changed a decision:**
+- **C8 — `sort`/`dir` are VIEW state, in the URL, not component state.** The first pass held
+  them in `useState`, `listQuery` never sent them and the load effect never watched them, so
+  a column header flipped its own arrow and re-issued an identical request — a control that
+  changes its appearance and nothing else, which reads as working. Putting them in `CrmView`
+  fixes all three at once (the effect already keys on view fields), makes a sorted list
+  shareable, and lets `selectTab`'s existing "filters that do not travel" rule clear a stale
+  key — which matters more here than for the others, because sort keys are a per-entity
+  server allowlist and a carried-over key is a 422, not an odd order. `canSortBy` is
+  belt-and-braces behind it for the hand-edited-URL case.
+- **C9 — `similarOrganizations` excludes the exact match by IDENTITY, not by comparing
+  strings.** The review found the exact match rendered twice (both entries carrying the same
+  id, so both drew selected) because the filter compared a lowercased candidate against a
+  non-lowercased lead name. The suggested fix — fold both sides — also removes the duplicate,
+  but it hides every case-variant: `matchOrganization` is case-SENSITIVE, so "bosch india" is
+  *not* the exact match and is precisely the near-miss the list exists to surface. Excluding
+  `o.id === exact?.id` fixes the duplicate and keeps the near-miss.
+- **C10 — `link_deal_contact`'s `is_primary` is tri-state (`None` = leave it alone), like
+  `role`.** `DealContactIn.is_primary` defaulted to `False`, so "set this contact's role"
+  demoted the deal's primary as a side effect: a field the caller never mentioned deciding
+  something. Explicit `false` still demotes — a deal may legitimately have no primary.
+
+The other four were straight defects, fixed without a decision: `createRecord` and a
+*successful* `patchRecord` now re-read the collection (`refreshCollection`); `moveDeal`'s
+post-move re-read carries the board's owner filter instead of widening it to the whole
+pipeline; the kanban's `dragstart` sets a `dataTransfer` payload, without which Firefox
+never starts the drag at all; and `api.moveDeal` now consumes `board.moveRequest` (extended
+to carry the lost fields) rather than building a second, diverging shape beside a function
+whose comments claimed to be the only one.
+
 ---
 
 ## 9. Tickets — WS-26a…e (every item AGENT-SAFE unless labeled)
@@ -641,8 +676,9 @@ box-side copy, not in the PR.
 error, and the gateway addendum
 `apps/services/gateway/gateway/routes/crm/deal_contacts.py` + `core.link_deal_contact` /
 `core.project_joined` / `core.reject_null_on_defaulted` / `core.lead_name_is_derived`.
-Fenced by 89 new vitest cases and 37 new pytest cases (the four `test_crm_*.py` files go
-191 → 228); **zero DB, zero network.**
+Fenced by 103 new vitest cases and 41 new pytest cases (the four `test_crm_*.py` files go
+191 → 232); **zero DB, zero network.** Adversarial review returned REQUEST-CHANGES on the
+first pass; all seven findings repaired in the same branch — see C8–C10 in §8.
 **Built, not deployed:** migration 144 has still not been applied anywhere.)*
 Notes: until an admin grants `feature:crm`, the UI is visible to owner/admin only (§5).
 **Migration 144 has not been applied anywhere**, so live rendering, drag persistence and

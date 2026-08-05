@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as api from "./api";
 import { CrmError } from "./api";
+import { moveRequest } from "./board";
+import { listQuery } from "./filters";
+import { DEFAULT_VIEW } from "./urlState";
 
 // ── The client goes through the BFF, and refusals keep their meaning ──────
 //
@@ -51,10 +54,31 @@ describe("every request goes through /api/crm", () => {
     ]);
   });
 
+  it("puts the sorted column on the wire, not just on the header", async () => {
+    // The defect this pins: `listQuery` never set sort/dir and the load
+    // effect never watched them, so clicking a column header flipped its own
+    // arrow and re-issued an identical request. A sort control that changes
+    // its appearance and nothing else is worse than no sorting — it looks
+    // like it worked. Asserted through the CLIENT, because the SORTS table on
+    // its own pins a vocabulary and says nothing about the request.
+    const { calls, restore } = stub(200, { rows: [], total: 0 });
+    try {
+      await api.listRecords(
+        "deals",
+        listQuery("deals", { ...DEFAULT_VIEW, sort: "amount", dir: "asc" })
+      );
+    } finally {
+      restore();
+    }
+    const url = new URL(calls[0][0], "https://workbench.test");
+    expect(url.searchParams.get("sort")).toBe("amount");
+    expect(url.searchParams.get("dir")).toBe("asc");
+  });
+
   it("issues the kanban drag as a PATCH of status_id", async () => {
     const { calls, restore } = stub(200, { id: "d1" });
     try {
-      await api.moveDeal("d1", "s2");
+      await api.moveDeal({ dealId: "d1", fromStatusId: "s1", toStatusId: "s2" });
     } finally {
       restore();
     }
@@ -64,16 +88,34 @@ describe("every request goes through /api/crm", () => {
     expect(JSON.parse(String(init?.body))).toEqual({ status_id: "s2" });
   });
 
+  it("builds that PATCH from moveRequest and nothing else", async () => {
+    // board.moveRequest documents itself as the single definition of what
+    // moving a deal means; it had no runtime caller, and this function built
+    // its own shape alongside it. Two definitions, one of them decorative.
+    const move = { dealId: "d1", fromStatusId: "s1", toStatusId: "s2" };
+    const extras = { lost_reason_id: "r1" };
+    const { calls, restore } = stub(200, { id: "d1" });
+    try {
+      await api.moveDeal(move, extras);
+    } finally {
+      restore();
+    }
+    const expected = moveRequest(move, extras);
+    expect(calls[0][0]).toBe(`/api/crm${expected.path}`);
+    expect(calls[0][1]?.method).toBe(expected.method);
+    expect(JSON.parse(String(calls[0][1]?.body))).toEqual(expected.body);
+  });
+
   it("carries a lost reason alongside the move when one is required", async () => {
     // Entering a lost-type status without one is a 422 BEFORE any of the
     // transition's three effects, so the reason travels with the move rather
     // than in a second request that could land on its own.
     const { calls, restore } = stub(200, { id: "d1" });
     try {
-      await api.moveDeal("d1", "lost-lane", {
-        lost_reason_id: "r1",
-        lost_note: "chose a competitor",
-      });
+      await api.moveDeal(
+        { dealId: "d1", fromStatusId: "s1", toStatusId: "lost-lane" },
+        { lost_reason_id: "r1", lost_note: "chose a competitor" }
+      );
     } finally {
       restore();
     }

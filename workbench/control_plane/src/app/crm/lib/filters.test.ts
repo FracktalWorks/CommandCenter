@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   activeChip,
   applyChip,
+  canSortBy,
   chipsFor,
   hasPipeline,
   listQuery,
@@ -55,6 +56,34 @@ describe("listQuery", () => {
   it("trims the search box and omits it when empty", () => {
     expect(listQuery("deals", { ...DEFAULT_VIEW, q: "  bosch " }).q).toBe("bosch");
     expect(listQuery("deals", { ...DEFAULT_VIEW, q: "   " }).q).toBeUndefined();
+  });
+
+  it("sends the sorted column and its direction", () => {
+    // The header used to flip its own arrow and issue an unchanged request.
+    const query = listQuery("deals", {
+      ...DEFAULT_VIEW,
+      sort: "amount",
+      dir: "asc",
+    });
+    expect(query.sort).toBe("amount");
+    expect(query.dir).toBe("asc");
+  });
+
+  it("omits dir when no column is sorted", () => {
+    // On its own it orders nothing; sending it would put a parameter on every
+    // list request that changes no answer.
+    const query = listQuery("deals", DEFAULT_VIEW);
+    expect(query.sort).toBeUndefined();
+    expect(query.dir).toBeUndefined();
+  });
+
+  it("drops a sort key the gateway does not allowlist for this entity", () => {
+    // `?tab=leads&sort=amount` is one paste away, and an unknown key is a 422
+    // that empties the list rather than a silent fall back to the default.
+    const stale = { ...DEFAULT_VIEW, tab: "leads" as const, sort: "amount" };
+    expect(listQuery("leads", stale).sort).toBeUndefined();
+    expect(canSortBy("leads", "amount")).toBe(false);
+    expect(canSortBy("deals", "amount")).toBe(true);
   });
 });
 

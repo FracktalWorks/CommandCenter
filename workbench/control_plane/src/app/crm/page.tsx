@@ -26,12 +26,13 @@ import LostReasonModal from "./components/LostReasonModal";
 import QuickCreateModal from "./components/QuickCreateModal";
 import RecordList from "./components/RecordList";
 import RecordSheet from "./components/RecordSheet";
-import { boardTotals, moveRequest, needsLostReason, type DealMove } from "./lib/board";
+import { boardTotals, needsLostReason, type DealMove } from "./lib/board";
 import { activeChip, applyChip, chipsFor } from "./lib/filters";
 import { compactMoney } from "./lib/format";
 import { useCrmStore } from "./lib/store";
 import type { EntitySlug, Lead, Status } from "./lib/types";
 import {
+  applySort,
   closeRecord,
   openRecord,
   parseView,
@@ -66,8 +67,6 @@ function CrmPageInner() {
   );
 
   const store = useCrmStore();
-  const [sort, setSort] = useState<string | null>(null);
-  const [direction, setDirection] = useState<"asc" | "desc">("desc");
   const [creating, setCreating] = useState<EntitySlug | null>(null);
   const [converting, setConverting] = useState<Lead | null>(null);
   const [pendingLoss, setPendingLoss] = useState<{
@@ -90,8 +89,19 @@ function CrmPageInner() {
   useEffect(() => {
     if (view.tab === "board") store.loadBoard(view);
     else store.loadList(view.tab, view);
+    // ⚠️ Every field `listQuery` reads has to be in this list, `sort`/`dir`
+    // included: a filter the effect does not watch is a control that changes
+    // its own appearance and issues no request.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [view.tab, view.q, view.statusId, view.includeConverted, view.owner]);
+  }, [
+    view.tab,
+    view.q,
+    view.statusId,
+    view.includeConverted,
+    view.owner,
+    view.sort,
+    view.dir,
+  ]);
 
   useEffect(() => {
     if (view.record) store.loadRecord(view.record.entity, view.record.id);
@@ -111,14 +121,6 @@ function CrmPageInner() {
     : [];
 
   const totals = boardTotals(store.lanes);
-
-  function onSort(key: string) {
-    if (sort === key) setDirection((d) => (d === "asc" ? "desc" : "asc"));
-    else {
-      setSort(key);
-      setDirection("desc");
-    }
-  }
 
   /** A board drop, or the status pill in the sheet. Same request either way. */
   async function moveDeal(move: DealMove, target: Status) {
@@ -223,9 +225,9 @@ function CrmPageInner() {
           rows={store.rows}
           total={store.total}
           loading={store.loading}
-          sort={sort}
-          direction={direction}
-          onSort={onSort}
+          sort={view.sort}
+          direction={view.dir}
+          onSort={(key) => go(applySort(view, key))}
           onOpen={(id) => go(openRecord(view, PARAM_FOR[view.tab as EntitySlug], id))}
         />
       )}
@@ -339,6 +341,3 @@ export default function CrmPage() {
     </Suspense>
   );
 }
-
-/** Re-exported so the move contract has exactly one definition in the app. */
-export { moveRequest };

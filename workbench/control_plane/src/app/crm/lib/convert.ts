@@ -58,9 +58,20 @@ export function matchOrganization(
   return organizations.find((o) => o.name.trim() === name) ?? null;
 }
 
-/** Near-misses to show under the exact match — case- and whitespace-folded,
- *  so "bosch india" surfaces next to "Bosch India" without the server ever
- *  treating them as the same row. */
+/**
+ * Near-misses to show under the exact match — case- and whitespace-folded, so
+ * "bosch india" surfaces next to "Bosch India" without the server ever
+ * treating them as the same row.
+ *
+ * ⚠️ The exact match is excluded **by identity**, not by comparing strings.
+ * The first version compared a lowercased candidate against a non-lowercased
+ * lead name, so the exact match never matched its own exclusion and the modal
+ * rendered that account twice — both entries carrying the same id, so both
+ * drew as selected. Excluding by id also keeps a case-variant genuinely
+ * visible: `matchOrganization` is case-SENSITIVE, so "bosch india" is NOT the
+ * exact match and is exactly the kind of near-miss this list exists to
+ * surface. Folding both sides instead would have hidden it entirely.
+ */
 export function similarOrganizations(
   lead: Pick<Lead, "organization_name">,
   organizations: Organization[],
@@ -68,13 +79,12 @@ export function similarOrganizations(
 ): Organization[] {
   const name = (lead.organization_name || "").trim().toLowerCase();
   if (!name) return [];
+  const exact = matchOrganization(lead, organizations);
   return organizations
     .filter((o) => {
+      if (o.id === exact?.id) return false;
       const candidate = o.name.trim().toLowerCase();
-      return (
-        candidate !== (lead.organization_name || "").trim() &&
-        (candidate.includes(name) || name.includes(candidate))
-      );
+      return candidate.includes(name) || name.includes(candidate);
     })
     .slice(0, limit);
 }

@@ -110,17 +110,31 @@ export function planMove(
   return { dealId: deal.id, fromStatusId: from, toStatusId };
 }
 
-/** The request a move issues. One place, so the board and the status pill in
- *  the record sheet cannot disagree about what moving a deal means. */
-export function moveRequest(move: DealMove): {
+/** Fields that ride along with a move — today `lost_reason_id`/`lost_note`. */
+export type MoveExtras = Record<string, unknown>;
+
+export type MoveRequest = {
   path: string;
   method: "PATCH";
-  body: { status_id: string };
-} {
+  body: { status_id: string } & MoveExtras;
+};
+
+/**
+ * The request a move issues. `api.moveDeal` is its only caller, so the board
+ * drag and the status pill in the record sheet cannot disagree about what
+ * moving a deal means.
+ *
+ * `extras` is part of the shape rather than a second request: entering a
+ * lost-type status without a reason is a 422 raised BEFORE any of the
+ * transition's three effects, so the reason has to be in the same PATCH — two
+ * requests could half-apply, and the half that lands is the one that moved
+ * the deal.
+ */
+export function moveRequest(move: DealMove, extras: MoveExtras = {}): MoveRequest {
   return {
     path: `/deals/${move.dealId}`,
     method: "PATCH",
-    body: { status_id: move.toStatusId },
+    body: { status_id: move.toStatusId, ...extras },
   };
 }
 

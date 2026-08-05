@@ -955,7 +955,7 @@ async def link_deal_contact(
     contact_id: str,
     *,
     role: str | None = None,
-    is_primary: bool = False,
+    is_primary: bool | None = None,
 ) -> Any:
     """Attach a contact to a deal, keeping "one primary per deal" true.
 
@@ -969,6 +969,12 @@ async def link_deal_contact(
 
     Promoting a contact demotes the incumbent in the same transaction, before
     the promotion — the intermediate state is "no primary", never "two".
+
+    ⚠️ **Both optional fields are tri-state: ``None`` means "leave it alone".**
+    ``role`` was written that way from the start and ``is_primary`` was not,
+    so ``PATCH``-ing a contact's role demoted the deal's primary as a side
+    effect — the caller said nothing about the flag and a default of ``False``
+    said "no". A field the caller did not mention must not be a decision.
     """
     if is_primary:
         await db.execute(
@@ -987,12 +993,16 @@ async def link_deal_contact(
         {"deal_id": deal_id, "contact_id": contact_id},
     )).fetchone()
     if existing is None:
-        return await insert_row(db, "crm_deal_contacts", {
+        values: dict[str, Any] = {
             "deal_id": deal_id,
             "contact_id": contact_id,
             "role": role,
-            "is_primary": is_primary,
-        })
+        }
+        # Unstated on a NEW row means the column's own default (false) —
+        # omitted rather than sent as null, which the NOT NULL guard refuses.
+        if is_primary is not None:
+            values["is_primary"] = is_primary
+        return await insert_row(db, "crm_deal_contacts", values)
     # The PK is (deal_id, contact_id), so re-adding a linked contact is an
     # update of its role/primary flag rather than a 409: "make Priya the
     # primary" is the same request whether or not she is already on the deal.
@@ -1005,7 +1015,10 @@ async def link_deal_contact(
         {
             "deal_id": deal_id, "contact_id": contact_id,
             "role": role if role is not None else getattr(existing, "role", None),
-            "is_primary": is_primary,
+            "is_primary": (
+                is_primary if is_primary is not None
+                else bool(getattr(existing, "is_primary", False))
+            ),
         },
     )).fetchone()
 

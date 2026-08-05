@@ -48,8 +48,20 @@ type CrmState = {
   loading: boolean;
   saving: boolean;
   error: string | null;
+  /**
+   * The view the visible collection was loaded for.
+   *
+   * Kept so a write can re-read WHAT IS ON SCREEN without every caller
+   * threading the view back in. A created record that is invisible until
+   * somebody hits refresh, or a renamed one whose row still shows the old
+   * name, is the same lie as a stale row after a 409 — the store's rule at
+   * the top of this file is one rule, and it applies to the successes too.
+   */
+  lastView: CrmView | null;
 
   setError: (message: string | null) => void;
+  /** Re-read whichever collection is showing (board or list). */
+  refreshCollection: () => Promise<void>;
   loadVocabulary: () => Promise<void>;
   loadBoard: (view: CrmView) => Promise<void>;
   loadList: (entity: EntitySlug, view: CrmView) => Promise<void>;
@@ -104,8 +116,16 @@ export const useCrmStore = create<CrmState>((set, get) => ({
   loading: false,
   saving: false,
   error: null,
+  lastView: null,
 
   setError: (error) => set({ error }),
+
+  async refreshCollection() {
+    const view = get().lastView;
+    if (!view) return;
+    if (view.tab === "board") await get().loadBoard(view);
+    else await get().loadList(view.tab, view);
+  },
 
   async loadVocabulary() {
     try {
@@ -121,7 +141,7 @@ export const useCrmStore = create<CrmState>((set, get) => ({
   },
 
   async loadBoard(view) {
-    set({ loading: true });
+    set({ loading: true, lastView: view });
     try {
       const pipeline = await api.getPipeline(view.owner);
       set({ lanes: toBoardLanes(pipeline), error: null });
@@ -133,7 +153,7 @@ export const useCrmStore = create<CrmState>((set, get) => ({
   },
 
   async loadList(entity, view) {
-    set({ loading: true });
+    set({ loading: true, lastView: view });
     try {
       const page = await api.listRecords(entity, listQuery(entity, view));
       set({ rows: page.rows, total: page.total, error: null });
@@ -181,8 +201,11 @@ export const useCrmStore = create<CrmState>((set, get) => ({
     const previous = get().lanes;
     set({ lanes: applyMove(previous, move), saving: true, error: null });
     try {
-      await api.moveDeal(move.dealId, move.toStatusId, extra);
-      const pipeline = await api.getPipeline(null);
+      await api.moveDeal(move, extra);
+      // Re-read under the SAME owner filter the board is showing. Re-reading
+      // unfiltered would silently widen a scoped board into the whole
+      // pipeline the moment somebody dragged a card on it.
+      const pipeline = await api.getPipeline(get().lastView?.owner ?? null);
       set({ lanes: toBoardLanes(pipeline) });
     } catch (err) {
       // Put the card back where it was AND say why. Either alone is a lie.
@@ -201,6 +224,11 @@ export const useCrmStore = create<CrmState>((set, get) => ({
         body
       );
       set({ record });
+      // The sheet is open OVER a list, and the list is showing the row that
+      // was just edited: renaming a deal and watching the card behind the
+      // sheet keep the old name is the same class of lie as a stale row
+      // after a 409. Re-read on success too, not only on refusal.
+      await get().refreshCollection();
       return true;
     } catch (err) {
       set({ error: message(err) });
@@ -217,6 +245,11 @@ export const useCrmStore = create<CrmState>((set, get) => ({
     set({ saving: true, error: null });
     try {
       const created = await api.createRecord<{ id: string }>(entity, body);
+      // Nothing else re-fetches the collection: opening the new record's
+      // sheet changes `view.record`, and the load effect keys on the tab and
+      // the filters. Without this the record exists on the server and is
+      // absent from the list behind the sheet until somebody hits refresh.
+      await get().refreshCollection();
       return created.id;
     } catch (err) {
       set({ error: message(err) });

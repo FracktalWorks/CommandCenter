@@ -51,8 +51,11 @@ class DealContactsResponse(BaseModel):
 
 class DealContactIn(BaseModel):
     contact_id: str
+    #: Both of these are tri-state — ``None`` is "leave it as it is", which is
+    #: what an absent field means. ``is_primary`` defaulting to ``False`` made
+    #: "set this person's role" demote the deal's primary as a side effect.
     role: str | None = None
-    is_primary: bool = False
+    is_primary: bool | None = None
 
 
 @router.get("/deals/{deal_id}/contacts", response_model=DealContactsResponse)

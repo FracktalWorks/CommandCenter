@@ -1092,6 +1092,58 @@ async def test_re_adding_a_linked_contact_updates_the_link(
     assert links[0]["role"] == "Procurement"
 
 
+async def test_a_role_only_update_leaves_the_primary_standing(
+    db: FakeCrmDB,
+) -> None:
+    """``is_primary`` is tri-state: an ABSENT field is "leave it alone".
+
+    It defaulted to ``False``, so "set Anitha's role to Procurement" silently
+    demoted the deal's primary — a field the caller never mentioned deciding
+    something. ``role`` was tri-state from the start; both are now.
+    """
+    deal, anitha, _ = _deal_with_contacts(db)
+    await _link(db, deal, anitha, is_primary=True)
+    await _link(db, deal, anitha, role="Procurement")
+
+    link = db.rows("crm_deal_contacts")[0]
+    assert link["is_primary"] is True
+    assert link["role"] == "Procurement"
+
+
+async def test_a_role_only_update_does_not_demote_somebody_else_either(
+    db: FakeCrmDB,
+) -> None:
+    """The same rule read from the other side of the deal: touching contact B
+    must not disturb contact A's flag."""
+    deal, anitha, priya = _deal_with_contacts(db)
+    await _link(db, deal, anitha, is_primary=True)
+    await _link(db, deal, priya, role="Finance")
+
+    primaries = [r for r in db.rows("crm_deal_contacts") if r.get("is_primary")]
+    assert [str(r["contact_id"]) for r in primaries] == [str(anitha.id)]
+
+
+async def test_an_explicit_false_still_demotes(db: FakeCrmDB) -> None:
+    """Tri-state means unstated is a no-op, not that demotion is unreachable:
+    a deal can legitimately end up with no primary."""
+    deal, anitha, _ = _deal_with_contacts(db)
+    await _link(db, deal, anitha, is_primary=True)
+    await _link(db, deal, anitha, is_primary=False)
+
+    assert db.rows("crm_deal_contacts")[0]["is_primary"] is False
+
+
+async def test_a_new_link_defaults_to_not_primary(db: FakeCrmDB) -> None:
+    """An unstated flag on a NEW row takes the column's own default rather
+    than being sent as null, which the NOT NULL guard refuses."""
+    deal, anitha, _ = _deal_with_contacts(db)
+    added = await _link(db, deal, anitha, role="Procurement")
+
+    assert added.is_primary is False
+    insert = db.statements_touching("INSERT INTO crm_deal_contacts")[0]
+    assert "is_primary" not in insert
+
+
 async def test_removing_a_contact_says_whether_it_was_the_primary(
     db: FakeCrmDB,
 ) -> None:

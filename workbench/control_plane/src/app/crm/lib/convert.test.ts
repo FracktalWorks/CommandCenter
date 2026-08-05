@@ -76,6 +76,35 @@ describe("similarOrganizations", () => {
     expect(similar.map((o) => o.id)).not.toContain("o3");
   });
 
+  it("EXCLUDES the exact match, which is rendered above it", () => {
+    // The defect: the filter compared a lowercased candidate against a
+    // non-lowercased lead name, so the exact match never matched its own
+    // exclusion — the modal drew "Bosch India" twice, and because both
+    // entries carried the same id, both drew as selected.
+    const exact = matchOrganization(lead(), ORGS);
+    expect(exact?.id).toBe("o1");
+    expect(similarOrganizations(lead(), ORGS).map((o) => o.id)).not.toContain(
+      exact!.id
+    );
+  });
+
+  it("renders no organization twice", () => {
+    const shown = [
+      ...(matchOrganization(lead(), ORGS) ? ["o1"] : []),
+      ...similarOrganizations(lead(), ORGS).map((o) => o.id),
+    ];
+    expect(new Set(shown).size).toBe(shown.length);
+  });
+
+  it("keeps a case-variant visible, because it is NOT the exact match", () => {
+    // `matchOrganization` is case-sensitive, so "bosch india pvt ltd" and any
+    // other casing are exactly the near-misses this list exists to surface.
+    // Folding both sides to dedupe would have hidden them along with the
+    // duplicate.
+    const orgs = [...ORGS, { id: "o4", name: "BOSCH INDIA" }];
+    expect(similarOrganizations(lead(), orgs).map((o) => o.id)).toContain("o4");
+  });
+
   it("is empty when the lead names no company", () => {
     expect(similarOrganizations(lead({ organization_name: "" }), ORGS)).toEqual([]);
   });

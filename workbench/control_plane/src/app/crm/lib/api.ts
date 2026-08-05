@@ -9,6 +9,7 @@
 // flattened them all to "request failed" would leave the UI unable to explain
 // a refusal, which is the difference between a rule and a bug.
 
+import { moveRequest, type DealMove, type MoveExtras } from "./board";
 import { queryString, type ListQuery } from "./filters";
 import type {
   Activity,
@@ -116,14 +117,20 @@ export function getPipeline(owner?: string | null): Promise<Pipeline> {
   return call<Pipeline>(`/pipeline${owner ? `?owner=${encodeURIComponent(owner)}` : ""}`);
 }
 
-/** The one place a deal changes lane. `board.moveRequest` decides the shape;
- *  this issues it, so the drag and the status pill send the same request. */
+/**
+ * The one place a deal changes lane. `board.moveRequest` decides the shape and
+ * this issues it — the drag and the status pill therefore send the same
+ * request by construction rather than by two functions agreeing.
+ */
 export function moveDeal(
-  dealId: string,
-  statusId: string,
-  extra: Record<string, unknown> = {}
+  move: DealMove,
+  extras: MoveExtras = {}
 ): Promise<Deal> {
-  return patchRecord<Deal>("deals", dealId, { status_id: statusId, ...extra });
+  const request = moveRequest(move, extras);
+  return call<Deal>(request.path, {
+    method: request.method,
+    body: JSON.stringify(request.body),
+  });
 }
 
 // ── Pipeline vocabulary ───────────────────────────────────────────────────

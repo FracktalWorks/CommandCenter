@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  applySort,
   closeRecord,
   DEFAULT_VIEW,
   openRecord,
@@ -131,5 +132,58 @@ describe("selectTab", () => {
   it("is a no-op for the tab already showing", () => {
     const view = { ...DEFAULT_VIEW, tab: "leads" as const, statusId: "s1" };
     expect(selectTab(view, "leads")).toBe(view);
+  });
+
+  it("clears the sort, because the keys are a per-entity allowlist", () => {
+    // Carrying `amount` from deals onto leads would not sort oddly — it is a
+    // 422 that empties the list.
+    const view = {
+      ...DEFAULT_VIEW,
+      tab: "deals" as const,
+      sort: "amount",
+      dir: "asc" as const,
+    };
+    expect(selectTab(view, "leads")).toMatchObject({ sort: null, dir: "desc" });
+  });
+});
+
+describe("applySort", () => {
+  it("starts a new column descending", () => {
+    // Every default here is newest / biggest / most recently touched;
+    // ascending on the first click opens on the oldest and smallest rows.
+    expect(applySort(DEFAULT_VIEW, "amount")).toMatchObject({
+      sort: "amount",
+      dir: "desc",
+    });
+  });
+
+  it("flips direction on the column already sorted", () => {
+    const once = applySort(DEFAULT_VIEW, "amount");
+    const twice = applySort(once, "amount");
+    expect(twice.dir).toBe("asc");
+    expect(applySort(twice, "amount").dir).toBe("desc");
+  });
+
+  it("resets direction when a different column is picked", () => {
+    const ascending = applySort(applySort(DEFAULT_VIEW, "amount"), "amount");
+    expect(applySort(ascending, "name")).toMatchObject({
+      sort: "name",
+      dir: "desc",
+    });
+  });
+
+  it("puts the sort in the URL, so a sorted list is shareable", () => {
+    const view = applySort({ ...DEFAULT_VIEW, tab: "deals" }, "amount");
+    expect(viewHref(view)).toBe("/crm?tab=deals&sort=amount");
+    expect(parseView(serializeView(view))).toEqual(view);
+
+    const ascending = applySort(view, "amount");
+    expect(viewHref(ascending)).toBe("/crm?tab=deals&sort=amount&dir=asc");
+    expect(parseView(serializeView(ascending))).toEqual(ascending);
+  });
+
+  it("writes no dir without a sort, and reads a nonsense one as desc", () => {
+    expect(serializeView({ ...DEFAULT_VIEW, dir: "asc" })).toBe("");
+    expect(parseView("?sort=name&dir=sideways").dir).toBe("desc");
   });
 });

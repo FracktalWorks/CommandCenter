@@ -137,6 +137,52 @@ safe — do not point one of them at the public hostname.
 - Identity chain: Next.js → Bearer + user headers → deps.py resolves real UserContext
 - Chat sessions scoped by user.email; fallback to "default" for anonymous/internal calls
 
+## The user-management contract — binding on every route you add here
+
+Full contract: `ai-company-brain/specs/user_management_contract.md`. The six
+that bite in *this* directory, each learned by breaking it:
+
+1. **The app is default-deny; do not opt out to make something reachable.**
+   `require_authenticated` is attached at the app level in `main.py`, so a new
+   route is gated without you doing anything. If it 401s, the answer is almost
+   never `PUBLIC_ROUTES` — that hands the surface to the internet. It is a
+   caller that cannot carry credentials, and the fix belongs in the BFF.
+   `/email/oauth/{provider}/authorize` was gated with only a browser navigation
+   calling it, and returned "Authentication required" to **every user for six
+   days**. Adding it to `PUBLIC_ROUTES` would have made the query parameter it
+   reads an account-takeover primitive.
+2. **The `/admin` auth floor is per-route, not a package property.**
+   `routes/admin/_common.py` builds the router with **no** `dependencies=`;
+   every route declares `Depends(require_admin_user)` in its own signature. A
+   route that omits it inherits *nothing*. Deleting the permission dependency
+   from the purge route once left 162 tests green.
+3. **Owner-scoped reads: shared predicate, 404 never 403.**
+   `routes/notes/core.py` — `OWNED_MEETING_PREDICATE` / `load_owned_meeting`.
+   403 confirms a row exists; 404 does not. Bind the predicate *into* the
+   mutating statement rather than loading first, so there is no TOCTOU window.
+   Check ownership **before** the expensive read, or the error code becomes the
+   oracle (a 409 "no transcript yet" told you whose meeting existed).
+4. **Never take the acting identity from a query parameter or body.** The
+   authenticated `user.email` outranks anything the caller supplies. A route
+   that preferred a `user_email=` parameter was one URL away from binding a
+   mailbox to somebody else's account.
+5. **Destructive routes owe four things:** the shared self-lockout guard
+   (`_common.assert_not_self_lockout` / `assert_not_self_demotion` — four doors
+   already use it), one transaction, a response that names what was destroyed
+   per table, and an audit row that outlives the deletion. Watch
+   `ON DELETE CASCADE`: a delete on one table silently empties tables on your
+   "kept" list, and a count that reports destroyed rows as kept is worse than
+   no count.
+6. **Verify, do not predict.** Read the row back before declaring success. A
+   route that decided what *would* happen, wrote, and never checked produced
+   three separate bugs — each a 200 for somebody it never let in.
+
+**Tests:** anything decided in SQL needs a *structural* assertion against the
+statement string, because the shared fake (`tests/unit/_admin_fakes.py`)
+re-implements clauses in Python and a mirror only ever agrees with itself.
+Where two guards return the same status code, discriminate on the detail text
+and on what was written — never on the bare code.
+
 ## Child DOX Index
 
 None -- leaf directory.

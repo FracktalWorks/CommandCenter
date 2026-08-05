@@ -13,14 +13,18 @@ SYNCED rows mirror a connected PM tool through the provider layer.
 from __future__ import annotations
 
 import json
-import os
 from typing import Any
 
-from acb_common import get_logger, get_settings
+from acb_auth import require_feature_router, require_permission
+from acb_common import get_logger
 from fastapi import APIRouter, HTTPException
+
+# The shared gateway engine (BO-10 / D-CRM-4) — see the DB section below for
+# why these keep their private names.
+from gateway.db import get_db as _get_db  # noqa: F401
+from gateway.db import get_session_factory as _get_session_factory  # noqa: F401
 from pydantic import BaseModel
 from sqlalchemy import text
-from acb_auth import require_feature_router, require_permission
 
 _log = get_logger("gateway.tasks")
 
@@ -188,40 +192,19 @@ class GtdProjectModel(BaseModel):
     created_at: str | None = None
 
 
-# ── DB (shared pooled async engine, same recipe as email/core.py) ────────────
-
-_ENGINE = None
-_SESSION_FACTORY = None
-
-
-def _get_session_factory():
-    global _ENGINE, _SESSION_FACTORY
-    if _SESSION_FACTORY is None:
-        from sqlalchemy.ext.asyncio import (
-            async_sessionmaker,
-            create_async_engine,
-        )
-        settings = get_settings()
-        db_url = os.environ.get("DATABASE_URL", settings.database_url)
-        if "postgresql+psycopg" in db_url:
-            db_url = db_url.replace("postgresql+psycopg", "postgresql+asyncpg")
-        elif db_url.startswith("postgresql://"):
-            db_url = db_url.replace("postgresql://", "postgresql+asyncpg://")
-        _ENGINE = create_async_engine(
-            db_url, echo=False, pool_pre_ping=True,
-            pool_size=10, max_overflow=20, pool_recycle=1800,
-            # Bound the CONNECT phase (asyncpg's `timeout`) so a slow/unreachable
-            # DB fails fast instead of stalling request handlers — same ceiling
-            # as acb_graph's engine (settings.db_connect_timeout).
-            connect_args={"timeout": settings.db_connect_timeout},
-        )
-        _SESSION_FACTORY = async_sessionmaker(_ENGINE, expire_on_commit=False)
-    return _SESSION_FACTORY
-
-
-async def _get_db():
-    """Return a new async session from the shared, pooled engine."""
-    return _get_session_factory()()
+# ── DB (the shared gateway engine — BO-10 / D-CRM-4) ─────────────────────────
+#
+# This package used to own a module-level engine of its own; the block that
+# built it now lives in ``gateway/db.py`` **verbatim**, and this app is the
+# proof that consuming the shared seam changes nothing (same URL coercion, same
+# pool sizing, same connect timeout). Spec: crm_app.md §4 "Engine seam".
+#
+# The private aliases are kept on purpose rather than renamed at ~50 call sites:
+# every feature module in this package imports ``_get_db`` from here by name,
+# and every route test monkeypatches it on the SUT submodule. Renaming it would
+# be a rename of the test seam, not of the engine.
+#
+# ``_get_db`` / ``_get_session_factory`` are imported at the top of this module.
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────

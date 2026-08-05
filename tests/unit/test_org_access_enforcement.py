@@ -139,6 +139,14 @@ GATED_ROUTERS: dict[str, set[str]] = {
         "/notes/meetings/{meeting_id}/live/wanted",
     },
     "gateway.routes.tasks": set(),
+    # WS-26 — the native CRM. No exemptions and none expected: every /crm route
+    # is a member-facing read or write, there is no provider webhook and no
+    # worker callback in the package, and WS-26b's importer will be gated on
+    # `admin:access:manage` ON TOP of the feature rather than exempted from it.
+    # This entry is the registry's OPINION that /crm must stay gated — the
+    # router carrying a gate is not self-evidence, which is why the module is
+    # named here deliberately rather than discovered.
+    "gateway.routes.crm": set(),
     "gateway.routes.chat": set(),
     "gateway.routes.actions": set(),
     "gateway.routes.integrations": set(),

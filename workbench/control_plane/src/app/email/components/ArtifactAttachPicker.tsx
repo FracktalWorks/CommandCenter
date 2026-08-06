@@ -8,8 +8,8 @@
  * send time — no base64 round-trip in the browser).
  */
 
+import Icon from "@/components/Icon";
 import { useState, useEffect, useRef } from "react";
-import { Sparkles, Loader2, Paperclip } from "lucide-react";
 import { listEmailArtifacts, type EmailArtifact } from "../lib/api";
 
 export function ArtifactAttachPicker({
@@ -60,13 +60,13 @@ export function ArtifactAttachPicker({
       >
         {/* Icon-only on phones — composer footers must fit the whole action
             row (incl. Send) on a narrow screen. */}
-        <Sparkles size={13} /> <span className="hidden sm:inline">AI files</span>
+        <Icon name="Sparkles" size={13} /> <span className="hidden sm:inline">AI files</span>
       </button>
       {open && (
         <div className="absolute bottom-full right-0 mb-1.5 w-64 max-h-60 overflow-y-auto rounded-lg border border-border bg-popover shadow-xl z-[70] py-1">
           {loading ? (
             <div className="px-3 py-2 text-[11px] text-muted-foreground flex items-center gap-1.5">
-              <Loader2 size={12} className="animate-spin" /> Loading…
+              <Icon name="Loader2" size={12} className="animate-spin" /> Loading…
             </div>
           ) : available.length === 0 ? (
             <div className="px-3 py-2 text-[11px] text-muted-foreground">
@@ -83,7 +83,7 @@ export function ArtifactAttachPicker({
                 }}
                 className="w-full text-left px-3 py-1.5 hover:bg-secondary transition-colors flex items-center gap-2"
               >
-                <Paperclip size={12} className="text-muted-foreground flex-shrink-0" />
+                <Icon name="Paperclip" size={12} className="text-muted-foreground flex-shrink-0" />
                 <span className="text-[11px] text-foreground truncate flex-1" title={a.path}>
                   {a.name}
                 </span>

@@ -1,5 +1,6 @@
 "use client";
 
+import Icon from "@/components/Icon";
 import {
   useCallback,
   useEffect,
@@ -7,7 +8,6 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
-import { ChevronRight, GripVertical, CornerDownRight, Loader2, Circle, CheckCircle2 } from "lucide-react";
 import { GtdItem, ViewKey } from "../lib/types";
 import { useTaskStore } from "../lib/taskStore";
 import { TaskCard } from "./TaskCard";
@@ -245,7 +245,7 @@ export function TaskListGrouped({
                   onClick={() => toggle(g.key)}
                   className="tech-transition flex min-w-0 flex-1 items-center gap-2 text-left"
                 >
-                  <ChevronRight
+                  <Icon name="ChevronRight"
                     className={[
                       "h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform",
                       isCollapsed ? "" : "rotate-90",
@@ -421,7 +421,7 @@ function DraggableRow({
         ) : (
           manual && (
             <span className="flex w-5 shrink-0 cursor-grab items-center justify-center text-muted-foreground/25 transition-colors group-hover/row:text-muted-foreground/60 active:cursor-grabbing">
-              <GripVertical className="h-3.5 w-3.5" />
+              <Icon name="GripVertical" className="h-3.5 w-3.5" />
             </span>
           )
         )}
@@ -436,7 +436,7 @@ function DraggableRow({
               aria-expanded={expanded}
               className="tech-transition rounded p-0.5 text-muted-foreground/60 hover:bg-secondary hover:text-foreground"
             >
-              <ChevronRight
+              <Icon name="ChevronRight"
                 className={[
                   "h-3.5 w-3.5 transition-transform",
                   expanded ? "rotate-90" : "",
@@ -558,7 +558,7 @@ function SubtaskRows({ parent }: { parent: GtdItem }) {
   if (children === null) {
     return (
       <div className="flex items-center gap-2 py-2 pl-14 text-[11px] text-muted-foreground">
-        <Loader2 className="h-3 w-3 animate-spin" />
+        <Icon name="Loader2" className="h-3 w-3 animate-spin" />
         Loading subtasks…
       </div>
     );
@@ -587,12 +587,12 @@ function SubtaskRows({ parent }: { parent: GtdItem }) {
               className="tech-transition shrink-0 text-muted-foreground/50 hover:text-success"
             >
               {done ? (
-                <CheckCircle2 className="h-4 w-4 text-success" />
+                <Icon name="CheckCircle2" className="h-4 w-4 text-success" />
               ) : (
-                <Circle className="h-4 w-4" />
+                <Icon name="Circle" className="h-4 w-4" />
               )}
             </button>
-            <CornerDownRight className="h-3 w-3 shrink-0 text-muted-foreground/30" />
+            <Icon name="CornerDownRight" className="h-3 w-3 shrink-0 text-muted-foreground/30" />
             <button
               type="button"
               onClick={() => openFocus(c.id)}

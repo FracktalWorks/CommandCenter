@@ -1,12 +1,7 @@
 "use client";
 
+import AppIcon, { themedIcon } from "@/components/Icon";
 import { useState, useEffect, useRef } from "react";
-import {
-  Star, Reply, Forward, Trash2, Archive, MoreHorizontal,
-  Paperclip, ReplyAll, Flag, FolderInput,
-  MailOpen, Tag, Printer, ExternalLink, X, AlertTriangle, Loader2, Send,
-  ListChecks,
-} from "lucide-react";
 import { Email } from "../lib/types";
 import { fullDateLabel, initials, buildOptimisticSent, bodyMatchKey } from "../lib/utils";
 import { useEmailStore, isRealFolder } from "../lib/emailStore";
@@ -686,26 +681,26 @@ export function EmailDetail({ email }: EmailDetailProps) {
         {/* Left group */}
         <div className="flex items-center gap-0.5 flex-wrap">
           <TBtn
-            icon={ReplyAll}
+            icon={themedIcon("ReplyAll")}
             label="Reply All"
             onClick={() => startReply("reply-all")}
             active={replyMode === "reply-all"}
           />
           <TBtn
-            icon={Reply}
+            icon={themedIcon("Reply")}
             label="Reply"
             onClick={() => startReply("reply")}
             active={replyMode === "reply"}
           />
           <TBtn
-            icon={Forward}
+            icon={themedIcon("Forward")}
             label="Forward"
             onClick={() => startReply("forward")}
             active={replyMode === "forward"}
           />
 
           <TBtn
-            icon={ListChecks}
+            icon={themedIcon("ListChecks")}
             label="Add to Tasks"
             onClick={() => {
               if (email) captureEmailToTasks(email.id);
@@ -714,15 +709,15 @@ export function EmailDetail({ email }: EmailDetailProps) {
 
           <Divider />
 
-          <TBtn icon={Archive} label="Archive" onClick={() => {
+          <TBtn icon={themedIcon("Archive")} label="Archive" onClick={() => {
             if (email) updateEmail(email.id, { folder: "archive" });
           }} />
-          <TBtn icon={Trash2} label="Delete" onClick={() => {
+          <TBtn icon={themedIcon("Trash2")} label="Delete" onClick={() => {
             if (email) deleteEmail(email.id);
           }} />
           <div className="relative">
             <TBtn
-              icon={FolderInput}
+              icon={themedIcon("FolderInput")}
               label="Move to folder"
               onClick={() => setShowMoveMenu((v) => !v)}
               active={showMoveMenu}
@@ -759,7 +754,7 @@ export function EmailDetail({ email }: EmailDetailProps) {
           <Divider />
 
           <TBtn
-            icon={Flag}
+            icon={themedIcon("Flag")}
             label={flagged ? "Unflag" : "Flag"}
             onClick={() => {
               if (email) {
@@ -770,7 +765,7 @@ export function EmailDetail({ email }: EmailDetailProps) {
             active={flagged}
           />
           <TBtn
-            icon={Star}
+            icon={themedIcon("Star")}
             label={starred ? "Unstar" : "Star"}
             onClick={() => {
               if (email) {
@@ -781,7 +776,7 @@ export function EmailDetail({ email }: EmailDetailProps) {
             active={starred}
           />
           <TBtn
-            icon={MailOpen}
+            icon={themedIcon("MailOpen")}
             label={read ? "Mark as Unread" : "Mark as Read"}
             onClick={() => {
               if (email) {
@@ -793,7 +788,7 @@ export function EmailDetail({ email }: EmailDetailProps) {
           />
           <div className="relative">
             <TBtn
-              icon={Tag}
+              icon={themedIcon("Tag")}
               label="Label"
               onClick={() => setShowLabelMenu((v) => !v)}
               active={showLabelMenu}
@@ -813,13 +808,13 @@ export function EmailDetail({ email }: EmailDetailProps) {
 
           <Divider />
 
-          <TBtn icon={Printer} label="Print" onClick={() => window.print()} />
+          <TBtn icon={themedIcon("Printer")} label="Print" onClick={() => window.print()} />
         </div>
 
         {/* More menu */}
         <div className="relative">
           <TBtn
-            icon={MoreHorizontal}
+            icon={themedIcon("MoreHorizontal")}
             label="More options"
             onClick={() => setShowMoreMenu((v) => !v)}
             active={showMoreMenu}
@@ -881,12 +876,12 @@ export function EmailDetail({ email }: EmailDetailProps) {
           <div className="flex items-center gap-1 flex-shrink-0 mt-1">
             {view.importance === "high" && (
               <span className="inline-flex items-center gap-0.5 text-[9px] px-1.5 py-0.5 bg-red-500/15 text-red-400 rounded-full">
-                <AlertTriangle size={9} /> Important
+                <AppIcon name="AlertTriangle" size={9} /> Important
               </span>
             )}
             {flagged && (
               <span className="inline-flex items-center gap-0.5 text-[9px] px-1.5 py-0.5 bg-amber-500/15 text-amber-400 rounded-full">
-                <Flag size={9} /> Flagged
+                <AppIcon name="Flag" size={9} /> Flagged
               </span>
             )}
             {!read && (
@@ -971,7 +966,7 @@ export function EmailDetail({ email }: EmailDetailProps) {
             title="Add to Tasks — the assistant reads the thread and files a routed task (follow-up / delegated / next action) with a due date if implied."
             className="shrink-0 inline-flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1.5 text-xs text-muted-foreground hover:border-primary/40 hover:text-primary transition-colors"
           >
-            <ListChecks size={14} />
+            <AppIcon name="ListChecks" size={14} />
             <span className="hidden sm:inline">Add to Tasks</span>
           </button>
         </div>
@@ -979,7 +974,7 @@ export function EmailDetail({ email }: EmailDetailProps) {
         {/* Body */}
         {loadingDetail ? (
           <div className="flex items-center gap-2 text-xs text-muted-foreground py-6">
-            <Loader2 size={14} className="animate-spin" /> Loading message…
+            <AppIcon name="Loader2" size={14} className="animate-spin" /> Loading message…
           </div>
         ) : fullBodyText ? (
           <div className="text-sm text-foreground/85 leading-relaxed whitespace-pre-wrap max-w-2xl">
@@ -1027,7 +1022,7 @@ export function EmailDetail({ email }: EmailDetailProps) {
               disabled={loadingFullBody}
               className="flex items-center gap-1.5 text-xs text-primary hover:opacity-80 transition-opacity disabled:opacity-40"
             >
-              <ExternalLink size={12} />
+              <AppIcon name="ExternalLink" size={12} />
               {loadingFullBody ? "Loading…" : "Load full message from provider"}
             </button>
             <p className="text-[10px] text-muted-foreground mt-1">
@@ -1070,7 +1065,7 @@ export function EmailDetail({ email }: EmailDetailProps) {
                       }`}
                       title="Reply to all"
                     >
-                      <ReplyAll size={11} />
+                      <AppIcon name="ReplyAll" size={11} />
                     </button>
                     <button
                       onClick={() => switchReplyMode("reply")}
@@ -1079,7 +1074,7 @@ export function EmailDetail({ email }: EmailDetailProps) {
                       }`}
                       title="Reply to sender only"
                     >
-                      <Reply size={11} />
+                      <AppIcon name="Reply" size={11} />
                     </button>
                   </div>
                 )}
@@ -1088,7 +1083,7 @@ export function EmailDetail({ email }: EmailDetailProps) {
                 className="text-muted-foreground hover:text-foreground transition-colors"
                 onClick={() => setReplyMode(null)}
               >
-                <X size={14} />
+                <AppIcon name="X" size={14} />
               </button>
             </div>
             {/* Recipients */}
@@ -1160,7 +1155,7 @@ export function EmailDetail({ email }: EmailDetailProps) {
                     key={`f-${i}`}
                     className="inline-flex items-center gap-1 text-[10px] px-2 py-1 rounded-md border border-border bg-secondary text-muted-foreground"
                   >
-                    <Paperclip size={10} />
+                    <AppIcon name="Paperclip" size={10} />
                     <span className="truncate max-w-[140px]" title={a.filename}>
                       {a.filename}
                     </span>
@@ -1171,7 +1166,7 @@ export function EmailDetail({ email }: EmailDetailProps) {
                       className="hover:text-foreground"
                       title="Remove attachment"
                     >
-                      <X size={10} />
+                      <AppIcon name="X" size={10} />
                     </button>
                   </span>
                 ))}
@@ -1181,7 +1176,7 @@ export function EmailDetail({ email }: EmailDetailProps) {
                     className="inline-flex items-center gap-1 text-[10px] px-2 py-1 rounded-md border border-primary/40 bg-primary/5 text-primary"
                     title={a.path}
                   >
-                    <Paperclip size={10} />
+                    <AppIcon name="Paperclip" size={10} />
                     <span className="truncate max-w-[140px]">{a.name || a.path}</span>
                     <button
                       onClick={() =>
@@ -1190,7 +1185,7 @@ export function EmailDetail({ email }: EmailDetailProps) {
                       className="hover:text-foreground"
                       title="Remove attachment"
                     >
-                      <X size={10} />
+                      <AppIcon name="X" size={10} />
                     </button>
                   </span>
                 ))}
@@ -1238,7 +1233,7 @@ export function EmailDetail({ email }: EmailDetailProps) {
                   className="px-2 py-1 text-xs rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors cursor-pointer flex items-center"
                   title="Attach files"
                 >
-                  <Paperclip size={13} />
+                  <AppIcon name="Paperclip" size={13} />
                   <input
                     type="file"
                     multiple
@@ -1263,7 +1258,7 @@ export function EmailDetail({ email }: EmailDetailProps) {
                   title="Open in the full composer (Bcc, attachments)"
                   aria-label="Pop out to full composer"
                 >
-                  <ExternalLink size={13} />
+                  <AppIcon name="ExternalLink" size={13} />
                   <span className="hidden sm:inline">Pop out</span>
                 </button>
                 <button
@@ -1277,7 +1272,7 @@ export function EmailDetail({ email }: EmailDetailProps) {
                   title="Discard this draft"
                   aria-label="Discard this draft"
                 >
-                  <Trash2 size={13} />
+                  <AppIcon name="Trash2" size={13} />
                   <span className="hidden sm:inline">Discard</span>
                 </button>
                 <button
@@ -1285,7 +1280,7 @@ export function EmailDetail({ email }: EmailDetailProps) {
                   disabled={!replyTo.trim() || !replyBody.trim()}
                   onClick={handleInlineSend}
                 >
-                  <Send size={12} />
+                  <AppIcon name="Send" size={12} />
                   Send
                 </button>
               </div>

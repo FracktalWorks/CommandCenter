@@ -1,10 +1,7 @@
 "use client";
 
+import AppIcon, { themedIcon } from "@/components/Icon";
 import { useEffect, useRef, useState } from "react";
-import {
-  ChevronDown, Paperclip, PenLine, Send, Loader2, Trash2,
-  Reply, ReplyAll, Forward,
-} from "lucide-react";
 import { Email } from "../lib/types";
 import { fullDateLabel, initials, buildOptimisticSent } from "../lib/utils";
 import { getEmail, fetchFullBody, detectReplyCommitment } from "../lib/api";
@@ -214,12 +211,12 @@ export function ConversationView({
                 )}
               </div>
               {m.hasAttachments && (
-                <Paperclip size={11} className="text-muted-foreground flex-shrink-0" />
+                <AppIcon name="Paperclip" size={11} className="text-muted-foreground flex-shrink-0" />
               )}
               <span className="text-[10px] text-muted-foreground whitespace-nowrap flex-shrink-0">
                 {fullDateLabel(m.receivedAt)}
               </span>
-              <ChevronDown
+              <AppIcon name="ChevronDown"
                 size={13}
                 className={`text-muted-foreground flex-shrink-0 transition-transform ${
                   isOpen ? "rotate-180" : ""
@@ -239,17 +236,17 @@ export function ConversationView({
                   {onReply && (
                     <div className="flex items-center gap-0.5 flex-shrink-0 -mt-0.5">
                       <CardAction
-                        icon={Reply}
+                        icon={themedIcon("Reply")}
                         label="Reply"
                         onClick={() => onReply(view, "reply")}
                       />
                       <CardAction
-                        icon={ReplyAll}
+                        icon={themedIcon("ReplyAll")}
                         label="Reply all"
                         onClick={() => onReply(view, "reply-all")}
                       />
                       <CardAction
-                        icon={Forward}
+                        icon={themedIcon("Forward")}
                         label="Forward"
                         onClick={() => onReply(view, "forward")}
                       />
@@ -593,7 +590,7 @@ export function DraftCard({
   return (
     <div className="border border-primary/40 rounded-lg bg-primary/5 px-3 py-3">
       <div className="flex items-center gap-1.5 mb-2">
-        <PenLine size={12} className="text-primary" />
+        <AppIcon name="PenLine" size={12} className="text-primary" />
         <span className="text-xs font-medium text-primary">Draft</span>
         {hasReplyTarget && (
           <div className="flex items-center bg-background border border-border rounded-md p-0.5 ml-1.5">
@@ -605,7 +602,7 @@ export function DraftCard({
                 !replyAll ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"
               }`}
             >
-              <Reply size={11} className="flex-shrink-0" /> Reply
+              <AppIcon name="Reply" size={11} className="flex-shrink-0" /> Reply
             </button>
             <button
               type="button"
@@ -615,7 +612,7 @@ export function DraftCard({
                 replyAll ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"
               }`}
             >
-              <ReplyAll size={11} className="flex-shrink-0" /> Reply All
+              <AppIcon name="ReplyAll" size={11} className="flex-shrink-0" /> Reply All
             </button>
           </div>
         )}
@@ -703,9 +700,9 @@ export function DraftCard({
           className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90 transition-colors disabled:opacity-50"
         >
           {sending ? (
-            <Loader2 className="animate-spin" size={13} />
+            <AppIcon name="Loader2" className="animate-spin" size={13} />
           ) : (
-            <Send size={13} />
+            <AppIcon name="Send" size={13} />
           )}
           Send
         </button>
@@ -713,7 +710,7 @@ export function DraftCard({
           onClick={discard}
           className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-border text-xs text-muted-foreground hover:text-destructive hover:bg-secondary transition-colors"
         >
-          <Trash2 size={13} /> Discard
+          <AppIcon name="Trash2" size={13} /> Discard
         </button>
         <AiButton active={aiOpen} onClick={() => setAiOpen((v) => !v)} />
         <span className="text-[10px] text-muted-foreground ml-auto">

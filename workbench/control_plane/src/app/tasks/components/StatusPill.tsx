@@ -1,7 +1,7 @@
 "use client";
 
+import Icon from "@/components/Icon";
 import { useState } from "react";
-import { Check, ChevronDown } from "lucide-react";
 import { GtdItem } from "../lib/types";
 import { useCardActions } from "../lib/useCardActions";
 import { stageAccent } from "../lib/stageColors";
@@ -36,7 +36,7 @@ export function StatusPill({ item }: { item: GtdItem }) {
       >
         <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${accent.dot}`} />
         <span className="max-w-[84px] truncate">{currentStage}</span>
-        <ChevronDown className="h-2.5 w-2.5 opacity-60" />
+        <Icon name="ChevronDown" className="h-2.5 w-2.5 opacity-60" />
       </button>
       {open && (
         <>
@@ -57,7 +57,7 @@ export function StatusPill({ item }: { item: GtdItem }) {
                 />
                 <span className="min-w-0 flex-1 truncate">{s}</span>
                 {s === currentStage && (
-                  <Check className="h-3 w-3 shrink-0 text-primary" />
+                  <Icon name="Check" className="h-3 w-3 shrink-0 text-primary" />
                 )}
               </button>
             ))}

@@ -1,11 +1,7 @@
 "use client";
 
+import Icon from "@/components/Icon";
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
-import {
-  Loader2, Archive, ArchiveRestore, Check, ExternalLink, Search,
-  ShieldX, Mail, X, MoreHorizontal, Trash2, RotateCcw, Clock,
-  ChevronDown, ChevronRight, Sparkles, HelpCircle,
-} from "lucide-react";
 import {
   listSenders, upsertNewsletter, unsubscribeSender, bulkAction,
   searchEmails, previewAutoCategorize, runAutoCategorize, getCleanupStatus,
@@ -803,7 +799,7 @@ export function BulkUnsubscribeView({
   if (loading) {
     return (
       <div className="flex items-center justify-center h-full text-muted-foreground gap-2 text-sm">
-        <Loader2 className="animate-spin" size={16} /> Analyzing senders…
+        <Icon name="Loader2" className="animate-spin" size={16} /> Analyzing senders…
       </div>
     );
   }
@@ -813,7 +809,7 @@ export function BulkUnsubscribeView({
       {/* Toolbar */}
       <div className="flex items-center gap-2 px-3 sm:px-5 py-3 border-b border-border flex-shrink-0">
         <div className="flex items-center gap-2 bg-secondary rounded-md px-2.5 py-1.5 flex-1 max-w-xs">
-          <Search size={13} className="text-muted-foreground" />
+          <Icon name="Search" size={13} className="text-muted-foreground" />
           <input
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
@@ -857,11 +853,11 @@ export function BulkUnsubscribeView({
               : "bg-secondary text-muted-foreground hover:text-foreground"
           }`}
         >
-          <Archive size={12} /> Include archived
+          <Icon name="Archive" size={12} /> Include archived
         </button>
         {categorizing && (
           <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground ml-auto whitespace-nowrap">
-            <Loader2 className="animate-spin" size={13} /> Categorizing…
+            <Icon name="Loader2" className="animate-spin" size={13} /> Categorizing…
           </div>
         )}
       </div>
@@ -921,7 +917,7 @@ export function BulkUnsubscribeView({
                 : "border-border text-muted-foreground hover:text-foreground hover:bg-secondary"
             }`}
           >
-            <HelpCircle size={10} />
+            <Icon name="HelpCircle" size={10} />
             Uncategorized
             <span className="opacity-60">{categoryCounts[UNCATEGORIZED]}</span>
           </button>
@@ -939,7 +935,7 @@ export function BulkUnsubscribeView({
       {!loading && senders.length > 0 &&
         senders.every((s) => !(s.labelled ?? 0)) && (
         <div className="flex items-center flex-wrap gap-2 px-3 sm:px-5 py-2 border-b border-border bg-amber-500/10 flex-shrink-0">
-          <RotateCcw size={13} className="text-amber-500 flex-shrink-0" />
+          <Icon name="RotateCcw" size={13} className="text-amber-500 flex-shrink-0" />
           <span className="text-[11px] text-foreground">
             None of your email is categorized here yet — your labels may not have
             synced down from your mail provider.
@@ -951,9 +947,9 @@ export function BulkUnsubscribeView({
             className="ml-auto flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-amber-500 text-white text-[11px] font-medium hover:bg-amber-500/90 transition-colors disabled:opacity-50"
           >
             {categorizing ? (
-              <Loader2 className="animate-spin" size={12} />
+              <Icon name="Loader2" className="animate-spin" size={12} />
             ) : (
-              <RotateCcw size={12} />
+              <Icon name="RotateCcw" size={12} />
             )}
             Restore labels
           </button>
@@ -968,7 +964,7 @@ export function BulkUnsubscribeView({
           cleaner having got worse. */}
       {pending && (
         <div className="flex items-center flex-wrap gap-2 px-3 sm:px-5 py-2 border-b border-border bg-amber-500/10 flex-shrink-0">
-          <HelpCircle size={13} className="text-amber-500 flex-shrink-0" />
+          <Icon name="HelpCircle" size={13} className="text-amber-500 flex-shrink-0" />
           <span className="text-[11px] text-foreground">
             <strong className="font-semibold">{pending.n}</strong>
             {pending.n === 1
@@ -990,7 +986,7 @@ export function BulkUnsubscribeView({
 
       {preview && preview.categorized > 0 && (
         <div className="flex items-center flex-wrap gap-2 px-3 sm:px-5 py-2 border-b border-border bg-primary/5 flex-shrink-0">
-          <Sparkles size={13} className="text-primary flex-shrink-0" />
+          <Icon name="Sparkles" size={13} className="text-primary flex-shrink-0" />
           <span className="text-[11px] text-foreground">
             {/* Built as explicit strings rather than JSX text nodes. Word
                 fragments split across source lines around {expressions} depend
@@ -1019,9 +1015,9 @@ export function BulkUnsubscribeView({
             className="ml-auto flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-primary text-primary-foreground text-[11px] font-medium hover:bg-primary/90 transition-colors disabled:opacity-50"
           >
             {categorizing ? (
-              <Loader2 className="animate-spin" size={12} />
+              <Icon name="Loader2" className="animate-spin" size={12} />
             ) : (
-              <Sparkles size={12} />
+              <Icon name="Sparkles" size={12} />
             )}
             Categorize
           </button>
@@ -1053,7 +1049,7 @@ export function BulkUnsubscribeView({
       )}
       {notice && (
         <div className="px-3 sm:px-5 py-2 text-xs text-primary bg-primary/10 border-b border-border flex items-center gap-1.5">
-          <Check size={12} className="flex-shrink-0" />
+          <Icon name="Check" size={12} className="flex-shrink-0" />
           {notice}
         </div>
       )}
@@ -1069,16 +1065,16 @@ export function BulkUnsubscribeView({
             <ActionMenu
               label="Actions"
               items={[
-                { label: "Unsubscribe", icon: <ShieldX size={13} />,
+                { label: "Unsubscribe", icon: <Icon name="ShieldX" size={13} />,
                   onClick: () => bulkUnsubscribe() },
-                { label: "Auto-archive future", icon: <ArchiveRestore size={13} />,
+                { label: "Auto-archive future", icon: <Icon name="ArchiveRestore" size={13} />,
                   onClick: () => bulkAct("AUTO_ARCHIVED") },
-                { label: "Keep", icon: <Check size={13} />,
+                { label: "Keep", icon: <Icon name="Check" size={13} />,
                   onClick: () => bulkAct("APPROVED") },
                 { sep: true },
-                { label: "Archive all existing", icon: <Archive size={13} />,
+                { label: "Archive all existing", icon: <Icon name="Archive" size={13} />,
                   onClick: () => bulkMessagesAction("archive") },
-                { label: "Delete all", icon: <Trash2 size={13} />, danger: true,
+                { label: "Delete all", icon: <Icon name="Trash2" size={13} />, danger: true,
                   onClick: () => bulkMessagesAction("trash") },
               ]}
             />
@@ -1089,21 +1085,21 @@ export function BulkUnsubscribeView({
                 onClick={() => bulkUnsubscribe()}
                 className="hover:bg-red-500/10 hover:text-red-400"
               >
-                <ShieldX size={13} /> Unsubscribe
+                <Icon name="ShieldX" size={13} /> Unsubscribe
               </ActionBtn>
               <ActionBtn
                 title="Auto-archive future mail (provider filter)"
                 onClick={() => bulkAct("AUTO_ARCHIVED")}
                 className="hover:bg-amber-500/10 hover:text-amber-400"
               >
-                <ArchiveRestore size={13} /> Auto-archive
+                <Icon name="ArchiveRestore" size={13} /> Auto-archive
               </ActionBtn>
               <ActionBtn
                 title="Keep — approve"
                 onClick={() => bulkAct("APPROVED")}
                 className="hover:bg-emerald-500/10 hover:text-emerald-400"
               >
-                <Check size={13} /> Keep
+                <Icon name="Check" size={13} /> Keep
               </ActionBtn>
               <div className="w-px h-4 bg-border mx-0.5" />
               <ActionBtn
@@ -1111,14 +1107,14 @@ export function BulkUnsubscribeView({
                 onClick={() => bulkMessagesAction("archive")}
                 className="hover:bg-secondary"
               >
-                <Archive size={13} /> Archive all
+                <Icon name="Archive" size={13} /> Archive all
               </ActionBtn>
               <ActionBtn
                 title="Move all existing mail from the selected senders to Trash"
                 onClick={() => bulkMessagesAction("trash")}
                 className="hover:bg-red-500/10 hover:text-red-400"
               >
-                <Trash2 size={13} /> Delete
+                <Icon name="Trash2" size={13} /> Delete
               </ActionBtn>
             </>
           )}
@@ -1127,7 +1123,7 @@ export function BulkUnsubscribeView({
             title="Clear selection"
             className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
           >
-            <X size={13} />
+            <Icon name="X" size={13} />
           </button>
         </div>
       )}
@@ -1196,34 +1192,34 @@ export function BulkUnsubscribeView({
                 s.status === "UNSUBSCRIBED" || s.status === "AUTO_ARCHIVED";
               const approved = s.status === "APPROVED";
               const unsubIcon = isMailto ? (
-                <Mail size={13} />
+                <Icon name="Mail" size={13} />
               ) : s.unsubscribe_link ? (
-                <ExternalLink size={13} />
+                <Icon name="ExternalLink" size={13} />
               ) : (
-                <ShieldX size={13} />
+                <Icon name="ShieldX" size={13} />
               );
               // One-off existing-mail cleanup (the desktop kebab + part of the
               // mobile "Actions" menu).
               const cleanupItems: MenuItem[] = [
-                { label: "Archive all existing", icon: <Archive size={13} />,
+                { label: "Archive all existing", icon: <Icon name="Archive" size={13} />,
                   onClick: () => messagesAction(s, "archive") },
-                { label: "Delete all", icon: <Trash2 size={13} />, danger: true,
+                { label: "Delete all", icon: <Icon name="Trash2" size={13} />, danger: true,
                   onClick: () => messagesAction(s, "trash") },
               ];
               // Full action set for the mobile single "Actions" button.
               const rowItems: MenuItem[] = [
                 ...(blocked
-                  ? [{ label: "Resubscribe", icon: <RotateCcw size={13} />,
+                  ? [{ label: "Resubscribe", icon: <Icon name="RotateCcw" size={13} />,
                        onClick: () => act(s, "APPROVED") }]
                   : [
                       { label: s.unsubscribe_link ? "Unsubscribe" : "Block",
                         icon: unsubIcon, onClick: () => doUnsubscribe(s) },
                       { label: "Auto-archive future",
-                        icon: <ArchiveRestore size={13} />,
+                        icon: <Icon name="ArchiveRestore" size={13} />,
                         onClick: () => act(s, "AUTO_ARCHIVED") },
                       ...(approved
                         ? []
-                        : [{ label: "Keep", icon: <Check size={13} />,
+                        : [{ label: "Keep", icon: <Icon name="Check" size={13} />,
                             onClick: () => act(s, "APPROVED") }]),
                     ]),
                 { sep: true },
@@ -1258,9 +1254,9 @@ export function BulkUnsubscribeView({
                     className="p-0.5 rounded text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors flex-shrink-0"
                   >
                     {expanded === s.email ? (
-                      <ChevronDown size={13} />
+                      <Icon name="ChevronDown" size={13} />
                     ) : (
-                      <ChevronRight size={13} />
+                      <Icon name="ChevronRight" size={13} />
                     )}
                   </button>
                   <div
@@ -1294,7 +1290,7 @@ export function BulkUnsubscribeView({
                           title="Future mail blocked at the source by a provider filter"
                           className="text-[9px] px-1.5 py-0.5 rounded-full bg-sky-500/15 text-sky-400 flex items-center gap-0.5"
                         >
-                          <ShieldX size={9} /> Filtered
+                          <Icon name="ShieldX" size={9} /> Filtered
                         </span>
                       )}
                       {/* Category chips — the rule-labelled cleanup categories on
@@ -1380,7 +1376,7 @@ export function BulkUnsubscribeView({
                       action is surfaced inline (there's room for the icons). */}
                   <div className="flex items-center gap-1 flex-shrink-0">
                     {busy === s.email ? (
-                      <Loader2 className="animate-spin text-muted-foreground" size={14} />
+                      <Icon name="Loader2" className="animate-spin text-muted-foreground" size={14} />
                     ) : isMobile ? (
                       <ActionMenu label="Actions" items={rowItems} />
                     ) : blocked ? (
@@ -1390,21 +1386,21 @@ export function BulkUnsubscribeView({
                           onClick={() => act(s, "APPROVED")}
                           className="hover:bg-emerald-500/10 hover:text-emerald-400"
                         >
-                          <RotateCcw size={13} /> Resubscribe
+                          <Icon name="RotateCcw" size={13} /> Resubscribe
                         </ActionBtn>
                         <ActionBtn
                           title="Archive all existing mail from this sender"
                           onClick={() => messagesAction(s, "archive")}
                           className="hover:bg-secondary"
                         >
-                          <Archive size={13} />
+                          <Icon name="Archive" size={13} />
                         </ActionBtn>
                         <ActionBtn
                           title="Delete all mail from this sender (move to Trash)"
                           onClick={() => messagesAction(s, "trash")}
                           className="hover:bg-red-500/10 hover:text-red-400"
                         >
-                          <Trash2 size={13} />
+                          <Icon name="Trash2" size={13} />
                         </ActionBtn>
                       </>
                     ) : (
@@ -1428,7 +1424,7 @@ export function BulkUnsubscribeView({
                           onClick={() => act(s, "AUTO_ARCHIVED")}
                           className="hover:bg-amber-500/10 hover:text-amber-400"
                         >
-                          <ArchiveRestore size={13} /> Auto-archive
+                          <Icon name="ArchiveRestore" size={13} /> Auto-archive
                         </ActionBtn>
                         {!approved && (
                           <ActionBtn
@@ -1436,7 +1432,7 @@ export function BulkUnsubscribeView({
                             onClick={() => act(s, "APPROVED")}
                             className="hover:bg-emerald-500/10 hover:text-emerald-400"
                           >
-                            <Check size={13} /> Keep
+                            <Icon name="Check" size={13} /> Keep
                           </ActionBtn>
                         )}
                         <ActionBtn
@@ -1444,14 +1440,14 @@ export function BulkUnsubscribeView({
                           onClick={() => messagesAction(s, "archive")}
                           className="hover:bg-secondary"
                         >
-                          <Archive size={13} />
+                          <Icon name="Archive" size={13} />
                         </ActionBtn>
                         <ActionBtn
                           title="Delete all mail from this sender (move to Trash)"
                           onClick={() => messagesAction(s, "trash")}
                           className="hover:bg-red-500/10 hover:text-red-400"
                         >
-                          <Trash2 size={13} />
+                          <Icon name="Trash2" size={13} />
                         </ActionBtn>
                       </>
                     )}
@@ -1480,7 +1476,7 @@ export function BulkUnsubscribeView({
                   disabled={loadingMore}
                   className="flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-border text-[11px] text-foreground hover:bg-secondary transition-colors disabled:opacity-50"
                 >
-                  {loadingMore && <Loader2 className="animate-spin" size={12} />}
+                  {loadingMore && <Icon name="Loader2" className="animate-spin" size={12} />}
                   Load more senders ({totalSenders - senders.length} left)
                 </button>
               </div>
@@ -1496,7 +1492,7 @@ export function BulkUnsubscribeView({
           fetched history is held back from the AI rule run server-side, which
           is what keeps a 40,000-message backfill from costing anything. */}
       <div className="flex-shrink-0 flex items-center flex-wrap gap-2 px-3 sm:px-5 py-2 border-t border-border bg-card/40">
-        <Sparkles size={12} className="text-primary flex-shrink-0" />
+        <Icon name="Sparkles" size={12} className="text-primary flex-shrink-0" />
         <span className="text-[11px] text-muted-foreground">
           Only mail synced to Command Center can be cleaned — fetch and
           categorize older mail, without using AI
@@ -1523,7 +1519,7 @@ export function BulkUnsubscribeView({
               className="px-1.5 py-0.5 text-muted-foreground hover:text-foreground"
               title="Cancel"
             >
-              <X size={11} />
+              <Icon name="X" size={11} />
             </button>
           </div>
         ) : (
@@ -1534,9 +1530,9 @@ export function BulkUnsubscribeView({
             className="ml-auto flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-primary text-primary-foreground text-[11px] font-medium hover:bg-primary/90 transition-colors disabled:opacity-50"
           >
             {categorizing ? (
-              <Loader2 className="animate-spin" size={12} />
+              <Icon name="Loader2" className="animate-spin" size={12} />
             ) : (
-              <Clock size={12} />
+              <Icon name="Clock" size={12} />
             )}
             Clean older mail
           </button>
@@ -1545,7 +1541,7 @@ export function BulkUnsubscribeView({
       {/* Archive old mail — age-based bulk archive across ALL senders. Pinned to the
           bottom: it's a standalone sweep, independent of the sender list above. */}
       <div className="flex-shrink-0 flex items-center flex-wrap gap-2 px-3 sm:px-5 py-2 border-t border-border bg-card/40">
-        <Clock size={12} className="text-primary flex-shrink-0" />
+        <Icon name="Clock" size={12} className="text-primary flex-shrink-0" />
         <span className="text-[11px] text-muted-foreground">
           Archive {onlyRead ? "read " : ""}inbox mail older than
         </span>
@@ -1580,9 +1576,9 @@ export function BulkUnsubscribeView({
           className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-primary text-primary-foreground text-[11px] font-medium hover:bg-primary/90 transition-colors disabled:opacity-50 ml-auto"
         >
           {busy === "__sweep__" ? (
-            <Loader2 className="animate-spin" size={12} />
+            <Icon name="Loader2" className="animate-spin" size={12} />
           ) : (
-            <Archive size={12} />
+            <Icon name="Archive" size={12} />
           )}
           Archive old mail
         </button>
@@ -1714,7 +1710,7 @@ function SenderMessages({
   if (!msgs) {
     return (
       <div className="px-10 py-3 text-[11px] text-muted-foreground flex items-center gap-1.5">
-        <Loader2 className="animate-spin" size={12} /> Loading messages…
+        <Icon name="Loader2" className="animate-spin" size={12} /> Loading messages…
       </div>
     );
   }
@@ -1780,7 +1776,7 @@ function SenderMessages({
               : ""}
           </span>
           {busyId === m.id ? (
-            <Loader2
+            <Icon name="Loader2"
               className="animate-spin text-muted-foreground flex-shrink-0"
               size={12}
             />
@@ -1791,14 +1787,14 @@ function SenderMessages({
                 title="Archive this message"
                 className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors flex-shrink-0"
               >
-                <Archive size={12} />
+                <Icon name="Archive" size={12} />
               </button>
               <button
                 onClick={() => act(m.id, "trash")}
                 title="Delete this message (move to Trash)"
                 className="p-1 rounded text-muted-foreground hover:text-red-400 hover:bg-red-500/10 transition-colors flex-shrink-0"
               >
-                <Trash2 size={12} />
+                <Icon name="Trash2" size={12} />
               </button>
             </>
           )}
@@ -1810,7 +1806,7 @@ function SenderMessages({
           disabled={loadingMore}
           className="flex items-center gap-1.5 py-1.5 text-[10px] text-primary hover:opacity-80 disabled:opacity-50"
         >
-          {loadingMore && <Loader2 className="animate-spin" size={11} />}
+          {loadingMore && <Icon name="Loader2" className="animate-spin" size={11} />}
           Show {Math.min(DRILL_PAGE, total - msgs.length)} more
           <span className="text-muted-foreground">
             ({msgs.length} of {total})
@@ -1905,10 +1901,10 @@ function ActionMenu({ items, label }: { items: MenuItem[]; label?: string }) {
         {label ? (
           <>
             {label}
-            <ChevronDown size={12} />
+            <Icon name="ChevronDown" size={12} />
           </>
         ) : (
-          <MoreHorizontal size={13} />
+          <Icon name="MoreHorizontal" size={13} />
         )}
       </button>
       {open && (

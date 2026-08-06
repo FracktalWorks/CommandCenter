@@ -1,17 +1,7 @@
 "use client";
 
+import Icon from "@/components/Icon";
 import { useEffect, useRef, useState } from "react";
-import {
-  Sparkles,
-  Loader2,
-  X,
-  CornerDownLeft,
-  Check,
-  ChevronDown,
-  ChevronUp,
-  AlertTriangle,
-  Undo2,
-} from "lucide-react";
 import type { DraftStep, DraftRevision } from "../lib/useDraftSession";
 
 /**
@@ -27,7 +17,7 @@ import type { DraftStep, DraftRevision } from "../lib/useDraftSession";
 function StepIcon({ state }: { state: DraftStep["state"] }) {
   if (state === "running") {
     return (
-      <Loader2
+      <Icon name="Loader2"
         size={11}
         className="text-primary animate-spin flex-shrink-0 mt-[3px]"
         aria-hidden
@@ -36,7 +26,7 @@ function StepIcon({ state }: { state: DraftStep["state"] }) {
   }
   if (state === "failed") {
     return (
-      <AlertTriangle
+      <Icon name="AlertTriangle"
         size={11}
         className="text-warning flex-shrink-0 mt-[3px]"
         aria-hidden
@@ -44,7 +34,7 @@ function StepIcon({ state }: { state: DraftStep["state"] }) {
     );
   }
   return (
-    <Check size={11} className="text-success flex-shrink-0 mt-[3px]" aria-hidden />
+    <Icon name="Check" size={11} className="text-success flex-shrink-0 mt-[3px]" aria-hidden />
   );
 }
 
@@ -248,7 +238,7 @@ export function DraftAssistant({
                 aria-expanded={expanded}
                 className="p-0.5 rounded text-muted-foreground hover:text-foreground hover:bg-secondary tech-transition"
               >
-                {expanded ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+                {expanded ? <Icon name="ChevronUp" size={13} /> : <Icon name="ChevronDown" size={13} />}
               </button>
             )}
           </div>
@@ -278,7 +268,7 @@ export function DraftAssistant({
       )}
 
       <div className="px-4 py-2 flex items-center gap-2">
-        <Sparkles size={13} className="text-primary flex-shrink-0" aria-hidden />
+        <Icon name="Sparkles" size={13} className="text-primary flex-shrink-0" aria-hidden />
         <input
           ref={inputRef}
           type="text"
@@ -314,7 +304,7 @@ export function DraftAssistant({
             title="Go back to the previous version"
             className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-secondary tech-transition flex-shrink-0"
           >
-            <Undo2 size={13} />
+            <Icon name="Undo2" size={13} />
           </button>
         )}
         <button
@@ -324,9 +314,9 @@ export function DraftAssistant({
           className="px-2.5 py-1 text-xs rounded-md bg-primary text-primary-foreground hover:bg-primary/90 tech-transition disabled:opacity-50 flex items-center gap-1 flex-shrink-0"
         >
           {busy ? (
-            <Loader2 size={12} className="animate-spin" aria-hidden />
+            <Icon name="Loader2" size={12} className="animate-spin" aria-hidden />
           ) : (
-            <CornerDownLeft size={12} aria-hidden />
+            <Icon name="CornerDownLeft" size={12} aria-hidden />
           )}
           {runLabel}
         </button>
@@ -338,7 +328,7 @@ export function DraftAssistant({
           title="Close"
           aria-label="Close AI drafting"
         >
-          <X size={14} />
+          <Icon name="X" size={14} />
         </button>
       </div>
       {/* Keeps the collapsed summary reachable for screen readers. */}

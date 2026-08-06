@@ -12,28 +12,9 @@
  *   3. Register → agent appears in picker on the Chat page
  */
 
+import AppIcon from "@/components/Icon";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import {
-  AlertTriangle,
-  Bot,
-  CheckSquare,
-  ChevronRight,
-  ExternalLink,
-  Filter,
-  FolderOpen,
-  Lightbulb,
-  Loader2,
-  MessageCircle,
-  Package,
-  Plug,
-  Plus,
-  Receipt,
-  RefreshCw,
-  Trash2,
-  TrendingUp,
-  X,
-} from "lucide-react";
 import type { AgentEntry } from "@/app/api/agent/list/route";
 import type { MutationEntry } from "@/app/api/agent/mutations/route";
 import type { IntegrationStatus } from "@/app/api/integrations/status/route";
@@ -1239,15 +1220,15 @@ function GithubIcon({ size = 16, className = "" }: { size?: number; className?: 
 // Agent icons + colors by name
 // ---------------------------------------------------------------------------
 
-const AGENT_ICONS: Record<string, React.ElementType> = {
-  "task-manager": CheckSquare,
-  "sales":        TrendingUp,
-  "delivery":     Package,
-  "triage":       Filter,
-  "reconciler":   RefreshCw,
-  "billing":      Receipt,
-  "strategy":     Lightbulb,
-  "apis-config":  Plug,
+const AGENT_ICONS: Record<string, string> = {
+  "task-manager": "CheckSquare",
+  "sales":        "TrendingUp",
+  "delivery":     "Package",
+  "triage":       "Filter",
+  "reconciler":   "RefreshCw",
+  "billing":      "Receipt",
+  "strategy":     "Lightbulb",
+  "apis-config":  "Plug",
 };
 
 const AGENT_COLORS: Record<string, string> = {
@@ -1261,8 +1242,8 @@ const AGENT_COLORS: Record<string, string> = {
   "apis-config":  "text-primary",
 };
 
-function getAgentIcon(agent: AgentEntry): React.ElementType {
-  return AGENT_ICONS[agent.name] ?? Bot;
+function getAgentIcon(agent: AgentEntry): string {
+  return AGENT_ICONS[agent.name] ?? "Bot";
 }
 
 function getAgentColor(agent: AgentEntry): string {
@@ -1303,7 +1284,7 @@ function AgentTile({
   onRefresh?: () => void;
   avatarLibraryId?: string | null;
 }) {
-  const Icon      = getAgentIcon(agent);
+  const iconName  = getAgentIcon(agent);
   const color     = getAgentColor(agent);
   const readiness = agentReadiness(agent, statuses);
   const behindBy  = (agent as any).behind_by as number | undefined;
@@ -1375,7 +1356,7 @@ function AgentTile({
               <AgentAvatar
                 libraryId={avatarLibraryId}
                 size={34}
-                fallback={<Icon size={26} className={`${color} shrink-0`} />}
+                fallback={<AppIcon name={iconName} size={26} className={`${color} shrink-0`} />}
               />
             }
           />
@@ -1538,7 +1519,7 @@ function AgentAvatarPicker({ agentName }: { agentName: string }) {
           {current ? (
             <LibBreathingSprite char={current} box={44} />
           ) : (
-            <Bot size={20} className="text-muted-foreground" />
+            <AppIcon name="Bot" size={20} className="text-muted-foreground" />
           )}
         </span>
         <span className="min-w-0 flex-1">
@@ -1553,7 +1534,7 @@ function AgentAvatarPicker({ agentName }: { agentName: string }) {
             Tap to choose from the library
           </span>
         </span>
-        <ChevronRight size={15} className="shrink-0 text-muted-foreground" />
+        <AppIcon name="ChevronRight" size={15} className="shrink-0 text-muted-foreground" />
       </button>
 
       {/* Popup picker — bottom sheet on mobile, centered dialog on desktop */}
@@ -1575,7 +1556,7 @@ function AgentAvatarPicker({ agentName }: { agentName: string }) {
                 onClick={() => setOpen(false)}
                 className="rounded-md p-1 text-muted-foreground hover:bg-secondary transition-colors"
               >
-                <X size={16} />
+                <AppIcon name="X" size={16} />
               </button>
             </div>
             <div className="overflow-y-auto p-4">
@@ -1612,7 +1593,7 @@ function AgentAvatarPicker({ agentName }: { agentName: string }) {
                       style={{ width: 104, height: 104 }}
                       className={`${tileCls(libraryId === null)} flex-col gap-1 disabled:opacity-60`}
                     >
-                      <Bot size={26} className="text-muted-foreground" />
+                      <AppIcon name="Bot" size={26} className="text-muted-foreground" />
                       <span className="text-[10px] text-muted-foreground">Default</span>
                     </button>
                     {shown.map((c) => (
@@ -1664,7 +1645,7 @@ function AgentSidePanel({
   compact?: boolean;
   avatarLibraryId?: string | null;
 }) {
-  const Icon  = getAgentIcon(agent);
+  const iconName  = getAgentIcon(agent);
   const color = getAgentColor(agent);
   const [confirming, setConfirming] = useState(false);
   const [removing, setRemoving]     = useState(false);
@@ -1793,7 +1774,7 @@ function AgentSidePanel({
                   <AgentAvatar
                     libraryId={avatarLibraryId}
                     size={48}
-                    fallback={<Icon size={40} className={`${color} shrink-0`} />}
+                    fallback={<AppIcon name={iconName} size={40} className={`${color} shrink-0`} />}
                   />
                 }
               />
@@ -1822,7 +1803,7 @@ function AgentSidePanel({
             </div>
           </div>
           <button onClick={onClose} className="self-start m-3 text-muted-foreground hover:text-foreground p-1 rounded transition-colors">
-            <X className="w-4 h-4" />
+            <AppIcon name="X" className="w-4 h-4" />
           </button>
         </div>
       )}
@@ -1874,7 +1855,7 @@ function AgentSidePanel({
 
         {missingDeps.length > 0 && (
           <div className="flex items-start gap-2 rounded-lg border border-warning/20 bg-warning/5 px-3 py-2.5">
-            <AlertTriangle className="w-3.5 h-3.5 text-warning mt-0.5 shrink-0" />
+            <AppIcon name="AlertTriangle" className="w-3.5 h-3.5 text-warning mt-0.5 shrink-0" />
             <div className="text-xs text-warning">
               <span className="font-medium">Agent blocked</span> — needs{" "}
               <Link href="/integrations" className="underline hover:opacity-80">
@@ -1886,7 +1867,7 @@ function AgentSidePanel({
 
         {agent.dep_status?.ok === false && (
           <div className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2.5">
-            <AlertTriangle className="w-3.5 h-3.5 text-destructive mt-0.5 shrink-0" />
+            <AppIcon name="AlertTriangle" className="w-3.5 h-3.5 text-destructive mt-0.5 shrink-0" />
             <div className="text-xs text-destructive min-w-0">
               <span className="font-medium">Dependencies failed to install</span>
               {(agent.dep_status.needs_system_packages?.length ?? 0) > 0 ? (
@@ -1928,7 +1909,7 @@ function AgentSidePanel({
                         state === "ok" ? "bg-success" : state === "missing" ? "bg-warning" : "bg-muted"
                       }`} />
                       {intg?.label ?? i}
-                      {state === "missing" && <ExternalLink className="w-2.5 h-2.5" />}
+                      {state === "missing" && <AppIcon name="ExternalLink" className="w-2.5 h-2.5" />}
                     </span>
                   </Link>
                 );
@@ -1964,7 +1945,7 @@ function AgentSidePanel({
             <div className="text-[10px] text-muted uppercase tracking-wider mb-1.5">Source</div>
             {agent.local_path ? (
               <div className="flex items-center gap-1.5 text-xs text-muted-foreground font-mono bg-secondary rounded-lg px-2.5 py-1.5">
-                <FolderOpen className="w-3.5 h-3.5 shrink-0" />
+                <AppIcon name="FolderOpen" className="w-3.5 h-3.5 shrink-0" />
                 <span className="truncate">{agent.local_path}</span>
               </div>
             ) : (
@@ -1980,7 +1961,7 @@ function AgentSidePanel({
               >
                 <GithubIcon size={14} className="shrink-0" />
                 <span className="truncate">{agent.repo_name ?? agent.repo_url}</span>
-                <ExternalLink className="w-2.5 h-2.5 shrink-0 ml-auto" />
+                <AppIcon name="ExternalLink" className="w-2.5 h-2.5 shrink-0 ml-auto" />
               </a>
             )}
           </div>
@@ -2006,7 +1987,7 @@ function AgentSidePanel({
                   className="rounded-lg border border-border px-2.5 py-1.5 text-xs text-muted-foreground hover:border-primary/30 hover:text-foreground disabled:opacity-50 transition-colors"
                   title="Force-check for remote updates"
                 >
-                  <RefreshCw className={`w-3 h-3 ${checking ? "animate-spin" : ""}`} />
+                  <AppIcon name="RefreshCw" className={`w-3 h-3 ${checking ? "animate-spin" : ""}`} />
                 </button>
               </div>
             )}
@@ -2018,7 +1999,7 @@ function AgentSidePanel({
                 disabled={pulling}
                 className="flex items-center justify-center gap-2 w-full rounded-lg bg-amber-500/10 border border-amber-500/20 px-3 py-2 text-xs font-medium text-amber-600 hover:bg-amber-500/20 disabled:opacity-50 transition-colors"
               >
-                <RefreshCw className={`w-3.5 h-3.5 ${pulling ? "animate-spin" : ""}`} />
+                <AppIcon name="RefreshCw" className={`w-3.5 h-3.5 ${pulling ? "animate-spin" : ""}`} />
                 {pulling
                   ? "Pulling…"
                   : `Pull ${behindBy} update${behindBy !== 1 ? "s" : ""}`}
@@ -2028,7 +2009,7 @@ function AgentSidePanel({
             {/* Pulling spinner */}
             {pulling && (
               <div className="flex items-center gap-2 text-xs text-muted-foreground animate-pulse">
-                <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                <AppIcon name="RefreshCw" className="w-3.5 h-3.5 animate-spin" />
                 Pulling latest commits…
               </div>
             )}
@@ -2106,7 +2087,7 @@ function AgentSidePanel({
             href={`/chat?agent=${encodeURIComponent(agent.name)}`}
             className="flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-lg bg-primary hover:opacity-90 text-sm font-medium text-primary-foreground transition-colors"
           >
-            <MessageCircle className="w-4 h-4" /> Chat
+            <AppIcon name="MessageCircle" className="w-4 h-4" /> Chat
           </Link>
           {agent.dynamic && (
             confirming ? (
@@ -2124,7 +2105,7 @@ function AgentSidePanel({
               <button onClick={() => setConfirming(true)}
                 className="p-2.5 rounded-lg border border-border text-muted-foreground hover:border-destructive/40 hover:text-destructive transition-colors"
                 title="Remove agent">
-                <Trash2 className="w-4 h-4" />
+                <AppIcon name="Trash2" className="w-4 h-4" />
               </button>
             )
           )}
@@ -2242,7 +2223,7 @@ export default function AgentsPage() {
                   : "Check all for updates"
               }
             >
-              <RefreshCw className={`w-3.5 h-3.5 ${checkingAll ? "animate-spin" : ""}`} />
+              <AppIcon name="RefreshCw" className={`w-3.5 h-3.5 ${checkingAll ? "animate-spin" : ""}`} />
               <span className="hidden sm:inline">
                 {checkingAll
                   ? "Checking…"
@@ -2254,11 +2235,11 @@ export default function AgentsPage() {
           )}
           <button onClick={() => void load()} title="Refresh agent list"
             className="p-2 rounded-lg border border-border text-muted-foreground hover:bg-secondary transition-colors">
-            <RefreshCw className="w-4 h-4" />
+            <AppIcon name="RefreshCw" className="w-4 h-4" />
           </button>
           <button onClick={() => setShowAdd(true)}
             className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-primary hover:opacity-90 text-sm font-medium text-primary-foreground transition-colors">
-            <Plus className="w-4 h-4" /><span className="hidden sm:inline">Add Agent</span>
+            <AppIcon name="Plus" className="w-4 h-4" /><span className="hidden sm:inline">Add Agent</span>
           </button>
         </div>
       </div>
@@ -2274,13 +2255,13 @@ export default function AgentsPage() {
         <div className={`flex-1 p-4 overflow-y-auto ${selectedAgent ? "sm:min-w-0" : ""}`}>
           {loading ? (
             <div className="flex items-center justify-center h-48 gap-3 text-muted-foreground text-sm">
-              <Loader2 className="w-4 h-4 animate-spin" /> Loading agents…
+              <AppIcon name="Loader2" className="w-4 h-4 animate-spin" /> Loading agents…
             </div>
           ) : filtered.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-48 gap-3 text-muted-foreground text-sm">
               <p>No {filter !== "all" ? filter : ""} agents found.</p>
               <button onClick={() => setShowAdd(true)} className="flex items-center gap-1.5 text-xs text-primary hover:opacity-80">
-                <Plus className="w-3.5 h-3.5" /> Add agent
+                <AppIcon name="Plus" className="w-3.5 h-3.5" /> Add agent
               </button>
             </div>
           ) : (
@@ -2300,7 +2281,7 @@ export default function AgentsPage() {
                 onClick={() => setShowAdd(true)}
                 className="p-4 rounded-xl border-2 border-dashed border-border text-muted-foreground hover:border-primary/40 hover:text-primary hover:bg-primary/5 transition-all flex flex-col items-center justify-center gap-2 min-h-[120px]"
               >
-                <Plus className="w-5 h-5" /><span className="text-xs">Add Agent</span>
+                <AppIcon name="Plus" className="w-5 h-5" /><span className="text-xs">Add Agent</span>
               </button>
             </div>
           )}
@@ -2315,20 +2296,20 @@ export default function AgentsPage() {
                 <div className="flex items-center justify-between px-4 py-2 border-b border-border shrink-0">
                   <div className="flex items-center gap-2 min-w-0">
                     {(() => {
-                      const Icon = getAgentIcon(selectedAgent);
+                      const iconName = getAgentIcon(selectedAgent);
                       const color = getAgentColor(selectedAgent);
                       return (
                         <AgentAvatar
                           libraryId={agentAvatars[selectedAgent.name]}
                           size={20}
-                          fallback={<Icon size={20} className={color} />}
+                          fallback={<AppIcon name={iconName} size={20} className={color} />}
                         />
                       );
                     })()}
                     <span className="text-sm font-semibold truncate">{selectedAgent.display_name || selectedAgent.name}</span>
                   </div>
                   <button onClick={() => setSelected(null)} className="p-1 rounded-md hover:bg-secondary text-muted-foreground shrink-0">
-                    <X size={16} />
+                    <AppIcon name="X" size={16} />
                   </button>
                 </div>
                 <div className="flex-1 min-h-0 overflow-y-auto pb-safe">

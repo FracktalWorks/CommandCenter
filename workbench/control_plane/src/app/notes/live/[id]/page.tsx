@@ -21,21 +21,9 @@
  * Meet call, or your own mic. Reattaches by id, so a refresh never drops it.
  */
 
+import Icon from "@/components/Icon";
 import { use, useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import {
-  ArrowLeft,
-  Bot,
-  Check,
-  Circle,
-  ListChecks,
-  Loader2,
-  Mic,
-  Settings2,
-  Sparkles,
-  Square,
-  Users,
-} from "lucide-react";
 import { speakerEdge, speakerText } from "../../lib/speakers";
 import {
   getAgendaProgress,
@@ -228,7 +216,7 @@ export default function LiveConsolePage({
   if (loading) {
     return (
       <div className="flex min-h-[60vh] items-center justify-center">
-        <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+        <Icon name="Loader2" className="h-5 w-5 animate-spin text-muted-foreground" />
       </div>
     );
   }
@@ -243,7 +231,7 @@ export default function LiveConsolePage({
           href={`/notes/meeting/${id}`}
           className="mt-4 inline-flex items-center gap-1.5 text-sm text-primary hover:underline"
         >
-          <ArrowLeft className="h-4 w-4" /> Open the meeting
+          <Icon name="ArrowLeft" className="h-4 w-4" /> Open the meeting
         </Link>
       </div>
     );
@@ -258,7 +246,7 @@ export default function LiveConsolePage({
           className="text-muted-foreground hover:text-foreground"
           aria-label="Back to notes"
         >
-          <ArrowLeft className="h-4 w-4" />
+          <Icon name="ArrowLeft" className="h-4 w-4" />
         </Link>
         <div className="min-w-0">
           <h1 className="truncate text-base font-bold sm:text-lg">
@@ -266,9 +254,9 @@ export default function LiveConsolePage({
           </h1>
           <p className="mt-0.5 flex items-center gap-2 text-xs text-muted-foreground">
             {session.source === "bot" ? (
-              <Bot className="h-3.5 w-3.5" />
+              <Icon name="Bot" className="h-3.5 w-3.5" />
             ) : (
-              <Mic className="h-3.5 w-3.5" />
+              <Icon name="Mic" className="h-3.5 w-3.5" />
             )}
             {session.source === "bot" ? "Notetaker in call" : "Recording here"}
             {roster.length > 0 && <span>· {roster.length} speakers</span>}
@@ -298,7 +286,7 @@ export default function LiveConsolePage({
             title="Agenda, briefing and context for this meeting"
             aria-label="Meeting setup"
           >
-            <Settings2 className="h-4 w-4" />
+            <Icon name="Settings2" className="h-4 w-4" />
           </Link>
           <button
             onClick={onToggleCopilot}
@@ -309,7 +297,7 @@ export default function LiveConsolePage({
                 : "border-border text-muted-foreground hover:bg-secondary"
             }`}
           >
-            <Sparkles className="h-4 w-4" />
+            <Icon name="Sparkles" className="h-4 w-4" />
             {busy ? "…" : session.copilot_enabled ? "Copilot on" : "Copilot off"}
           </button>
           {/* Ending the meeting belongs HERE — this is the screen you're on
@@ -326,7 +314,7 @@ export default function LiveConsolePage({
                   : "Stop recording"
               }
             >
-              <Square className="h-3.5 w-3.5 fill-current" />
+              <Icon name="Square" className="h-3.5 w-3.5 fill-current" />
               {ending ? "Ending…" : session.source === "bot" ? "End" : "Stop"}
             </button>
           )}
@@ -393,7 +381,7 @@ export default function LiveConsolePage({
           {/* Copilot output arrives here. */}
           <section>
             <p className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-primary">
-              <Sparkles className="h-3.5 w-3.5" /> Copilot
+              <Icon name="Sparkles" className="h-3.5 w-3.5" /> Copilot
               {tips.length > 0 && (
                 <span className="font-mono text-[10px] normal-case tracking-normal opacity-70">
                   {tips.length}
@@ -441,7 +429,7 @@ export default function LiveConsolePage({
           {progress && progress.total > 0 && (
             <section>
               <p className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                <ListChecks className="h-3.5 w-3.5" /> Agenda
+                <Icon name="ListChecks" className="h-3.5 w-3.5" /> Agenda
                 <span className="font-mono text-[10px] normal-case tracking-normal opacity-70">
                   {progress.covered_count} of {progress.total}
                   {progress.elapsed_s > 60 &&
@@ -469,9 +457,9 @@ export default function LiveConsolePage({
                     }`}
                   >
                     {it.covered ? (
-                      <Check className="mt-0.5 h-3.5 w-3.5 shrink-0 text-success" />
+                      <Icon name="Check" className="mt-0.5 h-3.5 w-3.5 shrink-0 text-success" />
                     ) : (
-                      <Circle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning/70" />
+                      <Icon name="Circle" className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning/70" />
                     )}
                     <span
                       className={
@@ -496,7 +484,7 @@ export default function LiveConsolePage({
           {/* Who's on the call, per the live voiceprint gallery. */}
           <section>
             <p className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-              <Users className="h-3.5 w-3.5" /> In the room
+              <Icon name="Users" className="h-3.5 w-3.5" /> In the room
             </p>
             {roster.length === 0 ? (
               <p className="text-sm text-muted-foreground">

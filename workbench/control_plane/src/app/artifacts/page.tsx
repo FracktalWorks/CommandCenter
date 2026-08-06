@@ -9,27 +9,8 @@
  * Grid / List views change how the current directory's contents appear.
  */
 
+import Icon from "@/components/Icon";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import {
-  Search,
-  Download,
-  Eye,
-  FolderOpen,
-  FolderClosed,
-  File,
-  FileCode,
-  FileText,
-  FileImage,
-  FileSpreadsheet,
-  X,
-  LayoutGrid,
-  List,
-  ChevronDown,
-  ChevronRight,
-  Sparkles,
-  RefreshCw,
-  Bot,
-} from "lucide-react";
 import ArtifactViewerModal from "@/components/ArtifactViewerModal";
 import type { FileEntry } from "@/components/ArtifactSidebar";
 
@@ -101,23 +82,23 @@ function formatRelative(iso: string): string {
 
 function fileIconEl(entry: ArtifactEntry | { name: string; mime_type: string; is_dir?: boolean }, size = 16) {
   if ((entry as ArtifactEntry).is_dir) {
-    return <FolderClosed size={size} className="shrink-0 text-amber-400" />;
+    return <Icon name="FolderClosed" size={size} className="shrink-0 text-amber-400" />;
   }
   const ext = entry.name.split(".").pop()?.toLowerCase() ?? "";
   const mime = entry.mime_type;
   if (["png","jpg","jpeg","gif","webp","svg","ico"].includes(ext) || mime.startsWith("image/"))
-    return <FileImage size={size} className="shrink-0 text-purple-400" />;
+    return <Icon name="FileImage" size={size} className="shrink-0 text-purple-400" />;
   if (["py","ts","tsx","js","jsx","sh","yaml","yml","toml","json","sql","rs","go","java"].includes(ext))
-    return <FileCode size={size} className="shrink-0 text-blue-400" />;
+    return <Icon name="FileCode" size={size} className="shrink-0 text-blue-400" />;
   if (["md","txt","log","rst"].includes(ext) || mime.startsWith("text/"))
-    return <FileText size={size} className="shrink-0 text-green-400" />;
+    return <Icon name="FileText" size={size} className="shrink-0 text-green-400" />;
   if (["pdf"].includes(ext) || mime === "application/pdf")
-    return <FileText size={size} className="shrink-0 text-red-400" />;
+    return <Icon name="FileText" size={size} className="shrink-0 text-red-400" />;
   if (["docx","doc"].includes(ext))
-    return <FileText size={size} className="shrink-0 text-cyan-400" />;
+    return <Icon name="FileText" size={size} className="shrink-0 text-cyan-400" />;
   if (["xlsx","xls","csv"].includes(ext))
-    return <FileSpreadsheet size={size} className="shrink-0 text-emerald-400" />;
-  return <File size={size} className="shrink-0 text-muted-foreground" />;
+    return <Icon name="FileSpreadsheet" size={size} className="shrink-0 text-emerald-400" />;
+  return <Icon name="File" size={size} className="shrink-0 text-muted-foreground" />;
 }
 
 function isImage(entry: ArtifactEntry): boolean {
@@ -237,7 +218,7 @@ function FileCard({ artifact, onView, index }: { artifact: ArtifactEntry; onView
       </div>
       <div className="absolute inset-0 bg-background/80 opacity-0 group-hover:opacity-100 tech-transition flex items-center justify-center gap-3">
         <button onClick={(e) => { e.stopPropagation(); onView(); }} className="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90 tech-transition shadow-lg">
-          <Eye size={13} /> View
+          <Icon name="Eye" size={13} /> View
         </button>
       </div>
     </div>
@@ -255,7 +236,7 @@ function FolderCard({ item, onNavigate, index }: { item: ExplorerItem; onNavigat
       title={`${item.name}\nClick to open`}
     >
       <div className="flex items-center justify-center h-28 bg-amber-500/5 border-b border-border/30">
-        <FolderClosed size={40} className="text-amber-400/70" />
+        <Icon name="FolderClosed" size={40} className="text-amber-400/70" />
       </div>
       <div className="p-3">
         <p className="text-xs font-medium text-foreground truncate leading-tight mb-1">{item.name}</p>
@@ -278,7 +259,7 @@ function ListRow({ item, onNavigate, onView, index }: {
     >
       <div className="flex items-center gap-2.5 min-w-0">
         {item.isDir
-          ? <FolderClosed size={15} className="shrink-0 text-amber-400" />
+          ? <Icon name="FolderClosed" size={15} className="shrink-0 text-amber-400" />
           : fileIconEl(item.entry ?? { name: item.name, mime_type: "" }, 15)}
         <div className="min-w-0">
           <div className="truncate text-xs font-medium text-foreground">{item.name}</div>
@@ -422,7 +403,7 @@ export default function ArtifactsPage() {
         <div className="flex items-center justify-between mb-3">
           <div className="flex items-center gap-3">
             <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary/15">
-              <FolderOpen size={20} className="text-primary" />
+              <Icon name="FolderOpen" size={20} className="text-primary" />
             </div>
             <div>
               <h1 className="text-lg font-semibold text-foreground">Artifacts</h1>
@@ -432,7 +413,7 @@ export default function ArtifactsPage() {
             </div>
           </div>
           <button onClick={fetchArtifacts} className="rounded-lg p-2 text-muted-foreground hover:text-foreground hover:bg-secondary tech-transition" title="Refresh">
-            <RefreshCw size={15} className={loading ? "animate-spin" : ""} />
+            <Icon name="RefreshCw" size={15} className={loading ? "animate-spin" : ""} />
           </button>
         </div>
 
@@ -471,17 +452,17 @@ export default function ArtifactsPage() {
           <div className="flex-1" />
 
           <div className="relative w-full sm:w-56">
-            <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
+            <Icon name="Search" size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
             <input type="text" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} placeholder="Search files…"
               className="w-full rounded-lg border border-border bg-secondary pl-8 pr-8 py-1.5 text-[11px] text-foreground placeholder-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50" />
             {searchQuery && (
-              <button onClick={() => setSearchQuery("")} className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"><X size={12} /></button>
+              <button onClick={() => setSearchQuery("")} className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"><Icon name="X" size={12} /></button>
             )}
           </div>
 
           {hasFilters && (
             <button onClick={clearFilters} className="rounded-lg border border-border px-2.5 py-1.5 text-[11px] text-muted-foreground hover:text-foreground hover:bg-secondary tech-transition flex items-center gap-1">
-              <X size={11} /> Clear
+              <Icon name="X" size={11} /> Clear
             </button>
           )}
         </div>
@@ -491,14 +472,14 @@ export default function ArtifactsPage() {
       <div className="flex-1 overflow-auto">
         {loading && (
           <div className="flex flex-col items-center justify-center h-48 gap-3">
-            <RefreshCw size={18} className="animate-spin text-muted-foreground" />
+            <Icon name="RefreshCw" size={18} className="animate-spin text-muted-foreground" />
             <p className="text-sm text-muted-foreground animate-pulse">Loading artifacts…</p>
           </div>
         )}
 
         {error && !loading && (
           <div className="flex flex-col items-center justify-center h-48 gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-full bg-red-500/10"><X size={18} className="text-red-400" /></div>
+            <div className="flex h-10 w-10 items-center justify-center rounded-full bg-red-500/10"><Icon name="X" size={18} className="text-red-400" /></div>
             <p className="text-sm text-red-400">{error}</p>
             <button onClick={fetchArtifacts} className="text-xs text-muted-foreground hover:text-foreground underline">Retry</button>
           </div>
@@ -506,7 +487,7 @@ export default function ArtifactsPage() {
 
         {!loading && !error && filteredFiles.length === 0 && availableAgents.length === 0 && (
           <div className="flex flex-col items-center justify-center h-64 gap-4">
-            <Sparkles size={28} className="text-muted-foreground/40" />
+            <Icon name="Sparkles" size={28} className="text-muted-foreground/40" />
             <p className="text-sm font-medium text-foreground">No artifacts yet</p>
             <p className="text-xs text-muted-foreground mt-1 max-w-xs">Files appear here as agents create them.</p>
           </div>
@@ -530,8 +511,8 @@ export default function ArtifactsPage() {
                     }}
                     className={`w-full flex items-center gap-3 px-4 py-3 bg-card hover:bg-secondary/40 tech-transition text-left border-l-2 ${accent}`}
                   >
-                    {isOpen ? <ChevronDown size={15} className="text-muted-foreground shrink-0" /> : <ChevronRight size={15} className="text-muted-foreground shrink-0" />}
-                    <Bot size={16} className="text-muted-foreground shrink-0" />
+                    {isOpen ? <Icon name="ChevronDown" size={15} className="text-muted-foreground shrink-0" /> : <Icon name="ChevronRight" size={15} className="text-muted-foreground shrink-0" />}
+                    <Icon name="Bot" size={16} className="text-muted-foreground shrink-0" />
                     <div className="min-w-0 flex-1">
                       <div className="text-sm font-medium text-foreground truncate">{name}</div>
                       <div className="text-[11px] text-muted-foreground">{agentFiles.length} file{agentFiles.length !== 1 ? "s" : ""}</div>
@@ -549,7 +530,7 @@ export default function ArtifactsPage() {
                         </button>
                         {currentPath && currentPath.split("/").map((seg, i, arr) => (
                           <span key={i} className="flex items-center gap-1.5">
-                            <ChevronRight size={12} className="text-muted-foreground" />
+                            <Icon name="ChevronRight" size={12} className="text-muted-foreground" />
                             {i === arr.length - 1 ? (
                               <span className="text-xs font-semibold text-foreground px-1.5 py-0.5 rounded bg-secondary">{seg}</span>
                             ) : (
@@ -568,10 +549,10 @@ export default function ArtifactsPage() {
                         <div className="flex items-center rounded-md border border-border/60 bg-secondary/40 p-0.5">
                           <button onClick={() => setViewMode("grid")}
                             className={`rounded p-1 tech-transition ${viewMode === "grid" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
-                            title="Grid view"><LayoutGrid size={12} /></button>
+                            title="Grid view"><Icon name="LayoutGrid" size={12} /></button>
                           <button onClick={() => setViewMode("list")}
                             className={`rounded p-1 tech-transition ${viewMode === "list" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
-                            title="List view"><List size={12} /></button>
+                            title="List view"><Icon name="List" size={12} /></button>
                         </div>
                       </div>
 
@@ -579,7 +560,7 @@ export default function ArtifactsPage() {
                       <div className="p-3 max-h-[60vh] overflow-auto">
                         {items.length === 0 ? (
                           <div className="flex flex-col items-center justify-center h-24 gap-2 text-muted-foreground">
-                            <FolderOpen size={20} className="opacity-30" />
+                            <Icon name="FolderOpen" size={20} className="opacity-30" />
                             <p className="text-xs">This folder is empty</p>
                           </div>
                         ) : viewMode === "grid" ? (

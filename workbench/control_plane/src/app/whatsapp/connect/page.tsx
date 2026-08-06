@@ -7,25 +7,9 @@
 // token. Honest by design: it names exactly what Meta requires and never fakes a
 // one-click flow the platform can't actually deliver without app review.
 
+import Icon from "@/components/Icon";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import {
-  AlertTriangle,
-  ArrowLeft,
-  ArrowRight,
-  Building2,
-  Check,
-  CheckCircle2,
-  Copy,
-  ExternalLink,
-  Loader2,
-  LogIn,
-  MessageCircle,
-  QrCode,
-  RefreshCw,
-  ShieldCheck,
-  Smartphone,
-} from "lucide-react";
 import {
   createAccount,
   embeddedSignup,
@@ -76,7 +60,7 @@ export default function ConnectPage() {
     <div className="mx-auto flex min-h-full max-w-2xl flex-col p-4 md:p-6">
       <div className="mb-6 flex items-center gap-3">
         <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary/15 text-primary">
-          <MessageCircle className="h-5 w-5" />
+          <Icon name="MessageCircle" className="h-5 w-5" />
         </span>
         <div>
           <h1 className="text-[16px] font-semibold leading-tight">
@@ -88,7 +72,7 @@ export default function ConnectPage() {
 
       {mode === "loading" && (
         <div className="mt-10 flex justify-center text-muted-foreground">
-          <Loader2 className="h-5 w-5 animate-spin" />
+          <Icon name="Loader2" className="h-5 w-5 animate-spin" />
         </div>
       )}
 
@@ -172,7 +156,7 @@ function PickTransport({
         className="group flex w-full items-start gap-3 rounded-xl border border-border bg-background p-5 text-left transition hover:border-primary/60 hover:bg-primary/[0.03]"
       >
         <span className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/15 text-primary">
-          <Smartphone className="h-5 w-5" />
+          <Icon name="Smartphone" className="h-5 w-5" />
         </span>
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
@@ -188,7 +172,7 @@ function PickTransport({
             Web works. No Meta developer account, no tokens, live in a minute.
           </p>
         </div>
-        <ArrowRight className="mt-1 h-4 w-4 shrink-0 text-muted-foreground transition group-hover:translate-x-0.5 group-hover:text-primary" />
+        <Icon name="ArrowRight" className="mt-1 h-4 w-4 shrink-0 text-muted-foreground transition group-hover:translate-x-0.5 group-hover:text-primary" />
       </button>
 
       <button
@@ -196,7 +180,7 @@ function PickTransport({
         className="group flex w-full items-start gap-3 rounded-xl border border-border bg-background p-5 text-left transition hover:border-primary/60 hover:bg-primary/[0.03]"
       >
         <span className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
-          <Building2 className="h-5 w-5" />
+          <Icon name="Building2" className="h-5 w-5" />
         </span>
         <div className="min-w-0 flex-1">
           <span className="text-[14px] font-semibold">
@@ -208,7 +192,7 @@ function PickTransport({
             about 15 minutes of setup.
           </p>
         </div>
-        <ArrowRight className="mt-1 h-4 w-4 shrink-0 text-muted-foreground transition group-hover:translate-x-0.5 group-hover:text-primary" />
+        <Icon name="ArrowRight" className="mt-1 h-4 w-4 shrink-0 text-muted-foreground transition group-hover:translate-x-0.5 group-hover:text-primary" />
       </button>
 
       <p className="px-1 pt-1 text-[11px] leading-relaxed text-muted-foreground">
@@ -285,7 +269,7 @@ function PersonalPairing({
   return (
     <Card>
       <div className="flex items-center gap-2">
-        <QrCode className="h-4 w-4 text-primary" />
+        <Icon name="QrCode" className="h-4 w-4 text-primary" />
         <h2 className="text-[14px] font-semibold">Scan to link your WhatsApp</h2>
       </div>
 
@@ -318,7 +302,7 @@ function PersonalPairing({
                 </div>
               ) : (
                 <div className="flex flex-col items-center gap-2 text-muted-foreground">
-                  <Loader2 className="h-5 w-5 animate-spin" />
+                  <Icon name="Loader2" className="h-5 w-5 animate-spin" />
                   <span className="text-[11px]">Generating code…</span>
                 </div>
               )}
@@ -330,7 +314,7 @@ function PersonalPairing({
               <span className="font-semibold text-success">Linked!</span>
             ) : (
               <>
-                <Loader2 className="h-3 w-3 animate-spin" />
+                <Icon name="Loader2" className="h-3 w-3 animate-spin" />
                 Waiting for you to scan… the code refreshes automatically.
               </>
             )}
@@ -353,10 +337,10 @@ function PersonalPairing({
 
       <div className="mt-5 flex items-center justify-between">
         <GhostButton onClick={onBack}>
-          <ArrowLeft className="h-3.5 w-3.5" /> Back
+          <Icon name="ArrowLeft" className="h-3.5 w-3.5" /> Back
         </GhostButton>
         <GhostButton onClick={restart}>
-          <RefreshCw className="h-3.5 w-3.5" /> New code
+          <Icon name="RefreshCw" className="h-3.5 w-3.5" /> New code
         </GhostButton>
       </div>
     </Card>
@@ -367,7 +351,7 @@ function BridgeUnreachable({ onRetry }: { onRetry: () => void }) {
   return (
     <div className="mt-3">
       <div className="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3">
-        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+        <Icon name="AlertTriangle" className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
         <div className="text-[12px] text-amber-700 dark:text-amber-400">
           <div className="font-semibold">The WhatsApp bridge isn&apos;t running</div>
           <p className="mt-1 leading-relaxed">
@@ -380,7 +364,7 @@ function BridgeUnreachable({ onRetry }: { onRetry: () => void }) {
       </div>
       <div className="mt-4 flex justify-end">
         <PrimaryButton onClick={onRetry}>
-          <RefreshCw className="h-3.5 w-3.5" /> Retry
+          <Icon name="RefreshCw" className="h-3.5 w-3.5" /> Retry
         </PrimaryButton>
       </div>
     </div>
@@ -538,9 +522,9 @@ function EmbeddedSignupButton({
         className="flex w-full items-center justify-center gap-2 rounded-lg bg-[#1877F2] px-4 py-2.5 text-[13px] font-semibold text-white hover:opacity-95 disabled:opacity-60"
       >
         {busy ? (
-          <Loader2 className="h-4 w-4 animate-spin" />
+          <Icon name="Loader2" className="h-4 w-4 animate-spin" />
         ) : (
-          <LogIn className="h-4 w-4" />
+          <Icon name="LogIn" className="h-4 w-4" />
         )}
         Continue with Facebook
       </button>
@@ -576,7 +560,7 @@ function Stepper({ step }: { step: number }) {
                       : "bg-muted text-muted-foreground"
                 }`}
               >
-                {done ? <Check className="h-3.5 w-3.5" /> : i + 1}
+                {done ? <Icon name="Check" className="h-3.5 w-3.5" /> : i + 1}
               </span>
               <span
                 className={`hidden text-[11px] sm:inline ${
@@ -657,7 +641,7 @@ function StepPrereqs({
                 rel="noreferrer"
                 className="mt-0.5 inline-flex items-center gap-1 text-[11px] text-primary hover:underline"
               >
-                {it.link} <ExternalLink className="h-3 w-3" />
+                {it.link} <Icon name="ExternalLink" className="h-3 w-3" />
               </a>
             </div>
           </li>
@@ -665,7 +649,7 @@ function StepPrereqs({
       </ol>
       <div className="mt-6 flex justify-end">
         <PrimaryButton onClick={onNext}>
-          Continue <ArrowRight className="h-3.5 w-3.5" />
+          Continue <Icon name="ArrowRight" className="h-3.5 w-3.5" />
         </PrimaryButton>
       </div>
     </Card>
@@ -702,7 +686,7 @@ function StepWebhook({
 
       {!info ? (
         <div className="mt-4 flex items-center gap-2 text-[12px] text-muted-foreground">
-          <Loader2 className="h-4 w-4 animate-spin" /> Loading…
+          <Icon name="Loader2" className="h-4 w-4 animate-spin" /> Loading…
         </div>
       ) : (
         <div className="mt-4 space-y-3">
@@ -728,10 +712,10 @@ function StepWebhook({
 
       <div className="mt-6 flex items-center justify-between">
         <GhostButton onClick={onBack}>
-          <ArrowLeft className="h-3.5 w-3.5" /> Back
+          <Icon name="ArrowLeft" className="h-3.5 w-3.5" /> Back
         </GhostButton>
         <PrimaryButton onClick={onNext} disabled={!webhookUrl}>
-          I&apos;ve done this <ArrowRight className="h-3.5 w-3.5" />
+          I&apos;ve done this <Icon name="ArrowRight" className="h-3.5 w-3.5" />
         </PrimaryButton>
       </div>
     </Card>
@@ -837,9 +821,9 @@ function StepCredentials({
       <div className="mt-3 flex items-center gap-2">
         <GhostButton onClick={doTest} disabled={!canTest || testing}>
           {testing ? (
-            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            <Icon name="Loader2" className="h-3.5 w-3.5 animate-spin" />
           ) : (
-            <ShieldCheck className="h-3.5 w-3.5" />
+            <Icon name="ShieldCheck" className="h-3.5 w-3.5" />
           )}
           Test connection
         </GhostButton>
@@ -853,7 +837,7 @@ function StepCredentials({
       {result?.ok && (
         <div className="mt-3 rounded-lg border border-success/30 bg-success/10 p-3">
           <div className="flex items-center gap-1.5 text-[12.5px] font-semibold text-success">
-            <CheckCircle2 className="h-4 w-4" />
+            <Icon name="CheckCircle2" className="h-4 w-4" />
             {result.verified_name || "Connected"}
           </div>
           <div className="mt-0.5 text-[11.5px] text-muted-foreground">
@@ -877,13 +861,13 @@ function StepCredentials({
 
       <div className="mt-6 flex items-center justify-between">
         <GhostButton onClick={onBack}>
-          <ArrowLeft className="h-3.5 w-3.5" /> Back
+          <Icon name="ArrowLeft" className="h-3.5 w-3.5" /> Back
         </GhostButton>
         <PrimaryButton onClick={doConnect} disabled={!verified || saving}>
           {saving ? (
-            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            <Icon name="Loader2" className="h-3.5 w-3.5 animate-spin" />
           ) : (
-            <Check className="h-3.5 w-3.5" />
+            <Icon name="Check" className="h-3.5 w-3.5" />
           )}
           Connect number
         </PrimaryButton>
@@ -904,7 +888,7 @@ function StepDone({ onGo }: { onGo: () => void }) {
     <Card>
       <div className="flex flex-col items-center py-4 text-center">
         <span className="mb-3 flex h-14 w-14 items-center justify-center rounded-2xl bg-success/15 text-success">
-          <CheckCircle2 className="h-7 w-7" />
+          <Icon name="CheckCircle2" className="h-7 w-7" />
         </span>
         <h2 className="text-[15px] font-semibold">You&apos;re connected 🎉</h2>
         <p className="mx-auto mt-1.5 max-w-sm text-[12.5px] text-muted-foreground">
@@ -913,7 +897,7 @@ function StepDone({ onGo }: { onGo: () => void }) {
           inbox starts fresh from now.
         </p>
         <PrimaryButton onClick={onGo} className="mt-5">
-          Go to inbox <ArrowRight className="h-3.5 w-3.5" />
+          Go to inbox <Icon name="ArrowRight" className="h-3.5 w-3.5" />
         </PrimaryButton>
       </div>
     </Card>
@@ -999,11 +983,11 @@ function CopyRow({ label, value }: { label: string; value: string }) {
         >
           {copied ? (
             <>
-              <Check className="h-3 w-3 text-success" /> Copied
+              <Icon name="Check" className="h-3 w-3 text-success" /> Copied
             </>
           ) : (
             <>
-              <Copy className="h-3 w-3" /> Copy
+              <Icon name="Copy" className="h-3 w-3" /> Copy
             </>
           )}
         </button>

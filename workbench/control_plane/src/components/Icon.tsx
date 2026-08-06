@@ -42,7 +42,11 @@ export type IconProps = {
    * their own weight — passing it is harmless so call sites need no edit.
    */
   strokeWidth?: number;
+  /** SVG paint attributes some call sites set (e.g. a filled star). */
+  fill?: string;
+  color?: string;
   style?: React.CSSProperties;
+  onClick?: React.MouseEventHandler<SVGSVGElement>;
   "aria-label"?: string;
   "aria-hidden"?: boolean;
 };
@@ -52,7 +56,10 @@ export default function Icon({
   size = 16,
   className,
   strokeWidth,
+  fill,
+  color,
   style,
+  onClick,
   ...aria
 }: IconProps) {
   const pack = useIconPack();
@@ -72,6 +79,8 @@ export default function Icon({
         height={size}
         className={className}
         style={style}
+        color={color}
+        onClick={onClick}
         // Iconify renders decorative markup; without a label it should be
         // invisible to assistive tech, matching Lucide's own default.
         aria-hidden={aria["aria-label"] ? undefined : true}
@@ -89,7 +98,48 @@ export default function Icon({
     size,
     className,
     strokeWidth,
+    fill,
+    color,
     style,
+    onClick,
     ...aria,
   });
+}
+
+/**
+ * A themed icon component bound to one name — what `themedIcon` returns.
+ * `displayName` is part of the type so bound icons are identifiable in React
+ * DevTools rather than as a wall of anonymous functions.
+ */
+export type ThemedIcon = ((props: Omit<IconProps, "name">) => React.ReactNode) & {
+  displayName?: string;
+};
+
+const bound = new Map<string, ThemedIcon>();
+
+/**
+ * A themed icon as a COMPONENT VALUE, for the many places that keep an icon in
+ * a lookup table rather than rendering it inline:
+ *
+ *     const META = { inbox: { icon: themedIcon("Inbox"), label: "Inbox" } };
+ *     …
+ *     <META.inbox.icon size={16} />
+ *
+ * This exists so those call sites migrate with a one-token edit — `Inbox`
+ * becomes `themedIcon("Inbox")` — instead of restructuring every table into
+ * name strings and threading a render helper through everything that reads
+ * them. Where such a table needs a TYPE, use `ThemedIcon`: `typeof` applied to
+ * a call expression is not valid TypeScript.
+ *
+ * Results are memoised per name because the return value is a component TYPE.
+ * A fresh function on every call would be a new type each render, and React
+ * would unmount and remount the icon instead of updating it.
+ */
+export function themedIcon(name: string): ThemedIcon {
+  const cached = bound.get(name);
+  if (cached) return cached;
+  const Bound: ThemedIcon = (props) => <Icon name={name} {...props} />;
+  Bound.displayName = `ThemedIcon(${name})`;
+  bound.set(name, Bound);
+  return Bound;
 }

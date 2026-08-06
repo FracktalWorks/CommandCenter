@@ -8,18 +8,10 @@
  * modules become "Module" nodes in every workflow's palette.
  */
 
+import Icon from "@/components/Icon";
 import { useCallback, useEffect, useRef, useState } from "react";
 import Editor from "@monaco-editor/react";
 import { useTheme } from "next-themes";
-import {
-  Boxes,
-  Check,
-  Loader2,
-  Play,
-  Save,
-  Sparkles,
-  Trash2,
-} from "lucide-react";
 import {
   createModule,
   deleteModule,
@@ -246,14 +238,14 @@ export default function ModuleStudio() {
             onClick={startFresh}
             className="w-full rounded-lg bg-primary px-3 py-2 text-xs font-medium text-primary-foreground hover:opacity-90 tech-transition flex items-center justify-center gap-1.5"
           >
-            <Sparkles className="w-3.5 h-3.5" />
+            <Icon name="Sparkles" className="w-3.5 h-3.5" />
             New module
           </button>
         </div>
         <div className="flex-1 overflow-y-auto scrollbar-thin p-2 space-y-1">
           {loading && (
             <div className="flex justify-center py-6">
-              <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
+              <Icon name="Loader2" className="w-4 h-4 animate-spin text-muted-foreground" />
             </div>
           )}
           {!loading && modules.length === 0 && (
@@ -272,7 +264,7 @@ export default function ModuleStudio() {
               }`}
             >
               <div className="flex items-center gap-1.5">
-                <Boxes className="w-3.5 h-3.5 text-sky-500 shrink-0" />
+                <Icon name="Boxes" className="w-3.5 h-3.5 text-sky-500 shrink-0" />
                 <span className="text-xs font-medium text-foreground truncate">
                   {m.name}
                 </span>
@@ -319,7 +311,7 @@ export default function ModuleStudio() {
             ))}
             {generating && (
               <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                <Icon name="Loader2" className="w-3.5 h-3.5 animate-spin" />
                 Generating…
               </div>
             )}
@@ -346,7 +338,7 @@ export default function ModuleStudio() {
                 className="self-end rounded-lg bg-primary p-2 text-primary-foreground hover:opacity-90 tech-transition disabled:opacity-50"
                 title="Generate"
               >
-                <Sparkles className="w-4 h-4" />
+                <Icon name="Sparkles" className="w-4 h-4" />
               </button>
             </div>
           </div>
@@ -373,9 +365,9 @@ export default function ModuleStudio() {
                 className="rounded-lg border border-border px-2.5 py-1.5 text-xs text-foreground hover:bg-secondary tech-transition flex items-center gap-1 disabled:opacity-50"
               >
                 {testing ? (
-                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  <Icon name="Loader2" className="w-3.5 h-3.5 animate-spin" />
                 ) : (
-                  <Play className="w-3.5 h-3.5" />
+                  <Icon name="Play" className="w-3.5 h-3.5" />
                 )}
                 Test
               </button>
@@ -385,9 +377,9 @@ export default function ModuleStudio() {
                 className="rounded-lg bg-primary px-2.5 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90 tech-transition flex items-center gap-1 disabled:opacity-50"
               >
                 {saving ? (
-                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  <Icon name="Loader2" className="w-3.5 h-3.5 animate-spin" />
                 ) : (
-                  <Save className="w-3.5 h-3.5" />
+                  <Icon name="Save" className="w-3.5 h-3.5" />
                 )}
                 Save
               </button>
@@ -402,7 +394,7 @@ export default function ModuleStudio() {
                         : "Mark ready for workflows"
                     }
                   >
-                    <Check className="w-3.5 h-3.5" />
+                    <Icon name="Check" className="w-3.5 h-3.5" />
                     {status === "ready" ? "Unready" : "Mark ready"}
                   </button>
                   <button
@@ -410,7 +402,7 @@ export default function ModuleStudio() {
                     className="rounded-lg border border-border p-1.5 text-muted-foreground hover:text-destructive hover:bg-secondary tech-transition"
                     title="Delete module"
                   >
-                    <Trash2 className="w-3.5 h-3.5" />
+                    <Icon name="Trash2" className="w-3.5 h-3.5" />
                   </button>
                 </>
               )}

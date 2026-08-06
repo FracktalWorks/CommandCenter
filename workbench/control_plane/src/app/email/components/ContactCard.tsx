@@ -19,12 +19,9 @@
  * above / to the left near an edge, and becomes a bottom sheet on mobile).
  */
 
+import AppIcon, { themedIcon, type ThemedIcon } from "@/components/Icon";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import {
-  AtSign, Building2, Copy, Check, ExternalLink, Loader2, Mail, Paperclip,
-  Phone, Search, X,
-} from "lucide-react";
 import { getContactCard } from "../lib/api";
 import { useEmailStore } from "../lib/emailStore";
 import {
@@ -183,7 +180,7 @@ function CopyButton({ value, label }: { value: string; label: string }) {
           : "text-muted-foreground opacity-45 group-hover:opacity-80 hover:!opacity-100 hover:text-foreground hover:bg-secondary"
       }`}
     >
-      {done ? <Check size={12} /> : <Copy size={12} />}
+      {done ? <AppIcon name="Check" size={12} /> : <AppIcon name="Copy" size={12} />}
     </button>
   );
 }
@@ -196,7 +193,7 @@ function DetailRow({
   href,
   display,
 }: {
-  icon: typeof Phone;
+  icon: ThemedIcon;
   value: string;
   label: string;
   href?: string;
@@ -437,7 +434,7 @@ function ContactPopover({
           aria-label="Close contact card"
           className="p-1 rounded-lg text-muted-foreground hover:bg-secondary tech-transition shrink-0"
         >
-          <X size={14} />
+          <AppIcon name="X" size={14} />
         </button>
       </div>
 
@@ -448,14 +445,14 @@ function ContactPopover({
           onClick={mailTo}
           className="flex-1 inline-flex items-center justify-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90 tech-transition"
         >
-          <Mail size={12} /> Email
+          <AppIcon name="Mail" size={12} /> Email
         </button>
         <button
           type="button"
           onClick={searchTheirMail}
           className="flex-1 inline-flex items-center justify-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground hover:border-primary/30 tech-transition"
         >
-          <Search size={12} /> All mail
+          <AppIcon name="Search" size={12} /> All mail
         </button>
       </div>
 
@@ -465,7 +462,7 @@ function ContactPopover({
         </div>
       ) : !card ? (
         <div className="flex items-center gap-2 px-4 pb-4 text-xs text-muted-foreground">
-          <Loader2 size={13} className="animate-spin" /> Loading contact…
+          <AppIcon name="Loader2" size={13} className="animate-spin" /> Loading contact…
         </div>
       ) : (
         <>
@@ -475,7 +472,7 @@ function ContactPopover({
               {details?.phones.map((phone) => (
                 <DetailRow
                   key={phone}
-                  icon={Phone}
+                  icon={themedIcon("Phone")}
                   value={phone}
                   label="phone number"
                   href={`tel:${phone.replace(/[^\d+]/g, "")}`}
@@ -483,18 +480,18 @@ function ContactPopover({
               ))}
               {details?.organization && (
                 <DetailRow
-                  icon={Building2}
+                  icon={themedIcon("Building2")}
                   value={details.organization}
                   label="organization"
                 />
               )}
               {card.domain && !details?.organization && (
-                <DetailRow icon={AtSign} value={card.domain} label="domain" />
+                <DetailRow icon={themedIcon("AtSign")} value={card.domain} label="domain" />
               )}
               {details?.links.map((link) => (
                 <DetailRow
                   key={link}
-                  icon={ExternalLink}
+                  icon={themedIcon("ExternalLink")}
                   value={link}
                   display={link.replace(/^https?:\/\//, "")}
                   label="link"
@@ -572,7 +569,7 @@ function ContactPopover({
                         {m.subject}
                       </span>
                       {m.hasAttachments && (
-                        <Paperclip size={10} className="text-muted-foreground shrink-0" />
+                        <AppIcon name="Paperclip" size={10} className="text-muted-foreground shrink-0" />
                       )}
                       {m.receivedAt && (
                         <span className="text-[10px] text-muted-foreground shrink-0">

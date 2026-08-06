@@ -1,7 +1,7 @@
 "use client";
 
+import Icon from "@/components/Icon";
 import { useEffect } from "react";
-import { X, SkipForward } from "lucide-react";
 import { useTaskStore } from "../lib/taskStore";
 import { useVisualViewport } from "../lib/useVisualViewport";
 import { ClarifyPanel } from "./ClarifyPanel";
@@ -110,7 +110,7 @@ export function ClarifyModal() {
                   title="Leave it in the inbox to decide later"
                   className="tech-transition inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium text-muted-foreground hover:bg-secondary hover:text-foreground"
                 >
-                  <SkipForward className="h-3.5 w-3.5" />
+                  <Icon name="SkipForward" className="h-3.5 w-3.5" />
                   Skip
                 </button>
               )}
@@ -120,7 +120,7 @@ export function ClarifyModal() {
                 aria-label="Close"
                 className="tech-transition rounded-md p-1 text-muted-foreground hover:bg-secondary hover:text-foreground"
               >
-                <X className="h-4 w-4" />
+                <Icon name="X" className="h-4 w-4" />
               </button>
             </div>
           </div>

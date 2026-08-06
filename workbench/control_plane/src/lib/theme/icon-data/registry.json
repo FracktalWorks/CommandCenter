@@ -746,5 +746,357 @@
   "LifeBuoy": {
     "fluent": "person-support-20-regular",
     "material": "support-rounded"
+  },
+  "Bold": {
+    "fluent": "text-bold-20-regular",
+    "material": "format-bold-rounded"
+  },
+  "Italic": {
+    "fluent": "text-italic-20-regular",
+    "material": "format-italic-rounded"
+  },
+  "Underline": {
+    "fluent": "text-underline-20-regular",
+    "material": "format-underlined-rounded"
+  },
+  "Strikethrough": {
+    "fluent": "text-strikethrough-20-regular",
+    "material": "format-strikethrough-rounded"
+  },
+  "RemoveFormatting": {
+    "fluent": "text-clear-formatting-20-regular",
+    "material": "format-clear-rounded"
+  },
+  "AlignLeft": {
+    "fluent": "text-align-left-20-regular",
+    "material": "format-align-left-rounded"
+  },
+  "AlignCenter": {
+    "fluent": "text-align-center-20-regular",
+    "material": "format-align-center-rounded"
+  },
+  "AlignRight": {
+    "fluent": "text-align-right-20-regular",
+    "material": "format-align-right-rounded"
+  },
+  "List": {
+    "fluent": "text-bullet-list-ltr-20-regular",
+    "material": "format-list-bulleted-rounded"
+  },
+  "ListOrdered": {
+    "fluent": "text-number-list-ltr-20-regular",
+    "material": "format-list-numbered-rounded"
+  },
+  "Table": {
+    "fluent": "table-20-regular",
+    "material": "table-rounded"
+  },
+  "Redo2": {
+    "fluent": "arrow-redo-20-regular",
+    "material": "redo-rounded"
+  },
+  "Link2Off": {
+    "fluent": "link-dismiss-20-regular",
+    "material": "link-off-rounded"
+  },
+  "ImageOff": {
+    "fluent": "image-off-20-regular",
+    "material": "hide-image-rounded"
+  },
+  "Eraser": {
+    "fluent": "eraser-20-regular",
+    "material": "ink-eraser-rounded"
+  },
+  "PenTool": {
+    "fluent": "pen-20-regular",
+    "material": "draw-rounded"
+  },
+  "PencilLine": {
+    "fluent": "edit-20-regular",
+    "material": "edit-rounded"
+  },
+  "SquarePen": {
+    "fluent": "edit-20-regular",
+    "material": "edit-square-rounded"
+  },
+  "Code2": {
+    "fluent": "code-20-regular",
+    "material": "code-rounded"
+  },
+  "PanelLeftClose": {
+    "fluent": "panel-left-contract-20-regular",
+    "material": "left-panel-close-rounded"
+  },
+  "PanelLeftOpen": {
+    "fluent": "panel-left-expand-20-regular",
+    "material": "left-panel-open-rounded"
+  },
+  "PanelRight": {
+    "fluent": "panel-right-20-regular",
+    "material": "view-sidebar-rounded"
+  },
+  "Columns2": {
+    "fluent": "column-double-compare-20-regular",
+    "material": "view-column-2-rounded"
+  },
+  "Rows3": {
+    "fluent": "row-triple-20-regular",
+    "material": "table-rows-rounded"
+  },
+  "LayoutTemplate": {
+    "fluent": "slide-layout-20-regular",
+    "material": "dashboard-rounded"
+  },
+  "AppWindow": {
+    "fluent": "window-20-regular",
+    "material": "web-asset-rounded"
+  },
+  "GripVertical": {
+    "fluent": "re-order-dots-vertical-20-regular",
+    "material": "drag-indicator-rounded"
+  },
+  "StretchHorizontal": {
+    "fluent": "auto-fit-width-20-regular",
+    "material": "width-full-rounded"
+  },
+  "ChevronsUpDown": {
+    "fluent": "chevron-up-down-20-regular",
+    "material": "unfold-more-rounded"
+  },
+  "ListFilter": {
+    "fluent": "filter-20-regular",
+    "material": "filter-list-rounded"
+  },
+  "ArrowDownUp": {
+    "fluent": "arrow-sort-20-regular",
+    "material": "swap-vert-rounded"
+  },
+  "ArrowUpNarrowWide": {
+    "fluent": "arrow-sort-up-20-regular",
+    "material": "sort-rounded"
+  },
+  "ArrowDownWideNarrow": {
+    "fluent": "arrow-sort-down-20-regular",
+    "material": "sort-rounded"
+  },
+  "SearchX": {
+    "fluent": "search-info-20-regular",
+    "material": "search-off-rounded"
+  },
+  "ArrowUpRight": {
+    "fluent": "arrow-up-right-20-regular",
+    "material": "north-east-rounded"
+  },
+  "ArrowDownRight": {
+    "fluent": "arrow-down-right-20-regular",
+    "material": "south-east-rounded"
+  },
+  "ArrowUpToLine": {
+    "fluent": "arrow-export-up-20-regular",
+    "material": "vertical-align-top-rounded"
+  },
+  "CornerDownRight": {
+    "fluent": "arrow-turn-right-down-20-regular",
+    "material": "subdirectory-arrow-right-rounded"
+  },
+  "SkipForward": {
+    "fluent": "next-20-regular",
+    "material": "skip-next-rounded"
+  },
+  "RotateCw": {
+    "fluent": "arrow-clockwise-20-regular",
+    "material": "refresh-rounded"
+  },
+  "LoaderCircle": {
+    "fluent": "spinner-ios-20-regular",
+    "material": "progress-activity-rounded"
+  },
+  "Hourglass": {
+    "fluent": "hourglass-20-regular",
+    "material": "hourglass-empty-rounded"
+  },
+  "CheckCheck": {
+    "fluent": "checkmark-starburst-20-regular",
+    "material": "done-all-rounded"
+  },
+  "BadgeCheck": {
+    "fluent": "checkmark-starburst-20-regular",
+    "material": "verified-rounded"
+  },
+  "CircleDot": {
+    "fluent": "radio-button-20-regular",
+    "material": "radio-button-checked-rounded"
+  },
+  "MinusCircle": {
+    "fluent": "subtract-circle-20-regular",
+    "material": "do-not-disturb-on-rounded"
+  },
+  "PauseCircle": {
+    "fluent": "pause-circle-20-regular",
+    "material": "pause-circle-rounded"
+  },
+  "Gauge": {
+    "fluent": "gauge-20-regular",
+    "material": "speed-rounded"
+  },
+  "Milestone": {
+    "fluent": "flag-20-regular",
+    "material": "flag-rounded"
+  },
+  "ShieldX": {
+    "fluent": "shield-dismiss-20-regular",
+    "material": "gpp-bad-rounded"
+  },
+  "ListTodo": {
+    "fluent": "task-list-square-ltr-20-regular",
+    "material": "checklist-rounded"
+  },
+  "ListPlus": {
+    "fluent": "text-bullet-list-add-20-regular",
+    "material": "playlist-add-rounded"
+  },
+  "CopyX": {
+    "fluent": "clipboard-error-20-regular",
+    "material": "content-paste-off-rounded"
+  },
+  "FolderPlus": {
+    "fluent": "folder-add-20-regular",
+    "material": "create-new-folder-rounded"
+  },
+  "FolderClosed": {
+    "fluent": "folder-20-regular",
+    "material": "folder-rounded"
+  },
+  "BookMarked": {
+    "fluent": "book-star-20-regular",
+    "material": "bookmark-rounded"
+  },
+  "Pin": {
+    "fluent": "pin-20-regular",
+    "material": "push-pin"
+  },
+  "PinOff": {
+    "fluent": "pin-off-20-regular",
+    "material": "keep-off-rounded"
+  },
+  "Mails": {
+    "fluent": "mail-multiple-20-regular",
+    "material": "mail-rounded"
+  },
+  "MessageSquareText": {
+    "fluent": "comment-text-20-regular",
+    "material": "chat-rounded"
+  },
+  "MessageCircleQuestion": {
+    "fluent": "chat-help-20-regular",
+    "material": "contact-support-rounded"
+  },
+  "PhoneIncoming": {
+    "fluent": "call-inbound-20-regular",
+    "material": "phone-callback-rounded"
+  },
+  "PhoneOff": {
+    "fluent": "call-dismiss-20-regular",
+    "material": "phone-disabled-rounded"
+  },
+  "Headphones": {
+    "fluent": "headphones-20-regular",
+    "material": "headphones-rounded"
+  },
+  "AudioLines": {
+    "fluent": "sound-wave-circle-20-regular",
+    "material": "graphic-eq-rounded"
+  },
+  "UserRound": {
+    "fluent": "person-20-regular",
+    "material": "person-rounded"
+  },
+  "Keyboard": {
+    "fluent": "keyboard-20-regular",
+    "material": "keyboard-rounded"
+  },
+  "Printer": {
+    "fluent": "print-20-regular",
+    "material": "print-rounded"
+  },
+  "QrCode": {
+    "fluent": "qr-code-20-regular",
+    "material": "qr-code-rounded"
+  },
+  "Webhook": {
+    "fluent": "link-square-20-regular",
+    "material": "webhook-rounded"
+  },
+  "GitFork": {
+    "fluent": "branch-fork-20-regular",
+    "material": "fork-right-rounded"
+  },
+  "Hammer": {
+    "fluent": "wrench-20-regular",
+    "material": "hardware-rounded"
+  },
+  "Box": {
+    "fluent": "box-20-regular",
+    "material": "inventory-2-rounded"
+  },
+  "Sliders": {
+    "fluent": "options-20-regular",
+    "material": "tune-rounded"
+  },
+  "BarChart2": {
+    "fluent": "data-bar-vertical-20-regular",
+    "material": "bar-chart-rounded"
+  },
+  "UploadCloud": {
+    "fluent": "cloud-arrow-up-20-regular",
+    "material": "cloud-upload-rounded"
+  },
+  "Coins": {
+    "fluent": "money-20-regular",
+    "material": "payments-rounded"
+  },
+  "Gem": {
+    "fluent": "diamond-20-regular",
+    "material": "diamond-rounded"
+  },
+  "Coffee": {
+    "fluent": "drink-coffee-20-regular",
+    "material": "coffee-rounded"
+  },
+  "Footprints": {
+    "fluent": "run-20-regular",
+    "material": "footprint-rounded"
+  },
+  "Mountain": {
+    "fluent": "mountain-location-top-20-regular",
+    "material": "landscape-rounded"
+  },
+  "DoorOpen": {
+    "fluent": "door-20-regular",
+    "material": "door-open-rounded"
+  },
+  "MoonStar": {
+    "fluent": "weather-moon-20-regular",
+    "material": "bedtime-rounded"
+  },
+  "CalendarX": {
+    "fluent": "calendar-cancel-20-regular",
+    "material": "event-busy-rounded"
+  },
+  "AlarmClockOff": {
+    "fluent": "alert-off-20-regular",
+    "material": "alarm-off-rounded"
+  },
+  "Battery": {
+    "fluent": "battery-10-20-regular",
+    "material": "battery-full-rounded"
+  },
+  "BatteryLow": {
+    "fluent": "battery-2-20-regular",
+    "material": "battery-2-bar-rounded"
+  },
+  "BatteryMedium": {
+    "fluent": "battery-5-20-regular",
+    "material": "battery-5-bar-rounded"
   }
 }

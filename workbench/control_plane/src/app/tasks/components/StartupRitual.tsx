@@ -7,18 +7,8 @@
 // Completion (or dismissal) stamps today in focusPrefs so it offers once/day;
 // the streak counts completions only.
 
+import Icon from "@/components/Icon";
 import { useEffect, useMemo, useState } from "react";
-import {
-  AlertTriangle,
-  ArrowRight,
-  Check,
-  RotateCcw,
-  Star,
-  Sun,
-  Wand2,
-  Wind,
-  X,
-} from "lucide-react";
 import { GtdItem } from "../lib/types";
 import { priorityRank } from "../lib/priority";
 import { durationLabel } from "../lib/utils";
@@ -160,7 +150,7 @@ export function StartupRitual({
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center gap-2 border-b border-border px-4 py-3">
-          <Sun className="h-4 w-4 shrink-0 text-warning" />
+          <Icon name="Sun" className="h-4 w-4 shrink-0 text-warning" />
           <h2 className="min-w-0 flex-1 truncate text-sm font-semibold text-foreground">
             Start your day
           </h2>
@@ -178,7 +168,7 @@ export function StartupRitual({
             aria-label="Skip today"
             className="rounded-md p-1 text-muted-foreground hover:bg-secondary hover:text-foreground"
           >
-            <X className="h-4 w-4" />
+            <Icon name="X" className="h-4 w-4" />
           </button>
         </div>
 
@@ -221,7 +211,7 @@ export function StartupRitual({
                     }}
                     className="tech-transition inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-2 text-[12px] font-semibold text-primary-foreground hover:opacity-90"
                   >
-                    <Wind className="h-3.5 w-3.5" />
+                    <Icon name="Wind" className="h-3.5 w-3.5" />
                     Begin
                   </button>
                 ) : (
@@ -243,7 +233,7 @@ export function StartupRitual({
                     className="tech-transition inline-flex items-center gap-1 rounded-md px-3 py-2 text-[12px] font-medium text-muted-foreground hover:text-foreground"
                   >
                     Skip
-                    <ArrowRight className="h-3.5 w-3.5" />
+                    <Icon name="ArrowRight" className="h-3.5 w-3.5" />
                   </button>
                 )}
               </div>
@@ -282,19 +272,19 @@ export function StartupRitual({
                     onClick={onRollover}
                     className="tech-transition mt-2 inline-flex items-center gap-1.5 rounded-md bg-warning/20 px-2.5 py-1.5 text-[11.5px] font-medium text-warning hover:bg-warning/30"
                   >
-                    <RotateCcw className="h-3.5 w-3.5" />
+                    <Icon name="RotateCcw" className="h-3.5 w-3.5" />
                     Move to my list
                   </button>
                 </div>
               ) : (
                 <div className="rounded-lg bg-success/5 p-3 text-[12px] text-success">
-                  <Check className="mr-1 inline h-3.5 w-3.5" />
+                  <Icon name="Check" className="mr-1 inline h-3.5 w-3.5" />
                   Nothing carried over — clean slate.
                 </div>
               )}
               {dueSoonCount > 0 && (
                 <div className="flex items-center gap-2 rounded-lg bg-warning/10 p-3 text-[12px] text-foreground">
-                  <AlertTriangle className="h-4 w-4 shrink-0 text-warning" />
+                  <Icon name="AlertTriangle" className="h-4 w-4 shrink-0 text-warning" />
                   {dueSoonCount} unscheduled task{dueSoonCount === 1 ? "" : "s"}{" "}
                   due within 2 weeks — the planner will weigh them.
                 </div>
@@ -305,7 +295,7 @@ export function StartupRitual({
                 className="tech-transition inline-flex items-center justify-center gap-1.5 rounded-md bg-primary px-3 py-2 text-[12px] font-semibold text-primary-foreground hover:opacity-90"
               >
                 Pick the One Thing
-                <ArrowRight className="h-3.5 w-3.5" />
+                <Icon name="ArrowRight" className="h-3.5 w-3.5" />
               </button>
             </div>
           )}
@@ -337,7 +327,7 @@ export function StartupRitual({
                           : "border-border bg-background/60 hover:border-amber-500/40",
                       ].join(" ")}
                     >
-                      <Star
+                      <Icon name="Star"
                         className={[
                           "h-4 w-4 shrink-0",
                           picked
@@ -385,7 +375,7 @@ export function StartupRitual({
               onClick={() => finish(true)}
               className="tech-transition inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-2 text-[12px] font-semibold text-primary-foreground hover:opacity-90"
             >
-              <Wand2 className="h-3.5 w-3.5" />
+              <Icon name="Wand2" className="h-3.5 w-3.5" />
               Rebuild my day
             </button>
           </div>

@@ -6,8 +6,8 @@
  * a cron expression. All kinds converge on the same run entrypoint.
  */
 
+import Icon from "@/components/Icon";
 import { useMemo, useState } from "react";
-import { Copy, X, Zap } from "lucide-react";
 import type { TriggerSpec } from "../lib/types";
 
 const inputCls =
@@ -81,14 +81,14 @@ export default function TriggerPanel({
     <div className="absolute right-3 top-12 z-20 w-80 rounded-xl border border-border bg-popover shadow-lg">
       <div className="flex items-center justify-between px-3 py-2 border-b border-border">
         <span className="text-xs font-semibold text-foreground flex items-center gap-1.5">
-          <Zap className="w-3.5 h-3.5 text-amber-500" />
+          <Icon name="Zap" className="w-3.5 h-3.5 text-amber-500" />
           Triggers
         </span>
         <button
           onClick={onClose}
           className="p-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary tech-transition"
         >
-          <X className="w-3.5 h-3.5" />
+          <Icon name="X" className="w-3.5 h-3.5" />
         </button>
       </div>
 
@@ -135,7 +135,7 @@ export default function TriggerPanel({
                   className="p-1.5 rounded-lg border border-border text-muted-foreground hover:text-foreground tech-transition shrink-0 disabled:opacity-50"
                   title="Copy URL"
                 >
-                  <Copy className="w-3.5 h-3.5" />
+                  <Icon name="Copy" className="w-3.5 h-3.5" />
                 </button>
               </div>
               {copied && (

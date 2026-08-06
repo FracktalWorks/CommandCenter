@@ -1,7 +1,7 @@
 "use client";
 
+import Icon from "@/components/Icon";
 import { useEffect, useMemo, useState } from "react";
-import { Plus, Search, Loader2, Users, Link2 } from "lucide-react";
 import { useTaskStore } from "../lib/taskStore";
 import { OrgPerson } from "../lib/types";
 import { PersonEditor } from "./PersonEditor";
@@ -62,7 +62,7 @@ export function PeopleView() {
   if (backend !== "live") {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-2 text-sm text-muted-foreground">
-        <Users size={22} className="opacity-40" />
+        <Icon name="Users" size={22} className="opacity-40" />
         Connect a live workspace to manage your team.
       </div>
     );
@@ -74,7 +74,7 @@ export function PeopleView() {
       <div className="flex flex-wrap items-center gap-2 border-b border-border bg-card px-4 py-2.5">
         <div className="flex items-center gap-2">
           <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-primary/15 text-primary">
-            <Users size={15} />
+            <Icon name="Users" size={15} />
           </div>
           <div>
             <h1 className="text-sm font-semibold leading-tight text-foreground">
@@ -87,7 +87,7 @@ export function PeopleView() {
         </div>
         <div className="ml-auto flex items-center gap-2">
           <div className="flex items-center gap-2 rounded-md bg-secondary px-2.5 py-1.5">
-            <Search size={13} className="text-muted-foreground" />
+            <Icon name="Search" size={13} className="text-muted-foreground" />
             <input
               value={q}
               onChange={(e) => setQ(e.target.value)}
@@ -99,7 +99,7 @@ export function PeopleView() {
             onClick={() => setEditing("new")}
             className="flex items-center gap-1.5 rounded-md bg-primary px-3 py-2 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90"
           >
-            <Plus size={14} /> Add person
+            <Icon name="Plus" size={14} /> Add person
           </button>
         </div>
       </div>
@@ -136,11 +136,11 @@ export function PeopleView() {
       <div className="min-h-0 flex-1 overflow-y-auto">
         {loading ? (
           <div className="flex items-center gap-2 px-4 py-6 text-xs text-muted-foreground">
-            <Loader2 size={14} className="animate-spin" /> Loading people…
+            <Icon name="Loader2" size={14} className="animate-spin" /> Loading people…
           </div>
         ) : visible.length === 0 ? (
           <div className="flex flex-col items-center justify-center gap-2 py-16 text-sm text-muted-foreground">
-            <Users size={22} className="opacity-40" />
+            <Icon name="Users" size={22} className="opacity-40" />
             {orgPeople.length === 0
               ? "No people yet — add your team or seed from the HR import."
               : "No one matches those filters."}
@@ -190,7 +190,7 @@ function PersonRow({ p, onOpen }: { p: OrgPerson; onOpen: () => void }) {
             </span>
           )}
           {p.providerUserId && (
-            <Link2
+            <Icon name="Link2"
               size={11}
               className="text-emerald-500"
               aria-label="Linked to ClickUp"

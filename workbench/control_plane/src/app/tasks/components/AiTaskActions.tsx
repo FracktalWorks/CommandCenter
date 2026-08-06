@@ -1,13 +1,7 @@
 "use client";
 
+import Icon from "@/components/Icon";
 import { useState } from "react";
-import {
-  Sparkles,
-  RefreshCw,
-  Check,
-  Loader2,
-  Wand2,
-} from "lucide-react";
 import { useTaskStore } from "../lib/taskStore";
 import type { GtdItem } from "../lib/types";
 import type { EnrichFields } from "../lib/api";
@@ -83,7 +77,7 @@ export function AiTaskActions({ item }: { item: GtdItem }) {
         title="Re-run Clarify on this task — break it down or refine it"
         className="tech-transition inline-flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-[11px] font-medium text-muted-foreground hover:border-primary/40 hover:text-foreground"
       >
-        <RefreshCw className="h-3.5 w-3.5" />
+        <Icon name="RefreshCw" className="h-3.5 w-3.5" />
         Re-clarify
       </button>
       <button
@@ -97,7 +91,7 @@ export function AiTaskActions({ item }: { item: GtdItem }) {
         }
         className="tech-transition inline-flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-[11px] font-medium text-muted-foreground hover:border-primary/40 hover:text-foreground disabled:opacity-40"
       >
-        <Wand2 className="h-3.5 w-3.5" />
+        <Icon name="Wand2" className="h-3.5 w-3.5" />
         Fill details
       </button>
 
@@ -112,12 +106,12 @@ export function AiTaskActions({ item }: { item: GtdItem }) {
           />
           <div className="absolute right-0 top-full z-50 mt-1.5 w-72 rounded-lg border border-border bg-card p-3 shadow-xl">
             <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold text-primary">
-              <Sparkles className="h-3.5 w-3.5" />
+              <Icon name="Sparkles" className="h-3.5 w-3.5" />
               Fill missing details
             </div>
             {loading ? (
               <div className="flex items-center gap-2 py-3 text-xs text-muted-foreground">
-                <Loader2 className="h-4 w-4 animate-spin" />
+                <Icon name="Loader2" className="h-4 w-4 animate-spin" />
                 Reading the task…
               </div>
             ) : error ? (
@@ -177,7 +171,7 @@ export function AiTaskActions({ item }: { item: GtdItem }) {
                     disabled={chosen.size === 0}
                     className="tech-transition inline-flex items-center gap-1.5 rounded-md bg-primary px-2.5 py-1.5 text-[12px] font-medium text-primary-foreground hover:opacity-90 disabled:opacity-40"
                   >
-                    <Check className="h-3.5 w-3.5" />
+                    <Icon name="Check" className="h-3.5 w-3.5" />
                     Apply {chosen.size > 0 ? chosen.size : ""}
                   </button>
                   <button
@@ -231,7 +225,7 @@ function FillRow({
             : "border-border",
         ].join(" ")}
       >
-        {checked && <Check className="h-3 w-3" />}
+        {checked && <Icon name="Check" className="h-3 w-3" />}
       </span>
       <span className="w-16 shrink-0 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
         {label}

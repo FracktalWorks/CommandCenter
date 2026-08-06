@@ -8,23 +8,10 @@
  * the published app full-page, drafts (and editors) jump into the Workshop.
  */
 
+import Icon from "@/components/Icon";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useSession } from "next-auth/react";
-import {
-  Clock,
-  GitFork,
-  Hammer,
-  LayoutTemplate,
-  Loader2,
-  Pin,
-  PinOff,
-  Plus,
-  RefreshCw,
-  Sparkles,
-  X,
-  Zap,
-} from "lucide-react";
 import FilterPills from "@/components/FilterPills";
 import type { AppMeta } from "./lib/types";
 
@@ -133,7 +120,7 @@ function AppCard({
                 : "text-muted-foreground opacity-0 group-hover:opacity-100 hover:text-foreground"
             }`}
           >
-            <LayoutTemplate className="w-3.5 h-3.5" />
+            <Icon name="LayoutTemplate" className="w-3.5 h-3.5" />
           </span>
         )}
         <span
@@ -157,9 +144,9 @@ function AppCard({
           }`}
         >
           {app.pinned ? (
-            <Pin className="w-3.5 h-3.5 fill-current" />
+            <Icon name="Pin" className="w-3.5 h-3.5 fill-current" />
           ) : (
-            <PinOff className="w-3.5 h-3.5" />
+            <Icon name="PinOff" className="w-3.5 h-3.5" />
           )}
         </span>
       </div>
@@ -185,7 +172,7 @@ function AppCard({
             {isLive && <span>·</span>}
             <span className="truncate">by {app.owner_email.split("@")[0]}</span>
             <span>·</span>
-            <Clock className="w-3 h-3 shrink-0" />
+            <Icon name="Clock" className="w-3 h-3 shrink-0" />
             <span>{formatRelative(app.updated_at)}</span>
           </div>
         </div>
@@ -213,7 +200,7 @@ function AppCard({
             title={`${app.month_calls} AI call${app.month_calls === 1 ? "" : "s"} this month`}
             className="flex items-center gap-1 text-[10.5px] text-muted-foreground"
           >
-            <Zap className="w-3 h-3 shrink-0" />
+            <Icon name="Zap" className="w-3 h-3 shrink-0" />
             {formatCost(app.month_cost_usd ?? 0)}
           </span>
         )}
@@ -235,7 +222,7 @@ function AppCard({
             }}
             className="flex items-center gap-1 text-[11px] font-semibold text-accent hover:opacity-80 tech-transition"
           >
-            <GitFork className="w-3 h-3" />
+            <Icon name="GitFork" className="w-3 h-3" />
             Use
           </span>
         )}
@@ -470,7 +457,7 @@ export default function CustomAppsPage() {
             title="Refresh"
             className="p-2 rounded-lg border border-border text-muted-foreground hover:bg-secondary tech-transition"
           >
-            <RefreshCw className={`w-4 h-4 ${loading ? "animate-spin" : ""}`} />
+            <Icon name="RefreshCw" className={`w-4 h-4 ${loading ? "animate-spin" : ""}`} />
           </button>
           <button
             onClick={() => createApp("")}
@@ -478,9 +465,9 @@ export default function CustomAppsPage() {
             className="rounded-lg bg-primary px-3 sm:px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 tech-transition flex items-center gap-1.5 disabled:opacity-50"
           >
             {creating ? (
-              <Loader2 className="w-4 h-4 animate-spin" />
+              <Icon name="Loader2" className="w-4 h-4 animate-spin" />
             ) : (
-              <Plus className="w-4 h-4" />
+              <Icon name="Plus" className="w-4 h-4" />
             )}
             New app
           </button>
@@ -502,7 +489,7 @@ export default function CustomAppsPage() {
 
       {forkError && (
         <div className="flex items-center gap-2 mx-4 sm:mx-6 mt-3 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive shrink-0">
-          <X className="w-3.5 h-3.5 shrink-0" />
+          <Icon name="X" className="w-3.5 h-3.5 shrink-0" />
           {forkError}
           <button
             onClick={() => setForkError(null)}
@@ -525,7 +512,7 @@ export default function CustomAppsPage() {
                 if (describe.trim()) createApp(describe);
               }}
             >
-              <Sparkles className="w-4 h-4 text-accent shrink-0" />
+              <Icon name="Sparkles" className="w-4 h-4 text-accent shrink-0" />
               <input
                 value={describe}
                 onChange={(e) => setDescribe(e.target.value)}
@@ -554,7 +541,7 @@ export default function CustomAppsPage() {
             </div>
             {createError && (
               <div className="flex items-center gap-1.5 text-xs text-destructive">
-                <X className="w-3.5 h-3.5" /> {createError}
+                <Icon name="X" className="w-3.5 h-3.5" /> {createError}
               </div>
             )}
           </div>
@@ -562,7 +549,7 @@ export default function CustomAppsPage() {
           {/* Loading / error / empty */}
           {loading && (
             <div className="flex flex-col items-center justify-center h-40 gap-3">
-              <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
+              <Icon name="Loader2" className="w-5 h-5 animate-spin text-muted-foreground" />
               <p className="text-sm text-muted-foreground">Loading apps…</p>
             </div>
           )}
@@ -582,7 +569,7 @@ export default function CustomAppsPage() {
           {!loading && !error && visible.length === 0 && (
             <div className="flex flex-col items-center justify-center h-56 gap-3 text-center">
               <div className="w-11 h-11 rounded-xl bg-primary/10 flex items-center justify-center">
-                <Hammer className="w-5 h-5 text-primary" />
+                <Icon name="Hammer" className="w-5 h-5 text-primary" />
               </div>
               <p className="text-sm font-medium text-foreground">
                 {apps.length === 0 ? "No apps yet" : "Nothing matches this filter"}

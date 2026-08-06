@@ -6,8 +6,8 @@
  * (spec §4 Tier-1 / §5.3 provenance-you-can-touch).
  */
 
+import Icon from "@/components/Icon";
 import { useState } from "react";
-import { Loader2, MessageCircleQuestion, Send } from "lucide-react";
 import { askMeeting } from "../lib/api";
 
 interface QA {
@@ -51,7 +51,7 @@ export default function AskPanel({
   return (
     <div className="rounded-xl border border-border bg-card">
       <div className="flex items-center gap-1.5 px-4 py-2.5 border-b border-border">
-        <MessageCircleQuestion className="w-4 h-4 text-primary" />
+        <Icon name="MessageCircleQuestion" className="w-4 h-4 text-primary" />
         <h2 className="text-sm font-semibold text-foreground">
           Ask this meeting
         </h2>
@@ -94,7 +94,7 @@ export default function AskPanel({
         ))}
         {loading && (
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
-            <Loader2 className="w-3.5 h-3.5 animate-spin" /> Thinking…
+            <Icon name="Loader2" className="w-3.5 h-3.5 animate-spin" /> Thinking…
           </div>
         )}
         {error && (
@@ -116,7 +116,7 @@ export default function AskPanel({
           className="p-2 rounded-lg bg-primary text-primary-foreground hover:opacity-90 tech-transition disabled:opacity-50"
           aria-label="Ask"
         >
-          <Send className="w-4 h-4" />
+          <Icon name="Send" className="w-4 h-4" />
         </button>
       </div>
     </div>

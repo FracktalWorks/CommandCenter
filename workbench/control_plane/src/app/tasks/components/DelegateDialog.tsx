@@ -1,15 +1,7 @@
 "use client";
 
+import Icon from "@/components/Icon";
 import { useMemo, useState } from "react";
-import {
-  X,
-  Cloud,
-  FolderKanban,
-  Search,
-  Check,
-  Loader2,
-  UserPlus,
-} from "lucide-react";
 import { useTaskStore } from "../lib/taskStore";
 import type { GtdItem, Person } from "../lib/types";
 import { initials } from "../lib/utils";
@@ -90,7 +82,7 @@ export function DelegateDialog({
       >
         <div className="flex shrink-0 items-center justify-between border-b border-border px-4 py-3">
           <span className="inline-flex items-center gap-2 text-sm font-semibold text-foreground">
-            <UserPlus className="h-4 w-4 text-primary" />
+            <Icon name="UserPlus" className="h-4 w-4 text-primary" />
             Delegate to {assignee.name}
           </span>
           <button
@@ -99,13 +91,13 @@ export function DelegateDialog({
             aria-label="Close"
             className="tech-transition rounded-md p-1 text-muted-foreground hover:bg-secondary hover:text-foreground"
           >
-            <X className="h-4 w-4" />
+            <Icon name="X" className="h-4 w-4" />
           </button>
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
           <p className="mb-3 flex items-start gap-1.5 text-[11px] text-muted-foreground">
-            <Cloud className="mt-0.5 h-3.5 w-3.5 shrink-0 text-primary/70" />
+            <Icon name="Cloud" className="mt-0.5 h-3.5 w-3.5 shrink-0 text-primary/70" />
             <span>
               A delegated task lives in the PM tool so {assignee.name.split(" ")[0]}{" "}
               can see it. Pick where it should go.
@@ -140,7 +132,7 @@ export function DelegateDialog({
                             : "border-border text-muted-foreground hover:bg-secondary",
                         ].join(" ")}
                       >
-                        <Cloud className="h-3.5 w-3.5" />
+                        <Icon name="Cloud" className="h-3.5 w-3.5" />
                         {a.label}
                       </button>
                     ))}
@@ -154,7 +146,7 @@ export function DelegateDialog({
               </p>
               {projects.filter((p) => p.accountId === accountId).length > 5 && (
                 <div className="relative mb-1.5">
-                  <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+                  <Icon name="Search" className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
                   <input
                     value={q}
                     onChange={(e) => setQ(e.target.value)}
@@ -181,10 +173,10 @@ export function DelegateDialog({
                           : "border-border text-foreground hover:bg-secondary",
                       ].join(" ")}
                     >
-                      <FolderKanban className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                      <Icon name="FolderKanban" className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                       <span className="min-w-0 flex-1 truncate">{p.outcome}</span>
                       {projectId === p.id && (
-                        <Check className="h-3.5 w-3.5 shrink-0" />
+                        <Icon name="Check" className="h-3.5 w-3.5 shrink-0" />
                       )}
                     </button>
                   ))
@@ -226,7 +218,7 @@ export function DelegateDialog({
             className="tech-transition inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-[12px] font-medium text-primary-foreground hover:opacity-90 disabled:opacity-40"
           >
             {busy ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              <Icon name="Loader2" className="h-3.5 w-3.5 animate-spin" />
             ) : (
               <span className="flex h-4 w-4 items-center justify-center rounded-full bg-primary-foreground/20 text-[8px] font-bold">
                 {initials(assignee.name)}

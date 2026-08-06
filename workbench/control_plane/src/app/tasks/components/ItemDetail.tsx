@@ -1,36 +1,8 @@
 "use client";
 
+import AppIcon, { themedIcon } from "@/components/Icon";
+import type { ThemedIcon } from "@/components/Icon";
 import { useEffect, useState } from "react";
-import {
-  ArrowRight,
-  Clock,
-  AlertTriangle,
-  FolderKanban,
-  Zap,
-  CalendarClock,
-  UploadCloud,
-  ExternalLink,
-  Mail,
-  Check,
-  X,
-  Pencil,
-  Gauge,
-  Tag,
-  UserRound,
-  UserMinus,
-  CircleDot,
-  Trash2,
-  MessageSquare,
-  Paperclip,
-  ListTree,
-  Loader2,
-  Plus,
-  Maximize2,
-  Timer,
-  Archive,
-  ArchiveRestore,
-  type LucideIcon,
-} from "lucide-react";
 import { useTaskStore } from "../lib/taskStore";
 import {
   originEmailHref,
@@ -132,7 +104,7 @@ function ItemDetailEmpty({
 
   return (
     <div className="flex h-full flex-col items-center justify-center gap-2 p-8 text-center">
-      <FolderKanban className="h-8 w-8 text-muted-foreground/40" />
+      <AppIcon name="FolderKanban" className="h-8 w-8 text-muted-foreground/40" />
       <p className="text-sm text-muted-foreground">
         {view === "projects"
           ? "Select a project to see its tasks."
@@ -243,7 +215,7 @@ export function TaskDetail({
               rel="noreferrer"
               className="tech-transition inline-flex items-center gap-1 text-[11px] font-medium text-primary hover:underline"
             >
-              <ExternalLink className="h-3 w-3" />
+              <AppIcon name="ExternalLink" className="h-3 w-3" />
               Open in {item.provider}
             </a>
           )}
@@ -257,7 +229,7 @@ export function TaskDetail({
               title="Start Focus Mode — a full-screen timer for this task"
               className="tech-transition inline-flex items-center gap-1 rounded-md border border-primary/30 bg-primary/5 px-2 py-1 text-[11px] font-medium text-primary hover:bg-primary/10"
             >
-              <Timer className="h-3 w-3" />
+              <AppIcon name="Timer" className="h-3 w-3" />
               Focus
             </button>
           )}
@@ -269,7 +241,7 @@ export function TaskDetail({
               onClick={() => openFocus(item.id)}
               className="tech-transition ml-auto rounded-md p-1 text-muted-foreground/70 hover:bg-secondary hover:text-foreground"
             >
-              <Maximize2 className="h-4 w-4" />
+              <AppIcon name="Maximize2" className="h-4 w-4" />
             </button>
           )}
           <button
@@ -283,9 +255,9 @@ export function TaskDetail({
             ].join(" ")}
           >
             {isArchived ? (
-              <ArchiveRestore className="h-4 w-4" />
+              <AppIcon name="ArchiveRestore" className="h-4 w-4" />
             ) : (
-              <Archive className="h-4 w-4" />
+              <AppIcon name="Archive" className="h-4 w-4" />
             )}
           </button>
           <button
@@ -295,7 +267,7 @@ export function TaskDetail({
             onClick={() => requestDelete([item.id])}
             className="tech-transition rounded-md p-1 text-muted-foreground/70 hover:bg-destructive/10 hover:text-destructive"
           >
-            <Trash2 className="h-4 w-4" />
+            <AppIcon name="Trash2" className="h-4 w-4" />
           </button>
         </div>
         <EditableTitle
@@ -320,7 +292,7 @@ export function TaskDetail({
       <div className="flex flex-col gap-5 px-5 py-4">
         {/* Next action — the cardinal GTD field, prominent + editable */}
         <section>
-          <SectionLabel icon={ArrowRight}>Next action</SectionLabel>
+          <SectionLabel icon={themedIcon("ArrowRight")}>Next action</SectionLabel>
           <EditableText
             value={item.nextAction ?? ""}
             placeholder="The next physical, visible step…"
@@ -331,10 +303,10 @@ export function TaskDetail({
 
         {/* Metadata grid — every cell is click-to-edit */}
         <section>
-          <SectionLabel icon={Tag}>Details</SectionLabel>
+          <SectionLabel icon={themedIcon("Tag")}>Details</SectionLabel>
           <div className="grid grid-cols-2 gap-2">
             {/* Context */}
-            <MetaEdit label="Context" icon={Tag}
+            <MetaEdit label="Context" icon={themedIcon("Tag")}
               display={item.context
                 ? <span className="font-mono text-primary/90">{item.context}</span>
                 : null}
@@ -351,7 +323,7 @@ export function TaskDetail({
             </MetaEdit>
 
             {/* Energy */}
-            <MetaEdit label="Energy" icon={Gauge}
+            <MetaEdit label="Energy" icon={themedIcon("Gauge")}
               display={item.energy
                 ? <span className="inline-flex items-center gap-1.5 capitalize">
                     <span className={`h-2 w-2 rounded-full ${ENERGY_DOT[item.energy]}`} />
@@ -371,7 +343,7 @@ export function TaskDetail({
             </MetaEdit>
 
             {/* Estimate */}
-            <MetaEdit label="Estimate" icon={Zap}
+            <MetaEdit label="Estimate" icon={themedIcon("Zap")}
               display={item.timeEstimateMins
                 ? <span>{durationLabel(item.timeEstimateMins)}</span>
                 : null}
@@ -391,10 +363,10 @@ export function TaskDetail({
             </MetaEdit>
 
             {/* Due */}
-            <MetaEdit label="Due" icon={CalendarClock}
+            <MetaEdit label="Due" icon={themedIcon("CalendarClock")}
               display={item.dueAt
                 ? <span className={`inline-flex items-center gap-1 ${overdue ? "font-medium text-destructive" : ""}`}>
-                    {overdue ? <AlertTriangle className="h-3 w-3" /> : <Clock className="h-3 w-3" />}
+                    {overdue ? <AppIcon name="AlertTriangle" className="h-3 w-3" /> : <AppIcon name="Clock" className="h-3 w-3" />}
                     {relativeTime(item.dueAt)}
                   </span>
                 : null}
@@ -416,7 +388,7 @@ export function TaskDetail({
                   {item.dueAt && (
                     <button type="button" onClick={() => { updateItem(item.id, { dueAt: "" }); close(); }}
                       className="tech-transition rounded p-1 text-muted-foreground hover:text-destructive" title="Clear">
-                      <X className="h-3.5 w-3.5" />
+                      <AppIcon name="X" className="h-3.5 w-3.5" />
                     </button>
                   )}
                 </div>
@@ -429,7 +401,7 @@ export function TaskDetail({
                 visible/changeable here too, not just on the board. */}
             {isSynced ? (
               syncedStageOptions.length > 0 && (
-                <MetaEdit label="Stage" icon={CircleDot}
+                <MetaEdit label="Stage" icon={themedIcon("CircleDot")}
                   display={item.providerStatus
                     ? <span>{formatStatus(item.providerStatus)}</span>
                     : null}
@@ -446,7 +418,7 @@ export function TaskDetail({
               )
             ) : (
               stageActions.stages.length > 0 && (
-                <MetaEdit label="Stage" icon={CircleDot}
+                <MetaEdit label="Stage" icon={themedIcon("CircleDot")}
                   display={<span>{stageActions.currentStage}</span>}
                 >
                   {(close) => (
@@ -466,7 +438,7 @@ export function TaskDetail({
                 ClickUp task (they can't see a private local one), so it routes
                 through the destination picker. */}
             {isSynced ? (
-              <MetaEdit label="Assignees" icon={UserRound}
+              <MetaEdit label="Assignees" icon={themedIcon("UserRound")}
                 display={assigneeList.length
                   ? <AssigneeStack people={assigneeList} />
                   : null}
@@ -487,7 +459,7 @@ export function TaskDetail({
                 )}
               </MetaEdit>
             ) : (
-              <MetaEdit label="Assignee" icon={UserRound}
+              <MetaEdit label="Assignee" icon={themedIcon("UserRound")}
                 display={item.assignee
                   ? <span className="inline-flex items-center gap-1.5">
                       <Avatar name={item.assignee.name} />
@@ -525,7 +497,7 @@ export function TaskDetail({
                   Project
                 </div>
                 <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-sm text-foreground">
-                  <FolderKanban className="h-3.5 w-3.5 shrink-0 text-primary/70" />
+                  <AppIcon name="FolderKanban" className="h-3.5 w-3.5 shrink-0 text-primary/70" />
                   <span className="truncate" title={project.outcome}>{project.outcome}</span>
                 </div>
               </div>
@@ -579,7 +551,7 @@ export function TaskDetail({
             delete/two-way sync is untouched. */}
         {offerDropFromNext && (
           <div className="flex flex-wrap items-center gap-2 rounded-lg border border-warning/40 bg-warning/10 px-3 py-2.5">
-            <AlertTriangle className="h-4 w-4 shrink-0 text-warning" />
+            <AppIcon name="AlertTriangle" className="h-4 w-4 shrink-0 text-warning" />
             <span className="min-w-0 flex-1 text-[12.5px] text-foreground">
               No longer your action? Remove it from My Next Actions — it stays on ClickUp.
             </span>
@@ -588,7 +560,7 @@ export function TaskDetail({
               onClick={() => { updateItem(item.id, { isMine: false }); setOfferDropFromNext(false); }}
               className="tech-transition inline-flex items-center gap-1.5 rounded-md bg-primary px-2.5 py-1.5 text-[12px] font-medium text-primary-foreground hover:opacity-90"
             >
-              <UserMinus className="h-3.5 w-3.5" />
+              <AppIcon name="UserMinus" className="h-3.5 w-3.5" />
               Remove from My Next Actions
             </button>
             <button
@@ -604,7 +576,7 @@ export function TaskDetail({
         {/* Waiting-on (delegated) */}
         {item.waitingOn && (
           <section>
-            <SectionLabel icon={Clock}>Waiting on</SectionLabel>
+            <SectionLabel icon={themedIcon("Clock")}>Waiting on</SectionLabel>
             <span className="inline-flex items-center gap-2 text-sm text-foreground">
               <Avatar name={item.waitingOn.name} lg />
               {item.waitingOn.name}
@@ -620,10 +592,10 @@ export function TaskDetail({
                 it only when they actually committed to a date; clearing it
                 takes the promise back rather than writing a second deadline. */}
             <div className="mt-2 max-w-xs">
-              <MetaEdit label="Promised by" icon={CalendarClock}
+              <MetaEdit label="Promised by" icon={themedIcon("CalendarClock")}
                 display={item.expectedBy
                   ? <span className={`inline-flex items-center gap-1 ${promiseLate ? "font-medium text-destructive" : ""}`}>
-                      {promiseLate ? <AlertTriangle className="h-3 w-3" /> : <Clock className="h-3 w-3" />}
+                      {promiseLate ? <AppIcon name="AlertTriangle" className="h-3 w-3" /> : <AppIcon name="Clock" className="h-3 w-3" />}
                       {relativeTime(item.expectedBy)}
                     </span>
                   : <span className="text-[13px] text-muted-foreground/70">
@@ -650,7 +622,7 @@ export function TaskDetail({
                     {item.expectedBy && (
                       <button type="button" onClick={() => { updateItem(item.id, { expectedBy: "" }); close(); }}
                         className="tech-transition rounded p-1 text-muted-foreground hover:text-destructive" title="Clear the promise">
-                        <X className="h-3.5 w-3.5" />
+                        <AppIcon name="X" className="h-3.5 w-3.5" />
                       </button>
                     )}
                   </div>
@@ -693,7 +665,7 @@ export function TaskDetail({
         {/* Captured-from linkage */}
         {item.origin?.kind === "email" && (
           <section>
-            <SectionLabel icon={Mail}>Captured from</SectionLabel>
+            <SectionLabel icon={themedIcon("Mail")}>Captured from</SectionLabel>
             <p className="text-sm text-muted-foreground">
               Email from {item.origin.fromName || item.origin.fromEmail || "someone"}
               {item.origin.subject ? ` — “${item.origin.subject}”` : ""}{"  "}
@@ -712,7 +684,7 @@ export function TaskDetail({
           <section className="rounded-lg border border-warning/30 bg-warning/5 px-3 py-2.5">
             <div className="flex items-center justify-between gap-2">
               <span className="inline-flex items-center gap-1.5 text-[12px] font-medium text-warning">
-                <Clock className="h-3.5 w-3.5" />
+                <AppIcon name="Clock" className="h-3.5 w-3.5" />
                 Not yet pushed to {item.provider ?? "the tool"}
               </span>
               <button
@@ -729,7 +701,7 @@ export function TaskDetail({
                 }}
                 className="tech-transition inline-flex items-center gap-1 rounded-md bg-primary px-2.5 py-1.5 text-[11px] font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
               >
-                <UploadCloud className="h-3.5 w-3.5" />
+                <AppIcon name="UploadCloud" className="h-3.5 w-3.5" />
                 {pushState === "busy" ? "Pushing…" : "Push now"}
               </button>
             </div>
@@ -806,7 +778,7 @@ function LocalSubtasksSection({ item }: { item: GtdItem }) {
 
   return (
     <section>
-      <SectionLabel icon={ListTree}>
+      <SectionLabel icon={themedIcon("ListTree")}>
         Subtasks{subs.length > 0 ? ` · ${doneCount}/${subs.length}` : ""}
       </SectionLabel>
       {loading ? (
@@ -831,7 +803,7 @@ function LocalSubtasksSection({ item }: { item: GtdItem }) {
                       : "border-border hover:border-primary",
                   ].join(" ")}
                 >
-                  {done && <Check className="h-2.5 w-2.5" />}
+                  {done && <AppIcon name="Check" className="h-2.5 w-2.5" />}
                 </button>
                 <button
                   type="button"
@@ -851,7 +823,7 @@ function LocalSubtasksSection({ item }: { item: GtdItem }) {
                     className="shrink-0 text-muted-foreground/60 hover:text-foreground"
                     title="Open in ClickUp"
                   >
-                    <ExternalLink className="h-3 w-3" />
+                    <AppIcon name="ExternalLink" className="h-3 w-3" />
                   </a>
                 )}
               </div>
@@ -859,7 +831,7 @@ function LocalSubtasksSection({ item }: { item: GtdItem }) {
           })}
           {backend === "live" && (
             <div className="flex items-center gap-1.5 rounded-md border border-dashed border-border px-2 py-1.5">
-              <Plus className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+              <AppIcon name="Plus" className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
               <input
                 value={adding}
                 onChange={(e) => setAdding(e.target.value)}
@@ -913,7 +885,7 @@ function ProviderDetailSections({
   if (loading) {
     return (
       <div className="flex items-center gap-2 text-[12px] text-muted-foreground">
-        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+        <AppIcon name="Loader2" className="h-3.5 w-3.5 animate-spin" />
         Loading {provider === "clickup" ? "ClickUp" : provider} detail…
       </div>
     );
@@ -928,7 +900,7 @@ function ProviderDetailSections({
     <>
       {subtasks.length > 0 && (
         <section>
-          <SectionLabel icon={ListTree}>Subtasks · {subtasks.length}</SectionLabel>
+          <SectionLabel icon={themedIcon("ListTree")}>Subtasks · {subtasks.length}</SectionLabel>
           <div className="flex flex-col gap-1">
             {subtasks.map((s) => <SubtaskRow key={s.providerTaskId} s={s} />)}
           </div>
@@ -937,7 +909,7 @@ function ProviderDetailSections({
 
       {attachments.length > 0 && (
         <section>
-          <SectionLabel icon={Paperclip}>
+          <SectionLabel icon={themedIcon("Paperclip")}>
             Attachments · {attachments.length}
           </SectionLabel>
           <AttachmentChips attachments={attachments} />
@@ -946,7 +918,7 @@ function ProviderDetailSections({
 
       {comments.length > 0 && (
         <section>
-          <SectionLabel icon={MessageSquare}>
+          <SectionLabel icon={themedIcon("MessageSquare")}>
             Comments · {comments.length}
           </SectionLabel>
           <div className="flex flex-col gap-2.5">
@@ -982,7 +954,7 @@ function SubtaskRow({ s }: { s: TaskSubtask }) {
           done ? "border-success bg-success/15 text-success" : "border-border",
         ].join(" ")}
       >
-        {done && <Check className="h-2.5 w-2.5" />}
+        {done && <AppIcon name="Check" className="h-2.5 w-2.5" />}
       </span>
       <span className={`min-w-0 flex-1 truncate ${done ? "text-muted-foreground line-through" : "text-foreground"}`}>
         {s.title}
@@ -993,7 +965,7 @@ function SubtaskRow({ s }: { s: TaskSubtask }) {
         </span>
       )}
       {s.assignees[0] && <Avatar name={s.assignees[0].name} />}
-      {s.providerUrl && <ExternalLink className="h-3 w-3 shrink-0 text-muted-foreground/60" />}
+      {s.providerUrl && <AppIcon name="ExternalLink" className="h-3 w-3 shrink-0 text-muted-foreground/60" />}
     </div>
   );
   return s.providerUrl ? (
@@ -1030,7 +1002,7 @@ function SectionLabel({
   icon: Icon,
   children,
 }: {
-  icon?: LucideIcon;
+  icon?: ThemedIcon;
   children: React.ReactNode;
 }) {
   return (
@@ -1055,7 +1027,7 @@ function EditableTitle({ value, onSave }: { value: string; onSave: (v: string) =
         title="Click to edit"
       >
         <h1 className="text-lg font-bold leading-snug text-foreground">{value}</h1>
-        <Pencil className="mt-1.5 h-3.5 w-3.5 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
+        <AppIcon name="Pencil" className="mt-1.5 h-3.5 w-3.5 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
       </button>
     );
   }
@@ -1108,7 +1080,7 @@ function EditableText({
         <p className={`flex-1 text-sm text-foreground ${multiline ? "whitespace-pre-wrap" : ""}`}>
           {value}
         </p>
-        <Pencil className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
+        <AppIcon name="Pencil" className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
       </button>
     ) : (
       <button
@@ -1116,7 +1088,7 @@ function EditableText({
         onClick={startEdit}
         className="tech-transition inline-flex items-center gap-1.5 rounded-md border border-dashed border-border px-2.5 py-1.5 text-[13px] text-muted-foreground hover:border-primary/40 hover:text-foreground"
       >
-        <Pencil className="h-3 w-3" />
+        <AppIcon name="Pencil" className="h-3 w-3" />
         {emptyHint}
       </button>
     );
@@ -1157,7 +1129,7 @@ function MetaEdit({
   children,
 }: {
   label: string;
-  icon: LucideIcon;
+  icon: ThemedIcon;
   display: React.ReactNode;
   children: (close: () => void) => React.ReactNode;
 }) {
@@ -1176,7 +1148,7 @@ function MetaEdit({
             <Icon className="h-3 w-3" />
             {label}
           </span>
-          <Pencil className="h-3 w-3 shrink-0 text-muted-foreground/50 opacity-0 transition-opacity group-hover:opacity-100" />
+          <AppIcon name="Pencil" className="h-3 w-3 shrink-0 text-muted-foreground/50 opacity-0 transition-opacity group-hover:opacity-100" />
         </div>
         <div className="mt-0.5 text-sm text-foreground">
           {display ?? <span className="text-muted-foreground/60">—</span>}
@@ -1197,7 +1169,7 @@ function MetaEdit({
           className="tech-transition rounded p-0.5 text-muted-foreground/60 hover:text-foreground"
           aria-label={`Close ${label} editor`}
         >
-          <X className="h-3 w-3" />
+          <AppIcon name="X" className="h-3 w-3" />
         </button>
       </div>
       <div className="mt-1.5">{children(() => setOpen(false))}</div>
@@ -1329,7 +1301,7 @@ function MultiPersonMenu({
                 : "border-border text-muted-foreground hover:bg-secondary",
             ].join(" ")}
           >
-            {on ? <Check className="h-3 w-3 shrink-0" /> : <Avatar name={p.name} />}
+            {on ? <AppIcon name="Check" className="h-3 w-3 shrink-0" /> : <Avatar name={p.name} />}
             {p.name}
           </button>
         );
@@ -1413,7 +1385,7 @@ function StatusPicker({
                   item.disposition === d ? "bg-primary/10 text-primary" : "text-foreground hover:bg-secondary",
                 ].join(" ")}
               >
-                {item.disposition === d && <Check className="h-3.5 w-3.5" />}
+                {item.disposition === d && <AppIcon name="Check" className="h-3.5 w-3.5" />}
                 <span className={item.disposition === d ? "" : "ml-[22px]"}>
                   {DISPOSITION_LABEL[d]}
                 </span>

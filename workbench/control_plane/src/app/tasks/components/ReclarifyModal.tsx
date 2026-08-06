@@ -1,7 +1,7 @@
 "use client";
 
+import Icon from "@/components/Icon";
 import { useEffect } from "react";
-import { X, RefreshCw } from "lucide-react";
 import { useTaskStore } from "../lib/taskStore";
 import { useVisualViewport } from "../lib/useVisualViewport";
 import { ClarifyPanel } from "./ClarifyPanel";
@@ -47,7 +47,7 @@ export function ReclarifyModal() {
       >
         <div className="flex shrink-0 items-center justify-between border-b border-border px-4 py-2">
           <span className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-            <RefreshCw className="h-3.5 w-3.5 text-primary" />
+            <Icon name="RefreshCw" className="h-3.5 w-3.5 text-primary" />
             Re-clarify task
           </span>
           <button
@@ -56,7 +56,7 @@ export function ReclarifyModal() {
             aria-label="Close"
             className="tech-transition rounded-md p-1 text-muted-foreground hover:bg-secondary hover:text-foreground"
           >
-            <X className="h-4 w-4" />
+            <Icon name="X" className="h-4 w-4" />
           </button>
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto">

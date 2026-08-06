@@ -119,7 +119,9 @@ test.describe("theme tokens", () => {
 test.describe("colour mode is independent of theme", () => {
   test("light mode swaps colours but keeps the theme's structure", async ({ page }) => {
     await loadWithTheme(page, "fluent", "light");
-    expect(await readVar(page, "--primary")).toBe("hsl(206 100% 42%)");
+    // 41%, not Fluent's nominal 42%: white-on-42% measures 4.44:1, just under
+    // WCAG AA. See src/lib/theme/contrast.test.ts.
+    expect(await readVar(page, "--primary")).toBe("hsl(206 100% 41%)");
     expect(await readVar(page, "--background")).toBe("hsl(0 0% 95%)");
     // Structural tokens live only on the base scope; light inherits them.
     expect(await readVar(page, "--radius")).toBe("0.25rem");

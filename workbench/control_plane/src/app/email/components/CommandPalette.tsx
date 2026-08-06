@@ -1,7 +1,7 @@
 "use client";
 
+import Icon from "@/components/Icon";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Search } from "lucide-react";
 
 export interface Command {
   id: string;
@@ -68,7 +68,7 @@ export function CommandPalette({
       <div className="absolute inset-0 bg-black/50" onClick={onClose} />
       <div className="relative w-full max-w-lg bg-card border border-border rounded-xl shadow-2xl overflow-hidden">
         <div className="flex items-center gap-2 px-3 py-2.5 border-b border-border">
-          <Search size={14} className="text-muted-foreground flex-shrink-0" />
+          <Icon name="Search" size={14} className="text-muted-foreground flex-shrink-0" />
           <input
             ref={inputRef}
             value={q}

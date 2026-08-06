@@ -5,11 +5,8 @@
 // knowledge base, learned preferences/patterns, cold senders, org domains).
 // Extracted from AISettingsView.tsx.
 
+import Icon from "@/components/Icon";
 import { useCallback, useEffect, useState } from "react";
-import {
-  AlertTriangle, BookOpen, Check, Loader2, Pencil, Plus, RefreshCcw,
-  RotateCcw, Settings, Sparkles, Trash2, Wand2, X,
-} from "lucide-react";
 import {
   approveKnowledge, createKnowledge, deleteKnowledge, deleteLearnedPattern,
   deleteRulePattern,
@@ -93,7 +90,7 @@ function OrgDomainsCard({
               className="text-muted-foreground hover:text-destructive transition-colors"
               aria-label={`Remove ${d}`}
             >
-              <X size={11} />
+              <Icon name="X" size={11} />
             </button>
           </span>
         ))}
@@ -121,7 +118,7 @@ function OrgDomainsCard({
           disabled={!input.trim()}
           className="flex items-center gap-1 px-2.5 py-2 rounded-lg border border-border text-xs text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors disabled:opacity-40"
         >
-          <Plus size={12} /> Add
+          <Icon name="Plus" size={12} /> Add
         </button>
       </div>
     </SettingCard>
@@ -269,7 +266,7 @@ export function SettingsTab({ accountId }: { accountId: string | null }) {
               <div className="flex items-center gap-2">
                 {followUpOn && (
                   <button onClick={() => setDialog("followup")} className={CONFIGURE_BTN}>
-                    <Settings size={12} /> Configure
+                    <Icon name="Settings" size={12} /> Configure
                   </button>
                 )}
                 <Toggle
@@ -292,7 +289,7 @@ export function SettingsTab({ accountId }: { accountId: string | null }) {
               <div className="flex items-center gap-2">
                 {digestOn && (
                   <button onClick={() => setDialog("digest")} className={CONFIGURE_BTN}>
-                    <Settings size={12} /> Configure
+                    <Icon name="Settings" size={12} /> Configure
                   </button>
                 )}
                 <Toggle
@@ -530,7 +527,7 @@ export function SettingsTab({ accountId }: { accountId: string | null }) {
                 onClick={() => setDialog("resetrules")}
                 className="flex flex-shrink-0 items-center gap-1.5 px-3 py-1.5 rounded-lg border border-destructive/40 text-xs font-medium text-destructive hover:bg-destructive/10 transition-colors"
               >
-                <RotateCcw size={13} /> Reset rules
+                <Icon name="RotateCcw" size={13} /> Reset rules
               </button>
             </div>
           </div>
@@ -540,7 +537,7 @@ export function SettingsTab({ accountId }: { accountId: string | null }) {
         <div className="flex items-center gap-2 pb-2 h-5">
           {saving && (
             <span className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
-              <Loader2 className="animate-spin" size={12} /> Saving…
+              <Icon name="Loader2" className="animate-spin" size={12} /> Saving…
             </span>
           )}
           {saved && <span className="text-[11px] text-emerald-400">Saved ✓</span>}
@@ -683,7 +680,7 @@ function EditBtn({
 }) {
   return (
     <button onClick={onClick} className={CONFIGURE_BTN}>
-      <Settings size={12} /> {label ?? (set ? "Edit" : "Set up")}
+      <Icon name="Settings" size={12} /> {label ?? (set ? "Edit" : "Set up")}
     </button>
   );
 }
@@ -711,7 +708,7 @@ function WritingStyleDialog({
           onClick={() => onSave(draft)}
           className="ml-auto flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90 transition-colors"
         >
-          <Check size={13} /> Save
+          <Icon name="Check" size={13} /> Save
         </button>
       }
     >
@@ -750,7 +747,7 @@ function PersonalInstructionsDialog({
           onClick={() => onSave(draft)}
           className="ml-auto flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90 transition-colors"
         >
-          <Check size={13} /> Save
+          <Icon name="Check" size={13} /> Save
         </button>
       }
     >
@@ -796,7 +793,7 @@ function SignatureDialog({
           onClick={() => onSave(draft)}
           className="ml-auto flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90 transition-colors"
         >
-          <Check size={13} /> Save
+          <Icon name="Check" size={13} /> Save
         </button>
       }
     >
@@ -858,7 +855,7 @@ function ResetRulesDialog({
             disabled={busy}
             className="ml-auto flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-destructive text-destructive-foreground text-xs font-medium hover:bg-destructive/90 transition-colors disabled:opacity-50"
           >
-            {busy ? <Loader2 className="animate-spin" size={13} /> : <RotateCcw size={13} />}
+            {busy ? <Icon name="Loader2" className="animate-spin" size={13} /> : <Icon name="RotateCcw" size={13} />}
             Reset rules
           </button>
         </>
@@ -866,7 +863,7 @@ function ResetRulesDialog({
     >
       <div className="flex items-start gap-3">
         <span className="mt-0.5 flex-shrink-0 text-destructive">
-          <AlertTriangle size={18} />
+          <Icon name="AlertTriangle" size={18} />
         </span>
         <div className="space-y-2 text-xs text-muted-foreground leading-relaxed">
           <p>
@@ -933,14 +930,14 @@ function FollowUpDialog({
             disabled={scanning}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border text-xs text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors disabled:opacity-50"
           >
-            {scanning ? <Loader2 className="animate-spin" size={13} /> : <RefreshCcw size={13} />}
+            {scanning ? <Icon name="Loader2" className="animate-spin" size={13} /> : <Icon name="RefreshCcw" size={13} />}
             Find follow-ups now
           </button>
           <button
             onClick={() => onSave(draft)}
             className="ml-auto flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90 transition-colors"
           >
-            <Check size={13} /> Save
+            <Icon name="Check" size={13} /> Save
           </button>
         </>
       }
@@ -1029,9 +1026,9 @@ function WritingStyleGenerator({
         className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-border text-[11px] text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors disabled:opacity-50"
       >
         {busy ? (
-          <Loader2 className="animate-spin" size={12} />
+          <Icon name="Loader2" className="animate-spin" size={12} />
         ) : (
-          <Wand2 size={12} />
+          <Icon name="Wand2" size={12} />
         )}
         Generate from my sent mail
       </button>
@@ -1105,14 +1102,14 @@ function KnowledgeBase({ accountId }: { accountId: string | null }) {
     <div className="bg-card border border-border rounded-xl p-4">
       <div className="flex items-center justify-between mb-2">
         <h3 className="flex items-center gap-1.5 text-sm font-medium text-foreground">
-          <BookOpen size={14} className="text-primary" /> Knowledge base
+          <Icon name="BookOpen" size={14} className="text-primary" /> Knowledge base
         </h3>
         {!editing && (
           <button
             onClick={() => setEditing({ account_id: accountId, title: "", content: "" })}
             className="flex items-center gap-1 text-xs text-primary hover:opacity-80"
           >
-            <Plus size={12} /> Add entry
+            <Icon name="Plus" size={12} /> Add entry
           </button>
         )}
       </div>
@@ -1142,7 +1139,7 @@ function KnowledgeBase({ accountId }: { accountId: string | null }) {
               disabled={busy || !editing.title.trim()}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90 transition-colors disabled:opacity-50"
             >
-              {busy ? <Loader2 className="animate-spin" size={13} /> : <Check size={13} />}
+              {busy ? <Icon name="Loader2" className="animate-spin" size={13} /> : <Icon name="Check" size={13} />}
               Save
             </button>
             <button
@@ -1196,18 +1193,18 @@ function KnowledgeBase({ accountId }: { accountId: string | null }) {
                     onClick={() => approve(entry)}
                     className="hover:text-emerald-400"
                   >
-                    <Check size={12} />
+                    <Icon name="Check" size={12} />
                   </IconAction>
                 )}
                 <IconAction title="Edit" onClick={() => setEditing(entry)}>
-                  <Pencil size={12} />
+                  <Icon name="Pencil" size={12} />
                 </IconAction>
                 <IconAction
                   title="Delete"
                   onClick={() => remove(entry)}
                   className="hover:text-destructive"
                 >
-                  <Trash2 size={12} />
+                  <Icon name="Trash2" size={12} />
                 </IconAction>
               </div>
             </div>
@@ -1250,7 +1247,7 @@ function LearnedPreferences({ accountId }: { accountId: string | null }) {
   return (
     <div className="bg-card border border-border rounded-xl p-4">
       <div className="flex items-center gap-1.5 mb-1">
-        <Sparkles size={14} className="text-primary" />
+        <Icon name="Sparkles" size={14} className="text-primary" />
         <h3 className="text-sm font-medium text-foreground">Learned preferences</h3>
       </div>
       <p className="text-[11px] text-muted-foreground mb-3">
@@ -1286,7 +1283,7 @@ function LearnedPreferences({ accountId }: { accountId: string | null }) {
               title="Forget this"
               className="text-muted-foreground hover:text-destructive flex-shrink-0"
             >
-              <X size={13} />
+              <Icon name="X" size={13} />
             </button>
           </div>
           );
@@ -1447,7 +1444,7 @@ function LearnedPatternsList({ accountId }: { accountId: string | null }) {
                     title="Withdraw this correction"
                     className="ml-auto p-1 rounded-md text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors flex-shrink-0"
                   >
-                    <Trash2 size={12} />
+                    <Icon name="Trash2" size={12} />
                   </button>
                 </div>
                 <p className="mt-1 text-xs text-foreground/90 break-words">
@@ -1680,7 +1677,7 @@ export function PatternRow({
                 : "Approve — let the cleaner use this"}
               className="text-emerald-500 hover:text-emerald-400 disabled:opacity-50"
             >
-              <Check size={14} />
+              <Icon name="Check" size={14} />
             </button>
           )}
           {onReject && (
@@ -1690,7 +1687,7 @@ export function PatternRow({
               title="Reject — this pattern is wrong (and won't be re-learned)"
               className="text-muted-foreground hover:text-destructive disabled:opacity-50"
             >
-              <X size={14} />
+              <Icon name="X" size={14} />
             </button>
           )}
           {onForget && (
@@ -1700,7 +1697,7 @@ export function PatternRow({
               title="Forget this"
               className="text-muted-foreground hover:text-destructive disabled:opacity-50"
             >
-              <Trash2 size={13} />
+              <Icon name="Trash2" size={13} />
             </button>
           )}
         </span>
@@ -1797,7 +1794,7 @@ function ColdSendersList({ accountId }: { accountId: string | null }) {
                 Not cold
               </span>
             ) : busy === c.from_email ? (
-              <Loader2 className="animate-spin text-muted-foreground" size={13} />
+              <Icon name="Loader2" className="animate-spin text-muted-foreground" size={13} />
             ) : (
               <button
                 onClick={() => whitelist(c.from_email)}

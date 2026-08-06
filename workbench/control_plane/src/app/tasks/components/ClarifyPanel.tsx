@@ -1,35 +1,8 @@
 "use client";
 
+import AppIcon, { themedIcon } from "@/components/Icon";
+import type { ThemedIcon } from "@/components/Icon";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-  Sparkles,
-  Check,
-  ArrowRight,
-  ListChecks,
-  ListTree,
-  FolderKanban,
-  UserPlus,
-  User,
-  CalendarClock,
-  CalendarDays,
-  Lightbulb,
-  FileText,
-  Trash2,
-  Zap,
-  HardDrive,
-  Cloud,
-  Search,
-  Mail as MailIcon,
-  ChevronRight,
-  Plus,
-  Loader2,
-  Lock,
-  AlertTriangle,
-  Wand2,
-  Pencil,
-  X,
-  type LucideIcon,
-} from "lucide-react";
 import { useTaskStore, type ClarifyDecision } from "../lib/taskStore";
 import {
   proposeClarification,
@@ -74,19 +47,19 @@ type Size = "single" | "subtasks" | "project";
 type Owner = "me" | "delegate";
 type When = "anytime" | "date";
 
-const SORT_META: Record<Sort, { label: string; icon: LucideIcon; danger?: boolean }> = {
-  "do-now": { label: "Do now · 2 min", icon: Zap },
-  actionable: { label: "Actionable", icon: ListChecks },
-  reference: { label: "Reference", icon: FileText },
-  someday: { label: "Someday", icon: Lightbulb },
-  trash: { label: "Trash", icon: Trash2, danger: true },
+const SORT_META: Record<Sort, { label: string; icon: ThemedIcon; danger?: boolean }> = {
+  "do-now": { label: "Do now · 2 min", icon: themedIcon("Zap") },
+  actionable: { label: "Actionable", icon: themedIcon("ListChecks") },
+  reference: { label: "Reference", icon: themedIcon("FileText") },
+  someday: { label: "Someday", icon: themedIcon("Lightbulb") },
+  trash: { label: "Trash", icon: themedIcon("Trash2"), danger: true },
 };
 const SORT_ORDER: Sort[] = ["do-now", "actionable", "reference", "someday", "trash"];
 
-const SIZE_META: Record<Size, { label: string; icon: LucideIcon }> = {
-  single: { label: "Single action", icon: ListChecks },
-  subtasks: { label: "Break into steps", icon: ListTree },
-  project: { label: "Project", icon: FolderKanban },
+const SIZE_META: Record<Size, { label: string; icon: ThemedIcon }> = {
+  single: { label: "Single action", icon: themedIcon("ListChecks") },
+  subtasks: { label: "Break into steps", icon: themedIcon("ListTree") },
+  project: { label: "Project", icon: themedIcon("FolderKanban") },
 };
 
 /** Map a disposition (server proposal / current item state) → the Sort bucket. */
@@ -696,13 +669,13 @@ export function ClarifyPanel({
             title="Rephrase this title with AI"
             className="tech-transition mt-0.5 inline-flex shrink-0 items-center gap-1 rounded-md border border-primary/30 bg-primary/5 px-2 py-1 text-[11px] font-medium text-primary hover:bg-primary/10 disabled:opacity-40"
           >
-            {titleBusy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Wand2 className="h-3 w-3" />}
+            {titleBusy ? <AppIcon name="Loader2" className="h-3 w-3 animate-spin" /> : <AppIcon name="Wand2" className="h-3 w-3" />}
             Improve
           </button>
         </div>
         {item.origin?.kind === "email" && (
           <p className="mt-1 flex items-center gap-1 text-[11px] text-muted-foreground">
-            <MailIcon className="h-3 w-3 shrink-0" />
+            <AppIcon name="Mail" className="h-3 w-3 shrink-0" />
             <span className="truncate">
               Captured from email — {item.origin.fromName || item.origin.fromEmail}
               {item.origin.subject ? ` · “${item.origin.subject}”` : ""}
@@ -734,7 +707,7 @@ export function ClarifyPanel({
                 onClick={() => setNoteOpen(true)}
                 className="tech-transition inline-flex items-center gap-1 text-[11px] font-medium text-primary hover:underline"
               >
-                <Sparkles className="h-3 w-3" />
+                <AppIcon name="Sparkles" className="h-3 w-3" />
                 Add context for the assistant
               </button>
             ) : (
@@ -755,9 +728,9 @@ export function ClarifyPanel({
                     className="tech-transition inline-flex items-center gap-1.5 rounded-md bg-primary px-2.5 py-1.5 text-[12px] font-medium text-primary-foreground hover:opacity-90 disabled:opacity-40"
                   >
                     {noteBusy ? (
-                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      <AppIcon name="Loader2" className="h-3.5 w-3.5 animate-spin" />
                     ) : (
-                      <Wand2 className="h-3.5 w-3.5" />
+                      <AppIcon name="Wand2" className="h-3.5 w-3.5" />
                     )}
                     Re-clarify with this
                   </button>
@@ -802,7 +775,7 @@ export function ClarifyPanel({
         {vagueOpen && (
           <div className="flex flex-col gap-2 rounded-lg border border-warning/45 bg-warning/10 p-3">
             <div className="flex items-start gap-2 text-[13px] font-semibold text-foreground">
-              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
+              <AppIcon name="AlertTriangle" className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
               <span>
                 {proposal.isVague
                   ? "This title is vague — clarify it so the assistant can clarify the rest"
@@ -833,7 +806,7 @@ export function ClarifyPanel({
                 disabled={!suggestedTitle}
                 className="tech-transition inline-flex items-center gap-1.5 rounded-md bg-primary px-2.5 py-1.5 text-[12px] font-medium text-primary-foreground hover:opacity-90 disabled:opacity-40"
               >
-                <Check className="h-3.5 w-3.5" />
+                <AppIcon name="Check" className="h-3.5 w-3.5" />
                 Use this title
               </button>
               <button
@@ -897,7 +870,7 @@ export function ClarifyPanel({
           )}
           <div className="mb-1.5 flex items-center justify-between gap-2">
             <div className="flex items-center gap-1.5 text-xs font-semibold text-primary">
-              <Sparkles className="h-3.5 w-3.5" />
+              <AppIcon name="Sparkles" className="h-3.5 w-3.5" />
               Assistant recommends
             </div>
             <span
@@ -957,15 +930,15 @@ export function ClarifyPanel({
             {proposal.timeEstimateMins ? <span>{durationLabel(proposal.timeEstimateMins)}</span> : null}
             {proposal.dueDate && (
               <span className="inline-flex items-center gap-1">
-                <CalendarDays className="h-3 w-3" /> by {proposal.dueDate}
+                <AppIcon name="CalendarDays" className="h-3 w-3" /> by {proposal.dueDate}
               </span>
             )}
             {sortOf(proposal.disposition) === "actionable" && proposedDestLabel && (
               <span className="inline-flex items-center gap-1 rounded bg-secondary px-1.5 py-0.5 font-medium">
                 {proposal.target?.source === "LOCAL" ? (
-                  <HardDrive className="h-3 w-3" />
+                  <AppIcon name="HardDrive" className="h-3 w-3" />
                 ) : (
-                  <Cloud className="h-3 w-3" />
+                  <AppIcon name="Cloud" className="h-3 w-3" />
                 )}
                 {proposedDestLabel}
                 {proposedProject ? ` · ${short(proposedProject.outcome, 16)}` : ""}
@@ -995,7 +968,7 @@ export function ClarifyPanel({
               disabled={creatingTarget || !canApply}
               className="tech-transition inline-flex items-center gap-1.5 rounded-md bg-primary px-2.5 py-1.5 text-[12px] font-medium text-primary-foreground hover:opacity-90 disabled:opacity-60"
             >
-              {creatingTarget ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+              {creatingTarget ? <AppIcon name="Loader2" className="h-3.5 w-3.5 animate-spin" /> : <AppIcon name="Check" className="h-3.5 w-3.5" />}
               {bigSuggestion
                 ? `Accept & create all ${subtasks.length || 1} step${subtasks.length === 1 ? "" : "s"}`
                 : "Accept & next"}
@@ -1007,7 +980,7 @@ export function ClarifyPanel({
                 title="Change the sort, owner, timing, or destination yourself"
                 className="tech-transition inline-flex items-center gap-1 rounded-md border border-border px-2.5 py-1.5 text-[12px] font-medium text-muted-foreground hover:border-primary/40 hover:text-foreground"
               >
-                <Pencil className="h-3 w-3" />
+                <AppIcon name="Pencil" className="h-3 w-3" />
                 Adjust
               </button>
             )}
@@ -1017,7 +990,7 @@ export function ClarifyPanel({
               title="Trash this — it's not actionable"
               className="tech-transition ml-auto inline-flex items-center gap-1.5 rounded-md border border-transparent px-2.5 py-1.5 text-[12px] font-medium text-muted-foreground hover:border-destructive/30 hover:bg-destructive/10 hover:text-destructive"
             >
-              <Trash2 className="h-3.5 w-3.5" />
+              <AppIcon name="Trash2" className="h-3.5 w-3.5" />
               Trash
             </button>
           </div>
@@ -1119,7 +1092,7 @@ export function ClarifyPanel({
                         owner === "me" ? "border-primary bg-primary/10 text-primary" : "border-border text-muted-foreground hover:bg-secondary",
                       ].join(" ")}
                     >
-                      <User className="h-3.5 w-3.5" /> Me
+                      <AppIcon name="User" className="h-3.5 w-3.5" /> Me
                     </button>
                     <button
                       type="button"
@@ -1129,7 +1102,7 @@ export function ClarifyPanel({
                         owner === "delegate" ? "border-primary bg-primary/10 text-primary" : "border-border text-muted-foreground hover:bg-secondary",
                       ].join(" ")}
                     >
-                      <UserPlus className="h-3.5 w-3.5" /> Delegate →
+                      <AppIcon name="UserPlus" className="h-3.5 w-3.5" /> Delegate →
                     </button>
                   </div>
                   {owner === "delegate" && (
@@ -1144,7 +1117,7 @@ export function ClarifyPanel({
                           : assignee.name.toLowerCase() ===
                             proposal.suggestedAssignee.name.toLowerCase()) && (
                           <p className="mt-1.5 flex items-start gap-1 text-[11px] text-amber-500">
-                            <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
+                            <AppIcon name="AlertTriangle" className="mt-0.5 h-3 w-3 shrink-0" />
                             <span>
                               {assignee.name.split(/\s+/)[0]} is{" "}
                               {proposal.assigneeLoad.note ?? "already at capacity"} —
@@ -1176,7 +1149,7 @@ export function ClarifyPanel({
                         when === "date" ? "border-primary bg-primary/10 text-primary" : "border-border text-muted-foreground hover:bg-secondary",
                       ].join(" ")}
                     >
-                      <CalendarClock className="h-3.5 w-3.5" /> By a date →
+                      <AppIcon name="CalendarClock" className="h-3.5 w-3.5" /> By a date →
                     </button>
                   </div>
                   {when === "date" && (
@@ -1261,7 +1234,7 @@ export function ClarifyPanel({
                                 active ? "border-primary bg-primary/10 text-primary" : "border-border text-muted-foreground hover:bg-secondary",
                               ].join(" ")}
                             >
-                              {cp.source === "LOCAL" ? <HardDrive className="h-3.5 w-3.5" /> : <Cloud className="h-3.5 w-3.5" />}
+                              {cp.source === "LOCAL" ? <AppIcon name="HardDrive" className="h-3.5 w-3.5" /> : <AppIcon name="Cloud" className="h-3.5 w-3.5" />}
                               {cp.label}
                             </button>
                           );
@@ -1340,7 +1313,7 @@ export function ClarifyPanel({
 
             {needsProjectForDelegate && (
               <p className="inline-flex items-center gap-1 text-[11px] font-medium text-warning">
-                <AlertTriangle className="h-3 w-3 shrink-0" />
+                <AppIcon name="AlertTriangle" className="h-3 w-3 shrink-0" />
                 Pick a {destAccount?.provider === "clickup" ? "ClickUp list" : "list"}{" "}
                 to delegate into — {assignee?.name.split(/\s+/)[0]} needs it in the
                 tool to see it.
@@ -1362,8 +1335,8 @@ export function ClarifyPanel({
               : "cursor-not-allowed bg-secondary text-muted-foreground",
           ].join(" ")}
         >
-          {creatingTarget ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-          Organize it <ArrowRight className="h-4 w-4" />
+          {creatingTarget ? <AppIcon name="Loader2" className="h-4 w-4 animate-spin" /> : null}
+          Organize it <AppIcon name="ArrowRight" className="h-4 w-4" />
         </button>
         </>)}
       </div>
@@ -1394,15 +1367,15 @@ function ProjectSuggestBanner({
   return (
     <div className="flex flex-col gap-2.5 rounded-lg border border-primary/35 bg-primary/5 p-3">
       <div className="flex items-start gap-2 text-[13px] font-semibold text-foreground">
-        <FolderKanban className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+        <AppIcon name="FolderKanban" className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
         <span>Looks like it belongs in an existing project</span>
       </div>
       <div className="rounded-md border border-border bg-background/50 px-3 py-2">
         <div className="flex items-center gap-1.5 text-[12.5px] text-foreground">
           {synced ? (
-            <Cloud className="h-3.5 w-3.5 shrink-0 text-primary/70" />
+            <AppIcon name="Cloud" className="h-3.5 w-3.5 shrink-0 text-primary/70" />
           ) : (
-            <HardDrive className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+            <AppIcon name="HardDrive" className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
           )}
           <span className="min-w-0 flex-1 truncate" title={project.outcome}>{project.outcome}</span>
         </div>
@@ -1411,7 +1384,7 @@ function ProjectSuggestBanner({
         </div>
       </div>
       <p className="flex items-start gap-1.5 text-[11.5px] text-muted-foreground">
-        <ArrowRight className="mt-0.5 h-3 w-3 shrink-0 text-primary/70" />
+        <AppIcon name="ArrowRight" className="mt-0.5 h-3 w-3 shrink-0 text-primary/70" />
         {assignee
           ? `Assigned to ${assignee.name} — it'll show under them in Projects${synced ? ", and stays on ClickUp" : ""}.`
           : `Assigned to you — it'll show up in My Next Actions${synced ? ", and on ClickUp" : ""}.`}
@@ -1423,7 +1396,7 @@ function ProjectSuggestBanner({
           onClick={() => { setBusy(true); onFile(); }}
           className="tech-transition inline-flex items-center gap-1.5 rounded-md bg-primary px-2.5 py-1.5 text-[12px] font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
         >
-          {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+          {busy ? <AppIcon name="Loader2" className="h-3.5 w-3.5 animate-spin" /> : <AppIcon name="Check" className="h-3.5 w-3.5" />}
           File it here
         </button>
         <button
@@ -1454,17 +1427,17 @@ function ParentSuggestBanner({
   return (
     <div className="flex flex-col gap-2.5 rounded-lg border border-primary/35 bg-primary/5 p-3">
       <div className="flex items-start gap-2 text-[13px] font-semibold text-foreground">
-        <ListTree className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+        <AppIcon name="ListTree" className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
         <span>Looks like a step of an existing task</span>
       </div>
       <div className="rounded-md border border-border bg-background/50 px-3 py-2">
         <div className="flex items-center gap-1.5 text-[12.5px] text-foreground">
-          <FolderKanban className="h-3.5 w-3.5 shrink-0 text-primary/70" />
+          <AppIcon name="FolderKanban" className="h-3.5 w-3.5 shrink-0 text-primary/70" />
           <span className="min-w-0 flex-1 truncate" title={parentTitle}>{parentTitle}</span>
         </div>
       </div>
       <p className="flex items-start gap-1.5 text-[11.5px] text-muted-foreground">
-        <ArrowRight className="mt-0.5 h-3 w-3 shrink-0 text-primary/70" />
+        <AppIcon name="ArrowRight" className="mt-0.5 h-3 w-3 shrink-0 text-primary/70" />
         File it as a subtask under this task instead of a standalone one.
       </p>
       <div className="flex flex-wrap items-center gap-2">
@@ -1474,7 +1447,7 @@ function ParentSuggestBanner({
           onClick={async () => { setBusy(true); try { await onFileUnder(); } finally { setBusy(false); } }}
           className="tech-transition inline-flex items-center gap-1.5 rounded-md bg-primary px-2.5 py-1.5 text-[12px] font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
         >
-          {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ListTree className="h-3.5 w-3.5" />}
+          {busy ? <AppIcon name="Loader2" className="h-3.5 w-3.5 animate-spin" /> : <AppIcon name="ListTree" className="h-3.5 w-3.5" />}
           File as subtask
         </button>
         <button
@@ -1527,7 +1500,7 @@ function DuplicateBanner({
   return (
     <div className="flex flex-col gap-2.5 rounded-lg border border-warning/45 bg-warning/10 p-3">
       <div className="flex items-start gap-2 text-[13px] font-semibold text-foreground">
-        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
+        <AppIcon name="AlertTriangle" className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
         <span>
           {dup.verdict === "duplicate"
             ? "This looks like a task that's already on ClickUp"
@@ -1536,7 +1509,7 @@ function DuplicateBanner({
       </div>
       <div className="rounded-md border border-border bg-background/50 px-3 py-2">
         <div className="flex items-center gap-1.5 text-[12.5px] text-foreground">
-          <Cloud className="h-3.5 w-3.5 shrink-0 text-primary/70" />
+          <AppIcon name="Cloud" className="h-3.5 w-3.5 shrink-0 text-primary/70" />
           <span className="min-w-0 flex-1 truncate" title={dup.title}>{dup.title}</span>
           {dup.providerUrl && (
             <a
@@ -1579,7 +1552,7 @@ function DuplicateBanner({
               onClick={() => void run("rename", () => onRename(renameTitle))}
               className="tech-transition inline-flex items-center gap-1.5 rounded-md bg-primary px-2.5 py-1.5 text-[12px] font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
             >
-              {busy === "rename" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+              {busy === "rename" ? <AppIcon name="Loader2" className="h-3.5 w-3.5 animate-spin" /> : <AppIcon name="Check" className="h-3.5 w-3.5" />}
               Save name
             </button>
             <button
@@ -1600,7 +1573,7 @@ function DuplicateBanner({
             onClick={() => void run("merge", onMerge)}
             className="tech-transition inline-flex items-center gap-1.5 rounded-md bg-primary px-2.5 py-1.5 text-[12px] font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
           >
-            {busy === "merge" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
+            {busy === "merge" ? <AppIcon name="Loader2" className="h-3.5 w-3.5 animate-spin" /> : <AppIcon name="Plus" className="h-3.5 w-3.5" />}
             Add to existing task
           </button>
           <button
@@ -1609,7 +1582,7 @@ function DuplicateBanner({
             onClick={() => setRenaming(true)}
             className="tech-transition inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1.5 text-[12px] font-medium text-foreground hover:border-primary/40 hover:bg-primary/10 disabled:opacity-50"
           >
-            <Pencil className="h-3.5 w-3.5" />
+            <AppIcon name="Pencil" className="h-3.5 w-3.5" />
             Update its name
           </button>
           <button
@@ -1618,7 +1591,7 @@ function DuplicateBanner({
             onClick={() => void run("drop", onDrop)}
             className="tech-transition inline-flex items-center gap-1.5 rounded-md border border-transparent px-2.5 py-1.5 text-[12px] font-medium text-muted-foreground hover:border-destructive/30 hover:bg-destructive/10 hover:text-destructive disabled:opacity-50"
           >
-            {busy === "drop" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+            {busy === "drop" ? <AppIcon name="Loader2" className="h-3.5 w-3.5 animate-spin" /> : <AppIcon name="Trash2" className="h-3.5 w-3.5" />}
             Delete this inbox item
           </button>
           <button
@@ -1648,14 +1621,14 @@ function LockedWhere({
   return (
     <div>
       <div className="flex items-center gap-2 rounded-md border border-border bg-background/40 px-3 py-2">
-        <Lock className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+        <AppIcon name="Lock" className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
         <span className="flex min-w-0 flex-wrap items-center gap-x-1.5 text-[12px] text-foreground">
-          <Cloud className="h-3.5 w-3.5 text-primary/70" />
+          <AppIcon name="Cloud" className="h-3.5 w-3.5 text-primary/70" />
           {destEntry(dest, providers)?.label ?? "ClickUp"}
           {selectedProject && (
             <>
               <span className="text-border">·</span>
-              <FolderKanban className="h-3 w-3 text-muted-foreground" />
+              <AppIcon name="FolderKanban" className="h-3 w-3 text-muted-foreground" />
               {short(selectedProject.outcome, 22)}
             </>
           )}
@@ -1727,12 +1700,12 @@ function SubtaskEditor({
             aria-label="Remove step"
             className="tech-transition shrink-0 rounded p-1 text-muted-foreground/60 hover:bg-destructive/10 hover:text-destructive"
           >
-            <X className="h-3.5 w-3.5" />
+            <AppIcon name="X" className="h-3.5 w-3.5" />
           </button>
         </div>
       ))}
       <div className="flex items-center gap-1.5 rounded-md border border-dashed border-border px-2 py-1.5">
-        <Plus className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+        <AppIcon name="Plus" className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
         <input
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
@@ -1988,7 +1961,7 @@ function InlineCreateFolder({
         onClick={() => setOpen(true)}
         className="tech-transition ml-4 flex items-center gap-1.5 text-left text-[12px] text-primary hover:underline"
       >
-        <Plus className="h-3 w-3" /> New folder here
+        <AppIcon name="Plus" className="h-3 w-3" /> New folder here
       </button>
     );
   }
@@ -2016,7 +1989,7 @@ function InlineCreateFolder({
         }}
         className="tech-transition inline-flex items-center gap-1 rounded-md bg-primary px-2.5 py-1.5 text-[12px] font-medium text-primary-foreground disabled:opacity-50"
       >
-        {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Plus className="h-3 w-3" />}
+        {busy ? <AppIcon name="Loader2" className="h-3 w-3 animate-spin" /> : <AppIcon name="Plus" className="h-3 w-3" />}
         Create
       </button>
     </div>
@@ -2143,7 +2116,7 @@ function TreePicker({
     const expandable =
       !!n.children?.length || (!!onSelectLeaf && n.type !== "list");
     const isOpen = openIds.has(n.id);
-    const Icon = n.type === "space" ? HardDrive : n.type === "folder" ? FolderKanban : ListChecks;
+    const Icon = n.type === "space" ? themedIcon("HardDrive") : n.type === "folder" ? themedIcon("FolderKanban") : themedIcon("ListChecks");
     return (
       <div key={n.id}>
         <button
@@ -2164,7 +2137,7 @@ function TreePicker({
           ].join(" ")}
         >
           {expandable ? (
-            <ChevronRight
+            <AppIcon name="ChevronRight"
               onClick={(e) => { e.stopPropagation(); toggle(n.id); }}
               className={`h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform ${isOpen ? "rotate-90" : ""}`}
             />
@@ -2175,11 +2148,11 @@ function TreePicker({
           <span className="min-w-0 flex-1 truncate">{n.name}</span>
           {unmirrored && (
             <span className="inline-flex shrink-0 items-center gap-1 text-[10px] text-muted-foreground/70">
-              <Loader2 className="h-3 w-3 animate-spin" /> syncing…
+              <AppIcon name="Loader2" className="h-3 w-3 animate-spin" /> syncing…
             </span>
           )}
-          {isSuggested && <Sparkles className="h-3 w-3 shrink-0 text-primary" />}
-          {active && <Check className="h-3.5 w-3.5 shrink-0" />}
+          {isSuggested && <AppIcon name="Sparkles" className="h-3 w-3 shrink-0 text-primary" />}
+          {active && <AppIcon name="Check" className="h-3.5 w-3.5 shrink-0" />}
         </button>
         {expandable && isOpen && (
           <div className="flex flex-col gap-0.5 pb-1 pt-0.5">
@@ -2206,7 +2179,7 @@ function TreePicker({
                     onClick={() => void submitCreate(n.type === "space" ? n.id : ancestorSpaceId, n.type === "folder" ? n.id : undefined)}
                     className="tech-transition inline-flex items-center gap-1 rounded-md bg-primary px-2.5 py-1.5 text-[12px] font-medium text-primary-foreground disabled:opacity-50"
                   >
-                    {creating ? <Loader2 className="h-3 w-3 animate-spin" /> : <Plus className="h-3 w-3" />}
+                    {creating ? <AppIcon name="Loader2" className="h-3 w-3 animate-spin" /> : <AppIcon name="Plus" className="h-3 w-3" />}
                     Create
                   </button>
                 </div>
@@ -2221,7 +2194,7 @@ function TreePicker({
                 {/* Say WHICH level the new list lands on — a space with folders
                     offers both "directly in this space" (folderless, the level
                     above) and per-folder creation, and "here" hid that. */}
-                <Plus className="h-3 w-3" />{" "}
+                <AppIcon name="Plus" className="h-3 w-3" />{" "}
                 {newLabel.replace(
                   "here…",
                   n.type === "folder" ? "in this folder…" : "directly in this space…",
@@ -2252,7 +2225,7 @@ function TreePicker({
                       onClick={() => void submitCreateFolder(n.id)}
                       className="tech-transition inline-flex items-center gap-1 rounded-md bg-primary px-2.5 py-1.5 text-[12px] font-medium text-primary-foreground disabled:opacity-50"
                     >
-                      {creating ? <Loader2 className="h-3 w-3 animate-spin" /> : <Plus className="h-3 w-3" />}
+                      {creating ? <AppIcon name="Loader2" className="h-3 w-3 animate-spin" /> : <AppIcon name="Plus" className="h-3 w-3" />}
                       Create
                     </button>
                   </div>
@@ -2264,7 +2237,7 @@ function TreePicker({
                   onClick={() => { setCreatingAt(`folder:${n.id}`); setNewName(""); setCreateError(null); }}
                   className="tech-transition ml-4 flex items-center gap-1.5 text-left text-[12px] text-primary hover:underline"
                 >
-                  <Plus className="h-3 w-3" /> New folder here…
+                  <AppIcon name="Plus" className="h-3 w-3" /> New folder here…
                 </button>
               ))}
           </div>
@@ -2314,9 +2287,9 @@ function TreePicker({
               : "border-transparent text-foreground hover:bg-secondary",
           ].join(" ")}
         >
-          <FolderKanban className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+          <AppIcon name="FolderKanban" className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
           <span className="flex-1">{emptyLabel}</span>
-          {value === undefined && <Check className="h-3.5 w-3.5 shrink-0" />}
+          {value === undefined && <AppIcon name="Check" className="h-3.5 w-3.5 shrink-0" />}
         </button>
       )}
       <div className="max-h-56 overflow-y-auto pr-0.5">
@@ -2341,7 +2314,7 @@ function TreePicker({
                 onClick={() => void submitCreate(undefined, undefined)}
                 className="tech-transition inline-flex items-center gap-1 rounded-md bg-primary px-2.5 py-1.5 text-[12px] font-medium text-primary-foreground disabled:opacity-50"
               >
-                {creating ? <Loader2 className="h-3 w-3 animate-spin" /> : <Plus className="h-3 w-3" />}
+                {creating ? <AppIcon name="Loader2" className="h-3 w-3 animate-spin" /> : <AppIcon name="Plus" className="h-3 w-3" />}
                 Create
               </button>
             </div>
@@ -2351,7 +2324,7 @@ function TreePicker({
               onClick={() => { setCreatingAt("top"); setNewName(""); setCreateError(null); }}
               className="tech-transition flex items-center gap-1.5 text-left text-[12px] text-primary hover:underline"
             >
-              <Plus className="h-3 w-3" /> {newLabel}
+              <AppIcon name="Plus" className="h-3 w-3" /> {newLabel}
             </button>
           )
         )}
@@ -2366,7 +2339,7 @@ function TreePicker({
 function SearchBox({ q, setQ }: { q: string; setQ: (v: string) => void }) {
   return (
     <div className="relative">
-      <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+      <AppIcon name="Search" className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
       <input
         value={q}
         onChange={(e) => setQ(e.target.value)}

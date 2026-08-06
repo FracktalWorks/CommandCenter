@@ -1,7 +1,7 @@
 "use client";
 
+import Icon from "@/components/Icon";
 import { useEffect } from "react";
-import { AlertTriangle, Trash2, X } from "lucide-react";
 import { useTaskStore } from "../lib/taskStore";
 
 /**
@@ -51,7 +51,7 @@ export function DeleteConfirmModal() {
       >
         <div className="flex items-start gap-3 px-4 py-4">
           <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-destructive/10 text-destructive">
-            <Trash2 className="h-4 w-4" />
+            <Icon name="Trash2" className="h-4 w-4" />
           </div>
           <div className="min-w-0 flex-1">
             <h2 className="text-sm font-semibold text-foreground">
@@ -67,7 +67,7 @@ export function DeleteConfirmModal() {
             </p>
             {syncedCount > 0 && (
               <div className="mt-2 flex items-start gap-1.5 rounded-lg border border-amber-500/30 bg-amber-500/5 px-2.5 py-2 text-[11px] text-amber-600 dark:text-amber-500">
-                <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
+                <Icon name="AlertTriangle" className="mt-0.5 h-3 w-3 shrink-0" />
                 <span>
                   {syncedCount === count && count === 1
                     ? "This is a ClickUp task — it will be archived in ClickUp (recoverable there), not permanently deleted."
@@ -81,7 +81,7 @@ export function DeleteConfirmModal() {
             aria-label="Cancel"
             className="text-muted-foreground hover:text-foreground"
           >
-            <X className="h-4 w-4" />
+            <Icon name="X" className="h-4 w-4" />
           </button>
         </div>
         <div className="flex items-center justify-end gap-2 border-t border-border px-4 py-3">
@@ -96,7 +96,7 @@ export function DeleteConfirmModal() {
             autoFocus
             className="inline-flex items-center gap-1.5 rounded-lg bg-destructive px-3 py-1.5 text-xs font-medium text-destructive-foreground hover:opacity-90"
           >
-            <Trash2 className="h-3.5 w-3.5" />
+            <Icon name="Trash2" className="h-3.5 w-3.5" />
             Delete
           </button>
         </div>

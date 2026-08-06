@@ -1,9 +1,6 @@
 "use client";
 
-import {
-  Check,
-  Play,
-} from "lucide-react";
+import Icon from "@/components/Icon";
 import { GtdItem } from "../../lib/types";
 import {
   startOfDay,
@@ -113,7 +110,7 @@ export function NowNextBar({
               title="Mark done"
               className="tech-transition flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-muted-foreground/50 text-transparent hover:border-success hover:bg-success/10 hover:text-success"
             >
-              <Check className="h-3 w-3" strokeWidth={3} />
+              <Icon name="Check" className="h-3 w-3" strokeWidth={3} />
             </button>
             <button
               type="button"
@@ -129,7 +126,7 @@ export function NowNextBar({
               }
               className="tech-transition flex h-5 shrink-0 items-center gap-1 rounded-full border border-primary/50 px-2 text-[10px] font-semibold text-primary hover:bg-primary/10"
             >
-              <Play className="h-2.5 w-2.5" fill="currentColor" />
+              <Icon name="Play" className="h-2.5 w-2.5" fill="currentColor" />
               Focus
             </button>
             <button

@@ -14,18 +14,8 @@
  * reading it.
  */
 
+import Icon from "@/components/Icon";
 import { useCallback, useState } from "react";
-import {
-  Bot,
-  Eye,
-  KeyRound,
-  Loader2,
-  Lock,
-  Plus,
-  Trash2,
-  UserPlus,
-  X,
-} from "lucide-react";
 import { AgentAvatar, useAgentAvatars } from "@/components/AgentAvatar";
 import {
   addRoomAgent,
@@ -119,7 +109,7 @@ export function PresenceRail({
           className="self-end rounded-md p-1 text-muted-foreground hover:bg-secondary hover:text-foreground lg:hidden"
           aria-label="Close room panel"
         >
-          <X className="h-4 w-4" />
+          <Icon name="X" className="h-4 w-4" />
         </button>
       )}
 
@@ -194,7 +184,7 @@ export function PresenceRail({
               className="ml-auto rounded-md p-0.5 text-muted-foreground hover:bg-secondary hover:text-foreground"
               title="Add an agent to this room"
             >
-              <Plus className="h-3.5 w-3.5" />
+              <Icon name="Plus" className="h-3.5 w-3.5" />
             </button>
           )}
         </h3>
@@ -205,7 +195,7 @@ export function PresenceRail({
               <AgentAvatar
                 libraryId={avatars[a.agentName] ?? null}
                 size={24}
-                fallback={<Bot className="h-3.5 w-3.5 text-muted-foreground" />}
+                fallback={<Icon name="Bot" className="h-3.5 w-3.5 text-muted-foreground" />}
               />
               <span className="min-w-0 flex-1">
                 <span className="block truncate text-[13px] text-foreground">
@@ -229,9 +219,9 @@ export function PresenceRail({
                   title="Remove from this room"
                 >
                   {busy === a.agentName ? (
-                    <Loader2 className="h-3 w-3 animate-spin" />
+                    <Icon name="Loader2" className="h-3 w-3 animate-spin" />
                   ) : (
-                    <Trash2 className="h-3 w-3" />
+                    <Icon name="Trash2" className="h-3 w-3" />
                   )}
                 </button>
               )}
@@ -253,7 +243,7 @@ export function PresenceRail({
                   }
                   className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] text-muted-foreground hover:bg-secondary hover:text-foreground disabled:opacity-50"
                 >
-                  <UserPlus className="h-3 w-3" />
+                  <Icon name="UserPlus" className="h-3 w-3" />
                   {name}
                 </button>
               </li>
@@ -304,17 +294,17 @@ export function PresenceRail({
         </h3>
         <ul className="space-y-1.5 text-[11px]">
           <li className="flex items-center gap-2 px-1">
-            <Eye className="h-3 w-3 shrink-0 text-muted-foreground" />
+            <Icon name="Eye" className="h-3 w-3 shrink-0 text-muted-foreground" />
             <span className="text-muted-foreground">Transcript, tools, files</span>
             <span className="ml-auto text-foreground">Everyone here</span>
           </li>
           <li className="flex items-center gap-2 px-1">
-            <Lock className="h-3 w-3 shrink-0 text-muted-foreground" />
+            <Icon name="Lock" className="h-3 w-3 shrink-0 text-muted-foreground" />
             <span className="text-muted-foreground">Your personal memory</span>
             <span className="ml-auto text-foreground">Private</span>
           </li>
           <li className="flex items-center gap-2 px-1">
-            <KeyRound className="h-3 w-3 shrink-0 text-muted-foreground" />
+            <Icon name="KeyRound" className="h-3 w-3 shrink-0 text-muted-foreground" />
             <span className="text-muted-foreground">Credentials and keys</span>
             <span className="ml-auto text-foreground">Never</span>
           </li>

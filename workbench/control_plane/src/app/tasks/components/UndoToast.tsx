@@ -1,7 +1,7 @@
 "use client";
 
+import Icon from "@/components/Icon";
 import { useEffect } from "react";
-import { Undo2, X } from "lucide-react";
 import { useTaskStore } from "../lib/taskStore";
 
 /**
@@ -61,7 +61,7 @@ export function UndoToast() {
         onClick={undoLastChange}
         className="tech-transition inline-flex items-center gap-1 whitespace-nowrap text-[13px] font-semibold text-primary hover:underline"
       >
-        <Undo2 className="h-3.5 w-3.5" />
+        <Icon name="Undo2" className="h-3.5 w-3.5" />
         Undo
         <kbd className="ml-0.5 hidden rounded border border-border px-1 py-0.5 font-mono text-[9px] text-muted-foreground sm:inline">
           u
@@ -73,7 +73,7 @@ export function UndoToast() {
         aria-label="Dismiss"
         className="tech-transition rounded-md p-0.5 text-muted-foreground hover:text-foreground"
       >
-        <X className="h-3.5 w-3.5" />
+        <Icon name="X" className="h-3.5 w-3.5" />
       </button>
     </div>
   );

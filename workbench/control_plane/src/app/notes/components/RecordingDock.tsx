@@ -12,8 +12,8 @@
  * pill when both are minimized, so neither is clipped by the menu bar.
  */
 
+import Icon from "@/components/Icon";
 import { usePathname, useRouter } from "next/navigation";
-import { Loader2, Mic, Pause, Play, Square } from "lucide-react";
 import { useTaskStore } from "@/app/tasks/lib/taskStore";
 import { formatClock } from "../lib/api";
 import { isActive, useRecordingStore } from "../lib/recordingStore";
@@ -63,7 +63,7 @@ export function RecordingDock() {
           title="Back to the recording"
         >
           {finalizing ? (
-            <Loader2 className="w-3.5 h-3.5 shrink-0 animate-spin text-primary" />
+            <Icon name="Loader2" className="w-3.5 h-3.5 shrink-0 animate-spin text-primary" />
           ) : (
             <span
               className={`w-2.5 h-2.5 shrink-0 rounded-full ${
@@ -75,7 +75,7 @@ export function RecordingDock() {
             {formatClock(elapsed)}
           </span>
           <span className="flex min-w-0 items-center gap-1 truncate text-xs text-muted-foreground">
-            <Mic className="w-3 h-3 shrink-0" />
+            <Icon name="Mic" className="w-3 h-3 shrink-0" />
             <span className="truncate">
               {finalizing
                 ? "Finishing…"
@@ -94,9 +94,9 @@ export function RecordingDock() {
               aria-label={paused ? "Resume" : "Pause"}
             >
               {paused ? (
-                <Play className="w-4 h-4" />
+                <Icon name="Play" className="w-4 h-4" />
               ) : (
-                <Pause className="w-4 h-4" />
+                <Icon name="Pause" className="w-4 h-4" />
               )}
             </button>
             <button
@@ -104,7 +104,7 @@ export function RecordingDock() {
               className="rounded-lg bg-destructive/15 p-1.5 text-destructive hover:bg-destructive/25 tech-transition"
               aria-label="Stop and transcribe"
             >
-              <Square className="w-4 h-4 fill-current" />
+              <Icon name="Square" className="w-4 h-4 fill-current" />
             </button>
           </>
         )}

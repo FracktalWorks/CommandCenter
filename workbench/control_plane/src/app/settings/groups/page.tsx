@@ -15,18 +15,9 @@
  * explicit decision made on their member page.
  */
 
+import Icon from "@/components/Icon";
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import {
-  ArrowLeft,
-  Building2,
-  Loader2,
-  Plus,
-  Star,
-  Trash2,
-  UserPlus,
-  X,
-} from "lucide-react";
 import { useAccess } from "@/components/AccessProvider";
 import type { Group, Member } from "../members/types";
 
@@ -133,7 +124,7 @@ export default function GroupsPage() {
             className="rounded-lg border border-border p-2 text-muted-foreground tech-transition hover:bg-secondary"
             aria-label="Back to members"
           >
-            <ArrowLeft size={15} />
+            <Icon name="ArrowLeft" size={15} />
           </Link>
           <div>
             <h1 className="text-base font-bold text-foreground sm:text-lg">Teams</h1>
@@ -146,7 +137,7 @@ export default function GroupsPage() {
           onClick={() => setCreating(true)}
           className="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground tech-transition hover:opacity-90 sm:px-4"
         >
-          <Plus size={15} />
+          <Icon name="Plus" size={15} />
           New team
         </button>
       </div>
@@ -155,7 +146,7 @@ export default function GroupsPage() {
         <div className="mx-4 mt-3 flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive sm:mx-6">
           <span className="flex-1">{error}</span>
           <button onClick={() => setError("")} aria-label="Dismiss">
-            <X size={13} />
+            <Icon name="X" size={13} />
           </button>
         </div>
       )}
@@ -163,7 +154,7 @@ export default function GroupsPage() {
         <div className="mx-4 mt-3 flex items-start gap-2 rounded-lg border border-border bg-secondary/40 px-3 py-2 text-xs text-muted-foreground sm:mx-6">
           <span className="flex-1">{notice}</span>
           <button onClick={() => setNotice("")} aria-label="Dismiss">
-            <X size={13} />
+            <Icon name="X" size={13} />
           </button>
         </div>
       )}
@@ -177,7 +168,7 @@ export default function GroupsPage() {
 
         {loading ? (
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
-            <Loader2 size={14} className="animate-spin" /> Loading teams…
+            <Icon name="Loader2" size={14} className="animate-spin" /> Loading teams…
           </div>
         ) : groups.length === 0 ? (
           <p className="text-xs text-muted-foreground">
@@ -206,7 +197,7 @@ export default function GroupsPage() {
                           className="flex items-center gap-1 text-[10px] text-muted-foreground"
                           title={`Pairs with the center.${g.slug} feature — cannot be deleted`}
                         >
-                          <Building2 size={10} /> Center
+                          <Icon name="Building2" size={10} /> Center
                         </span>
                       )}
                     </div>
@@ -220,7 +211,7 @@ export default function GroupsPage() {
                       onClick={() => setAddingTo(g)}
                       className="flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1.5 text-[11px] text-muted-foreground tech-transition hover:border-primary/30 hover:text-foreground"
                     >
-                      <UserPlus size={12} />
+                      <Icon name="UserPlus" size={12} />
                       Add member
                     </button>
                     {!g.is_center && (
@@ -229,7 +220,7 @@ export default function GroupsPage() {
                         className="rounded-lg bg-destructive/10 p-2 text-destructive tech-transition hover:bg-destructive/20"
                         title="Delete team (must be empty)"
                       >
-                        <Trash2 size={14} />
+                        <Icon name="Trash2" size={14} />
                       </button>
                     )}
                   </div>
@@ -261,7 +252,7 @@ export default function GroupsPage() {
                               : "text-muted-foreground/50 hover:text-warning"
                           }
                         >
-                          <Star
+                          <Icon name="Star"
                             size={11}
                             fill={m.role === "lead" ? "currentColor" : "none"}
                           />
@@ -273,7 +264,7 @@ export default function GroupsPage() {
                           aria-label={`Remove ${m.email} from ${g.display_name}`}
                           title="Remove from team (keeps any Center access — revoke that on their member page)"
                         >
-                          <X size={11} />
+                          <Icon name="X" size={11} />
                         </button>
                       </span>
                     ))}
@@ -379,7 +370,7 @@ function CreateGroupDialog({
             className="rounded-lg p-1 text-muted-foreground hover:bg-secondary"
             aria-label="Close"
           >
-            <X size={15} />
+            <Icon name="X" size={15} />
           </button>
         </div>
 
@@ -432,7 +423,7 @@ function CreateGroupDialog({
             disabled={busy || !slug}
             className="flex items-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground tech-transition hover:opacity-90 disabled:opacity-50"
           >
-            {busy && <Loader2 size={14} className="animate-spin" />}
+            {busy && <Icon name="Loader2" size={14} className="animate-spin" />}
             Create team
           </button>
         </div>
@@ -498,7 +489,7 @@ function EditGroupDialog({
             className="rounded-lg p-1 text-muted-foreground hover:bg-secondary"
             aria-label="Close"
           >
-            <X size={15} />
+            <Icon name="X" size={15} />
           </button>
         </div>
 
@@ -539,7 +530,7 @@ function EditGroupDialog({
             disabled={busy}
             className="flex items-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground tech-transition hover:opacity-90 disabled:opacity-50"
           >
-            {busy && <Loader2 size={14} className="animate-spin" />}
+            {busy && <Icon name="Loader2" size={14} className="animate-spin" />}
             Save
           </button>
         </div>
@@ -604,7 +595,7 @@ function AddMemberDialog({
         <div className="mb-4 flex items-start justify-between">
           <div>
             <h2 className="flex items-center gap-2 text-sm font-semibold text-foreground">
-              <UserPlus size={15} /> Add to {group.display_name}
+              <Icon name="UserPlus" size={15} /> Add to {group.display_name}
             </h2>
           </div>
           <button
@@ -612,7 +603,7 @@ function AddMemberDialog({
             className="rounded-lg p-1 text-muted-foreground hover:bg-secondary"
             aria-label="Close"
           >
-            <X size={15} />
+            <Icon name="X" size={15} />
           </button>
         </div>
 
@@ -693,7 +684,7 @@ function AddMemberDialog({
             disabled={busy || !email || candidates.length === 0}
             className="flex items-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground tech-transition hover:opacity-90 disabled:opacity-50"
           >
-            {busy && <Loader2 size={14} className="animate-spin" />}
+            {busy && <Icon name="Loader2" size={14} className="animate-spin" />}
             Add
           </button>
         </div>

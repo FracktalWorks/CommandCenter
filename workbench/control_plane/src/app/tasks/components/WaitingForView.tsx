@@ -1,7 +1,7 @@
 "use client";
 
+import Icon from "@/components/Icon";
 import { useMemo } from "react";
-import { AlertTriangle, Clock, Hourglass, Mail, Send } from "lucide-react";
 import { GtdItem } from "../lib/types";
 import { useTaskStore } from "../lib/taskStore";
 import { initials, relativeTime } from "../lib/utils";
@@ -144,7 +144,7 @@ function WaitingRow({
                 stale ? "font-medium text-warning" : "text-muted-foreground",
               ].join(" ")}
             >
-              <Hourglass className="h-3 w-3" />
+              <Icon name="Hourglass" className="h-3 w-3" />
               {days}d waiting
             </span>
           )}
@@ -161,9 +161,9 @@ function WaitingRow({
               ].join(" ")}
             >
               {overdue ? (
-                <AlertTriangle className="h-3 w-3" />
+                <Icon name="AlertTriangle" className="h-3 w-3" />
               ) : (
-                <Clock className="h-3 w-3" />
+                <Icon name="Clock" className="h-3 w-3" />
               )}
               {/* WHICH fact — an explicit promise reads differently from the
                   task's own deadline, and the row must not blur them. */}
@@ -176,7 +176,7 @@ function WaitingRow({
               title={`From email — ${item.origin.fromName || item.origin.fromEmail || ""}`}
               className="inline-flex items-center text-[10px] text-muted-foreground"
             >
-              <Mail className="h-3 w-3" />
+              <Icon name="Mail" className="h-3 w-3" />
             </span>
           )}
         </div>
@@ -200,7 +200,7 @@ function WaitingRow({
             which is owner-gated and not built; NULL until then. */}
         {item.lastNudgedAt && (
           <span className="inline-flex items-center gap-1 text-[10px] text-muted-foreground">
-            <Send className="h-3 w-3" />
+            <Icon name="Send" className="h-3 w-3" />
             nudged {relativeTime(item.lastNudgedAt, nowMs)}
           </span>
         )}

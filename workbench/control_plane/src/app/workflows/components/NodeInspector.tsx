@@ -6,8 +6,8 @@
  * available roots are shown as hint chips (trigger, vars, upstream node ids).
  */
 
+import Icon from "@/components/Icon";
 import { useCallback, useMemo, useState } from "react";
-import { Trash2 } from "lucide-react";
 import { FALLBACK_ICON, NODE_ICON, NODE_KIND_LABEL } from "../lib/nodeVisuals";
 import { NODE_CATEGORY_STYLE, categoryForType } from "../lib/types";
 import type {
@@ -319,7 +319,7 @@ export default function NodeInspector({
             title="Delete node"
             className="p-1.5 rounded-lg text-muted-foreground hover:text-destructive hover:bg-secondary tech-transition"
           >
-            <Trash2 className="w-3.5 h-3.5" />
+            <Icon name="Trash2" className="w-3.5 h-3.5" />
           </button>
         )}
       </div>

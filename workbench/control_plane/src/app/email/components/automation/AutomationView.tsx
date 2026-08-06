@@ -1,9 +1,6 @@
 "use client";
 
-import {
-  ArrowLeft, Sparkles, MailMinus, BarChart3, LayoutDashboard,
-  MessageSquare,
-} from "lucide-react";
+import AppIcon, { themedIcon } from "@/components/Icon";
 import { AutomationFeature } from "../../lib/types";
 import { AISettingsView } from "./AISettingsView";
 import { DashboardView } from "./DashboardView";
@@ -41,29 +38,29 @@ const META: Record<
   chat: {
     title: "Chat",
     subtitle: "Conversational AI assistant",
-    icon: MessageSquare,
+    icon: themedIcon("MessageSquare"),
   },
   "ai-settings": {
     title: "AI Settings",
     subtitle: "Rules, testing & history",
-    icon: Sparkles,
+    icon: themedIcon("Sparkles"),
   },
   digest: {
     // The feature KEY stays "digest" (routing/state churn for zero gain); the
     // surface is the mailbox dashboard — open loops, promises, and traffic.
     title: "Dashboard",
     subtitle: "Open loops, commitments & daily traffic — act from here",
-    icon: LayoutDashboard,
+    icon: themedIcon("LayoutDashboard"),
   },
   unsubscribe: {
     title: "Email Cleaner",
     subtitle: "Unsubscribe, auto-archive & clear out your whole mailbox",
-    icon: MailMinus,
+    icon: themedIcon("MailMinus"),
   },
   analytics: {
     title: "Analytics",
     subtitle: "Inbox trends & activity",
-    icon: BarChart3,
+    icon: themedIcon("BarChart3"),
   },
 };
 
@@ -92,7 +89,7 @@ export function AutomationView({
           className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
           aria-label="Back to inbox"
         >
-          <ArrowLeft size={16} />
+          <AppIcon name="ArrowLeft" size={16} />
         </button>
         <div className="w-7 h-7 rounded-lg bg-primary/15 text-primary flex items-center justify-center flex-shrink-0">
           <Icon size={15} />

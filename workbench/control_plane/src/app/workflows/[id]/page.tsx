@@ -7,6 +7,7 @@
  * status onto the canvas over SSE.
  */
 
+import Icon from "@/components/Icon";
 import {
   Suspense,
   use,
@@ -37,20 +38,6 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { useTheme } from "next-themes";
-import {
-  AlertTriangle,
-  ArrowLeft,
-  BadgeCheck,
-  ChevronDown,
-  Loader2,
-  Play,
-  Power,
-  Rocket,
-  Save,
-  ShieldCheck,
-  Sparkles,
-  Zap,
-} from "lucide-react";
 import { useAccess } from "@/components/AccessProvider";
 import { hasCapability } from "@/lib/access";
 import CopilotPanel from "../components/CopilotPanel";
@@ -944,7 +931,7 @@ function EditorInner({ id }: { id: string }) {
   if (!detail) {
     return (
       <div className="flex items-center justify-center h-full">
-        <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
+        <Icon name="Loader2" className="w-5 h-5 animate-spin text-muted-foreground" />
       </div>
     );
   }
@@ -959,7 +946,7 @@ function EditorInner({ id }: { id: string }) {
           href="/workflows"
           className="p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary tech-transition"
         >
-          <ArrowLeft className="w-4 h-4" />
+          <Icon name="ArrowLeft" className="w-4 h-4" />
         </Link>
         <input
           value={name}
@@ -1029,7 +1016,7 @@ function EditorInner({ id }: { id: string }) {
                           className="text-[10px] px-1.5 py-0.5 rounded-md border border-border text-foreground hover:bg-secondary tech-transition disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
                         >
                           {busy === "rollback" ? (
-                            <Loader2 className="w-3 h-3 animate-spin" />
+                            <Icon name="Loader2" className="w-3 h-3 animate-spin" />
                           ) : (
                             "Roll back"
                           )}
@@ -1051,9 +1038,9 @@ function EditorInner({ id }: { id: string }) {
                     className="w-full flex items-center gap-1.5 px-1.5 py-1 text-[11px] rounded-md text-muted-foreground hover:text-destructive hover:bg-secondary/50 tech-transition disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     {busy === "disable" ? (
-                      <Loader2 className="w-3 h-3 animate-spin" />
+                      <Icon name="Loader2" className="w-3 h-3 animate-spin" />
                     ) : (
-                      <Power className="w-3 h-3" />
+                      <Icon name="Power" className="w-3 h-3" />
                     )}
                     Take offline — stops all triggers, keeps the version
                   </button>
@@ -1068,7 +1055,7 @@ function EditorInner({ id }: { id: string }) {
           title="Configure triggers"
           className="flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-full border border-amber-500/30 bg-amber-500/10 text-amber-500 hover:bg-amber-500/15 tech-transition shrink-0 max-w-56"
         >
-          <Zap className="w-3 h-3 shrink-0" />
+          <Icon name="Zap" className="w-3 h-3 shrink-0" />
           <span className="truncate">
             {triggerFacts.detail === "manual"
               ? "Trigger: run manually"
@@ -1088,9 +1075,9 @@ function EditorInner({ id }: { id: string }) {
             className="rounded-lg border border-border px-2.5 py-1.5 text-xs text-foreground hover:bg-secondary tech-transition flex items-center gap-1 disabled:opacity-50"
           >
             {saving ? (
-              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              <Icon name="Loader2" className="w-3.5 h-3.5 animate-spin" />
             ) : (
-              <Save className="w-3.5 h-3.5" />
+              <Icon name="Save" className="w-3.5 h-3.5" />
             )}
             {dirty ? "Save" : "Saved"}
           </button>
@@ -1100,9 +1087,9 @@ function EditorInner({ id }: { id: string }) {
             className="rounded-lg border border-border px-2.5 py-1.5 text-xs text-foreground hover:bg-secondary tech-transition flex items-center gap-1 disabled:opacity-50"
           >
             {busy === "validate" ? (
-              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              <Icon name="Loader2" className="w-3.5 h-3.5 animate-spin" />
             ) : (
-              <ShieldCheck className="w-3.5 h-3.5" />
+              <Icon name="ShieldCheck" className="w-3.5 h-3.5" />
             )}
             Validate
           </button>
@@ -1113,9 +1100,9 @@ function EditorInner({ id }: { id: string }) {
               className="rounded-l-lg border border-border px-2.5 py-1.5 text-xs font-medium text-foreground hover:bg-secondary tech-transition flex items-center gap-1 disabled:opacity-50"
             >
               {busy === "test" || running ? (
-                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                <Icon name="Loader2" className="w-3.5 h-3.5 animate-spin" />
               ) : (
-                <Play className="w-3.5 h-3.5" />
+                <Icon name="Play" className="w-3.5 h-3.5" />
               )}
               Test
             </button>
@@ -1124,7 +1111,7 @@ function EditorInner({ id }: { id: string }) {
               className="rounded-r-lg border border-l-0 border-border px-1 py-1.5 text-muted-foreground hover:bg-secondary tech-transition"
               title="Sample trigger payload"
             >
-              <ChevronDown className="w-3.5 h-3.5" />
+              <Icon name="ChevronDown" className="w-3.5 h-3.5" />
             </button>
           </div>
           <button
@@ -1138,11 +1125,11 @@ function EditorInner({ id }: { id: string }) {
             className="rounded-lg bg-primary px-2.5 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90 tech-transition flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {busy === "publish" ? (
-              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              <Icon name="Loader2" className="w-3.5 h-3.5 animate-spin" />
             ) : published ? (
-              <BadgeCheck className="w-3.5 h-3.5" />
+              <Icon name="BadgeCheck" className="w-3.5 h-3.5" />
             ) : (
-              <Rocket className="w-3.5 h-3.5" />
+              <Icon name="Rocket" className="w-3.5 h-3.5" />
             )}
             Publish
           </button>
@@ -1151,7 +1138,7 @@ function EditorInner({ id }: { id: string }) {
 
       {detail.status === "disabled" && (
         <div className="flex items-center gap-2 px-3 sm:px-4 py-2 border-b border-warning/20 bg-warning/10 shrink-0">
-          <AlertTriangle className="w-4 h-4 text-warning shrink-0" />
+          <Icon name="AlertTriangle" className="w-4 h-4 text-warning shrink-0" />
           <p className="text-xs text-warning min-w-0">
             <span className="font-medium">Not live — no trigger fires. </span>
             {detail.disabled_reason ??
@@ -1170,9 +1157,9 @@ function EditorInner({ id }: { id: string }) {
             className="ml-auto shrink-0 rounded-lg border border-warning/30 px-2.5 py-1.5 text-xs font-medium text-warning hover:bg-warning/15 tech-transition flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {busy === "enable" ? (
-              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              <Icon name="Loader2" className="w-3.5 h-3.5 animate-spin" />
             ) : (
-              <Power className="w-3.5 h-3.5" />
+              <Icon name="Power" className="w-3.5 h-3.5" />
             )}
             Re-enable
           </button>
@@ -1230,7 +1217,7 @@ function EditorInner({ id }: { id: string }) {
                   : "text-muted-foreground hover:text-foreground"
               }`}
             >
-              <Sparkles className="w-3 h-3" /> Copilot
+              <Icon name="Sparkles" className="w-3 h-3" /> Copilot
             </button>
           </div>
           {insertEdgeId && leftTab === "palette" && (
@@ -1308,7 +1295,7 @@ function EditorInner({ id }: { id: string }) {
             }}
             className="absolute left-1/2 -translate-x-1/2 bottom-4 z-10 w-[min(560px,84%)] flex items-center gap-2 rounded-xl border border-border bg-card/95 backdrop-blur-sm shadow-lg pl-3 pr-2 py-2"
           >
-            <Sparkles className="w-4 h-4 text-primary shrink-0" />
+            <Icon name="Sparkles" className="w-4 h-4 text-primary shrink-0" />
             <input
               value={describe}
               onChange={(e) => setDescribe(e.target.value)}
@@ -1358,7 +1345,7 @@ export default function WorkflowEditorPage({
     <Suspense
       fallback={
         <div className="flex items-center justify-center h-full">
-          <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
+          <Icon name="Loader2" className="w-5 h-5 animate-spin text-muted-foreground" />
         </div>
       }
     >

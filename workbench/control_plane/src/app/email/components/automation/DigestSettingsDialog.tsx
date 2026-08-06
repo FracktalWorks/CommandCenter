@@ -11,8 +11,8 @@
  * via `onSaved` so an embedding screen (AI-Settings) can sync its local copy.
  */
 
+import Icon from "@/components/Icon";
 import { useEffect, useState } from "react";
-import { Check, Loader2 } from "lucide-react";
 import {
   getAssistantSettings, listRules, saveAssistantSettings,
 } from "../../lib/api";
@@ -95,14 +95,14 @@ export function DigestSettingsDialog({
           disabled={saving || !s}
           className="ml-auto flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90 transition-colors disabled:opacity-50"
         >
-          {saving ? <Loader2 className="animate-spin" size={13} /> : <Check size={13} />}
+          {saving ? <Icon name="Loader2" className="animate-spin" size={13} /> : <Icon name="Check" size={13} />}
           Save
         </button>
       }
     >
       {!s ? (
         <div className="flex items-center gap-2 text-xs text-muted-foreground py-4">
-          <Loader2 className="animate-spin" size={14} /> Loading…
+          <Icon name="Loader2" className="animate-spin" size={14} /> Loading…
         </div>
       ) : (
         <div className="space-y-3">

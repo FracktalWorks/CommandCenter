@@ -10,20 +10,8 @@
 // AppShell). Specs: calendar_timeboxing.md, calendar_focus_os.md,
 // calendar_ai_review.md.
 
+import Icon from "@/components/Icon";
 import { useEffect, useMemo, useRef, useState } from "react";
-import {
-  ChevronLeft,
-  ChevronRight,
-  CalendarDays,
-  CalendarPlus,
-  Settings2,
-  AlertTriangle,
-  Wand2,
-  RotateCcw,
-  CalendarClock,
-  ClipboardCheck,
-  Sun,
-} from "lucide-react";
 import {
   apiGetDayState,
   apiSetDayState,
@@ -422,7 +410,7 @@ export function CalendarView() {
     <div className="relative flex h-full min-h-0 flex-col bg-background">
       {/* Header: title, nav, mode toggle */}
       <div className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-3">
-        <CalendarDays className="h-5 w-5 shrink-0 text-primary" />
+        <Icon name="CalendarDays" className="h-5 w-5 shrink-0 text-primary" />
         <h1 className="text-base font-semibold text-foreground">{title}</h1>
         <div className="ml-2 flex items-center gap-0.5">
           <button
@@ -431,7 +419,7 @@ export function CalendarView() {
             onClick={() => step(-1)}
             className="tech-transition rounded-md p-1 text-muted-foreground hover:bg-secondary hover:text-foreground"
           >
-            <ChevronLeft className="h-4 w-4" />
+            <Icon name="ChevronLeft" className="h-4 w-4" />
           </button>
           <button
             type="button"
@@ -446,7 +434,7 @@ export function CalendarView() {
             onClick={() => step(1)}
             className="tech-transition rounded-md p-1 text-muted-foreground hover:bg-secondary hover:text-foreground"
           >
-            <ChevronRight className="h-4 w-4" />
+            <Icon name="ChevronRight" className="h-4 w-4" />
           </button>
         </div>
         {/* Actions: share the row with the title on desktop (ml-auto), but on
@@ -458,7 +446,7 @@ export function CalendarView() {
               title={`${dueSoon.length} unscheduled task(s) due within 2 weeks`}
               className="inline-flex items-center gap-1 whitespace-nowrap rounded-full bg-warning/15 px-2 py-0.5 text-[11px] font-medium text-warning"
             >
-              <AlertTriangle className="h-3 w-3" />
+              <Icon name="AlertTriangle" className="h-3 w-3" />
               {dueSoon.length} due soon
             </span>
           )}
@@ -471,7 +459,7 @@ export function CalendarView() {
               title="Start (or restart) your day — breathe · review · commit the One Thing"
               className="tech-transition inline-flex items-center gap-1.5 rounded-md bg-secondary px-2.5 py-1.5 text-[12px] font-medium text-muted-foreground hover:bg-secondary/70 hover:text-foreground"
             >
-              <Sun className="h-3.5 w-3.5" />
+              <Icon name="Sun" className="h-3.5 w-3.5" />
               <span className="hidden sm:inline">Start day</span>
             </button>
           )}
@@ -482,7 +470,7 @@ export function CalendarView() {
               title="End-of-day review — what got done, what carries forward, estimate accuracy"
               className="tech-transition inline-flex items-center gap-1.5 rounded-md bg-secondary px-2.5 py-1.5 text-[12px] font-medium text-muted-foreground hover:bg-secondary/70 hover:text-foreground"
             >
-              <ClipboardCheck className="h-3.5 w-3.5" />
+              <Icon name="ClipboardCheck" className="h-3.5 w-3.5" />
               <span className="hidden sm:inline">Review</span>
             </button>
           )}
@@ -493,7 +481,7 @@ export function CalendarView() {
               title="Fit what's left: reshuffle today's not-done tasks into the time you have left, and move anything that no longer fits back to your list. Adds no new tasks."
               className="tech-transition inline-flex items-center gap-1.5 rounded-md bg-secondary px-2.5 py-1.5 text-[12px] font-medium text-muted-foreground hover:bg-secondary/70 hover:text-foreground"
             >
-              <CalendarClock className="h-3.5 w-3.5" />
+              <Icon name="CalendarClock" className="h-3.5 w-3.5" />
               <span className="hidden sm:inline">Fit what&apos;s left</span>
             </button>
           )}
@@ -503,7 +491,7 @@ export function CalendarView() {
             title="Rebuild my day: reshuffle what's on your calendar into the time left, trim the overflow back to your list, and fill any remaining room from your Next Actions."
             className="tech-transition inline-flex items-center gap-1.5 rounded-md bg-primary/10 px-2.5 py-1.5 text-[12px] font-medium text-primary hover:bg-primary/20"
           >
-            <Wand2 className="h-3.5 w-3.5" />
+            <Icon name="Wand2" className="h-3.5 w-3.5" />
             <span className="hidden sm:inline">Rebuild my day</span>
           </button>
           <button
@@ -518,7 +506,7 @@ export function CalendarView() {
                 : "text-muted-foreground hover:bg-secondary hover:text-foreground",
             ].join(" ")}
           >
-            <Settings2 className="h-4 w-4" />
+            <Icon name="Settings2" className="h-4 w-4" />
           </button>
           <div className="ml-auto flex rounded-lg bg-secondary p-0.5 text-xs sm:ml-0">
             {(["day", "week", "month"] as Mode[]).map((m) => (
@@ -570,7 +558,7 @@ export function CalendarView() {
           around rituals; the banner invites, it never ambushes. */}
       {startupOffered && !startupOpen && !dayClosed && (
         <div className="flex items-center gap-2 border-b border-border bg-warning/5 px-4 py-2 text-[12px]">
-          <Sun className="h-4 w-4 shrink-0 text-warning" />
+          <Icon name="Sun" className="h-4 w-4 shrink-0 text-warning" />
           <span className="min-w-0 flex-1 text-foreground">
             Start your day — breathe · review · commit the One Thing.
           </span>
@@ -596,7 +584,7 @@ export function CalendarView() {
 
       {overdueCount > 0 && (
         <div className="flex items-center gap-2 border-b border-warning/40 bg-warning/10 px-4 py-2 text-[12px]">
-          <AlertTriangle className="h-4 w-4 shrink-0 text-warning" />
+          <Icon name="AlertTriangle" className="h-4 w-4 shrink-0 text-warning" />
           <span className="min-w-0 flex-1 text-foreground">
             {overdueCount} unfinished task{overdueCount === 1 ? "" : "s"} from
             earlier {overdueCount === 1 ? "is" : "are"} still on your calendar.
@@ -607,7 +595,7 @@ export function CalendarView() {
             title="Clear their times and move them back to your unscheduled list, so you can re-plan them (drag, or Rebuild my day)."
             className="tech-transition inline-flex shrink-0 items-center gap-1.5 rounded-md bg-warning/20 px-2.5 py-1 font-medium text-warning hover:bg-warning/30"
           >
-            <RotateCcw className="h-3.5 w-3.5" />
+            <Icon name="RotateCcw" className="h-3.5 w-3.5" />
             Move to my list
           </button>
         </div>
@@ -697,7 +685,7 @@ export function CalendarView() {
           aria-label="Schedule a task"
           className="tech-transition absolute bottom-4 right-4 z-30 inline-flex items-center gap-1.5 rounded-full bg-primary px-4 py-3 font-semibold text-primary-foreground shadow-lg hover:opacity-90 md:hidden"
         >
-          <CalendarPlus className="h-5 w-5" />
+          <Icon name="CalendarPlus" className="h-5 w-5" />
           {unscheduled.length > 0 && (
             <span className="text-[13px] tabular-nums">{unscheduled.length}</span>
           )}

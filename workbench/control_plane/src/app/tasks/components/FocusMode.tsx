@@ -23,21 +23,8 @@
 // `C` capture hotkey (page.tsx) opens the capture palette on top of the room:
 // a stray thought is one keystroke to the inbox and the timer never stops.
 
+import Icon, { themedIcon, type ThemedIcon } from "@/components/Icon";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-  Check,
-  ChevronRight,
-  Coffee,
-  Footprints,
-  Maximize2,
-  Minimize2,
-  Pause,
-  Play,
-  Plus,
-  StretchHorizontal,
-  Wind,
-  X,
-} from "lucide-react";
 import { useTaskStore } from "../lib/taskStore";
 import { GtdItem } from "../lib/types";
 import { blocksForDay, startOfDay, type Block } from "../lib/scheduling";
@@ -54,11 +41,11 @@ const TIMER_MODES: { key: FocusTimerMode; label: string; work: number | null; br
   { key: "flow", label: "Flow", work: null, brk: 10 },
 ];
 
-const BREAK_KINDS: { key: string; label: string; icon: typeof Wind }[] = [
-  { key: "walk", label: "Walk", icon: Footprints },
-  { key: "breathe", label: "Breathe", icon: Wind },
-  { key: "stretch", label: "Stretch", icon: StretchHorizontal },
-  { key: "coffee", label: "Coffee", icon: Coffee },
+const BREAK_KINDS: { key: string; label: string; icon: ThemedIcon }[] = [
+  { key: "walk", label: "Walk", icon: themedIcon("Footprints") },
+  { key: "breathe", label: "Breathe", icon: themedIcon("Wind") },
+  { key: "stretch", label: "Stretch", icon: themedIcon("StretchHorizontal") },
+  { key: "coffee", label: "Coffee", icon: themedIcon("Coffee") },
 ];
 
 /** mm:ss for the big countdown. */
@@ -399,9 +386,9 @@ function FocusRoom({ itemId }: { itemId: string }) {
               className="tech-transition shrink-0 rounded-md p-1.5 text-muted-foreground hover:bg-secondary hover:text-foreground"
             >
               {pausedAt != null ? (
-                <Play className="h-3.5 w-3.5" fill="currentColor" />
+                <Icon name="Play" className="h-3.5 w-3.5" fill="currentColor" />
               ) : (
-                <Pause className="h-3.5 w-3.5" />
+                <Icon name="Pause" className="h-3.5 w-3.5" />
               )}
             </button>
           )}
@@ -412,7 +399,7 @@ function FocusRoom({ itemId }: { itemId: string }) {
             title="Expand"
             className="tech-transition shrink-0 rounded-md p-1.5 text-muted-foreground hover:bg-secondary hover:text-foreground"
           >
-            <Maximize2 className="h-3.5 w-3.5" />
+            <Icon name="Maximize2" className="h-3.5 w-3.5" />
           </button>
           <button
             type="button"
@@ -421,7 +408,7 @@ function FocusRoom({ itemId }: { itemId: string }) {
             title="End focus — stops the timer"
             className="tech-transition shrink-0 rounded-md p-1.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
           >
-            <X className="h-3.5 w-3.5" />
+            <Icon name="X" className="h-3.5 w-3.5" />
           </button>
         </div>
       </div>
@@ -460,7 +447,7 @@ function FocusRoom({ itemId }: { itemId: string }) {
           title="Minimize (esc) — the timer keeps running in a corner dock"
           className="tech-transition ml-auto rounded-md p-1.5 text-muted-foreground hover:bg-secondary hover:text-foreground"
         >
-          <Minimize2 className="h-4 w-4" />
+          <Icon name="Minimize2" className="h-4 w-4" />
         </button>
         <button
           type="button"
@@ -469,7 +456,7 @@ function FocusRoom({ itemId }: { itemId: string }) {
           title="End focus — stops the timer and closes this"
           className="tech-transition rounded-md p-1.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
         >
-          <X className="h-4 w-4" />
+          <Icon name="X" className="h-4 w-4" />
         </button>
       </div>
 
@@ -478,7 +465,7 @@ function FocusRoom({ itemId }: { itemId: string }) {
           /* ── completion screen — celebrate, then bridge to what's next ── */
           <>
             <div className="flex h-14 w-14 items-center justify-center rounded-full bg-success/15">
-              <Check className="h-7 w-7 text-success" strokeWidth={3} />
+              <Icon name="Check" className="h-7 w-7 text-success" strokeWidth={3} />
             </div>
             <h1 className="mt-4 max-w-lg text-lg font-semibold text-foreground">
               {item.title}
@@ -531,7 +518,7 @@ function FocusRoom({ itemId }: { itemId: string }) {
                 className="tech-transition mt-4 inline-flex items-center gap-1.5 rounded-md bg-primary/10 px-3 py-2 text-[12px] font-medium text-primary hover:bg-primary/20"
               >
                 Next · {nextBlock.item.title} at {fmtClock(nextBlock.start)}
-                <ChevronRight className="h-3.5 w-3.5" />
+                <Icon name="ChevronRight" className="h-3.5 w-3.5" />
               </button>
             )}
             <button
@@ -645,7 +632,7 @@ function FocusRoom({ itemId }: { itemId: string }) {
                           : "border-muted-foreground/50 text-transparent",
                       ].join(" ")}
                     >
-                      <Check className="h-2.5 w-2.5" strokeWidth={3} />
+                      <Icon name="Check" className="h-2.5 w-2.5" strokeWidth={3} />
                     </span>
                     <span
                       className={
@@ -670,11 +657,11 @@ function FocusRoom({ itemId }: { itemId: string }) {
               >
                 {pausedAt != null ? (
                   <>
-                    <Play className="h-3.5 w-3.5" fill="currentColor" /> Resume
+                    <Icon name="Play" className="h-3.5 w-3.5" fill="currentColor" /> Resume
                   </>
                 ) : (
                   <>
-                    <Pause className="h-3.5 w-3.5" /> Pause
+                    <Icon name="Pause" className="h-3.5 w-3.5" /> Pause
                   </>
                 )}
               </button>
@@ -683,7 +670,7 @@ function FocusRoom({ itemId }: { itemId: string }) {
                 onClick={complete}
                 className="tech-transition inline-flex items-center gap-1.5 rounded-md bg-success px-4 py-2 text-[12px] font-semibold text-success-foreground hover:opacity-90"
               >
-                <Check className="h-3.5 w-3.5" strokeWidth={3} />
+                <Icon name="Check" className="h-3.5 w-3.5" strokeWidth={3} />
                 Done
               </button>
               {item.scheduledStart && (
@@ -693,7 +680,7 @@ function FocusRoom({ itemId }: { itemId: string }) {
                   title="Running over? Extend this block 15m — the flexible rest of today shifts with it. No guilt, the plan reflows."
                   className="tech-transition inline-flex items-center gap-1 rounded-md bg-secondary px-3 py-2 text-[12px] font-medium text-muted-foreground hover:text-foreground"
                 >
-                  <Plus className="h-3.5 w-3.5" />
+                  <Icon name="Plus" className="h-3.5 w-3.5" />
                   15 min
                 </button>
               )}

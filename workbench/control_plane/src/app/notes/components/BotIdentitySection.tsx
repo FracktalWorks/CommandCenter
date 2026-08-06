@@ -24,8 +24,8 @@
  *    responses from the user, so they must never collapse into "sign-in failed".
  */
 
+import Icon from "@/components/Icon";
 import { useCallback, useEffect, useState } from "react";
-import { AlertTriangle, CheckCircle2, KeyRound, Loader2, Monitor } from "lucide-react";
 import { getBotIdentity, signInBot, signInBotInteractive } from "../lib/api";
 import type { BotIdentity } from "../lib/types";
 
@@ -133,7 +133,7 @@ export default function BotIdentitySection() {
   if (loading) {
     return (
       <div className="flex items-center gap-2 text-xs text-muted-foreground">
-        <Loader2 className="h-3.5 w-3.5 animate-spin" /> Checking the notetaker&apos;s account…
+        <Icon name="Loader2" className="h-3.5 w-3.5 animate-spin" /> Checking the notetaker&apos;s account…
       </div>
     );
   }
@@ -145,19 +145,19 @@ export default function BotIdentitySection() {
   return (
     <section>
       <h3 className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-        <KeyRound className="h-3.5 w-3.5" /> Notetaker account
+        <Icon name="KeyRound" className="h-3.5 w-3.5" /> Notetaker account
       </h3>
 
       {/* Status first — it's the fact that decides whether joining can work. */}
       {id.unreachable ? (
         <p className="mb-3 flex items-start gap-1.5 rounded-lg border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
-          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          <Icon name="AlertTriangle" className="mt-0.5 h-3.5 w-3.5 shrink-0" />
           Couldn&apos;t reach the notetaker service, so its sign-in state is
           unknown. It may be restarting.
         </p>
       ) : signedIn ? (
         <p className="mb-3 flex items-start gap-1.5 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs">
-          <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-500" />
+          <Icon name="CheckCircle2" className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-500" />
           <span>
             Signed in as <strong>{id.email || "a Google account"}</strong>. Put
             this address on a calendar invite and the notetaker joins on its own,
@@ -166,7 +166,7 @@ export default function BotIdentitySection() {
         </p>
       ) : (
         <p className="mb-3 flex items-start gap-1.5 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs">
-          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-500" />
+          <Icon name="AlertTriangle" className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-500" />
           <span>
             Not signed in, so Google will decline the notetaker — it refuses
             participants that aren&apos;t signed in, and being in the call
@@ -225,7 +225,7 @@ export default function BotIdentitySection() {
               disabled={busy !== null || !email.trim() || !password}
               className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground disabled:opacity-50"
             >
-              {busy === "scripted" && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+              {busy === "scripted" && <Icon name="Loader2" className="h-3.5 w-3.5 animate-spin" />}
               {signedIn ? "Sign in as someone else" : "Sign in"}
             </button>
             <button
@@ -235,9 +235,9 @@ export default function BotIdentitySection() {
               title="Opens Google's sign-in page in the notetaker's own browser so you can complete 2FA over VNC"
             >
               {busy === "interactive" ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                <Icon name="Loader2" className="h-3.5 w-3.5 animate-spin" />
               ) : (
-                <Monitor className="h-3.5 w-3.5" />
+                <Icon name="Monitor" className="h-3.5 w-3.5" />
               )}
               Sign in by hand (2FA)
             </button>

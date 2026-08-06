@@ -1,7 +1,7 @@
 "use client";
 
+import Icon from "@/components/Icon";
 import { useEffect } from "react";
-import { X } from "lucide-react";
 import { useTaskStore } from "../lib/taskStore";
 import { TaskDetail } from "./ItemDetail";
 
@@ -48,7 +48,7 @@ export function TaskFocusModal() {
           aria-label="Close"
           className="tech-transition absolute right-3 top-3 z-10 rounded-md p-1.5 text-muted-foreground hover:bg-secondary hover:text-foreground"
         >
-          <X className="h-4 w-4" />
+          <Icon name="X" className="h-4 w-4" />
         </button>
         <div className="min-h-0 flex-1 overflow-y-auto">
           <TaskDetail

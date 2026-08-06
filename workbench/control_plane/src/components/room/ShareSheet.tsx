@@ -19,17 +19,8 @@
  * mysterious failure three turns later.
  */
 
+import Icon from "@/components/Icon";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-  AlertTriangle,
-  Check,
-  Globe,
-  Loader2,
-  Search,
-  Shield,
-  Users,
-  X,
-} from "lucide-react";
 import {
   addParticipant,
   capabilityLabel,
@@ -123,7 +114,7 @@ export function ShareSheet({
         onClick={(e) => e.stopPropagation()}
       >
         <header className="flex items-center gap-3 border-b border-border px-5 py-4">
-          <Users className="h-4 w-4 text-primary" />
+          <Icon name="Users" className="h-4 w-4 text-primary" />
           <div className="flex-1">
             <h2 className="text-sm font-semibold text-foreground">
               Share this conversation
@@ -137,14 +128,14 @@ export function ShareSheet({
             className="rounded-md p-1 text-muted-foreground hover:bg-secondary hover:text-foreground"
             aria-label="Close"
           >
-            <X className="h-4 w-4" />
+            <Icon name="X" className="h-4 w-4" />
           </button>
         </header>
 
         <div className="max-h-[70vh] overflow-y-auto px-5 py-4">
           {/* ── Who ──────────────────────────────────────────────────────── */}
           <div className="relative">
-            <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+            <Icon name="Search" className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
             <input
               ref={inputRef}
               value={query}
@@ -190,7 +181,7 @@ export function ShareSheet({
                   >
                     {d.kind === "group" ? (
                       <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-secondary text-muted-foreground">
-                        <Users className="h-3 w-3" />
+                        <Icon name="Users" className="h-3 w-3" />
                       </span>
                     ) : (
                       <PersonAvatar
@@ -210,7 +201,7 @@ export function ShareSheet({
                       </span>
                     </span>
                     {busy === d.subject && (
-                      <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
+                      <Icon name="Loader2" className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
                     )}
                   </button>
                 </li>
@@ -245,9 +236,9 @@ export function ShareSheet({
                   ) : (
                     <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-secondary text-muted-foreground">
                       {p.kind === "org" ? (
-                        <Globe className="h-3 w-3" />
+                        <Icon name="Globe" className="h-3 w-3" />
                       ) : (
-                        <Users className="h-3 w-3" />
+                        <Icon name="Users" className="h-3 w-3" />
                       )}
                     </span>
                   )}
@@ -301,7 +292,7 @@ export function ShareSheet({
                       title={isYou ? "Leave this room" : "Remove"}
                       className="rounded-md p-1 text-muted-foreground hover:bg-secondary hover:text-destructive"
                     >
-                      <X className="h-3.5 w-3.5" />
+                      <Icon name="X" className="h-3.5 w-3.5" />
                     </button>
                   )}
                 </li>
@@ -341,7 +332,7 @@ export function ShareSheet({
                   >
                     <span className="flex items-center gap-1.5 font-medium">
                       {room.settings.historyVisibility === value && (
-                        <Check className="h-3 w-3 text-primary" />
+                        <Icon name="Check" className="h-3 w-3 text-primary" />
                       )}
                       {label}
                     </span>
@@ -358,20 +349,20 @@ export function ShareSheet({
           <div className="rounded-lg border border-border bg-background/60 p-3">
             {room.cap.degraded ? (
               <p className="flex items-start gap-2 text-xs text-muted-foreground">
-                <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning" />
+                <Icon name="AlertTriangle" className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning" />
                 Could not work out what this room can reach right now. Treat the
                 list as unknown rather than as unrestricted.
               </p>
             ) : cappedCount === 0 ? (
               <p className="flex items-start gap-2 text-xs text-muted-foreground">
-                <Shield className="mt-0.5 h-3.5 w-3.5 shrink-0 text-success" />
+                <Icon name="Shield" className="mt-0.5 h-3.5 w-3.5 shrink-0 text-success" />
                 Everyone here holds the same access, so the agents lose nothing
                 by this conversation being shared.
               </p>
             ) : (
               <>
                 <p className="flex items-start gap-2 text-xs text-foreground">
-                  <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning" />
+                  <Icon name="AlertTriangle" className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning" />
                   A shared run acts with what <em>everyone</em> here holds, so
                   these are switched off in this conversation:
                 </p>
@@ -401,7 +392,7 @@ export function ShareSheet({
           </div>
 
           <p className="mt-4 flex items-start gap-2 text-[11px] text-faint">
-            <Shield className="mt-0.5 h-3 w-3 shrink-0" />
+            <Icon name="Shield" className="mt-0.5 h-3 w-3 shrink-0" />
             Your private memory is never used in a shared conversation, and no
             credential or key is ever visible to anyone here.
           </p>

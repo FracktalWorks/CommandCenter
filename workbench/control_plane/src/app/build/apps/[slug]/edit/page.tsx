@@ -11,6 +11,7 @@
  * (onActivity → debounce → refetch + POST /sync), and a fallback poll.
  */
 
+import Icon from "@/components/Icon";
 import {
   Suspense,
   use,
@@ -23,34 +24,6 @@ import {
 import { useRouter, useSearchParams } from "next/navigation";
 import { useTheme } from "next-themes";
 import Editor from "@monaco-editor/react";
-import {
-  AlertTriangle,
-  ArrowLeft,
-  CheckCircle2,
-  ChevronDown,
-  ChevronRight,
-  Clock,
-  FileCode,
-  FlaskConical,
-  Folder,
-  FolderOpen,
-  History,
-  Loader2,
-  Lock,
-  Monitor,
-  Play,
-  Plug,
-  Plus,
-  RefreshCw,
-  Rocket,
-  Save,
-  Smartphone,
-  Sparkles,
-  Trash2,
-  Wrench,
-  X,
-  XCircle,
-} from "lucide-react";
 import AgentChat from "@/components/AgentChat";
 import SandboxedHtml from "@/components/SandboxedHtml";
 import Tabs from "@/components/Tabs";
@@ -132,7 +105,7 @@ function CheckpointsPanel({
   if (checkpoints === null) {
     return (
       <div className="px-2 py-1.5">
-        <Loader2 className="w-3.5 h-3.5 animate-spin text-muted-foreground" />
+        <Icon name="Loader2" className="w-3.5 h-3.5 animate-spin text-muted-foreground" />
       </div>
     );
   }
@@ -184,7 +157,7 @@ function CheckpointsPanel({
                 className="text-[10px] rounded-md bg-primary px-2 py-1 font-medium text-primary-foreground hover:opacity-90 tech-transition disabled:opacity-50 flex items-center gap-1"
               >
                 {restoringSha === c.sha && (
-                  <Loader2 className="w-3 h-3 animate-spin" />
+                  <Icon name="Loader2" className="w-3 h-3 animate-spin" />
                 )}
                 Confirm
               </button>
@@ -321,9 +294,9 @@ function FileTreeView({
               className="w-full flex items-center gap-1.5 px-2 py-1 rounded-lg text-left font-mono text-[11.5px] text-muted-foreground hover:bg-secondary tech-transition"
             >
               {collapsed ? (
-                <Folder className="w-3.5 h-3.5 shrink-0" />
+                <Icon name="Folder" className="w-3.5 h-3.5 shrink-0" />
               ) : (
-                <FolderOpen className="w-3.5 h-3.5 shrink-0" />
+                <Icon name="FolderOpen" className="w-3.5 h-3.5 shrink-0" />
               )}
               <span className="truncate">{name}</span>
             </button>
@@ -357,7 +330,7 @@ function FileTreeView({
             title={`${f.path} · ${formatBytes(f.size)}`}
             className="flex-1 min-w-0 flex items-center gap-2 px-2 py-1.5 text-left font-mono text-[11.5px]"
           >
-            <FileCode className="w-3.5 h-3.5 shrink-0" />
+            <Icon name="FileCode" className="w-3.5 h-3.5 shrink-0" />
             <span className="truncate">{f.path.split("/").pop()}</span>
           </button>
           <button
@@ -365,7 +338,7 @@ function FileTreeView({
             title={`Delete ${f.path}`}
             className="p-1 mr-1 rounded opacity-0 group-hover:opacity-100 hover:text-destructive tech-transition shrink-0"
           >
-            <Trash2 className="w-3 h-3" />
+            <Icon name="Trash2" className="w-3 h-3" />
           </button>
         </div>
       ))}
@@ -633,7 +606,7 @@ function PublishModal({
       >
         <div className="w-full max-w-md rounded-2xl border border-border bg-card shadow-lg p-5 flex flex-col items-center gap-3 text-center">
           <div className="w-11 h-11 rounded-xl bg-warning/10 flex items-center justify-center">
-            <Clock className="w-5 h-5 text-warning" />
+            <Icon name="Clock" className="w-5 h-5 text-warning" />
           </div>
           <div>
             <h2 className="text-base font-bold text-foreground">
@@ -665,7 +638,7 @@ function PublishModal({
       >
         <div className="w-full max-w-md rounded-2xl border border-border bg-card shadow-lg p-5 flex flex-col items-center gap-3 text-center">
           <div className="w-11 h-11 rounded-xl bg-warning/10 flex items-center justify-center">
-            <AlertTriangle className="w-5 h-5 text-warning" />
+            <Icon name="AlertTriangle" className="w-5 h-5 text-warning" />
           </div>
           <div>
             <h2 className="text-base font-bold text-foreground">
@@ -777,7 +750,7 @@ function PublishModal({
                         aria-label={`Remove ${email}`}
                         className="rounded-full p-0.5 text-muted-foreground hover:text-foreground tech-transition"
                       >
-                        <X className="w-3 h-3" />
+                        <Icon name="X" className="w-3 h-3" />
                       </button>
                     </span>
                   ))}
@@ -809,9 +782,9 @@ function PublishModal({
             }`}
           >
             {testStatus.passed === testStatus.total ? (
-              <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+              <Icon name="CheckCircle2" className="w-3.5 h-3.5 shrink-0" />
             ) : (
-              <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+              <Icon name="AlertTriangle" className="w-3.5 h-3.5 shrink-0" />
             )}
             <span>
               {testStatus.passed === testStatus.total
@@ -827,7 +800,7 @@ function PublishModal({
 
         {error && (
           <div className="flex items-start gap-1.5 text-xs text-destructive whitespace-pre-line">
-            <X className="w-3.5 h-3.5 shrink-0 mt-0.5" /> <span>{error}</span>
+            <Icon name="X" className="w-3.5 h-3.5 shrink-0 mt-0.5" /> <span>{error}</span>
           </div>
         )}
 
@@ -844,9 +817,9 @@ function PublishModal({
             className="rounded-lg bg-primary px-3 sm:px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 tech-transition flex items-center gap-1.5 disabled:opacity-50"
           >
             {busy ? (
-              <Loader2 className="w-4 h-4 animate-spin" />
+              <Icon name="Loader2" className="w-4 h-4 animate-spin" />
             ) : (
-              <Rocket className="w-4 h-4" />
+              <Icon name="Rocket" className="w-4 h-4" />
             )}
             Publish
           </button>
@@ -1672,7 +1645,7 @@ function Workshop({ slug }: { slug: string }) {
   if (!app) {
     return (
       <div className="flex flex-col items-center justify-center h-full gap-3">
-        <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
+        <Icon name="Loader2" className="w-5 h-5 animate-spin text-muted-foreground" />
         <p className="text-sm text-muted-foreground">Opening Workshop…</p>
       </div>
     );
@@ -1686,7 +1659,7 @@ function Workshop({ slug }: { slug: string }) {
           onClick={() => router.push("/build/apps")}
           className="flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-sm text-muted-foreground hover:text-foreground hover:bg-secondary tech-transition"
         >
-          <ArrowLeft className="w-4 h-4" /> Apps
+          <Icon name="ArrowLeft" className="w-4 h-4" /> Apps
         </button>
         <div className="flex items-center gap-2 min-w-0">
           <div className="w-7 h-7 rounded-lg border border-border bg-gradient-to-br from-primary/20 to-accent/15 flex items-center justify-center text-sm shrink-0">
@@ -1711,7 +1684,7 @@ function Workshop({ slug }: { slug: string }) {
                 ? [
                     { id: "preview", label: "Preview" },
                     { id: "code", label: "Code" },
-                    { id: "tests", label: "Tests", icon: FlaskConical },
+                    { id: "tests", label: "Tests", icon: "FlaskConical" },
                   ]
                 : [{ id: "preview", label: "Preview" }]
             }
@@ -1740,7 +1713,7 @@ function Workshop({ slug }: { slug: string }) {
               : "text-muted-foreground hover:bg-secondary"
           }`}
         >
-          <Wrench className="w-3.5 h-3.5" />
+          <Icon name="Wrench" className="w-3.5 h-3.5" />
           <span className="hidden sm:inline">
             {advanced ? "Advanced" : "Simple"}
           </span>
@@ -1757,7 +1730,7 @@ function Workshop({ slug }: { slug: string }) {
                 : "text-muted-foreground hover:bg-secondary"
             }`}
           >
-            <History className="w-4 h-4" />
+            <Icon name="History" className="w-4 h-4" />
           </button>
 
           {/* Desktop: a popover anchored to this button. On mobile this
@@ -1831,7 +1804,7 @@ function Workshop({ slug }: { slug: string }) {
           onClick={() => setShowPublish(true)}
           className="rounded-lg bg-primary px-3 sm:px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 tech-transition flex items-center gap-1.5 shrink-0"
         >
-          <Rocket className="w-4 h-4" /> Publish
+          <Icon name="Rocket" className="w-4 h-4" /> Publish
         </button>
       </div>
 
@@ -1856,7 +1829,7 @@ function Workshop({ slug }: { slug: string }) {
                   title="Reload preview"
                   className="p-1.5 rounded-lg border border-border text-muted-foreground hover:bg-secondary tech-transition"
                 >
-                  <RefreshCw
+                  <Icon name="RefreshCw"
                     className={`w-3.5 h-3.5 ${previewBusy ? "animate-spin" : ""}`}
                   />
                 </button>
@@ -1882,7 +1855,7 @@ function Workshop({ slug }: { slug: string }) {
                         : "text-muted-foreground hover:text-foreground"
                     }`}
                   >
-                    <Monitor className="w-3.5 h-3.5" />
+                    <Icon name="Monitor" className="w-3.5 h-3.5" />
                   </button>
                   <button
                     onClick={() => setPreviewDevice("mobile")}
@@ -1893,7 +1866,7 @@ function Workshop({ slug }: { slug: string }) {
                         : "text-muted-foreground hover:text-foreground"
                     }`}
                   >
-                    <Smartphone className="w-3.5 h-3.5" />
+                    <Icon name="Smartphone" className="w-3.5 h-3.5" />
                   </button>
                 </div>
                 <span className="font-mono text-[10px] text-muted-foreground hidden sm:block">
@@ -1915,7 +1888,7 @@ function Workshop({ slug }: { slug: string }) {
                   )
                 ) : (
                   <div className="flex flex-col items-center justify-center flex-1 gap-3 text-center px-6">
-                    <Sparkles className="w-6 h-6 text-muted-foreground/50" />
+                    <Icon name="Sparkles" className="w-6 h-6 text-muted-foreground/50" />
                     <p className="text-sm font-medium text-foreground">
                       No preview yet
                     </p>
@@ -1935,9 +1908,9 @@ function Workshop({ slug }: { slug: string }) {
                     className="flex items-center gap-1.5 font-mono text-[11px] text-muted-foreground hover:text-foreground tech-transition"
                   >
                     {consoleOpen ? (
-                      <ChevronDown className="w-3 h-3 shrink-0" />
+                      <Icon name="ChevronDown" className="w-3 h-3 shrink-0" />
                     ) : (
-                      <ChevronRight className="w-3 h-3 shrink-0" />
+                      <Icon name="ChevronRight" className="w-3 h-3 shrink-0" />
                     )}
                     {consoleEvents.length === 0 ? (
                       <span className="text-success">Console · clean</span>
@@ -2004,7 +1977,7 @@ function Workshop({ slug }: { slug: string }) {
                     title="New file"
                     className="p-1 rounded hover:bg-secondary text-muted-foreground hover:text-foreground tech-transition shrink-0"
                   >
-                    <Plus className="w-3.5 h-3.5" />
+                    <Icon name="Plus" className="w-3.5 h-3.5" />
                   </button>
                 </div>
                 {showNewFile && (
@@ -2079,13 +2052,13 @@ function Workshop({ slug }: { slug: string }) {
                       title="Files"
                       className="flex items-center gap-1.5 text-[11px] rounded-md border border-border px-2 py-1 text-muted-foreground hover:text-foreground hover:border-primary/30 tech-transition shrink-0"
                     >
-                      <Folder className="w-3 h-3" />
+                      <Icon name="Folder" className="w-3 h-3" />
                       Files
                     </button>
                   )}
                   {selectedPath ? (
                     <>
-                      <FileCode className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+                      <Icon name="FileCode" className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
                       <span className="font-mono text-[11.5px] text-foreground truncate">
                         {selectedPath}
                       </span>
@@ -2104,7 +2077,7 @@ function Workshop({ slug }: { slug: string }) {
                   <div className="flex-1" />
                   {buildStatus === "building" && (
                     <span className="flex items-center gap-1.5 text-[11px] text-muted-foreground shrink-0">
-                      <Loader2 className="w-3 h-3 animate-spin" /> Building…
+                      <Icon name="Loader2" className="w-3 h-3 animate-spin" /> Building…
                     </span>
                   )}
                   {selectedPath && (
@@ -2115,9 +2088,9 @@ function Workshop({ slug }: { slug: string }) {
                       className="flex items-center gap-1.5 text-[11px] rounded-md border border-border px-2 py-1 text-muted-foreground hover:text-foreground hover:border-primary/30 tech-transition disabled:opacity-40 shrink-0"
                     >
                       {savingFile ? (
-                        <Loader2 className="w-3 h-3 animate-spin" />
+                        <Icon name="Loader2" className="w-3 h-3 animate-spin" />
                       ) : (
-                        <Save className="w-3 h-3" />
+                        <Icon name="Save" className="w-3 h-3" />
                       )}
                       Save
                     </button>
@@ -2126,17 +2099,17 @@ function Workshop({ slug }: { slug: string }) {
                 <div className="flex-1 min-h-0">
                   {selectedPath === null ? (
                     <div className="flex flex-col items-center justify-center h-full gap-2 text-center px-6">
-                      <FileCode className="w-6 h-6 text-muted-foreground/50" />
+                      <Icon name="FileCode" className="w-6 h-6 text-muted-foreground/50" />
                       <p className="text-xs text-muted-foreground max-w-xs">
                         Select a file to edit, or use{" "}
-                        <Plus className="w-3 h-3 inline" /> to create one.
+                        <Icon name="Plus" className="w-3 h-3 inline" /> to create one.
                         Uploaded assets (via the chat&apos;s attach button)
                         land under <code>inputs/</code>.
                       </p>
                     </div>
                   ) : editedContent === null ? (
                     <div className="p-4">
-                      <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
+                      <Icon name="Loader2" className="w-4 h-4 animate-spin text-muted-foreground" />
                     </div>
                   ) : (
                     <Editor
@@ -2157,7 +2130,7 @@ function Workshop({ slug }: { slug: string }) {
                 </div>
                 {buildError && (
                   <div className="flex items-start gap-2 px-3 py-2 border-t border-border bg-destructive/5 text-[11px] text-destructive shrink-0">
-                    <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                    <Icon name="AlertTriangle" className="w-3.5 h-3.5 shrink-0 mt-0.5" />
                     <pre className="whitespace-pre-wrap break-words">
                       {buildError}
                     </pre>
@@ -2183,7 +2156,7 @@ function Workshop({ slug }: { slug: string }) {
                         onClick={() => deleteFile(deletePath)}
                         className="flex items-center gap-1.5 text-xs rounded-md bg-destructive px-3 py-1.5 font-medium text-destructive-foreground hover:opacity-90 tech-transition"
                       >
-                        <Trash2 className="w-3 h-3" /> Delete
+                        <Icon name="Trash2" className="w-3 h-3" /> Delete
                       </button>
                     </div>
                   </div>
@@ -2194,7 +2167,7 @@ function Workshop({ slug }: { slug: string }) {
             /* Tests — empty state. Authoring stays conversational (RFC
                §4.9) — no form/editor here, just a nudge toward chat. */
             <div className="flex flex-col items-center justify-center flex-1 gap-3 text-center px-6">
-              <FlaskConical className="w-6 h-6 text-muted-foreground/50" />
+              <Icon name="FlaskConical" className="w-6 h-6 text-muted-foreground/50" />
               <p className="text-sm font-medium text-foreground">
                 No test scenarios yet
               </p>
@@ -2218,9 +2191,9 @@ function Workshop({ slug }: { slug: string }) {
                   className="flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground hover:border-primary/30 tech-transition disabled:opacity-50 shrink-0"
                 >
                   {runningTestIds.size > 0 ? (
-                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    <Icon name="Loader2" className="w-3.5 h-3.5 animate-spin" />
                   ) : (
-                    <Play className="w-3.5 h-3.5" />
+                    <Icon name="Play" className="w-3.5 h-3.5" />
                   )}
                   Run all
                 </button>
@@ -2250,9 +2223,9 @@ function Workshop({ slug }: { slug: string }) {
                           className="flex items-center gap-1.5 flex-1 min-w-0 text-left"
                         >
                           {expanded ? (
-                            <ChevronDown className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+                            <Icon name="ChevronDown" className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
                           ) : (
-                            <ChevronRight className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+                            <Icon name="ChevronRight" className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
                           )}
                           <span className="text-sm text-foreground truncate">
                             {scenario.name}
@@ -2280,9 +2253,9 @@ function Workshop({ slug }: { slug: string }) {
                           className="flex items-center gap-1 rounded-md border border-border px-2 py-1 text-[10px] text-muted-foreground hover:text-foreground hover:border-primary/30 tech-transition disabled:opacity-50 shrink-0"
                         >
                           {running ? (
-                            <Loader2 className="w-3 h-3 animate-spin" />
+                            <Icon name="Loader2" className="w-3 h-3 animate-spin" />
                           ) : (
-                            <Play className="w-3 h-3" />
+                            <Icon name="Play" className="w-3 h-3" />
                           )}
                           Run
                         </button>
@@ -2295,7 +2268,7 @@ function Workshop({ slug }: { slug: string }) {
                             </p>
                           ) : result.passed ? (
                             <div className="flex items-center gap-1.5 text-success">
-                              <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                              <Icon name="CheckCircle2" className="w-3.5 h-3.5 shrink-0" />
                               All {result.steps.length} steps and{" "}
                               {result.assertions.length} assertions passed.
                             </div>
@@ -2314,7 +2287,7 @@ function Workshop({ slug }: { slug: string }) {
                                     key={`step-${i}`}
                                     className="flex items-start gap-1.5"
                                   >
-                                    <XCircle className="w-3 h-3 text-destructive shrink-0 mt-0.5" />
+                                    <Icon name="XCircle" className="w-3 h-3 text-destructive shrink-0 mt-0.5" />
                                     <span className="text-destructive break-words">
                                       {describeStep(s.step)}
                                       {s.error ? `: ${s.error}` : ""}
@@ -2328,7 +2301,7 @@ function Workshop({ slug }: { slug: string }) {
                                     key={`assertion-${i}`}
                                     className="flex items-start gap-1.5"
                                   >
-                                    <XCircle className="w-3 h-3 text-destructive shrink-0 mt-0.5" />
+                                    <Icon name="XCircle" className="w-3 h-3 text-destructive shrink-0 mt-0.5" />
                                     <span className="text-destructive break-words">
                                       {describeAssertion(a.assertion)} — got{" "}
                                       {JSON.stringify(a.actual)}
@@ -2338,7 +2311,7 @@ function Workshop({ slug }: { slug: string }) {
                                 ))}
                               {result.error && (
                                 <div className="flex items-start gap-1.5">
-                                  <XCircle className="w-3 h-3 text-destructive shrink-0 mt-0.5" />
+                                  <Icon name="XCircle" className="w-3 h-3 text-destructive shrink-0 mt-0.5" />
                                   <span className="text-destructive break-words">
                                     {result.error}
                                   </span>
@@ -2363,7 +2336,7 @@ function Workshop({ slug }: { slug: string }) {
           }`}
         >
           <div className="flex items-center gap-2 px-4 h-10 border-b border-border shrink-0">
-            <Sparkles className="w-4 h-4 text-accent" />
+            <Icon name="Sparkles" className="w-4 h-4 text-accent" />
             <div className="min-w-0">
               <div className="text-xs font-semibold text-foreground">
                 Build chat
@@ -2383,7 +2356,7 @@ function Workshop({ slug }: { slug: string }) {
                   key={scope}
                   className="flex items-start gap-2.5 rounded-lg border border-border bg-secondary px-3 py-2.5"
                 >
-                  <Plug className="w-4 h-4 text-primary shrink-0 mt-0.5" />
+                  <Icon name="Plug" className="w-4 h-4 text-primary shrink-0 mt-0.5" />
                   <div className="min-w-0 flex-1">
                     <p className="text-[12px] font-semibold text-foreground leading-snug">
                       New capability requested:{" "}
@@ -2401,7 +2374,7 @@ function Workshop({ slug }: { slug: string }) {
                     aria-label="Dismiss"
                     className="shrink-0 p-0.5 rounded text-muted-foreground hover:text-foreground tech-transition"
                   >
-                    <X className="w-3.5 h-3.5" />
+                    <Icon name="X" className="w-3.5 h-3.5" />
                   </button>
                 </div>
               ))}
@@ -2423,7 +2396,7 @@ function Workshop({ slug }: { slug: string }) {
                     key={result.scenarioId}
                     className="flex items-start gap-2.5 rounded-lg border border-border bg-secondary px-3 py-2.5"
                   >
-                    <FlaskConical className="w-4 h-4 text-destructive shrink-0 mt-0.5" />
+                    <Icon name="FlaskConical" className="w-4 h-4 text-destructive shrink-0 mt-0.5" />
                     <div className="min-w-0 flex-1">
                       <p className="text-[12px] font-semibold text-foreground leading-snug">
                         Test failing:{" "}
@@ -2446,7 +2419,7 @@ function Workshop({ slug }: { slug: string }) {
                       aria-label="Dismiss"
                       className="shrink-0 p-0.5 rounded text-muted-foreground hover:text-foreground tech-transition"
                     >
-                      <X className="w-3.5 h-3.5" />
+                      <Icon name="X" className="w-3.5 h-3.5" />
                     </button>
                   </div>
                 );
@@ -2457,7 +2430,7 @@ function Workshop({ slug }: { slug: string }) {
           <div className="flex-1 min-h-0">
             {!app.workspace_path ? (
               <div className="flex flex-col items-center justify-center h-full gap-3 px-6 text-center">
-                <Lock className="w-5 h-5 text-muted-foreground/60" />
+                <Icon name="Lock" className="w-5 h-5 text-muted-foreground/60" />
                 <p className="text-sm font-medium text-foreground">Read-only</p>
                 <p className="text-xs text-muted-foreground max-w-[16rem]">
                   You can browse this app&apos;s preview and code, but only its
@@ -2478,7 +2451,7 @@ function Workshop({ slug }: { slug: string }) {
               />
             ) : (
               <div className="flex items-center justify-center h-full">
-                <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
+                <Icon name="Loader2" className="w-4 h-4 animate-spin text-muted-foreground" />
               </div>
             )}
           </div>
@@ -2506,7 +2479,7 @@ function Workshop({ slug }: { slug: string }) {
       {pendingConfirm && (
         <div className="fixed bottom-5 right-5 z-40 w-[360px] rounded-2xl border border-border bg-popover shadow-lg p-3.5 flex flex-col gap-2.5">
           <div className="flex items-start gap-2.5">
-            <AlertTriangle className="w-4 h-4 text-warning shrink-0 mt-0.5" />
+            <Icon name="AlertTriangle" className="w-4 h-4 text-warning shrink-0 mt-0.5" />
             <div className="min-w-0">
               <p className="text-[12.5px] font-semibold text-foreground leading-snug">
                 Preview wants to use{" "}
@@ -2576,7 +2549,7 @@ export default function WorkshopPage({
     <Suspense
       fallback={
         <div className="flex items-center justify-center h-full">
-          <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
+          <Icon name="Loader2" className="w-5 h-5 animate-spin text-muted-foreground" />
         </div>
       }
     >

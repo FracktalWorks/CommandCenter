@@ -1,7 +1,7 @@
 "use client";
 
+import Icon from "@/components/Icon";
 import { useMemo, useRef, useState } from "react";
-import { X, Loader2, Upload, Check, Plus } from "lucide-react";
 import { useTaskStore } from "../lib/taskStore";
 import { OrgPerson, OrgPersonWrite } from "../lib/types";
 
@@ -136,7 +136,7 @@ export function PersonEditor({
             onClick={onClose}
             className="rounded-md p-1 text-muted-foreground hover:bg-secondary hover:text-foreground"
           >
-            <X size={16} />
+            <Icon name="X" size={16} />
           </button>
         </div>
 
@@ -212,7 +212,7 @@ export function PersonEditor({
                     onClick={() => removeSkill(s)}
                     className="text-muted-foreground hover:text-foreground"
                   >
-                    <X size={10} />
+                    <Icon name="X" size={10} />
                   </button>
                 </span>
               ))}
@@ -232,7 +232,7 @@ export function PersonEditor({
                 {skillInput.trim() && (
                   <button onClick={() => addSkill(skillInput)}
                     className="text-primary hover:opacity-80">
-                    <Plus size={12} />
+                    <Icon name="Plus" size={12} />
                   </button>
                 )}
               </div>
@@ -256,15 +256,15 @@ export function PersonEditor({
                   className="flex items-center gap-1.5 rounded-md border border-dashed border-border px-3 py-2 text-xs text-muted-foreground transition-colors hover:bg-secondary disabled:opacity-50"
                 >
                   {uploading ? (
-                    <Loader2 size={13} className="animate-spin" />
+                    <Icon name="Loader2" size={13} className="animate-spin" />
                   ) : (
-                    <Upload size={13} />
+                    <Icon name="Upload" size={13} />
                   )}
                   {uploading ? "Parsing résumé…" : "Upload résumé (PDF/DOCX) → auto-update skills"}
                 </button>
                 {notice && (
                   <div className="flex items-start gap-1.5 text-[11px] text-emerald-500">
-                    <Check size={12} className="mt-0.5 flex-shrink-0" /> {notice}
+                    <Icon name="Check" size={12} className="mt-0.5 flex-shrink-0" /> {notice}
                   </div>
                 )}
               </div>
@@ -292,7 +292,7 @@ export function PersonEditor({
             disabled={saving || !name.trim()}
             className="flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50"
           >
-            {saving && <Loader2 size={13} className="animate-spin" />}
+            {saving && <Icon name="Loader2" size={13} className="animate-spin" />}
             {person ? "Save changes" : "Add person"}
           </button>
         </div>

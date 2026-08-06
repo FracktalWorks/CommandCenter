@@ -21,22 +21,10 @@
  * every row looks deliberately configured hides the two rows that actually are.
  */
 
+import Icon from "@/components/Icon";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import {
-  ArrowLeft,
-  Bot,
-  Check,
-  Plug,
-  Info,
-  LayoutGrid,
-  Loader2,
-  Save,
-  ShieldOff,
-  Sliders,
-  X,
-} from "lucide-react";
 import { useAccess } from "@/components/AccessProvider";
 import { explainSource, type Decision, type MemberAccess, type Role } from "../types";
 
@@ -179,7 +167,7 @@ export default function MemberAccessPage() {
     return (
       <div className="flex h-full items-center justify-center p-8">
         <div className="max-w-sm rounded-xl border border-border bg-card p-8 text-center">
-          <ShieldOff size={20} className="mx-auto mb-3 text-muted-foreground" />
+          <Icon name="ShieldOff" size={20} className="mx-auto mb-3 text-muted-foreground" />
           <h1 className="text-base font-semibold text-foreground">Admin only</h1>
         </div>
       </div>
@@ -189,7 +177,7 @@ export default function MemberAccessPage() {
   if (loading) {
     return (
       <div className="flex items-center gap-2 p-6 text-xs text-muted-foreground">
-        <Loader2 size={14} className="animate-spin" /> Loading access…
+        <Icon name="Loader2" size={14} className="animate-spin" /> Loading access…
       </div>
     );
   }
@@ -217,7 +205,7 @@ export default function MemberAccessPage() {
             className="rounded-lg border border-border p-2 text-muted-foreground tech-transition hover:bg-secondary"
             aria-label="Back to members"
           >
-            <ArrowLeft size={15} />
+            <Icon name="ArrowLeft" size={15} />
           </Link>
           <div className="min-w-0">
             <h1 className="truncate text-base font-bold text-foreground sm:text-lg">
@@ -233,7 +221,7 @@ export default function MemberAccessPage() {
           disabled={!dirty || saving}
           className="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground tech-transition hover:opacity-90 disabled:opacity-40 sm:px-4"
         >
-          {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
+          {saving ? <Icon name="Loader2" size={14} className="animate-spin" /> : <Icon name="Save" size={14} />}
           {dirty ? "Save changes" : "Saved"}
         </button>
       </div>
@@ -254,7 +242,7 @@ export default function MemberAccessPage() {
             }}
             aria-label="Dismiss"
           >
-            <X size={13} />
+            <Icon name="X" size={13} />
           </button>
         </div>
       )}
@@ -262,7 +250,7 @@ export default function MemberAccessPage() {
       <div className="flex-1 overflow-y-auto px-4 py-4 sm:px-6">
         {/* Role */}
         <Section
-          icon={<Sliders size={14} />}
+          icon={<Icon name="Sliders" size={14} />}
           title="Role"
           subtitle="The baseline. Everything below adjusts it for this person only."
         >
@@ -281,7 +269,7 @@ export default function MemberAccessPage() {
                   }`}
                 >
                   <div className="flex items-center gap-1.5 text-sm font-medium text-foreground">
-                    {held && <Check size={13} className="text-primary" />}
+                    {held && <Icon name="Check" size={13} className="text-primary" />}
                     {r.display_name}
                   </div>
                   <div className="mt-0.5 max-w-[220px] text-[11px] text-muted-foreground">
@@ -295,7 +283,7 @@ export default function MemberAccessPage() {
 
         {/* Features */}
         <Section
-          icon={<LayoutGrid size={14} />}
+          icon={<Icon name="LayoutGrid" size={14} />}
           title="Apps and features"
           subtitle="Which parts of CommandCenter this person can open."
         >
@@ -311,7 +299,7 @@ export default function MemberAccessPage() {
 
         {/* Agents */}
         <Section
-          icon={<Bot size={14} />}
+          icon={<Icon name="Bot" size={14} />}
           title="Agents"
           subtitle="Which agents this person can run. Denying the role's blanket access and allowing individual agents is the usual pattern."
         >
@@ -322,7 +310,7 @@ export default function MemberAccessPage() {
           ) : (
             <>
               <div className="mb-2 flex items-center gap-2 rounded-lg border border-border bg-secondary/30 px-3 py-2 text-[11px] text-muted-foreground">
-                <Info size={12} className="shrink-0" />
+                <Icon name="Info" size={12} className="shrink-0" />
                 <span>
                   To restrict someone to specific agents, set{" "}
                   <code className="font-mono">agents:run:*</code> below to{" "}
@@ -362,7 +350,7 @@ export default function MemberAccessPage() {
 
         {/* Integrations */}
         <Section
-          icon={<Plug size={14} />}
+          icon={<Icon name="Plug" size={14} />}
           title="Integrations"
           subtitle="Which third-party services an agent may use on this person's behalf. Separate from managing the credentials themselves, which is a capability below."
         >
@@ -405,7 +393,7 @@ export default function MemberAccessPage() {
 
         {/* Capabilities */}
         <Section
-          icon={<Sliders size={14} />}
+          icon={<Icon name="Sliders" size={14} />}
           title="Administration and capabilities"
           subtitle="Platform-level permissions, separate from which apps are visible."
         >

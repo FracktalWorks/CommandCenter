@@ -12,20 +12,8 @@
  * clearing returns to the category view.
  */
 
+import AppIcon, { themedIcon } from "@/components/Icon";
 import { useEffect, useRef, useState } from "react";
-import {
-  Bot,
-  Boxes,
-  ChevronDown,
-  ChevronRight,
-  GitBranch,
-  LogOut,
-  Plus,
-  Search,
-  Wrench,
-  X,
-  Zap,
-} from "lucide-react";
 import { searchCatalog } from "../lib/api";
 import { FALLBACK_ICON, NODE_ICON } from "../lib/nodeVisuals";
 import { NODE_CATEGORY_STYLE } from "../lib/types";
@@ -161,7 +149,7 @@ export default function NodePalette({
           </span>
           {!dead && (
             <span className="shrink-0 text-muted-foreground opacity-0 group-hover:opacity-100 tech-transition">
-              <Plus className="w-3 h-3" />
+              <AppIcon name="Plus" className="w-3 h-3" />
             </span>
           )}
         </div>
@@ -181,7 +169,7 @@ export default function NodePalette({
           onClick={() => setOpen((o) => ({ ...o, [id]: !o[id] }))}
           className="w-full flex items-center gap-1.5 px-1 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground hover:text-foreground tech-transition"
         >
-          {open[id] ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+          {open[id] ? <AppIcon name="ChevronDown" className="w-3 h-3" /> : <AppIcon name="ChevronRight" className="w-3 h-3" />}
           <span className={`w-1.5 h-1.5 rounded-sm shrink-0 ${style.dot}`} />
           <Icon className="w-3 h-3" />
           {label}
@@ -200,7 +188,7 @@ export default function NodePalette({
     <div className="w-52 sm:w-60 shrink-0 overflow-y-auto scrollbar-thin p-2">
       {/* Search — the front door once the catalog is big */}
       <div className="relative mb-2">
-        <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
+        <AppIcon name="Search" className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
         <input
           value={query}
           onChange={(e) => setQuery(e.target.value)}
@@ -213,7 +201,7 @@ export default function NodePalette({
             className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
             title="Clear search"
           >
-            <X className="w-3 h-3" />
+            <AppIcon name="X" className="w-3 h-3" />
           </button>
         )}
       </div>
@@ -248,12 +236,12 @@ export default function NodePalette({
       ) : (
         <>
           <div className="flex items-center gap-1.5 px-1 pb-2 text-[10px] text-muted-foreground">
-            <Zap className="w-3 h-3 text-amber-500" />
+            <AppIcon name="Zap" className="w-3 h-3 text-amber-500" />
             Drag onto the canvas, or click to append
           </div>
 
           {section(
-            "agent", "Agents", Bot, (catalog?.agents ?? []).length,
+            "agent", "Agents", themedIcon("Bot"), (catalog?.agents ?? []).length,
             (catalog?.agents ?? []).map((a) =>
               item(
                 `agent:${a.name}`,
@@ -264,7 +252,7 @@ export default function NodePalette({
           )}
 
           {section(
-            "tool", "Tools & Integrations", Wrench,
+            "tool", "Tools & Integrations", themedIcon("Wrench"),
             (catalog?.tools ?? []).length,
             <>
               {platformTools.length > 0 && (
@@ -308,7 +296,7 @@ export default function NodePalette({
           )}
 
           {section(
-            "module", "Modules", Boxes, readyModules.length,
+            "module", "Modules", themedIcon("Boxes"), readyModules.length,
             readyModules.length === 0 ? (
               <p className="text-[10px] text-muted-foreground px-1">
                 No ready modules — build one in the Module Studio, or ask the Copilot.
@@ -325,7 +313,7 @@ export default function NodePalette({
           )}
 
           {section(
-            "logic", "Logic", GitBranch, 4,
+            "logic", "Logic", themedIcon("GitBranch"), 4,
             <>
               {item(
                 "logic:condition",
@@ -352,7 +340,7 @@ export default function NodePalette({
           )}
 
           {section(
-            "output", "Output", LogOut, 1,
+            "output", "Output", themedIcon("LogOut"), 1,
             item(
               "output:output",
               { nodeType: "output", label: "Output", config: { value: "" } },

@@ -1,21 +1,7 @@
 "use client";
 
+import AppIcon, { themedIcon } from "@/components/Icon";
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
-import {
-  PanelLeftClose,
-  PanelLeftOpen,
-  Columns2,
-  ArrowLeft,
-  RefreshCw,
-  X,
-  Mail,
-  ExternalLink,
-  Settings,
-  CheckCircle2,
-  AlertCircle,
-  Loader2,
-  ArrowRight,
-} from "lucide-react";
 import { useViewMode } from "@/components/ViewModeProvider";
 import { useMobileDrawer } from "@/components/AppShell";
 import { AccountSidebar } from "./components/AccountSidebar";
@@ -542,7 +528,7 @@ export default function EmailPage() {
             {/* Header */}
             <div className="text-center mb-5">
               <div className="w-12 h-12 rounded-full bg-primary/10 border border-primary/20 flex items-center justify-center mx-auto mb-3">
-                <Mail className="w-6 h-6 text-primary" />
+                <AppIcon name="Mail" className="w-6 h-6 text-primary" />
               </div>
               <h2 className="text-lg font-semibold text-foreground">Welcome to Email</h2>
               <p className="text-sm text-muted-foreground mt-1">
@@ -556,7 +542,7 @@ export default function EmailPage() {
               <div className={`p-3 rounded-xl border ${oauthStatus.gmail && oauthStatus.microsoft ? "border-emerald-500/20 bg-emerald-500/5" : "border-amber-500/20 bg-amber-500/5"}`}>
                 <div className="flex items-start gap-3">
                   <div className={`w-6 h-6 rounded-full flex items-center justify-center shrink-0 mt-0.5 text-xs font-bold ${oauthStatus.gmail && oauthStatus.microsoft ? "bg-emerald-500/20 text-emerald-400" : "bg-amber-500/20 text-amber-400"}`}>
-                    {oauthStatus.gmail && oauthStatus.microsoft ? <CheckCircle2 size={14} /> : "1"}
+                    {oauthStatus.gmail && oauthStatus.microsoft ? <AppIcon name="CheckCircle2" size={14} /> : "1"}
                   </div>
                   <div className="flex-1 min-w-0">
                     <div className="text-sm font-medium text-foreground">
@@ -574,8 +560,8 @@ export default function EmailPage() {
                         href="/integrations?tab=apis&search=OAuth"
                         className="inline-flex items-center gap-1 text-xs text-primary hover:opacity-80 mt-1.5 transition-opacity"
                       >
-                        <Settings size={11} /> Open setup guides
-                        <ExternalLink size={10} />
+                        <AppIcon name="Settings" size={11} /> Open setup guides
+                        <AppIcon name="ExternalLink" size={10} />
                       </a>
                     )}
                   </div>
@@ -640,7 +626,7 @@ export default function EmailPage() {
                 className="flex-1 py-2 rounded-lg bg-primary hover:opacity-90 text-xs font-medium text-primary-foreground text-center transition-colors flex items-center justify-center gap-1.5"
               >
                 Manage in Integrations
-                <ArrowRight size={12} />
+                <AppIcon name="ArrowRight" size={12} />
               </a>
             </div>
           </div>
@@ -763,13 +749,13 @@ export default function EmailPage() {
           <div className="flex items-center gap-3 px-3 py-2 border-b border-border flex-shrink-0 bg-card">
             <div className="flex items-center gap-1.5 flex-1 basis-0 min-w-0">
               <IconBtn
-                icon={leftOpen ? PanelLeftClose : PanelLeftOpen}
+                icon={leftOpen ? themedIcon("PanelLeftClose") : themedIcon("PanelLeftOpen")}
                 label={leftOpen ? "Hide accounts" : "Show accounts"}
                 onClick={() => setLeftOpen((v) => !v)}
               />
               <div className="w-px h-4 bg-border" />
               <IconBtn
-                icon={Columns2}
+                icon={themedIcon("Columns2")}
                 label={listOpen ? "Hide email list" : "Show email list"}
                 onClick={() => setListOpen((v) => !v)}
                 active={listOpen}
@@ -815,7 +801,7 @@ export default function EmailPage() {
               className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
               aria-label="Back to inbox"
             >
-              <ArrowLeft size={16} />
+              <AppIcon name="ArrowLeft" size={16} />
             </button>
             <div className="flex-1 min-w-0">
               <div className="text-xs font-medium text-foreground truncate">
@@ -869,7 +855,7 @@ export default function EmailPage() {
                 aria-label="Refresh"
                 title="Refresh"
               >
-                <RefreshCw size={16} className={syncing ? "animate-spin" : ""} />
+                <AppIcon name="RefreshCw" size={16} className={syncing ? "animate-spin" : ""} />
               </button>
             </div>
           </div>
@@ -888,7 +874,7 @@ export default function EmailPage() {
         {selectedAccount &&
           (selectedAccount.syncStatus === "error" || authErrors[selectedAccount.id]) && (
           <div className="flex items-start gap-2 px-3 py-2 border-b border-amber-500/30 bg-amber-500/10 flex-shrink-0">
-            <AlertCircle size={14} className="text-amber-400 mt-0.5 flex-shrink-0" />
+            <AppIcon name="AlertCircle" size={14} className="text-amber-400 mt-0.5 flex-shrink-0" />
             <div className="flex-1 min-w-0">
               <p className="text-xs text-foreground">
                 <span className="font-medium">{selectedAccount.emailAddress}</span> can&apos;t
@@ -903,14 +889,14 @@ export default function EmailPage() {
                 onClick={() => handleConnect(selectedAccount.provider as "gmail" | "microsoft")}
                 className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-amber-500/20 text-amber-300 hover:bg-amber-500/30 text-[11px] font-medium transition-colors flex-shrink-0"
               >
-                <ExternalLink size={11} /> Reconnect
+                <AppIcon name="ExternalLink" size={11} /> Reconnect
               </button>
             ) : (
               <a
                 href="/integrations?tab=email"
                 className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-amber-500/20 text-amber-300 hover:bg-amber-500/30 text-[11px] font-medium transition-colors flex-shrink-0"
               >
-                <ExternalLink size={11} /> Fix in Integrations
+                <AppIcon name="ExternalLink" size={11} /> Fix in Integrations
               </a>
             )}
           </div>
@@ -1111,7 +1097,7 @@ export default function EmailPage() {
                 onClick={() => setShowAddModal(false)}
                 className="p-1 rounded-md hover:bg-secondary text-muted-foreground transition-colors"
               >
-                <X size={16} />
+                <AppIcon name="X" size={16} />
               </button>
             </div>
             <div className="space-y-2">

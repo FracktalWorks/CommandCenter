@@ -1,13 +1,7 @@
 "use client";
 
+import Icon from "@/components/Icon";
 import { useState } from "react";
-import {
-  X,
-  Plus,
-  Trash2,
-  ChevronDown,
-  ChevronRight,
-} from "lucide-react";
 import {
   type TaskSettings,
   type EnergyWindow,
@@ -111,7 +105,7 @@ export function CalendarSettings({
             aria-label="Close"
             className="rounded p-1 text-muted-foreground hover:text-foreground"
           >
-            <X className="h-4 w-4" />
+            <Icon name="X" className="h-4 w-4" />
           </button>
         </div>
 
@@ -146,9 +140,9 @@ export function CalendarSettings({
               className="mt-1.5 inline-flex items-center gap-0.5 text-[10px] font-medium text-primary hover:underline"
             >
               {showDefault ? (
-                <ChevronDown className="h-3 w-3" />
+                <Icon name="ChevronDown" className="h-3 w-3" />
               ) : (
-                <ChevronRight className="h-3 w-3" />
+                <Icon name="ChevronRight" className="h-3 w-3" />
               )}
               {usingDefaultPrompt
                 ? "See the default the AI is using"
@@ -331,7 +325,7 @@ export function CalendarSettings({
               }
               className="inline-flex items-center gap-0.5 text-primary hover:underline"
             >
-              <Plus className="h-3 w-3" /> Add
+              <Icon name="Plus" className="h-3 w-3" /> Add
             </button>
           </div>
           <p className="mb-1.5 text-[10px] text-muted-foreground">
@@ -384,7 +378,7 @@ export function CalendarSettings({
                     aria-label="Remove window"
                     className="rounded p-0.5 text-muted-foreground hover:text-destructive"
                   >
-                    <Trash2 className="h-3 w-3" />
+                    <Icon name="Trash2" className="h-3 w-3" />
                   </button>
                 </div>
               ))}
@@ -430,7 +424,7 @@ export function CalendarSettings({
                     }
                     className="inline-flex items-center gap-0.5 text-primary hover:underline"
                   >
-                    <Plus className="h-3 w-3" /> Add
+                    <Icon name="Plus" className="h-3 w-3" /> Add
                   </button>
                 </div>
                 <p className="mb-1.5 text-[10px] text-muted-foreground">
@@ -477,7 +471,7 @@ export function CalendarSettings({
                             aria-label="Remove window"
                             className="rounded p-0.5 text-muted-foreground hover:text-destructive"
                           >
-                            <Trash2 className="h-3 w-3" />
+                            <Icon name="Trash2" className="h-3 w-3" />
                           </button>
                         </div>
                         <div className="mt-1.5 flex items-center gap-1">

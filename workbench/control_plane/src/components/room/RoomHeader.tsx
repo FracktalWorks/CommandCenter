@@ -13,8 +13,8 @@
  * that live only in a settings page are neither.
  */
 
+import Icon from "@/components/Icon";
 import { useState } from "react";
-import { AlertTriangle, Eye, Share2, Users } from "lucide-react";
 import {
   capabilityLabel,
   isShared as roomIsShared,
@@ -70,7 +70,7 @@ export function RoomHeader({
 
           {watching && (
             <span className="inline-flex items-center gap-1 rounded-full border border-border px-2 py-0.5 text-[11px] text-muted-foreground">
-              <Eye className="h-3 w-3" />
+              <Icon name="Eye" className="h-3 w-3" />
               Watching
             </span>
           )}
@@ -80,7 +80,7 @@ export function RoomHeader({
             className="ml-auto inline-flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1 text-xs text-muted-foreground tech-transition hover:border-primary hover:text-foreground"
             title={shared ? "Manage who is in this room" : "Share this conversation"}
           >
-            {shared ? <Users className="h-3.5 w-3.5" /> : <Share2 className="h-3.5 w-3.5" />}
+            {shared ? <Icon name="Users" className="h-3.5 w-3.5" /> : <Icon name="Share2" className="h-3.5 w-3.5" />}
             {shared ? "Room" : "Share"}
           </button>
         </div>
@@ -88,7 +88,7 @@ export function RoomHeader({
         {/* The cap, stated. This is the one thing the header exists to say. */}
         {shared && suspended.length > 0 && (
           <p className="flex items-start gap-1.5 rounded-lg border border-destructive/40 bg-destructive/10 px-2.5 py-1.5 text-[11px] text-destructive">
-            <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
+            <Icon name="AlertTriangle" className="mt-0.5 h-3 w-3 shrink-0" />
             <span>
               {suspended.map((e) => e.split("@")[0]).join(", ")} is suspended, so
               the agents here can reach nothing until they are removed from the
@@ -99,7 +99,7 @@ export function RoomHeader({
 
         {shared && suspended.length === 0 && capped.length > 0 && !compact && (
           <p className="flex items-start gap-1.5 rounded-lg border border-warning/40 bg-warning/10 px-2.5 py-1.5 text-[11px] text-muted-foreground">
-            <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0 text-warning" />
+            <Icon name="AlertTriangle" className="mt-0.5 h-3 w-3 shrink-0 text-warning" />
             <span>
               Unavailable in this room:{" "}
               <span className="text-foreground">

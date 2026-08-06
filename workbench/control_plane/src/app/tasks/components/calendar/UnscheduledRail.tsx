@@ -1,18 +1,7 @@
 "use client";
 
+import Icon, { themedIcon } from "@/components/Icon";
 import { useState } from "react";
-import {
-  Clock,
-  Zap,
-  Sparkles,
-  CalendarPlus,
-  Trash2,
-  Check,
-  AlertTriangle,
-  CalendarClock,
-  Star,
-  ExternalLink,
-} from "lucide-react";
 import { GtdItem } from "../../lib/types";
 import { durationLabel } from "../../lib/utils";
 import { priorityRank } from "../../lib/priority";
@@ -89,7 +78,7 @@ export function UnscheduledRail({
     <aside className="hidden w-64 shrink-0 flex-col border-l border-border bg-card md:flex">
       <div className="border-b border-border px-3 py-2">
         <div className="flex items-center gap-1.5 text-[12px] font-semibold text-foreground">
-          <CalendarPlus className="h-3.5 w-3.5 text-primary" />
+          <Icon name="CalendarPlus" className="h-3.5 w-3.5 text-primary" />
           Unscheduled
         </div>
         <p className="mt-0.5 text-[10px] text-muted-foreground">
@@ -123,7 +112,7 @@ export function UnscheduledRail({
         )}
         {doneStats.count > 0 && (
           <div className="mt-0.5 inline-flex items-center gap-1 text-[10px] font-medium text-success">
-            <Check className="h-3 w-3" />
+            <Icon name="Check" className="h-3 w-3" />
             {doneStats.count} done ·{" "}
             {Math.round((doneStats.mins / 60) * 10) / 10}h
           </div>
@@ -200,7 +189,7 @@ export function UnscheduledRail({
                         : "text-muted-foreground/60 opacity-0 hover:text-amber-400 group-hover:opacity-100",
                     ].join(" ")}
                   >
-                    <Star
+                    <Icon name="Star"
                       className="h-3 w-3"
                       fill={t.id === oneThingId ? "currentColor" : "none"}
                     />
@@ -209,18 +198,18 @@ export function UnscheduledRail({
                 <div className="mt-1 flex items-center gap-2 text-[10px] text-muted-foreground">
                   {t.timeEstimateMins ? (
                     <span className="inline-flex items-center gap-0.5">
-                      <Clock className="h-3 w-3" />
+                      <Icon name="Clock" className="h-3 w-3" />
                       {durationLabel(t.timeEstimateMins)}
                     </span>
                   ) : (
                     <span className="inline-flex items-center gap-0.5">
-                      <Clock className="h-3 w-3" />
+                      <Icon name="Clock" className="h-3 w-3" />
                       {DEFAULT_BLOCK_MINS}m
                     </span>
                   )}
                   {t.energy && (
                     <span className="inline-flex items-center gap-0.5 capitalize">
-                      <Zap className="h-3 w-3" />
+                      <Icon name="Zap" className="h-3 w-3" />
                       {t.energy}
                     </span>
                   )}
@@ -233,7 +222,7 @@ export function UnscheduledRail({
                           : "text-warning",
                       ].join(" ")}
                     >
-                      <AlertTriangle className="h-3 w-3" />
+                      <Icon name="AlertTriangle" className="h-3 w-3" />
                       {(dueDays.get(t.id) as number) <= 0
                         ? "due today"
                         : dueDays.get(t.id) === 1
@@ -255,7 +244,7 @@ export function UnscheduledRail({
           title="Rebuild your day: reshuffle what's scheduled + fill from your list, around priority, energy + deadlines"
           className="tech-transition flex w-full items-center justify-center gap-1.5 rounded-md bg-primary/10 px-2 py-2 text-[11px] font-medium text-primary hover:bg-primary/20"
         >
-          <Sparkles className="h-3.5 w-3.5" />
+          <Icon name="Sparkles" className="h-3.5 w-3.5" />
           Rebuild my day
         </button>
       </div>
@@ -269,13 +258,13 @@ export function UnscheduledRail({
             {
               kind: "item",
               label: "Open task",
-              icon: ExternalLink,
+              icon: themedIcon("ExternalLink"),
               onSelect: () => onOpen(ctx.item.id),
             },
             {
               kind: "item",
               label: "Timebox → first free slot",
-              icon: CalendarPlus,
+              icon: themedIcon("CalendarPlus"),
               onSelect: () => onTimebox(ctx.item),
             },
             { kind: "sep" },
@@ -285,7 +274,7 @@ export function UnscheduledRail({
                 ctx.item.id === oneThingId
                   ? "Unset One Thing"
                   : "Make it the One Thing",
-              icon: Star,
+              icon: themedIcon("Star"),
               checked: ctx.item.id === oneThingId,
               onSelect: () => onToggleOneThing(ctx.item.id),
             },
@@ -293,13 +282,13 @@ export function UnscheduledRail({
             {
               kind: "item",
               label: "Schedule…",
-              icon: CalendarClock,
+              icon: themedIcon("CalendarClock"),
               onSelect: () => onReschedulePopup(ctx.item.id),
             },
             {
               kind: "item",
               label: "Delete task…",
-              icon: Trash2,
+              icon: themedIcon("Trash2"),
               danger: true,
               onSelect: () => onDelete(ctx.item.id),
             },

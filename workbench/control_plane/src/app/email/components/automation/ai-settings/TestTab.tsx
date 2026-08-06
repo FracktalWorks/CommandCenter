@@ -5,8 +5,8 @@
 // The bulk-run sweep state lives in the email store so it survives unmount.
 // Extracted from AISettingsView.tsx.
 
+import Icon from "@/components/Icon";
 import { useCallback, useEffect, useState } from "react";
-import { ArrowDown, Loader2, Play, RefreshCcw, Sparkles, Square } from "lucide-react";
 import { listEmails } from "../../../lib/api";
 import type { Email, RuleAction } from "../../../lib/types";
 import { useEmailStore } from "../../../lib/emailStore";
@@ -131,7 +131,7 @@ export function TestTab({ accountId }: { accountId: string | null }) {
             onClick={stopTestRun}
             className="flex items-center gap-1.5 whitespace-nowrap px-3 py-1.5 rounded-lg bg-rose-600 text-white text-xs font-medium hover:bg-rose-700 transition-colors"
           >
-            <Square size={12} /> {applyMode ? "Stop run" : "Stop test"}
+            <Icon name="Square" size={12} /> {applyMode ? "Stop run" : "Stop test"}
           </button>
         ) : (
           <button
@@ -139,7 +139,7 @@ export function TestTab({ accountId }: { accountId: string | null }) {
             disabled={visible.length === 0}
             className="flex items-center gap-1.5 whitespace-nowrap px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-medium hover:bg-emerald-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
           >
-            <Play size={12} /> {applyMode ? "Run on all" : "Test all"}
+            <Icon name="Play" size={12} /> {applyMode ? "Run on all" : "Test all"}
           </button>
         )}
         <input
@@ -228,17 +228,17 @@ export function TestTab({ accountId }: { accountId: string | null }) {
                         title={applyMode ? "Rerun" : "Retest"}
                         className="p-1.5 rounded-md text-muted-foreground border border-border hover:text-foreground hover:bg-secondary transition-colors disabled:opacity-50"
                       >
-                        <RefreshCcw size={12} />
+                        <Icon name="RefreshCcw" size={12} />
                       </button>
                     </>
                   ) : isRunning ? (
-                    <Loader2 className="animate-spin text-muted-foreground" size={14} />
+                    <Icon name="Loader2" className="animate-spin text-muted-foreground" size={14} />
                   ) : (
                     <button
                       onClick={() => runOne(e.id)}
                       className="flex items-center gap-1 px-2.5 py-1 rounded-md bg-primary text-primary-foreground text-[11px] font-medium hover:bg-primary/90 transition-colors"
                     >
-                      <Sparkles size={12} /> {applyMode ? "Run" : "Test"}
+                      <Icon name="Sparkles" size={12} /> {applyMode ? "Run" : "Test"}
                     </button>
                   )}
                 </div>
@@ -254,9 +254,9 @@ export function TestTab({ accountId }: { accountId: string | null }) {
             className="w-full flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg border border-border text-xs text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors disabled:opacity-50"
           >
             {loadingMore ? (
-              <Loader2 className="animate-spin" size={13} />
+              <Icon name="Loader2" className="animate-spin" size={13} />
             ) : (
-              <ArrowDown size={13} />
+              <Icon name="ArrowDown" size={13} />
             )}
             Load more ({emails.length} of {total})
           </button>

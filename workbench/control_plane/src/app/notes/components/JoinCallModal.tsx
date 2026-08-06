@@ -7,8 +7,8 @@
  * set up yet" state when no provider key is configured.
  */
 
+import Icon from "@/components/Icon";
 import { useEffect, useState } from "react";
-import { AlertCircle, Loader2, Video, X } from "lucide-react";
 import { botJoin, getBotConfig } from "../lib/api";
 
 interface JoinCallModalProps {
@@ -81,7 +81,7 @@ export default function JoinCallModal({
       >
         <div className="mb-3 flex items-center gap-2">
           <span className="grid h-8 w-8 place-items-center rounded-lg bg-primary/15 text-primary">
-            <Video className="h-4 w-4" />
+            <Icon name="Video" className="h-4 w-4" />
           </span>
           <div className="min-w-0 flex-1">
             <h2 className="text-sm font-bold text-foreground">
@@ -97,14 +97,14 @@ export default function JoinCallModal({
             className="rounded-lg p-1 text-muted-foreground hover:bg-secondary hover:text-foreground tech-transition"
             aria-label="Close"
           >
-            <X className="h-4 w-4" />
+            <Icon name="X" className="h-4 w-4" />
           </button>
         </div>
 
         {configured === false ? (
           <div className="rounded-lg bg-warning/10 px-3 py-2.5 text-xs text-warning">
             <span className="flex items-start gap-1.5">
-              <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              <Icon name="AlertCircle" className="mt-0.5 h-3.5 w-3.5 shrink-0" />
               <span>
                 The meeting notetaker isn&apos;t set up yet. An admin needs to
                 connect the self-hosted meeting-bot worker
@@ -151,7 +151,7 @@ export default function JoinCallModal({
                 guests outright when nobody is in the call yet. Saying so here
                 prevents the failure instead of explaining it afterwards. */}
             <p className="mt-2 flex items-start gap-1.5 rounded-lg bg-warning/10 px-2.5 py-1.5 text-[10px] leading-relaxed text-warning">
-              <AlertCircle className="mt-0.5 h-3 w-3 shrink-0" />
+              <Icon name="AlertCircle" className="mt-0.5 h-3 w-3 shrink-0" />
               <span>
                 Join the call yourself first, then admit the notetaker when it
                 knocks — Google turns guests away when no one is in the meeting
@@ -178,9 +178,9 @@ export default function JoinCallModal({
                 className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90 tech-transition disabled:opacity-50"
               >
                 {busy ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  <Icon name="Loader2" className="h-3.5 w-3.5 animate-spin" />
                 ) : (
-                  <Video className="h-3.5 w-3.5" />
+                  <Icon name="Video" className="h-3.5 w-3.5" />
                 )}
                 {busy ? "Sending…" : "Send notetaker"}
               </button>

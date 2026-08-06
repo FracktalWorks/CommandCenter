@@ -8,24 +8,12 @@
  * user/storage/ai calls with the VIEWER's session (docs/app-workshop §4.4).
  */
 
+import AppIcon, { themedIcon } from "@/components/Icon";
+import type { ThemedIcon } from "@/components/Icon";
 import { use, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useSession } from "next-auth/react";
 import { useTheme } from "next-themes";
-import {
-  AlertTriangle,
-  Database,
-  GitFork,
-  Hammer,
-  HelpCircle,
-  Info,
-  Loader2,
-  Plug,
-  Sparkles,
-  User,
-  Wrench,
-  type LucideIcon,
-} from "lucide-react";
 import SandboxedHtml from "@/components/SandboxedHtml";
 import {
   buildAppSrcDoc,
@@ -134,12 +122,12 @@ function describeScope(scope: string): string {
 }
 
 /** Icon per scope category — `HelpCircle` for anything unrecognized. */
-function scopeIcon(scope: string): LucideIcon {
-  if (scope === "identity:read") return User;
-  if (scope === "storage:app") return Database;
-  if (scope.startsWith("ai:")) return Sparkles;
-  if (scope.startsWith("tool:")) return Plug;
-  return HelpCircle;
+function scopeIcon(scope: string): ThemedIcon {
+  if (scope === "identity:read") return themedIcon("User");
+  if (scope === "storage:app") return themedIcon("Database");
+  if (scope.startsWith("ai:")) return themedIcon("Sparkles");
+  if (scope.startsWith("tool:")) return themedIcon("Plug");
+  return themedIcon("HelpCircle");
 }
 
 export default function AppRunPage({
@@ -413,7 +401,7 @@ export default function AppRunPage({
   if (loading) {
     return (
       <div className="flex flex-col items-center justify-center h-full gap-3">
-        <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
+        <AppIcon name="Loader2" className="w-5 h-5 animate-spin text-muted-foreground" />
         <p className="text-sm text-muted-foreground">Loading app…</p>
       </div>
     );
@@ -470,9 +458,9 @@ export default function AppRunPage({
           className="rounded-lg border border-border px-2 sm:px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground hover:border-primary/30 tech-transition flex items-center gap-1.5 shrink-0 disabled:opacity-50"
         >
           {forking ? (
-            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            <AppIcon name="Loader2" className="w-3.5 h-3.5 animate-spin" />
           ) : (
-            <GitFork className="w-3.5 h-3.5" />
+            <AppIcon name="GitFork" className="w-3.5 h-3.5" />
           )}
           <span className="hidden sm:inline">Fork</span>
         </button>
@@ -482,7 +470,7 @@ export default function AppRunPage({
             title="Open in Workshop"
             className="rounded-lg border border-border px-2 sm:px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground hover:border-primary/30 tech-transition flex items-center gap-1.5 shrink-0"
           >
-            <Wrench className="w-3.5 h-3.5" />
+            <AppIcon name="Wrench" className="w-3.5 h-3.5" />
             <span className="hidden sm:inline">Open in Workshop</span>
           </button>
         )}
@@ -496,7 +484,7 @@ export default function AppRunPage({
                 : "text-muted-foreground hover:bg-secondary"
             }`}
           >
-            <Info className="w-4 h-4" />
+            <AppIcon name="Info" className="w-4 h-4" />
           </button>
 
           {/* Info popover */}
@@ -521,7 +509,7 @@ export default function AppRunPage({
                   Versions
                 </span>
                 {versions === null ? (
-                  <Loader2 className="w-3.5 h-3.5 animate-spin text-muted-foreground" />
+                  <AppIcon name="Loader2" className="w-3.5 h-3.5 animate-spin text-muted-foreground" />
                 ) : versions.length === 0 ? (
                   <span className="text-muted-foreground">
                     No published versions.
@@ -565,7 +553,7 @@ export default function AppRunPage({
                               className="text-[10px] rounded-md bg-primary px-2 py-1 font-medium text-primary-foreground hover:opacity-90 tech-transition disabled:opacity-50 flex items-center gap-1"
                             >
                               {rollbackBusy && (
-                                <Loader2 className="w-3 h-3 animate-spin" />
+                                <AppIcon name="Loader2" className="w-3 h-3 animate-spin" />
                               )}
                               Confirm
                             </button>
@@ -589,7 +577,7 @@ export default function AppRunPage({
 
       {forkError && (
         <div className="flex items-center gap-2 px-4 py-2 border-b border-border bg-destructive/5 text-xs text-destructive shrink-0">
-          <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+          <AppIcon name="AlertTriangle" className="w-3.5 h-3.5 shrink-0" />
           {forkError}
           <button
             onClick={() => setForkError(null)}
@@ -607,7 +595,7 @@ export default function AppRunPage({
         ) : (
           <div className="flex flex-col items-center justify-center flex-1 gap-3 text-center px-6">
             <div className="w-11 h-11 rounded-xl bg-primary/10 flex items-center justify-center">
-              <Hammer className="w-5 h-5 text-primary" />
+              <AppIcon name="Hammer" className="w-5 h-5 text-primary" />
             </div>
             <p className="text-sm font-medium text-foreground">
               Not published yet
@@ -687,7 +675,7 @@ export default function AppRunPage({
                 disabled={consentBusy}
                 className="rounded-lg bg-primary px-3 sm:px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 tech-transition flex items-center gap-1.5 disabled:opacity-50"
               >
-                {consentBusy && <Loader2 className="w-4 h-4 animate-spin" />}
+                {consentBusy && <AppIcon name="Loader2" className="w-4 h-4 animate-spin" />}
                 Allow
               </button>
             </div>
@@ -700,7 +688,7 @@ export default function AppRunPage({
       {pendingConfirm && (
         <div className="fixed bottom-5 right-5 z-40 w-[360px] rounded-2xl border border-border bg-popover shadow-lg p-3.5 flex flex-col gap-2.5">
           <div className="flex items-start gap-2.5">
-            <AlertTriangle className="w-4 h-4 text-warning shrink-0 mt-0.5" />
+            <AppIcon name="AlertTriangle" className="w-4 h-4 text-warning shrink-0 mt-0.5" />
             <div className="min-w-0">
               <p className="text-[12.5px] font-semibold text-foreground leading-snug">
                 <span className="font-bold">{app.name}</span> wants to use{" "}

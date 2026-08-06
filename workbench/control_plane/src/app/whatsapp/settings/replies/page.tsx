@@ -4,8 +4,8 @@
 // typed ten times a day (price list, address, GST no.), with an optional
 // '/shortcut'. Plain CRUD; the composer's picker inserts the body.
 
+import Icon from "@/components/Icon";
 import { useCallback, useEffect, useState } from "react";
-import { Loader2, MessageSquareText, Plus, Trash2 } from "lucide-react";
 import {
   createSavedReply,
   deleteSavedReply,
@@ -74,7 +74,7 @@ export default function SavedRepliesPage() {
   if (loading) {
     return (
       <div className="flex h-full items-center justify-center text-muted-foreground">
-        <Loader2 className="h-5 w-5 animate-spin" />
+        <Icon name="Loader2" className="h-5 w-5 animate-spin" />
       </div>
     );
   }
@@ -82,7 +82,7 @@ export default function SavedRepliesPage() {
   return (
     <div className="mx-auto h-full max-w-2xl overflow-y-auto p-4 text-foreground md:p-6">
       <div className="mb-5 flex items-center gap-2">
-        <MessageSquareText className="h-4 w-4 text-primary" />
+        <Icon name="MessageSquareText" className="h-4 w-4 text-primary" />
         <h1 className="text-[15px] font-semibold">Saved replies</h1>
         <span className="text-[11px] text-muted-foreground">
           canned snippets for the composer
@@ -125,9 +125,9 @@ export default function SavedRepliesPage() {
             className="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-[12px] font-semibold text-primary-foreground disabled:opacity-50"
           >
             {busy ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              <Icon name="Loader2" className="h-3.5 w-3.5 animate-spin" />
             ) : (
-              <Plus className="h-3.5 w-3.5" />
+              <Icon name="Plus" className="h-3.5 w-3.5" />
             )}
             Add reply
           </button>
@@ -161,7 +161,7 @@ export default function SavedRepliesPage() {
                 className="mt-0.5 shrink-0 text-muted-foreground/60 hover:text-red-500"
                 aria-label="Delete"
               >
-                <Trash2 className="h-3.5 w-3.5" />
+                <Icon name="Trash2" className="h-3.5 w-3.5" />
               </button>
             </li>
           ))}

@@ -16,9 +16,9 @@
  * suggestion you never see is the same as no copilot.
  */
 
+import Icon from "@/components/Icon";
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { Radio, Sparkles } from "lucide-react";
 import { getLiveSession, setCopilot } from "../lib/api";
 import type { CopilotEvent, LiveSession } from "../lib/types";
 
@@ -83,7 +83,7 @@ export default function LiveCopilotStrip({ meetingId }: { meetingId: string }) {
       }`}
     >
       <div className="flex items-center gap-2.5">
-        <Sparkles
+        <Icon name="Sparkles"
           className={`h-4 w-4 shrink-0 ${on ? "text-primary" : "text-muted-foreground"}`}
         />
         <div className="min-w-0 flex-1">
@@ -121,7 +121,7 @@ export default function LiveCopilotStrip({ meetingId }: { meetingId: string }) {
           href={`/notes/live/${meetingId}`}
           className="mt-2 inline-flex items-center gap-1.5 text-xs text-primary hover:underline"
         >
-          <Radio className="h-3.5 w-3.5" />
+          <Icon name="Radio" className="h-3.5 w-3.5" />
           {count > 1 ? "See all suggestions and agenda coverage" : "Open the live console"}
         </Link>
       )}

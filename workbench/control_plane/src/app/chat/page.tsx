@@ -1,9 +1,9 @@
 "use client";
 
+import Icon from "@/components/Icon";
 import { useState, useEffect, useCallback, useMemo, useRef, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import { useSession } from "next-auth/react";
-import { Bot, MessagesSquare, Search, Trash2, Users } from "lucide-react";
 import BreathingCharacter, { characterForAgent } from "@/components/BreathingCharacter";
 import {
   getSessions,
@@ -91,7 +91,7 @@ function AgentPickerCard({
             <AgentAvatar
               libraryId={avatarId}
               size={34}
-              fallback={<Bot size={22} className="text-muted-foreground/70" />}
+              fallback={<Icon name="Bot" size={22} className="text-muted-foreground/70" />}
             />
           }
         />
@@ -398,7 +398,7 @@ function SessionList({
 
       {/* Search — client-side filter over titles, previews, and agent names. */}
       <div className="relative mb-1.5">
-        <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground/60" />
+        <Icon name="Search" className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground/60" />
         <input
           value={query}
           onChange={(e) => setQuery(e.target.value)}
@@ -434,7 +434,7 @@ function SessionList({
                 <AgentAvatar
                   libraryId={agentAvatars[agentName] ?? agentName}
                   size={18}
-                  fallback={<Bot size={14} className="text-muted-foreground/60" />}
+                  fallback={<Icon name="Bot" size={14} className="text-muted-foreground/60" />}
                 />
               </span>
               <span className="flex-1 text-xs font-medium truncate">
@@ -491,7 +491,7 @@ function SessionList({
                                   : `Shared · ${s.participantCount} in the room`
                               }
                             >
-                              <Users className="h-2.5 w-2.5" />
+                              <Icon name="Users" className="h-2.5 w-2.5" />
                               {s.participantCount}
                             </span>
                           )}
@@ -522,7 +522,7 @@ function SessionList({
                         title="Delete conversation"
                         aria-label="Delete conversation"
                       >
-                        <Trash2 className="w-3.5 h-3.5" />
+                        <Icon name="Trash2" className="w-3.5 h-3.5" />
                       </button>
                     </div>
                   );
@@ -989,7 +989,7 @@ function ChatPageInner() {
             className="flex w-full flex-1 cursor-pointer flex-col items-center py-2.5 text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground transition-colors"
             title="Open conversations"
           >
-            <MessagesSquare size={15} />
+            <Icon name="MessagesSquare" size={15} />
             {sessions.length > 0 && (
               <span className="mt-1 rounded-full bg-secondary px-1 text-[10px]">
                 {sessions.length}

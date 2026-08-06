@@ -12,8 +12,8 @@
  * can see what it *would* do before deciding to override it.
  */
 
+import Icon from "@/components/Icon";
 import { useEffect, useState } from "react";
-import { Loader2, Send, Settings2, Sparkles, X } from "lucide-react";
 import { getNotesSettings, saveNotesSettings } from "../lib/api";
 import type { NotesSettings, TemplateInfo } from "../lib/types";
 import BotIdentitySection from "./BotIdentitySection";
@@ -131,20 +131,20 @@ export default function NotesSettingsModal({ onClose }: { onClose: () => void })
       <div className="absolute inset-0 bg-black/60" onClick={onClose} />
       <div className="relative flex max-h-[85vh] w-full max-w-2xl flex-col rounded-2xl border border-border bg-card shadow-2xl">
         <div className="flex items-center gap-2 border-b border-border px-4 py-3">
-          <Settings2 className="h-4 w-4 text-primary" />
+          <Icon name="Settings2" className="h-4 w-4 text-primary" />
           <h2 className="flex-1 text-sm font-semibold">Note Taker settings</h2>
           <button
             onClick={onClose}
             className="text-muted-foreground hover:text-foreground"
             aria-label="Close"
           >
-            <X className="h-4 w-4" />
+            <Icon name="X" className="h-4 w-4" />
           </button>
         </div>
 
         {loading ? (
           <div className="flex h-48 items-center justify-center">
-            <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+            <Icon name="Loader2" className="h-4 w-4 animate-spin text-muted-foreground" />
           </div>
         ) : loadFailed ? (
           <div className="px-4 py-8 text-center text-sm text-destructive">
@@ -162,7 +162,7 @@ export default function NotesSettingsModal({ onClose }: { onClose: () => void })
             {/* ── After-meeting dispatch ──────────────────────────────── */}
             <section>
               <h3 className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                <Send className="h-3.5 w-3.5" /> After each meeting
+                <Icon name="Send" className="h-3.5 w-3.5" /> After each meeting
               </h3>
               <p className="mb-2 text-xs text-muted-foreground">
                 Confident action items (≥80%) are dispatched automatically when
@@ -192,7 +192,7 @@ export default function NotesSettingsModal({ onClose }: { onClose: () => void })
             {/* ── Copilot ─────────────────────────────────────────────── */}
             <section>
               <h3 className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                <Sparkles className="h-3.5 w-3.5" /> Meeting copilot
+                <Icon name="Sparkles" className="h-3.5 w-3.5" /> Meeting copilot
               </h3>
               <label className="mb-3 flex items-start gap-2">
                 <input

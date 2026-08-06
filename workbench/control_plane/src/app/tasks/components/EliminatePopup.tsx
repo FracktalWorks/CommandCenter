@@ -1,6 +1,6 @@
 "use client";
 
-import { Trash2, X, Archive, MoonStar } from "lucide-react";
+import Icon from "@/components/Icon";
 import { useTaskStore } from "../lib/taskStore";
 
 // The "Eliminate" popup — opened from the Eliminate pill or a context menu (via
@@ -30,7 +30,7 @@ export function EliminatePopup() {
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center gap-2 border-b border-border px-4 py-3">
-          <Archive className="h-4 w-4 shrink-0 text-muted-foreground" />
+          <Icon name="Archive" className="h-4 w-4 shrink-0 text-muted-foreground" />
           <div className="min-w-0 flex-1">
             <h2 className="truncate text-sm font-semibold text-foreground">
               Let this go?
@@ -45,7 +45,7 @@ export function EliminatePopup() {
             aria-label="Close"
             className="rounded-md p-1 text-muted-foreground hover:bg-secondary hover:text-foreground"
           >
-            <X className="h-4 w-4" />
+            <Icon name="X" className="h-4 w-4" />
           </button>
         </div>
 
@@ -58,7 +58,7 @@ export function EliminatePopup() {
             }}
             className="tech-transition flex items-start gap-2.5 rounded-lg border border-border bg-background/60 p-3 text-left hover:border-primary/50 active:bg-primary/5"
           >
-            <MoonStar className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+            <Icon name="MoonStar" className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
             <span className="min-w-0">
               <span className="block text-[13px] font-medium text-foreground">
                 Move to Someday / Maybe
@@ -78,7 +78,7 @@ export function EliminatePopup() {
             }}
             className="tech-transition flex items-start gap-2.5 rounded-lg border border-border bg-background/60 p-3 text-left hover:border-destructive/50 hover:bg-destructive/5"
           >
-            <Trash2 className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
+            <Icon name="Trash2" className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
             <span className="min-w-0">
               <span className="block text-[13px] font-medium text-foreground">
                 Delete

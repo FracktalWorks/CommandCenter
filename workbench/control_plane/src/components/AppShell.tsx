@@ -13,6 +13,7 @@
  * rely on plain Tailwind responsive prefixes (kept in sync via the viewport meta).
  */
 
+import AppIcon, { themedIcon, type ThemedIcon } from "@/components/Icon";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
@@ -24,7 +25,6 @@ import {
   type ReactNode,
 } from "react";
 import { useSession, signOut } from "next-auth/react";
-import { X, Monitor, Smartphone, LogOut, Command, Mail, Zap, Inbox, ListChecks, Plus, Sparkles, Mic, Upload, BookMarked, Video } from "lucide-react";
 import Sidebar from "@/components/Sidebar";
 import { useViewMode } from "@/components/ViewModeProvider";
 import { useActiveSessions } from "@/hooks/useActiveSessions";
@@ -98,7 +98,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
             onClick={toggleView}
             className="fixed bottom-4 right-4 z-[60] flex items-center gap-1.5 rounded-full border border-border bg-popover/95 px-3 py-2 text-xs text-muted-foreground shadow-lg backdrop-blur hover:border-primary/50 tech-transition"
           >
-            <Smartphone size={14} />
+            <AppIcon name="Smartphone" size={14} />
             Mobile view
           </button>
         )}
@@ -162,9 +162,6 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 // Mobile bottom navigation bar — ChatGPT/DeepSeek-style 3-tab bar
 // ---------------------------------------------------------------------------
 
-import { MessageCircle, FolderOpen, Menu as MenuIcon, Filter, LayoutGrid, Play, FileCode, FlaskConical } from "lucide-react";
-import ThemedIcon from "@/components/Icon";
-
 function MobileBottomNavInner({
   pathname,
   toggleView,
@@ -190,7 +187,7 @@ function MobileBottomNavInner({
         {/* Branding doubles as the way home — the mobile shell has no top bar. */}
         <Link href="/" onClick={close} className="flex items-center gap-2.5">
           <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-primary text-primary-foreground">
-            <Command size={14} strokeWidth={2.5} />
+            <AppIcon name="Command" size={14} strokeWidth={2.5} />
           </span>
           <div>
             <div className="text-sm font-semibold text-foreground">CommandCenter</div>
@@ -202,7 +199,7 @@ function MobileBottomNavInner({
           className="rounded-lg p-1.5 text-muted-foreground hover:bg-secondary"
           aria-label="Close"
         >
-          <X size={16} />
+          <AppIcon name="X" size={16} />
         </button>
       </div>
       <nav className="flex flex-col overflow-y-auto">
@@ -232,7 +229,7 @@ function MobileBottomNavInner({
                     }`}
                   >
                     <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-secondary text-muted-foreground">
-                      <ThemedIcon name={p.icon} size={15} strokeWidth={active ? 2.5 : 2} />
+                      <AppIcon name={p.icon} size={15} strokeWidth={active ? 2.5 : 2} />
                     </span>
                     <span className="text-sm font-medium">{p.label}</span>
                   </Link>
@@ -248,7 +245,7 @@ function MobileBottomNavInner({
           onClick={() => { toggleView(); close(); }}
           className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm text-muted-foreground hover:bg-secondary hover:text-foreground tech-transition"
         >
-          <Monitor size={16} className="shrink-0" />
+          <AppIcon name="Monitor" size={16} className="shrink-0" />
           Desktop view
         </button>
         {session?.user && (
@@ -256,7 +253,7 @@ function MobileBottomNavInner({
             onClick={() => signOut({ callbackUrl: "/signin" })}
             className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm text-muted-foreground hover:bg-secondary hover:text-foreground tech-transition"
           >
-            <LogOut size={16} className="shrink-0" />
+            <AppIcon name="LogOut" size={16} className="shrink-0" />
             Sign out
           </button>
         )}
@@ -309,7 +306,7 @@ function MobileBottomNavInner({
             isOpen ? "text-primary" : "text-muted-foreground hover:text-foreground"
           }`}
         >
-          <MenuIcon size={20} />
+          <AppIcon name="Menu" size={20} />
           <span className="text-[10px] font-medium leading-none">Menu</span>
         </button>
         {isEmailPage && (
@@ -318,21 +315,21 @@ function MobileBottomNavInner({
               onClick={() => dispatchNav("email-accounts")}
               className="flex flex-1 min-w-0 flex-col items-center gap-0.5 px-1 py-1 rounded-lg transition-colors text-muted-foreground hover:text-foreground"
             >
-              <Mail size={20} />
+              <AppIcon name="Mail" size={20} />
               <span className="text-[10px] font-medium leading-none">Inbox</span>
             </button>
             <button
               onClick={() => dispatchNav("email-automation")}
               className="flex flex-1 min-w-0 flex-col items-center gap-0.5 px-1 py-1 rounded-lg transition-colors text-muted-foreground hover:text-foreground"
             >
-              <Zap size={20} />
+              <AppIcon name="Zap" size={20} />
               <span className="text-[10px] font-medium leading-none">Automation</span>
             </button>
             <button
               onClick={() => dispatchNav("email-ai")}
               className="flex flex-1 min-w-0 flex-col items-center gap-0.5 px-1 py-1 rounded-lg transition-colors text-muted-foreground hover:text-foreground"
             >
-              <MessageCircle size={20} />
+              <AppIcon name="MessageCircle" size={20} />
               <span className="text-[10px] font-medium leading-none">AI Chat</span>
             </button>
           </>
@@ -343,7 +340,7 @@ function MobileBottomNavInner({
               onClick={() => dispatchNav("chats")}
               className="relative flex flex-1 min-w-0 flex-col items-center gap-0.5 px-1 py-1 rounded-lg transition-colors text-muted-foreground hover:text-foreground"
             >
-              <MessageCircle size={20} />
+              <AppIcon name="MessageCircle" size={20} />
               {activeCount > 0 && (
                 <span className="absolute -top-0.5 right-2 flex items-center justify-center min-w-[16px] h-4 px-1 rounded-full bg-success text-success-foreground text-[9px] font-bold animate-pulse">
                   {activeCount}
@@ -355,7 +352,7 @@ function MobileBottomNavInner({
               onClick={() => dispatchNav("files")}
               className="flex flex-1 min-w-0 flex-col items-center gap-0.5 px-1 py-1 rounded-lg transition-colors text-muted-foreground hover:text-foreground"
             >
-              <FolderOpen size={20} />
+              <AppIcon name="FolderOpen" size={20} />
               <span className="text-[10px] font-medium leading-none">Files</span>
             </button>
           </>
@@ -365,24 +362,24 @@ function MobileBottomNavInner({
             <TaskTab
               active={tasksSection === "inbox"}
               onClick={() => dispatchNav("tasks-inbox")}
-              icon={Inbox}
+              icon={themedIcon("Inbox")}
               label="Inbox"
             />
             <TaskTab
               active={tasksSection !== "inbox"}
               onClick={() => dispatchNav("tasks-lists")}
-              icon={ListChecks}
+              icon={themedIcon("ListChecks")}
               label="Lists"
             />
             <TaskTab
               onClick={() => dispatchNav("tasks-capture")}
-              icon={Plus}
+              icon={themedIcon("Plus")}
               label="Capture"
               accent
             />
             <TaskTab
               onClick={() => dispatchNav("tasks-assistant")}
-              icon={Sparkles}
+              icon={themedIcon("Sparkles")}
               label="Assistant"
             />
           </>
@@ -391,23 +388,23 @@ function MobileBottomNavInner({
           <>
             <TaskTab
               onClick={() => dispatchNav("notes-record")}
-              icon={Mic}
+              icon={themedIcon("Mic")}
               label="Record"
               accent
             />
             <TaskTab
               onClick={() => dispatchNav("notes-join")}
-              icon={Video}
+              icon={themedIcon("Video")}
               label="Join call"
             />
             <TaskTab
               onClick={() => dispatchNav("notes-upload")}
-              icon={Upload}
+              icon={themedIcon("Upload")}
               label="Upload"
             />
             <TaskTab
               onClick={() => dispatchNav("notes-glossary")}
-              icon={BookMarked}
+              icon={themedIcon("BookMarked")}
               label="Glossary"
             />
           </>
@@ -415,14 +412,14 @@ function MobileBottomNavInner({
         {isWhatsAppInbox && (
           <TaskTab
             onClick={() => dispatchNav("wa-triage")}
-            icon={Filter}
+            icon={themedIcon("Filter")}
             label="Triage"
           />
         )}
         {isWhatsAppPage && (
           <TaskTab
             onClick={() => dispatchNav("wa-sections")}
-            icon={LayoutGrid}
+            icon={themedIcon("LayoutGrid")}
             label="Sections"
           />
         )}
@@ -430,23 +427,23 @@ function MobileBottomNavInner({
           <>
             <TaskTab
               onClick={() => dispatchNav("workshop-chat")}
-              icon={Sparkles}
+              icon={themedIcon("Sparkles")}
               label="Chat"
               accent
             />
             <TaskTab
               onClick={() => dispatchNav("workshop-preview")}
-              icon={Play}
+              icon={themedIcon("Play")}
               label="Preview"
             />
             <TaskTab
               onClick={() => dispatchNav("workshop-code")}
-              icon={FileCode}
+              icon={themedIcon("FileCode")}
               label="Code"
             />
             <TaskTab
               onClick={() => dispatchNav("workshop-tests")}
-              icon={FlaskConical}
+              icon={themedIcon("FlaskConical")}
               label="Tests"
             />
           </>
@@ -464,7 +461,7 @@ function TaskTab({
 }: {
   active?: boolean;
   onClick: () => void;
-  icon: typeof Inbox;
+  icon: ThemedIcon;
   label: string;
   accent?: boolean;
 }) {

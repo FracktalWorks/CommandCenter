@@ -1,9 +1,7 @@
 "use client";
 
+import Icon from "@/components/Icon";
 import { useCallback, useEffect, useState } from "react";
-import {
-  AlertTriangle, ArrowRight, CheckCircle2, Loader2, Sparkles, X,
-} from "lucide-react";
 import {
   createEmailCapture, createReplyCommitment, detectReplyCommitment,
   enhanceEmailCapture, previewEmailCapture,
@@ -233,21 +231,21 @@ export function TaskCaptureModal({
             className="text-muted-foreground hover:text-foreground flex-shrink-0 disabled:opacity-40"
             title="Close (Esc)"
           >
-            <X size={16} />
+            <Icon name="X" size={16} />
           </button>
         </div>
 
         <div className="overflow-y-auto px-4 py-3 flex-1 space-y-3">
           {loading ? (
             <div className="flex items-center gap-2 text-xs text-muted-foreground py-8 justify-center">
-              <Loader2 className="animate-spin" size={14} /> Preparing task…
+              <Icon name="Loader2" className="animate-spin" size={14} /> Preparing task…
             </div>
           ) : (
             <>
               {/* Already captured — offer to open instead of duplicating. */}
               {already && (
                 <div className="flex items-start gap-2 rounded-lg border border-primary/30 bg-primary/5 px-3 py-2 text-xs">
-                  <CheckCircle2 size={14} className="text-primary mt-0.5 flex-shrink-0" />
+                  <Icon name="CheckCircle2" size={14} className="text-primary mt-0.5 flex-shrink-0" />
                   <div className="min-w-0">
                     <div className="text-foreground">
                       This email is already in Tasks: &ldquo;{already.title}&rdquo;
@@ -263,7 +261,7 @@ export function TaskCaptureModal({
               {similar.length > 0 && (
                 <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs">
                   <div className="flex items-center gap-1.5 text-amber-600 dark:text-amber-500 font-medium mb-1">
-                    <AlertTriangle size={13} /> You may already have this
+                    <Icon name="AlertTriangle" size={13} /> You may already have this
                   </div>
                   <ul className="space-y-0.5">
                     {similar.map((s) => (
@@ -300,9 +298,9 @@ export function TaskCaptureModal({
                 className="inline-flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1.5 text-xs text-muted-foreground hover:border-primary/40 hover:text-primary transition-colors disabled:opacity-50"
               >
                 {enhancing ? (
-                  <Loader2 size={13} className="animate-spin" />
+                  <Icon name="Loader2" size={13} className="animate-spin" />
                 ) : (
-                  <Sparkles size={13} />
+                  <Icon name="Sparkles" size={13} />
                 )}
                 {enhancing
                   ? commitment
@@ -482,7 +480,7 @@ export function TaskCaptureModal({
                               className="flex-shrink-0 text-muted-foreground/50 hover:text-destructive"
                               title="Remove step"
                             >
-                              <X size={12} />
+                              <Icon name="X" size={12} />
                             </button>
                           </li>
                         ))}
@@ -512,9 +510,9 @@ export function TaskCaptureModal({
             className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90 disabled:opacity-40"
           >
             {saving ? (
-              <Loader2 size={13} className="animate-spin" />
+              <Icon name="Loader2" size={13} className="animate-spin" />
             ) : (
-              <ArrowRight size={13} />
+              <Icon name="ArrowRight" size={13} />
             )}
             {already ? "Add anyway" : "Add task"}
           </button>

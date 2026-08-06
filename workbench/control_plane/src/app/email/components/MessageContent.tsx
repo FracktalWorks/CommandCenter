@@ -1,8 +1,8 @@
 "use client";
 
+import Icon from "@/components/Icon";
 import { useEffect, useMemo, useRef, useState } from "react";
 import DOMPurify from "dompurify";
-import { ImageOff, MoreHorizontal } from "lucide-react";
 import { splitQuotedHtml, splitQuotedText } from "../lib/quoting";
 
 interface MessageContentProps {
@@ -95,7 +95,7 @@ function QuoteToggle({
           : "border-border bg-secondary text-muted-foreground hover:bg-secondary/70 hover:text-foreground"
       }`}
     >
-      <MoreHorizontal size={14} />
+      <Icon name="MoreHorizontal" size={14} />
     </button>
   );
 }
@@ -224,7 +224,7 @@ function HtmlFrame({ html, quoted = false }: { html: string; quoted?: boolean })
       {sanitized?.hasRemote && !showImages && (
         <div className="flex items-center justify-between gap-2 mb-2 px-3 py-2 rounded-md bg-secondary border border-border text-xs">
           <span className="flex items-center gap-2 text-muted-foreground">
-            <ImageOff size={13} />
+            <Icon name="ImageOff" size={13} />
             Remote images are blocked to protect your privacy.
           </span>
           <button

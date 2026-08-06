@@ -6,8 +6,8 @@
  * and sends via the existing /email/send (spec §3.9). Nothing sends on its own.
  */
 
+import Icon from "@/components/Icon";
 import { useEffect, useState } from "react";
-import { Loader2, Send, X } from "lucide-react";
 import {
   draftFollowupEmail,
   listEmailAccounts,
@@ -95,13 +95,13 @@ export default function FollowupEmailModal({
             className="p-1.5 rounded-lg text-muted-foreground hover:bg-secondary tech-transition"
             aria-label="Close"
           >
-            <X className="w-4 h-4" />
+            <Icon name="X" className="w-4 h-4" />
           </button>
         </div>
 
         {loading ? (
           <div className="flex items-center justify-center py-16">
-            <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
+            <Icon name="Loader2" className="w-5 h-5 animate-spin text-muted-foreground" />
           </div>
         ) : (
           <div className="p-4 space-y-3 overflow-y-auto">
@@ -181,9 +181,9 @@ export default function FollowupEmailModal({
           >
             <span className="flex items-center gap-1.5">
               {sending ? (
-                <Loader2 className="w-4 h-4 animate-spin" />
+                <Icon name="Loader2" className="w-4 h-4 animate-spin" />
               ) : (
-                <Send className="w-4 h-4" />
+                <Icon name="Send" className="w-4 h-4" />
               )}
               Send
             </span>

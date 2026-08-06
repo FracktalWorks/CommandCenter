@@ -24,22 +24,9 @@
  * gateway's, and this is only a courtesy (`lib/access.ts:126-129`).
  */
 
+import Icon from "@/components/Icon";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import {
-  AlertTriangle,
-  Check,
-  DoorOpen,
-  Loader2,
-  Plus,
-  RefreshCw,
-  ShieldOff,
-  Trash2,
-  UserMinus,
-  UserPlus,
-  Users,
-  X,
-} from "lucide-react";
 import FilterPills from "@/components/FilterPills";
 import Tabs from "@/components/Tabs";
 import { useAccess } from "@/components/AccessProvider";
@@ -391,7 +378,7 @@ export default function MembersPage() {
     return (
       <div className="flex h-full items-center justify-center p-8">
         <div className="max-w-sm rounded-xl border border-border bg-card p-8 text-center">
-          <ShieldOff size={20} className="mx-auto mb-3 text-muted-foreground" />
+          <Icon name="ShieldOff" size={20} className="mx-auto mb-3 text-muted-foreground" />
           <h1 className="text-base font-semibold text-foreground">
             Members is admin-only
           </h1>
@@ -420,7 +407,7 @@ export default function MembersPage() {
             className="rounded-lg border border-border p-2 text-muted-foreground tech-transition hover:bg-secondary"
             title="Refresh"
           >
-            <RefreshCw size={16} />
+            <Icon name="RefreshCw" size={16} />
           </button>
           <Link
             href="/settings/groups"
@@ -438,7 +425,7 @@ export default function MembersPage() {
             onClick={() => setInviting(true)}
             className="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground tech-transition hover:opacity-90 sm:px-4"
           >
-            <Plus size={15} />
+            <Icon name="Plus" size={15} />
             Invite
           </button>
         </div>
@@ -449,11 +436,11 @@ export default function MembersPage() {
         activeTab={tab}
         onTabChange={setTab}
         tabs={[
-          { id: "members", label: "Members", icon: Users, count: counts.all },
+          { id: "members", label: "Members", icon: "Users", count: counts.all },
           {
             id: "requests",
             label: "Requests",
-            icon: DoorOpen,
+            icon: "DoorOpen",
             // Only badged when there is something to answer — a permanent "0"
             // is the kind of chrome people stop reading. When the queue failed
             // to load there is no honest count, so the tooltip says so rather
@@ -483,7 +470,7 @@ export default function MembersPage() {
         <div className="mx-4 mt-3 flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive sm:mx-6">
           <span className="flex-1">{error}</span>
           <button onClick={() => setError("")} aria-label="Dismiss">
-            <X size={13} />
+            <Icon name="X" size={13} />
           </button>
         </div>
       )}
@@ -492,7 +479,7 @@ export default function MembersPage() {
         <div className="mx-4 mt-3 flex items-start gap-2 rounded-lg border border-border bg-secondary px-3 py-2 text-xs text-muted-foreground sm:mx-6">
           <span className="flex-1">{notice}</span>
           <button onClick={() => setNotice("")} aria-label="Dismiss">
-            <X size={13} />
+            <Icon name="X" size={13} />
           </button>
         </div>
       )}
@@ -503,7 +490,7 @@ export default function MembersPage() {
           succeeds. */}
       {queueError && (
         <div className="mx-4 mt-3 flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning sm:mx-6">
-          <AlertTriangle size={13} className="mt-0.5 shrink-0" />
+          <Icon name="AlertTriangle" size={13} className="mt-0.5 shrink-0" />
           <span className="flex-1">
             {queueError} The roster below is unaffected.
           </span>
@@ -513,7 +500,7 @@ export default function MembersPage() {
       <div className="flex-1 overflow-y-auto px-4 py-4 sm:px-6">
         {loading ? (
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
-            <Loader2 size={14} className="animate-spin" /> Loading members…
+            <Icon name="Loader2" size={14} className="animate-spin" /> Loading members…
           </div>
         ) : tab === "requests" ? (
           <RequestsTab
@@ -698,7 +685,7 @@ function MemberRow({
             onClick={() => onRemove(member)}
             className="flex items-center gap-1 rounded-lg border border-destructive/30 px-2.5 py-1.5 text-[11px] text-destructive tech-transition hover:bg-destructive/10"
           >
-            <UserMinus size={12} />
+            <Icon name="UserMinus" size={12} />
             Remove
           </button>
         )}
@@ -711,7 +698,7 @@ function MemberRow({
             title="Delete this person and every credential and access grant they hold. Their work and the audit trail are kept."
             className="flex items-center gap-1 rounded-lg bg-destructive px-2.5 py-1.5 text-[11px] font-medium text-destructive-foreground tech-transition hover:opacity-90"
           >
-            <Trash2 size={12} />
+            <Icon name="Trash2" size={12} />
             Delete permanently
           </button>
         )}
@@ -744,7 +731,7 @@ function RemoveDialog({
       <div className="absolute inset-0 bg-black/60" onClick={onClose} />
       <div className="relative w-full max-w-md rounded-xl border border-border bg-card p-5 shadow-2xl">
         <h2 className="flex items-center gap-2 text-sm font-semibold text-foreground">
-          <UserMinus size={15} className="text-destructive" />
+          <Icon name="UserMinus" size={15} className="text-destructive" />
           Remove {member.display_name || member.email}?
         </h2>
         <p className="mt-2 text-xs text-muted-foreground">
@@ -774,7 +761,7 @@ function RemoveDialog({
             disabled={busy}
             className="flex items-center gap-1.5 rounded-lg bg-destructive px-4 py-2 text-sm font-medium text-destructive-foreground tech-transition hover:opacity-90 disabled:opacity-50"
           >
-            {busy && <Loader2 size={14} className="animate-spin" />}
+            {busy && <Icon name="Loader2" size={14} className="animate-spin" />}
             Remove
           </button>
         </div>
@@ -821,7 +808,7 @@ function PurgeDialog({
       <div className="absolute inset-0 bg-black/60" onClick={onClose} />
       <div className="relative w-full max-w-md rounded-xl border border-destructive/40 bg-card p-5 shadow-2xl">
         <h2 className="flex items-center gap-2 text-sm font-semibold text-foreground">
-          <Trash2 size={15} className="text-destructive" />
+          <Icon name="Trash2" size={15} className="text-destructive" />
           Delete {member.display_name || member.email} permanently?
         </h2>
         <p className="mt-2 text-xs text-muted-foreground">
@@ -892,7 +879,7 @@ function PurgeDialog({
             disabled={busy || !confirmed}
             className="flex items-center gap-1.5 rounded-lg bg-destructive px-4 py-2 text-sm font-medium text-destructive-foreground tech-transition hover:opacity-90 disabled:opacity-50"
           >
-            {busy && <Loader2 size={14} className="animate-spin" />}
+            {busy && <Icon name="Loader2" size={14} className="animate-spin" />}
             Delete permanently
           </button>
         </div>
@@ -931,7 +918,7 @@ function RequestsTab({
   if (failed) {
     return (
       <div className="rounded-xl border border-dashed border-warning/40 p-8 text-center">
-        <AlertTriangle size={18} className="mx-auto mb-2 text-warning" />
+        <Icon name="AlertTriangle" size={18} className="mx-auto mb-2 text-warning" />
         <p className="text-xs text-muted-foreground">
           The sign-in queue is unavailable, so this list is not the truth.
           People may be locked out without appearing here. Retry with Refresh;
@@ -944,7 +931,7 @@ function RequestsTab({
   if (requests.length === 0) {
     return (
       <div className="rounded-xl border border-dashed border-border p-8 text-center">
-        <DoorOpen size={18} className="mx-auto mb-2 text-muted-foreground" />
+        <Icon name="DoorOpen" size={18} className="mx-auto mb-2 text-muted-foreground" />
         <p className="text-xs text-muted-foreground">
           Nobody is waiting. Anyone who signs in without an account shows up
           here — you do not have to be told.
@@ -1004,7 +991,7 @@ function RequestRow({
               className="flex shrink-0 items-center gap-1 rounded-md bg-warning/10 px-1.5 py-0.5 text-[10px] text-warning"
               title="Outside the company sign-in domain. Guests invited into the directory can sign in too — check who this is before approving."
             >
-              <AlertTriangle size={10} />
+              <Icon name="AlertTriangle" size={10} />
               outside the company domain
             </span>
           )}
@@ -1050,9 +1037,9 @@ function RequestRow({
           className="flex items-center gap-1.5 rounded-lg bg-primary px-2.5 py-1.5 text-[11px] font-medium text-primary-foreground tech-transition hover:opacity-90 disabled:opacity-50"
         >
           {busy ? (
-            <Loader2 size={12} className="animate-spin" />
+            <Icon name="Loader2" size={12} className="animate-spin" />
           ) : (
-            <Check size={12} />
+            <Icon name="Check" size={12} />
           )}
           Approve
         </button>
@@ -1117,7 +1104,7 @@ function InviteDialog({
         <div className="mb-4 flex items-start justify-between">
           <div>
             <h2 className="flex items-center gap-2 text-sm font-semibold text-foreground">
-              <UserPlus size={15} /> Invite a member
+              <Icon name="UserPlus" size={15} /> Invite a member
             </h2>
             <p className="mt-1 text-xs text-muted-foreground">
               Sign-in is Microsoft SSO — this provisions their access, it does
@@ -1129,7 +1116,7 @@ function InviteDialog({
             className="rounded-lg p-1 text-muted-foreground hover:bg-secondary"
             aria-label="Close"
           >
-            <X size={15} />
+            <Icon name="X" size={15} />
           </button>
         </div>
 
@@ -1189,7 +1176,7 @@ function InviteDialog({
             disabled={busy || !email.includes("@")}
             className="flex items-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground tech-transition hover:opacity-90 disabled:opacity-50"
           >
-            {busy && <Loader2 size={14} className="animate-spin" />}
+            {busy && <Icon name="Loader2" size={14} className="animate-spin" />}
             Invite
           </button>
         </div>

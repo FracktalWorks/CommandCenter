@@ -6,8 +6,8 @@
  * product names, people and customers get spelled right.
  */
 
+import Icon from "@/components/Icon";
 import { useEffect, useState } from "react";
-import { Loader2, Plus, X } from "lucide-react";
 import {
   addGlossaryTerm,
   deleteGlossaryTerm,
@@ -73,7 +73,7 @@ export default function GlossaryModal({ onClose }: { onClose: () => void }) {
             className="p-1.5 rounded-lg text-muted-foreground hover:bg-secondary tech-transition"
             aria-label="Close"
           >
-            <X className="w-4 h-4" />
+            <Icon name="X" className="w-4 h-4" />
           </button>
         </div>
 
@@ -98,16 +98,16 @@ export default function GlossaryModal({ onClose }: { onClose: () => void }) {
               aria-label="Add term"
             >
               {busy ? (
-                <Loader2 className="w-4 h-4 animate-spin" />
+                <Icon name="Loader2" className="w-4 h-4 animate-spin" />
               ) : (
-                <Plus className="w-4 h-4" />
+                <Icon name="Plus" className="w-4 h-4" />
               )}
             </button>
           </div>
 
           {loading ? (
             <div className="flex items-center justify-center py-8">
-              <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
+              <Icon name="Loader2" className="w-5 h-5 animate-spin text-muted-foreground" />
             </div>
           ) : terms.length === 0 ? (
             <p className="text-xs text-muted-foreground text-center py-6">
@@ -127,7 +127,7 @@ export default function GlossaryModal({ onClose }: { onClose: () => void }) {
                     className="text-muted-foreground hover:text-destructive"
                     aria-label={`Remove ${t.term}`}
                   >
-                    <X className="w-3 h-3" />
+                    <Icon name="X" className="w-3 h-3" />
                   </button>
                 </span>
               ))}

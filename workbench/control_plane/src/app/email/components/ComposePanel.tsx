@@ -1,7 +1,7 @@
 "use client";
 
+import Icon from "@/components/Icon";
 import { useState, useEffect, useRef } from "react";
-import { X, Loader2, Paperclip } from "lucide-react";
 import { useEmailStore } from "../lib/emailStore";
 import {
   fileToSendAttachment,
@@ -263,7 +263,7 @@ export function ComposePanel({
             onClick={onClose}
             className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
           >
-            <X size={16} />
+            <Icon name="X" size={16} />
           </button>
         </div>
 
@@ -330,14 +330,14 @@ export function ComposePanel({
                   key={`f-${i}`}
                   className="inline-flex items-center gap-1 text-[10px] px-2 py-1 rounded-md border border-border bg-secondary text-muted-foreground"
                 >
-                  <Paperclip size={10} />
+                  <Icon name="Paperclip" size={10} />
                   <span className="truncate max-w-[160px]" title={a.filename}>{a.filename}</span>
                   <button
                     onClick={() => setAttachments((prev) => prev.filter((_, j) => j !== i))}
                     className="hover:text-foreground"
                     title="Remove attachment"
                   >
-                    <X size={10} />
+                    <Icon name="X" size={10} />
                   </button>
                 </span>
               ))}
@@ -347,14 +347,14 @@ export function ComposePanel({
                   className="inline-flex items-center gap-1 text-[10px] px-2 py-1 rounded-md border border-primary/40 bg-primary/5 text-primary"
                   title={a.path}
                 >
-                  <Paperclip size={10} />
+                  <Icon name="Paperclip" size={10} />
                   <span className="truncate max-w-[160px]">{a.name || a.path}</span>
                   <button
                     onClick={() => setArtifacts((prev) => prev.filter((_, j) => j !== i))}
                     className="hover:text-foreground"
                     title="Remove attachment"
                   >
-                    <X size={10} />
+                    <Icon name="X" size={10} />
                   </button>
                 </span>
               ))}
@@ -402,7 +402,7 @@ export function ComposePanel({
               className="px-2 py-1.5 text-xs rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors cursor-pointer flex items-center"
               title="Attach files"
             >
-              <Paperclip size={14} />
+              <Icon name="Paperclip" size={14} />
               <input
                 type="file"
                 multiple
@@ -431,7 +431,7 @@ export function ComposePanel({
               disabled={sending || !to.trim()}
               className="px-4 py-1.5 text-xs rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors font-medium disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5"
             >
-              {sending && <Loader2 size={12} className="animate-spin" />}
+              {sending && <Icon name="Loader2" size={12} className="animate-spin" />}
               {sending ? "Sending…" : "Send"}
             </button>
           </div>

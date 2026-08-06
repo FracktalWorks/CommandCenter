@@ -19,12 +19,12 @@
  * watches it stream in.
  */
 
+import Icon from "@/components/Icon";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeRaw from "rehype-raw";
 import { useTheme } from "next-themes";
-import { Eye, Pencil, Save, RotateCcw, Download, Loader2 } from "lucide-react";
 import SandboxedHtml from "@/components/SandboxedHtml";
 import SandboxedReact from "@/components/SandboxedReact";
 import { buildIconMap, iconsUsedIn } from "@/lib/iconSvg";
@@ -165,7 +165,7 @@ export default function DocumentPane({ sessionId, path, name, live }: DocumentPa
       <span className="truncate text-xs font-medium text-foreground">{name}</span>
       {live && (
         <span className="flex items-center gap-1 rounded-full bg-primary/15 px-1.5 py-0.5 text-[10px] font-medium text-primary">
-          <Loader2 size={9} className="animate-spin" />
+          <Icon name="Loader2" size={9} className="animate-spin" />
           writing
         </span>
       )}
@@ -177,7 +177,7 @@ export default function DocumentPane({ sessionId, path, name, live }: DocumentPa
             className="flex items-center gap-1 rounded px-2 py-1 text-[11px] text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
             title="Rendered preview"
           >
-            <Eye size={12} /> Preview
+            <Icon name="Eye" size={12} /> Preview
           </button>
         )}
         {editable && mode === "preview" && (
@@ -186,7 +186,7 @@ export default function DocumentPane({ sessionId, path, name, live }: DocumentPa
             className="flex items-center gap-1 rounded px-2 py-1 text-[11px] text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
             title="Edit"
           >
-            <Pencil size={12} /> Edit
+            <Icon name="Pencil" size={12} /> Edit
           </button>
         )}
         {mode === "edit" && (
@@ -197,7 +197,7 @@ export default function DocumentPane({ sessionId, path, name, live }: DocumentPa
               className="flex items-center gap-1 rounded px-2 py-1 text-[11px] text-primary hover:bg-primary/10 transition-colors disabled:opacity-40"
               title="Save"
             >
-              <Save size={12} /> {saving ? "Saving…" : "Save"}
+              <Icon name="Save" size={12} /> {saving ? "Saving…" : "Save"}
             </button>
             <button
               onClick={cancelEdit}
@@ -205,7 +205,7 @@ export default function DocumentPane({ sessionId, path, name, live }: DocumentPa
               className="flex items-center gap-1 rounded px-2 py-1 text-[11px] text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
               title="Discard changes"
             >
-              <RotateCcw size={12} />
+              <Icon name="RotateCcw" size={12} />
             </button>
           </>
         )}
@@ -215,7 +215,7 @@ export default function DocumentPane({ sessionId, path, name, live }: DocumentPa
           className="flex items-center gap-1 rounded px-2 py-1 text-[11px] text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
           title={`Download ${name}`}
         >
-          <Download size={12} />
+          <Icon name="Download" size={12} />
         </a>
       </div>
     </div>
@@ -226,7 +226,7 @@ export default function DocumentPane({ sessionId, path, name, live }: DocumentPa
   if (loading) {
     body = (
       <div className="flex flex-1 items-center justify-center text-xs text-muted-foreground">
-        <Loader2 size={14} className="mr-2 animate-spin" /> Loading…
+        <Icon name="Loader2" size={14} className="mr-2 animate-spin" /> Loading…
       </div>
     );
   } else if (error) {
@@ -252,7 +252,7 @@ export default function DocumentPane({ sessionId, path, name, live }: DocumentPa
           download={name}
           className="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90 transition"
         >
-          <Download size={13} /> Download {name}
+          <Icon name="Download" size={13} /> Download {name}
         </a>
       </div>
     );
@@ -301,7 +301,7 @@ export default function DocumentPane({ sessionId, path, name, live }: DocumentPa
     body = live ? (
       <div className="flex-1 overflow-auto">
         <div className="flex items-center gap-1.5 border-b border-border/60 bg-card/40 px-3 py-1 text-[10px] text-muted-foreground">
-          <Loader2 size={9} className="animate-spin" />
+          <Icon name="Loader2" size={9} className="animate-spin" />
           building — renders when the agent finishes writing
         </div>
         <pre className="whitespace-pre-wrap break-words p-3 font-mono text-[12px] leading-relaxed text-muted-foreground">

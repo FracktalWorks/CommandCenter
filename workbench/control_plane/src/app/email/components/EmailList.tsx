@@ -1,13 +1,7 @@
 "use client";
 
+import AppIcon, { themedIcon } from "@/components/Icon";
 import { useState, useRef, useEffect, useCallback } from "react";
-import {
-  Pencil, Trash2, Archive, Flag, FolderInput,
-  Reply, ReplyAll, Forward, MailOpen, Mail, Tag,
-  Paperclip, Star, AlertTriangle, ChevronRight, Loader2, Check, X,
-  MessagesSquare, RefreshCw, Minus, Plus,
-  ListChecks, Clock, AlarmClockOff, MessageCircle,
-} from "lucide-react";
 import { Email } from "../lib/types";
 import { timeLabel } from "../lib/utils";
 import { useEmailStore, isRealFolder } from "../lib/emailStore";
@@ -35,15 +29,15 @@ interface EmailListProps {
 // respond → dispose → organize. "move"/"label" open the context menu (folder &
 // label pickers); everything else routes through onToolbarAction.
 const TOOLBAR_ACTIONS = [
-  { icon: Reply, label: "Reply", key: "reply" },
-  { icon: ReplyAll, label: "Reply All", key: "reply-all" },
-  { icon: Forward, label: "Forward", key: "forward" },
-  { icon: Archive, label: "Archive", key: "archive" },
-  { icon: Trash2, label: "Delete", key: "delete" },
-  { icon: FolderInput, label: "Move", key: "move" },
-  { icon: MailOpen, label: "Mark as Read", key: "mark-read" },
-  { icon: Flag, label: "Flag", key: "flag" },
-  { icon: Tag, label: "Label", key: "label" },
+  { icon: themedIcon("Reply"), label: "Reply", key: "reply" },
+  { icon: themedIcon("ReplyAll"), label: "Reply All", key: "reply-all" },
+  { icon: themedIcon("Forward"), label: "Forward", key: "forward" },
+  { icon: themedIcon("Archive"), label: "Archive", key: "archive" },
+  { icon: themedIcon("Trash2"), label: "Delete", key: "delete" },
+  { icon: themedIcon("FolderInput"), label: "Move", key: "move" },
+  { icon: themedIcon("MailOpen"), label: "Mark as Read", key: "mark-read" },
+  { icon: themedIcon("Flag"), label: "Flag", key: "flag" },
+  { icon: themedIcon("Tag"), label: "Label", key: "label" },
 ];
 
 // Render a search highlight (ts_headline output) safely: the server wraps the
@@ -289,17 +283,17 @@ export function EmailList({
             {selected.size} selected
           </span>
           <div className="flex-1" />
-          <ToolbarBtn icon={MailOpen} label="Mark read" onClick={() => bulkUpdate({ isRead: true })} />
-          <ToolbarBtn icon={Mail} label="Mark unread" onClick={() => bulkUpdate({ isRead: false })} />
-          <ToolbarBtn icon={Flag} label="Flag" onClick={() => bulkUpdate({ isFlagged: true })} />
-          <ToolbarBtn icon={Archive} label="Archive" onClick={() => bulkUpdate({ folder: "archive" })} />
-          <ToolbarBtn icon={Trash2} label="Delete" onClick={bulkDelete} />
+          <ToolbarBtn icon={themedIcon("MailOpen")} label="Mark read" onClick={() => bulkUpdate({ isRead: true })} />
+          <ToolbarBtn icon={themedIcon("Mail")} label="Mark unread" onClick={() => bulkUpdate({ isRead: false })} />
+          <ToolbarBtn icon={themedIcon("Flag")} label="Flag" onClick={() => bulkUpdate({ isFlagged: true })} />
+          <ToolbarBtn icon={themedIcon("Archive")} label="Archive" onClick={() => bulkUpdate({ folder: "archive" })} />
+          <ToolbarBtn icon={themedIcon("Trash2")} label="Delete" onClick={bulkDelete} />
           <button
             onClick={clearSelection}
             title="Clear selection"
             className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
           >
-            <X size={13} />
+            <AppIcon name="X" size={13} />
           </button>
         </div>
       ) : (
@@ -310,7 +304,7 @@ export function EmailList({
             onClick={onCompose}
             className="flex items-center gap-1 px-2.5 py-1.5 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors flex-shrink-0"
           >
-            <Pencil size={12} />
+            <AppIcon name="Pencil" size={12} />
             <span className="text-[10px] font-medium">New</span>
           </button>
 
@@ -352,7 +346,7 @@ export function EmailList({
       {/* Active label filter */}
       {selectedLabel && (
         <div className="flex items-center gap-1.5 px-2 py-1 border-b border-border flex-shrink-0 bg-primary/5 text-[11px]">
-          <Tag size={11} className="text-primary flex-shrink-0" />
+          <AppIcon name="Tag" size={11} className="text-primary flex-shrink-0" />
           <span className="text-foreground/70">
             Filtered by label <b className="text-primary">{selectedLabel}</b>
           </span>
@@ -361,7 +355,7 @@ export function EmailList({
             title="Clear label filter"
             className="ml-auto flex items-center gap-0.5 text-muted-foreground hover:text-foreground"
           >
-            <X size={11} /> Clear
+            <AppIcon name="X" size={11} /> Clear
           </button>
         </div>
       )}
@@ -397,7 +391,7 @@ export function EmailList({
             className="flex items-center justify-center text-muted-foreground overflow-hidden transition-[height]"
             style={{ height: syncing ? 36 : pullY }}
           >
-            <RefreshCw
+            <AppIcon name="RefreshCw"
               size={16}
               className={syncing ? "animate-spin" : ""}
               style={syncing ? undefined : { transform: `rotate(${pullY * 3}deg)` }}
@@ -411,7 +405,7 @@ export function EmailList({
           </div>
         ) : emails.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-muted-foreground gap-2">
-            <MailOpen size={24} className="opacity-40" />
+            <AppIcon name="MailOpen" size={24} className="opacity-40" />
             <p className="text-xs">No emails to show</p>
           </div>
         ) : (
@@ -474,21 +468,21 @@ export function EmailList({
                         className="inline-flex items-center gap-0.5 text-[9px] px-1 py-0.5 rounded-full bg-secondary text-muted-foreground"
                         title={`${email.threadCount} messages in this conversation`}
                       >
-                        <MessagesSquare size={9} />
+                        <AppIcon name="MessagesSquare" size={9} />
                         {email.threadCount}
                       </span>
                     )}
                     {email.importance === "high" && (
-                      <AlertTriangle size={10} className="text-red-400" />
+                      <AppIcon name="AlertTriangle" size={10} className="text-red-400" />
                     )}
                     {email.hasAttachments && (
-                      <Paperclip size={10} className="text-muted-foreground" />
+                      <AppIcon name="Paperclip" size={10} className="text-muted-foreground" />
                     )}
                     {email.isFlagged && (
-                      <Flag size={10} className="text-amber-400 fill-amber-400" />
+                      <AppIcon name="Flag" size={10} className="text-amber-400 fill-amber-400" />
                     )}
                     {email.isStarred && (
-                      <Star size={10} className="text-amber-400 fill-amber-400" />
+                      <AppIcon name="Star" size={10} className="text-amber-400 fill-amber-400" />
                     )}
                     <span className="text-[10px] text-muted-foreground whitespace-nowrap">
                       {timeLabel(email.receivedAt)}
@@ -581,7 +575,7 @@ export function EmailList({
                   className="w-full flex items-center justify-center gap-1.5 py-2 rounded-md text-xs text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors disabled:opacity-50"
                 >
                   {(loadingMore || backfilling) && (
-                    <Loader2 size={12} className="animate-spin" />
+                    <AppIcon name="Loader2" size={12} className="animate-spin" />
                   )}
                   {backfilling
                     ? "Fetching older messages…"
@@ -730,11 +724,11 @@ function ContextMenu({
           </div>
         ) : (
           <>
-            <CtxItem icon={Reply} label="Reply" onClick={() => run(() => onReply("reply"))} />
-            <CtxItem icon={ReplyAll} label="Reply All" onClick={() => run(() => onReply("reply-all"))} />
-            <CtxItem icon={Forward} label="Forward" onClick={() => run(() => onReply("forward"))} />
+            <CtxItem icon={themedIcon("Reply")} label="Reply" onClick={() => run(() => onReply("reply"))} />
+            <CtxItem icon={themedIcon("ReplyAll")} label="Reply All" onClick={() => run(() => onReply("reply-all"))} />
+            <CtxItem icon={themedIcon("Forward")} label="Forward" onClick={() => run(() => onReply("forward"))} />
             <CtxItem
-              icon={MessageCircle}
+              icon={themedIcon("MessageCircle")}
               label="Fix category…"
               onClick={() => run(onFix)}
             />
@@ -743,18 +737,18 @@ function ContextMenu({
         )}
 
         <CtxItem
-          icon={ListChecks}
+          icon={themedIcon("ListChecks")}
           label={bulk ? `Add ${count} to Tasks` : "Add to Tasks"}
           onClick={() => run(onAddToTasks)}
         />
         {snoozedView ? (
           <CtxItem
-            icon={AlarmClockOff}
+            icon={themedIcon("AlarmClockOff")}
             label={bulk ? `Unsnooze ${count}` : "Unsnooze"}
             onClick={() => run(() => onSnooze(null))}
           />
         ) : (
-          <CtxSubmenu icon={Clock} label="Snooze until…" flipLeft={flipLeft}>
+          <CtxSubmenu icon={themedIcon("Clock")} label="Snooze until…" flipLeft={flipLeft}>
             {snoozePresets().map((p) => (
               <button
                 key={p.label}
@@ -775,22 +769,22 @@ function ContextMenu({
         )}
         <CtxDivider />
         <CtxItem
-          icon={MailOpen}
+          icon={themedIcon("MailOpen")}
           label="Mark as read"
           onClick={() => run(() => update({ isRead: true }))}
         />
         <CtxItem
-          icon={Mail}
+          icon={themedIcon("Mail")}
           label="Mark as unread"
           onClick={() => run(() => update({ isRead: false }))}
         />
         <CtxItem
-          icon={Flag}
+          icon={themedIcon("Flag")}
           label={bulk ? "Flag" : email.isFlagged ? "Clear flag" : "Flag / mark important"}
           onClick={() => run(() => update({ isFlagged: bulk ? true : !email.isFlagged }))}
         />
         <CtxItem
-          icon={Star}
+          icon={themedIcon("Star")}
           label={bulk ? "Add star" : email.isStarred ? "Remove star" : "Add star"}
           onClick={() => run(() => update({ isStarred: bulk ? true : !email.isStarred }))}
         />
@@ -798,7 +792,7 @@ function ContextMenu({
         <CtxDivider />
 
         {/* Move to → (Windows-style flyout submenu) */}
-        <CtxSubmenu icon={FolderInput} label="Move to…" flipLeft={flipLeft}>
+        <CtxSubmenu icon={themedIcon("FolderInput")} label="Move to…" flipLeft={flipLeft}>
           {moveTargets.length === 0 ? (
             <div className="px-3 py-1.5 text-muted-foreground">No other folders</div>
           ) : (
@@ -816,7 +810,7 @@ function ContextMenu({
 
         {/* Categories → add (single + bulk), with checkmarks for the single case */}
         <CtxSubmenu
-          icon={Tag}
+          icon={themedIcon("Tag")}
           label={bulk ? "Add category…" : "Categories…"}
           flipLeft={flipLeft}
           bare
@@ -832,14 +826,14 @@ function ContextMenu({
         {/* Clear all categories on the target (single or selection) */}
         {hasCategories && (
           <CtxItem
-            icon={Tag}
+            icon={themedIcon("Tag")}
             label={bulk ? `Clear categories on ${count}` : "Clear categories"}
             onClick={() => run(onClearCategories)}
           />
         )}
 
         <CtxItem
-          icon={Archive}
+          icon={themedIcon("Archive")}
           label="Archive"
           onClick={() => run(() => update({ folder: "archive" }))}
         />
@@ -847,7 +841,7 @@ function ContextMenu({
         <CtxDivider />
 
         <CtxItem
-          icon={Trash2}
+          icon={themedIcon("Trash2")}
           label={bulk ? `Delete ${count}` : "Delete"}
           danger
           onClick={() => run(del)}
@@ -887,7 +881,7 @@ function CtxSubmenu({
         <span className="flex items-center gap-2">
           <Icon size={13} /> {label}
         </span>
-        <ChevronRight size={12} className={flipLeft ? "rotate-180" : ""} />
+        <AppIcon name="ChevronRight" size={12} className={flipLeft ? "rotate-180" : ""} />
       </button>
       {open && (
         <div
@@ -989,7 +983,7 @@ function CtxLabelMenu({
             title="Add category"
             className="text-primary hover:opacity-80 disabled:opacity-40"
           >
-            <Plus size={13} />
+            <AppIcon name="Plus" size={13} />
           </button>
         </div>
       </div>
@@ -1020,7 +1014,7 @@ function CheckboxSquare({
               }`
       }`}
     >
-      {checked ? <Check size={11} /> : indeterminate ? <Minus size={11} /> : null}
+      {checked ? <AppIcon name="Check" size={11} /> : indeterminate ? <AppIcon name="Minus" size={11} /> : null}
     </span>
   );
 }

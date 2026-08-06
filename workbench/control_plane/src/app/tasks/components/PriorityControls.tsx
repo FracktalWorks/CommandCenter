@@ -1,6 +1,6 @@
 "use client";
 
-import { AlertTriangle, Gem, Waves, X, Zap } from "lucide-react";
+import AppIcon, { themedIcon, type ThemedIcon } from "@/components/Icon";
 import { GtdItem } from "../lib/types";
 import { useTaskStore } from "../lib/taskStore";
 import {
@@ -53,7 +53,7 @@ export function WeightToggles({
       <FlagToggle
         active={!!item.important}
         onClick={() => onChange({ important: !item.important })}
-        icon={AlertTriangle}
+        icon={themedIcon("AlertTriangle")}
         label="Important"
         title="Something stalls or breaks if this is skipped (downside)."
         tone="important"
@@ -62,7 +62,7 @@ export function WeightToggles({
       <FlagToggle
         active={!!item.leveraged}
         onClick={() => onChange({ leveraged: !item.leveraged })}
-        icon={Gem}
+        icon={themedIcon("Gem")}
         label="Leveraged"
         title="Rare, asymmetric 100x upside — an investor, a grant, a key hire."
         tone="leveraged"
@@ -71,7 +71,7 @@ export function WeightToggles({
       <FlagToggle
         active={!!item.deepWork}
         onClick={() => onChange({ deepWork: !item.deepWork })}
-        icon={Waves}
+        icon={themedIcon("Waves")}
         label="Deep work"
         title="Needs an unbroken flow state — creative, building, writing, strategy. The planner protects a long peak-energy block for it."
         tone="deep"
@@ -92,7 +92,7 @@ export function WeightToggles({
             : "border-dashed border-border text-muted-foreground/50",
         ].join(" ")}
       >
-        <Zap className="h-3 w-3" />
+        <AppIcon name="Zap" className="h-3 w-3" />
         Urgent
         <span className="text-[9px] opacity-60">(auto)</span>
       </span>
@@ -111,7 +111,7 @@ function FlagToggle({
 }: {
   active: boolean;
   onClick: () => void;
-  icon: typeof AlertTriangle;
+  icon: ThemedIcon;
   label: string;
   title: string;
   tone: "important" | "leveraged" | "deep";
@@ -268,7 +268,7 @@ export function SuggestionBadge({
         aria-label="Dismiss suggestion — keep mine"
         className="tech-transition -mr-0.5 shrink-0 rounded-full p-0.5 hover:bg-black/10 dark:hover:bg-white/15"
       >
-        <X className="h-2.5 w-2.5" />
+        <AppIcon name="X" className="h-2.5 w-2.5" />
       </button>
     </span>
   );

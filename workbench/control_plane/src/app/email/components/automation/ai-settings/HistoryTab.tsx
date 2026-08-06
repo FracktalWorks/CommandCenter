@@ -5,8 +5,8 @@
 // rule, with per-row result pill + Fix. Can live-poll while a "Process past
 // emails" job runs. Extracted from AISettingsView.tsx.
 
+import Icon from "@/components/Icon";
 import { useCallback, useEffect, useState } from "react";
-import { Loader2 } from "lucide-react";
 import { getRulesHistory } from "../../../lib/api";
 import type { ExecutedRule, RuleAction } from "../../../lib/types";
 import { EmailPreviewModal } from "../../EmailPreviewModal";
@@ -99,7 +99,7 @@ export function HistoryTab({
         </select>
         {live && (
           <span className="flex items-center gap-1.5 text-[11px] text-primary">
-            <Loader2 className="animate-spin" size={12} /> Processing past emails…
+            <Icon name="Loader2" className="animate-spin" size={12} /> Processing past emails…
           </span>
         )}
         <button

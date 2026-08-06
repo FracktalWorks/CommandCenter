@@ -1,7 +1,7 @@
 "use client";
 
+import Icon from "@/components/Icon";
 import { useMemo, useState } from "react";
-import { CalendarClock, X, Check, CalendarX, Clock } from "lucide-react";
 import { useTaskStore } from "../lib/taskStore";
 import { durationLabel } from "../lib/utils";
 import {
@@ -108,7 +108,7 @@ export function SchedulePopup() {
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center gap-2 border-b border-border px-4 py-3">
-          <CalendarClock className="h-4 w-4 shrink-0 text-primary" />
+          <Icon name="CalendarClock" className="h-4 w-4 shrink-0 text-primary" />
           <div className="min-w-0 flex-1">
             <h2 className="truncate text-sm font-semibold text-foreground">
               Schedule on calendar
@@ -123,13 +123,13 @@ export function SchedulePopup() {
             aria-label="Close"
             className="rounded-md p-1 text-muted-foreground hover:bg-secondary hover:text-foreground"
           >
-            <X className="h-4 w-4" />
+            <Icon name="X" className="h-4 w-4" />
           </button>
         </div>
 
         <div className="flex flex-col gap-2 px-4 py-3">
           <p className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
-            <Clock className="h-3 w-3" />
+            <Icon name="Clock" className="h-3 w-3" />
             Blocks {durationLabel(dur)}
             {scheduled && (
               <span className="text-primary">
@@ -180,7 +180,7 @@ export function SchedulePopup() {
                 }}
                 className="tech-transition inline-flex shrink-0 items-center gap-1 rounded-md bg-primary px-2.5 py-1.5 text-[12px] font-medium text-primary-foreground hover:opacity-90"
               >
-                <Check className="h-3.5 w-3.5" />
+                <Icon name="Check" className="h-3.5 w-3.5" />
                 Set
               </button>
             </div>
@@ -195,7 +195,7 @@ export function SchedulePopup() {
               }}
               className="tech-transition mt-0.5 inline-flex items-center justify-center gap-1.5 rounded-md px-3 py-2 text-[12px] font-medium text-muted-foreground hover:bg-secondary hover:text-destructive"
             >
-              <CalendarX className="h-3.5 w-3.5" />
+              <Icon name="CalendarX" className="h-3.5 w-3.5" />
               Unschedule
             </button>
           )}

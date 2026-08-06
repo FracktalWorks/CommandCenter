@@ -13,19 +13,10 @@
  *   /api/agent/workspace/{sessionId}/file?path={rel_path}
  */
 
+import Icon from "@/components/Icon";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useViewMode } from "@/components/ViewModeProvider";
 import { classifyArtifact, isRenderable } from "@/lib/artifactKind";
-import {
-  File,
-  FileCode,
-  FileText,
-  FileImage,
-  FileSpreadsheet,
-  Download,
-  Maximize2,
-  PanelLeft,
-} from "lucide-react";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -96,16 +87,16 @@ function fileIcon(artifact: ArtifactMeta): React.ReactNode {
   const ext = getExt(artifact.name);
   const mime = artifact.mimeType ?? "";
   if (IMAGE_EXTS.has(ext) || mime.startsWith("image/"))
-    return <FileImage size={15} className="shrink-0 text-purple-400" />;
+    return <Icon name="FileImage" size={15} className="shrink-0 text-purple-400" />;
   if (CODE_EXTS.has(ext))
-    return <FileCode size={15} className="shrink-0 text-blue-400" />;
+    return <Icon name="FileCode" size={15} className="shrink-0 text-blue-400" />;
   if (["md", "txt", "log", "rst", "csv"].includes(ext) || mime.startsWith("text/"))
-    return <FileText size={15} className="shrink-0 text-green-400" />;
+    return <Icon name="FileText" size={15} className="shrink-0 text-green-400" />;
   if (["pdf"].includes(ext) || mime === "application/pdf")
-    return <FileText size={15} className="shrink-0 text-red-400" />;
+    return <Icon name="FileText" size={15} className="shrink-0 text-red-400" />;
   if (["xlsx", "xls"].includes(ext))
-    return <FileSpreadsheet size={15} className="shrink-0 text-emerald-400" />;
-  return <File size={15} className="shrink-0 text-muted-foreground" />;
+    return <Icon name="FileSpreadsheet" size={15} className="shrink-0 text-emerald-400" />;
+  return <Icon name="File" size={15} className="shrink-0 text-muted-foreground" />;
 }
 
 // ─── Component ─────────────────────────────────────────────────────────────────
@@ -171,7 +162,7 @@ export default function ArtifactCard({
               className="rounded-lg bg-secondary/90 px-3 py-1.5 text-xs text-foreground hover:bg-secondary transition-colors flex items-center gap-1.5"
               title="Open full size"
             >
-              <Maximize2 size={13} />
+              <Icon name="Maximize2" size={13} />
               Open
             </button>
             <a
@@ -179,7 +170,7 @@ export default function ArtifactCard({
               download={artifact.name}
               className="rounded-lg bg-secondary/90 px-3 py-1.5 text-xs text-foreground hover:bg-secondary transition-colors flex items-center gap-1.5"
             >
-              <Download size={13} />
+              <Icon name="Download" size={13} />
               Download
             </a>
           </div>
@@ -251,7 +242,7 @@ export default function ArtifactCard({
             className="flex items-center gap-1.5 rounded-lg bg-primary/10 px-2.5 py-1.5 text-[11px] font-medium text-primary hover:bg-primary/20 transition-colors"
             title={isMobile ? "Open the rendered artifact" : "Open in side panel — edit + live preview"}
           >
-            {isMobile ? <Maximize2 size={13} /> : <PanelLeft size={13} />}
+            {isMobile ? <Icon name="Maximize2" size={13} /> : <Icon name="PanelLeft" size={13} />}
             Open
           </button>
         )}
@@ -261,7 +252,7 @@ export default function ArtifactCard({
             className="rounded-lg p-1.5 text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
             title={isDoc ? "Open in modal viewer" : "Open in viewer"}
           >
-            <Maximize2 size={14} />
+            <Icon name="Maximize2" size={14} />
           </button>
         )}
         <a
@@ -271,7 +262,7 @@ export default function ArtifactCard({
           className="rounded-lg p-1.5 text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
           title="Download"
         >
-          <Download size={14} />
+          <Icon name="Download" size={14} />
         </a>
       </div>
     </div>

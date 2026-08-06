@@ -1,7 +1,7 @@
 "use client";
 
+import Icon from "@/components/Icon";
 import { useTheme } from "next-themes";
-import { Sun, Moon } from "lucide-react";
 import { useEffect, useState } from "react";
 
 /**
@@ -34,7 +34,7 @@ export default function ThemeToggle() {
       aria-label={isDark ? "Switch to light theme" : "Switch to dark theme"}
       title={isDark ? "Light mode" : "Dark mode"}
     >
-      {isDark ? <Sun size={15} /> : <Moon size={15} />}
+      {isDark ? <Icon name="Sun" size={15} /> : <Icon name="Moon" size={15} />}
     </button>
   );
 }
@@ -64,7 +64,7 @@ export function ThemeToggleMenuItem({ onClick }: { onClick?: () => void }) {
       }}
       className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm text-muted-foreground hover:bg-secondary hover:text-foreground tech-transition"
     >
-      {isDark ? <Sun size={16} className="shrink-0" /> : <Moon size={16} className="shrink-0" />}
+      {isDark ? <Icon name="Sun" size={16} className="shrink-0" /> : <Icon name="Moon" size={16} className="shrink-0" />}
       {isDark ? "Light mode" : "Dark mode"}
     </button>
   );

@@ -14,58 +14,36 @@
  * wall so they stay correctly placed as it expands/contracts.
  */
 
+import AppIcon, { themedIcon, type ThemedIcon } from "@/components/Icon";
 import React from "react";
 
-import {
-  Building2,
-  Calendar,
-  Cog,
-  Coins,
-  Database,
-  FileText,
-  GitBranch,
-  Globe,
-  ListTodo,
-  Mail,
-  MessageCircle,
-  MessageCircleQuestion,
-  PenTool,
-  PencilLine,
-  Search,
-  Send,
-  Share2,
-  Stethoscope,
-  Terminal,
-  TriangleAlert,
-  Wrench,
-} from "lucide-react";
 
 // Granular observability: map the tool an agent is CURRENTLY calling to a lucide icon
 // shown on the agent (top-right badge). Ordered rules — first match wins, most
 // specific first — so any tool name (read_email, gtd_add_task, web_search, git_push…)
 // resolves to a sensible icon, falling back to a generic wrench.
-type IconType = typeof Cog;
+type IconType = ThemedIcon;
 const TOOL_ICON_RULES: Array<[RegExp, IconType]> = [
-  [/send|dispatch|deliver/, Send],
-  [/mail|email|inbox|reply|thread|message/, Mail],
-  [/web|search|browse|google|lookup|find_/, Search],
-  [/diagnos|lint|error|test|verify|check/, Stethoscope],
-  [/git|commit|push|pull|branch|\bpr\b|merge/, GitBranch],
-  [/diagram|draw|chart|render|image|figure/, PenTool],
-  [/artifact|share|export|upload|publish/, Share2],
-  [/task|gtd|todo|ticket|clickup|reclarify/, ListTodo],
-  [/calendar|schedule|meeting|event|remind/, Calendar],
-  [/ask|question|clarify|confirm/, MessageCircleQuestion],
-  [/sql|database|postgres|\bdb\b|record/, Database],
-  [/http|fetch|\bapi\b|url|request/, Globe],
-  [/write|edit|create_|update_|save|note|draft/, PencilLine],
-  [/shell|bash|exec|run_|command|terminal|code|python/, Terminal],
-  [/read|get_|open|view|list|file|doc|load|query/, FileText],
+  [/send|dispatch|deliver/, themedIcon("Send")],
+  [/mail|email|inbox|reply|thread|message/, themedIcon("Mail")],
+  [/web|search|browse|google|lookup|find_/, themedIcon("Search")],
+  [/diagnos|lint|error|test|verify|check/, themedIcon("Stethoscope")],
+  [/git|commit|push|pull|branch|\bpr\b|merge/, themedIcon("GitBranch")],
+  [/diagram|draw|chart|render|image|figure/, themedIcon("PenTool")],
+  [/artifact|share|export|upload|publish/, themedIcon("Share2")],
+  [/task|gtd|todo|ticket|clickup|reclarify/, themedIcon("ListTodo")],
+  [/calendar|schedule|meeting|event|remind/, themedIcon("Calendar")],
+  [/ask|question|clarify|confirm/, themedIcon("MessageCircleQuestion")],
+  [/sql|database|postgres|\bdb\b|record/, themedIcon("Database")],
+  [/http|fetch|\bapi\b|url|request/, themedIcon("Globe")],
+  [/write|edit|create_|update_|save|note|draft/, themedIcon("PencilLine")],
+  [/shell|bash|exec|run_|command|terminal|code|python/, themedIcon("Terminal")],
+  [/read|get_|open|view|list|file|doc|load|query/, themedIcon("FileText")],
 ];
 function toolIcon(tool: string): IconType {
   const t = tool.toLowerCase();
   for (const [re, Icon] of TOOL_ICON_RULES) if (re.test(t)) return Icon;
-  return Wrench;
+  return themedIcon("Wrench");
 }
 
 import { CHARACTER_LIBRARY } from "./character-library.generated";
@@ -294,12 +272,12 @@ function Seat({
           // cog when the tool is unknown. createElement (not JSX) so the dynamic
           // lucide component isn't flagged as a render-local component.
           <span className="oc-badge oc-b-working" title={tool ? `Using ${tool}` : "working"}>
-            {React.createElement(tool ? toolIcon(tool) : Cog, { size: 12, strokeWidth: 2.5 })}
+            {React.createElement(tool ? toolIcon(tool) : themedIcon("Cog"), { size: 12, strokeWidth: 2.5 })}
           </span>
         )}
         {state === "error" && (
           <span className="oc-badge oc-b-error">
-            <TriangleAlert size={12} strokeWidth={2.5} />
+            <AppIcon name="TriangleAlert" size={12} strokeWidth={2.5} />
           </span>
         )}
         {plant && (
@@ -342,7 +320,7 @@ function AppSeat({
           <span className="oc-kiosk-stand" aria-hidden />
         </div>
         <span className="oc-badge oc-b-app" title="Consuming AI tokens">
-          <Coins size={12} strokeWidth={2.5} />
+          <AppIcon name="Coins" size={12} strokeWidth={2.5} />
         </span>
       </div>
       <div className="oc-plate">
@@ -393,7 +371,7 @@ function CrStandee({
     >
       {speaking && (
         <span className="oc-cr-bubble">
-          <MessageCircle size={11} strokeWidth={2.6} />
+          <AppIcon name="MessageCircle" size={11} strokeWidth={2.6} />
         </span>
       )}
       {breathe && nFrames ? (
@@ -543,15 +521,15 @@ export function TopDownOffice({
     <div className="h-full min-h-0 overflow-y-auto pb-24 sm:pb-2">
       <div className="flex items-center justify-between mb-3">
         <div className="oc-mono text-[11px] uppercase tracking-wide text-muted-foreground flex items-center gap-1.5">
-          <Building2 size={13} /> The Office · {workingCount}/{roster.length} at work
+          <AppIcon name="Building2" size={13} /> The Office · {workingCount}/{roster.length} at work
         </div>
         <div className="oc-mono text-[11px] text-emerald-500 flex items-center gap-1">
-          <Coins size={12} /> Today {fmtCost(todayCost)}
+          <AppIcon name="Coins" size={12} /> Today {fmtCost(todayCost)}
         </div>
       </div>
       {roster.length === 0 ? (
         <div className="flex flex-col items-center justify-center h-48 text-center gap-2">
-          <Building2 size={30} className="text-muted-foreground/50" />
+          <AppIcon name="Building2" size={30} className="text-muted-foreground/50" />
           <p className="oc-mono text-sm text-muted-foreground">No agents registered yet.</p>
         </div>
       ) : (
@@ -626,7 +604,7 @@ export function TopDownOffice({
           {collabs.length > 0 && (
             <div className="oc-confs">
               <div className="oc-confs-head">
-                <Building2 size={12} /> {collabs.length === 1 ? "Conference room" : "Conference rooms"} ·{" "}
+                <AppIcon name="Building2" size={12} /> {collabs.length === 1 ? "Conference room" : "Conference rooms"} ·{" "}
                 {collabs.length} in session
               </div>
               <div className="oc-confs-grid">

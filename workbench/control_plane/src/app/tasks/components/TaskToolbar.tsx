@@ -1,17 +1,8 @@
 "use client";
 
+import Icon from "@/components/Icon";
+import type { ThemedIcon } from "@/components/Icon";
 import { useMemo, useRef, useState, useEffect } from "react";
-import {
-  Search,
-  X,
-  ArrowUpNarrowWide,
-  ArrowDownWideNarrow,
-  ListFilter,
-  Rows3,
-  ChevronDown,
-  Check,
-  type LucideIcon,
-} from "lucide-react";
 import { GtdItem } from "../lib/types";
 import { useTaskStore } from "../lib/taskStore";
 import {
@@ -164,7 +155,7 @@ export function TaskToolbar({ items }: { items: GtdItem[] }) {
     <div className="flex flex-wrap items-center gap-2 border-b border-border bg-card px-4 py-2">
       {/* Search */}
       <div className="relative min-w-[160px] flex-1 sm:max-w-xs">
-        <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+        <Icon name="Search" className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
         <input
           type="text"
           value={filters.query}
@@ -179,7 +170,7 @@ export function TaskToolbar({ items }: { items: GtdItem[] }) {
             title="Clear search"
             className="absolute right-1.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
           >
-            <X className="h-3.5 w-3.5" />
+            <Icon name="X" className="h-3.5 w-3.5" />
           </button>
         )}
       </div>
@@ -219,14 +210,14 @@ export function TaskToolbar({ items }: { items: GtdItem[] }) {
           onClick={clearFilters}
           className="tech-transition inline-flex h-7 items-center gap-1 rounded-md px-2 text-[11px] font-medium text-muted-foreground hover:bg-secondary hover:text-foreground"
         >
-          <X className="h-3 w-3" />
+          <Icon name="X" className="h-3 w-3" />
           Clear{nFacets > 1 ? " all" : ""}
         </button>
       )}
 
       {/* Group-by + Sort — pushed right */}
       <div className="ml-auto flex items-center gap-1">
-        <Rows3 className="h-3.5 w-3.5 text-muted-foreground" />
+        <Icon name="Rows3" className="h-3.5 w-3.5 text-muted-foreground" />
         <select
           value={groupBy}
           onChange={(e) => setGroupBy(e.target.value as GroupBy | "")}
@@ -245,7 +236,7 @@ export function TaskToolbar({ items }: { items: GtdItem[] }) {
       </div>
       {showSort && (
         <div className="flex items-center gap-1">
-          <ListFilter className="h-3.5 w-3.5 text-muted-foreground" />
+          <Icon name="ListFilter" className="h-3.5 w-3.5 text-muted-foreground" />
           <select
             value={sort.field}
             onChange={(e) => setSort({ field: e.target.value as SortField })}
@@ -277,9 +268,9 @@ export function TaskToolbar({ items }: { items: GtdItem[] }) {
             ].join(" ")}
           >
             {sort.dir === "asc" ? (
-              <ArrowUpNarrowWide className="h-3.5 w-3.5" />
+              <Icon name="ArrowUpNarrowWide" className="h-3.5 w-3.5" />
             ) : (
-              <ArrowDownWideNarrow className="h-3.5 w-3.5" />
+              <Icon name="ArrowDownWideNarrow" className="h-3.5 w-3.5" />
             )}
           </button>
         </div>
@@ -294,7 +285,7 @@ interface FacetOption {
   value: string;
   label: string;
   /** lucide icon (priority) — takes precedence over a dot/emoji marker. */
-  icon?: LucideIcon;
+  icon?: ThemedIcon;
   /** a solid colour dot marker (context), e.g. "bg-sky-500". */
   dot?: string;
   emoji?: string;
@@ -350,14 +341,14 @@ function FilterMenu({
             : "border-border text-muted-foreground hover:text-foreground",
         ].join(" ")}
       >
-        <ListFilter className="h-3.5 w-3.5" />
+        <Icon name="ListFilter" className="h-3.5 w-3.5" />
         Filter
         {count > 0 && (
           <span className="rounded-full bg-primary/15 px-1.5 text-[10px] font-semibold text-primary">
             {count}
           </span>
         )}
-        <ChevronDown className="h-3 w-3 opacity-60" />
+        <Icon name="ChevronDown" className="h-3 w-3 opacity-60" />
       </button>
       {open && (
         <div className="absolute left-0 top-8 z-40 max-h-[70vh] w-64 overflow-y-auto rounded-lg border border-border bg-card p-2 shadow-xl">
@@ -381,7 +372,7 @@ function FilterMenu({
                         on ? "border-primary bg-primary text-primary-foreground" : "border-border",
                       ].join(" ")}
                     >
-                      {on && <Check className="h-3 w-3" />}
+                      {on && <Icon name="Check" className="h-3 w-3" />}
                     </span>
                     {o.icon ? (
                       <o.icon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden />
@@ -410,7 +401,7 @@ interface FacetChip {
   value: string;
   label: string;
   /** priority chips carry their lucide icon; context chips their colour. */
-  icon?: LucideIcon;
+  icon?: ThemedIcon;
   dot?: string;
 }
 
@@ -420,7 +411,7 @@ function FacetChips({
   onRemove,
 }: {
   filters: TaskFilters;
-  priorityMeta: { value: string; label: string; icon?: LucideIcon }[];
+  priorityMeta: { value: string; label: string; icon?: ThemedIcon }[];
   onRemove: (key: "contexts" | "priorities" | "energies", value: string) => void;
 }) {
   const chips: FacetChip[] = [
@@ -468,7 +459,7 @@ function FacetChips({
             aria-label={`Remove ${c.label} filter`}
             className="tech-transition rounded-full p-0.5 hover:bg-primary/20"
           >
-            <X className="h-2.5 w-2.5" />
+            <Icon name="X" className="h-2.5 w-2.5" />
           </button>
         </span>
       ))}

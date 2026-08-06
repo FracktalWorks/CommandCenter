@@ -1053,12 +1053,33 @@ PR (R4).
                   tests/unit/test_org_access_control.py \
                   tests/unit/test_org_access_enforcement.py -q
 
-    # WS-26d read half — the agent + the parse-only WhatsApp constant:
+    # WS-26d read half — the agent, the parse-only WhatsApp constant, AND the
+    # four registration fences the slice leans on. Run all seven together: a
+    # new agent's failure mode is not a broken tool, it is silently never
+    # loading, and only the fences can see that. test_crm_agent.py alone goes
+    # green on an agent that no run path can reach.
     uv run pytest tests/unit/test_crm_agent.py \
                   tests/unit/test_agent_gateway_identity.py \
-                  tests/unit/test_whatsapp_context.py -q
+                  tests/unit/test_whatsapp_context.py \
+                  tests/unit/test_agent_manifest.py \
+                  tests/unit/test_orchestrator_registration.py \
+                  tests/unit/test_resolve_agent_for_run.py \
+                  tests/unit/test_default_deny_auth.py -q
 
     cd workbench/control_plane && npx tsc --noEmit && npm test
+
+⚠️ The WS-26d block takes **~5 minutes**, nearly all of it in `test_agent_manifest.py`
+(it parametrises over every first-party `config.json` and imports the real
+orchestrator resolver). It is not hung — do not interrupt it and do not drop the
+slow file to make the command feel faster. What each fence catches, since a
+green run tells you nothing about why they are listed: `test_agent_manifest.py`
+— the new `config.json` must resolve the same tool surface the executor
+injects, and its `sharing.instancing` must stay `shared` or the
+`PENDING_INSTANCE_MIGRATION` canary fires (declaring `personal` would
+re-partition memory with no migration behind it); `test_orchestrator_registration.py`
+— the `_AGENT_REGISTRY` shape that makes an agent delegatable at all;
+`test_resolve_agent_for_run.py` — that a stored session name still resolves;
+`test_default_deny_auth.py` — that no route escaped the app-wide auth guard.
 
 **Owner-verified — migrations 144 and 145 are applied on prod as of 2026-08-06** (none of
 this can be checked from the repo, and WS-26c deliberately did not reach for a database):

@@ -47,9 +47,11 @@ from gateway.routes.crm.core import (
     count_where,
     has_column,
     insert_row,
+    lead_name_is_derived,
     list_contract,
     load_default_status,
     now,
+    record_zoho_tombstone,
     require_row,
     router,
     row_to_dict,
@@ -101,6 +103,10 @@ class DeleteResponse(BaseModel):
     deleted: str
     entity: str
     cascaded: dict[str, int]
+    #: WS-26b — true when this record had a Zoho twin and a
+    #: ``crm_zoho_tombstones`` row was written, so the next sync cycle will
+    #: delete it there too. The caller is told the deletion leaves this app.
+    zoho_delete_queued: bool = False
 
 
 # ── Shared behaviour ────────────────────────────────────────────────────────
@@ -239,37 +245,64 @@ async def patch_record(
         await db.close()
 
 
-#: The lead fields the display name is derived from. Touching any of them
-#: re-derives it; touching none of them leaves a hand-edited name alone.
+#: The lead fields the display name is derived from. Touching any of them may
+#: re-derive it; touching none of them never does.
 _LEAD_NAME_INPUTS = frozenset(
     {"first_name", "last_name", "organization_name", "email", "lead_name"}
 )
 
 
 def _recompute_lead_name(record: Any, values: dict[str, Any]) -> None:
+    """Keep ``lead_name`` in step with the fields it is derived FROM — unless
+    somebody typed it.
+
+    Three cases, and the third is the one WS-26c dw 3 exists to fix:
+
+    * the body sets ``lead_name`` → that is the name, blank-guarded by the
+      fallback chain;
+    * the body moves a name input and the stored name is still the chain's own
+      output → re-derive, so renaming a lead's company renames the lead;
+    * the body moves a name input but the stored name was hand-edited → leave
+      it. Correcting a lead's email address must not silently rename
+      "Ravi (Bosch, via Anil)" back to "ravi".
+    """
     if not (_LEAD_NAME_INPUTS & values.keys()):
         return
-    merged = {**row_to_dict(record, LEADS.model), **values}
+    current = row_to_dict(record, LEADS.model)
+    merged = {**current, **values}
     if "lead_name" not in values:
+        if not lead_name_is_derived(current):
+            return
         # Blank the stored name so the fallback chain actually re-derives
         # rather than returning the value it is supposed to be replacing.
         merged["lead_name"] = None
     values["lead_name"] = compute_lead_name(merged)
 
 
-async def delete_record(entity: Entity, record_id: str) -> DeleteResponse:
+async def delete_record(
+    entity: Entity, record_id: str, user: UserContext,
+) -> DeleteResponse:
     """Delete a record and report what Postgres took with it.
 
     The counts are read BEFORE the delete, in the same transaction: afterwards
     the rows are gone and the honest number is unobtainable. R7/R8 — "deleted"
     with no blast radius is the response that hides a cascade.
+
+    A record with a ``zoho_id`` also leaves a ``crm_zoho_tombstones`` row
+    **inside this transaction** (§7.1). Same reason as the counts, one step
+    further: after the DELETE the ``zoho_id`` the sync needs to propagate the
+    deletion upstream no longer exists anywhere, and a delete that rolls back
+    must not leave a tombstone that would delete a live Zoho record.
     """
     db = await _get_db()
     try:
-        await require_row(db, entity.table, record_id, entity.label)
+        record = await require_row(db, entity.table, record_id, entity.label)
         cascaded: dict[str, int] = {}
         for table, column in entity.cascades:
             cascaded[table] = await count_where(db, table, column, record_id)
+        queued = await record_zoho_tombstone(
+            db, entity, record, deleted_by=actor(user),
+        )
         await db.execute(
             text(f"DELETE FROM {entity.table} WHERE id = CAST(:id AS uuid)"),
             {"id": record_id},
@@ -277,6 +310,7 @@ async def delete_record(entity: Entity, record_id: str) -> DeleteResponse:
         await db.commit()
         return DeleteResponse(
             deleted=record_id, entity=entity.slug, cascaded=cascaded,
+            zoho_delete_queued=queued,
         )
     finally:
         await db.close()
@@ -319,7 +353,7 @@ async def patch_lead(
 async def delete_lead(
     record_id: str, user: UserContext = Depends(get_current_user),
 ) -> DeleteResponse:
-    return await delete_record(LEADS, record_id)
+    return await delete_record(LEADS, record_id, user)
 
 
 # ── Deals ───────────────────────────────────────────────────────────────────
@@ -358,7 +392,7 @@ async def patch_deal(
 async def delete_deal(
     record_id: str, user: UserContext = Depends(get_current_user),
 ) -> DeleteResponse:
-    return await delete_record(DEALS, record_id)
+    return await delete_record(DEALS, record_id, user)
 
 
 # ── Contacts ────────────────────────────────────────────────────────────────
@@ -397,7 +431,7 @@ async def patch_contact(
 async def delete_contact(
     record_id: str, user: UserContext = Depends(get_current_user),
 ) -> DeleteResponse:
-    return await delete_record(CONTACTS, record_id)
+    return await delete_record(CONTACTS, record_id, user)
 
 
 # ── Organizations ───────────────────────────────────────────────────────────
@@ -436,4 +470,4 @@ async def patch_organization(
 async def delete_organization(
     record_id: str, user: UserContext = Depends(get_current_user),
 ) -> DeleteResponse:
-    return await delete_record(ORGANIZATIONS, record_id)
+    return await delete_record(ORGANIZATIONS, record_id, user)

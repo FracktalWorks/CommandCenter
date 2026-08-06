@@ -71,6 +71,10 @@ const HREF_FEATURES: ReadonlyArray<[string, string]> = [
   ["/memory", "memory"],
   ["/tasks", "tasks"],
   ["/notes", "notes"],
+  // The Sales Center's pipeline module. Gated on its own slug, not on
+  // `center.sales`: a Center is a projection, and its modules carry their own
+  // grants (specs/crm_app.md §5).
+  ["/crm", "crm"],
   ["/dashboard", "dashboard"],
   ["/observability", "observability"],
   ["/artifacts", "artifacts"],

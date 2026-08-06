@@ -99,6 +99,14 @@ class Settings(BaseSettings):
     zoho_region: str = "in"
     zoho_webhook_secret: str = ""        # HMAC secret for /webhooks/zoho (WBS 1.1)
 
+    # CRM ⟷ Zoho two-way sync (spec crm_app.md §7.1, D-CRM-7). Gates ONLY the
+    # scheduled loop the gateway lifespan registers (routes/crm/sync_zoho.py);
+    # POST /crm/sync/zoho runs one cycle regardless, because a hand-run cycle
+    # is an explicit admin act. Ships OFF: ON means the platform WRITES the
+    # live Zoho tenant unattended — pushing native edits up and propagating
+    # deletes both ways. Flipping it is an OWNER-GATE act (work_plan.md §6).
+    crm_zoho_sync: bool = False
+
     # Gmail (Phase 1, WBS 1.3)
     gmail_sa_json_path: str = ""         # service-account key file
     gmail_workspace_domain: str = ""     # e.g. fracktal.in

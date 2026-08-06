@@ -91,7 +91,11 @@ def _validate_status(kind: str, values: dict[str, Any]) -> None:
             status_code=422,
             detail=f"Unknown status type '{declared}'. One of: {list(STATUS_TYPES)}.",
         )
-    if kind == "lead" and values.get("probability") is not None:
+    # Keyed on the field being PRESENT, not on it being non-null:
+    # `{"probability": null}` would otherwise reach an INSERT naming a column
+    # `crm_lead_statuses` has not got, and surface as a driver error rather
+    # than as the 422 this rule already knows how to say (WS-26c dw 3).
+    if kind == "lead" and "probability" in values:
         raise HTTPException(
             status_code=422,
             detail="Lead statuses have no probability — that column is deal-only.",

@@ -110,13 +110,30 @@ export const NAV_SECTIONS: NavSection[] = [
   {
     id: "centers",
     label: "Centers",
-    items: CENTERS.map((c) => ({
-      href: `/centers/${c.slug}`,
-      label: c.name,
-      icon: c.icon,
-      note: c.tagline,
-      feature: c.feature,
-    })),
+    items: [
+      ...CENTERS.map((c) => ({
+        href: `/centers/${c.slug}`,
+        label: c.name,
+        icon: c.icon,
+        note: c.tagline,
+        feature: c.feature,
+      })),
+      // A Center MODULE, not a Center: /crm is the Sales Center's pipeline app
+      // (lib/centers.ts links to it from there too), and it is gated on its
+      // own `crm` feature rather than on `center.sales`. It sits in this
+      // section because that is where somebody looks for it, and it is a
+      // literal rather than derived from CENTERS because a Center's apps are
+      // not all separate panes. `feature:crm` is `is_default false` in
+      // migration 144, so until an admin grants it this pane is owner/admin
+      // only (specs/crm_app.md §5, D-CRM-3).
+      {
+        href: "/crm",
+        label: "CRM",
+        icon: "KanbanSquare",
+        note: "Pipeline, leads and customers",
+        feature: "crm",
+      },
+    ],
   },
 
   // ── Studio — create things; each object is personally or team scoped ──

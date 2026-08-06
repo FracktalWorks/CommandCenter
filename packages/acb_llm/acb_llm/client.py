@@ -30,6 +30,43 @@ _TRANSIENT_ERRORS = (
     "timeout", "connection", "retry", "service unavailable",
 )
 
+#: Hard ceiling on a single provider round-trip, in seconds.
+#:
+#: Every completion below runs under ``asyncio.wait_for`` at this bound. That is
+#: not belt-and-braces over litellm's own ``timeout`` — it is the guarantee. A
+#: provider-side ``timeout`` is only honoured to the extent the provider's
+#: transport honours it, and on 2026-08-06 one that was not took production down:
+#: a completion hung, and because callers across the email automation package hold
+#: an open SQLAlchemy session across the call (``AsyncSession`` opens a
+#: transaction on first ``execute()`` and holds it until commit/rollback/close),
+#: the hung call parked a Postgres transaction `idle in transaction` for 14h44m.
+#: A migration's ``ALTER TABLE`` then queued behind that transaction's ACCESS
+#: SHARE lock, and because Postgres's lock queue is FIFO every later reader of the
+#: table queued behind the *waiting* ALTER. Sending mail — which reads
+#: ``email_assistant_settings`` for the signature — stopped working, and the
+#: connection pool drained behind the blocked readers.
+#:
+#: So the bound that matters is on the WALL CLOCK of the await, not on the
+#: provider's good intentions. Worst case per call is 3 attempts x this ceiling
+#: plus 6s of backoff.
+#:
+#: Override with ``LLM_REQUEST_TIMEOUT_SECS``; a per-call ``timeout=`` kwarg still
+#: wins for the provider-side bound, but never lifts the wall-clock ceiling.
+_DEFAULT_REQUEST_TIMEOUT_SECS = 90.0
+
+
+def _request_timeout_secs() -> float:
+    """The per-attempt wall-clock ceiling, from env or the default."""
+    raw = os.getenv("LLM_REQUEST_TIMEOUT_SECS", "").strip()
+    if raw:
+        try:
+            val = float(raw)
+            if val > 0:
+                return val
+        except ValueError:
+            _log.warning("acb_llm.bad_request_timeout", value=raw[:32])
+    return _DEFAULT_REQUEST_TIMEOUT_SECS
+
 # ── Tier → model mapping ──────────────────────────────────────────────────
 # Populated from config.yaml + tier_overrides.yaml at import time so the
 # runtime always matches the configured tiers.  Falls back to these hardcoded
@@ -664,17 +701,26 @@ async def complete(
     if enable_litellm_cache:
         extra.setdefault("cache", {"no-cache": False, "no-store": False})
 
+    # Ask the provider to bound itself too, so a well-behaved transport fails
+    # cleanly rather than being cancelled mid-flight. `setdefault` — an explicit
+    # per-call `timeout=` still wins here.
+    ceiling = _request_timeout_secs()
+    extra.setdefault("timeout", ceiling)
+
     last_exc: Exception | None = None
     for attempt in range(3):
         if attempt > 0:
             await asyncio.sleep(2 ** attempt)  # 2 s, then 4 s
         try:
-            response = await acompletion(
-                model=model,
-                messages=messages,
-                temperature=temperature,
-                max_tokens=max_tokens,
-                **extra,
+            response = await asyncio.wait_for(
+                acompletion(
+                    model=model,
+                    messages=messages,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    **extra,
+                ),
+                timeout=ceiling,
             )
             # content can be None for thinking models (e.g. gemini-2.5-pro returns
             # reasoning tokens separately; the text content field is null until done).
@@ -688,6 +734,15 @@ async def complete(
             _emit_usage(model, tier.value, response)
             content = choices[0]["message"]["content"]
             return content or ""  # type: ignore[no-any-return,index]
+        except TimeoutError as exc:
+            # MUST precede the generic handler. `asyncio.wait_for`'s TimeoutError
+            # stringifies to '', so the substring test below reads it as
+            # NON-transient and re-raises — which would turn the one failure this
+            # ceiling exists to make survivable into a hard error on attempt 1.
+            _log.warning("acb_llm.request_timeout", model=model,
+                         attempt=attempt + 1, ceiling_secs=ceiling)
+            last_exc = exc
+            continue
         except Exception as exc:
             if any(token in str(exc).lower() for token in _TRANSIENT_ERRORS):
                 last_exc = exc
@@ -735,19 +790,29 @@ async def complete_with_tools(
     if enable_litellm_cache:
         extra.setdefault("cache", {"no-cache": False, "no-store": False})
 
+    # Same wall-clock ceiling as `complete` — see _DEFAULT_REQUEST_TIMEOUT_SECS.
+    # Tool-calling turns are the LONGEST-lived completions in the codebase and
+    # the ones most often awaited with a DB session open, so bounding this one
+    # matters more than bounding the plain-text path, not less.
+    ceiling = _request_timeout_secs()
+    extra.setdefault("timeout", ceiling)
+
     last_exc: Exception | None = None
     for attempt in range(3):
         if attempt > 0:
             await asyncio.sleep(2 ** attempt)
         try:
-            response = await acompletion(
-                model=model,
-                messages=messages,
-                tools=tools,
-                tool_choice=tool_choice,
-                temperature=temperature,
-                max_tokens=max_tokens,
-                **extra,
+            response = await asyncio.wait_for(
+                acompletion(
+                    model=model,
+                    messages=messages,
+                    tools=tools,
+                    tool_choice=tool_choice,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    **extra,
+                ),
+                timeout=ceiling,
             )
             choices = response.get("choices") or []
             if not choices:
@@ -792,6 +857,12 @@ async def complete_with_tools(
 
             return result
 
+        except TimeoutError as exc:
+            # MUST precede the generic handler — see the note in `complete`.
+            _log.warning("acb_llm.request_timeout", model=model,
+                         attempt=attempt + 1, ceiling_secs=ceiling)
+            last_exc = exc
+            continue
         except Exception as exc:
             if any(token in str(exc).lower() for token in _TRANSIENT_ERRORS):
                 last_exc = exc

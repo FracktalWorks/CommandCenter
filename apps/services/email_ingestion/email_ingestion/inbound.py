@@ -271,7 +271,7 @@ async def _persist_message(msg: EmailMessage) -> None:
         from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
         engine = create_async_engine(
-            db_url, echo=False, connect_args={"timeout": _connect_timeout()}
+            db_url, echo=False, connect_args=_connect_args()
         )
         session_factory = async_sessionmaker(engine, expire_on_commit=False)
 
@@ -320,6 +320,22 @@ def _connect_timeout() -> int:
         return get_settings().db_connect_timeout
     except Exception:
         return 10
+
+
+def _connect_args() -> dict:
+    """Connect args for this module's engines.
+
+    :func:`_connect_timeout` bounds getting IN; the server-side
+    ``idle_in_transaction_session_timeout`` bounds staying in, so a wedged
+    persist cannot hold its locks for the life of the process. Mirrors
+    ``scheduler._connect_args`` and ``gateway.db.engine_connect_args`` — see the
+    2026-08-06 write-up for why an unbounded one took the app down."""
+    return {
+        "timeout": _connect_timeout(),
+        "server_settings": {
+            "idle_in_transaction_session_timeout": "600000",  # 10 min
+        },
+    }
 
 
 # -- Lifecycle management -----------------------------------------------------

@@ -393,6 +393,8 @@ def _get_session_factory():
             async_sessionmaker,
             create_async_engine,
         )
+
+        from gateway.db import engine_connect_args
         settings = get_settings()
         db_url = os.environ.get("DATABASE_URL", settings.database_url)
         if "postgresql+psycopg" in db_url:
@@ -404,10 +406,11 @@ def _get_session_factory():
         _ENGINE = create_async_engine(
             db_url, echo=False, pool_pre_ping=True,
             pool_size=10, max_overflow=20, pool_recycle=1800,
-            # Bound the CONNECT phase (asyncpg's `timeout`) so a slow/unreachable
-            # DB fails fast instead of stalling request handlers — same ceiling
-            # as acb_graph's engine (settings.db_connect_timeout).
-            connect_args={"timeout": settings.db_connect_timeout},
+            # Bounds the connect phase AND how long one of our sessions may sit
+            # `idle in transaction`. This engine is the one that drained on
+            # 2026-08-06 — see gateway/db.py::engine_connect_args for why the
+            # second bound exists and why it is 10 minutes and not 5.
+            connect_args=engine_connect_args(),
         )
         _SESSION_FACTORY = async_sessionmaker(_ENGINE, expire_on_commit=False)
     return _SESSION_FACTORY

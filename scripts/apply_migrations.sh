@@ -16,11 +16,36 @@
 #
 # Usage:  scripts/apply_migrations.sh
 # Env:    APP_DIR (default /opt/acb/app), PG_CONTAINER (default acb-postgres)
+#         MIGRATION_LOCK_TIMEOUT (default 5s), MIGRATION_LOCK_RETRIES (default 5)
 set -euo pipefail
 
 APP_DIR="${APP_DIR:-/opt/acb/app}"
 PG_CONTAINER="${PG_CONTAINER:-acb-postgres}"
 MIGRATIONS_DIR="$APP_DIR/infra/postgres"
+
+# --- Never WAIT for a lock. This is the whole outage, in one setting. ---------
+#
+# 2026-08-06: a gateway session sat `idle in transaction` on
+# email_assistant_settings for 14h44m (a hung LLM call, with a SQLAlchemy session
+# open across it). This runner then asked for ACCESS EXCLUSIVE on that table to
+# replay `39_email_learned_writing_style.sql` — and waited.
+#
+# Waiting is what made it an outage rather than a slow deploy. Postgres's lock
+# queue is FIFO: once an ACCESS EXCLUSIVE request is QUEUED, every later reader
+# queues behind it, even though the reader would not have conflicted with the
+# stale transaction it is ultimately waiting on. So one idle session plus one
+# patient ALTER froze the table for the entire application. Sending mail reads
+# email_assistant_settings for the signature; it stopped. Blocked readers each
+# pinned a pooled connection until the pool drained, and endpoints with nothing
+# to do with email started answering 500.
+#
+# With a lock_timeout the ALTER gives up in seconds and never enters the queue,
+# so a stale reader can delay a migration but can no longer freeze a table.
+# Retries absorb the ordinary case (a long-running query holding the table for a
+# moment); exhausting them fails the deploy LOUDLY, which is the correct outcome
+# and the one that used to be indistinguishable from a hang.
+MIGRATION_LOCK_TIMEOUT="${MIGRATION_LOCK_TIMEOUT:-5s}"
+MIGRATION_LOCK_RETRIES="${MIGRATION_LOCK_RETRIES:-5}"
 
 # Pull DB credentials from .env when present, else fall back to compose defaults.
 ENV_FILE="$APP_DIR/.env"
@@ -92,16 +117,43 @@ for f in $(ls "$MIGRATIONS_DIR"/[0-9][0-9]*_*.sql | sort -V); do
     00_*|01_*) continue ;;  # init-only, skip
   esac
   printf "    - %s ... " "$base"
-  if docker exec -i "$PG_CONTAINER" \
-       psql -v ON_ERROR_STOP=1 -U "$PG_USER" -d "$PG_DB" -q < "$f" >/dev/null 2>/tmp/migrate_err; then
-    echo "ok"
-    applied=$((applied + 1))
-  else
+  attempt=1
+  while :; do
+    # `SET lock_timeout` is prepended to the stream rather than passed as a psql
+    # flag so it lands in the SAME session as the migration, ahead of any BEGIN
+    # the file opens. Session-level, so one SET covers every statement in it.
+    if { printf 'SET lock_timeout = %s;\n' "$MIGRATION_LOCK_TIMEOUT"; cat "$f"; } \
+         | docker exec -i "$PG_CONTAINER" \
+             psql -v ON_ERROR_STOP=1 -U "$PG_USER" -d "$PG_DB" -q \
+             >/dev/null 2>/tmp/migrate_err; then
+      echo "ok"
+      applied=$((applied + 1))
+      break
+    fi
+    # Only a LOCK timeout is retryable. Any other psql error is a real migration
+    # failure and must not be papered over by trying it four more times.
+    if grep -qi 'lock timeout' /tmp/migrate_err \
+       && [ "$attempt" -lt "$MIGRATION_LOCK_RETRIES" ]; then
+      printf "lock busy, retry %d/%d ... " "$attempt" "$MIGRATION_LOCK_RETRIES"
+      sleep $((attempt * 5))
+      attempt=$((attempt + 1))
+      continue
+    fi
     echo "FAILED"
+    if grep -qi 'lock timeout' /tmp/migrate_err; then
+      echo "      Could not acquire a lock on this table after $MIGRATION_LOCK_RETRIES tries." >&2
+      echo "      Something is holding it. Find the holder before re-running:" >&2
+      echo "        SELECT pid, state, now()-state_change AS dur, query" >&2
+      echo "          FROM pg_stat_activity" >&2
+      echo "         WHERE datname = '$PG_DB' AND state <> 'idle'" >&2
+      echo "         ORDER BY state_change;" >&2
+      echo "      A session 'idle in transaction' for minutes is a wedged app" >&2
+      echo "      handler; pg_terminate_backend(<pid>) releases it." >&2
+    fi
     echo "      ----- psql error -----" >&2
     sed 's/^/      /' /tmp/migrate_err >&2
     exit 1
-  fi
+  done
 done
 
 say "Migrations complete ($applied file(s) applied idempotently)"

@@ -36,6 +36,11 @@
 > enabling the flag and any hand-run push cycle against prod remain OWNER-GATE
 > (`work_plan.md` §6).
 > · **WS-26d write half + email join: 🟡 SPEC.** · **WS-26e: 🟡 SPEC, nothing built.**
+> · **WS-26f–h (pipeline truth + settings UI · forecast & funnel · stage discipline):
+> 🟢 SPECCED 2026-08-07, dispatchable — §5.1 is the blueprint, trigger was the owner's
+> first live board session (lanes out of order, imported stages at 0% probability).
+> WS-26i (data management): 🟡 SPEC-THIN, audit-narrow before dispatch. Applying WS-26f's
+> stage repair against prod is OWNER-GATE (work_plan §6).**
 > · **Owner:** vjvarada · **Board row:** WS-26
 >
 > ⚠️ **`.env.example` cannot carry `CRM_ZOHO_SYNC`** — plan-guard blocks agent writes to it, so
@@ -339,6 +344,69 @@ discriminated on `status`, so a `live` entry without an `href` is a **compile** 
 existing `test_centers_registry_matches_the_feature_vocabulary` reads each Center's
 `feature:` field and nothing else, so it cannot see a mistake in `apps[]` at all.
 Runtime twin: `src/lib/centers.test.ts`.
+
+### 5.1 Pipeline blueprint — order, probability, forecast, discipline *(added 2026-08-07)*
+
+**Why this section exists.** The owner's first working session on the live board
+(2026-08-07) found lanes out of order and imported stages at 0% probability. That is not
+a modeling gap: `crm_deal_statuses` has carried `position` and `probability` since 144,
+`pipeline.py` already inherits the stage default into a deal on entry, `crm_deals` carries
+a per-deal `probability` that the backfill filled from Zoho's own field, and `admin.py`
+exposes full CRUD over all of it. It is two delivery gaps. (1) The importer, refusing to
+invent semantics for a stage it has never seen, **appends** it past the last position with
+`probability 0` (`import_zoho.py::_ensure_status`) — and because 144's six seed lanes hold
+*renamed* variants of Zoho's defaults ("Proposal" vs the tenant's likely
+"Proposal/Price Quote"), name-match missed them, so the tenant's real stages sit at the end
+of the board behind seed lanes that may hold zero deals. (2) The admin API is **headless**
+— there is no settings surface, so nobody can fix (1) without curl. This section is the
+plan of record for the pipeline as a *system*; §9's WS-26f–i are its tickets.
+
+**The pipeline science (what the numbers mean, so nobody re-derives it wrong):**
+
+- A **stage** carries a default win probability — the historical chance that a deal
+  sitting in it eventually closes won. B2B benchmarks (and 144's seeds agree):
+  qualification 10–20, needs analysis 20–30, proposal 40–60, negotiation 70–90, won 100,
+  lost 0. These are priors, not gospel — once a quarter of native history exists,
+  recalibrate them against `crm_status_changes` conversion data (WS-26g's funnel makes
+  that a read, not a project).
+- A **deal** may override its stage's default (`crm_deals.probability`, nullable; on
+  entering a stage a NULL inherits the stage default — shipped behaviour). A rep who
+  knows the champion just left marks a Proposal-stage deal at 20 without moving it.
+  Deal-level probability is what forecast math reads — never the stage's.
+- **Weighted pipeline** = Σ(`amount` × `probability`/100) over deals in open/ongoing-type
+  stages. It appears wherever money already appears: per-lane under the existing ₹ total,
+  a board-header rollup, and WS-26g's reports.
+- **`type` stays king.** The machine class (`open/ongoing/won/lost`) is what stamps
+  `closed_at`, drives funnel math and the sync's semantics. Probability *informs*, `type`
+  *decides*: a mis-set 100% stage can lie to a forecast but cannot close a deal. Zoho's
+  `forecast_type` maps onto `type`; do not grow a parallel enum (D-CRM-10).
+
+**The four systems, in build order:**
+
+1. **Pipeline truth + settings (WS-26f).** Repair the live stage set from Zoho's own
+   pipeline metadata (`settings/pipeline` carries the tenant's real `sequence_number` and
+   `forecast_type` per stage), then give the pipeline a management surface — drag-reorder,
+   inline probability/color/type, lost-reason manager — so the next fix never needs an
+   engineer. The sales team manages its own pipeline (D-CRM-3).
+2. **Forecast & funnel (WS-26g).** Weighted totals on the board; a reports tab with
+   funnel conversion, per-stage dwell, win rate, cycle time, lost-reason breakdown and an
+   owner leaderboard. `crm_status_changes` has recorded every transition with actor and
+   timestamp since day one — the report is a query, not an instrument.
+3. **Stage discipline (WS-26h).** Entry requirements per stage (the lost-reason-on-lost
+   mechanism, generalized: e.g. no entering Proposal without an `amount`) and **rot** —
+   a deal older in-stage than the stage's threshold wears an age badge
+   (`status_changed_at` is already the stage-age clock). Pipedrive's lesson, adopted
+   deliberately: discipline enforced by *visibility*, not locks.
+4. **Data management (WS-26i).** Duplicate merge (the convert modal's match rules already
+   *find* duplicates; merge is the missing verb), bulk actions on the lists, CSV
+   import/export, saved views on the URL grammar `urlState.ts` already defines.
+
+**Deliberate deferrals — written down so nobody "helpfully" builds them early:**
+**multiple pipelines** (one sales motion, one pipeline; the additive path is a
+`pipeline_id` FK on statuses+deals and a board switcher — D-CRM-11 holds until a second
+motion exists); **outreach sequences/cadences** (that is scheduled-send territory, and
+schedule-send is owner-PARKED in the email app); **AI deal scoring** (needs a quarter of
+native funnel history; the log is accruing it now).
 
 ---
 
@@ -647,6 +715,25 @@ WS-2 (the standing "rotate Zoho token" P0 becomes "revoke", strictly better).
   mechanism already has: a row arriving WITH a `zoho_id` came from Zoho and is not born
   dirty, so "native write" here means exactly what the code already keys on. This resolves
   the WS-26d audit's push-queue blocker; the confirmation mechanism (B5) is still open.
+- **D-CRM-10 — `DECISION (agent-proposed, owner may overrule)`: probability = stage
+  default + per-deal override; forecast math reads the deal, never the stage; `type`
+  alone decides.** `crm_deal_statuses.probability` is the prior a deal inherits on
+  entering the stage (shipped, `pipeline.py`); `crm_deals.probability` is what every
+  forecast computation reads. Won-type stage rows are pinned to 100 and lost-type to 0 —
+  enforced at the admin PATCH (422 on contradiction, explicit beats silent rewrite), not
+  trusted downstream. Weighted pipeline = Σ(`amount` × `probability`/100) over deals in
+  open/ongoing-type stages only; `won` contributes to *closed* revenue, never to
+  pipeline. Probability never triggers mechanics: `type` stamps `closed_at`, gates the
+  lost-reason requirement, and drives funnel math. Zoho's `forecast_type`
+  ("Open"/"Closed Won"/"Closed Lost") maps onto `type` at the WS-26f metadata pull; no
+  parallel forecast-category enum is added.
+- **D-CRM-11 — `DECISION (agent-proposed, owner may overrule)`: one pipeline until a
+  second sales motion exists.** No `crm_pipelines` table now. The additive path when a
+  second motion is real: `pipeline_id` FK on `crm_deal_statuses` + `crm_deals`, a board
+  switcher, nothing else changes shape. WS-26f's metadata pull verifies the premise — if
+  `settings/pipeline` returns more than one pipeline for the layout, this decision goes
+  back to the owner *before* the repair is applied, because a name-match repair against
+  the wrong pipeline scrambles the board it was meant to fix.
 
 **Build-time decisions, recorded post-hoc (WS-26a implementer, 2026-08-05 — owner may
 overrule any of them):**
@@ -753,7 +840,7 @@ whose comments claimed to be the only one.
 
 ---
 
-## 9. Tickets — WS-26a…e (every item AGENT-SAFE unless labeled)
+## 9. Tickets — WS-26a…i (every item AGENT-SAFE unless labeled)
 
 ### WS-26a — Schema + feature registration + core API · ✅ **BUILT 2026-08-05**
 *(Audited GO-NARROWED 2026-08-05; blockers A/B folded in below. Landed as
@@ -1252,6 +1339,152 @@ user-approved write"). That difference is the whole division of labour:
 
 **Flipping `CRM_AUTO_LEAD` = OWNER-GATE (§6)** — and per D-CRM-9 the ON-state queues each
 auto-created lead for push into the live Zoho tenant.
+
+### WS-26f — Pipeline truth + settings UI · 🟢 AGENT-SAFE to build · 🔴 OWNER-GATE to apply against prod
+*(§5.1 system 1. Trigger: the owner's first live look, 2026-08-07 — lanes out of order,
+imported stages at 0%. Three sub-slices, one branch; f2 and f3 are useful even if f1's
+metadata probe comes back empty-handed.)*
+
+**Root cause, verified in code.** `import_zoho.py::_ensure_status` appends an unseen
+Zoho stage past the last `position` with `probability = 0` — the right refusal at import
+time, the wrong place to leave the data forever. 144's seeds renamed Zoho defaults
+("Proposal", "Negotiation" vs the tenant's likely "Proposal/Price Quote",
+"Negotiation/Review"), so name-match missed them and the board is seed lanes (some
+plausibly empty) followed by the tenant's real stages in first-encounter order.
+
+**f1 — the stage-metadata pull.** `POST /crm/import/zoho/stages`, floor
+`admin:access:manage` (this rewrites the pipeline, not a record — same floor as the
+record import, same reasoning):
+1. Resolve the Deals layout id (`settings/layouts?module=Deals`), then
+   `GET /crm/v8/settings/pipeline?layout_id=…` (scope `ZohoCRM.settings.pipeline.READ`).
+   Per stage: `display_value`, `sequence_number`, `forecast_type`, `forecast_category`.
+   That is the tenant's REAL lane order. **If more than one pipeline returns, STOP and
+   surface it — D-CRM-11 goes back to the owner before anything is written.**
+2. Probability: probe the same layout metadata's Stage `pick_list_values` for a per-value
+   `probability` (Zoho documents this inconsistently, and this tenant already withholds
+   record-level fields — §7.1). Absent → probabilities stay untouched and f2 is the
+   editor; the report must distinguish **no-scope** (an OAuth scope error, named in the
+   response) from **no-data** (metadata present, field absent) — the existing token was
+   not minted with `settings.*` scopes, so no-scope is the *expected* first outcome, and
+   re-minting the token is the owner's act (WS-2 territory, named in the report).
+3. Apply by name-match to `crm_deal_statuses`: matched → `position = sequence_number×10`,
+   `type` from `forecast_type` ("Closed Won"→`won`, "Closed Lost"→`lost`, else keep the
+   existing `type`); unmatched tenant stage → created in sequence (probability 0, owner
+   sets it in f2); native-only lane (no tenant counterpart) → **reported, never deleted**
+   — deletion is the owner's call in f2, and `ON DELETE RESTRICT` 409s a lane holding
+   deals anyway.
+4. **Dry-run by default, `?apply=true` to write** — the record importer's own pattern
+   (fetch and report, write nothing). The report lists per-stage: matched/created,
+   position before→after, type before→after, probability before→after, orphans.
+5. **No deal row is touched.** Statuses tables are native config and do not sync to Zoho;
+   the repair queues zero pushes. Pinned by test, not asserted in prose.
+
+**f2 — Pipeline Settings surface.** `?tab=settings` in the existing URL grammar (no new
+route file): three grids — deal stages (drag-reorder writes renumbered `position`s ×10
+via the existing per-row PATCH; inline name/color/type/probability/is_default), lead
+statuses (same, minus probability), lost reasons (label + position). Gate: `feature:crm`
+(D-CRM-3 — the sales team manages its own pipeline); the f1 pull button additionally
+behind `admin:access:manage`. Server-side clamp lands in `admin.py` PATCH/POST:
+probability outside 0–100 → 422; won-type with probability ≠ 100 or lost-type ≠ 0 → 422
+naming the rule (D-CRM-10). The grids use the EXISTING admin API — if a needed endpoint
+is missing, that is a spec bug to raise, not an addendum to sneak in.
+
+**f3 — probability on the money surfaces.** Weighted ₹ per lane under the existing lane
+total and a board-header total+weighted rollup — one pure function in `board.ts`
+(deal-level `probability`, NULL treated as stage default — the inheritance materializes
+on entry, so NULL survives only on rows that predate a move; handle it anyway).
+Record sheet: probability becomes an editable field with its stage's default shown when
+inherited; the status-pill dropdown shows each stage's default beside its name.
+
+**Done-when:**
+1. Dry-run returns the full report and writes nothing — test pins zero writes, including
+   the >1-pipeline stop.
+2. Apply is idempotent — second run reports zero changes.
+3. No-scope vs no-data are distinguishable in the response, each with a named test; the
+   no-scope response names the missing scope string.
+4. Post-apply, no row in `crm_deals` changed and nothing is `zoho_dirty` that wasn't —
+   pinned by test (the §5.1 safety property).
+5. Settings grids render from the live GETs; reorder issues renumbered PATCHes; the
+   won=100/lost=0 clamp is tested on BOTH sides (client validation message, server 422).
+6. Weighted math: pure-function tests for NULL/0/100/mixed probability and the
+   open/ongoing-only filter; lane + header render it through the BFF against fixtures.
+7. Running `?apply=true` against prod is **OWNER-GATE** (work_plan §6) — everything
+   before that line is agent-safe.
+
+**Tests:** `tests/unit/test_crm_stage_metadata.py` (new), `test_crm_routes.py` (clamps),
+vitest: `board.test.ts` (weighted math), settings-grid helpers colocated.
+
+### WS-26g — Forecast & funnel reports · 🟢 AGENT-SAFE
+*(§5.1 system 2. The instrument already ran: `crm_status_changes` has logged every
+transition with actor+timestamp since 26a; `closed_at` and `status_changed_at` are
+stamped by the same move path.)*
+
+`?tab=reports`, read-only SQL in a new `routes/crm/reports.py` (same router+gate;
+core.py-is-the-leaf). Four blocks, each a named endpoint:
+1. **Pipeline by stage** — per open/ongoing stage: deal count, ₹ total, ₹ weighted;
+   grand totals. Same formula as f3's board math — a cross-language parity test pins
+   `board.ts` against the SQL on one shared fixture (the `priority.ts ⟷ priority.py`
+   precedent).
+2. **Funnel** — per stage: deals that ever *entered* it (visited stages only — a deal
+   jumping Qualification→Negotiation counts in those two, no backfill of skipped lanes;
+   stated because both conventions exist in the wild), conversion-forward %, median dwell
+   days from `crm_status_changes`.
+3. **Win/loss** — trailing 90d: win rate (won/(won+lost) by `closed_at`), average cycle
+   (created→closed), lost-reason breakdown (mandatory on lost since 26a, so the data is
+   complete by construction).
+4. **Owner leaderboard** — per `owner_email`: open count, weighted ₹, won ₹ trailing 90d.
+
+**Done-when:** each block has fixture tests proving the math (funnel visited-only rule
+named in a test); an empty CRM returns zeros, never errors; the tab renders through the
+BFF; all math server-side except f3's board duplication, which the parity test bridges.
+
+**Tests:** `tests/unit/test_crm_reports.py`, shared fixtures via `_crm_fakes.py`.
+
+### WS-26h — Stage discipline: entry requirements + rot · 🟢 AGENT-SAFE · after f2
+*(§5.1 system 3. The mechanism exists in miniature: lost-type moves already demand a
+reason — `needsLostReason` in `board.ts`, enforced server-side. Generalize exactly that,
+change nothing about it.)*
+
+- Migration (next free number at build time, R1): `crm_deal_statuses` gains
+  `required_fields TEXT[] NOT NULL DEFAULT '{}'` and `max_dwell_days SMALLINT NULL`
+  (NULL = never rots).
+- `required_fields` values come from a server allowlist of real deal columns (`amount`,
+  `expected_close_date`, `organization_id`, `owner_email`) validated at PATCH time —
+  free-text column names are how a typo becomes a lane nobody can enter.
+- Server: the status-move path in `pipeline.py` (the one that stamps `closed_at`) returns
+  422 naming the missing fields when the TARGET stage requires them and the deal (plus
+  the same PATCH's own updates) lacks them. Entry-only: requirements never block a
+  non-move edit.
+- UI: `planMove` grows the check alongside `needsLostReason` — the move modal prompts for
+  the missing fields inline and sends ONE PATCH carrying fields + status together.
+- Rot: presentation only. The card's existing stage-age turns amber past
+  `max_dwell_days`, red past 2× — computed from `status_changed_at`, no mechanics, no
+  locks.
+- f2's grids grow both columns (hence *after f2*).
+
+**Done-when:** move-with-missing-fields → 422 naming them; same PATCH carrying the fields
+→ succeeds; non-move PATCH never blocked; unknown field name in `required_fields` → 422;
+rot thresholds pure-function tested (NULL, boundary, 2×); settings grid edits both
+columns.
+
+**Tests:** extend `tests/unit/test_crm_pipeline.py`; vitest `board.test.ts` (rot,
+move-plan).
+
+### WS-26i — Data management: merge, bulk, import/export, saved views · 🟡 SPEC-THIN — audit before dispatch
+*(§5.1 system 4. Deliberately thin — the WS-26d lesson: four things behind one done-when
+is how a ticket goes undispatchable. Each item below gets its own spec-auditor narrowing
+before any build.)*
+- **Duplicate merge** (contacts/orgs): the convert modal's match rules already FIND
+  duplicates (`convert.ts`, §3.7 mirror); merge = pick survivor, re-point FKs (deals,
+  activities, deal_contacts), and — the hard part — express the loser to Zoho under
+  D-CRM-7 semantics (a merge is an update+delete pair with tombstone implications;
+  spec against §7.1 before building).
+- **Bulk actions** on the lists: multi-select → owner/status change, delete. Per-record
+  endpoints vs a bulk endpoint is an audit-time call (3.4k records total today).
+- **CSV import/export**: export = current list filter, server-streamed; import = the Zoho
+  importer's dedup discipline generalized (match-by-email first).
+- **Saved views**: the URL grammar IS the view (`urlState.ts`); a saved view is a named
+  URL. Per-user table vs localStorage is an audit-time call (QuickFilters precedent).
 
 ### WS-26e — Cutover + retirement · 🔴 OWNER-GATE end-to-end
 Final import + parity report; §6 consumers repointed; §7.4 inventory retired; Zoho refresh

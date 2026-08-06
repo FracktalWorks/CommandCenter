@@ -771,6 +771,33 @@ transition's three effects; (4) two assignees hold independent dispositions; (5)
 project is created once, granted to its owner alone, and excluded from every team read;
 (6) no route here accepts a `?member=` in any form.
 
+**The surface landed 2026-08-06** (`src/app/projects/components/MyWork.tsx` +
+`lib/mywork.ts`; 17 vitest cases, 7 mutants red). WS-27e had shipped API-only, which meant
+the cohesion the revision bought was true in the schema and invisible to a member. **"My
+work" sits above the project tree in the same app** — not a second surface and not a second
+nav entry, because a personal lens reached from somewhere else re-teaches exactly the split
+D-PM-6 was revised to remove. Four decisions worth recording, each of which could
+reasonably have gone the other way:
+
+- **Four lanes, not eight.** `INBOX | NEXT | WAITING | SOMEDAY` are work states and get
+  lanes; `PROJECT | REFERENCE` are filing states and collapse into one "Filed" lane shown
+  only when occupied; `DONE | TRASH` the endpoint already excludes. Eight lanes would make
+  the daily view a filing cabinet.
+- **Empty work lanes still render.** "You have triaged nothing into today" is a real and
+  useful state, and a lane that vanishes when empty cannot say it. Only "Filed" hides.
+- **Undated tasks sort BELOW dated ones.** A task nobody dated is not more urgent than one
+  due tomorrow, and the opposite order is how a personal list stops being read.
+- **Untriaged is stated in the row, not implied by a missing badge**, and counted in the
+  header. That count is the Weekly Review's whole question and is only answerable because
+  the server derives dispositions instead of storing them on first read (§3.12).
+
+Completing from a row calls `POST /tasks/{id}/complete`, which moves the **shared** status
+— the checkbox carries a title saying so. Triage buttons call
+`PATCH /tasks/{id}/personal` and cannot touch a shared field. One repair the surface forced:
+`TaskPanel` previously read the *selected project's* statuses, which is wrong for a task
+opened from My work — it may belong to any project the member is assigned into — so the
+panel's statuses are now resolved from the task's own root project.
+
 **WS-27f — automation + agent dispatch.** 🟢 AGENT-SAFE (the node types land in
 `workflows_app.md`'s tree per D6 and are recorded there in the same PR).
 Done when: (1) `pm.*` events reach `dispatch_event` (proven at the `emit_event` seam);

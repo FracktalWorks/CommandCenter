@@ -7,13 +7,15 @@
  * (§3.8) — the timeline shows a status change, an assignment, an agent run and
  * a comment in the same stream, which is the point of the shared spine.
  */
-import { Bot, X } from "lucide-react";
+import { Bot, Image as ImageIcon, Paperclip, X } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import {
   type ActivityRow,
+  type AttachmentRow,
   type StatusRow,
   type TaskRow,
+  attachmentsApi,
   projectsApi,
 } from "../lib/api";
 import {
@@ -60,6 +62,8 @@ function describe(activity: ActivityRow): string {
       return `Agent run ${String(meta.agent ?? "")}`.trim();
     case "sync":
       return activity.body ?? "Synced";
+    case "attachment":
+      return activity.body ?? "Attachment changed";
     default:
       return activity.body ?? activity.type;
   }
@@ -78,6 +82,7 @@ export function TaskPanel({
   const [subtask, setSubtask] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [files, setFiles] = useState<AttachmentRow[]>([]);
   const assignees = task.assignees ?? [];
 
   useEffect(() => {
@@ -88,10 +93,56 @@ export function TaskPanel({
         if (live) setTimeline(res.rows);
       })
       .catch((err) => live && setError(String(err.message ?? err)));
+    attachmentsApi
+      .list(task.id)
+      .then((res) => {
+        if (live) setFiles(res.rows);
+      })
+      // Attachments failing must not blank the panel: the timeline and the
+      // status control are the reason somebody opened it.
+      .catch(() => undefined);
     return () => {
       live = false;
     };
   }, [task.id]);
+
+  async function uploadFiles(picked: FileList | null) {
+    if (!picked || picked.length === 0) return;
+    setBusy(true);
+    setError(null);
+    try {
+      // Sequential, not Promise.all: each upload writes a timeline row, and a
+      // burst of parallel writes would interleave them into an order that does
+      // not match what the person did.
+      for (const file of Array.from(picked)) {
+        await attachmentsApi.upload(task.id, file);
+      }
+      const [fresh, tl] = await Promise.all([
+        attachmentsApi.list(task.id),
+        projectsApi.timeline(task.id),
+      ]);
+      setFiles(fresh.rows);
+      setTimeline(tl.rows);
+    } catch (err) {
+      setError(String((err as Error).message));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function detach(attachmentId: string) {
+    setBusy(true);
+    setError(null);
+    try {
+      await attachmentsApi.detach(task.id, attachmentId);
+      const fresh = await attachmentsApi.list(task.id);
+      setFiles(fresh.rows);
+    } catch (err) {
+      setError(String((err as Error).message));
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function reload() {
     const [fresh, tl] = await Promise.all([
@@ -273,6 +324,56 @@ export function TaskPanel({
             {task.description}
           </p>
         ) : null}
+        <div>
+          <span className="text-xs text-muted-foreground">Files</span>
+          <div className="mt-1 space-y-1">
+            {files.map((f) => (
+              <div key={f.attachment_id} className="flex items-center gap-2 text-xs">
+                {f.kind === "image" ? (
+                  <ImageIcon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                ) : (
+                  <Paperclip className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                )}
+                <a
+                  href={f.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="min-w-0 flex-1 truncate text-foreground hover:underline"
+                >
+                  {f.name}
+                </a>
+                <span className="shrink-0 text-muted-foreground">
+                  {Math.max(1, Math.round(f.size / 1024))} KB
+                </span>
+                <button
+                  type="button"
+                  disabled={busy}
+                  aria-label={`Remove ${f.name}`}
+                  title="Removes it from this task; the file itself is kept"
+                  onClick={() => void detach(f.attachment_id)}
+                  className="shrink-0 text-muted-foreground hover:text-foreground"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </div>
+            ))}
+            {files.length === 0 ? (
+              <p className="text-xs text-muted-foreground">Nothing attached.</p>
+            ) : null}
+          </div>
+          <input
+            type="file"
+            multiple
+            disabled={busy}
+            aria-label="Attach files"
+            onChange={(e) => {
+              void uploadFiles(e.target.files);
+              // Reset so picking the SAME file twice still fires a change.
+              e.target.value = "";
+            }}
+            className="mt-1 w-full text-xs text-muted-foreground file:mr-2 file:rounded-md file:border file:border-border file:bg-background file:px-2 file:py-1 file:text-xs file:text-foreground"
+          />
+        </div>
         <div>
           <span className="text-xs text-muted-foreground">Subtask</span>
           <input

@@ -937,7 +937,7 @@ interesting it is to build.
 
 | # | Gap | Why it blocks | Ticket |
 |---|---|---|---|
-| 1 | **Attachments** — no `pm_task_attachments`, no upload | A task with a photo of the failed print is the normal case in a hardware company. Today there is nowhere to put it | **WS-27i** |
+| 1 | ~~**Attachments**~~ | — | **WS-27i ✅ BUILT 2026-08-06** |
 | 2 | **Notifications + @mentions** — nothing notifies anybody | Assignment is silent. A tool nobody hears from is a tool nobody opens, and the whole assignment→agent chain assumes somebody noticed | **WS-27j** |
 | 3 | **Filters, grouping and saved views** — `pm_views` exists; the UI has a board/list toggle and nothing else | "My open bugs in Ops, grouped by assignee" is a daily question with no answer. The **table is already there**, so this is a UI ticket, not a schema one | **WS-27k** |
 | 4 | **Custom fields** — no definitions table, no values | ClickUp's signature feature. Paca's shape (`custom_field_definitions` + a JSONB column keyed by `field_key`) is proven and portable | **WS-27l** |
@@ -967,3 +967,41 @@ reach.
 Every one is 🟢 **AGENT-SAFE** to build. The gates stay where they already are: running the
 importer against production, confirming a Space→Center mapping, and the WS-27g cutover are
 owner acts (`work_plan.md` §6), and nothing in §11 changes that.
+
+### 11.4 WS-27i — attachments (built 2026-08-06)
+
+Migration `150_projects_attachments.sql`, `routes/projects/attachments.py`, the Files
+section of the task panel. 25 hermetic cases, 10 mutants red.
+
+**One file store, not two.** `gtd_attachments` already IS Paca's "central files registry"
+(research §2.7) — owner, name, mime, size, path — so the bytes and the upload rules are
+**imported** from the capture flow rather than copied. A second table with a second storage
+directory would have meant two places to back up, two size limits to keep in step and two
+answers to "is this extension allowed".
+
+**What differs is who may READ, and that is the entire reason for the join.**
+`gtd_attachments` is owner-scoped end to end; `pm_task_attachments` makes a file readable by
+anyone who can see a task it hangs off. Two consequences, both security properties rather
+than conveniences:
+
+- **There is no attach-by-id endpoint.** Upload and attach are one call. A caller who could
+  name an arbitrary `attachment_id` could attach somebody else's private capture to a task
+  they own and read it back — privilege escalation dressed as a feature.
+- **A personal capture stays unreachable here**, because it has no join row.
+
+Detaching **keeps the bytes**: the same file may hang off another task, and deleting the row
+from under it would turn one person's tidy-up into somebody else's broken link. Detaching
+something already gone is a no-op, not a 404 (Paca's lenient-removes lesson, research §6).
+
+**A bug caught before it shipped:** the projects BFF proxy re-serialised every POST as JSON.
+A multipart upload would have failed `req.json()`, fallen into the `catch(() => ({}))`, and
+reached the gateway **with no file at all — while still answering 201**. The proxy now passes
+a non-JSON body through byte-for-byte. `workflows_app.md` §3.3b documents the identical trap
+for HMAC-signed webhook bodies; this was that trap on the upload path.
+
+**A test that was asserting the wrong thing:** the first traversal test checked the file's
+path on disk, which is safe *by construction* (`<uuid><suffix>` — the supplied name never
+reaches it), so a mutant removing `_safe_name` entirely survived. What that function actually
+protects is the **stored name**, which is echoed into the descriptor, rendered in the UI, and
+handed to `FileResponse(filename=…)` — i.e. into a `Content-Disposition` header, where
+separators, quotes and newlines matter. Both properties are now asserted separately.

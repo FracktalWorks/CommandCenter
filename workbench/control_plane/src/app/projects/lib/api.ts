@@ -206,6 +206,52 @@ export const myWorkApi = {
     }),
 };
 
+export interface AttachmentRow {
+  attachment_id: string;
+  kind: "image" | "file";
+  name: string;
+  mime: string;
+  size: number;
+  added_by?: string | null;
+  created_at?: string | null;
+  url: string;
+}
+
+/**
+ * Attachments (WS-27i).
+ *
+ * The upload is a raw multipart POST rather than a `call()` — that helper
+ * forces JSON. It still goes through the BFF proxy, so identity travels the
+ * same way everything else does.
+ */
+export const attachmentsApi = {
+  list: (taskId: string) =>
+    call<{ rows: AttachmentRow[]; total: number }>(`tasks/${taskId}/attachments`),
+
+  upload: async (taskId: string, file: File): Promise<AttachmentRow> => {
+    const body = new FormData();
+    body.append("file", file);
+    const res = await fetch(`/api/projects/tasks/${taskId}/attachments`, {
+      method: "POST",
+      body,
+    });
+    const text = await res.text();
+    const parsed = text ? JSON.parse(text) : null;
+    if (!res.ok) {
+      throw new ProjectsApiError(
+        parsed?.detail ?? `Upload failed (${res.status})`,
+        res.status
+      );
+    }
+    return parsed as AttachmentRow;
+  },
+
+  detach: (taskId: string, attachmentId: string) =>
+    call<{ removed: number }>(`tasks/${taskId}/attachments/${attachmentId}`, {
+      method: "DELETE",
+    }),
+};
+
 /** What `/my/inbox` returns: the task row with this member's overlay merged on. */
 export interface MyTaskApiRow extends TaskRow {
   disposition: string;

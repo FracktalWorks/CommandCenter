@@ -4,14 +4,15 @@
 > module, sliced into every other Center) · **Created:** 2026-08-05 · **Updated:** 2026-08-06
 > (owner pass — §8's three open questions are answered as **D-PM-8/9/10**; §7.1 gains the
 > Space→Center mapping step and WS-27b's done-whens grew with it) ·
-> **Status:** 🟢 **WS-27a + WS-27b + WS-27d BUILT** (2026-08-06, branch
+> **Status:** 🟢 **WS-27a + WS-27b + WS-27d + WS-27e BUILT** (2026-08-06, branch
 > `claude/paca-research-task-management-a1f6zd`, PR #367) — migration `146_projects.sql`
 > (§3.1–§3.10), `feature:projects` registered on both sides, the `routes/projects/` API (§4
 > minus `sync.py`) live behind the feature gate on the `gateway/db.py` seam, the ClickUp
 > importer with its Space→Center mapping plan (§7.1), and the `/projects` UI with its Center
-> projections (§5). **Not deployed and never run** — the migration has not been applied
-> anywhere and neither import endpoint has been executed against the live tenant. ·
-> **WS-27c, e, f, g: 🟡 SPEC, nothing built.** ·
+> projections (§5), and the personal lens (§3.11-§3.12, §6.1) on migration
+> `147_projects_personal.sql`. **Not deployed and never run** — neither migration has been
+> applied anywhere and neither import endpoint has been executed against the live tenant. ·
+> **WS-27c, f, g, h: 🟡 SPEC, nothing built.** ·
 > **Owner:** vjvarada · **Board row: WS-27**
 >
 > **Verified 2026-08-06:** 140 hermetic cases across
@@ -25,10 +26,16 @@
 > Space, a plan that writes, and a re-import that duplicates), and WS-27d's six (an unknown
 > Center yielding an empty forest, `planDrop` never materialising, a board drop hard-coding
 > status, unpositioned tasks sorting to the top, a missing nav pane, a Center linking at a
-> forked route).
+> forked route). **WS-27e adds six more:** an overlay keyed by task rather than per member,
+> a personal-only completion that leaves the board behind, `is_triaged` always true, an
+> inbox that drops its personal-project arm, a disposition filter matching only the stored
+> value, and a tickler that ignores `defer_until`. ⚠️ Two of those first **survived** and
+> the fake was at fault, not the tests — it applied the inbox's arms unconditionally instead
+> of keying them off the statement, the exact mirror failure `_projects_fakes.py`'s own
+> docstring warns about. Found by mutation, not by review.
 >
-> **Not built, on purpose:** no sync (WS-27c — blocked on BO-1a/BO-1b), no personal mirror
-> (WS-27e), no automation/agent dispatch (WS-27f), and
+> **Not built, on purpose:** no sync (WS-27c — blocked on BO-1a/BO-1b), no automation or
+> agent dispatch (WS-27f), no `gtd_items` retirement (WS-27h), and
 > `schema.generated.sql` was NOT regenerated — it needs a migrated live DB and is stale
 > repo-wide, so it stays an owner-run chore (the WS-26a precedent).
 >
@@ -287,7 +294,8 @@ on tasks). No engine 13.
 | `activities.py` | `GET /projects/tasks/{id}/timeline` · `POST /projects/tasks/{id}/comments` · `PATCH/DELETE /projects/comments/{id}` · `POST /projects/activities/{id}/revert` (field_change only) |
 | `admin.py` | statuses + types CRUD per root project (`RESTRICT` delete answers 409 naming the count in use) |
 | `views.py` | views CRUD · `PUT /projects/views/{id}/positions` (bulk upsert) |
-| `me.py` | `GET /projects/assigned-to-me` — the personal lens's read (§6.1) |
+| `me.py` | `GET /projects/assigned-to-me` — the flat "what is mine" read |
+| `personal.py` (WS-27e) | `GET /projects/my/inbox` · `GET/POST /projects/my/project` · `POST /projects/my/tasks` · `PATCH /projects/tasks/{id}/personal` · `POST /projects/tasks/{id}/{complete,defer}` · `GET /projects/my/contexts` |
 | `mapping.py` (WS-27b) | no routes — the three suggestion signals and their combination, kept apart from the importer because a proposal and an application are different acts (D-PM-10) |
 | `import_clickup.py` (WS-27b) | `POST /projects/import/clickup/plan` (proposes a Center per Space, writes nothing) · `POST /projects/import/clickup` (applies the confirmed mapping) |
 | `sync.py` (WS-27c) | `POST /projects/sync` · `GET /projects/sync/status` · `GET /projects/sync/conflicts` |
@@ -361,7 +369,10 @@ upsert per drop (the board's cross-column drag patches whatever field `column_by
 
 ### 6.1 Personal tasks (`/tasks`) — the org↔personal seam this spec exists for
 The requirement: a `pm_task` assigned to a member appears in their personal GTD system, and
-completing it in either place is one fact. Mechanism is **D-PM-6** (§8): the Tasks app's
+completing it in either place is one fact. **Since 2026-08-06 that is true by construction
+rather than by synchronisation** — there is one row, and the personal view is a lens over
+it (D-PM-6 revised). What follows describes the superseded mirror; it is kept for the
+reader who needs to know what was rejected. ~~Mechanism is the Tasks app's
 existing provider machinery mirrors `pm_tasks` where `lower(assignee) = user` into
 `gtd_items` as `source='SYNCED'` rows (internal provider `commandcenter`, no credentials,
 no broker gate — it is not an outward write). The GTD overlay (disposition, context,
@@ -488,6 +499,25 @@ Final import + parity counts per Space · flip the sync to **pull-only mirror** 
 edits still land; pushes stop) · a soak window where the org works in `/projects` · then
 stop the pull.
 
+### 7.5 The `gtd_items` retirement (WS-27h) — the cost D-PM-6's revision accepted
+
+One store means the old one goes. Sequenced **after** WS-27e (which is the destination) and
+independent of the ClickUp work, because it is a move between two tables we own:
+
+1. `/tasks` reads a **union** of `gtd_items` and `pm_tasks` during coexistence, so the app
+   keeps working while rows move.
+2. Every `gtd_items` row migrates: `LOCAL` rows into the owner's personal project; `SYNCED`
+   rows onto their `pm_tasks` counterpart by `clickup_id`, with the GTD overlay landing in
+   `pm_task_personal`. The disposition vocabulary is **unchanged on purpose** (§3.12), so
+   this is a copy rather than a translation.
+3. `items.py`'s 27 `user_id` predicates retire with the table they scope. They are untouched
+   by WS-27e, deliberately — the blast radius WS-14 C1 measured belongs to this ticket.
+4. `gtd_projects`, `gtd_spaces`, `gtd_folders` retire with it; `gtd_people` does **not** —
+   that is the People Center's store (`specs/people_center_app.md`).
+
+⚠️ **Not started, and it is the largest single piece of WS-27 remaining.** Until it lands
+there are two personal task stores, which is the state this decision exists to end.
+
 ### 7.4 Retirement inventory (WS-27g, second half)
 System A ClickUp arm: `ingestion/sources/clickup/` (client, normaliser, webhook),
 `scheduler.py`'s ClickUp job, `scripts/clickup_sync.py`, `/webhooks/clickup` from
@@ -547,16 +577,51 @@ slice. **Rejected:** `gtd_item_sort_key`-style single order (one global order ca
 N views) . **Cost:** one side table and materialise-on-first-drag semantics the UI must
 implement faithfully.
 
-**D-PM-6 — The personal connection is the Tasks app's provider seam, run internally.**
+~~**D-PM-6 — The personal connection is the Tasks app's provider seam, run internally.**
 `DECISION (agent-proposed, owner may overrule).` §6.1's mechanism: `pm_tasks` mirrored into
-`gtd_items` as `source='SYNCED'` under an internal `commandcenter` provider — every GTD
-feature works unchanged, the overlay contract already exists, and the mirror is in-DB
-(cheap, transactional, no broker). **Rejected:** (a) a read-union inside `/tasks` (touches
-the 27-predicate blast radius C1 already measured, and the GTD overlay has no home for
-un-mirrored rows); (b) linking `gtd_items` rows by hand (two sources of truth with no
-reconcile discipline). **Cost:** row duplication inside one database, and the internal
-provider must be exempted from `_broker_gate` (it is not an outward write — assert that in
-its tests).
+`gtd_items` as `source='SYNCED'` under an internal `commandcenter` provider…~~
+— **SUPERSEDED 2026-08-06.** Kept struck rather than deleted because the replacement is
+only legible against what it replaces: the mirror was the thing rejected, and a reader who
+finds `pm_task_personal` without this will wonder why the obvious answer was not taken.
+
+**D-PM-6 (revised) — ONE task store. The personal manager is a lens, not a copy.**
+`DECISION (owner-directed 2026-08-06: "the personal task manager should be a proper
+extension of the project system … a cohesive whole that should fit within each other".)`
+
+`pm_tasks` is **the** task table. Three consequences, and they are the whole design:
+
+1. **Assignment is not a sync.** A task assigned to a member is the row in their inbox.
+   Completing it there completes it for the project at the same instant, because there is
+   one row and one status. The mirror would have had two rows for one fact, and every
+   feature built afterwards — search, calendar, agents, reporting, the weekly review —
+   would have had to know about both.
+2. **Private work is a personal project.** An ordinary `pm_projects` row carrying
+   `personal_owner`, granted to that one address (§3.11). Nothing about tasks, boards,
+   timelines, automation or agent dispatch needs a special case; it is a project whose
+   grant happens to name a person. Personal projects are excluded from every *team* read —
+   "My tasks" is not a department — which is presentation, not access.
+3. **The GTD overlay is per-member** (§3.12, `pm_task_personal`). Two people assigned the
+   same task hold different dispositions: the person doing it says NEXT, the person who
+   delegated it says WAITING. A single column on `pm_tasks` could not express that, and it
+   is what delegation looks like rather than an edge case.
+
+**Rejected:** (a) the mirror, above — cohesion was the owner's stated requirement and a
+mirror is by construction two things; (b) keeping `gtd_items` for private todos and merging
+in the UI (owner-answered: two task tables forever, and every future feature has to handle
+both — the seam that quietly drifts); (c) rewriting `/tasks` onto `pm_tasks` in one pass
+(same end state, but ~11.8k lines and 68 endpoints at once, and a regression there breaks
+the owner's daily driver).
+
+**Cost, and it is real:** `gtd_items` becomes legacy and needs its own retirement
+(**WS-27h**, §7.5) — a second retirement project running beside ClickUp's. `/tasks` reads a
+union of both stores until it lands. The 27 owner-scoped predicates in `items.py` are
+untouched by this ticket and are WS-27h's problem, deliberately.
+
+**A property worth stating because it falls out rather than being built:** `disposition` is
+NULL until a member triages, and the read *derives* one from the task's status. So "never
+looked at" and "deliberately filed to INBOX" stay distinguishable — which is the only
+question the Weekly Review exists to ask, and a column defaulting to `'INBOX'` would have
+destroyed it silently.
 
 **D-PM-7 — Sync conflicts: three-way merge, newest-wins per field, conflicts logged to the
 timeline.** `DECISION (agent-proposed, owner may overrule).` §7.2. **Rejected:** whole-row
@@ -682,12 +747,18 @@ and cross-column drags patch the `column_by` field; (3) nav/access registration 
 slice pre-filters by its group — with a vitest asserting the `?center=` param filters
 presentation only.
 
-**WS-27e — personal-task connection + people binding.** 🟢 AGENT-SAFE.
-Done when: (1) an assigned `pm_task` appears in the assignee's `/tasks` inbox as a
-`SYNCED` row with the correct GTD disposition mapping; (2) re-sync never clobbers the
-overlay (the existing contract's test extended to the internal provider); (3) completion
-round-trips both directions; (4) the internal provider is asserted broker-exempt; (5)
-assignee suggestions read the capability layer with N4's projection intact.
+**WS-27e — the personal lens (one store).** ✅ **BUILT 2026-08-06**
+(migration `147_projects_personal.sql`, `routes/projects/personal.py`; 31 hermetic cases,
+6 mutants red). **Its shape changed with D-PM-6's revision** — this was specced as a mirror
+into `gtd_items` and is built as a lens over `pm_tasks`, so the done-whens below are
+restated against what was actually built rather than what the mirror would have owed.
+Done when: (1) an assigned `pm_task` appears in the assignee's inbox **with no sync** —
+same row, same id — with the correct derived disposition; (2) a member's triage cannot move
+the team's board and a status change cannot overwrite a stated disposition, both proven
+structurally; (3) completing from the inbox moves the shared status and writes the
+transition's three effects; (4) two assignees hold independent dispositions; (5) a personal
+project is created once, granted to its owner alone, and excluded from every team read;
+(6) no route here accepts a `?member=` in any form.
 
 **WS-27f — automation + agent dispatch.** 🟢 AGENT-SAFE (the node types land in
 `workflows_app.md`'s tree per D6 and are recorded there in the same PR).
@@ -697,6 +768,13 @@ Done when: (1) `pm.*` events reach `dispatch_event` (proven at the `emit_event` 
 immediate `agent_run` activity, and a closing activity on completion/failure; (4) the
 `skill-projects` tool family lets an agent read/update its assigned task under its own
 identity, permission-intersected.
+
+**WS-27h — `gtd_items` retirement.** 🟡 sequenced after WS-27e; the data move itself is
+🔴 **OWNER-GATE** (it rewrites the owner's live task store).
+Done when: (1) `/tasks` serves a union with no visible regression; (2) every `gtd_items`
+row has a `pm_tasks` counterpart and the counts match per disposition; (3) the overlay
+landed in `pm_task_personal` with dispositions preserved exactly; (4) `items.py`'s
+owner-scoped predicates and the `gtd_*` task tables are gone. See §7.5.
 
 **WS-27g — cutover + ClickUp retirement.** 🔴 **OWNER-GATE end-to-end** (final import,
 parity sign-off, sync flips, consumer repoint, token revocation, constraint-8 amendment —

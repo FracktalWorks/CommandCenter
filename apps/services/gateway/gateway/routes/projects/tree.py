@@ -99,9 +99,15 @@ class DeleteResponse(BaseModel):
 
 async def _visible_projects(db: Any, user: UserContext) -> list[Any]:
     vis = await resolve_visibility(db, user)
+    # Personal projects are excluded from every TEAM read (147/§3.11). They are
+    # ordinary projects the grant model already scopes to one person, so this is
+    # not a security filter — it is that "My tasks" does not belong in a
+    # department tree beside Sales and Operations. The personal surface reads
+    # them through `/projects/my/*`.
     return (await db.execute(
         text(
-            f"SELECT * FROM pm_projects WHERE {vis.project_clause()} "
+            f"SELECT * FROM pm_projects "
+            f"WHERE {vis.project_clause()} AND personal_owner IS NULL "
             f"ORDER BY position NULLS LAST, name"
         ),
         vis.params,

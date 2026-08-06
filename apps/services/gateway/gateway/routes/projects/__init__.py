@@ -25,6 +25,7 @@ from gateway.routes.projects import activities as _activities  # noqa: F401
 from gateway.routes.projects import admin as _admin  # noqa: F401
 from gateway.routes.projects import import_clickup as _import_clickup  # noqa: F401
 from gateway.routes.projects import me as _me  # noqa: F401
+from gateway.routes.projects import personal as _personal  # noqa: F401
 from gateway.routes.projects import tasks as _tasks  # noqa: F401
 from gateway.routes.projects import tree as _tree  # noqa: F401
 from gateway.routes.projects import views as _views  # noqa: F401

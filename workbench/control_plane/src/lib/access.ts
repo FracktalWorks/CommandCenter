@@ -75,6 +75,12 @@ const HREF_FEATURES: ReadonlyArray<[string, string]> = [
   // `center.sales`: a Center is a projection, and its modules carry their own
   // grants (specs/crm_app.md §5).
   ["/crm", "crm"],
+  // Projects — the People Center's work-management module, projected into
+  // every other Center as (app + scope). Gated on its own slug for the same
+  // reason as /crm; note this feature gates DATA as well as the pane, so the
+  // grant model in the API is the real boundary and this is the courtesy half
+  // (specs/project_management_app.md §5).
+  ["/projects", "projects"],
   ["/dashboard", "dashboard"],
   ["/observability", "observability"],
   ["/artifacts", "artifacts"],

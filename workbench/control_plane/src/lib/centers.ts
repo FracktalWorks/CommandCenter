@@ -75,6 +75,13 @@ export const CENTERS: Center[] = [
     group: "sales",
     apps: [
       {
+        label: "Projects & tasks",
+        note: "This Center's slice of the Projects app — the departments and projects granted to group:sales",
+        icon: "FolderKanban",
+        status: "live",
+        href: "/projects?center=sales",
+      },
+      {
         label: "Sales dashboard",
         note: "Pipeline health, quota progress, follow-ups due — the team's morning view",
         icon: "LayoutDashboard",
@@ -127,6 +134,13 @@ export const CENTERS: Center[] = [
     group: "marketing",
     apps: [
       {
+        label: "Projects & tasks",
+        note: "This Center's slice of the Projects app — the departments and projects granted to group:marketing",
+        icon: "FolderKanban",
+        status: "live",
+        href: "/projects?center=marketing",
+      },
+      {
         label: "Marketing dashboard",
         note: "Campaign performance, content calendar, channel health at a glance",
         icon: "LayoutDashboard",
@@ -173,6 +187,13 @@ export const CENTERS: Center[] = [
     group: "finance",
     apps: [
       {
+        label: "Projects & tasks",
+        note: "This Center's slice of the Projects app — the departments and projects granted to group:finance",
+        icon: "FolderKanban",
+        status: "live",
+        href: "/projects?center=finance",
+      },
+      {
         label: "Finance dashboard",
         note: "Cash position, receivables aging, collections due this week",
         icon: "LayoutDashboard",
@@ -212,6 +233,13 @@ export const CENTERS: Center[] = [
     feature: "center.operations",
     group: "operations",
     apps: [
+      {
+        label: "Projects & tasks",
+        note: "This Center's slice of the Projects app — the departments and projects granted to group:operations",
+        icon: "FolderKanban",
+        status: "live",
+        href: "/projects?center=operations",
+      },
       {
         label: "Ops dashboard",
         note: "Builds in progress, dispatches due, open service tickets",
@@ -259,6 +287,13 @@ export const CENTERS: Center[] = [
     group: "people",
     apps: [
       {
+        label: "Projects & work",
+        note: "The whole portfolio — every department, project and task. This Center is the app's home; the others see their granted slice of the same app, never a fork",
+        icon: "FolderKanban",
+        status: "live",
+        href: "/projects",
+      },
+      {
         label: "People dashboard",
         note: "Who's in, who's out, open roles, onboarding in progress",
         icon: "LayoutDashboard",
@@ -298,6 +333,13 @@ export const CENTERS: Center[] = [
     feature: "center.company",
     group: "company",
     apps: [
+      {
+        label: "All projects",
+        note: "Every department's work in one place — the full portfolio, which needs data:org:read",
+        icon: "FolderKanban",
+        status: "live",
+        href: "/projects",
+      },
       {
         label: "Company dashboard",
         note: "The org-wide overview, fed by every Center",

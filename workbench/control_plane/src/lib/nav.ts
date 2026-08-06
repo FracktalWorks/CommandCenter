@@ -133,6 +133,20 @@ export const NAV_SECTIONS: NavSection[] = [
         note: "Pipeline, leads and customers",
         feature: "crm",
       },
+      // Same shape, same reasoning: /projects is the People Center's work
+      // module and every other Center's slice of it. ONE pane, not one per
+      // Center — a Center item is (app + scope), and forking the app per
+      // department is the bloat failure mode department_centers.md §1 rule 2
+      // says to refuse in review. The Centers link into it with `?center=<slug>`
+      // (lib/centers.ts), which pre-filters the tree; the server's grants are
+      // what actually scope the data.
+      {
+        href: "/projects",
+        label: "Projects",
+        icon: "FolderKanban",
+        note: "Departments, projects and team tasks",
+        feature: "projects",
+      },
     ],
   },
 

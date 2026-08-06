@@ -557,6 +557,13 @@ async def sweep_uncategorized(
             except HTTPException:
                 summary["error"] = "account not found"
                 return summary
+            # Close the read transaction the loader just opened before the
+            # network round-trip. A session left `idle in transaction` across a
+            # provider call holds ACCESS SHARE on everything it touched, which
+            # is how a migration's ALTER TABLE ends up queued behind a sweep —
+            # see the 2026-08-06 write-up. Nothing is pending, so this only
+            # ends the transaction.
+            await db.commit()
             if not await provider.authenticate():
                 # ABORT — do NOT continue with provider=None. A local-only label
                 # is logged APPLIED but Outlook (categories-authoritative) wipes

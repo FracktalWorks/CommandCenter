@@ -122,19 +122,23 @@ def _seed_session(*participants: tuple[str, str]) -> str:
 
 @pytest.fixture
 def clean(monkeypatch):
-    """Purge seed data, disable the 60s access cache, and reset the module's
+    """Purge seed data, disable the 60s access cache, and reset the shared
     async engine — it binds to the event loop of the test that first created
     it, and pytest-asyncio gives every test a fresh loop, so a reused engine
     fails with 'Event loop is closed' and resolve_access degrades to
     no-access, which would make every assertion here pass or fail for the
-    wrong reason."""
+    wrong reason.
+
+    The engine lives in ``acb_common.db`` (BO-10, one pool per process), not on
+    ``acb_auth.access`` — that module holds only the cache now."""
     import acb_auth.access as access_mod
+    import acb_common.db as db_mod
 
     _purge()
     access_mod.invalidate()
     monkeypatch.setattr(access_mod, "CACHE_TTL_SECONDS", 0.0)
-    monkeypatch.setattr(access_mod, "_ENGINE", None)
-    monkeypatch.setattr(access_mod, "_SESSION_FACTORY", None)
+    monkeypatch.setattr(db_mod, "_ENGINE", None)
+    monkeypatch.setattr(db_mod, "_SESSION_FACTORY", None)
     yield
     _purge()
     access_mod.invalidate()

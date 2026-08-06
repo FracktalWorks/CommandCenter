@@ -35,6 +35,19 @@ class Settings(BaseSettings):
     # never trips in normal operation.
     db_connect_timeout: int = 10
 
+    # Size of the ONE shared async pool per process (acb_common.db, BO-10).
+    # Ceiling = db_pool_size + db_max_overflow = 30 connections from a process.
+    #
+    # These are knobs, not constants, because the arithmetic is deployment-wide:
+    # a stock Postgres allows 100 connections total and the gateway is not its
+    # only client — Langfuse, LiteLLM and the ingestion services draw from the
+    # same server. 30 is what `gateway/db.py` already used for the packages that
+    # had been converted, and it is deliberately unchanged here so consolidating
+    # the rest is a no-op per package rather than a silent retune. Raise it when
+    # you have raised `max_connections` (or put PgBouncer in front), not before.
+    db_pool_size: int = 10
+    db_max_overflow: int = 20
+
     # Redis (event bus)
     redis_url: str = "redis://localhost:6379/0"
 

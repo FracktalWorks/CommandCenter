@@ -227,6 +227,53 @@ def test_migrations_set_a_lock_timeout():
     assert "MIGRATION_LOCK_TIMEOUT" in src
 
 
+def test_the_lock_timeout_value_is_QUOTED():
+    """The bug this file previously shipped, now pinned.
+
+    `SET lock_timeout = 5s;` is not valid SQL — Postgres answers "trailing junk
+    after numeric literal". Under ON_ERROR_STOP=1 that failed the FIRST
+    migration, so the guard meant to stop a stalled session blocking deploys
+    blocked every deploy itself. `'5s'` and `'5000'` are both accepted.
+
+    The old assertion (`"SET lock_timeout" in src`) passed on the broken code,
+    which is exactly why presence is not a substitute for validity.
+    """
+    # Comment lines are excluded deliberately: the runner QUOTES the broken form
+    # in its own explanation of this bug, and a test that cannot tell an example
+    # from an instruction would fail on the very documentation that prevents the
+    # next occurrence.
+    code = "\n".join(
+        line for line in _migration_runner().splitlines()
+        if not line.lstrip().startswith("#")
+    )
+    stmts = re.findall(r"SET lock_timeout\s*=\s*[^;\n]+", code)
+    assert stmts, "no lock_timeout statement found in the runner's actual code"
+    for stmt in stmts:
+        value = stmt.split("=", 1)[1].strip()
+        assert value.startswith("'") and value.rstrip(";").endswith("'"), (
+            f"unquoted lock_timeout value in {stmt!r} — Postgres rejects a bare "
+            f"unit like 5s, and ON_ERROR_STOP=1 turns that into a failed deploy"
+        )
+
+
+def test_a_bad_prelude_degrades_instead_of_bricking_the_deploy():
+    """A safety feature must not be able to brick the thing it protects.
+
+    If the prelude will not parse, the runner has to warn and apply migrations
+    WITHOUT it. Failing closed here means an un-deployable box, which is
+    strictly worse than the stall the guard exists to prevent.
+    """
+    src = _migration_runner()
+    assert "LOCK_PRELUDE" in src, "the prelude must be a variable that can be emptied"
+    assert re.search(r'LOCK_PRELUDE=""', src), (
+        "no fallback path — a prelude Postgres rejects would fail every migration"
+    )
+    assert re.search(r'\[ -n "\$LOCK_PRELUDE" \]', src), (
+        "the emit site must skip an emptied prelude rather than print nothing "
+        "meaningful into the SQL stream"
+    )
+
+
 def test_the_unbounded_psql_invocation_is_gone():
     """Pins the SHAPE, not just the presence of a setting.
 

@@ -87,6 +87,24 @@ def _connect_timeout() -> int:
         return 10
 
 
+def _connect_args() -> dict:
+    """Connect args for every engine in this service.
+
+    :func:`_connect_timeout` bounds getting IN; the server-side
+    ``idle_in_transaction_session_timeout`` bounds staying in. A sync tick holds
+    an open session across provider calls, so a tick that wedges would otherwise
+    hold its row locks for as long as the process lives — which on 2026-08-06
+    (gateway side, same shape) queued a migration's ALTER TABLE behind it and
+    took the whole app down. Mirrors ``gateway.db.engine_connect_args``; the two
+    are separate packages and cannot share the constant."""
+    return {
+        "timeout": _connect_timeout(),
+        "server_settings": {
+            "idle_in_transaction_session_timeout": "600000",  # 10 min
+        },
+    }
+
+
 def _next_backoff(current: int, interval: int, *, failed: bool) -> int:
     """The next sleep length for a sync loop.
 
@@ -141,7 +159,7 @@ async def _sync_account(
     # the session releases it, so the missing dispose no longer leaks.
     engine = create_async_engine(
         db_url, echo=False, poolclass=NullPool,
-        connect_args={"timeout": _connect_timeout()},
+        connect_args=_connect_args(),
     )
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
 
@@ -525,7 +543,7 @@ async def _get_account_sync_interval(account_id: str) -> int | None:
     """Read the current sync_interval_secs for an account."""
     db_url = _get_db_url()
     engine = create_async_engine(
-        db_url, echo=False, connect_args={"timeout": _connect_timeout()}
+        db_url, echo=False, connect_args=_connect_args()
     )
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     try:
@@ -558,7 +576,7 @@ async def start_background_sync() -> dict[str, int]:
 
         db_url = _get_db_url()
         engine = create_async_engine(
-            db_url, echo=False, connect_args={"timeout": _connect_timeout()}
+            db_url, echo=False, connect_args=_connect_args()
         )
         session_factory = async_sessionmaker(engine, expire_on_commit=False)
 

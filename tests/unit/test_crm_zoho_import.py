@@ -255,7 +255,7 @@ async def test_the_activity_upsert_carries_on_conflict_zoho_id(
     zoho.data["Accounts"] = [{"id": "z-acc-1", "Account_Name": "Fracktal"}]
     zoho.data["Notes"] = [{
         "id": "z-note-1", "Note_Title": "Called", "Note_Content": "Wants a quote",
-        "Parent_Id": "z-acc-1", "$se_module": "Accounts",
+        "Parent_Id": {"name": "Fracktal", "id": "z-acc-1"}, "$se_module": "Accounts",
     }]
     await _run()
 
@@ -558,10 +558,15 @@ async def test_an_owner_lookups_embedded_address_is_the_second_answer(
 async def test_a_note_lands_on_its_parent_and_bumps_its_recency(
     db: FakeCrmDB, zoho: FakeZoho,
 ) -> None:
+    """``Parent_Id`` here is the LOOKUP OBJECT the live API actually sends
+    (verified against the tenant 2026-08-06). The first real backfill skipped
+    all 1,909 notes because the fixtures used a bare string id, which the API
+    never returns — so the dict-handling path had no coverage. Do not simplify
+    this fixture back to a string."""
     zoho.data["Accounts"] = [{"id": "z-acc-1", "Account_Name": "Fracktal"}]
     zoho.data["Notes"] = [{
         "id": "z-note-1", "Note_Title": "Called", "Note_Content": "Wants a quote",
-        "Parent_Id": "z-acc-1", "$se_module": "Accounts",
+        "Parent_Id": {"name": "Fracktal", "id": "z-acc-1"}, "$se_module": "Accounts",
     }]
     await _run()
 
@@ -618,7 +623,8 @@ async def test_an_activity_with_no_imported_parent_is_skipped_not_orphaned(
     attached to nothing is invisible in every timeline while still counting
     against the numbers, so it is skipped and REPORTED as skipped."""
     zoho.data["Notes"] = [{
-        "id": "z-note-1", "Note_Title": "Orphan", "Parent_Id": "z-missing",
+        "id": "z-note-1", "Note_Title": "Orphan",
+        "Parent_Id": {"name": "Gone", "id": "z-missing"},
         "$se_module": "Accounts",
     }]
     report = await _run()
@@ -626,6 +632,24 @@ async def test_an_activity_with_no_imported_parent_is_skipped_not_orphaned(
     assert db.rows("crm_activities") == []
     assert report.modules["Notes"].skipped == 1
     assert report.modules["Notes"].created == 0
+
+
+async def test_a_bare_string_parent_id_still_resolves(
+    db: FakeCrmDB, zoho: FakeZoho,
+) -> None:
+    """The fallback contract: the live API sends lookup objects, but a bare
+    string id (the shape the old fixtures invented) must keep working —
+    ``_lookup_id`` first, ``_text`` second."""
+    zoho.data["Accounts"] = [{"id": "z-acc-1", "Account_Name": "Fracktal"}]
+    zoho.data["Notes"] = [{
+        "id": "z-note-1", "Note_Title": "Called",
+        "Parent_Id": "z-acc-1", "$se_module": "Accounts",
+    }]
+    await _run()
+
+    [org] = db.rows(ORGANIZATIONS.table)
+    [note] = db.rows("crm_activities")
+    assert note["organization_id"] == str(org["id"])
 
 
 # ── Reporting ───────────────────────────────────────────────────────────────

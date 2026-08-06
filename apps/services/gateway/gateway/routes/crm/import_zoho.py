@@ -602,7 +602,13 @@ async def apply_activity(
         module_report.skipped += 1
         return None
 
-    parent = _text(record.get("Parent_Id")) or _lookup_id(record.get("Parent_Id"))
+    # _lookup_id FIRST. Zoho sends Parent_Id as a lookup object
+    # ({"name": ..., "id": ...}), and _text() stringifies any non-None value —
+    # so with _text first the dict became "{'name': …}", a truthy garbage
+    # string that made the _lookup_id fallback unreachable and skipped every
+    # note (1,909/1,909 on the first real backfill, 2026-08-06). _text stays
+    # as the fallback for a bare string id.
+    parent = _lookup_id(record.get("Parent_Id")) or _text(record.get("Parent_Id"))
     if module == "Tasks":
         parent = (
             _lookup_id(record.get("What_Id"))

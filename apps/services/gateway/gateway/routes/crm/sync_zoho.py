@@ -379,6 +379,7 @@ def advance_cursor(
     fallback: datetime | None,
     failures: int = 0,
     oldest_failed: datetime | None = None,
+    applied: int = 0,
 ) -> datetime | None:
     """The module's new watermark. Forward-only, and never over a failure.
 
@@ -394,6 +395,19 @@ def advance_cursor(
       changed stops re-reading its whole table every ten minutes. (Keeping the
       previous value matters: a module whose window is momentarily empty must
       not have its cursor dragged forward to now.)
+    * **Everything applied, but Zoho returned no readable timestamp on any of
+      them** → adopt the cycle's start. Measured against the live tenant
+      2026-08-06: `Deals` returns neither `Modified_Time` nor `Created_Time`
+      (asking for them by name returns them empty — a per-module field
+      permission, not our query), so `newest_applied` is None on a batch where
+      all 551 records landed. Without this branch the module can never write a
+      watermark, so `If-Modified-Since` stays empty and the pull re-reads the
+      whole table every ten minutes, forever. The safety argument is exactly
+      the "nothing fetched" branch's: every record Zoho returned for this
+      window applied with zero failures, so everything up to the cycle's start
+      IS reconciled — the timestamps we lack are Zoho's, not evidence of
+      unfinished work. Requires `failures == 0`: with even one failure we
+      cannot place it in time, and the next branch stands still on purpose.
     * Records fetched but **none applied** → do not move at all.
     * Something failed and we cannot place it in time (no readable
       ``Modified_Time``) → do not move. "We do not know" must not read as
@@ -414,6 +428,18 @@ def advance_cursor(
     if not fetched:
         return previous or fallback
     if newest_applied is None:
+        # Untimestamped-but-clean batch (see the Deals note above). Never
+        # backwards: `fallback` is this cycle's start, so it is normally the
+        # later of the two, but take the max rather than assume it.
+        if applied and not failures:
+            if previous is None:
+                return fallback
+            if fallback is None:
+                return previous
+            try:
+                return fallback if fallback > previous else previous
+            except TypeError:
+                return previous
         return previous
     if failures:
         if oldest_failed is None:
@@ -480,6 +506,7 @@ async def pull_phase(
                 cursor, outcome.newest_applied,
                 fetched=len(records), fallback=report_started(report),
                 failures=outcome.failures, oldest_failed=outcome.oldest_failed,
+                applied=module_report.created + module_report.updated,
             ),
             status="ok" if not module_report.errors else "partial",
         )

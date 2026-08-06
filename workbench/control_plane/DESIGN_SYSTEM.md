@@ -60,14 +60,17 @@ Never use `bg-[#1a1b1e]` or arbitrary hex values.
 
 ## Typography
 
+Fonts come from the active theme — `font-sans` resolves to Geist on RapidTool,
+Segoe UI on Fluent, Roboto on Material. Never name a family directly.
+
 | Element | Font | Class |
 |---|---|---|
-| Body text | Geist Sans | `font-sans` (default) |
-| Code / monospace | Geist Mono | `font-mono` |
-| Page title (`h1`) | Geist Sans | `text-base sm:text-lg font-bold text-foreground` |
-| Section heading | Geist Sans | `text-sm font-semibold text-foreground` |
-| Body / description | Geist Sans | `text-xs text-muted-foreground` |
-| Small label / badge | Geist Sans | `text-[10px] text-muted-foreground` |
+| Body text | theme's app font | `font-sans` (default) |
+| Code / monospace | theme's mono font | `font-mono` |
+| Page title (`h1`) | theme font | `text-base sm:text-lg font-bold text-foreground` |
+| Section heading | theme font | `text-sm font-semibold text-foreground` |
+| Body / description | theme font | `text-xs text-muted-foreground` |
+| Small label / badge | theme font | `text-[10px] text-muted-foreground` |
 
 ---
 
@@ -86,14 +89,15 @@ Two variants for tab navigation:
 
 ```tsx
 import Tabs from "@/components/Tabs";
-import { Zap, Mail, Server, Puzzle } from "lucide-react";
 
+// `icon` is a Lucide NAME, not a component — a component would pin the tab
+// bar to one icon pack while the rest of the app follows the theme.
 <Tabs
   tabs={[
-    { id: "apis",    label: "APIs",    icon: Zap },
-    { id: "email",   label: "Email",   icon: Mail },
-    { id: "mcps",    label: "MCPs",    icon: Server },
-    { id: "plugins", label: "Plugins", icon: Puzzle },
+    { id: "apis",    label: "APIs",    icon: "Zap" },
+    { id: "email",   label: "Email",   icon: "Mail" },
+    { id: "mcps",    label: "MCPs",    icon: "Server" },
+    { id: "plugins", label: "Plugins", icon: "Puzzle" },
   ]}
   activeTab={tab}
   onTabChange={setTab}
@@ -119,14 +123,48 @@ import FilterPills from "@/components/FilterPills";
 />
 ```
 
-### Buttons
+### Buttons, inputs and badges — use the primitives
 
-| Role | Classes |
+```tsx
+import Button from "@/components/ui/Button";
+import { Input, Textarea } from "@/components/ui/Input";
+import Badge from "@/components/ui/Badge";
+
+<Button onClick={save}>Save</Button>                            // primary
+<Button variant="secondary" size="sm">Cancel</Button>
+<Button variant="destructive" icon="Trash2" loading={busy}>Delete</Button>
+<Button variant="ghost" size="icon" icon="X" aria-label="Close" />
+
+<Input icon="Search" value={q} onChange={…} placeholder="Search" />
+<Textarea rows={4} value={body} onChange={…} />
+
+<Badge tone="success" dot>Connected</Badge>
+```
+
+| Prop | Values |
 |---|---|
-| Primary action | `rounded-lg bg-primary px-3 sm:px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 tech-transition` |
-| Secondary / cancel | `rounded-lg border border-border px-3 sm:px-4 py-2 text-sm text-muted-foreground hover:text-foreground hover:border-primary/30 tech-transition` |
-| Ghost / icon-only | `p-2 rounded-lg border border-border text-muted-foreground hover:bg-secondary tech-transition` |
-| Destructive | `rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive hover:bg-destructive/20 tech-transition` |
+| `variant` | `primary` (default) · `secondary` · `ghost` · `destructive` |
+| `size` | `sm` · `md` (default) · `lg` · `icon` |
+| `icon` | Lucide icon name — follows the theme's pack |
+| `loading` | Shows a spinner **and disables the button**, so a double-submit is impossible |
+
+**Do not hand-roll a button from classes.** The old recipe table lived here and
+was copied into ~75 files. It could carry colour and radius, because those are
+tokens — but not *behaviour*, and behaviour is where a design system's identity
+actually is: Material renders pills with a translucent state layer on hover,
+Fluent strokes even its solid buttons and weights labels heavier, Graphite
+upper-cases them. Those come from the control tokens (`--button-radius`,
+`--control-state-layer`, `--control-filled-border`, `--control-focus-ring`,
+`--control-label-tracking`, `--control-label-transform`) and need one component
+to apply them. A copied class string opts that control out.
+
+`className` on a primitive is for **layout only** — margins, width, grid
+placement. Colour, radius and weight come from the variant.
+
+Anything genuinely bespoke that still needs to feel like a control (a
+selectable chip, a toggle) should carry the `cc-control` class, which supplies
+the theme's label weight, tracking, transform and focus ring without imposing a
+variant.
 
 ### Page Header
 

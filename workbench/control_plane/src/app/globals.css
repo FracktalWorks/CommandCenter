@@ -42,6 +42,13 @@
   --elevation: 0 4px 16px hsl(0 0% 0% / 0.25);
   --motion-duration: 0.2s;
   --motion-easing: cubic-bezier(0.25, 0.46, 0.45, 0.94);
+  /* Control personality — consumed by the primitives in components/ui/. */
+  --button-radius: var(--radius);
+  --control-filled-border: 0px;
+  --control-state-layer: 0;
+  --control-focus-ring: 2px;
+  --control-label-tracking: 0em;
+  --control-label-transform: none;
   /* Root font-size multiplier driven by the user's density preference. */
   --ui-scale: 1;
 
@@ -261,6 +268,62 @@ body {
    than blur to separate layers. */
 .tech-elevated {
   box-shadow: var(--elevation);
+}
+
+/* ── Control primitives ─────────────────────────────────────────────────
+   The shared <Button>/<Input>/<Badge> in components/ui/ build on these. They
+   exist as CSS rather than Tailwind classes because two of them cannot be
+   expressed as utilities at all: a state-layer overlay needs a pseudo-element,
+   and text-transform/letter-spacing have to come from a custom property so a
+   theme can change them without touching a call site. */
+.cc-control {
+  position: relative;
+  isolation: isolate;
+  font-weight: var(--label-weight);
+  letter-spacing: var(--control-label-tracking);
+  text-transform: var(--control-label-transform);
+  transition: all var(--motion-duration) var(--motion-easing);
+}
+
+/* Keyboard focus only — a mouse click should not draw a ring. */
+.cc-control:focus-visible {
+  outline: var(--control-focus-ring) solid var(--ring);
+  outline-offset: 2px;
+}
+
+/* Material-style state layer: an overlay of the control's own text colour, so
+   it works on any variant without knowing that variant's background. Themes
+   leaving --control-state-layer at 0 render nothing and fall back to the
+   opacity shift the variant classes apply. */
+.cc-control::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: currentColor;
+  opacity: 0;
+  pointer-events: none;
+  z-index: -1;
+  transition: opacity var(--motion-duration) var(--motion-easing);
+}
+
+.cc-control:hover:not(:disabled)::after {
+  opacity: var(--control-state-layer);
+}
+
+.cc-control:active:not(:disabled)::after {
+  opacity: calc(var(--control-state-layer) * 1.5);
+}
+
+/* Buttons carry their own radius so Material can render pills while cards and
+   inputs keep the theme's ordinary radius. */
+.cc-button {
+  border-radius: var(--button-radius);
+}
+
+/* Fluent strokes even its solid buttons; themes at 0px get no border. */
+.cc-button-filled {
+  border: var(--control-filled-border) solid color-mix(in srgb, currentColor 25%, transparent);
 }
 
 /* ── iOS safe-area padding utilities ─────────────────────────────────────

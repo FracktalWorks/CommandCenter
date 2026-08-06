@@ -211,3 +211,66 @@ test.describe("user preferences", () => {
     expect(await readVar(page, "--primary")).toBe("hsl(198 89% 50%)");
   });
 });
+
+test.describe("control personality", () => {
+  /**
+   * The point of the shared primitives: a theme changes how a control BEHAVES,
+   * not just what colour it is. These read computed style off a real button,
+   * because none of it is visible to a type-checker and only some of it is
+   * expressible as a class.
+   */
+  const measureButton = (page: Page) =>
+    page.evaluate(() => {
+      const el = document.createElement("button");
+      el.className =
+        "cc-control cc-button cc-button-filled bg-primary text-primary-foreground px-3 py-1.5 text-xs";
+      document.body.appendChild(el);
+      const cs = getComputedStyle(el);
+      const out = {
+        radius: cs.borderTopLeftRadius,
+        filledBorder: cs.borderTopWidth,
+        weight: cs.fontWeight,
+        transform: cs.textTransform,
+        hasStateLayer: getComputedStyle(el, "::after").content !== "none",
+      };
+      el.remove();
+      return out;
+    });
+
+  test("Material renders pill buttons with a state layer", async ({ page }) => {
+    await loadWithTheme(page, "material");
+    const b = await measureButton(page);
+    expect(b.radius).toBe("9999px");
+    expect(b.hasStateLayer).toBe(true);
+    // 8% overlay of the foreground colour, M3's hover treatment.
+    expect(await readVar(page, "--control-state-layer")).toBe("0.08");
+    expect(await readVar(page, "--control-focus-ring")).toBe("3px");
+  });
+
+  test("Fluent strokes its solid buttons and weights labels heavier", async ({ page }) => {
+    await loadWithTheme(page, "fluent");
+    const b = await measureButton(page);
+    expect(b.radius).toBe("4px");
+    // The 1px stroke is what stops a Fluent button reading as a flat block.
+    expect(b.filledBorder).toBe("1px");
+    expect(b.weight).toBe("600");
+  });
+
+  test("Graphite upper-cases control labels", async ({ page }) => {
+    await loadWithTheme(page, "graphite");
+    const b = await measureButton(page);
+    expect(b.transform).toBe("uppercase");
+    expect(b.radius).toBe("2px");
+  });
+
+  test("the default theme's buttons are unchanged by the primitives", async ({ page }) => {
+    // Adoption must not shift the shipped look: same radius, same weight, no
+    // border on a filled button, no state layer.
+    await loadWithTheme(page, "rapidtool");
+    const b = await measureButton(page);
+    expect(b.radius).toBe("12px");
+    expect(b.filledBorder).toBe("0px");
+    expect(b.weight).toBe("500");
+    expect(b.transform).toBe("none");
+  });
+});

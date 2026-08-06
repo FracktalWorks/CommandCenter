@@ -150,6 +150,37 @@ export type EffectTokens = {
 };
 
 /**
+ * Control tokens — how buttons and inputs behave, as opposed to what colour
+ * they are. This is where a design system's personality actually lives: every
+ * theme so far could change a button's palette, radius and font, but a button
+ * still *behaved* identically everywhere. Material 3 buttons are full pills
+ * with a translucent state layer on hover; Fluent outlines even its solid
+ * buttons and keeps a tight focus ring; Metro-descended looks upper-case their
+ * labels. None of that is expressible as a colour.
+ *
+ * These are consumed by the shared primitives in `src/components/ui/`, which
+ * is why those primitives exist — there is no way to apply a state layer from
+ * a Tailwind class string repeated across 1,100 call sites.
+ */
+export type ControlTokens = {
+  /** Corner radius for buttons. Material 3 renders them as full pills. */
+  buttonRadius: string;
+  /** Border width on FILLED buttons — Fluent outlines even solid controls. */
+  filledBorderWidth: string;
+  /**
+   * Opacity of the hover/press state layer. Material overlays the foreground
+   * colour at 8%; `0` means the control uses a plain opacity shift instead.
+   */
+  stateLayerOpacity: string;
+  /** Focus ring width. */
+  focusRingWidth: string;
+  /** Letter-spacing on control labels. */
+  labelTracking: string;
+  /** `none` or `uppercase` — the Metro/industrial signature. */
+  labelTransform: string;
+};
+
+/**
  * Themes for the third-party surfaces that carry their own theme vocabulary.
  *
  * Monaco and Shiki cannot be driven by our CSS tokens — each ships a closed
@@ -183,6 +214,7 @@ export type Theme = {
   typography: TypographyTokens;
   shape: ShapeTokens;
   effects: EffectTokens;
+  controls: ControlTokens;
   surfaces: SurfaceTokens;
   colors: {
     dark: ColorTokens;

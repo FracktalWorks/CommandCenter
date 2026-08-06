@@ -19,6 +19,8 @@ import { useCallback, useEffect, useState } from "react";
 import { useTheme } from "next-themes";
 import Icon from "@/components/Icon";
 import Tabs from "@/components/Tabs";
+import Button from "@/components/ui/Button";
+import { Input } from "@/components/ui/Input";
 import { THEMES, resolveTheme } from "@/lib/theme/themes";
 import { useAppearanceStore, effectiveThemeId, effectiveDensity } from "@/lib/theme/store";
 import { isSafeColor } from "@/lib/theme/css";
@@ -142,12 +144,9 @@ function PersonalSettings() {
           ))}
         </div>
         {userThemeId && (
-          <button
-            onClick={() => setUserTheme(null)}
-            className="mt-3 rounded-lg border border-border px-3 py-2 text-xs text-muted-foreground tech-transition hover:border-primary/30 hover:text-foreground"
-          >
+          <Button variant="secondary" size="lg" className="mt-3" onClick={() => setUserTheme(null)}>
             Reset to organisation default ({resolveTheme(orgThemeId).name})
-          </button>
+          </Button>
         )}
       </section>
 
@@ -197,7 +196,7 @@ function PersonalSettings() {
             <button
               key={preset.label}
               onClick={() => setAccent(preset.value)}
-              className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-xs tech-transition ${
+              className={`cc-control flex items-center gap-2 rounded-lg border px-3 py-2 text-xs ${
                 accent === preset.value
                   ? "border-primary bg-primary/5 text-foreground ring-1 ring-primary/20"
                   : "border-border text-muted-foreground hover:border-primary/40 hover:text-foreground"
@@ -245,20 +244,19 @@ function CustomAccentInput({
   return (
     <div className="mt-3">
       <div className="flex flex-wrap items-center gap-2">
-        <input
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && apply()}
-          placeholder="#0078d4"
-          aria-label="Custom accent colour"
-          className="w-48 rounded-lg border border-border bg-background px-3 py-2 text-xs text-foreground outline-none tech-transition focus:border-primary/50"
-        />
-        <button
-          onClick={apply}
-          className="rounded-lg border border-border px-3 py-2 text-xs text-muted-foreground tech-transition hover:border-primary/30 hover:text-foreground"
-        >
+        <div className="w-48">
+          <Input
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && apply()}
+            placeholder="#0078d4"
+            aria-label="Custom accent colour"
+            inputSize="lg"
+          />
+        </div>
+        <Button variant="secondary" size="lg" onClick={apply}>
           Apply
-        </button>
+        </Button>
       </div>
       {error && <p className="mt-1.5 text-[11px] text-destructive">{error}</p>}
     </div>
@@ -448,7 +446,7 @@ function OptionPill({
     <button
       onClick={onClick}
       disabled={disabled}
-      className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-xs tech-transition disabled:cursor-not-allowed disabled:opacity-50 ${
+      className={`cc-control flex items-center gap-2 rounded-lg border px-3 py-2 text-xs disabled:cursor-not-allowed disabled:opacity-50 ${
         selected
           ? "border-primary bg-primary/5 text-foreground ring-1 ring-primary/20"
           : "border-border text-muted-foreground hover:border-primary/40 hover:text-foreground"

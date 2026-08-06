@@ -53,6 +53,14 @@ const rapidtool: Theme = {
     motionDuration: "0.2s",
     motionEasing: "cubic-bezier(0.25, 0.46, 0.45, 0.94)",
   },
+  controls: {
+    buttonRadius: "var(--radius)",
+    filledBorderWidth: "0px",
+    stateLayerOpacity: "0",
+    focusRingWidth: "2px",
+    labelTracking: "0em",
+    labelTransform: "none",
+  },
   surfaces: {
     monaco: { dark: "vs-dark", light: "vs" },
     shiki: { dark: "github-dark", light: "github-light" },
@@ -157,6 +165,16 @@ const fluent: Theme = {
     motionDuration: "0.15s",
     motionEasing: "cubic-bezier(0.33, 0, 0.67, 1)",
   },
+  controls: {
+    // Fluent draws a 1px stroke on solid buttons too, which is what stops them
+    // reading as flat blocks of colour.
+    buttonRadius: "var(--radius)",
+    filledBorderWidth: "1px",
+    stateLayerOpacity: "0",
+    focusRingWidth: "2px",
+    labelTracking: "0em",
+    labelTransform: "none",
+  },
   surfaces: {
     monaco: { dark: "vs-dark", light: "vs" },
     shiki: { dark: "dark-plus", light: "light-plus" },
@@ -254,6 +272,16 @@ const material: Theme = {
     motionDuration: "0.2s",
     motionEasing: "cubic-bezier(0.2, 0, 0, 1)",
   },
+  controls: {
+    // M3 buttons are full pills, and hover is an 8% overlay of the foreground
+    // colour rather than a change in opacity.
+    buttonRadius: "9999px",
+    filledBorderWidth: "0px",
+    stateLayerOpacity: "0.08",
+    focusRingWidth: "3px",
+    labelTracking: "0.00714em",
+    labelTransform: "none",
+  },
   surfaces: {
     monaco: { dark: "vs-dark", light: "vs" },
     shiki: { dark: "material-theme-darker", light: "material-theme-lighter" },
@@ -345,6 +373,16 @@ const graphite: Theme = {
     shadow: "0 1px 2px hsl(0 0% 0% / 0.2)",
     motionDuration: "0.12s",
     motionEasing: "ease-out",
+  },
+  controls: {
+    // Upper-case labels and a hairline focus ring — the industrial register
+    // this theme is going for, and proof the axis is real.
+    buttonRadius: "var(--radius)",
+    filledBorderWidth: "1px",
+    stateLayerOpacity: "0",
+    focusRingWidth: "1px",
+    labelTracking: "0.05em",
+    labelTransform: "uppercase",
   },
   surfaces: {
     monaco: { dark: "hc-black", light: "hc-light" },

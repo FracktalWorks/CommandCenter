@@ -111,6 +111,12 @@ describe("globals.css fallback matches the default manifest", () => {
     expect.soft(root["--heading-tracking"]).toBe(theme.typography.headingLetterSpacing);
     expect.soft(root["--heading-weight"]).toBe(theme.typography.headingWeight);
     expect.soft(root["--label-weight"]).toBe(theme.typography.labelWeight);
+    expect.soft(root["--button-radius"]).toBe(theme.controls.buttonRadius);
+    expect.soft(root["--control-filled-border"]).toBe(theme.controls.filledBorderWidth);
+    expect.soft(root["--control-state-layer"]).toBe(theme.controls.stateLayerOpacity);
+    expect.soft(root["--control-focus-ring"]).toBe(theme.controls.focusRingWidth);
+    expect.soft(root["--control-label-tracking"]).toBe(theme.controls.labelTracking);
+    expect.soft(root["--control-label-transform"]).toBe(theme.controls.labelTransform);
   });
 
   it("still declares the Tailwind bridge the tokens feed", () => {

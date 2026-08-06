@@ -70,7 +70,7 @@ function colorDeclarations(colors: ColorTokens): [string, string][] {
  * inherited by the light scope.
  */
 function structuralDeclarations(theme: Theme): [string, string][] {
-  const { shape, effects, typography } = theme;
+  const { shape, effects, typography, controls } = theme;
   return [
     ["radius", shape.radius],
     ["border-width", shape.borderWidth],
@@ -87,6 +87,12 @@ function structuralDeclarations(theme: Theme): [string, string][] {
     ["elevation", effects.shadow],
     ["motion-duration", effects.motionDuration],
     ["motion-easing", effects.motionEasing],
+    ["button-radius", controls.buttonRadius],
+    ["control-filled-border", controls.filledBorderWidth],
+    ["control-state-layer", controls.stateLayerOpacity],
+    ["control-focus-ring", controls.focusRingWidth],
+    ["control-label-tracking", controls.labelTracking],
+    ["control-label-transform", controls.labelTransform],
   ];
 }
 

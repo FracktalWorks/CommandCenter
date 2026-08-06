@@ -1061,24 +1061,194 @@ which every member holds — and **never on `feature:*`**, while `feature:crm` i
 into a transcript a non-`feature:crm` member can read. Revisit together with D-CRM-3's
 `group:` grants at WS-14, not before.
 
-**STILL OPEN, and why** (audit doc-blocker IDs — distinct from §8's build-time decisions
-B1–B6, which are a different numbering):
-- **B3 — email-thread timeline join.** Needs a testable, caller-scoped done-when: which
-  mailbox is joined, whose access decides it, and what the join returns for a CRM record
-  whose `email` matches nothing. D-CRM-5 says read-time address join, no link table; it
-  does not say what that means for a colleague who cannot read the mailbox it joins.
-- **B4 — `CRM_AUTO_LEAD`.** Names no hook. The settings field is deliberately NOT added:
-  a flag with nothing behind it is worse than no flag. Owes the named email-app seam it
-  attaches to, plus the regression that proves its OFF-state is byte-identical.
-- **B5 — write tools** (`create_lead`, `update_deal_status`, `log_activity`,
-  `convert_lead`). Owes a NAMED confirm/risk mechanism — `request_confirmation` on the
-  tool, the Action-Broker gate, or both, and which one covers which verb. "Confirmation-
-  gated fail-closed" is a property, not a mechanism.
-- **B7 — test-file naming** for those slices, so the §10 verify line can be written before
-  the code rather than after.
-- **B6/D-CRM-9 — RESOLVED 2026-08-06.** The push-queue question ("do agent writes reach
-  Zoho like human writes?") is owner-answered: yes, identically. See §8 D-CRM-9. It no
-  longer blocks the write half; B5 still does.
+**B3, B4, B5 and B7 — CLOSED 2026-08-06** by §9.1, §9.2 and §9.3 below; every anchor in
+them was read off `origin/main` at `af3d3fc8` rather than recalled. **B6/D-CRM-9 —
+RESOLVED 2026-08-06**: the push-queue question ("do agent writes reach Zoho like human
+writes?") is owner-answered — yes, identically (§8 D-CRM-9). The three remaining WS-26d
+slices are therefore dispatchable; each is a separate ticket below and none may be
+narrowed into another.
+
+### WS-26d-email — the email→CRM timeline join · 🟢 AGENT-SAFE
+*(Closes B3. Highest-leverage item in §6 and the one with the sharpest failure mode:
+the CRM is org-visible to every `feature:crm` holder (D-CRM-3) while a mailbox is
+owner-scoped, so an unscoped join publishes one member's inbox to the whole company.)*
+
+**The scoping rule, non-negotiable.** The join is **caller-scoped, never record-scoped**:
+the timeline shows email *the caller can already read*, not email *the record has*. Two
+holders of `feature:crm` opening the same lead may legitimately see different email
+entries, and a holder with no mailbox sees none. The predicate is the email app's own
+`_account_scope` (`routes/email/core.py:424-435`) — a fragment generator that appends
+`em.account_id IN (SELECT id FROM email_accounts WHERE user_id = :uid)` and mutates the
+caller's `params`; the caller must pre-seed `params["uid"]`. Note it hardcodes the alias
+`em` (`analytics.py:66-68` already had to `.replace()` it) — alias the CRM query's
+`email_messages` as `em` and the fragment drops in unchanged.
+
+**Where it comes from — decide, do not drift.** Cross-routes-package imports are
+precedented (`routes/notes/dispatch.py:280-282` imports private names from
+`routes/email/core`), but `routes/crm` has explicitly declined that once already, on
+D-CRM-4 grounds (`routes/crm/broker_handlers.py:61-64`, which re-implemented four lines
+rather than import them). **Decision: copy the twelve-line predicate into `routes/crm/`
+as `_email_account_scope`, with a comment naming `routes/email/core.py:424` as its
+origin and this line as the reason.** Rejected alternatives: importing it (contradicts the
+CRM package's own stated doctrine, and couples the CRM's read path to the email app's
+private surface) and promoting it to a shared module (correct eventually, but it drags
+`routes/email`'s callers into a WS-26 PR). If it is copied a *third* time anywhere,
+promote it instead — two copies is a coincidence, three is a missing module.
+
+**The unit is the THREAD, not the message.** There is no `email_threads` table;
+`email_messages.thread_id` (`17_email_accounts.sql:43`, indexed `:70-71`) is the grouping
+column, and the conversation is already the unit of classification and snooze across the
+app. Group by `(account_id, thread_id)`, take the newest message per thread for the
+display row, and left-join `email_thread_status (account_id, thread_id)`
+(`27_email_reply_tracking.sql:14-23`) for the status badge when present. A row-per-message
+timeline double-counts every conversation.
+
+**The address join.** `from_address` is `JSONB {name, email}` and `to_addresses` /
+`cc_addresses` are `JSONB [{name, email}]` (`17_email_accounts.sql:46-49`); the writer
+always supplies both keys, `""` when absent (`email_ingestion/persist.py:178-190`). Case is
+**not** normalised on write, so every comparison lowercases at query time — the existing
+contact card is the exact precedent: `LOWER(em.from_address->>'email') = :addr`
+(`routes/email/transport/contacts.py:404-412`), which is already this join, already
+caller-scoped. v1 matches **inbound only** (`from_address`); outbound matching
+(`to_addresses @> :tojson`, precedent at `senders.py:1259-1263`) is deferred — it needs a
+GIN index that does not exist and doubles the query cost for a marginal gain on a mailbox
+being retired.
+
+**Which records join.** `crm_organizations`, `crm_contacts` and `crm_leads` have an `email`
+column (`144_crm.sql:40,70,150`, contacts/leads already indexed `lower(email)`).
+**`crm_deals` does not** — a deal reaches email only through its originating
+`lead_id → crm_leads.email` or through `crm_deal_contacts → crm_contacts.email`, and the
+done-when must state which (v1: both, unioned, matching how `_timeline` already inherits
+lead history). **Organizations do NOT join by email domain** in v1: an `@fracktal.in`
+domain match would attach the entire mailbox to our own org record.
+
+**The index.** No existing index serves `LOWER(from_address->>'email') = :addr` — the two
+FTS GINs (`17_email_accounts.sql:80-89`, `72_email_search_fts.sql:28-37`) bury the address
+inside a `to_tsvector` expression, usable only via `@@`. Add
+`(account_id, LOWER(from_address->>'email'))` at **the next free migration number at build
+time**. (The contact card runs this unindexed today over ~14k messages; the CRM timeline
+would run it on every record open.)
+
+**Threading the caller through.** `_timeline()` (`routes/crm/activities.py:94`) takes no
+user today; the four routes have `user` and drop it (`:220-254`). Change the signature and
+pass it — that is the whole plumbing change, and it is why this must not be done "quickly"
+in a later slice.
+
+**Done-when:**
+1. A `feature:crm` holder who owns **no** email account sees **zero** email entries on
+   every CRM timeline — named test, not an argument.
+2. Two accounts, two holders: each sees only their own account's threads on the same
+   record. A test that only ever runs one account cannot see this bug.
+3. `TimelineEntry.kind` gains `"email_thread"` in **both** `activities.py:75-86` and
+   `workbench/control_plane/src/app/crm/lib/types.ts:148-155` (a closed TS union today —
+   tsc fails if only one side is updated), and `Timeline.tsx` renders it with the origin
+   label the merge already carries.
+4. A record whose `email` is NULL or matches nothing returns the same shape with no email
+   entries — never an error, never a full-mailbox fallback.
+5. The join is bounded by the existing `limit` (`Query(100, ge=1, le=500)`), applied per
+   source before the merge, so one chatty thread cannot crowd out status history.
+6. Migration adds the address index; number taken at build time (R1).
+
+**Tests:** `tests/unit/test_crm_email_timeline.py` (B7), reusing `tests/unit/_crm_fakes.py`.
+Frontend: extend the existing CRM vitest for the third `kind`.
+
+### WS-26d-autolead — `CRM_AUTO_LEAD` · 🟡 AGENT-SAFE to build · 🔴 OWNER-GATE to flip
+*(Closes B4.)*
+
+**The hook is `process_new_mail(account_id)` — `routes/email/scheduler_hooks.py:57`.**
+It is the shared new-mail pipeline (rules → sweep → categorize senders → classify threads
+→ auto-archive) and it is the single entry point *however mail arrived*: the background
+scheduler, the manual-sync route and the webhook all funnel through it. Each step is
+independently try/except-isolated (`:81-112`) — the CRM step copies that shape, so a CRM
+failure can never break mail sync. It receives `account_id` only, so the step re-queries
+the newly-classified messages itself.
+
+**Rejected alternative, and why it is recorded:** `_run_rules_job`'s per-message loop
+(`routes/email/automation/runner.py:1589-1717`) already holds the parsed sender and the
+classification, which is tempting. It is wrong here for two reasons: a classifier outage
+`continue`s **without stamping** the watermark (`:1678-1685`), so a hook placed there
+double-fires on retry; and it only ever sees INBOX mail with `rules_processed_at IS NULL`,
+so historical backfills (`rules_held_back_at`, `84_email_rules_held_back.sql:22-27`) never
+reach it. Seam A is the durable one.
+
+**"Unknown sender" is not a new idea — mirror `_maybe_block_cold`**
+(`routes/email/automation/senders.py:1242-1273`), which already answers it in two steps:
+a memo table, then "have we ever emailed them" (`to_addresses @> :tojson` over Sent). The
+CRM version adds a third step — no `crm_contacts`/`crm_leads` row with that
+`lower(email)` — and reuses the same idempotency shape (`INSERT … ON CONFLICT DO NOTHING`)
+so a re-run cannot duplicate a lead.
+
+**Never create a lead for a colleague.** `is_own_mail` / `sender_scope`
+(`routes/email/automation/identity.py:64-101`) is the single answer to "is this person a
+colleague?" across the automation package, and it fails SAFE to `"external"` — which is
+the wrong direction here, so the CRM step must treat `"external"` as *necessary but not
+sufficient* and still apply the internal-domain list (`cleanup.py:298-303`). A lead row
+for your own CFO, pushed into the live Zoho tenant (D-CRM-9), is the failure this
+paragraph exists to prevent.
+
+**Done-when:**
+1. `crm_auto_lead: bool = False` in `acb_common/settings.py`, shipping OFF.
+2. **OFF-state is byte-identical**: with the flag off, `process_new_mail` makes no CRM
+   call and issues no CRM query — pinned by a test that fails if the call is merely
+   short-circuited *inside* the CRM step rather than skipped before it.
+3. ON-state, per inbound message from an unknown external sender: exactly one
+   `crm_leads` row, `source='email'`, owner = the account's user, `lead_name` derived from
+   the sender's display name (strip padding **before** deriving — the "Asha Asha" trap,
+   §8 B-series), and the originating message logged as the lead's first activity.
+4. Re-running the same sync creates **no** second lead (idempotency test).
+5. A colleague sender, a self-sender and an already-known contact each create nothing —
+   three separate named cases.
+6. Per D-CRM-9 each created lead is born `zoho_dirty` and queues for Zoho; the test asserts
+   that rather than leaving it implied.
+
+**Tests:** `tests/unit/test_crm_auto_lead.py` (B7).
+
+### WS-26d-write — the CRM write tools · 🟢 AGENT-SAFE
+*(Closes B5. `create_lead`, `update_deal_status`, `log_activity`, `convert_lead`.)*
+
+**The mechanism is `request_confirmation` (`acb_skills/ask_tools.py:345-348`), awaited at
+the top of the tool, before the HTTP call.** It is a plain async function — not a
+decorator, not a return shape: it emits a `confirmation_requested` event the UI renders as
+a card and blocks on a Future; only a literal `APPROVE` proceeds (`:398`). With no delivery
+channel it **fails CLOSED** (`:446-448`), and `non_interactive_default="approve"` is the
+per-call opt-out reserved for reversible actions — **no CRM write tool may pass it.** Call
+shape to copy: `agent-email-assistant/agents.py:1377-1386` (confirm, then `_post`).
+
+**`@_annotate_risk` is the risk half, and it is a shared convention, not decoration** —
+`acb_skills.tool_annotations.annotate`, aliased identically across the email assistant,
+the GTD skill and the ClickUp skill, read by `permission_policy.py:184` and the
+orchestrator's tool builders. Its vocabulary is four booleans (`read_only`, `destructive`,
+`idempotent`, `open_world`). **Annotation is not enforcement** — the policy layer
+explicitly defers to the tool's own `request_confirmation` (`permission_policy.py:15,194`).
+So: annotate *and* confirm; neither substitutes for the other.
+
+**Confirmation and the Action Broker are not interchangeable — they fail in opposite
+directions.** `request_confirmation` denies on error; `_broker_gate` proceeds on error
+(`routes/tasks/providers.py:139-147,165-167` — "a broker-layer error never blocks a
+user-approved write"). That difference is the whole division of labour:
+
+| Write | Mechanism | Why |
+|---|---|---|
+| Agent tool → native CRM row | `request_confirmation`, fail-closed | Arguments are LLM-filled; there is no prior human approval to inherit |
+| That row → Zoho | the existing `crm.zoho_*` broker gate (`crm/broker_handlers.py:45-50`) | By then already approved; the broker's job is audit + kill switch, and it must not lose the write |
+| `CRM_AUTO_LEAD` rows | no tool confirmation possible → **the flag itself is the gate** | No human is in the loop at all; hence OWNER-GATE (§6) |
+
+**Done-when:**
+1. Each of the four tools awaits `request_confirmation` **before** any mutating request is
+   constructed — proven by a test asserting zero HTTP calls when confirmation is denied
+   (the shape at `test_email_tool_consolidation.py:272-280`).
+2. Each is `@_annotate_risk(destructive=True, ...)`; the existing
+   `test_crm_agent.py::test_the_tools_are_risk_annotated_read_only` is generalised rather
+   than duplicated.
+3. **Non-interactive runs deny**: no delivery channel ⇒ no write, for all four, and no tool
+   passes `non_interactive_default="approve"` — assert the absence structurally, the way
+   the read half asserts its path guard.
+4. The read half's `_record_uuid`/`_entity_slug` guards cover every new path segment; the
+   AST fence is extended to the write tools' path idiom (today it only scans `/crm`
+   f-strings — a `.format()`/`%`/`+` build passes it, per the re-review's P2).
+5. `convert_lead` keys on `converted_deal_id`, never `converted_at` (§8 B6).
+
+**Tests:** `tests/unit/test_crm_agent_write.py` (B7).
 
 **Flipping `CRM_AUTO_LEAD` = OWNER-GATE (§6)** — and per D-CRM-9 the ON-state queues each
 auto-created lead for push into the live Zoho tenant.
@@ -1111,6 +1281,15 @@ PR (R4).
                   tests/unit/test_orchestrator_registration.py \
                   tests/unit/test_resolve_agent_for_run.py \
                   tests/unit/test_default_deny_auth.py -q
+
+    # WS-26d remaining slices — each names its own file (B7, closed 2026-08-06).
+    # Written BEFORE the code, so a slice cannot land with its verify line
+    # invented after the fact:
+    #   WS-26d-email    tests/unit/test_crm_email_timeline.py
+    #   WS-26d-autolead tests/unit/test_crm_auto_lead.py
+    #   WS-26d-write    tests/unit/test_crm_agent_write.py
+    # Each runs WITH the six-file WS-26a-c block above, never alone: the email
+    # join changes `_timeline`, which test_crm_routes.py already pins.
 
     cd workbench/control_plane && npx tsc --noEmit && npm test
 

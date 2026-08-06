@@ -959,6 +959,60 @@ def test_advance_cursor_is_forward_only_and_never_over_a_failure(
     assert result == stamps[expected]
 
 
+# ── A module Zoho gives us no timestamps for ───────────────────────────────
+#
+# Measured against the live tenant 2026-08-06, the cycle after the sync was
+# first enabled: `Deals` returns neither `Modified_Time` nor `Created_Time`
+# (requesting them by name returns them empty — a per-module field permission,
+# not our query), so a batch where all 551 records applied still yields
+# `newest_applied is None`. Before this branch existed the module could never
+# write a watermark: every cycle re-pulled the entire table, forever, while
+# every other module converged to one or two records.
+
+@pytest.mark.parametrize(
+    ("previous", "applied", "failures", "expected"),
+    [
+        # All clean, no timestamps → adopt the cycle start. This is the fix.
+        (None, 551, 0, "fallback"),
+        # Same, but the module already had a watermark: still forward.
+        ("t1", 551, 0, "fallback"),
+        # ⚠️ A failure anywhere in the batch → stand still, exactly as before.
+        # We cannot place the failure in time, so the window must be re-read.
+        (None, 550, 1, None),
+        ("t1", 550, 1, "t1"),
+        # Fetched, zero applied, no failures (every record skipped) → the
+        # batch proves nothing landed, so the cursor must not move.
+        ("t1", 0, 0, "t1"),
+    ],
+)
+def test_an_untimestamped_but_clean_batch_adopts_the_cycle_start(
+    previous: Any, applied: int, failures: int, expected: Any,
+) -> None:
+    stamps = {
+        "t1": _instant("2026-08-01T00:00:00+00:00"),
+        "fallback": _instant("2026-08-09T00:00:00+00:00"),
+        None: None,
+    }
+    result = crm_sync.advance_cursor(
+        stamps[previous], None,
+        fetched=551, fallback=stamps["fallback"],
+        failures=failures, oldest_failed=None, applied=applied,
+    )
+    assert result == stamps[expected]
+
+
+def test_the_untimestamped_branch_never_rewinds_the_cursor() -> None:
+    """`fallback` is the cycle's start, so it is normally later than the
+    previous watermark — but a clock skew or a replayed report must not drag
+    a module's cursor backwards over a window it already reconciled."""
+    ahead = _instant("2026-08-09T00:00:00+00:00")
+    behind = _instant("2026-08-01T00:00:00+00:00")
+    assert crm_sync.advance_cursor(
+        ahead, None, fetched=10, fallback=behind,
+        failures=0, oldest_failed=None, applied=10,
+    ) == ahead
+
+
 async def test_an_older_failure_holds_the_cursor_below_a_newer_success(
     db: FakeCrmDB, zoho: FakeZoho, writer: FakeWriter, audit: list,
     monkeypatch: pytest.MonkeyPatch,

@@ -5,7 +5,7 @@
 > (owner pass — §8's three open questions are answered as **D-PM-8/9/10**; §7.1 gains the
 > Space→Center mapping step and WS-27b's done-whens grew with it) ·
 > **Status:** 🟢 **WS-27a + WS-27b BUILT** (2026-08-06, branch
-> `claude/paca-research-task-management-a1f6zd`, PR #367) — migration `145_projects.sql`
+> `claude/paca-research-task-management-a1f6zd`, PR #367) — migration `146_projects.sql`
 > (§3.1–§3.10), `feature:projects` registered on both sides, the `routes/projects/` API (§4
 > minus `sync.py`) live behind the feature gate on the `gateway/db.py` seam, and the ClickUp
 > importer with its Space→Center mapping plan (§7.1). **Not deployed and never run** — the

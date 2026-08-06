@@ -422,3 +422,40 @@ async def test_converting_an_unknown_lead_is_404(db: FakeCrmDB) -> None:
             "00000000-0000-0000-0000-000000000000", ConvertRequest(), USER,
         )
     assert exc.value.status_code == 404
+
+
+# ── WS-26c · the primary contact goes through the shared seam ──────────────
+
+async def test_the_converted_deals_contact_is_primary_through_the_seam(
+    db: FakeCrmDB,
+) -> None:
+    """Convert was the ONLY writer of crm_deal_contacts in 26a, and it wrote
+    ``is_primary`` straight into an INSERT. Now that the deal-contacts
+    endpoints exist there are two writers, so the rule moved to
+    ``core.link_deal_contact`` and this asserts convert still reaches it — the
+    demote-first UPDATE it issues is the tell."""
+    lead = _lead(db)
+    await convert_lead(str(lead.id), ConvertRequest(), USER)
+
+    links = db.rows("crm_deal_contacts")
+    assert len(links) == 1
+    assert links[0]["is_primary"] is True
+    assert db.statements_touching(
+        "UPDATE crm_deal_contacts SET is_primary = false",
+    ), "convert bypassed core.link_deal_contact and wrote the link directly"
+
+
+async def test_converting_two_leads_onto_one_contact_keeps_one_primary_each(
+    db: FakeCrmDB,
+) -> None:
+    """The demotion is scoped to the DEAL, not to the contact: one person can
+    be the primary contact on every deal they are on."""
+    first = _lead(db, email="anitha@bosch.in")
+    second = _lead(db, email="anitha@bosch.in", organization_name="Bosch Pune")
+    await convert_lead(str(first.id), ConvertRequest(), USER)
+    await convert_lead(str(second.id), ConvertRequest(), USER)
+
+    links = db.rows("crm_deal_contacts")
+    assert len(links) == 2
+    assert [link["is_primary"] for link in links] == [True, True]
+    assert len({str(link["deal_id"]) for link in links}) == 2

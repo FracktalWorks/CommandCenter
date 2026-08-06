@@ -1,5 +1,5 @@
 -- ============================================================================
--- 145_projects.sql — the native project-management spine: departments,
+-- 146_projects.sql — the native project-management spine: departments,
 --                    projects, subprojects, tasks, subtasks, grants,
 --                    statuses-as-data, one activity timeline, per-view order.
 --

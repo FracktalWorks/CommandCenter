@@ -83,7 +83,7 @@ FEATURES: tuple[str, ...] = (
     # admin grants it (D-CRM-3, specs/crm_app.md §5).
     "crm",
     # Native project management — departments, projects, subprojects, tasks
-    # (145_projects.sql, category `apps`, sort_order 56: after CRM, so the three
+    # (146_projects.sql, category `apps`, sort_order 56: after CRM, so the three
     # work surfaces sit together). NOT a member default, same posture as `crm`:
     # `feature:projects` reaches `*`-holders and `admin`'s `feature:*` until an
     # admin grants it (specs/project_management_app.md §5). Note this feature

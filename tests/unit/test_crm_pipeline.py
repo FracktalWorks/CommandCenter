@@ -466,6 +466,56 @@ async def test_the_board_can_be_scoped_to_one_owner_case_insensitively(
     assert proposal.count == 1
 
 
+# ── WS-26c · kanban cards carry the account name (done-when 2) ─────────────
+
+async def test_a_board_card_carries_its_organization_name(
+    db: FakeCrmDB,
+) -> None:
+    """The board is the surface that most needs it: a card shows
+    name/org/amount/owner/stage-age, and the browser cannot client-side join
+    the account list because that list is paged at 100."""
+    stages = _deal_pipeline(db)
+    org = db.seed("crm_organizations", name="Bosch India")
+    _seed_deal(db, stages["Proposal"], amount=100_000.0, organization_id=org.id)
+
+    board = await crm_pipeline.get_pipeline(owner=None, per_lane=50, user=USER)
+    proposal = next(x for x in board.lanes if x.status.name == "Proposal")
+
+    assert proposal.rows[0]["organization_name"] == "Bosch India"
+
+
+async def test_a_board_card_without_an_organization_still_renders(
+    db: FakeCrmDB,
+) -> None:
+    """LEFT, not INNER — a walk-in filament order has no account and must not
+    disappear from the lane it is sitting in."""
+    stages = _deal_pipeline(db)
+    _seed_deal(db, stages["Proposal"], amount=8_000.0)
+
+    board = await crm_pipeline.get_pipeline(owner=None, per_lane=50, user=USER)
+    proposal = next(x for x in board.lanes if x.status.name == "Proposal")
+
+    assert proposal.count == 1
+    assert proposal.rows[0]["organization_name"] is None
+
+
+async def test_the_lane_query_joins_after_its_own_limit(
+    db: FakeCrmDB,
+) -> None:
+    """Structural: per_lane caps the rows the join runs over. A join outside
+    the limit would resolve an account name for every deal in the stage to
+    return the first fifty."""
+    stages = _deal_pipeline(db)
+    _seed_deal(db, stages["Proposal"], amount=1.0)
+
+    await crm_pipeline.get_pipeline(owner=None, per_lane=2, user=USER)
+    joined = db.statements_touching("LEFT JOIN crm_organizations")
+
+    assert joined, "the board lost its organization-name projection"
+    assert "LIMIT :limit) base LEFT JOIN" in joined[0]
+    assert joined[0].rstrip().endswith("base.id DESC")
+
+
 # ── Structural fences ───────────────────────────────────────────────────────
 
 def test_the_entity_type_vocabulary_matches_the_migration_check() -> None:

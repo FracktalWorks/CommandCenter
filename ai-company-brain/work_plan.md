@@ -606,10 +606,19 @@ runbook, the preflight and the matrix, and must stop there ·
 is agent-safe to author and its DB checks read the live database, so an agent's
 only mode is `--mode local`, which refuses the box-only checks by design ·
 **the three WS-26 CRM gates** (`specs/crm_app.md`), registered 2026-08-05:
-**(a) the Zoho two-way sync against production** — **BUILT 2026-08-05 and never
-run** (branch `ws-26b-zoho-sync`); building it was AGENT-SAFE,
-**enabling `CRM_ZOHO_SYNC=1`, the first backfill run, and any hand-run sync
-cycle are the owner's acts**: the engine now **WRITES the live Zoho tenant**
+**(a) the Zoho two-way sync against production** — **BUILT 2026-08-05 · BACKFILL RUN
+2026-08-06 · SYNC LOOP ENABLED BY THE OWNER 2026-08-06.** (The old "never run"
+reading is retired; the gate is NOT — it now governs changes to a *running* loop
+rather than a first switch-on.) Measured at enablement: the loop cycles every 600s;
+the first cycle pushed **nothing** (no row was dirty), pulled
+737/1,189/1,516/551/1,909, and left **zero** rows dirty — echo suppression held. One
+defect surfaced in the first cycles and is fixed in main (PR #375): the `Deals`
+watermark could never advance, because this tenant returns no `Modified_Time` for any
+module and no `Created_Time` for Deals, so that module re-pulled all 551 records every
+cycle. Deal conflict resolution is consequently one-sided (native-wins) by design —
+spec §7.1. Building the engine was AGENT-SAFE; **turning the sync flag on, the first
+backfill run, and any hand-run sync cycle were the owner's acts and remain so**: the
+engine **WRITES the live Zoho tenant**
 (re-scoped 2026-08-05 per spec D-CRM-7, owner-directed), pushes native edits
 up, and propagates deletes in both directions. The **code floor is
 `admin:access:manage`**, not `integrations:use:zoho-crm` — audit finding

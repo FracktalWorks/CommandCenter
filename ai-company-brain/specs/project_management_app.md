@@ -758,6 +758,32 @@ and cross-column drags patch the `column_by` field; (3) nav/access registration 
 slice pre-filters by its group — with a vitest asserting the `?center=` param filters
 presentation only.
 
+**Authoring landed 2026-08-06** (`lib/assignees.ts` + edits to `page.tsx`, `ProjectTree`,
+`TaskPanel`; 17 vitest cases, 7 mutants red). WS-27d shipped a UI that could **read and
+drag but never create**: `createProject`, `createTask` and `setAssignees` existed in the
+client and were wired to nothing, so a member could only work with rows a ClickUp import
+had put there. Four surfaces close it, each placed where the answer already is:
+
+- **New department** from the sidebar header, **new subproject** from a `+` on the node
+  itself — the parent is on screen, and a dialog that asks "which parent?" is how a
+  fifty-node tree acquires mis-parented rows.
+- **New task** from a one-field row above the board. Status is deliberately **not sent**:
+  the API picks the project's default (`create_task`), so the browser never has to know
+  which lane a new task starts in.
+- **Subtask** from the task panel. A subtask is a task with a parent (§3.5) — one endpoint,
+  one table, so it inherits statuses, timeline and assignment whole.
+- **Assignees** as removable chips plus one input. This is where **D-PM-4 stops being a
+  schema note**: an agent and a person go in the same field, and the only difference on
+  screen is an icon. Handing work to an agent is now literally the same gesture as handing
+  it to a colleague — which is the precondition for WS-27f's dispatch being reachable at
+  all, since `pm.task.assigned` is what it keys off.
+
+Two details worth keeping: `withAssignee` returns the **same array** when the assignee is
+already present, and the caller skips the PUT on that identity — a re-assert must not emit
+`pm.task.assigned` and re-dispatch an agent run. And `parseAssignees` splits on commas,
+semicolons and newlines but **never on spaces**, because a pasted `Priya <priya@x.com>`
+would otherwise shred into tokens that assign work to nobody.
+
 **WS-27e — the personal lens (one store).** ✅ **BUILT 2026-08-06**
 (migration `147_projects_personal.sql`, `routes/projects/personal.py`; 31 hermetic cases,
 6 mutants red). **Its shape changed with D-PM-6's revision** — this was specced as a mirror

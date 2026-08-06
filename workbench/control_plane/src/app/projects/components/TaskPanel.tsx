@@ -7,7 +7,7 @@
  * (§3.8) — the timeline shows a status change, an assignment, an agent run and
  * a comment in the same stream, which is the point of the shared spine.
  */
-import { X } from "lucide-react";
+import { Bot, X } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import {
@@ -16,12 +16,25 @@ import {
   type TaskRow,
   projectsApi,
 } from "../lib/api";
+import {
+  assigneeLabel,
+  classify,
+  parseAssignees,
+  withAssignee,
+  withoutAssignee,
+} from "../lib/assignees";
 
 interface Props {
   task: TaskRow;
   statuses: StatusRow[];
   onClose: () => void;
   onChanged: (task: TaskRow) => void;
+  /**
+   * Fired when this panel adds a row the surrounding list does not know about.
+   * `onChanged` merges one task; a new subtask is a task the board has never
+   * seen, so it needs a real reload rather than a merge.
+   */
+  onTaskAdded?: () => void;
 }
 
 function describe(activity: ActivityRow): string {
@@ -52,11 +65,20 @@ function describe(activity: ActivityRow): string {
   }
 }
 
-export function TaskPanel({ task, statuses, onClose, onChanged }: Props) {
+export function TaskPanel({
+  task,
+  statuses,
+  onClose,
+  onChanged,
+  onTaskAdded,
+}: Props) {
   const [timeline, setTimeline] = useState<ActivityRow[]>([]);
   const [comment, setComment] = useState("");
+  const [assignee, setAssignee] = useState("");
+  const [subtask, setSubtask] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const assignees = task.assignees ?? [];
 
   useEffect(() => {
     let live = true;
@@ -86,6 +108,57 @@ export function TaskPanel({ task, statuses, onClose, onChanged }: Props) {
     try {
       await projectsApi.patchTask(task.id, { status_id: statusId });
       await reload();
+    } catch (err) {
+      setError(String((err as Error).message));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function saveAssignees(next: string[]) {
+    setBusy(true);
+    setError(null);
+    try {
+      await projectsApi.setAssignees(task.id, next);
+      await reload();
+    } catch (err) {
+      setError(String((err as Error).message));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function addAssignees() {
+    // A whole pasted list at once, not one at a time: the PUT replaces the set
+    // anyway, so batching them is one event rather than N.
+    let next = assignees;
+    for (const who of parseAssignees(assignee)) next = withAssignee(next, who);
+    // Identity means nothing changed — skipping the PUT is what stops a
+    // re-assert emitting pm.task.assigned and re-dispatching an agent run.
+    if (next === assignees) {
+      setAssignee("");
+      return;
+    }
+    setAssignee("");
+    await saveAssignees(next);
+  }
+
+  async function addSubtask() {
+    const title = subtask.trim();
+    if (!title) return;
+    setBusy(true);
+    setError(null);
+    try {
+      // A subtask is a task with a parent (§3.5) — no second endpoint and no
+      // second table, so it inherits statuses, timeline and assignment whole.
+      await projectsApi.createTask({
+        project_id: task.project_id,
+        parent_task_id: task.id,
+        title,
+      });
+      setSubtask("");
+      await reload();
+      onTaskAdded?.();
     } catch (err) {
       setError(String((err as Error).message));
     } finally {
@@ -144,16 +217,79 @@ export function TaskPanel({ task, statuses, onClose, onChanged }: Props) {
             ))}
           </select>
         </label>
-        {task.assignees?.length ? (
-          <p className="text-xs text-muted-foreground">
-            Assigned to {task.assignees.join(", ")}
-          </p>
-        ) : null}
+        <div>
+          <span className="text-xs text-muted-foreground">Assignees</span>
+          <div className="mt-1 flex flex-wrap gap-1">
+            {assignees.map((who) => {
+              const kind = classify(who);
+              return (
+                <span
+                  key={who}
+                  title={kind === "unknown" ? "Not an email or agent:<name>" : who}
+                  className={`flex items-center gap-1 rounded-md px-2 py-1 text-xs ${
+                    kind === "unknown"
+                      ? "border border-border text-muted-foreground"
+                      : "bg-muted text-foreground"
+                  }`}
+                >
+                  {/* Agents and people are one vocabulary (D-PM-4), so the
+                      difference is an icon, never a separate field. */}
+                  {kind === "agent" ? <Bot className="h-3 w-3" /> : null}
+                  {assigneeLabel(who)}
+                  <button
+                    type="button"
+                    disabled={busy}
+                    aria-label={`Unassign ${who}`}
+                    onClick={() => void saveAssignees(withoutAssignee(assignees, who))}
+                    className="text-muted-foreground hover:text-foreground"
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </span>
+              );
+            })}
+            {assignees.length === 0 ? (
+              <span className="text-xs text-muted-foreground">Nobody yet</span>
+            ) : null}
+          </div>
+          <input
+            value={assignee}
+            disabled={busy}
+            onChange={(e) => setAssignee(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                void addAssignees();
+              }
+            }}
+            onBlur={() => void addAssignees()}
+            placeholder="email or agent:name"
+            aria-label="Add an assignee"
+            className="mt-1 w-full rounded-md border border-border bg-background px-2 py-1.5 text-sm text-foreground"
+          />
+        </div>
         {task.description ? (
           <p className="whitespace-pre-wrap text-sm text-foreground">
             {task.description}
           </p>
         ) : null}
+        <div>
+          <span className="text-xs text-muted-foreground">Subtask</span>
+          <input
+            value={subtask}
+            disabled={busy}
+            onChange={(e) => setSubtask(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                void addSubtask();
+              }
+            }}
+            placeholder="Break this down…"
+            aria-label="Add a subtask"
+            className="mt-1 w-full rounded-md border border-border bg-background px-2 py-1.5 text-sm text-foreground"
+          />
+        </div>
       </div>
 
       {error ? (

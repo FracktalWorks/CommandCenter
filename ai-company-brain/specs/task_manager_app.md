@@ -555,6 +555,40 @@ This is the explicitly-requested capability: not just *my* tasks, but **delegati
 
 ---
 
+### 6.0 SCOPE NARROWED 2026-08-06 — this app is the PERSONAL lens
+
+`DECISION (owner-directed 2026-08-06: "the tasks app will only now be used for managing
+personal tasks … we have a separate project view now, and the people will show up in the
+people center instead.")`
+
+The **Projects** and **People** left-rail views are **removed**. What they showed now has a
+whole app each:
+
+| Was | Is |
+|---|---|
+| Projects view — the ClickUp Space → Folder → List → Task → Subtask tree (§9 item 9) | **`/projects`** (WS-27). Departments, projects, subprojects, tasks, boards, per-Center slices |
+| People view — the HR roster + person editor | **`/people`** (WS-28). Directory, person page, skills, capacity, org chart |
+
+**What did NOT change, deliberately.** `GtdProject` survives as an *association*: a task
+still belongs to a project and every card still names it. What went is the **browsing**
+surface. The clarify flow's Where axis still offers the local hierarchy, because filing a
+personal task is a personal act. `gtd_people` is untouched — the People Center reads it.
+
+**Two things this broke and how they were handled.** `loadPeople()` had exactly one caller:
+opening the People view. Deleting that view would have left the delegate picker and the
+clarify Who axis silently offering nobody — a broken picker that reads as a company with no
+people — so both now load the roster where they need it.
+
+⚠️ **One capability is unreachable and has no replacement yet: creating/editing a person and
+uploading a résumé.** `PersonEditor` was the only UI for it. The API is untouched
+(`POST/PATCH /tasks/people`, `POST /tasks/people/{id}/resume`, all on
+`admin:members:manage`) and `taskStore.uploadPersonResume` still wraps it, so nothing was
+deleted — but until the People Center grows the write half (**WS-28b-write**, filed in
+`people_center_app.md` §7) an admin cannot do it from the product. Stated here rather than
+discovered later.
+
+---
+
 ### 6.1 People & capabilities intelligence — the org-knowledge layer (✅ v1 shipped)
 
 > Added 2026-07-01 as a forward design note; **v1 shipped 2026-07-02** with the *actual* company data. `agent-project-manager`'s `agent-data/` (hr_structure.json + resume_profiles.json — 26 people, 11 departments, roles, org-chart + resume-extracted skills, capacity/load hours, ClickUp user ids) is snapshotted into **`infra/seed/hr/`** (phones stripped) and imported into **`gtd_people`** (migration `49_gtd_people.sql`) by **`scripts/import_hr_people.py`** (idempotent upsert by name; re-run to refresh — the source repo / HR system stays the source of truth). Served via **`GET /tasks/people`** (auth-gated, `q` searches name/role/department/skill); the clarify proposal is now **capability-aware** (skills word-boundary match + free-hours tiebreak → `suggested_assignee` with the person's real ClickUp id, so delegation pushes assign the actual user); the agent gained **`gtd_people(query)`**; the UI's delegation/assignee pickers hydrate from the org people. Remaining (below) = embeddings matching, live load sync from the PM tool, overload warnings, and richer org-structure reasoning.

@@ -322,6 +322,18 @@ The person-page **writes stay on `/tasks/people`** under `admin:members:manage`.
 gateway does not serve would mint a second, hollow write path, and the first person to find
 it would reasonably assume it worked.
 
+**WS-28b-write — the person write half.** 🟢 AGENT-SAFE. *(Minted 2026-08-06, and it is a
+REGRESSION to close, not a new idea.)*
+The tasks app's People view was removed the same day (owner-directed scope narrowing,
+`task_manager_app.md` §6.0), and `PersonEditor` went with it. That was the only UI for
+creating a person, editing their skills, and uploading a résumé. **The API is untouched** —
+`POST /tasks/people`, `PATCH /tasks/people/{id}`, `POST /tasks/people/{id}/resume`, all on
+`admin:members:manage` — and `taskStore.uploadPersonResume` still wraps it, so nothing was
+deleted. But until this lands, an admin cannot do any of it from the product.
+Done when: the person page grows edit + résumé upload for a holder of
+`admin:members:manage`; the controls are **absent** rather than disabled without it (§3.2);
+and the résumé upload reports what it merged, as `PersonEditor` did.
+
 **WS-28c — org chart.** 🟢 AGENT-SAFE.
 Done when: the tree renders from `manager_id`, unmanaged people surface as roots, a
 re-parent that would create a cycle is refused before the request, and the Center overlay

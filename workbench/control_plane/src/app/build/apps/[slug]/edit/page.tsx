@@ -23,7 +23,6 @@ import {
   useState,
 } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useTheme } from "next-themes";
 import { useMonacoTheme } from "@/lib/theme/surfaces";
 import Editor from "@monaco-editor/react";
 import AgentChat from "@/components/AgentChat";
@@ -45,7 +44,6 @@ import {
   type CcToolConfirmDecision,
   type CcToolConfirmRequest,
 } from "../../lib/ccBridge";
-import { buildIconMap } from "@/lib/iconSvg";
 import { runAllScenarios, type TestResult, type TestScenario } from "../../lib/testRunner";
 import type { AppFile, AppMeta, Checkpoint, GrantEntry } from "../../lib/types";
 
@@ -811,9 +809,7 @@ function PublishModal({
 function Workshop({ slug }: { slug: string }) {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { resolvedTheme } = useTheme();
   const monacoTheme = useMonacoTheme();
-  const theme: "light" | "dark" = resolvedTheme === "light" ? "light" : "dark";
 
   const [app, setApp] = useState<AppMeta | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -1601,7 +1597,7 @@ function Workshop({ slug }: { slug: string }) {
   // into inline SVG here, same mechanism the chat-artifacts renderer already
   // uses for generative UI (GenerativeUINode.tsx).
   const previewIcons = useMemo(
-    () => (srcDoc ? buildIconMap(extractCcIconNames(srcDoc)) : {}),
+    () => (srcDoc ? extractCcIconNames(srcDoc) : []),
     [srcDoc]
   );
 
@@ -1850,10 +1846,10 @@ function Workshop({ slug }: { slug: string }) {
                 {srcDoc ? (
                   previewDevice === "mobile" ? (
                     <div className="w-[390px] max-w-full shrink-0 h-[780px] max-h-full rounded-[2rem] border-4 border-border overflow-hidden shadow-lg bg-background">
-                      <SandboxedHtml chromeless html={srcDoc} theme={theme} icons={previewIcons} />
+                      <SandboxedHtml chromeless html={srcDoc} iconNames={previewIcons} />
                     </div>
                   ) : (
-                    <SandboxedHtml chromeless html={srcDoc} theme={theme} icons={previewIcons} />
+                    <SandboxedHtml chromeless html={srcDoc} iconNames={previewIcons} />
                   )
                 ) : (
                   <div className="flex flex-col items-center justify-center flex-1 gap-3 text-center px-6">

@@ -48,6 +48,43 @@ them, and rendered offline.
 `themedIcon(name)` returns a memoised component bound to one name, for tables
 that store an icon rather than rendering it inline; `ThemedIcon` is its type.
 
+**Apps and generated UI follow the theme too.** Custom Apps, generative-UI
+cards and React artifacts run in an opaque-origin iframe: they inherit nothing —
+not our stylesheet, not `data-theme`, not one custom property. They already had
+a token vocabulary (`--cc-*`, written into `agent-app-builder`'s instructions
+and `acb_skills/design.md`), but its **values were hand-written RapidTool
+literals switching only on light/dark**, so every app ever built stayed
+RapidTool-blue while the shell around it turned Fluent or Material. Nothing
+errored; it just quietly did not theme.
+
+`app-tokens.ts` now derives that block from the active manifest, and
+`sandbox-frame.ts` builds the frame around it. Colour, ink pairs, type, shape,
+motion and the theme's *control personality* (Material's pill buttons and 8%
+state layer, Fluent's tight ring, Graphite's uppercase labels) all cross, so an
+app built a year ago picks up a new theme's behaviour and not merely its
+palette. Icons cross as SVG resolved from the active pack. The block is applied
+twice: in the frame's first `<style>` so there is no flash, and as a live
+`postMessage` patch on a theme change — a patch rather than a rebuild, because
+rebuilding `srcDoc` remounts the document and a published app would throw away
+whatever the user had typed into it.
+
+`--cc-*` is deliberately a *separate, smaller, stable* vocabulary rather than
+our own tokens: our set is Tailwind's `@theme inline` surface and we rename
+things in it, while `--cc-*` is published into apps we cannot go back and edit.
+The two are kept in sync by a test that checks the code against the agent
+instructions in both directions. One honest limit: **self-hosted webfonts do not
+cross** — the frame's CSP is `font-src data:` — so an app gets the theme's named
+and system families (Segoe UI, Roboto) and falls back where one is absent.
+
+**Staying themed** is enforced, not asked for. `conformance.test.ts` fails the
+build on a hardcoded colour, a `lucide-react` import, an arbitrary Tailwind
+colour class, or a hand-rolled solid control. Existing debt is a frozen
+baseline that may only shrink: a file with no budget must be clean, a baselined
+file may not get worse, and one that got *better* fails until its number is
+lowered — so the figures can never quietly become fiction. Values that are
+genuinely not theme decisions (weather pictograms, Gmail's label palette, a
+person's identity hue) sit in an exceptions list with the argument for each.
+
 **Third-party surfaces** — Monaco and Shiki — name their equivalents per theme
 in `surfaces`, so a code view follows the theme rather than only the colour
 mode. Fluent highlights with VS Code's own dark-plus, Material with

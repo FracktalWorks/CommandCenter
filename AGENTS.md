@@ -116,10 +116,28 @@ Copilot SDK sandboxes.
 - Tests in tests/unit/ and tests/integration/ -- pytest with asyncio
 - CI/CD via GitHub Actions: deploy.yml (push-to-deploy on main), pr-check.yml (lint+test on PRs)
 - Deploy target: Hostinger KVM 4 VPS (Ubuntu 24.04 + Docker)
-- **Control Plane UI**: All frontend work MUST follow `workbench/control_plane/DESIGN_SYSTEM.md`.
-  Use shared components (`Tabs`, `FilterPills`, etc.) from `src/components/` — never inline
-  ad-hoc tab bars, filter pills, or page headers. Use semantic Tailwind color tokens
-  (`bg-primary`, `text-foreground`, `border-border`) — never arbitrary hex values.
+- **Control Plane UI is THEMED. Read `workbench/control_plane/DESIGN_SYSTEM.md`
+  before writing any of it.** Settings → Appearance switches the whole org between
+  RapidTool, Fluent, Material and Graphite, which disagree about palette, corner
+  radius, icon pack, glass/glow and control behaviour (Material buttons are pills,
+  Graphite's labels are uppercase). Three rules, all machine-checked by
+  `src/lib/theme/conformance.test.ts`:
+  1. **Never write a colour.** Use `bg-primary`, `text-foreground`,
+     `border-border`, `var(--success)` — not `#0ea5e9`, `hsl(…)` or `bg-[#1a1b1e]`.
+     Text on a coloured fill takes the `-foreground` partner, never `text-white`.
+  2. **Never import `lucide-react`.** Use `<Icon name="Plus" />`; Lucide names are
+     the vocabulary, the theme picks the pack.
+  3. **Never hand-roll a control.** Use `Button`/`Input`/`Badge` from
+     `src/components/ui/` — a theme's state layer, focus ring and label transform
+     are not expressible in a class string, which is why the primitives exist.
+  Also use the shared `Tabs`, `FilterPills` and page-header patterns from
+  `src/components/` rather than inlining ad-hoc versions.
+- **Apps that run in the sandbox** (Custom Apps, generative UI, React artifacts)
+  inherit nothing from the shell — they get the `--cc-*` contract instead
+  (`src/lib/theme/app-tokens.ts`, documented in
+  `apps/agents/agent-app-builder/instructions.md`). Style with those tokens and
+  the app follows the org's theme for life; write one hex value and that part of
+  it leaves the design system permanently.
 - Agent-generated artefacts (images, reports, PDFs) MUST be written to
   `inputs/`, `outputs/`, or `agent-data/` within the agent workspace so the
   Control Plane file browser and inline chat cards can discover them.  These

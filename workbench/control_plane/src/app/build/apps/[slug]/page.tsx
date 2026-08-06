@@ -14,7 +14,6 @@ import type { ThemedIcon } from "@/components/Icon";
 import { use, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useSession } from "next-auth/react";
-import { useTheme } from "next-themes";
 import SandboxedHtml from "@/components/SandboxedHtml";
 import {
   buildAppSrcDoc,
@@ -23,7 +22,6 @@ import {
   type CcToolConfirmDecision,
   type CcToolConfirmRequest,
 } from "../lib/ccBridge";
-import { buildIconMap } from "@/lib/iconSvg";
 import type { AppMeta, AppUsage, AppVersion } from "../lib/types";
 
 /** A pending `cc.tools.call()` confirm, waiting on the viewer's decision. */
@@ -140,8 +138,6 @@ export default function AppRunPage({
   const router = useRouter();
   const { data: session } = useSession();
   const viewerEmail = session?.user?.email ?? "dev@fracktal.in";
-  const { resolvedTheme } = useTheme();
-  const theme: "light" | "dark" = resolvedTheme === "light" ? "light" : "dark";
 
   const [app, setApp] = useState<AppMeta | null>(null);
   const [bundle, setBundle] = useState<string | null>(null);
@@ -393,7 +389,7 @@ export default function AppRunPage({
   // Same icon pre-resolution as the Workshop's preview — the published run
   // page goes through the exact same sandboxed frame.
   const runIcons = useMemo(
-    () => (srcDoc ? buildIconMap(extractCcIconNames(srcDoc)) : {}),
+    () => (srcDoc ? extractCcIconNames(srcDoc) : []),
     [srcDoc]
   );
 
@@ -573,7 +569,7 @@ export default function AppRunPage({
       {/* ── The app, in the sandboxed frame ─────────────────────────── */}
       <div className="flex-1 min-h-0 flex flex-col">
         {srcDoc ? (
-          <SandboxedHtml chromeless html={srcDoc} theme={theme} icons={runIcons} />
+          <SandboxedHtml chromeless html={srcDoc} iconNames={runIcons} />
         ) : (
           <div className="flex flex-col items-center justify-center flex-1 gap-3 text-center px-6">
             <div className="w-11 h-11 rounded-xl bg-primary/10 flex items-center justify-center">

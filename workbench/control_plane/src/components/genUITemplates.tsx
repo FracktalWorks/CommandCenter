@@ -146,18 +146,21 @@ function useCountUp(target: number, ms = 700): number {
   return v;
 }
 
+// These are Tier-2 templates: real React components in OUR bundle, rendered
+// under `html[data-theme]`, so every semantic token is defined and a literal
+// here is simply a colour the theming engine cannot reach.
 const TONE_COLOR: Record<string, string> = {
-  primary: "var(--primary, #0ea5e9)",
-  success: "#10b981",
-  warning: "#f59e0b",
-  danger: "#ef4444",
+  primary: "var(--primary)",
+  success: "var(--success)",
+  warning: "var(--warning)",
+  danger: "var(--destructive)",
 };
 
 function DeltaArrow({ delta }: { delta: number }): React.ReactElement | null {
   if (!delta) return <span style={{ color: "var(--muted-foreground)" }}>—</span>;
   const up = delta > 0;
   return (
-    <span style={{ color: up ? "#10b981" : "#ef4444", fontVariantNumeric: "tabular-nums" }}>
+    <span style={{ color: up ? "var(--success)" : "var(--destructive)", fontVariantNumeric: "tabular-nums" }}>
       {up ? "▲" : "▼"} {Math.abs(delta)}
     </span>
   );
@@ -165,18 +168,40 @@ function DeltaArrow({ delta }: { delta: number }): React.ReactElement | null {
 
 // ── Animated weather glyph (pure SVG/CSS) ────────────────────────────────────
 
+/**
+ * The one place in this file that is deliberately NOT themed.
+ *
+ * These are depictions, not chrome: a sun is yellow and a raincloud is
+ * blue-grey because that is what those things look like, and routing them
+ * through `--warning` / `--muted` would make the weather card recolour when
+ * somebody changes theme — which is not a themed illustration, it is a broken
+ * one. Semantic tokens describe MEANING (danger, success); nothing here means
+ * anything, it just depicts.
+ *
+ * Collected here rather than inlined so the exception is one visible, argued
+ * decision instead of seven literals a reader has to judge one at a time —
+ * and so `theme-conformance.test.ts` can allow exactly this constant.
+ */
+const WEATHER_INK = {
+  sun: "#fbbf24",
+  cloud: "#94a3b8",
+  cloudLight: "#cbd5e1",
+  rain: "#38bdf8",
+  snow: "#e0f2fe",
+} as const;
+
 function WeatherGlyph({ condition, size = 48 }: { condition: string; size?: number }) {
   const c = condition.toLowerCase();
   const sun = (
     <g>
-      <circle cx="24" cy="24" r="9" fill="#fbbf24">
+      <circle cx="24" cy="24" r="9" fill={WEATHER_INK.sun}>
         <animate attributeName="r" values="9;9.8;9" dur="3s" repeatCount="indefinite" />
       </circle>
       {Array.from({ length: 8 }).map((_, i) => (
         <line
           key={i}
           x1="24" y1="24" x2="24" y2="6"
-          stroke="#fbbf24" strokeWidth="2" strokeLinecap="round"
+          stroke={WEATHER_INK.sun} strokeWidth="2" strokeLinecap="round"
           transform={`rotate(${i * 45} 24 24)`}
         >
           <animate attributeName="opacity" values="0.4;1;0.4" dur="2s"
@@ -187,17 +212,17 @@ function WeatherGlyph({ condition, size = 48 }: { condition: string; size?: numb
   );
   const cloud = (
     <g>
-      <ellipse cx="24" cy="30" rx="14" ry="8" fill="#94a3b8">
+      <ellipse cx="24" cy="30" rx="14" ry="8" fill={WEATHER_INK.cloud}>
         <animate attributeName="cx" values="22;26;22" dur="4s" repeatCount="indefinite" />
       </ellipse>
-      <circle cx="17" cy="26" r="7" fill="#cbd5e1" />
-      <circle cx="30" cy="26" r="8" fill="#cbd5e1" />
+      <circle cx="17" cy="26" r="7" fill={WEATHER_INK.cloudLight} />
+      <circle cx="30" cy="26" r="8" fill={WEATHER_INK.cloudLight} />
     </g>
   );
   const drops = (
     <g>
       {[14, 24, 34].map((x, i) => (
-        <line key={x} x1={x} y1="34" x2={x - 2} y2="42" stroke="#38bdf8" strokeWidth="2"
+        <line key={x} x1={x} y1="34" x2={x - 2} y2="42" stroke={WEATHER_INK.rain} strokeWidth="2"
           strokeLinecap="round">
           <animate attributeName="opacity" values="0;1;0" dur="1s"
             begin={`${i * 0.25}s`} repeatCount="indefinite" />
@@ -211,7 +236,7 @@ function WeatherGlyph({ condition, size = 48 }: { condition: string; size?: numb
       {c.includes("cloud") || c.includes("rain") || c.includes("storm") ? cloud : null}
       {c.includes("rain") || c.includes("storm") ? drops : null}
       {c.includes("snow") ? (
-        <text x="24" y="40" textAnchor="middle" fontSize="16" fill="#e0f2fe">❄</text>
+        <text x="24" y="40" textAnchor="middle" fontSize="16" fill={WEATHER_INK.snow}>❄</text>
       ) : null}
     </svg>
   );
@@ -229,7 +254,7 @@ function WeatherCard({ data }: { data: Data }) {
   return (
     <div style={{
       borderRadius: 14, padding: 16, border: "1px solid var(--border)",
-      background: "linear-gradient(135deg, color-mix(in srgb, var(--primary,#0ea5e9) 12%, var(--card)), var(--card))",
+      background: "linear-gradient(135deg, color-mix(in srgb, var(--primary) 12%, var(--card)), var(--card))",
     }}>
       <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
         <WeatherGlyph condition={condition} />
@@ -377,7 +402,7 @@ function SparkTrend({ data }: { data: Data }) {
         {data.delta != null && <div style={{ fontSize: 11 }}><DeltaArrow delta={num(data.delta)} /></div>}
       </div>
       <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`}>
-        <polyline points={pts} fill="none" stroke="var(--primary,#0ea5e9)" strokeWidth="2"
+        <polyline points={pts} fill="none" stroke="var(--primary)" strokeWidth="2"
           strokeLinecap="round" strokeLinejoin="round"
           style={{ strokeDasharray: 400, strokeDashoffset: 400, animation: "ccDraw 1s ease forwards" }} />
       </svg>
@@ -402,8 +427,8 @@ function Comparison({ data }: { data: Data }) {
         {options.map((o, i) => (
           <div key={i} style={{
             padding: "8px 10px", fontSize: 12, fontWeight: 600, textAlign: "center",
-            color: o.recommended ? "#10b981" : "var(--foreground)",
-            background: o.recommended ? "color-mix(in srgb, #10b981 12%, var(--card))" : "var(--card)",
+            color: o.recommended ? "var(--success)" : "var(--foreground)",
+            background: o.recommended ? "color-mix(in srgb, var(--success) 12%, var(--card))" : "var(--card)",
             borderLeft: "1px solid var(--border)",
           }}>
             {str(o.name)}{o.recommended ? " ★" : ""}
@@ -420,7 +445,7 @@ function Comparison({ data }: { data: Data }) {
               return (
                 <div key={ci} style={{ padding: "8px 10px", fontSize: 12, textAlign: "center",
                   color: "var(--foreground)", borderTop: "1px solid var(--border)", borderLeft: "1px solid var(--border)",
-                  background: o.recommended ? "color-mix(in srgb, #10b981 6%, transparent)" : (ri % 2 ? "var(--secondary)" : "transparent") }}>
+                  background: o.recommended ? "color-mix(in srgb, var(--success) 6%, transparent)" : (ri % 2 ? "var(--secondary)" : "transparent") }}>
                   {row ? str(row.value) : "—"}
                 </div>
               );
@@ -442,20 +467,20 @@ function ProgressTracker({ data }: { data: Data }) {
         <div style={{ fontSize: 13, fontWeight: 600, color: "var(--foreground)", marginBottom: 10 }}>{str(data.title)}</div>
       )}
       <div style={{ height: 6, borderRadius: 3, background: "var(--secondary)", overflow: "hidden", marginBottom: 12 }}>
-        <div style={{ height: "100%", width: `${pct}%`, background: "#10b981",
+        <div style={{ height: "100%", width: `${pct}%`, background: "var(--success)",
           animation: "ccGrow .7s cubic-bezier(.22,1,.36,1) both" }} />
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
         {steps.map((s, i) => {
           const state = str(s.state, "pending");
-          const dot = state === "done" ? "#10b981" : state === "active" ? "var(--primary,#0ea5e9)" : "var(--border)";
+          const dot = state === "done" ? "var(--success)" : state === "active" ? "var(--primary)" : "var(--border)";
           return (
             <div key={i} style={{ display: "flex", alignItems: "center", gap: 10 }}>
               <span style={{ width: 14, height: 14, borderRadius: "50%", background: dot,
-                boxShadow: state === "active" ? "0 0 0 4px color-mix(in srgb, var(--primary,#0ea5e9) 25%, transparent)" : "none",
+                boxShadow: state === "active" ? "0 0 0 4px color-mix(in srgb, var(--primary) 25%, transparent)" : "none",
                 animation: state === "active" ? "ccPulse 1.6s ease-in-out infinite" : "none",
                 display: "flex", alignItems: "center", justifyContent: "center",
-                fontSize: 9, color: "#fff" }}>
+                fontSize: 9, color: "var(--success-foreground)" }}>
                 {state === "done" ? "✓" : ""}
               </span>
               <span style={{ fontSize: 12,
@@ -485,10 +510,10 @@ function RecipeCard({ data }: { data: Data }) {
     <div style={{ borderRadius: 14, border: "1px solid var(--border)", background: "var(--card)", overflow: "hidden" }}>
       <div style={{
         padding: "14px 16px", borderBottom: "1px solid var(--border)",
-        background: "linear-gradient(135deg, color-mix(in srgb, var(--accent, #fb923c) 10%, var(--card)), var(--card))",
+        background: "linear-gradient(135deg, color-mix(in srgb, var(--accent) 10%, var(--card)), var(--card))",
       }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <TIcon name="utensils" size={16} color="var(--accent, #fb923c)" />
+          <TIcon name="utensils" size={16} color="var(--accent)" />
           <span style={{ fontSize: 15, fontWeight: 600, color: "var(--foreground)" }}>{str(data.title, "Recipe")}</span>
         </div>
         {data.description != null && (
@@ -514,7 +539,7 @@ function RecipeCard({ data }: { data: Data }) {
               {ingredients.map((ing, i) => (
                 <div key={i} style={{ display: "flex", alignItems: "baseline", gap: 6, fontSize: 12,
                   color: "var(--foreground)", animation: `ccFadeUp .3s ease ${i * 0.03}s both` }}>
-                  <TIcon name="check" size={11} color="var(--success, #10b981)" />
+                  <TIcon name="check" size={11} color="var(--success)" />
                   <span>{str(ing.item)}</span>
                   {ing.amount != null && <span style={{ color: "var(--muted-foreground)", fontSize: 11 }}>{str(ing.amount)}</span>}
                 </div>
@@ -532,8 +557,8 @@ function RecipeCard({ data }: { data: Data }) {
                   animation: `ccFadeUp .3s ease ${i * 0.05}s both` }}>
                   <span style={{ flexShrink: 0, width: 20, height: 20, borderRadius: "50%", display: "flex",
                     alignItems: "center", justifyContent: "center", fontSize: 10, fontWeight: 600,
-                    background: "color-mix(in srgb, var(--primary, #0ea5e9) 15%, transparent)",
-                    color: "var(--primary, #0ea5e9)" }}>{i + 1}</span>
+                    background: "color-mix(in srgb, var(--primary) 15%, transparent)",
+                    color: "var(--primary)" }}>{i + 1}</span>
                   <span style={{ lineHeight: 1.55 }}>{s}</span>
                 </li>
               ))}
@@ -542,8 +567,8 @@ function RecipeCard({ data }: { data: Data }) {
         )}
         {data.tip != null && (
           <div style={{ display: "flex", gap: 8, fontSize: 12, color: "var(--foreground)", padding: "8px 10px",
-            borderRadius: 10, background: "color-mix(in srgb, var(--accent, #fb923c) 10%, transparent)" }}>
-            <TIcon name="lightbulb" size={14} color="var(--accent, #fb923c)" />
+            borderRadius: 10, background: "color-mix(in srgb, var(--accent) 10%, transparent)" }}>
+            <TIcon name="lightbulb" size={14} color="var(--accent)" />
             <span>{str(data.tip)}</span>
           </div>
         )}
@@ -563,13 +588,13 @@ function RecipeCard({ data }: { data: Data }) {
 
 const STATUS_TONE: Record<string, { color: string; bg: string }> = {
   scheduled: { color: "var(--muted-foreground)", bg: "var(--secondary)" },
-  boarding: { color: "var(--primary, #0ea5e9)", bg: "color-mix(in srgb, var(--primary, #0ea5e9) 14%, transparent)" },
-  departed: { color: "var(--primary, #0ea5e9)", bg: "color-mix(in srgb, var(--primary, #0ea5e9) 14%, transparent)" },
-  "in-air": { color: "var(--primary, #0ea5e9)", bg: "color-mix(in srgb, var(--primary, #0ea5e9) 14%, transparent)" },
-  landed: { color: "var(--success, #10b981)", bg: "color-mix(in srgb, var(--success, #10b981) 14%, transparent)" },
-  arrived: { color: "var(--success, #10b981)", bg: "color-mix(in srgb, var(--success, #10b981) 14%, transparent)" },
-  delayed: { color: "var(--warning, #f59e0b)", bg: "color-mix(in srgb, var(--warning, #f59e0b) 14%, transparent)" },
-  cancelled: { color: "var(--destructive, #ef4444)", bg: "color-mix(in srgb, var(--destructive, #ef4444) 14%, transparent)" },
+  boarding: { color: "var(--primary)", bg: "color-mix(in srgb, var(--primary) 14%, transparent)" },
+  departed: { color: "var(--primary)", bg: "color-mix(in srgb, var(--primary) 14%, transparent)" },
+  "in-air": { color: "var(--primary)", bg: "color-mix(in srgb, var(--primary) 14%, transparent)" },
+  landed: { color: "var(--success)", bg: "color-mix(in srgb, var(--success) 14%, transparent)" },
+  arrived: { color: "var(--success)", bg: "color-mix(in srgb, var(--success) 14%, transparent)" },
+  delayed: { color: "var(--warning)", bg: "color-mix(in srgb, var(--warning) 14%, transparent)" },
+  cancelled: { color: "var(--destructive)", bg: "color-mix(in srgb, var(--destructive) 14%, transparent)" },
 };
 
 function StatusBadge({ status }: { status: string }) {
@@ -609,7 +634,7 @@ function FlightStatus({ data }: { data: Data }) {
     <div style={{ borderRadius: 14, border: "1px solid var(--border)", background: "var(--card)", padding: 16 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <TIcon name="plane" size={16} color="var(--primary, #0ea5e9)" />
+          <TIcon name="plane" size={16} color="var(--primary)" />
           <span style={{ fontSize: 13, fontWeight: 600, color: "var(--foreground)" }}>
             {data.airline != null ? `${str(data.airline)} ` : ""}{str(data.flightNo)}
           </span>
@@ -623,10 +648,10 @@ function FlightStatus({ data }: { data: Data }) {
           <div style={{ position: "absolute", top: 11, left: 0, right: 0, height: 2, borderRadius: 1,
             background: "var(--secondary)" }} />
           <div style={{ position: "absolute", top: 11, left: 0, width: `${pct}%`, height: 2, borderRadius: 1,
-            background: "var(--primary, #0ea5e9)", transition: "width 0.6s var(--cc-ease, ease)" }} />
+            background: "var(--primary)", transition: "width 0.6s var(--cc-ease, ease)" }} />
           <span style={{ position: "absolute", top: 0, left: `${pct}%`, transform: "translateX(-50%)",
             animation: "ccFadeUp .5s ease both" }}>
-            <TIcon name="plane" size={20} color="var(--primary, #0ea5e9)" />
+            <TIcon name="plane" size={20} color="var(--primary)" />
           </span>
         </div>
         <EndpointBlock e={to} align="right" />
@@ -653,15 +678,15 @@ function TrainStatus({ data }: { data: Data }) {
     <div style={{ borderRadius: 14, border: "1px solid var(--border)", background: "var(--card)", padding: 16 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <TIcon name="train-front" size={16} color="var(--primary, #0ea5e9)" />
+          <TIcon name="train-front" size={16} color="var(--primary)" />
           <span style={{ fontSize: 13, fontWeight: 600, color: "var(--foreground)" }}>
             {[str(data.operator), str(data.trainNo), data.line != null ? `· ${str(data.line)}` : ""].filter(Boolean).join(" ")}
           </span>
         </div>
         <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
           {delay > 0 && (
-            <span style={{ fontSize: 10.5, fontWeight: 600, color: "var(--warning, #f59e0b)",
-              background: "color-mix(in srgb, var(--warning, #f59e0b) 14%, transparent)",
+            <span style={{ fontSize: 10.5, fontWeight: 600, color: "var(--warning)",
+              background: "color-mix(in srgb, var(--warning) 14%, transparent)",
               borderRadius: 999, padding: "3px 10px" }}>+{delay} min</span>
           )}
           <StatusBadge status={status} />
@@ -677,15 +702,15 @@ function TrainStatus({ data }: { data: Data }) {
           marginLeft: 6, paddingLeft: 14 }}>
           {stops.map((s, i) => {
             const state = str(s.state, "pending");
-            const dot = state === "done" ? "var(--success, #10b981)"
-              : state === "active" ? "var(--primary, #0ea5e9)" : "var(--border)";
+            const dot = state === "done" ? "var(--success)"
+              : state === "active" ? "var(--primary)" : "var(--border)";
             return (
               <div key={i} style={{ position: "relative", padding: "5px 0", fontSize: 12,
                 color: state === "pending" ? "var(--muted-foreground)" : "var(--foreground)",
                 animation: `ccFadeUp .3s ease ${i * 0.04}s both` }}>
                 <span style={{ position: "absolute", left: -20, top: 9, width: 10, height: 10,
                   borderRadius: "50%", background: dot,
-                  boxShadow: state === "active" ? "0 0 0 3px color-mix(in srgb, var(--primary, #0ea5e9) 25%, transparent)" : "none" }} />
+                  boxShadow: state === "active" ? "0 0 0 3px color-mix(in srgb, var(--primary) 25%, transparent)" : "none" }} />
                 <span style={{ fontWeight: state === "active" ? 600 : 400 }}>{str(s.station)}</span>
                 {s.time != null && <span style={{ color: "var(--muted-foreground)", marginLeft: 8,
                   fontVariantNumeric: "tabular-nums" }}>{str(s.time)}</span>}
@@ -736,7 +761,7 @@ function FormCard({ data, ctx }: { data: Data; ctx?: TemplateCtx }) {
     <div style={{ borderRadius: 14, border: "1px solid var(--border)", background: "var(--card)", padding: 16 }}>
       {data.title != null && (
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-          <TIcon name="clipboard-list" size={15} color="var(--primary, #0ea5e9)" />
+          <TIcon name="clipboard-list" size={15} color="var(--primary)" />
           <span style={{ fontSize: 13.5, fontWeight: 600, color: "var(--foreground)" }}>{str(data.title)}</span>
         </div>
       )}
@@ -775,16 +800,17 @@ function FormCard({ data, ctx }: { data: Data; ctx?: TemplateCtx }) {
                 <button type="button" disabled={submitted} onClick={() => set(name, !v)}
                   aria-pressed={!!v}
                   style={{ width: 40, height: 22, borderRadius: 999, border: "1px solid var(--border)",
-                    background: v ? "var(--primary, #0ea5e9)" : "var(--secondary)", position: "relative",
+                    background: v ? "var(--primary)" : "var(--secondary)", position: "relative",
                     cursor: submitted ? "default" : "pointer", transition: "background 0.2s var(--cc-ease, ease)" }}>
                   <span style={{ position: "absolute", top: 2, left: v ? 20 : 2, width: 16, height: 16,
-                    borderRadius: "50%", background: "#fff", transition: "left 0.2s var(--cc-ease, ease)" }} />
+                    borderRadius: "50%", background: v ? "var(--primary-foreground)" : "var(--foreground)",
+                    transition: "left 0.2s var(--cc-ease, ease)" }} />
                 </button>
               ) : type === "slider" ? (
                 <input type="range" disabled={submitted} min={num(f.min, 0)} max={num(f.max, 100)}
                   step={num(f.step, 1)} value={num(v, num(f.min, 0))}
                   onChange={(e) => set(name, parseFloat(e.target.value))}
-                  style={{ width: "100%", accentColor: "var(--primary, #0ea5e9)" }} />
+                  style={{ width: "100%", accentColor: "var(--primary)" }} />
               ) : (
                 <input type={type === "number" ? "number" : type === "date" ? "date" : "text"}
                   value={str(v)} disabled={submitted} placeholder={str(f.placeholder)}
@@ -800,8 +826,8 @@ function FormCard({ data, ctx }: { data: Data; ctx?: TemplateCtx }) {
       <button type="button" onClick={submit} disabled={!ctx?.onAction || submitted || missing}
         style={{ marginTop: 12, fontSize: 12.5, fontWeight: 600, borderRadius: 8, padding: "8px 16px",
           border: "none", cursor: submitted || missing ? "default" : "pointer",
-          color: "var(--primary-foreground, #fff)",
-          background: submitted ? "var(--success, #10b981)" : "var(--primary, #0ea5e9)",
+          color: "var(--primary-foreground)",
+          background: submitted ? "var(--success)" : "var(--primary)",
           opacity: !ctx?.onAction || missing ? 0.5 : 1, transition: "all 0.2s var(--cc-ease, ease)" }}>
         {submitted ? "✓ Submitted" : str(data.submitLabel, "Submit")}
       </button>
@@ -846,15 +872,15 @@ function OptionPicker({ data, ctx }: { data: Data; ctx?: TemplateCtx }) {
           return (
             <button key={id} type="button" onClick={() => toggle(id)} disabled={submitted}
               style={{ textAlign: "left", borderRadius: 12, padding: "10px 12px", cursor: submitted ? "default" : "pointer",
-                border: `1px solid ${active ? "var(--primary, #0ea5e9)" : "var(--border)"}`,
-                background: active ? "color-mix(in srgb, var(--primary, #0ea5e9) 10%, var(--card))" : "var(--card)",
-                boxShadow: active ? "0 0 0 3px color-mix(in srgb, var(--primary, #0ea5e9) 15%, transparent)" : "none",
+                border: `1px solid ${active ? "var(--primary)" : "var(--border)"}`,
+                background: active ? "color-mix(in srgb, var(--primary) 10%, var(--card))" : "var(--card)",
+                boxShadow: active ? "0 0 0 3px color-mix(in srgb, var(--primary) 15%, transparent)" : "none",
                 transition: "all 0.15s var(--cc-ease, ease)", animation: `ccFadeUp .3s ease ${i * 0.05}s both`,
                 opacity: submitted && !active ? 0.5 : 1 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                <TIcon name={o.icon} size={14} color="var(--primary, #0ea5e9)" />
+                <TIcon name={o.icon} size={14} color="var(--primary)" />
                 <span style={{ fontSize: 12.5, fontWeight: 600, color: "var(--foreground)" }}>{str(o.label)}</span>
-                {o.recommended ? <span style={{ color: "var(--accent, #fb923c)", fontSize: 11 }}>★</span> : null}
+                {o.recommended ? <span style={{ color: "var(--accent)", fontSize: 11 }}>★</span> : null}
               </div>
               {o.description != null && (
                 <div style={{ fontSize: 11, color: "var(--muted-foreground)", marginTop: 3, lineHeight: 1.45 }}>
@@ -863,7 +889,7 @@ function OptionPicker({ data, ctx }: { data: Data; ctx?: TemplateCtx }) {
               )}
               {o.badge != null && (
                 <span style={{ display: "inline-block", marginTop: 5, fontSize: 9.5, fontWeight: 600,
-                  color: "var(--primary, #0ea5e9)", background: "color-mix(in srgb, var(--primary, #0ea5e9) 12%, transparent)",
+                  color: "var(--primary)", background: "color-mix(in srgb, var(--primary) 12%, transparent)",
                   borderRadius: 999, padding: "2px 7px" }}>{str(o.badge)}</span>
               )}
             </button>
@@ -874,8 +900,8 @@ function OptionPicker({ data, ctx }: { data: Data; ctx?: TemplateCtx }) {
         <button type="button" onClick={() => submit(picked)}
           disabled={!ctx?.onAction || submitted || !picked.length}
           style={{ marginTop: 12, fontSize: 12.5, fontWeight: 600, borderRadius: 8, padding: "8px 16px",
-            border: "none", cursor: "pointer", color: "var(--primary-foreground, #fff)",
-            background: submitted ? "var(--success, #10b981)" : "var(--primary, #0ea5e9)",
+            border: "none", cursor: "pointer", color: "var(--primary-foreground)",
+            background: submitted ? "var(--success)" : "var(--primary)",
             opacity: !ctx?.onAction || !picked.length ? 0.5 : 1 }}>
           {submitted ? "✓ Submitted" : "Confirm selection"}
         </button>

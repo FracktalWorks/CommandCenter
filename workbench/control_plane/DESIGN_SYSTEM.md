@@ -1,374 +1,272 @@
 # CommandCenter Control Plane — Design System
 
-Unified UI/UX standards for all Control Plane pages. Every page, endpoint, and
-agent-generated UI MUST follow these conventions.
+**The whole document in one sentence: never write a colour, an icon import, or a
+control's chrome by hand — every one of those is a theme decision, and the theme
+is a setting somebody can change for the entire company in one click.**
+
+This is the contract for every page in the Control Plane and every app built
+inside CommandCenter. `src/lib/theme/conformance.test.ts` enforces the parts a
+machine can check; the rest is here.
 
 ---
 
-## The design system is themeable
+## 0. What "themed" actually means here
 
-The Control Plane ships several themes — RapidTool (default), Fluent
-(Microsoft), Material (Google) and Graphite — and members switch between them
-in **Settings → Appearance**. A theme changes colours, fonts, corner radius,
-effects **and the icon pack**, all at once, across every page.
+CommandCenter ships four themes — RapidTool, Fluent, Material, Graphite —
+switchable at **Settings → Appearance**, org-wide. They differ by far more than
+palette:
 
-This works only because components describe intent (`bg-primary`,
-`rounded-lg`, `<Icon name="Plus">`) rather than appearance (`bg-[#0ea5e9]`,
-`rounded-[12px]`, `<Plus />`). Hardcoding any visual value opts that element
-out of theming: it will look correct on the default theme and wrong on every
-other one.
+| | RapidTool | Fluent | Material | Graphite |
+|---|---|---|---|---|
+| Corner radius | `0.75rem` | `0.25rem` | `1rem` | `0.125rem` |
+| Button radius | follows radius | follows radius | `9999px` — full pills | follows radius |
+| Icon set | Lucide | Fluent UI | Material Symbols | Lucide |
+| Button labels | sentence case | sentence case | sentence case | **UPPERCASE** |
+| Hover | opacity shift | opacity shift | 8% state layer | opacity shift |
+| Glass blur | 16px | 30px | **0 — flat** | 8px |
+| Glow | on | off | off | off |
 
-**The three rules that keep the app themeable:**
+Two axes, deliberately independent:
 
-1. **Never hardcode a colour.** Use the semantic tokens below.
-2. **Never hardcode a radius, blur, shadow or transition.** Use `rounded-*`,
-   `tech-glass`, `tech-elevated`, `tech-transition`.
-3. **Never import from `lucide-react` in a component.** Use
-   `<Icon name="Plus" />` from `@/components/Icon`.
+* **style** — the theme identity, on `<html data-theme="…">`
+* **mode** — light/dark, on the `.light` / `.dark` class (next-themes)
 
-Themes are data: `src/lib/theme/themes.ts`. Adding one is a manifest entry —
-no component, CSS or Tailwind change. See "Theming engine" at the end of this
-document.
+Every theme supplies both modes, so the axes never interfere. A component that
+handles one but not the other is broken on half the matrix.
 
----
-
-## Color Tokens (HSL — Tailwind CSS v4)
-
-Every theme supplies a full set of these; the table shows the default theme's
-values. Always use the semantic token name, never a raw hex value.
-
-| Token | Dark (default) | Light (.light) | Usage |
-|---|---|---|---|
-| `--primary` | `hsl(198 89% 50%)` | `hsl(198 89% 35%)` | Primary actions, active states, links |
-| `--accent` | `hsl(27 96% 61%)` | `hsl(27 96% 61%)` | Call-to-action highlights |
-| `--background` | `hsl(220 13% 8%)` | `hsl(0 0% 100%)` | Page background |
-| `--foreground` | `hsl(210 40% 98%)` | `hsl(222.2 84% 4.9%)` | Primary text |
-| `--card` | `hsl(220 13% 10%)` | `hsl(0 0% 100%)` | Card / panel surfaces |
-| `--secondary` | `hsl(220 13% 14%)` | `hsl(210 40% 96%)` | Secondary surfaces, hover states |
-| `--muted` | `hsl(220 13% 15%)` | `hsl(210 40% 96%)` | Muted backgrounds |
-| `--muted-foreground` | `hsl(215 20% 65%)` | `hsl(215.4 16.3% 46.9%)` | Secondary text, placeholders |
-| `--border` | `hsl(220 13% 16%)` | `hsl(214.3 31.8% 91.4%)` | Borders, dividers |
-| `--success` | `hsl(142 76% 47%)` | `hsl(142 76% 47%)` | Success states, connected indicators |
-| `--warning` | `hsl(47 96% 53%)` | `hsl(47 96% 53%)` | Warning states |
-| `--destructive` | `hsl(0 63% 60%)` | `hsl(0 84.2% 60.2%)` | Error states, delete actions |
-| `--ring` | `hsl(198 89% 50%)` | `hsl(198 89% 50%)` | Focus rings |
-
-**Tailwind classes:** `bg-primary`, `text-foreground`, `border-border`, etc.
-Never use `bg-[#1a1b1e]` or arbitrary hex values.
+**The consequence for you:** a hardcoded value is not "a small inconsistency."
+It is a pixel that permanently leaves the design system, and it will *render
+fine* — so nobody catches it until the day the theme changes and that one card
+looks like it belongs to a different product.
 
 ---
 
-## Typography
+## 1. Colour — always a token
 
-Fonts come from the active theme — `font-sans` resolves to Geist on RapidTool,
-Segoe UI on Fluent, Roboto on Material. Never name a family directly.
+Tailwind v4 is wired to the theme's custom properties, so the semantic class
+names *are* the theme.
 
-| Element | Font | Class |
+| Token | Class | Use |
 |---|---|---|
-| Body text | theme's app font | `font-sans` (default) |
-| Code / monospace | theme's mono font | `font-mono` |
-| Page title (`h1`) | theme font | `text-base sm:text-lg font-bold text-foreground` |
-| Section heading | theme font | `text-sm font-semibold text-foreground` |
-| Body / description | theme font | `text-xs text-muted-foreground` |
-| Small label / badge | theme font | `text-[10px] text-muted-foreground` |
+| `--background` / `--foreground` | `bg-background` `text-foreground` | page base, primary text |
+| `--card` / `--card-foreground` | `bg-card` | panels, tiles |
+| `--popover` | `bg-popover` | menus, tooltips |
+| `--primary` / `--primary-foreground` | `bg-primary` `text-primary` | interactive: buttons, links, active state |
+| `--secondary` | `bg-secondary` | quiet fills, hover surfaces |
+| `--muted` / `--muted-foreground` | `bg-muted` `text-muted-foreground` | subtle fill / secondary text |
+| `--accent` | `text-accent` | one highlight, used sparingly |
+| `--success` `--warning` `--destructive` (+ `-foreground`) | `text-success` … | states |
+| `--border` / `--input` / `--ring` | `border-border` `ring-ring` | hairlines, focus |
+
+**Never:** `#0ea5e9`, `rgb(…)`, `hsl(…)`, `bg-[#1a1b1e]`, or `style={{ color:
+"…" }}` with a literal.
+
+**Text on a coloured fill takes the `-foreground` partner**, not white.
+`text-white` on `bg-warning` is invisible on a theme with a pale warning colour —
+which is not hypothetical, it was a real bug in the sandbox stylesheet.
+
+**Tints and translucency are fine and stay themed:** `bg-primary/10`,
+`border-primary/30`, `color-mix(in srgb, var(--success) 12%, var(--card))`. A
+token at an opacity is still a token.
+
+### The three exceptions, and why they are exceptions
+
+A literal is right only when the value is **not a theme decision**:
+
+1. **Illustration** — a sun in a weather glyph is yellow because suns are
+   yellow. Recolouring it per theme produces broken art, not themed art.
+   (`genUITemplates.tsx`'s `WEATHER_INK`, `observability/pixel.tsx`.)
+2. **Someone else's palette** — Gmail's label colours must match Gmail's or the
+   value does not round-trip to the real mailbox. Meta blue on a "Connect with
+   Facebook" button is Meta's, not ours.
+3. **Identity** — a per-person avatar hue derived from their email must be
+   *stable*; deriving it from the theme defeats the thing it is for.
+
+"It would be a lot of work to migrate" is not on this list — that is debt, and
+it belongs in the conformance test's baseline where it stays visible.
 
 ---
 
-## Shared Components
-
-**Always import from `@/components/` — never inline ad-hoc versions.**
-
-### Tabs (`@/components/Tabs`)
-
-Two variants for tab navigation:
-
-- **`variant="segmented"`** — Pill-group style. Best for 2–5 short text labels.
-  Used in: Settings > Models.
-- **`variant="underline"`** — Bottom-border highlight style. Best for tabs
-  with icons or longer labels. Used in: Integrations.
-
-```tsx
-import Tabs from "@/components/Tabs";
-
-// `icon` is a Lucide NAME, not a component — a component would pin the tab
-// bar to one icon pack while the rest of the app follows the theme.
-<Tabs
-  tabs={[
-    { id: "apis",    label: "APIs",    icon: "Zap" },
-    { id: "email",   label: "Email",   icon: "Mail" },
-    { id: "mcps",    label: "MCPs",    icon: "Server" },
-    { id: "plugins", label: "Plugins", icon: "Puzzle" },
-  ]}
-  activeTab={tab}
-  onTabChange={setTab}
-  variant="underline"
-/>
-```
-
-### FilterPills (`@/components/FilterPills`)
-
-Rounded pill buttons for filtering lists. Used in: Agents, Models.
-
-```tsx
-import FilterPills from "@/components/FilterPills";
-
-<FilterPills
-  items={[
-    { id: "all",     label: "All",     count: 12 },
-    { id: "builtin", label: "Built-in", count: 5 },
-    { id: "custom",  label: "Custom",   count: 7 },
-  ]}
-  activeId={filter}
-  onChange={setFilter}
-/>
-```
-
-### Buttons, inputs and badges — use the primitives
-
-```tsx
-import Button from "@/components/ui/Button";
-import { Input, Textarea } from "@/components/ui/Input";
-import Badge from "@/components/ui/Badge";
-
-<Button onClick={save}>Save</Button>                            // primary
-<Button variant="secondary" size="sm">Cancel</Button>
-<Button variant="destructive" icon="Trash2" loading={busy}>Delete</Button>
-<Button variant="ghost" size="icon" icon="X" aria-label="Close" />
-
-<Input icon="Search" value={q} onChange={…} placeholder="Search" />
-<Textarea rows={4} value={body} onChange={…} />
-
-<Badge tone="success" dot>Connected</Badge>
-```
-
-| Prop | Values |
-|---|---|
-| `variant` | `primary` (default) · `secondary` · `ghost` · `destructive` |
-| `size` | `sm` · `md` (default) · `lg` · `icon` |
-| `icon` | Lucide icon name — follows the theme's pack |
-| `loading` | Shows a spinner **and disables the button**, so a double-submit is impossible |
-
-**Do not hand-roll a button from classes.** The old recipe table lived here and
-was copied into ~75 files. It could carry colour and radius, because those are
-tokens — but not *behaviour*, and behaviour is where a design system's identity
-actually is: Material renders pills with a translucent state layer on hover,
-Fluent strokes even its solid buttons and weights labels heavier, Graphite
-upper-cases them. Those come from the control tokens (`--button-radius`,
-`--control-state-layer`, `--control-filled-border`, `--control-focus-ring`,
-`--control-label-tracking`, `--control-label-transform`) and need one component
-to apply them. A copied class string opts that control out.
-
-`className` on a primitive is for **layout only** — margins, width, grid
-placement. Colour, radius and weight come from the variant.
-
-Anything genuinely bespoke that still needs to feel like a control (a
-selectable chip, a toggle) should carry the `cc-control` class, which supplies
-the theme's label weight, tracking, transform and focus ring without imposing a
-variant.
-
-### Page Header
-
-Every page MUST use the same header pattern:
-
-```tsx
-<div className="flex items-center justify-between px-4 sm:px-6 py-3 sm:py-4 border-b border-border shrink-0">
-  <div>
-    <h1 className="text-base sm:text-lg font-bold text-foreground">Page Title</h1>
-    <p className="text-xs text-muted-foreground mt-0.5">Brief description or status</p>
-  </div>
-  {/* Action buttons go here */}
-</div>
-```
-
-### Status Indicators
-
-- **Connected/Ready:** `text-success` with a `bg-success` dot (`w-1.5 h-1.5 rounded-full`)
-- **Disconnected/Blocked:** `text-muted-foreground` with a `bg-muted` dot
-- **Warning:** `text-warning` with `bg-warning` dot
-
-### Cards / Tiles
-
-Interactive cards (agent tiles, provider cards, API cards) use:
-
-```tsx
-<button className={`text-left w-full p-3 sm:p-4 rounded-xl border tech-transition
-  ${selected ? "border-primary bg-primary/5 ring-1 ring-primary/20"
-             : "border-border bg-card hover:border-primary/40 hover:bg-secondary/30"}`}>
-  {/* card content */}
-</button>
-```
-
----
-
-## Icons
-
-Use the **`<Icon>`** component. It renders the glyph from whichever pack the
-active theme asks for — Lucide, Fluent System Icons, or Material Symbols.
+## 2. Icons — `<Icon>`, never an import
 
 ```tsx
 import Icon from "@/components/Icon";
 
-<Icon name="Plus" size={16} />
-<Icon name="AlertTriangle" size={14} className="text-warning" />
+<Icon name="Plus" size={16} className="text-primary" />
 ```
 
-**Lucide names are the vocabulary.** `name` is always a Lucide component name
-(`Plus`, `Trash2`, `MessageCircle`); other packs map onto those names. Any of
-Lucide's ~1,600 names works — one without a mapping simply renders the Lucide
-glyph on every theme, which is a safe default, not an error.
+Lucide names are the shared **vocabulary**; the active theme picks the **pack**.
+`"Plus"` renders Lucide's `Plus` on RapidTool, `fluent:add-20-regular` on
+Fluent, `material-symbols:add-rounded` on Material. Call sites never know.
 
-Migrating an existing call site is a one-line change:
+`import { Plus } from "lucide-react"` pins that one glyph to Lucide on every
+theme — one Lucide icon in a row of Material Symbols, which reads as a bug. Only
+`components/Icon.tsx` and `lib/icons.tsx` may import it, and the conformance
+test enforces that with no budget and no exceptions.
 
-```diff
-- import { Plus } from "lucide-react";
-+ import Icon from "@/components/Icon";
-- <Plus size={16} />
-+ <Icon name="Plus" size={16} />
-```
+Need a component reference rather than an element (a `tabs={[{icon}]}` prop)?
+Use `themedIcon("Plus")` from `@/components/Icon` — memoised, so it is stable
+across renders.
 
-**Do not import from `lucide-react` in a component.** A direct import pins that
-glyph to Lucide, so it stays Lucide-shaped while everything around it turns
-Fluent or Material.
+**A name with no mapping in the active pack falls back to Lucide** rather than
+rendering nothing. If you add an icon, add its mapping in
+`lib/theme/icon-registry.ts` too, or it will silently stay Lucide forever.
 
-Two deliberate exceptions, both because they cannot run React hooks:
-`resolveIcon()` in `@/lib/icons` (used by server components) and
-`iconSvg.ts` (renders to a static SVG string for the HTML sandbox).
-
-Common icon sizes:
-- Inline with text: `size={14}` or `size={16}`
-- Standalone buttons: `size={16}` or `size={18}`
-- Card/tile icons: `size={20}`
-
-To add a mapping for a new icon, add it to `MAP` in
-`scripts/build-icon-packs.mjs` and run `npm run build:icons`. The script
-resolves candidates against the real collections, so a name that does not
-exist fails loudly rather than shipping a blank square.
+Sizes: `14`–`16` inline with text, `18`–`20` standalone. Pick one per context.
 
 ---
 
-## Page Layout
+## 3. Controls — the primitives, not a class string
 
-Every page follows this structure:
+```tsx
+import Button from "@/components/ui/Button";
+import Input, { Textarea } from "@/components/ui/Input";
+import Badge from "@/components/ui/Badge";
 
+<Button variant="primary" icon="Save" loading={saving}>Save</Button>
+<Button variant="secondary">Cancel</Button>
+<Button variant="ghost" size="icon" aria-label="Close"><Icon name="X" size={14} /></Button>
 ```
-┌──────────────────────────────────────────────┐
-│ Page Header (h1 + description + actions)     │ ← border-b
-├──────────────────────────────────────────────┤
-│ Tabs or FilterPills (if needed)              │ ← border-b
-├──────────────────────────────────────────────┤
-│ Main content area (flex-1 overflow-y-auto)   │
-│   - Filters / search bar                     │
-│   - Grid or list of items                    │
-│   - Optional side panel (desktop, w-[380px]) │
-└──────────────────────────────────────────────┘
-```
+
+`Button` — `variant`: `primary | secondary | ghost | destructive | text`;
+`size`: `sm | md | lg | icon-xs | icon-sm | icon | none`; plus `icon`,
+`loading`, `radius`, `layout`.
+
+**Why this is a component and not a documented class string.** Colour can be a
+class. A theme's *control personality* cannot: Material's 8% hover state layer,
+Fluent's outline on solid fills, the theme's focus-ring width and label
+tracking. None of that is expressible in a `className`, which is exactly why the
+primitives exist. A raw `<button className="bg-primary …">` is themed for colour
+and frozen for everything else.
+
+Graphite uppercases every button label and Material makes every button a pill —
+neither is something a call site opts into, and neither is reachable from a
+class string. That is the concrete reason for the primitive.
+
+Two props exist because Tailwind genuinely cannot express the alternative — read
+their doc comments before working around them:
+
+* `layout` **replaces** the default `inline-flex items-center justify-center`.
+  It is a prop, not something `className` can override, because
+  `justify-center` and `justify-start` have equal specificity: which one wins
+  depends on stylesheet order, not on your class attribute. `layout=""` is
+  meaningful — a bare `<button>` is `inline-block`, and forcing `inline-flex`
+  moves its content.
+* `radius="keep"` omits the theme's button radius so an explicit `rounded-*`
+  survives. For controls that predate the primitive and want the theme's label
+  treatment and focus ring *without* resized corners. Use `theme` for anything
+  new.
+
+`className` on a primitive is for **layout only** — never colour, radius or
+weight. If you find yourself reaching for those, the variant you want is
+missing; add it to the primitive.
+
+**Not every `<button>` is a control.** A clickable card or list row is a button
+element for accessibility, and those legitimately stay raw — the rule is about
+things that *look* like controls.
 
 ---
 
-## Tech Utilities (from globals.css)
+## 4. Effects, shape and motion
 
-All of these are token-driven, so their behaviour changes with the theme — a
-flat theme like Material renders `tech-glass` opaque and `tech-glow` invisible
-rather than needing a separate code path.
+Use the utilities; they read theme tokens, so a flat theme flattens them.
 
-| Class | Purpose |
+| Class | What it does |
 |---|---|
-| `tech-transition` | Themed transition on all properties (`--motion-duration` / `--motion-easing`) |
-| `tech-glass` | Frosted panel — blur and opacity from `--glass-blur` / `--glass-opacity` |
-| `tech-glass-subtle` | Same material at higher opacity, for modals and drawers over live content |
-| `tech-glow` | Primary-colour glow, scaled by `--glow-strength` (0 disables it) |
-| `tech-elevated` | Elevation shadow from `--elevation` — how flat themes express depth |
+| `tech-transition` | the theme's duration + easing on all properties |
+| `tech-glass` / `tech-glass-subtle` | frosted panel — **opaque on flat themes**, by design |
+| `tech-glow` | primary glow — **off** where `glowStrength: 0` |
 | `pb-safe` / `pt-safe` | iOS safe-area padding |
 
----
+Radius comes from `--radius` via `rounded-sm/md/lg`. Don't write `rounded-[14px]`.
 
-## Rules for Agents & Contributors
-
-1. **Use shared components.** Check `src/components/` before writing any
-   tab bar, filter pills, or page header. Import `Tabs`, `FilterPills`,
-   or existing components.
-
-2. **Follow the color tokens.** Never use arbitrary hex values or Tailwind
-   arbitrary values like `bg-[#1a1b1e]`. Use `bg-primary`, `text-foreground`,
-   `border-border`, etc.
-
-3. **Match the page layout.** Every new page should mirror the header →
-   tabs/filters → content pattern described above.
-
-4. **Use consistent spacing.** Page-level padding is `px-4 sm:px-6`.
-   Content padding is `p-4`. Gaps between grid items are `gap-3`.
-
-5. **Support every theme, in both modes.** Colour usage must work in dark and
-   light, and must not assume the default theme's shape or effects. Check a
-   new surface against Fluent (square corners, no glow) and Material (round
-   corners, flat) as well as the default — those two catch nearly every
-   hardcoded value.
-
-6. **Mobile-responsive.** Use `sm:` breakpoint prefixes. Side panels slide
-   up from the bottom on mobile (`sm:hidden` + fixed bottom sheet).
-   Grid columns: `grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5`.
-
-7. **Use `<Icon>`, never a direct `lucide-react` import.** See Icons above.
+Motion: `duration-[var(--motion-duration)]` / `ease-[var(--motion-easing)]`, or
+just `tech-transition`. Respect `prefers-reduced-motion`.
 
 ---
 
-## Theming engine
+## 5. Apps that run in the sandbox
 
-Where things live:
+Custom Apps, generative-UI cards and React artifacts run in an **opaque-origin
+iframe**. They inherit nothing from us — not our stylesheet, not `data-theme`,
+not one custom property — so they get a separate, deliberately stable
+vocabulary: the **`--cc-*` contract**.
 
-| File | Role |
-|---|---|
-| `src/lib/theme/themes.ts` | The themes themselves. **Add a theme here and nowhere else.** |
-| `src/lib/theme/types.ts` | Token vocabulary — what a theme is allowed to set |
-| `src/lib/theme/css.ts` | Manifests → `html[data-theme="…"]` CSS scopes |
-| `src/lib/theme/store.ts` | Active theme, density, accent; org default vs member override |
-| `src/lib/theme/surfaces.ts` | Monaco / Shiki theme resolution for the active theme |
-| `src/lib/theme/boot.ts` | Pre-paint script that applies the stored theme (no flash) |
-| `src/components/Icon.tsx` | The themed icon primitive |
-| `scripts/build-icon-packs.mjs` | Regenerates the pruned icon packs (`npm run build:icons`) |
-| `src/app/settings/appearance/` | The Settings UI |
+* Defined in `src/lib/theme/app-tokens.ts`. **Nothing else may write those
+  variables.** The frame itself — CSP, token block, `.cc-*` component kit and
+  the `postMessage` bridge — is `src/lib/theme/sandbox-frame.ts`, deliberately
+  free of React so the e2e suite can drive the *real* frame rather than a copy
+  of it.
+* Documented for app authors in
+  `apps/agents/agent-app-builder/instructions.md`, which the conformance test
+  checks against the code in both directions — a token that exists but is
+  undocumented is one no app will use; a documented token that does not exist is
+  one an app *will* use and silently lose, because an unresolvable `var()`
+  invalidates the whole declaration.
+* Applied twice: in the frame's initial `<style>` (so the first paint is
+  correct, no flash) and as a live `postMessage` patch on a theme change — a
+  patch rather than a rebuild, because rebuilding `srcDoc` remounts the document
+  and a running app would lose whatever the user had typed into it.
+* Icons cross as pre-rendered SVG from the active pack, so a sandboxed app's
+  glyphs match the shell's.
 
-**Two independent axes.** *Style* (which theme) lives on
-`<html data-theme="…">`; *mode* (dark/light) stays on the `.light` / `.dark`
-class managed by next-themes. Every theme defines both modes, so the axes never
-interact. Structural tokens — radius, fonts, effects — are emitted once on the
-theme's base scope and inherited by its light scope.
+**Adding a `--cc-*` token:** add it to `appTokens()`, document it in the
+app-builder instructions, and the test will confirm you did both.
 
-**Why `globals.css` still contains the default theme's values.** Those
-`:root` / `.light` blocks are the no-JavaScript fallback. The generated scopes
-outrank them on specificity (0,1,1 vs 0,1,0), so they never apply in a normal
-session. They must stay identical to the `rapidtool` manifest —
-`src/lib/theme/themes.test.ts` parses the stylesheet and fails if they drift.
-**Change how the app looks by editing the manifest, not `globals.css`.**
+One honest limit: **self-hosted webfonts do not cross the boundary.** The frame's
+CSP is `font-src data:` and the `@font-face` rules live in a stylesheet it cannot
+reach, so a sandboxed app gets the theme's *named and system* families (Segoe UI
+on Fluent, Roboto on Material) and falls back where one is absent. Colour, shape,
+spacing, motion and icons all cross intact.
 
-**Third-party surfaces.** Monaco and Shiki ship closed sets of named themes and
-cannot be driven by our CSS tokens, so each theme names its equivalents in
-`surfaces`. Read them with `useMonacoTheme()` / `useShikiTheme()` — never branch
-on `resolvedTheme === "light"`, which sees two states where the app has eight.
-A unit test checks the names against Monaco's built-ins and the Shiki bundle,
-because a typo there is invisible until someone opens a code view.
+---
 
-xyflow's `colorMode` legitimately stays dark/light: it only drives the
-library's own chrome, and our nodes are styled with our tokens already.
+## 6. Shared components
 
-**Preference resolution:** member override → organisation default → built-in
-default. Members' choices are per-browser (localStorage); the org default is
-stored in Postgres (`org_settings`, migration 145) and served by the gateway at
-`GET/PUT /settings/appearance`, then cached locally so it survives the first
-paint. Writing it needs `admin:settings:manage` — it changes everyone's UI.
-An admin can lock the org to one theme by turning off personal overrides.
+Check `src/components/` before writing a tab bar, filter pills or a page header.
 
-The gateway deliberately does **not** know which themes exist. `themeId` is
-stored as an opaque, selector-safe string, because validating it against a copy
-of `THEMES` would mean a backend deploy for every new theme. The frontend
-re-validates on read and falls back for an id it cannot render.
+* `Tabs` — `variant="segmented"` (2–5 short labels) or `"underline"` (icons or
+  longer labels). Takes icon **names**, not components.
+* `FilterPills` — rounded filter buttons with counts.
+* Page header — every page uses the same shape:
 
-**Contrast is gated.** `contrast.test.ts` measures every theme × mode × text
-pair against WCAG AA and fails the build below it. Seven pairs in the original
-RapidTool palette predate the gate and are recorded in `KNOWN_SHORTFALLS` as a
-ratchet — they may improve, never regress, and fixing one forces its entry to
-be deleted. **New themes get no such latitude: they must meet AA outright.**
+```tsx
+<div className="flex items-center justify-between px-4 sm:px-6 py-3 sm:py-4 border-b border-border shrink-0">
+  <div>
+    <h1 className="text-base sm:text-lg font-bold text-foreground">Title</h1>
+    <p className="text-xs text-muted-foreground mt-0.5">Description or status</p>
+  </div>
+  {/* actions */}
+</div>
+```
 
-Coverage: `src/lib/theme/*.test.ts` (manifests, CSS generation, icon registry,
-contrast) and `e2e/theming.spec.ts` (computed styles and real glyph swapping in
-a browser — the only place cascade order can actually be verified).
+Layout: header → tabs/filters → `flex-1 overflow-y-auto` content, optional
+`w-[380px]` desktop side panel (bottom sheet on mobile).
+
+Spacing: page padding `px-4 sm:px-6`, content `p-4`, grid gaps `gap-3`.
+Grids: `grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5`.
+
+---
+
+## 7. Contrast
+
+Themes are checked against WCAG 2.1 AA by `src/lib/theme/contrast.test.ts`. It
+carries a `KNOWN_SHORTFALLS` ratchet for pre-existing pairs: they may improve,
+never regress, and **fixing one requires deleting its entry**, so the list can
+never quietly become fiction.
+
+If you add or edit a theme, run that test. Never signal state with colour alone —
+pair it with an icon or a label.
+
+---
+
+## 8. Checklist before you open a PR
+
+1. `npx vitest run src/lib/theme/` — conformance, contrast and token contract.
+2. No literal colour, no `lucide-react` import, no hand-rolled control chrome.
+3. Switch theme **and** mode in Settings → Appearance and look at your surface.
+   Fluent and Material are the useful pair: `0.25rem` corners and 30px glass
+   against `1rem` corners, pill buttons and no glass at all. Anything you
+   hardcoded shows up immediately. Graphite is the second check — it uppercases
+   button labels, so a control that missed the primitive stays sentence case
+   next to ones that did not.

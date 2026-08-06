@@ -35,10 +35,22 @@ Design mood words: **precise, calm, technical, trustworthy, spacious.**
 
 ## 2. Color palette & roles
 
-Use these semantic roles, not raw hex. In-app, they exist as CSS variables
-(`var(--primary)` etc.); in generated HTML sandboxes they are pre-defined as
-`--cc-*` variables (see §9). The HSL values below are the dark theme (the base);
-light-theme overrides are applied automatically by the app.
+Use these semantic roles, **never a raw hex value**. In-app they exist as CSS
+variables (`var(--primary)` etc.); in generated HTML sandboxes they are
+pre-injected as `--cc-*` variables (see §9).
+
+⚠️ **The HSL values in the table below are ONE theme's, and they are there to
+tell you what a role means — not to be copied.** CommandCenter is themed:
+Settings → Appearance switches the whole org between RapidTool, Fluent, Material
+and Graphite, which disagree about palette, corner radius, icon set and control
+behaviour. The token resolves to whatever is active when your artifact is
+*viewed*, which may be months after you wrote it and may not be what is active
+now. Write `var(--primary)` and it follows; write `hsl(198 89% 50%)` and that
+part of your artifact leaves the design system permanently — while still
+rendering fine, so nobody notices until it looks wrong.
+
+The values shown are RapidTool's dark mode. Light-mode and per-theme overrides
+are applied automatically.
 
 | Role | Token | Dark value | Use for |
 |------|-------|-----------|---------|
@@ -58,9 +70,11 @@ light-theme overrides are applied automatically by the app.
 | Ring | `--ring` | `hsl(198 89% 50%)` | Focus outline (matches primary) |
 
 **Rules:**
-- Blue (`--primary`) is the ONLY interactive color. If it's clickable, it's blue.
-- Orange (`--accent`) is a spotlight, not a second button color. Use it for one
-  key metric, a highlight, or an "attention" badge — never for large fills.
+- `--primary` is the ONLY interactive color. If it's clickable, it's primary.
+  (It is blue on RapidTool; other themes choose their own — which is the point,
+  and why the rule names the token and not the colour.)
+- `--accent` is a spotlight, not a second button color. Use it for one key
+  metric, a highlight, or an "attention" badge — never for large fills.
 - Never introduce colors outside this palette. No pure black (`#000`), no pure
   white text on dark (use `--foreground`), no random greens/purples.
 
@@ -70,7 +84,8 @@ light-theme overrides are applied automatically by the app.
 
 - **Font family:** the app's system UI stack (Inter / system-ui, sans-serif).
   In generated HTML, use `font-family: var(--cc-font, system-ui, -apple-system, "Segoe UI", sans-serif)`.
-- Monospace (code, data, keys): `ui-monospace, "SF Mono", Menlo, Consolas, monospace`.
+- Monospace (code, data, keys): `var(--cc-mono)` in a sandbox, `font-mono`
+  in-app. Both follow the theme — Fluent uses Cascadia, Material Roboto Mono.
 - **Hierarchy:**
   - Page title / H1 — `1.5rem`, weight `600`, tight tracking.
   - Section / H2 — `1.125rem`, weight `600`.
@@ -316,9 +331,22 @@ Both render in a locked sandbox with these CSS variables **pre-injected** — us
 them, don't redefine colors:
 
 ```
---cc-primary  --cc-accent  --cc-fg  --cc-muted  --cc-card  --cc-secondary
---cc-border   --cc-success --cc-warning --cc-danger --cc-radius --cc-ease
+colour   --cc-bg --cc-card --cc-fg --cc-muted --cc-border --cc-secondary
+         --cc-primary --cc-primary-fg --cc-accent
+         --cc-success --cc-warning --cc-danger  (+ -fg ink for each)
+type     --cc-font --cc-mono --cc-heading-weight --cc-heading-tracking
+shape    --cc-radius --cc-border-width --cc-shadow
+motion   --cc-duration --cc-ease
+control  --cc-button-radius --cc-control-filled-border --cc-control-state-layer
+         --cc-control-focus-ring --cc-control-label-tracking
+         --cc-control-label-transform
 ```
+
+Text on a coloured fill takes the `-fg` partner, never `white` — some themes
+ship a pale warning colour and white-on-pale is invisible. The full list with
+per-token guidance is in `apps/agents/agent-app-builder/instructions.md`, which
+a test checks against the code that injects them in both directions — so a token
+listed here always exists, and one that exists is always listed.
 
 - Wrap the document in a container with `max-width` and centered layout.
 - Use `--cc-card` panels on the `--cc-*` background, `--cc-border` hairlines,

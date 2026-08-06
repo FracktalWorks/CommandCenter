@@ -84,19 +84,19 @@ export default function TodoPanel({
                 <span className="shrink-0 flex items-center justify-center w-4 h-4">
                   {done ? (
                     <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
-                      <circle cx="8" cy="8" r="7" stroke="#34d399" strokeWidth="1.3" />
-                      <path d="M5 8.2l2 2 4-4.4" stroke="#34d399" strokeWidth="1.4"
+                      <circle cx="8" cy="8" r="7" stroke="var(--success)" strokeWidth="1.3" />
+                      <path d="M5 8.2l2 2 4-4.4" stroke="var(--success)" strokeWidth="1.4"
                         strokeLinecap="round" strokeLinejoin="round" />
                     </svg>
                   ) : active ? (
                     <svg width="14" height="14" viewBox="0 0 16 16" fill="none"
                       className="chat-pulse-dot">
-                      <circle cx="8" cy="8" r="7" stroke="#38bdf8" strokeWidth="1.3" />
-                      <circle cx="8" cy="8" r="3" fill="#38bdf8" />
+                      <circle cx="8" cy="8" r="7" stroke="var(--primary)" strokeWidth="1.3" />
+                      <circle cx="8" cy="8" r="3" fill="var(--primary)" />
                     </svg>
                   ) : (
                     <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
-                      <circle cx="8" cy="8" r="7" stroke="#52525b" strokeWidth="1.3" />
+                      <circle cx="8" cy="8" r="7" stroke="var(--muted-foreground)" strokeWidth="1.3" />
                     </svg>
                   )}
                 </span>

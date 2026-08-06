@@ -25,10 +25,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeRaw from "rehype-raw";
-import { useTheme } from "next-themes";
 import SandboxedHtml from "@/components/SandboxedHtml";
 import SandboxedReact from "@/components/SandboxedReact";
-import { buildIconMap, iconsUsedIn } from "@/lib/iconSvg";
+import { iconsUsedIn } from "@/lib/iconSvg";
 import { classifyArtifact, isRenderable, type ArtifactKind }
   from "@/lib/artifactKind";
 
@@ -51,8 +50,6 @@ export default function DocumentPane({ sessionId, path, name, live }: DocumentPa
     kind === "markdown" || isRenderable(kind) || kind === "code" || kind === "text";
   const previewable = kind === "markdown" || isRenderable(kind);
 
-  const { resolvedTheme } = useTheme();
-  const theme: "light" | "dark" = resolvedTheme === "light" ? "light" : "dark";
 
   const fileUrl = `/api/agent/workspace/${sessionId}/file?path=${encodeURIComponent(path)}`;
 
@@ -68,8 +65,8 @@ export default function DocumentPane({ sessionId, path, name, live }: DocumentPa
 
   // Full-page artifacts have no props.icons to declare with, so the icons
   // come from what the source actually references (see iconsUsedIn).
-  const icons = useMemo(() => buildIconMap(iconsUsedIn(content)), [content]);
-  const draftIcons = useMemo(() => buildIconMap(iconsUsedIn(draft)), [draft]);
+  const icons = useMemo(() => iconsUsedIn(content), [content]);
+  const draftIcons = useMemo(() => iconsUsedIn(draft), [draft]);
 
   const loadText = useCallback(
     async (opts?: { silent?: boolean }) => {
@@ -262,9 +259,9 @@ export default function DocumentPane({ sessionId, path, name, live }: DocumentPa
             {kind === "markdown" ? (
               <MarkdownBody content={draft} />
             ) : kind === "react" ? (
-              <SandboxedReact code={draft} theme={theme} icons={draftIcons} />
+              <SandboxedReact code={draft} iconNames={draftIcons} />
             ) : (
-              <SandboxedHtml html={draft} theme={theme} icons={draftIcons} />
+              <SandboxedHtml html={draft} iconNames={draftIcons} />
             )}
           </div>
         )}
@@ -279,7 +276,7 @@ export default function DocumentPane({ sessionId, path, name, live }: DocumentPa
   } else if (kind === "html") {
     body = (
       <div className="flex-1 min-h-0">
-        <SandboxedHtml html={content} theme={theme} icons={icons} chromeless />
+        <SandboxedHtml html={content} iconNames={icons} chromeless />
       </div>
     );
   } else if (kind === "react") {
@@ -298,7 +295,7 @@ export default function DocumentPane({ sessionId, path, name, live }: DocumentPa
       </div>
     ) : (
       <div className="flex-1 min-h-0">
-        <SandboxedReact code={content} theme={theme} icons={icons} chromeless />
+        <SandboxedReact code={content} iconNames={icons} chromeless />
       </div>
     );
   } else {

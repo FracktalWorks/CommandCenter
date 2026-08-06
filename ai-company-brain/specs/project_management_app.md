@@ -824,8 +824,50 @@ Completing from a row calls `POST /tasks/{id}/complete`, which moves the **share
 opened from My work — it may belong to any project the member is assigned into — so the
 panel's statuses are now resolved from the task's own root project.
 
-**WS-27f — automation + agent dispatch.** 🟢 AGENT-SAFE (the node types land in
-`workflows_app.md`'s tree per D6 and are recorded there in the same PR).
+**WS-27f — automation + agent dispatch.** ✅ **BUILT 2026-08-06**
+(`routes/projects/automation.py` + `agent_dispatch.py`, the `pm_task` node type in
+`workflows/engine/`, `PM_EVENT_TOPICS` in the catalog; 34 hermetic cases, 10 mutants red).
+Both halves of `workflows_app.md` §13 — **U1** the task-mutation node, **U7** dispatch.
+The node types land in `workflows_app.md`'s tree per D6 and are recorded there.
+
+**Six decisions worth reading before changing any of it:**
+
+- **The engine imports a service, not a route.** `apply_task_patch` is transport-free and
+  reuses `apply_status_transition`, `update_row`, `record_activity` — so an automation's
+  edit is *indistinguishable in validation* from a human's PATCH and lands the same
+  timeline row. That is Paca's "mutate through the ordinary service" rule as code.
+- **Status is named, never keyed** (`"Done"`, or the category as a fallback). Statuses are
+  per-project rows, so a graph pinned to one project's status UUID could only ever automate
+  that project — the opposite of what an automation is for. An unknown lane fails with the
+  project's actual lane names in the message.
+- **A `pm_task` node is NOT write-class.** The `write_without_approval` publish gate fires
+  for `tool` nodes reaching *external* systems; an internal task move must not need an
+  approval step. That exemption is now pinned by a test rather than true by accident.
+- **"Already in target state" writes nothing** — and the test asserts **no `UPDATE` is
+  issued**, not merely that no activity was written. `update_row` stamps `updated_at`, so a
+  redundant write is invisible in a diff while leaving the task looking freshly touched;
+  an automation firing on `pm.task.updated` would bump every task it inspected, forever.
+- **Assignment is dispatch, from a sink.** `PUT /tasks/{id}/assignees` emits and returns;
+  `agent_dispatch.on_event` is registered beside the workflows dispatcher. A slow or broken
+  agent therefore cannot fail the act of assigning somebody a task. Only **newly added**
+  assignees dispatch — `set_assignees` emits the added set, so a re-assert cannot start a
+  second run, and both sides say so.
+- **The handoff activity is committed BEFORE the run starts** (Paca's
+  `agent.session.started`), and the failure path writes too. A dispatch that fails silently
+  leaves a session that appears to be running forever and nobody knows to pick the work up.
+
+**One engine defect found and fixed:** `templating.resolve_value` keeps an unresolvable
+`{{ref}}` **as-is at run time by design**, and `{{trigger.missing}}` passes the publish gate
+because its *root* is legal. The literal would have reached Postgres as a would-be uuid and
+come back "Task not found", sending the maker to look for a task rather than at their
+reference. The node now fails with `task id did not resolve: '…'`.
+
+Done when: (1) an event-triggered workflow mutates a task and the target carries a
+`pm_activities` row actored `system:workflow:<id>`; (2) unknown field and missing target
+both fail at **publish** with named issues; (3) re-running against a task already in the
+target state records a skip and writes nothing; (4) the node is served by
+`GET /workflows/catalog` (D7); (5) assigning `agent:<name>` starts a run whose session is on
+the task timeline within the same request.
 Done when: (1) `pm.*` events reach `dispatch_event` (proven at the `emit_event` seam);
 (2) the `pm.update_task` action mutates through the ordinary service and stamps
 `system:workflow:<id>`; (3) assigning `agent:<name>` produces an orchestrator run, an

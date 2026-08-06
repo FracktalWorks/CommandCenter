@@ -1123,6 +1123,13 @@ try:
         from ingestion.event_hooks import register_event_sink
 
         register_event_sink(_wf_dispatch)
+        # WS-27f: assignment IS dispatch. A SECOND sink beside the workflows
+        # dispatcher rather than a call inside `PUT /tasks/{id}/assignees` —
+        # a slow or broken agent must not be able to fail the act of assigning
+        # somebody a task.
+        from gateway.routes.projects.agent_dispatch import on_event as _pm_agent_dispatch
+
+        register_event_sink(_pm_agent_dispatch)
     except Exception:  # pragma: no cover - ingestion optional in some deploys
         pass
 except Exception:  # pragma: no cover

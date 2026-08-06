@@ -386,7 +386,7 @@ Each item states Paca's design, **what this repo actually has today** (cited, ve
 
 Sequencing note: **U1 is the only item WS-27 is waiting on.** U2–U8 are independent of Projects and can be picked up in any order. None of them is a Slice-3 item — §8.3a/b/c stand unchanged, and U5 in particular is **downstream of 8.3b** and must not be started before it.
 
-#### U1 — A task-mutation action node (`pm.update_task`) ✅ **AGENT-SAFE** · *this is WS-27f*
+#### U1 — A task-mutation action node (`pm_task`) ✅ **BUILT 2026-08-06** · *WS-27f*
 
 **Paca:** three action types only — `update_task`, `trigger_ai_agent`, `call_api`. `update_task` is itself a **consolidation**: it merged five prior single-field actions (`set_status`, `set_assignee`, `set_priority`, …) into one multi-field patch. That consolidation is the lesson, recorded by Paca as an explicit one; a per-field node set is the thing to *not* build.
 
@@ -405,6 +405,43 @@ Sequencing note: **U1 is the only item WS-27 is waiting on.** U2–U8 are indepe
 3. Re-running the same node against a task already in the target state records a step outcome (skipped/no-op) and writes **no** activity row — asserted, so idempotency is pinned rather than hoped for.
 4. The node appears in `GET /workflows/catalog` (D7 — served, never hard-coded in the UI).
 5. An automation edit is **indistinguishable in validation** from a human edit: a transition the API would refuse from a human is refused from the node too, with the same error.
+
+**Built 2026-08-06 — what actually shipped, and the two places it differs from the sketch above.**
+The node type is **`pm_task`** (engine node types are bare words; `pm.update_task` was the
+Paca-side name). Its config is `{task_id, fields:{…}}` and it writes through
+`routes/projects/automation.apply_task_patch`, a transport-free service that reuses
+`apply_status_transition`, `update_row` and `record_activity` — so the "mutate through the
+ordinary service" rule is structural rather than a convention.
+
+Two design points that were NOT in the sketch and are load-bearing:
+
+- **Status is set by lane NAME, with the semantic category as a fallback** — never by
+  `status_id`. Statuses are per-project rows, so a graph carrying one project's status UUID
+  could only ever automate that project. An unknown lane fails with the project's actual
+  lane names in the message rather than "status not found".
+- **`update_task` takes no actor.** The engine says *what* to change; the wiring
+  (`build_node_services(actor, workflow_id)`) decides *who*, and for an automation that is
+  always `system:workflow:<workflow_id>` — never whoever tripped the trigger. Passing an
+  actor the implementation would have to ignore is how the two answers start disagreeing.
+
+**The write-class exemption is now pinned by a test.** `write_without_approval`
+(`graph.py:216`) only fires for `tool` nodes, so a `pm_task` node is un-gated — correct, and
+previously true only by accident. `test_a_task_node_does_NOT_need_an_approval_ancestor`
+makes it deliberate.
+
+⚠️ **One engine defect surfaced and fixed while building this, and it is not
+`pm_task`-specific in nature.** `templating.resolve_value` keeps an unresolvable `{{ref}}`
+**as-is at run time by design** (its docstring says so: "design-time validation is the place
+that flags it"), and `{{trigger.missing}}` *passes* `validate_graph` because its **root** is
+legal. The `pm_task` node now refuses a task id that still contains `{{`. **Every other node
+type has the same exposure** — the `agent` node will happily send a literal `{{…}}` as its
+message — so this is worth a general fix; it is recorded here rather than fixed globally
+because widening it touches every handler and belongs to its own ticket.
+
+**Extraction note for whoever reads `handlers.py` next:** `execute_node` sat at exactly the
+C901 ceiling (15), so adding this branch required paying for it. `_execute_set` was
+extracted **unchanged** alongside `_execute_pm_task`; the golden trajectory eval covers both
+and stayed green, and the ceiling was not raised.
 
 #### U2 — N-branch switch conditions ✅ **AGENT-SAFE**
 
@@ -460,7 +497,7 @@ The transferable discipline is the *statelessness*, and it is transferable indep
 
 **Done when:** a `pm.task.due_in(offset_minutes)` trigger fires once per task per offset (asserted across a simulated scanner restart, which is where a naive implementation double-fires); changing a task's due date re-arms rather than double-firing; and the claim rides the existing CAS discipline rather than introducing a second one.
 
-#### U7 — Agent dispatch from a node ✅ **AGENT-SAFE** · *the second half of WS-27f*
+#### U7 — Agent dispatch on assignment ✅ **BUILT 2026-08-06** · *the second half of WS-27f*
 
 **Paca:** `trigger_ai_agent` action → `{message, member_id}` → the assignment consumer writes an `agent_conversations` row and appends to `paca:agent:triggers`; an `agent.session.started` activity lands **on the task** so the handoff is visible in the timeline immediately; the agent then writes back **through the ordinary API under its own identity** (API key + `X-Agent-ID`, permission-checked as its own project member — a stated "Boundary Rule": the AI service never writes to Postgres directly).
 

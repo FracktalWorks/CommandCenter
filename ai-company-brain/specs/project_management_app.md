@@ -907,3 +907,63 @@ SUT submodule), the migration asserted idempotent **statically** over its text, 
 claims checked against `tests/unit/_schema_cascade.py`'s derived FK graph (the N8 lesson:
 never report a destroyed row as kept), and mutants for each new guard measured red and
 reverted byte-identical.
+
+---
+
+## 11. ClickUp parity — the measured gap, and how it gets closed
+
+> **Added 2026-08-06** against the owner's standing requirement: *"I want to be able to do
+> everything that I was doing from ClickUp and more."* WS-27g retires ClickUp, and it cannot
+> honestly be called until this list is short. **Measured against the built tree** (twelve
+> `pm_*` tables, 34 endpoints) rather than recalled — every "have" below is a table or a
+> route that exists today.
+
+### 11.1 What is already there
+
+Hierarchy (departments → projects → subprojects → tasks → subtasks, two self-FKs) ·
+statuses-as-data with a semantic category · task types · assignees in one vocabulary for
+people **and** agents · comments and a single activity timeline **with field-level revert** ·
+`blocks | relates_to | duplicates` links · per-view fractional ordering · board and list
+surfaces · the personal lens · grant scoping with Center projections · the ClickUp importer ·
+a `pm_task` automation node and assignment→agent dispatch.
+
+Several of those ClickUp does **not** have — revert, agents as assignees, per-Center
+projections of one board. That is the "and more" half, and it is already true.
+
+### 11.2 What is missing, in the order it hurts
+
+Ordered by *what stops somebody using this instead of ClickUp on a Monday*, not by how
+interesting it is to build.
+
+| # | Gap | Why it blocks | Ticket |
+|---|---|---|---|
+| 1 | **Attachments** — no `pm_task_attachments`, no upload | A task with a photo of the failed print is the normal case in a hardware company. Today there is nowhere to put it | **WS-27i** |
+| 2 | **Notifications + @mentions** — nothing notifies anybody | Assignment is silent. A tool nobody hears from is a tool nobody opens, and the whole assignment→agent chain assumes somebody noticed | **WS-27j** |
+| 3 | **Filters, grouping and saved views** — `pm_views` exists; the UI has a board/list toggle and nothing else | "My open bugs in Ops, grouped by assignee" is a daily question with no answer. The **table is already there**, so this is a UI ticket, not a schema one | **WS-27k** |
+| 4 | **Custom fields** — no definitions table, no values | ClickUp's signature feature. Paca's shape (`custom_field_definitions` + a JSONB column keyed by `field_key`) is proven and portable | **WS-27l** |
+| 5 | **Tags** — refused Paca's bare JSONB array (research row 13) and nothing replaced it | The refusal was right and left a hole. A tag registry with rename/merge is the version worth having | **WS-27m** |
+| 6 | **Bulk edit / multi-select** | Re-triaging fifty imported tasks one at a time is how an import gets abandoned — this one gates the migration itself | **WS-27n** |
+| 7 | **Recurring tasks** | Every operations cadence is recurring. Without it those live in someone's head or in ClickUp | **WS-27o** |
+| 8 | **Dependency and subtask UI** — `pm_task_links` and `parent_task_id` both exist, unreachable from the board | Data with no surface is a promise the product does not keep | **WS-27p** |
+| 9 | **Calendar / timeline view** | The third view ClickUp users actually use, after list and board | **WS-27q** |
+| 10 | **Global task search** | `?q=` exists on the list endpoint; there is no search surface | **WS-27r** |
+
+**Deliberately NOT on this list:** sprints (a stated non-goal, §1), time tracking and
+checklists (Paca moved both out of core into plugins — the growth path is subtraction), and
+Gantt. If any is wanted, it is a decision to record, not an omission to fix.
+
+### 11.3 Sequencing, and the one dependency that matters
+
+**WS-27n (bulk edit) gates WS-27g.** The cutover imports a real workspace, and an import
+that cannot be re-triaged in bulk is an import somebody abandons halfway — leaving two live
+systems, which is the exact state the retirement exists to end. Build it before the cutover,
+not after.
+
+**1 → 2 → 3 are the daily-use tier** and should go first as a block: a member who can
+attach a file, hear about an assignment, and filter their board can run a day here. 4-5
+(custom fields, tags) are the *modelling* tier — they change what a task can say. 6-10 are
+reach.
+
+Every one is 🟢 **AGENT-SAFE** to build. The gates stay where they already are: running the
+importer against production, confirming a Space→Center mapping, and the WS-27g cutover are
+owner acts (`work_plan.md` §6), and nothing in §11 changes that.

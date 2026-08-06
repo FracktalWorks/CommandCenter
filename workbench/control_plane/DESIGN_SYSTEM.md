@@ -304,9 +304,22 @@ session. They must stay identical to the `rapidtool` manifest —
 
 **Preference resolution:** member override → organisation default → built-in
 default. Members' choices are per-browser (localStorage); the org default is
-served by the gateway and cached locally so it survives the first paint. An
-admin can lock the org to one theme by turning off personal overrides.
+stored in Postgres (`org_settings`, migration 145) and served by the gateway at
+`GET/PUT /settings/appearance`, then cached locally so it survives the first
+paint. Writing it needs `admin:settings:manage` — it changes everyone's UI.
+An admin can lock the org to one theme by turning off personal overrides.
 
-Coverage: `src/lib/theme/*.test.ts` (manifests, CSS generation, icon registry)
-and `e2e/theming.spec.ts` (computed styles and real glyph swapping in a
-browser — the only place cascade order can actually be verified).
+The gateway deliberately does **not** know which themes exist. `themeId` is
+stored as an opaque, selector-safe string, because validating it against a copy
+of `THEMES` would mean a backend deploy for every new theme. The frontend
+re-validates on read and falls back for an id it cannot render.
+
+**Contrast is gated.** `contrast.test.ts` measures every theme × mode × text
+pair against WCAG AA and fails the build below it. Seven pairs in the original
+RapidTool palette predate the gate and are recorded in `KNOWN_SHORTFALLS` as a
+ratchet — they may improve, never regress, and fixing one forces its entry to
+be deleted. **New themes get no such latitude: they must meet AA outright.**
+
+Coverage: `src/lib/theme/*.test.ts` (manifests, CSS generation, icon registry,
+contrast) and `e2e/theming.spec.ts` (computed styles and real glyph swapping in
+a browser — the only place cascade order can actually be verified).

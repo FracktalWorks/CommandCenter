@@ -7,10 +7,12 @@
  * server-side consequence, and round-tripping them would add a request to
  * every page load to render something the boot script has already applied.
  *
- * The gateway may not have an appearance store yet. Rather than failing the
- * page, GET falls back to the built-in defaults and reports `orgManaged:
- * false`, which is what Settings uses to explain that the org-wide controls
- * are unavailable in this deployment.
+ * The gateway serves the org half from the `org_settings` table (migration
+ * 145). A deployment that has not applied that migration, or whose gateway is
+ * down, still has to render: GET falls back to the built-in defaults and
+ * reports `orgManaged: false`, which is what Settings uses to explain that the
+ * org-wide controls are unavailable rather than silently accepting edits that
+ * cannot be saved.
  */
 
 import { NextRequest, NextResponse } from "next/server";
@@ -90,6 +92,8 @@ export async function GET(): Promise<NextResponse> {
         org: normaliseOrg(data?.org ?? data),
         user: EMPTY_USER,
         orgManaged: true,
+        updatedBy: typeof data?.updatedBy === "string" ? data.updatedBy : "",
+        updatedAt: typeof data?.updatedAt === "string" ? data.updatedAt : "",
       } satisfies AppearanceSettings);
     }
   } catch {

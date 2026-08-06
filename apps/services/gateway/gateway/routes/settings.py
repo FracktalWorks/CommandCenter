@@ -1719,3 +1719,170 @@ async def get_cache_info(
             seen.add(c.provider)
             deduped.append(c)
     return deduped
+
+
+# ---------------------------------------------------------------------------
+# GET  /settings/appearance — the organisation's default look
+# PUT  /settings/appearance — change it (admin only)
+#
+# The theming engine (workbench/control_plane/src/lib/theme/) lets each member
+# pick a theme, but the ORG DEFAULT is what everyone who has not chosen sees,
+# and it is the only way to move the whole company onto one look at once.
+# That decision has to outlive a browser, so it lives here.
+#
+# WHAT THIS ROUTE DELIBERATELY DOES NOT KNOW
+# ------------------------------------------
+# Which themes exist. That list is `THEMES` in the frontend's themes.ts, and
+# the whole point of the engine is that adding a theme is one manifest entry —
+# if the gateway validated `theme_id` against a copy of that list, every new
+# theme would need a backend deploy too, and a mismatch between the two lists
+# would reject a theme the app can actually render.
+#
+# So `theme_id` is stored as an opaque identifier, constrained only to the
+# shape that is safe to put in a CSS attribute selector (the same rule
+# `buildThemeCss` enforces). The frontend re-validates on read and falls back
+# to its default for an id it does not recognise — which it must do anyway,
+# since a theme can be removed from the app long after this row named it.
+#
+# Personal preferences are NOT stored here. They are per-device, they change
+# often, and round-tripping them would add a request to every page load to
+# render something the pre-paint boot script has already applied from
+# localStorage.
+# ---------------------------------------------------------------------------
+
+_APPEARANCE_KEY = "appearance"
+
+#: Same rule as SAFE_ID in the frontend's css.ts: a theme id ends up inside
+#: `html[data-theme="…"]`, so restrict it to characters needing no escaping.
+_THEME_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+
+_MODES = ("dark", "light")
+_DENSITIES = ("compact", "default", "comfortable")
+
+_APPEARANCE_DEFAULTS: dict[str, Any] = {
+    "themeId": "rapidtool",
+    "mode": "dark",
+    "density": "default",
+    "allowUserOverride": True,
+}
+
+
+class OrgAppearance(BaseModel):
+    """The organisation-wide default look."""
+
+    themeId: str = _APPEARANCE_DEFAULTS["themeId"]
+    mode: str = _APPEARANCE_DEFAULTS["mode"]
+    density: str = _APPEARANCE_DEFAULTS["density"]
+    allowUserOverride: bool = True
+
+
+class AppearanceResponse(BaseModel):
+    org: OrgAppearance
+    #: Who last changed it and when — an org-wide setting affects everybody,
+    #: so "who did this" is the first question when the company's UI changes.
+    updatedBy: str = ""
+    updatedAt: str = ""
+
+
+def _coerce_appearance(raw: Any) -> tuple[OrgAppearance, str, str]:
+    """Normalise a stored blob into a usable default.
+
+    Every field falls back independently: a row written by an older or newer
+    version of the app should degrade one key at a time rather than reset the
+    whole organisation's look.
+    """
+    blob = raw if isinstance(raw, dict) else {}
+    org = blob.get("org") if isinstance(blob.get("org"), dict) else blob
+
+    theme_id = str(org.get("themeId") or "")
+    if not _THEME_ID_RE.match(theme_id) or len(theme_id) > 64:
+        theme_id = _APPEARANCE_DEFAULTS["themeId"]
+
+    mode = org.get("mode")
+    if mode not in _MODES:
+        mode = _APPEARANCE_DEFAULTS["mode"]
+
+    density = org.get("density")
+    if density not in _DENSITIES:
+        density = _APPEARANCE_DEFAULTS["density"]
+
+    allow = org.get("allowUserOverride")
+    if not isinstance(allow, bool):
+        allow = _APPEARANCE_DEFAULTS["allowUserOverride"]
+
+    return (
+        OrgAppearance(
+            themeId=theme_id, mode=mode, density=density, allowUserOverride=allow
+        ),
+        str(blob.get("updatedBy") or ""),
+        str(blob.get("updatedAt") or ""),
+    )
+
+
+@router.get("/appearance", response_model=AppearanceResponse)
+async def get_appearance(
+    _user: UserContext = Depends(get_current_user),
+) -> AppearanceResponse:
+    """Return the org's default theme, mode and density.
+
+    Readable by any signed-in member, not just admins: every client needs it on
+    load to know what to render for someone who has not picked a theme.
+    """
+    from acb_common import load_org_setting  # noqa: PLC0415
+
+    org, updated_by, updated_at = _coerce_appearance(
+        load_org_setting(_APPEARANCE_KEY, default={})
+    )
+    return AppearanceResponse(org=org, updatedBy=updated_by, updatedAt=updated_at)
+
+
+@router.put(
+    "/appearance",
+    response_model=AppearanceResponse,
+    dependencies=[require_permission("admin:settings:manage")],
+)
+async def put_appearance(
+    body: OrgAppearance,
+    user: UserContext = Depends(get_current_user),
+) -> AppearanceResponse:
+    """Set the org's default look. Admin-gated — this changes everyone's UI."""
+    from datetime import datetime, timezone  # noqa: PLC0415
+
+    from acb_common import save_org_setting  # noqa: PLC0415
+
+    # Re-validate rather than trusting the model: pydantic types `mode` and
+    # `density` as plain strings (they are open vocabularies on the frontend),
+    # so the enum check has to happen here or an arbitrary value reaches every
+    # member's browser.
+    if body.mode not in _MODES:
+        raise HTTPException(status_code=400, detail=f"mode must be one of {list(_MODES)}")
+    if body.density not in _DENSITIES:
+        raise HTTPException(
+            status_code=400, detail=f"density must be one of {list(_DENSITIES)}"
+        )
+    if not _THEME_ID_RE.match(body.themeId) or len(body.themeId) > 64:
+        raise HTTPException(
+            status_code=400,
+            detail="themeId must be lowercase alphanumeric with hyphens",
+        )
+
+    updated_at = datetime.now(timezone.utc).isoformat()
+    save_org_setting(
+        _APPEARANCE_KEY,
+        {
+            "org": body.model_dump(),
+            "updatedBy": user.email or "",
+            "updatedAt": updated_at,
+        },
+        updated_by=user.email or "",
+    )
+    _log.info(
+        "settings.appearance.updated",
+        theme_id=body.themeId,
+        mode=body.mode,
+        allow_user_override=body.allowUserOverride,
+        by=user.email,
+    )
+    return AppearanceResponse(
+        org=body, updatedBy=user.email or "", updatedAt=updated_at
+    )

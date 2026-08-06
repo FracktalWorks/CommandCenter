@@ -304,11 +304,20 @@ function OrganisationSettings() {
           const body = await res.json().catch(() => ({}));
           setMessage({
             kind: "error",
-            text: body?.error ?? `Could not save (${res.status}).`,
+            text:
+              res.status === 403
+                ? "Only an administrator can change the organisation default."
+                : (body?.error ?? body?.detail ?? `Could not save (${res.status}).`),
           });
           return;
         }
-        setSettings({ ...settings, org: next });
+        const saved = await res.json().catch(() => null);
+        setSettings({
+          ...settings,
+          org: next,
+          updatedBy: saved?.updatedBy ?? settings.updatedBy,
+          updatedAt: saved?.updatedAt ?? settings.updatedAt,
+        });
         // Push it into the live store too, so the admin sees the effect
         // immediately rather than on the next reload.
         setOrgDefaults(next);
@@ -396,6 +405,13 @@ function OrganisationSettings() {
           role="status"
         >
           {message.text}
+        </p>
+      )}
+
+      {settings.orgManaged && settings.updatedBy && (
+        <p className="text-[11px] text-muted-foreground">
+          Last changed by {settings.updatedBy}
+          {settings.updatedAt && ` on ${new Date(settings.updatedAt).toLocaleString()}`}.
         </p>
       )}
     </div>

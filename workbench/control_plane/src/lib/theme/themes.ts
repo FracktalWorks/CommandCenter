@@ -191,7 +191,9 @@ const fluent: Theme = {
       cardForeground: "hsl(0 0% 11%)",
       popover: "hsl(0 0% 100%)",
       popoverForeground: "hsl(0 0% 11%)",
-      primary: "hsl(206 100% 42%)",
+      // 41% rather than Fluent's nominal 42%: white on 42% measures
+      // 4.44:1, a hair under AA. See contrast.test.ts.
+      primary: "hsl(206 100% 41%)",
       primaryForeground: "hsl(0 0% 100%)",
       secondary: "hsl(0 0% 92%)",
       secondaryForeground: "hsl(0 0% 11%)",
@@ -203,7 +205,7 @@ const fluent: Theme = {
       destructiveForeground: "hsl(0 0% 100%)",
       border: "hsl(0 0% 88%)",
       input: "hsl(0 0% 88%)",
-      ring: "hsl(206 100% 42%)",
+      ring: "hsl(206 100% 41%)",
       success: "hsl(120 78% 27%)",
       successForeground: "hsl(0 0% 100%)",
       warning: "hsl(36 100% 31%)",
@@ -374,7 +376,7 @@ const graphite: Theme = {
       secondaryForeground: "hsl(0 0% 10%)",
       muted: "hsl(0 0% 96%)",
       mutedForeground: "hsl(0 0% 42%)",
-      accent: "hsl(30 90% 42%)",
+      accent: "hsl(30 90% 37%)",
       accentForeground: "hsl(0 0% 100%)",
       destructive: "hsl(0 70% 42%)",
       destructiveForeground: "hsl(0 0% 100%)",

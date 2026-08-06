@@ -41,18 +41,40 @@ rendered offline. All 28 sidebar glyphs swap; unmigrated call sites keep
 rendering Lucide, so the migration is incremental and never breaks.
 
 **Preferences** resolve member override → org default → built-in. Personal
-choices are per-browser; the org default comes from
-`GET/PUT /api/settings/appearance` and is cached locally so it survives first
-paint. Admins can lock the org to one theme. The route validates every field
-before forwarding, and falls back to built-in defaults with `orgManaged:
-false` when the gateway has no appearance store — so the feature works today
-without backend changes, and the UI says so rather than silently dropping edits.
+choices are per-browser. The **org default persists in Postgres** —
+`org_settings` (migration `145_org_settings.sql`), served by the gateway at
+`GET/PUT /settings/appearance` — and is cached locally so it survives first
+paint. Reading is open to any member (every client needs it on load); writing
+requires `admin:settings:manage`, since it changes everyone's UI. Admins can
+lock the org to one theme. Both layers validate independently, and the frontend
+still falls back with `orgManaged: false` if the migration has not been applied
+or the gateway is down.
 
-**Verified.** 37 unit tests (`src/lib/theme/*.test.ts`) plus 14 browser tests
+The gateway deliberately does **not** know which themes exist: `themeId` is an
+opaque, selector-safe string. Validating it against a copy of `THEMES` would
+mean a backend deploy for every new theme, and a mismatch would reject a theme
+the app can render.
+
+**Contrast is gated.** Every theme × mode × text pair is measured against WCAG
+AA and the build fails below it. Seven pairs in the original RapidTool palette
+predate the gate and are recorded as a ratchet — they may improve, never
+regress, and fixing one forces its entry to be deleted so the list cannot go
+stale. New themes must meet AA outright. Two shortfalls introduced by the new
+Fluent and Material themes were fixed rather than recorded.
+
+**Verified.** 172 frontend unit tests (manifests, CSS generation, icon
+registry, contrast), 22 gateway tests, and 14 browser tests
 (`e2e/theming.spec.ts`) asserting computed styles and real glyph swapping —
 the only place CSS cascade order can actually be checked. A drift guard parses
 `globals.css` and fails if its no-JavaScript fallback diverges from the default
-manifest.
+manifest. The migration and the full store→route round trip were exercised
+against a real Postgres 16.
+
+⚠️ **Deploy step:** `infra/postgres/schema.generated.sql` was NOT regenerated —
+replaying all 145 migrations needs the `pgvector` and `age` extensions, which
+were unavailable here, and the file must never be hand-edited. Run
+`scripts/apply_migrations.sh` then `scripts/dump_schema.sh` on a real
+deployment and commit the refreshed snapshot.
 
 **Not done (Phase 5).** Shared `<Button>` / `<Input>` primitives, and migrating
 the remaining ~155 files that still import `lucide-react` directly. Neither

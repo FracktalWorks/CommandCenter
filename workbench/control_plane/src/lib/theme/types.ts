@@ -224,4 +224,11 @@ export type AppearanceSettings = {
    * accepting edits that cannot be saved.
    */
   orgManaged: boolean;
+  /**
+   * Who last changed the org default, and when. An org-wide setting changes
+   * everyone's UI at once, so "who did this" is the first question asked when
+   * the company's app suddenly looks different.
+   */
+  updatedBy?: string;
+  updatedAt?: string;
 };

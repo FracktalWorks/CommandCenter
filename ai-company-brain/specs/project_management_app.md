@@ -4,20 +4,25 @@
 > module, sliced into every other Center) · **Created:** 2026-08-05 · **Updated:** 2026-08-06
 > (owner pass — §8's three open questions are answered as **D-PM-8/9/10**; §7.1 gains the
 > Space→Center mapping step and WS-27b's done-whens grew with it) ·
-> **Status:** 🟢 **WS-27a BUILT** (2026-08-06, branch
-> `claude/paca-research-task-management-a1f6zd`) — migration `145_projects.sql` (§3.1–§3.10),
-> `feature:projects` registered on both sides, and the `routes/projects/` API (§4 minus
-> `sync.py`) live behind the feature gate on the `gateway/db.py` seam. **Not deployed** — the
-> migration has not been applied anywhere. · **WS-27b–g: 🟡 SPEC, nothing built.** ·
+> **Status:** 🟢 **WS-27a + WS-27b BUILT** (2026-08-06, branch
+> `claude/paca-research-task-management-a1f6zd`, PR #367) — migration `145_projects.sql`
+> (§3.1–§3.10), `feature:projects` registered on both sides, the `routes/projects/` API (§4
+> minus `sync.py`) live behind the feature gate on the `gateway/db.py` seam, and the ClickUp
+> importer with its Space→Center mapping plan (§7.1). **Not deployed and never run** — the
+> migration has not been applied anywhere and neither import endpoint has been executed
+> against the live tenant. · **WS-27c–g: 🟡 SPEC, nothing built.** ·
 > **Owner:** vjvarada · **Board row: WS-27**
 >
-> **Verified 2026-08-06:** 115 hermetic cases across `test_projects_{routes,grants,migration}.py`
-> (no DB, no network), plus 324 unchanged cases in the org-access and CRM fences — 439 passed.
-> Five mutants measured red and reverted byte-identical: an unscoped visibility clause, a
-> dropped assignee escape, a transition that skips its activity, a `completed_at` never
-> cleared on reopen, and a removed Epic-root rule.
+> **Verified 2026-08-06:** 140 hermetic cases across
+> `test_projects_{routes,grants,migration,import_mapping}.py` (no DB, no ClickUp, no LLM),
+> plus the unchanged org-access and CRM fences — 298 passed on the combined set.
+> **Nine mutants measured red and reverted byte-identical:** WS-27a's five (unscoped
+> visibility clause, dropped assignee escape, transition skipping its activity,
+> `completed_at` never cleared on reopen, removed Epic-root rule) and WS-27b's four
+> (applying the suggestion instead of the confirmed mapping, refusing to import an unmapped
+> Space, a plan that writes, and a re-import that duplicates).
 >
-> **Not in WS-27a, on purpose:** no UI (WS-27d), no ClickUp importer or sync (WS-27b/c), and
+> **Not built, on purpose:** no UI (WS-27d), no sync (WS-27c — blocked on BO-1a/BO-1b), and
 > `schema.generated.sql` was NOT regenerated — it needs a migrated live DB and is stale
 > repo-wide, so it stays an owner-run chore (the WS-26a precedent).
 >
@@ -277,7 +282,9 @@ on tasks). No engine 13.
 | `admin.py` | statuses + types CRUD per root project (`RESTRICT` delete answers 409 naming the count in use) |
 | `views.py` | views CRUD · `PUT /projects/views/{id}/positions` (bulk upsert) |
 | `me.py` | `GET /projects/assigned-to-me` — the personal lens's read (§6.1) |
-| `sync.py` (WS-27b/c) | `POST /projects/import/clickup/plan` (proposes a Center per Space, writes nothing) · `POST /projects/import/clickup` (applies the confirmed mapping) · `POST /projects/sync` · `GET /projects/sync/status` · `GET /projects/sync/conflicts` |
+| `mapping.py` (WS-27b) | no routes — the three suggestion signals and their combination, kept apart from the importer because a proposal and an application are different acts (D-PM-10) |
+| `import_clickup.py` (WS-27b) | `POST /projects/import/clickup/plan` (proposes a Center per Space, writes nothing) · `POST /projects/import/clickup` (applies the confirmed mapping) |
+| `sync.py` (WS-27c) | `POST /projects/sync` · `GET /projects/sync/status` · `GET /projects/sync/conflicts` |
 
 Patterns carried from `routes/crm/core.py`: the frozen `Entity` registry dict (segment
 matched against it, never interpolated), sort keys as an allowlist (unknown = 422), typed
@@ -618,9 +625,17 @@ grant read model answers 404-not-403 for a non-granted caller and honours `email
 `org` subjects + assigned-to-me, proven hermetically; (5) status transition writes all
 three effects (§3.8); (6) `pm.*` events are emitted through `event_hooks.emit_event`.
 
-**WS-27b — ClickUp org importer + the Space→Center mapping plan.** 🟢 AGENT-SAFE to build ·
-🔴 **running either endpoint against the production workspace is OWNER-GATE** (§6 of
-`work_plan.md`).
+**WS-27b — ClickUp org importer + the Space→Center mapping plan.** ✅ **BUILT 2026-08-06**
+(`routes/projects/mapping.py` + `import_clickup.py`, 25 hermetic cases, 4 mutants red) ·
+🔴 **running either endpoint against the production workspace is still OWNER-GATE** (§6 of
+`work_plan.md`) — **neither has been executed**.
+Two things the build recorded that this ticket did not ask for, both in `import_clickup.py`:
+statuses are derived from the **tasks'** own status types rather than the space workflow
+(that is where ClickUp puts the type, and it costs no extra API call), and **subtasks import
+as top-level tasks of the right list** — ClickUp carries a parent id only on a detail fetch,
+so linking them would cost one call per task; WS-27c's sync already fetches detail and
+re-parents them. Recorded rather than silently skipped, because "subtasks became top-level
+tasks" is exactly the surprise an importer must not spring.
 Done when: (1) `POST /projects/import/clickup/plan` returns one row per Space with counts,
 a suggested Center, a confidence, and the evidence, from all three §7.1 signals — and
 **writes nothing**, proven by a test that asserts no INSERT/UPDATE reaches the session;

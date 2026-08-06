@@ -442,6 +442,26 @@ class FakeProjectsDB:
                 return _Result([], scalar=len(subtree))
             return _Result([SimpleNamespace(id=i) for i in sorted(subtree)])
 
+        # The importer's existing-mapping read joins pm_projects to
+        # pm_project_grants. The fake models no joins, so this shape is
+        # answered explicitly rather than silently returning project rows with
+        # no `subject` attribute — which is how a "no previous mapping" answer
+        # would look identical to a broken query.
+        # Matched on the JOIN specifically: the visibility CTE also names both
+        # tables, and a looser check short-circuited every scoped read.
+        if "JOIN pm_project_grants g" in statement:
+            return _Result([
+                SimpleNamespace(
+                    space_id=project.get("clickup_id"), subject=grant.get("subject"),
+                )
+                for project in self.rows("pm_projects")
+                for grant in self.rows("pm_project_grants")
+                if project.get("clickup_kind") == "space"
+                and project.get("clickup_id")
+                and str(grant.get("project_id")) == str(project.get("id"))
+                and str(grant.get("subject") or "").startswith("group:")
+            ])
+
         matched = self._matching(statement, table, args)
         if statement.upper().startswith("SELECT COUNT(*)"):
             return _Result([], scalar=len(matched))

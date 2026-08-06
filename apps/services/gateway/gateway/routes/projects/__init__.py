@@ -17,12 +17,13 @@ that calls its route function directly still passes. That trap is documented in
 ``department_centers.md`` C1 and it is why ``tests/unit/test_projects_routes.py``
 asserts the mounted path set rather than only calling the functions.
 
-``sync.py`` is WS-27b/c (the ClickUp importer and the two-way sync) and is
-deliberately absent.
+``sync.py`` is WS-27c (the two-way coexistence sync) and is deliberately absent;
+it is blocked on WS-1's BO-1a and BO-1b, which the spec names as prerequisites.
 """
 
 from gateway.routes.projects import activities as _activities  # noqa: F401
 from gateway.routes.projects import admin as _admin  # noqa: F401
+from gateway.routes.projects import import_clickup as _import_clickup  # noqa: F401
 from gateway.routes.projects import me as _me  # noqa: F401
 from gateway.routes.projects import tasks as _tasks  # noqa: F401
 from gateway.routes.projects import tree as _tree  # noqa: F401

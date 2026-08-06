@@ -18,10 +18,15 @@ list can never change which handler answers a request. ``records`` imports
 WS-26b. ``broker_handlers`` is deliberately NOT imported here: it registers no
 routes, and ``main.py`` calls its ``register_crm_broker_handlers()`` directly
 at startup exactly the way it calls the tasks app's.
+
+``deal_contacts.py`` is WS-26c's API addendum — the read/write surface for
+``crm_deal_contacts``, which 26a created and only the convert path ever wrote
+to.
 """
 
 from gateway.routes.crm import activities as _activities  # noqa: F401
 from gateway.routes.crm import admin as _admin  # noqa: F401
+from gateway.routes.crm import deal_contacts as _deal_contacts  # noqa: F401
 from gateway.routes.crm import import_zoho as _import_zoho  # noqa: F401
 from gateway.routes.crm import pipeline as _pipeline  # noqa: F401
 from gateway.routes.crm import records as _records  # noqa: F401

@@ -47,6 +47,7 @@ from gateway.routes.crm.core import (
     count_where,
     has_column,
     insert_row,
+    lead_name_is_derived,
     list_contract,
     load_default_status,
     now,
@@ -244,18 +245,34 @@ async def patch_record(
         await db.close()
 
 
-#: The lead fields the display name is derived from. Touching any of them
-#: re-derives it; touching none of them leaves a hand-edited name alone.
+#: The lead fields the display name is derived from. Touching any of them may
+#: re-derive it; touching none of them never does.
 _LEAD_NAME_INPUTS = frozenset(
     {"first_name", "last_name", "organization_name", "email", "lead_name"}
 )
 
 
 def _recompute_lead_name(record: Any, values: dict[str, Any]) -> None:
+    """Keep ``lead_name`` in step with the fields it is derived FROM — unless
+    somebody typed it.
+
+    Three cases, and the third is the one WS-26c dw 3 exists to fix:
+
+    * the body sets ``lead_name`` → that is the name, blank-guarded by the
+      fallback chain;
+    * the body moves a name input and the stored name is still the chain's own
+      output → re-derive, so renaming a lead's company renames the lead;
+    * the body moves a name input but the stored name was hand-edited → leave
+      it. Correcting a lead's email address must not silently rename
+      "Ravi (Bosch, via Anil)" back to "ravi".
+    """
     if not (_LEAD_NAME_INPUTS & values.keys()):
         return
-    merged = {**row_to_dict(record, LEADS.model), **values}
+    current = row_to_dict(record, LEADS.model)
+    merged = {**current, **values}
     if "lead_name" not in values:
+        if not lead_name_is_derived(current):
+            return
         # Blank the stored name so the fallback chain actually re-derives
         # rather than returning the value it is supposed to be replacing.
         merged["lead_name"] = None

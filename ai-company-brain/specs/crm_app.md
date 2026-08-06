@@ -1,22 +1,30 @@
 # CRM App — Master Plan (native CRM; Zoho CRM retirement path)
 
 > **Product:** CommandCenter · **Feature:** CRM (Sales Center's primary module) · **Created:** 2026-08-05
-> **Status:** 🟢 **WS-26a + WS-26b BUILT** (2026-08-05).
-> **26a** (branch `ws-26-crm-app`) — migration `144_crm.sql` (§3.1–§3.10), `feature:crm`
+> **Status:** 🟢 **WS-26a + WS-26b + WS-26c ALL BUILT** (2026-08-05/06), merged together on
+> branch `ws-26-crm-app`.
+> **26a** — migration `144_crm.sql` (§3.1–§3.10), `feature:crm`
 > registered on both sides, `gateway/db.py` engine seam with `routes/tasks/core.py` converted
 > as its proof, and the `routes/crm/` API (§4 minus `import_zoho.py`) live behind the feature
 > gate.
-> **26b** (branch `ws-26b-zoho-sync`) — the two-way Zoho sync: `list_leads` +
+> **26b** (merged from `ws-26b-zoho-sync`, PR #363) — the two-way Zoho sync: `list_leads` +
 > `list_deleted` on the read client, the single write client
 > `ingestion/sources/zoho/writer.py` (one caller, grep-asserted), migration
 > `145_crm_zoho_sync.sql` (dirty columns + `crm_zoho_tombstones` + `crm_sync_cursors`),
 > `routes/crm/{import_zoho,sync_zoho,broker_handlers}.py`, the `crm.zoho_*` Action-Broker
 > handlers registered from `main.py`, and `CRM_ZOHO_SYNC` (ships **OFF**) gating only the
 > lifespan loop.
-> **Neither is deployed** — migrations 144 and 145 have not been applied anywhere, no backfill
-> has been run, and **nothing has ever written the Zoho tenant**: enabling the flag, the first
-> backfill and any hand-run cycle against prod are OWNER-GATE (`work_plan.md` §6).
-> · **WS-26c–e: 🟡 SPEC, nothing built.** · **Owner:** vjvarada · **Board row:** WS-26
+> **26c** (merged from `ws-26c-crm-ui`) — the `/crm` app (`src/app/crm/` + BFF proxy), the three
+> frontend registration points with a `live ⇒ href` fence on `CenterApp`, the deal-contacts
+> endpoints (`routes/crm/deal_contacts.py`, one primary per deal enforced on the shared
+> `core.link_deal_contact` seam), `organization_name` on the deal list + board payloads, the
+> `NOT_NULL_DEFAULTED` null guard, and the three review residuals.
+> **None of it is deployed** — migrations 144 and 145 have not been applied anywhere, no
+> backfill has been run, and **nothing has ever written the Zoho tenant**: enabling the flag,
+> the first backfill and any hand-run cycle against prod are OWNER-GATE (`work_plan.md` §6).
+> Because the migrations are unapplied, live rendering, drag persistence and deep links are
+> **owner-verified after they apply**; everything below is fixture-level.
+> · **WS-26d–e: 🟡 SPEC, nothing built.** · **Owner:** vjvarada · **Board row:** WS-26
 >
 > ⚠️ **`.env.example` cannot carry `CRM_ZOHO_SYNC`** — plan-guard blocks agent writes to it, so
 > the variable is documented here and in `acb_common/settings.py` only. Same for the
@@ -250,6 +258,7 @@ Modules and endpoints (all under `feature:crm` unless noted):
 | `records.py` | CRUD ×4: `GET/POST /crm/{leads,deals,contacts,organizations}`, `GET/PATCH/DELETE /crm/<entity>/{id}`. List contract: `q, sort, dir, page, page_size≤100`, per-entity filters (`status_id, owner, source`) → `{rows, total}`. Sort via **allowlist**, never interpolated (trycompai's `resolveOrderBy` rule). |
 | `pipeline.py` | `GET /crm/pipeline` (deals grouped by status: rows ordered per-lane, count + `SUM(amount)` per lane) · `POST /crm/leads/{id}/convert` (§3.7) · status transition inside `PATCH` writes dwell log + activity + `status_changed_at` + probability default |
 | `activities.py` | `GET /crm/<entity>/{id}/timeline` (merged: activities ∪ status changes ∪ — Phase D — linked email threads; a deal's timeline unions its `lead_id`'s history, labeled) · `POST /crm/<entity>/{id}/activities` · `PATCH/DELETE /crm/activities/{aid}` (complete task, edit note) |
+| `deal_contacts.py` *(WS-26c)* | `GET/POST /crm/deals/{id}/contacts` · `DELETE /crm/deals/{id}/contacts/{contact_id}`. §3.5's "at most one primary per deal, enforced in code" lives on `core.link_deal_contact`, which the convert path also goes through — promoting demotes the incumbent first, in the same transaction. A **new module** rather than more of `records.py`: the package's stated layout is one feature module per concern, and deal-contacts are a sub-resource with their own invariant (build-time decision C1). |
 | `admin.py` | `GET/POST/PATCH/DELETE /crm/statuses/{lead,deal}` + `/crm/lost-reasons` (reorder = PATCH `position`). Gated `feature:crm` (v1 decision D-CRM-3: the sales team manages its own pipeline; revisit when WS-24 admits colleague #1). `DELETE` on an in-use status → 409 (FK RESTRICT surfaces it). |
 | `import_zoho.py` | `POST /crm/import/zoho` — **gated `require_permission("admin:access:manage")`** (existing admin capability; minting nothing per `user_management_contract.md` §3). ⚠️ `integrations:use:zoho-crm` was the first choice and is **wrong**: `131_integration_memory_permissions.sql` grants `member` `integrations:use:*`, so under `permission_matches` every member would hold it — the code floor must be an admin capability; the §6 owner gate governs the *run* on top of it. §7.1. Also owns the Zoho→native **field mapping**, which `sync_zoho.py` imports rather than re-deriving. |
 | `sync_zoho.py` | The two-way sync engine (§7.1's seven bullets) + `POST /crm/sync/zoho` (same `admin:access:manage` floor; runs one cycle **with or without** `CRM_ZOHO_SYNC`) + the gateway-lifespan loop, flag-gated. `execute_push` is the writer's only caller. |
@@ -297,6 +306,27 @@ module; also a flat `PANES` entry `/crm`) · `access.ts` `HREF_FEATURES` `["/crm
 Theming: Tailwind v4 semantic tokens (`bg-background`, `text-muted-foreground`, …), Lucide
 icon names as strings, `useViewMode()` for mobile. State: zustand store + pure helpers in
 `lib/` with colocated vitest tests (the `tasks` layout).
+
+**As built (WS-26c).** `lib/` holds everything server-shaped and pure, and each file is
+unit-tested: `urlState.ts` (the URL grammar — `?deal=` opens the sheet over the list,
+`?sort=`/`?dir=` make a sorted list shareable, and `selectTab` drops the filters that do not
+travel, `sort` included because the keys are a **per-entity server allowlist** and a stale
+one is a 422 that empties the list), `board.ts` (lane order, tone, the move plan, the
+optimistic re-tally, and `needsLostReason`), `filters.ts` (the list contract,
+including *never* sending `?status_id` to an entity without a pipeline), `convert.ts`
+(§3.7's match rules, mirrored so the modal pre-selects what the server would do),
+`format.ts` (₹ in `en-IN` lakh/crore grouping, stage age, dwell) and `api.ts` (the BFF
+client; refusals keep their status so a 409 can be explained rather than reported as a
+failure). `store.ts` is a thin zustand store whose one rule is that a **write re-reads what is on
+screen, whatever the response was** — a stale row after a 409 reads as success, and a
+created record that is invisible until somebody hits refresh is the same lie told the other
+way round. It keeps the last loaded view so `refreshCollection()` can re-read the board or
+the list without every caller threading the view back in.
+`components/` is composition only. ⚠️ `CenterApp` in `lib/centers.ts` is a union
+discriminated on `status`, so a `live` entry without an `href` is a **compile** error: the
+existing `test_centers_registry_matches_the_feature_vocabulary` reads each Center's
+`feature:` field and nothing else, so it cannot see a mistake in `apps[]` at all.
+Runtime twin: `src/lib/centers.test.ts`.
 
 ---
 
@@ -609,6 +639,77 @@ overrule any of them):**
   leaves `closed_at` stale — §3.4 stamps and never clears. Clearing on a move back to a
   non-terminal type is one line in `apply_status_transition` once decided.
 
+**Build-time decisions, WS-26c implementer (2026-08-05 — owner may overrule any of them):**
+- **C1 — the deal-contacts endpoints are a NEW module (`routes/crm/deal_contacts.py`), not
+  more of `records.py`.** The package's layout convention is one feature module per concern
+  registering on `core.router`, and a deal's people are a sub-resource with an invariant of
+  their own. It also keeps WS-26c's gateway diff off `records.py`, which WS-26b is editing
+  in parallel. Rejected: `records.py` (a fifth concern in a file whose whole shape is "four
+  entities × five verbs").
+- **C2 — "at most one primary per deal" is enforced on the shared seam
+  `core.link_deal_contact`, not per route.** 26a recorded the rule as convention with one
+  writer; adding endpoints would have made it two opinions. The convert path was moved onto
+  the same function (its bare `insert_row` is gone), and the demote-before-promote order is
+  deliberate — the intermediate state is "no primary", never "two". Pinned structurally: no
+  module outside `core.py` may INSERT into `crm_deal_contacts`.
+- **C3 — `organization_name` is projected by wrapping the base SELECT in a derived table**
+  (`core.project_joined`), not by inlining the join into `FROM`. `crm_organizations` also
+  carries `owner_email`, `source`, `name` and the timestamp trio, so an inlined join makes
+  every unqualified predicate `list_contract` renders ambiguous — the fix would be to
+  qualify all of them, in all four entities, to serve one. Wrapping also means the join runs
+  over one page rather than the table. The outer `ORDER BY` is not decoration: a join over
+  an ordered subquery does not preserve its order.
+- **C4 — "was the lead name hand-edited?" is answered by recomputing, not by a column.**
+  `core.lead_name_is_derived` compares the stored name to what the fallback chain would
+  produce; a `lead_name_is_custom` flag would have to be maintained by every writer (the
+  importer, the sync engine, the agent tools) and the one that forgets it silently reverts a
+  typed name. Accepted cost: typing exactly what the chain would have produced leaves the
+  name derived — which produces the same string, so nobody can tell.
+- **C5 — the explicit-`null` guard is a per-table map of NOT NULL **defaulted** columns**
+  (`core.NOT_NULL_DEFAULTED`), checked inside `insert_row`/`update_row` so a route added
+  later inherits it. Keyed by table because `probability` is NOT NULL DEFAULT 0 on
+  `crm_deal_statuses` and nullable on `crm_deals` — a flat column set would refuse a
+  legitimate "clear the probability". The map is derived from the migration and pinned both
+  ways by `test_crm_migration.py`, which caught `crm_status_changes` missing from the first
+  version.
+- **C6 — the frontend keeps the wire's snake_case.** The tasks app maps snake→camel at its
+  client boundary; the CRM's field names ARE its column names (`row_to_model` maps
+  generically by field name), so a rename layer would be a second vocabulary to keep in step
+  with migration 144 — and the copy is what drifts.
+- **C7 — the board asks for a lost reason BEFORE sending the move.** The gateway answers 422
+  before writing any of the transition's three effects, and the reason travels *with* the
+  `PATCH` rather than in a second request, so the move either lands whole or not at all.
+
+**Adversarial-review repairs, same branch (2026-08-05 → 06). Three changed a decision:**
+- **C8 — `sort`/`dir` are VIEW state, in the URL, not component state.** The first pass held
+  them in `useState`, `listQuery` never sent them and the load effect never watched them, so
+  a column header flipped its own arrow and re-issued an identical request — a control that
+  changes its appearance and nothing else, which reads as working. Putting them in `CrmView`
+  fixes all three at once (the effect already keys on view fields), makes a sorted list
+  shareable, and lets `selectTab`'s existing "filters that do not travel" rule clear a stale
+  key — which matters more here than for the others, because sort keys are a per-entity
+  server allowlist and a carried-over key is a 422, not an odd order. `canSortBy` is
+  belt-and-braces behind it for the hand-edited-URL case.
+- **C9 — `similarOrganizations` excludes the exact match by IDENTITY, not by comparing
+  strings.** The review found the exact match rendered twice (both entries carrying the same
+  id, so both drew selected) because the filter compared a lowercased candidate against a
+  non-lowercased lead name. The suggested fix — fold both sides — also removes the duplicate,
+  but it hides every case-variant: `matchOrganization` is case-SENSITIVE, so "bosch india" is
+  *not* the exact match and is precisely the near-miss the list exists to surface. Excluding
+  `o.id === exact?.id` fixes the duplicate and keeps the near-miss.
+- **C10 — `link_deal_contact`'s `is_primary` is tri-state (`None` = leave it alone), like
+  `role`.** `DealContactIn.is_primary` defaulted to `False`, so "set this contact's role"
+  demoted the deal's primary as a side effect: a field the caller never mentioned deciding
+  something. Explicit `false` still demotes — a deal may legitimately have no primary.
+
+The other four were straight defects, fixed without a decision: `createRecord` and a
+*successful* `patchRecord` now re-read the collection (`refreshCollection`); `moveDeal`'s
+post-move re-read carries the board's owner filter instead of widening it to the whole
+pipeline; the kanban's `dragstart` sets a `dataTransfer` payload, without which Firefox
+never starts the drag at all; and `api.moveDeal` now consumes `board.moveRequest` (extended
+to carry the lost fields) rather than building a second, diverging shape beside a function
+whose comments claimed to be the only one.
+
 ---
 
 ## 9. Tickets — WS-26a…e (every item AGENT-SAFE unless labeled)
@@ -805,8 +906,21 @@ owner. Also owed by this ticket: add `CRM_ZOHO_SYNC` (and `CRM_AUTO_LEAD`) to
 OWNER_GATES in the same PR" rule — noting `.claude/` is untracked, so this lands on the
 box-side copy, not in the PR.
 
-### WS-26c — UI (+ the API addendum the surfaces need) · 🟢 AGENT-SAFE
-*(Audited GO-NARROWED 2026-08-05; blockers folded in below.)*
+### WS-26c — UI (+ the API addendum the surfaces need) · ✅ **BUILT 2026-08-05**
+*(Audited GO-NARROWED 2026-08-05; blockers folded in below. Landed on branch
+`ws-26c-crm-ui` as `workbench/control_plane/src/app/crm/{page.tsx,components/,lib/}` +
+`src/app/api/crm/[...path]/route.ts`, the three registration edits in
+`src/lib/{nav,access,centers}.ts` with `CenterApp` re-typed so `live ⇒ href` is a compile
+error, and the gateway addendum
+`apps/services/gateway/gateway/routes/crm/deal_contacts.py` + `core.link_deal_contact` /
+`core.project_joined` / `core.reject_null_on_defaulted` / `core.lead_name_is_derived`.
+Fenced by 103 new vitest cases and 41 new pytest cases (the four `test_crm_*.py` files go
+191 → 232); **zero DB, zero network.** Adversarial review returned REQUEST-CHANGES on the
+first pass; all seven findings repaired in the same branch — see C8–C10 in §8.
+**Built, not deployed:** migrations 144 and 145 have still not been applied anywhere.
+Merged into `ws-26-crm-app` alongside 26b on 2026-08-06 — every resolution there was the
+union of both slices, so 26b's Zoho fields and 26c's join/null-guard fields coexist on the
+same `Entity` and both guards run on every write.)*
 Notes: until an admin grants `feature:crm`, the UI is visible to owner/admin only (§5).
 **Migration 144 has not been applied anywhere**, so live rendering, drag persistence and
 deep links are **owner-verified after the migration applies** — the agent builds and
@@ -853,7 +967,7 @@ PR (R4).
 
 ## 10. Verification
 
-    # WS-26a + WS-26b:
+    # WS-26a + WS-26b + WS-26c — all six CRM files plus the access pair:
     uv run pytest tests/unit/test_crm_zoho_import.py tests/unit/test_crm_zoho_sync.py \
                   tests/unit/test_crm_routes.py tests/unit/test_crm_pipeline.py \
                   tests/unit/test_crm_convert.py tests/unit/test_crm_migration.py \
@@ -861,6 +975,13 @@ PR (R4).
                   tests/unit/test_org_access_enforcement.py -q
 
     cd workbench/control_plane && npx tsc --noEmit && npm test
+
+**Owner-verified after migrations 144 and 145 apply** (nothing below can be checked from the repo,
+and WS-26c deliberately did not reach for a database): the board renders real lanes in
+`position` order with their ₹ totals; dragging a card persists and the card stays put on
+reload; `?deal=<id>` opens the sheet on a real record and Back closes it; the convert modal's
+matches are the ones the server picks; a lost move is refused without a reason and accepted
+with one.
 
 ⚠️ Never `uv run pytest tests/unit/` bare — whole-directory collection hangs on the Windows
 box against the live DB. Name the files. The pr-check gates that bind: ruff

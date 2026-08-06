@@ -65,6 +65,21 @@ _LITERAL_EQ = re.compile(r"\b(\w+)\s*=\s*'([^']*)'")
 _IS_NULL = re.compile(r"\b(\w+)\s+IS\s+(NOT\s+)?NULL", re.I)
 #: ``<col> ILIKE :q``
 _ILIKE = re.compile(r"(\w+)\s+ILIKE\s+:(\w+)", re.I)
+#: ``<col> IN ('a', 'b')`` — a closed literal vocabulary. Added for WS-26b's
+#: activity push, whose whole safety property is the ``type IN ('note','task')``
+#: predicate that keeps ``status_change`` rows out of Zoho: without a reader
+#: for it the fake would answer with every activity and the test would pass
+#: against a query that pushes the funnel's own history upstream.
+_IN_LITERALS = re.compile(r"\b(\w+)\s+IN\s*\(\s*'([^)]*)'\s*\)", re.I)
+#: ``coalesce(<col>, :default) <= :param`` — the retry queues' "is it due yet"
+#: gate. Written as a coalesce rather than ``IS NULL OR <=`` so the predicate
+#: is ONE comparison the fake can read; a disjunction it read as "IS NULL"
+#: alone would answer that a backed-off row is due.
+_COALESCE_CMP = re.compile(
+    r"coalesce\((\w+),\s*:(\w+)\)\s*(<=|<|>=|>)\s*:(\w+)", re.I
+)
+#: ``<col> < :param`` — the attempt ceiling.
+_NUM_CMP = re.compile(r"\b(\w+)\s*(<=|<|>=|>)\s*:(\w+)")
 
 
 def _table(sql: str) -> str:
@@ -113,14 +128,56 @@ _DEFAULTS: dict[str, dict[str, Any]] = {
     },
     "crm_lost_reasons": {"position": 0},
     "crm_deal_contacts": {"is_primary": False},
-    "crm_activities": {},
+    # Migration 145's retry trio on the activity queue.
+    "crm_activities": {
+        "zoho_push_attempts": 0, "zoho_push_error": None,
+        "zoho_next_attempt_at": None,
+    },
     "crm_status_changes": {},
+    # Migration 145 (WS-26b). `zoho_dirty` defaults false on the four record
+    # tables too — see `_ZOHO_TRACKED` below, which cannot live here because
+    # those tables already have entries.
+    "crm_zoho_tombstones": {
+        "pushed_at": None, "attempts": 0, "last_error": None,
+        "next_attempt_at": None,
+    },
+    "crm_sync_cursors": {
+        "last_pulled_at": None, "last_run_at": None, "last_status": None,
+    },
+}
+
+#: Migration 145's column defaults on the four record tables. A row seeded
+#: without them must read back as Postgres would: `zoho_dirty = false`, not
+#: `None` — otherwise "is this row dirty" is answered by a missing key and the
+#: push phase's predicate looks correct while matching nothing. Same for the
+#: retry trio: `zoho_push_attempts = 0`, not NULL, or the `< :max_attempts`
+#: gate would exclude every row that has never failed.
+_ZOHO_TRACKED: dict[str, Any] = {
+    "zoho_dirty": False, "zoho_synced_at": None,
+    "zoho_push_attempts": 0, "zoho_push_error": None,
+    "zoho_next_attempt_at": None,
 }
 
 #: Tables whose rows carry the timestamp trio.
 _TIMESTAMPED = {
     "crm_organizations", "crm_contacts", "crm_leads", "crm_deals",
 }
+
+
+class _FakeSavepoint:
+    """What :meth:`FakeCrmDB.begin_nested` hands back — an async CM."""
+
+    def __init__(self, db: FakeCrmDB) -> None:
+        self._db = db
+
+    async def __aenter__(self) -> _FakeSavepoint:
+        self._db.savepoints += 1
+        return self
+
+    async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> bool:
+        if exc_type is not None:
+            self._db.savepoint_rollbacks += 1
+        return False  # never swallow — the caller's except decides
 
 
 class FakeCrmDB:
@@ -133,7 +190,13 @@ class FakeCrmDB:
         #: with the values it expects rather than merely that a write happened.
         self.calls: list[tuple[str, dict[str, Any]]] = []
         self.committed = 0
+        self.rollbacks = 0
         self.closed = False
+        #: Savepoints opened / exited through the rollback arm (WS-26b).
+        self.savepoints = 0
+        self.savepoint_rollbacks = 0
+        #: ``[needle, remaining]`` — see :meth:`fail_on`.
+        self._failures: list[list[Any]] = []
 
     # seeding ------------------------------------------------------------
     def seed(self, table: str, **columns: Any) -> SimpleNamespace:
@@ -146,6 +209,8 @@ class FakeCrmDB:
             row.setdefault("created_at", _now() - timedelta(days=1))
             row.setdefault("updated_at", _now() - timedelta(days=1))
             row.setdefault("last_activity_at", None)
+            for column, default in _ZOHO_TRACKED.items():
+                row.setdefault(column, default)
         self.tables.setdefault(table, []).append(row)
         return SimpleNamespace(**row)
 
@@ -159,14 +224,45 @@ class FakeCrmDB:
     async def commit(self) -> None:
         self.committed += 1
 
+    async def rollback(self) -> None:
+        self.rollbacks += 1
+
     async def close(self) -> None:
         self.closed = True
+
+    def begin_nested(self) -> _FakeSavepoint:
+        """The SAVEPOINT seam ``core.savepoint`` uses.
+
+        ⚠️ It does NOT undo writes — an in-memory dict has no MVCC. What it
+        models is the *shape*: that the SUT opens a savepoint per record and
+        that a raising record exits through the rollback arm. The property
+        that matters against a real database — "the transaction is not
+        poisoned" — is unobservable here, which is why the tests assert the
+        savepoint was TAKEN and that the batch, the cursor write and the
+        commit all still happen after a statement error.
+        """
+        return _FakeSavepoint(self)
+
+    def fail_on(self, needle: str, *, times: int = 1) -> None:
+        """Make the next ``times`` statements containing *needle* raise.
+
+        Simulates a driver-level statement error — a `numeric field overflow`,
+        a CHECK violation — which is the class of failure a plain
+        ``try/except`` around a record cannot actually contain in Postgres.
+        """
+        self._failures.append([needle, times])
 
     async def execute(self, sql: Any, params: dict | None = None) -> _Result:
         statement = " ".join(str(sql).split())
         args = dict(params or {})
         self.statements.append(statement)
         self.calls.append((statement, args))
+        for entry in self._failures:
+            if entry[0] in statement and entry[1] > 0:
+                entry[1] -= 1
+                raise RuntimeError(
+                    f"fake driver error on statement containing {entry[0]!r}"
+                )
         head = statement.split(None, 1)[0].upper()
         table = _table(statement)
         if head == "INSERT":
@@ -194,6 +290,8 @@ class FakeCrmDB:
             row.setdefault("created_at", _now())
             row.setdefault("updated_at", _now())
             row.setdefault("last_activity_at", None)
+            for column, default in _ZOHO_TRACKED.items():
+                row.setdefault(column, default)
         if table == "crm_deals":
             row.setdefault("status_changed_at", _now())
             row.setdefault("closed_at", None)
@@ -275,6 +373,27 @@ class FakeCrmDB:
         for column, negated in _IS_NULL.findall(where):
             seen = True
             rows = [r for r in rows if (r.get(column) is not None) is bool(negated)]
+        for column, listed in _IN_LITERALS.findall(where):
+            seen = True
+            wanted = {v.strip().strip("'") for v in f"'{listed}'".split(",")}
+            rows = [r for r in rows if str(r.get(column)) in wanted]
+        for column, default, operator, param in _COALESCE_CMP.findall(where):
+            seen = True
+            fallback = args.get(default)
+            rows = [
+                r for r in rows
+                if _compare(
+                    r.get(column) if r.get(column) is not None else fallback,
+                    operator, args.get(param),
+                )
+            ]
+        # Plain comparisons, with the coalesce ones removed first so their
+        # inner `<=` is not read twice.
+        for column, operator, param in _NUM_CMP.findall(_COALESCE_CMP.sub("", where)):
+            seen = True
+            rows = [
+                r for r in rows if _compare(r.get(column), operator, args.get(param))
+            ]
         ilike = _ILIKE.findall(where)
         if ilike:
             seen = True
@@ -316,6 +435,22 @@ class FakeCrmDB:
         elif re.search(r"\bLIMIT\s+1\b", statement, re.I):
             rows = rows[:1]
         return rows
+
+
+def _compare(left: Any, operator: str, right: Any) -> bool:
+    """One SQL comparison, with SQL's NULL semantics: unknown never matches."""
+    if left is None or right is None:
+        return False
+    try:
+        if operator == "<":
+            return bool(left < right)
+        if operator == "<=":
+            return bool(left <= right)
+        if operator == ">":
+            return bool(left > right)
+        return bool(left >= right)
+    except TypeError:  # naive/aware or mixed types — SQL would error; we skip
+        return False
 
 
 def _sortable(value: Any) -> Any:

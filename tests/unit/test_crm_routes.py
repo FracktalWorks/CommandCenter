@@ -465,9 +465,14 @@ async def test_delete_reports_what_cascaded(db: FakeCrmDB) -> None:
     db.seed("crm_activities", type="call", deal_id=deal.id, created_by="a@b.in")
     db.seed("crm_deal_contacts", deal_id=deal.id, contact_id=str(deal.id))
 
-    result = await crm_records.delete_record(DEALS, str(deal.id))
+    result = await crm_records.delete_record(DEALS, str(deal.id), USER)
 
     assert result.cascaded == {"crm_activities": 2, "crm_deal_contacts": 1}
+    # WS-26b: a record Zoho has never seen leaves no tombstone — there is
+    # nothing upstream to delete, and an un-pushable row would sit in the
+    # backlog forever.
+    assert result.zoho_delete_queued is False
+    assert not db.rows("crm_zoho_tombstones")
     counts = [s for s in db.statements if s.startswith("SELECT count(*)")]
     deletes = [s for s in db.statements if s.startswith("DELETE")]
     assert db.statements.index(counts[-1]) < db.statements.index(deletes[0])

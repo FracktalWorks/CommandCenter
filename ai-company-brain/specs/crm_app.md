@@ -1,11 +1,27 @@
 # CRM App — Master Plan (native CRM; Zoho CRM retirement path)
 
 > **Product:** CommandCenter · **Feature:** CRM (Sales Center's primary module) · **Created:** 2026-08-05
-> **Status:** 🟢 **WS-26a BUILT** (2026-08-05, branch `ws-26-crm-app`) — migration `144_crm.sql`
-> (§3.1–§3.10), `feature:crm` registered on both sides, `gateway/db.py` engine seam with
-> `routes/tasks/core.py` converted as its proof, and the `routes/crm/` API (§4 minus
-> `import_zoho.py`) live behind the feature gate. **Not deployed** — the migration has not been
-> applied anywhere. · **WS-26b–e: 🟡 SPEC, nothing built.** · **Owner:** vjvarada · **Board row:** WS-26
+> **Status:** 🟢 **WS-26a + WS-26b BUILT** (2026-08-05).
+> **26a** (branch `ws-26-crm-app`) — migration `144_crm.sql` (§3.1–§3.10), `feature:crm`
+> registered on both sides, `gateway/db.py` engine seam with `routes/tasks/core.py` converted
+> as its proof, and the `routes/crm/` API (§4 minus `import_zoho.py`) live behind the feature
+> gate.
+> **26b** (branch `ws-26b-zoho-sync`) — the two-way Zoho sync: `list_leads` +
+> `list_deleted` on the read client, the single write client
+> `ingestion/sources/zoho/writer.py` (one caller, grep-asserted), migration
+> `145_crm_zoho_sync.sql` (dirty columns + `crm_zoho_tombstones` + `crm_sync_cursors`),
+> `routes/crm/{import_zoho,sync_zoho,broker_handlers}.py`, the `crm.zoho_*` Action-Broker
+> handlers registered from `main.py`, and `CRM_ZOHO_SYNC` (ships **OFF**) gating only the
+> lifespan loop.
+> **Neither is deployed** — migrations 144 and 145 have not been applied anywhere, no backfill
+> has been run, and **nothing has ever written the Zoho tenant**: enabling the flag, the first
+> backfill and any hand-run cycle against prod are OWNER-GATE (`work_plan.md` §6).
+> · **WS-26c–e: 🟡 SPEC, nothing built.** · **Owner:** vjvarada · **Board row:** WS-26
+>
+> ⚠️ **`.env.example` cannot carry `CRM_ZOHO_SYNC`** — plan-guard blocks agent writes to it, so
+> the variable is documented here and in `acb_common/settings.py` only. Same for the
+> `.claude/hooks/plan-guard.mjs` OWNER_GATES entry WS-26b's ticket asks for: `.claude/` is
+> untracked, so that edit lands on the box-side copy, not in this change.
 >
 > **Not in WS-26a, on purpose:** `schema.generated.sql` was NOT regenerated (struck from
 > done-when 1 by the 2026-08-05 audit — it needs a migrated live DB and is ~43 migrations stale
@@ -61,8 +77,8 @@ system of record, Zoho becomes an import source, then Zoho is retired.**
   sync**, which requires a write client. The boundary that survives: the sync engine is the
   **single writer** — no route handler, agent tool, or skill calls Zoho directly, the write
   client has exactly one caller (grep-asserted), and the whole write path retires with
-  WS-26e. WS-1's "no Zoho write path exists" clause becomes stale the day this merges; the
-  WS-26b PR updates that clause in the same PR (board Authority rule: fix the mirror).
+  WS-26e. ✅ **Built 2026-08-05**; WS-1's "no Zoho write path exists" clause and the §4
+  registry row were corrected in the same change (board Authority rule: fix the mirror).
 
 ---
 
@@ -73,7 +89,8 @@ Zoho agent tool that calls the API, no write path, and no `lead` table anywhere.
 
 | What | Where |
 |---|---|
-| Client (OAuth refresh + paginated `GET /crm/v2/*`) | `apps/services/ingestion/ingestion/sources/zoho/client.py` — `list_accounts/deals/contacts/notes/tasks/users`. **No `list_leads`.** |
+| Client (OAuth refresh + paginated `GET /crm/v2/*`) | `apps/services/ingestion/ingestion/sources/zoho/client.py` — `list_accounts/deals/contacts/notes/tasks/users`, plus `list_leads` + `list_deleted` **added by WS-26b**. Still read-only. |
+| Write client (**added by WS-26b**, D-CRM-7) | `apps/services/ingestion/ingestion/sources/zoho/writer.py` — create/update/upsert/delete per module. Exactly ONE caller (`routes/crm/sync_zoho.py::execute_push`), grep-asserted; every call arrives broker-gated; retires with WS-26e. |
 | Normaliser (Accounts→Customer, Contacts/Users→Person, Deals→Deal) | `apps/services/ingestion/ingestion/sources/zoho/normaliser.py` |
 | Webhook receiver (shared-secret, fail-closed, enqueue-only) | `apps/services/ingestion/ingestion/sources/zoho/webhook.py`; registered `gateway/main.py` (`/webhooks/zoho` in `PUBLIC_ROUTES`) |
 | Nightly sync (02:50) + manual script | `ingestion/scheduler.py::_run_zoho` · `scripts/zoho_sync.py` |
@@ -86,8 +103,8 @@ Zoho agent tool that calls the API, no write path, and no `lead` table anywhere.
 Consequences that shape this plan:
 - **Migration is import-and-retire, not a live cutover.** Nothing user-facing breaks when
   Zoho goes away; only the mirror consumers above need repointing (Phase E).
-- **Leads were never mirrored** — the importer must add a read-only `list_leads` to the
-  existing client (one `GET`, same shape as its siblings; still zero write functions).
+- **Leads were never mirrored** — WS-26b added the read-only `list_leads` to the existing
+  client (one `GET`, same shape as its siblings).
 - The graph mirror keeps running untouched through Phases A–D; retiring it is Phase E.
 
 ---
@@ -234,7 +251,9 @@ Modules and endpoints (all under `feature:crm` unless noted):
 | `pipeline.py` | `GET /crm/pipeline` (deals grouped by status: rows ordered per-lane, count + `SUM(amount)` per lane) · `POST /crm/leads/{id}/convert` (§3.7) · status transition inside `PATCH` writes dwell log + activity + `status_changed_at` + probability default |
 | `activities.py` | `GET /crm/<entity>/{id}/timeline` (merged: activities ∪ status changes ∪ — Phase D — linked email threads; a deal's timeline unions its `lead_id`'s history, labeled) · `POST /crm/<entity>/{id}/activities` · `PATCH/DELETE /crm/activities/{aid}` (complete task, edit note) |
 | `admin.py` | `GET/POST/PATCH/DELETE /crm/statuses/{lead,deal}` + `/crm/lost-reasons` (reorder = PATCH `position`). Gated `feature:crm` (v1 decision D-CRM-3: the sales team manages its own pipeline; revisit when WS-24 admits colleague #1). `DELETE` on an in-use status → 409 (FK RESTRICT surfaces it). |
-| `import_zoho.py` | `POST /crm/import/zoho` — **gated `require_permission("admin:access:manage")`** (existing admin capability; minting nothing per `user_management_contract.md` §3). ⚠️ `integrations:use:zoho-crm` was the first choice and is **wrong**: `131_integration_memory_permissions.sql` grants `member` `integrations:use:*`, so under `permission_matches` every member would hold it — the code floor must be an admin capability; the §6 owner gate governs the *run* on top of it. §7.1. |
+| `import_zoho.py` | `POST /crm/import/zoho` — **gated `require_permission("admin:access:manage")`** (existing admin capability; minting nothing per `user_management_contract.md` §3). ⚠️ `integrations:use:zoho-crm` was the first choice and is **wrong**: `131_integration_memory_permissions.sql` grants `member` `integrations:use:*`, so under `permission_matches` every member would hold it — the code floor must be an admin capability; the §6 owner gate governs the *run* on top of it. §7.1. Also owns the Zoho→native **field mapping**, which `sync_zoho.py` imports rather than re-deriving. |
+| `sync_zoho.py` | The two-way sync engine (§7.1's seven bullets) + `POST /crm/sync/zoho` (same `admin:access:manage` floor; runs one cycle **with or without** `CRM_ZOHO_SYNC`) + the gateway-lifespan loop, flag-gated. `execute_push` is the writer's only caller. |
+| `broker_handlers.py` | The Action-Broker gate every push crosses and the three `crm.zoho_*` handlers, registered from `main.py` exactly like `register_task_broker_handlers` (D-CRM-8). **Registers no routes** — deliberately not imported from `__init__.py`. |
 
 Rules that bind (from `user_management_contract.md`): identity from
 `X-User-Email` only (R3); no `PUBLIC_ROUTES` additions — the BFF proxies everything (R2);
@@ -366,11 +385,113 @@ faithful until cutover:
 - **Pull cursors are schema too:** `crm_sync_cursors` (`module` PK, `last_pulled_at`,
   `last_run_at`, `last_status`) — incremental pull without a persisted per-module cursor
   re-reads the world after every restart. Both new tables + the dirty columns land in one
-  migration at the next free number (145 free as of this audit), with 26a's static
-  idempotency fence extended to it.
+  migration at the next free number (landed as `145_crm_zoho_sync.sql`), with 26a's static
+  idempotency fence extended to it — found by CONTENT, never by number (R1).
+  **Two rules the cursor has to obey, both found by the 26b verifier:**
+  1. **One snapshot per cycle, read before anything moves.** The pull phase writes cursors
+     as it goes, so a deleted-records read that fetched the cursor *afterwards* would get
+     the watermark that very cycle just wrote — and Zoho would answer "nothing deleted"
+     for every deletion older than this cycle's newest `Modified_Time`. Those deletions are
+     missed **permanently**: the cursor only moves forward, so no later cycle asks about
+     that window again. `read_cursors()` snapshots once and both phases take it as an
+     argument.
+  2. **The watermark is the newest record that APPLIED, capped below the OLDEST that
+     failed.** `If-Modified-Since` is a single instant, so a failed record stays retryable
+     only while the cursor is strictly below it — and the failure may well be *older* than
+     a success in the same batch, which is why the ceiling is the oldest failure and not
+     simply "don't use the newest fetched". Full rule: nothing fetched ⇒ **keep** the
+     existing watermark, adopting the cycle start only when there isn't one (so an unchanged
+     module stops re-reading its table, while a momentarily empty window does not drag the
+     cursor forward to now); nothing applied ⇒ stand
+     still; a failure we cannot place in time (no readable `Modified_Time`) ⇒ stand still,
+     because "we do not know" must not read as "nothing failed"; otherwise the newest
+     applied, never backwards. **Accepted cost:** a record that fails every cycle pins that
+     module's cursor and its window is re-read every ten minutes until it applies. That is
+     the deliberate direction — the pull is idempotent, so a repeated window is wasted work
+     while an advanced cursor is lost data — and it is never silent: `pull_record_errors`
+     is non-zero and `last_status` stays `'partial'` on every such cycle. Per-record apply
+     failures are also folded into the cycle summary count; a cycle that dropped nine
+     records must not log `errors=0`.
+  3. **The pull asks for `sort_by=Modified_Time&sort_order=asc`.** Zoho's default order is
+     that key DESCENDING, so a record edited between page 1 and page 2 — by anyone, our own
+     push included — jumps to the front and shifts every later record back one slot, and the
+     record that sat on the page boundary is never returned. Ascending makes the sequence
+     append-only for the duration of the pull.
+- **Transaction shape — one bad record must not lose the batch, and Postgres does not
+  agree by default.** A statement error aborts the whole transaction, not the statement, so
+  a per-record `try/except` "survives" a bad row while in fact losing every row after it,
+  the cursor write and the commit — and the next cycle repeats it identically forever.
+  Every applied record and every push therefore runs inside a **SAVEPOINT**
+  (`core.savepoint`), each phase commits its own work, and each pull module commits WITH its
+  cursor. `_number()` additionally clamps values outside `NUMERIC(14,2)` to NULL, because
+  Zoho's currency fields have no such ceiling and one fat-fingered amount is otherwise a
+  poisoned transaction rather than a bad row.
+- **The external write is committed before anything else runs.** Zoho's API has no
+  idempotency token, so the window between "the create returned 200" and "the `zoho_id` is
+  durable locally" is a duplicate factory: a crash or an aborted transaction in it loses the
+  id while the record exists upstream, and every later cycle creates ANOTHER. Push → stamp →
+  **commit**, per record. For the same reason `stop_crm_zoho_sync` signals and waits
+  (`STOP_GRACE_SECS`) rather than cancelling: a cancel lands wherever the cycle happens to
+  be, including inside that window.
+- **One cycle at a time.** `run_cycle` takes a process-wide lock and a second caller gets
+  **409** (`POST /crm/sync/zoho`) or skips (the loop). Two overlapping cycles see the same
+  dirty rows and both create them upstream. ⚠️ The lock is in-process, which is correct only
+  while the gateway runs as a single worker — a second worker needs
+  `pg_advisory_xact_lock` on the same key.
+- **Failure has a ceiling.** Both push queues (records + activities, and tombstones) carry
+  `attempts` / `last_error` / `next_attempt_at`: exponential backoff, and after
+  `MAX_PUSH_ATTEMPTS` the row is parked, counted in `pushed.given_up` and logged at ERROR.
+  Without it a row Zoho will never accept sits at the front of an oldest-first `LIMIT` queue
+  forever and starves everything behind it. A tombstone whose record Zoho no longer has
+  (404, or a 200 carrying `RECORD_NOT_IN_MODULE`) is a **success** — the goal state holds.
+- **Approval writes state back.** Under broker enforcement the queued push, when approved,
+  runs through the same `apply_push_result` the inline path uses — otherwise every approval
+  performs the write and records nothing, so the row stays dirty and each approval mints
+  another copy upstream. The gate also refuses to enqueue a second proposal for an
+  `(action, target)` already pending: the row is re-offered every cycle by design, which at
+  ten-minute ticks is 144 identical inbox rows per day per stuck record.
 - **Conflicts:** record-level last-writer-wins comparing Zoho `Modified_Time` against
   native `updated_at`; both-changed conflicts are counted and logged per cycle, never
   silent. No field-level merge in v1 (D-CRM-6 amended).
+- **The sync must not mutate native data by echoing itself.** Three rules, all learned
+  from the 26b verifier's round-trip reading:
+  - **`source` is provenance and is written on INSERT only.** It is deliberately excluded
+    from the `ON CONFLICT` arm (`core.INSERT_ONLY_COLUMNS`), so a row typed into this app
+    stays `'manual'` after the sync pushes it up and pulls it back. Rewriting it would flip
+    every native-origin row to `'import'` on its first echo — a silent one-way rewrite of
+    the column the `?source=` filter reads.
+  - **Zoho's required fields are PADDED on push and un-padded on pull.** Zoho makes fields
+    NOT NULL that §3.2/§3.3 allow to be blank (a Contact needs `Last_Name`; a Lead needs
+    `Last_Name` and `Company`), so the push fills them from a field that is always
+    populated. `import_zoho.strip_padding_echo` drops a pulled value when — and only when —
+    the native column is NULL *and* the value is exactly what we would have padded it from.
+    Accepted cost, stated: a human in Zoho who genuinely types `Last_Name` = the first name
+    onto a contact whose native surname is blank is indistinguishable from our padding, and
+    the native column stays NULL. `PADDED_FROM` is held to `to_zoho_*` by a test that reads
+    the builders' **source** (AST-walks each for the `or`-fallback that IS a pad) rather
+    than restating the map — a pad added without a guard entry fails there.
+  - **Anything DERIVED from a padded field is derived after the strip, never inside the
+    mapper.** `crm_leads.lead_name` is §3.3's fallback chain over first/last/organization —
+    two of which the push pads — so deriving it in `map_lead` folded our own padding into
+    the display name: a lead called "Asha" came back "Asha Asha", and `lead_name` is on the
+    conflict arm, so every cycle rewrote it. `map_lead` therefore does **not** emit
+    `lead_name`; `apply_record` computes it after `strip_padding_echo`.
+  - **Activity DELETES sync in NEITHER direction, while activity creates do.** A note
+    deleted here survives in Zoho; one deleted in Zoho survives here. **Accepted v1 cost**
+    (P2, 2026-08-05 review): an activity is an append-mostly log entry whose stale copy
+    misleads nobody about the pipeline, Zoho is being retired, and closing it means a second
+    tombstone path plus a delete predicate over a table with four nullable parents. Records —
+    where a stale copy IS misleading — propagate deletes both ways. `apply_zoho_deletes`
+    iterates `RECORD_MODULES` only and says so; `activities.delete_activity` says so too.
+    ⚠️ Do not close one direction alone: a native tombstone without the matching Zoho→native
+    delete makes the two sides disagree in a NEW way.
+  - **A native field CLEAR does not reach Zoho, and the next pull restores the old value.**
+    The push prunes `None` (sending it would CLEAR the field at Zoho, so a column we simply
+    do not carry would blank the tenant's copy every cycle) — which means "user emptied
+    this field" and "we have nothing for this field" are the same wire state, and Zoho's
+    surviving value comes back on the next pull. **Accepted, not fixed:** distinguishing
+    them needs per-field dirty tracking, i.e. exactly the field-level merge D-CRM-6 rules
+    out for v1. Clearing a field on both sides, or clearing it in Zoho, both work.
 - **Pipeline vocabulary flows DOWN only** while sync is on: stage/status picklists are
   managed in Zoho and auto-created natively (as backfill already does); native status
   creation is not pushed (Zoho picklist mutation needs settings-API writes — out of scope,
@@ -526,9 +647,109 @@ Done when:
    (`tests/unit/test_org_access_enforcement.py`), added deliberately — that registry is
    the test's opinion, not the router's.
 
-### WS-26b — Zoho two-way sync · 🟢 build / 🔴 **OWNER-GATE to enable against prod**
+### WS-26b — Zoho two-way sync · ✅ **BUILT 2026-08-05** / 🔴 **OWNER-GATE to enable against prod**
 *(Re-scoped 2026-08-05 per D-CRM-7; audited GO-NARROWED the same day and repaired —
-blockers 1–9 folded in below.)*
+blockers 1–9 folded in below. Landed on branch `ws-26b-zoho-sync` as
+`ingestion/sources/zoho/{client.py→list_leads+list_deleted, writer.py}` +
+`infra/postgres/145_crm_zoho_sync.sql` +
+`apps/services/gateway/gateway/routes/crm/{import_zoho,sync_zoho,broker_handlers}.py` +
+the `core.py` dirty-marking choke point and `records.py` tombstone-in-delete, fenced by
+`tests/unit/test_crm_zoho_{import,sync}.py` — 129 new cases, zero DB and zero network, plus
+26a's migration fence extended to the second migration. **Built, not run:** no backfill and
+no cycle has ever executed against the tenant.)*
+
+**Build-time decisions, recorded post-hoc (WS-26b implementer — owner may overrule):**
+- **C1** — the dirty-marking choke point is `core.insert_row`/`core.update_row`, keyed on
+  the EXISTING `touch` flag. A pull applies with `touch=False`, which already meant "do not
+  bump `updated_at`"; reusing it means "is this a real edit" and "should this be pushed back"
+  are one switch that cannot disagree, and a route added later inherits both. The create half
+  keys on the payload instead — a row arriving with a `zoho_id` came FROM Zoho and is not born
+  dirty — so no caller has to remember a flag.
+- **C2** — **activities carry no dirty column.** Their push signal is a NULL `zoho_id`: an
+  activity is a log entry, so "has it been pushed" and "has it changed" are the same question,
+  and stamping the id on success is what makes the push idempotent. This is why migration 145
+  alters only the four record tables.
+- **C3** — the Zoho→native field mapping lives in `import_zoho.py` and the sync engine
+  imports it. A backfill and a pull that map `Deal_Name` differently is a divergence nobody
+  notices until the counts stop matching.
+- **C4** — the broker gate + `crm.zoho_*` handlers live in `routes/crm/broker_handlers.py`,
+  which deliberately does **not** import the writer: an approved queued push re-enters through
+  `sync_zoho.execute_push`, so the writer keeps exactly one import site and the grep assertion
+  stays meaningful.
+- **C5** — a **queued** push (broker enforcement ON) leaves the row dirty and stamps nothing.
+  BO-1b is the same bug on the ClickUp side: treating the `pending` marker as success shows a
+  row as synced that exists in no tenant.
+- **C6** — a Zoho→native delete bypasses `records.delete_record` and therefore writes **no**
+  tombstone. A tombstone there would push the deletion straight back at the tenant that just
+  reported it — an echo in the most destructive direction available.
+- **C7** — `DELETE /crm/<entity>/{id}` now takes the acting user (for `deleted_by`) and its
+  response gained `zoho_delete_queued`, so a caller is told the deletion leaves this app.
+
+**Verifier repairs (2026-08-05, same branch — five findings, all taken):**
+- **V1 (was a FAIL)** — the deleted-records read took its cursor *after* `pull_phase` had
+  already advanced it, so any Zoho deletion older than that cycle's newest `Modified_Time`
+  was silently and **permanently** missed. Cursors are now snapshotted once
+  (`read_cursors()`) before either phase and passed to both. Pinned by a test asserting the
+  `<module>/deleted` read's `since` equals the PRE-cycle cursor and is strictly older than
+  the cursor the same cycle wrote.
+- **V2** — the pull cursor advanced to the newest *fetched* record even when some records
+  failed to apply, dropping them permanently; and the cycle summary counted only the
+  cycle-level and push-level error lists, logging `errors=0` over a batch that lost rows.
+  Now `advance_cursor()` watermarks on the newest successfully **applied** record and
+  `SyncCycleReport.pull_record_errors` folds the per-record failures into the summary.
+  *(Re-verification: the first repair was still wrong when the failure was **older** than a
+  success — `apply_module` now returns a `ModulePass` carrying both `newest_applied` and
+  `oldest_failed`, and the cursor may only move strictly below the oldest failure. The
+  pinned-cursor cost of that is recorded in §7.1.)*
+- **V3** — three echo mutations. `source` is now insert-only (see §7.1); the push's padding
+  of Zoho's required fields is stripped on the way back in (`strip_padding_echo`), with the
+  one indistinguishable case recorded in §7.1 rather than hidden; and `lead_name` — which is
+  DERIVED from two padded fields — is computed after the strip instead of inside `map_lead`,
+  which had it round-tripping "Asha" into "Asha Asha" on the conflict arm.
+  *(Re-verification found that third one, and that the map-vs-padder drift test restated
+  `PADDED_FROM` instead of reading `to_zoho_*`; it now AST-walks the builders.)*
+- **V4** — a native field clear never reaching Zoho is **documented as an accepted cost** of
+  D-CRM-6's no-field-level-merge (§7.1), not changed.
+- **V5** — `writer.upsert_record` was exported and never called (`execute_push` branches the
+  verb itself). Deleted: the single write surface should stay countable, and "upsert by id"
+  is a decision in `push_records`, not a verb.
+
+**Adversarial-review repairs (2026-08-05, same branch — six findings, all real
+Postgres/Zoho semantics the unit fakes cannot see):**
+- **A1 (P1)** — the cycle was ONE transaction with no savepoints, so a single statement
+  error (a Zoho amount overflowing `NUMERIC(14,2)`) aborted it, took every later statement,
+  rolled back the cursor, and made the next cycle die identically forever. Now: a SAVEPOINT
+  per applied record and per push (`core.savepoint`), a commit per phase and per pull
+  module, and `_number()` clamps out-of-range values to NULL.
+- **A2 (P1)** — Zoho writes happened inside the transaction that recorded them, so an abort
+  after a successful create discarded the stamped `zoho_id` and the next cycle made a
+  DUPLICATE (Zoho has no idempotency token). Now: write → stamp → **commit** per record, and
+  `stop_crm_zoho_sync` signals + waits instead of cancelling mid-cycle.
+- **A3 (P1)** — the broker approval path never wrote state back, so under enforcement every
+  approval minted another duplicate and nothing converged; and nothing deduped the queue.
+  Now: the handler shares `apply_push_result` with the inline path, and the gate skips
+  enqueueing when an identical `(action, target)` is already pending.
+- **A4 (P1)** — no failure ceiling: poison rows starved both oldest-first queues forever.
+  Now: `attempts`/`last_error`/`next_attempt_at` on all three push queues (migration 145,
+  edited in place — still unapplied), exponential backoff, a give-up threshold counted in
+  `pushed.given_up` and logged at ERROR, and a tombstone whose Zoho record is already gone
+  counts as success.
+- **A5 (P1)** — `POST /crm/sync/zoho` had no reentrancy guard, so overlapping cycles
+  double-created. Now a process-wide lock: 409 for a second caller, skip for the loop.
+- **A6 (P2)** — activity deletes sync in neither direction while creates do. **Documented as
+  an accepted v1 cost** (§7.1) rather than built, with both `apply_zoho_deletes` and
+  `activities.delete_activity` stating it; closing one direction alone would be worse.
+- Mirror nits taken with them: the "adopt cycle start" prose now matches the code (nothing
+  fetched KEEPS the previous watermark), the RFC-1123-vs-ISO `If-Modified-Since` question is
+  recorded as an owner pre-flip `curl`, and the pull asks for
+  `sort_by=Modified_Time&sort_order=asc` to close the page-shift window.
+- **Also, from 26c's verifier** — `import_zoho`'s deal-contact link inserted a literal
+  `is_primary = true`, so a deal with a hand-set primary A whose Zoho record names B ended
+  up with **two** primaries (the one-primary rule is code, not a constraint). `is_primary` is
+  now computed inside the INSERT from `NOT EXISTS (… WHERE deal_id = :deal_id AND
+  is_primary)`, which also closes the read-then-write race and stays correct under the
+  one-primary seam WS-26c adds.
+
 Done when:
 1. `list_leads` **and a deleted-records read function** added to the client; Zoho **write**
    functions exist only in `ingestion/sources/zoho/writer.py` (create/update/delete per
@@ -561,7 +782,23 @@ Done when:
    registry row's *"the CRM never adds one"* clause (already softened 2026-08-05; finish
    it when the writer lands).
 **Enabling the flag, the first backfill, and any hand-run cycle against prod Zoho+DB are
-registered in §6 — the sync WRITES the live Zoho tenant.** ⚠️ `.env.example` cannot
+registered in §6 — the sync WRITES the live Zoho tenant.**
+
+⚠️ **Owner pre-flip check, one `curl` (unverifiable from the repo).** The client sends
+`If-Modified-Since` in **RFC 1123** (`Tue, 01 Jan 2026 00:00:00 +0000`) — the form the
+existing `_list_module` has always used. Zoho's v2 docs also describe an **ISO-8601**
+`If-Modified-Since`, and the two are not interchangeable: if the tenant ignores an
+unparseable header it returns EVERYTHING, and the pull is silently full rather than
+incremental (correct, idempotent, and far more expensive) — while if it errors, the pull
+fails loudly and is caught. Before the first enable, confirm which form the tenant honours:
+
+    curl -sD- -o/dev/null "$ZOHO_API_DOMAIN/crm/v2/Accounts?per_page=1" \
+      -H "Authorization: Zoho-oauthtoken $TOKEN" \
+      -H "If-Modified-Since: $(date -R -d '1 hour ago')"
+
+A `304` (or a short body) means RFC 1123 is honoured. A full first page means it is being
+ignored — switch the format in `client._with_modified_since`, which is the single place
+both readers build it. ⚠️ `.env.example` cannot
 document the new flag (plan-guard protects it); the PR body must carry the var for the
 owner. Also owed by this ticket: add `CRM_ZOHO_SYNC` (and `CRM_AUTO_LEAD`) to
 `.claude/hooks/plan-guard.mjs` OWNER_GATES per that file's own "§6 changes update
@@ -616,8 +853,9 @@ PR (R4).
 
 ## 10. Verification
 
-    # WS-26a (test_crm_zoho_import.py exists only from WS-26b onward — add it then):
-    uv run pytest tests/unit/test_crm_routes.py tests/unit/test_crm_pipeline.py \
+    # WS-26a + WS-26b:
+    uv run pytest tests/unit/test_crm_zoho_import.py tests/unit/test_crm_zoho_sync.py \
+                  tests/unit/test_crm_routes.py tests/unit/test_crm_pipeline.py \
                   tests/unit/test_crm_convert.py tests/unit/test_crm_migration.py \
                   tests/unit/test_org_access_control.py \
                   tests/unit/test_org_access_enforcement.py -q

@@ -53,20 +53,60 @@ def async_database_url() -> str:
     return db_url
 
 
+#: Ceiling on how long one of OUR sessions may sit `idle in transaction`, in ms.
+#:
+#: This is a lock-release deadline, not a performance knob. SQLAlchemy's
+#: ``AsyncSession`` opens a transaction on first ``execute()`` and holds it until
+#: commit/rollback/close, so a handler that reads a row and then awaits a slow
+#: network call is `idle in transaction` — holding an ACCESS SHARE lock — for the
+#: whole call. That is normal and fine. What is not fine is an await that never
+#: returns: on 2026-08-06 a hung LLM call pinned one such transaction for 14h44m,
+#: a migration's ``ALTER TABLE`` queued behind its lock, and because Postgres's
+#: lock queue is FIFO every later reader of that table queued behind the *waiting*
+#: ALTER. Sending mail stopped, and the pool drained behind the blocked readers.
+#:
+#: ⚠️ MUST stay comfortably above the LLM wall-clock worst case, because the email
+#: automation package legitimately awaits completions with a session open.
+#: ``acb_llm.client`` bounds one call at 3 attempts x 90s + 6s backoff ≈ 276s. At
+#: 600s a genuine retrying completion can never trip this, while a hang is capped
+#: at ten minutes instead of unbounded. Raise ``LLM_REQUEST_TIMEOUT_SECS`` and you
+#: must raise this too — that coupling is the whole reason both numbers are
+#: written down next to their reasoning.
+_IDLE_IN_TXN_TIMEOUT_MS = "600000"  # 10 minutes
+
+
+def engine_connect_args() -> dict[str, Any]:
+    """Driver-level connect args every gateway engine should share.
+
+    Two bounds, both about failing instead of hanging:
+
+    * ``timeout`` — asyncpg's CONNECT-phase ceiling, so a slow or unreachable DB
+      fails fast rather than stalling request handlers.
+    * ``idle_in_transaction_session_timeout`` — the server-side deadline above.
+      Set through asyncpg's ``server_settings`` so it rides the connection's
+      startup packet and applies to every session from this pool, with no
+      migration and no ``ALTER ROLE``. Scoping it to the app's own connections is
+      deliberate: ``pg_dump`` and the migration runner connect as the same role
+      and must NOT inherit an app-tuned deadline.
+    """
+    return {
+        "timeout": get_settings().db_connect_timeout,
+        "server_settings": {
+            "idle_in_transaction_session_timeout": _IDLE_IN_TXN_TIMEOUT_MS,
+        },
+    }
+
+
 def get_engine() -> Any:
     """The shared pooled async engine, created on first use."""
     global _ENGINE
     if _ENGINE is None:
         from sqlalchemy.ext.asyncio import create_async_engine
 
-        settings = get_settings()
         _ENGINE = create_async_engine(
             async_database_url(), echo=False, pool_pre_ping=True,
             pool_size=10, max_overflow=20, pool_recycle=1800,
-            # Bound the CONNECT phase (asyncpg's `timeout`) so a slow or
-            # unreachable DB fails fast instead of stalling request handlers —
-            # same ceiling as acb_graph's engine.
-            connect_args={"timeout": settings.db_connect_timeout},
+            connect_args=engine_connect_args(),
         )
     return _ENGINE
 

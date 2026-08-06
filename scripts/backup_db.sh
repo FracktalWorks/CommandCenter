@@ -200,9 +200,18 @@ cd "$BACKUP_DIR"
 # ISO-8601 UTC with a fixed width — lexical order IS chronological order.
 total="$(ls -1d [0-9]*Z 2>/dev/null | wc -l)"
 if [ "$total" -gt "$KEEP_DAILY" ]; then
+  # Pruning failure must NOT fail the backup. Under `set -e` a bare `rm -rf`
+  # hitting one unremovable dir (2026-08-06: a root-owned dir left by the
+  # pull unit's User=root era) aborted the script AFTER the dump had already
+  # succeeded — and because apply_migrations.sh fail-closes on this script's
+  # exit code, one stale directory blocked every deploy on the box. The dump
+  # is the product; retention is housekeeping. Warn loudly, keep the exit 0.
   ls -1d [0-9]*Z | head -n "-$KEEP_DAILY" | while read -r old; do
     echo "    pruning $old"
-    rm -rf "$old"
+    if ! rm -rf "$old" 2>/dev/null; then
+      warn "could not prune $old (permissions?) — backup itself SUCCEEDED;"
+      warn "fix ownership (chown -R acb:acb $BACKUP_DIR) to resume pruning."
+    fi
   done
 fi
 echo "    $(ls -1d [0-9]*Z 2>/dev/null | wc -l) backup(s) retained, $(du -sh "$BACKUP_DIR" | cut -f1) total"

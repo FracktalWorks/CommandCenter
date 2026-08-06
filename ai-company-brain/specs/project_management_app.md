@@ -1,7 +1,9 @@
 # Projects App — Master Plan (native project management; ClickUp retirement path)
 
 > **Product:** CommandCenter · **Feature:** Projects (the People Center's primary work-management
-> module, sliced into every other Center) · **Created:** 2026-08-05 · **Status:** 🔲 **SPEC,
+> module, sliced into every other Center) · **Created:** 2026-08-05 · **Updated:** 2026-08-06
+> (owner pass — §8's three open questions are answered as **D-PM-8/9/10**; §7.1 gains the
+> Space→Center mapping step and WS-27b's done-whens grew with it) · **Status:** 🔲 **SPEC,
 > nothing built** — no migration, no routes, no UI · **Owner:** vjvarada · **Board row: WS-27**
 >
 > **Not in WS-27a, on purpose:** sprints, custom fields, time tracking, a docs/wiki surface,
@@ -260,7 +262,7 @@ on tasks). No engine 13.
 | `admin.py` | statuses + types CRUD per root project (`RESTRICT` delete answers 409 naming the count in use) |
 | `views.py` | views CRUD · `PUT /projects/views/{id}/positions` (bulk upsert) |
 | `me.py` | `GET /projects/assigned-to-me` — the personal lens's read (§6.1) |
-| `sync.py` (WS-27b/c) | `POST /projects/import/clickup` · `POST /projects/sync` · `GET /projects/sync/status` · `GET /projects/sync/conflicts` |
+| `sync.py` (WS-27b/c) | `POST /projects/import/clickup/plan` (proposes a Center per Space, writes nothing) · `POST /projects/import/clickup` (applies the confirmed mapping) · `POST /projects/sync` · `GET /projects/sync/status` · `GET /projects/sync/conflicts` |
 
 Patterns carried from `routes/crm/core.py`: the frozen `Entity` registry dict (segment
 matched against it, never interpolated), sort keys as an allowlist (unknown = 422), typed
@@ -368,8 +370,12 @@ delegation uses), records an `agent_run` activity on the task immediately (Paca'
 says anything), and the agent works the task through a `skill-projects` tool family over
 this API under its own `agent:<name>` identity — permission-intersected with the acting
 member via `EffectiveAccess.intersect()`. Run completion/failure posts a closing activity.
-**No autonomous ClickUp write results**: during coexistence, agent edits to `pm_*` reach
-ClickUp only through the WS-27c sync chokepoint like every other local edit.
+**Agent edits are ordinary edits (D-PM-9):** during coexistence an agent may work linked
+tasks as well as native ones, and its changes reach ClickUp through the WS-27c sync
+chokepoint on exactly the same terms as the owner's own — auto-applying while
+`ACTION_BROKER_ENFORCE` is off, attributable and timeline-reversible either way. Read
+D-PM-9's Cost paragraph before building this: it names what that does and does not
+guarantee.
 
 ### 6.5 Email / WhatsApp / Notes
 Bind at the activity spine: email-to-task capture (`capture_email.py`) gains a `pm_tasks`
@@ -393,16 +399,42 @@ inverts it **for project management only** — CommandCenter becomes the system 
 ClickUp is retired — the same recorded inversion `crm_app.md` §1 made for Zoho. The
 amendment lands in root `AGENTS.md` in the WS-27g PR, not before.
 
-### 7.1 Import (WS-27b)
-An org-level pull using an owner-connected `task_accounts` credential: Spaces → root
-projects, Folders → subprojects, Lists → subprojects (leaf containers), tasks + subtasks →
-`pm_tasks` with `parent_task_id`, per-list statuses → root-project `pm_task_statuses`
-(union by name, `category` mapped from ClickUp status type), assignees → emails via the
-member map `schema_cache` already holds, everything stamped `source='import'` +
-`clickup_id`. Re-runnable: upsert on `clickup_id`; **during coexistence a re-import is
-last-import-wins on ClickUp-sourced fields only** (never on rows/fields the sync marks
-locally newer, §7.2). Import summary reports per-entity counts; parity check = ClickUp
-count vs `pm_*` count per Space.
+### 7.1 Import (WS-27b) — plan, then apply
+
+**Step 1 — the mapping plan (D-PM-10).** `POST /projects/import/clickup/plan` reads the
+workspace and returns one row per Space: the Space, its task/subtask counts, a **suggested
+Center**, a confidence, and the evidence behind the suggestion. Three signals, cheapest and
+most reliable first:
+
+1. **Assignee overlap** — the share of the Space's task assignees who are members of each
+   `org_group`. Deterministic, no LLM, and the strongest signal the platform already holds.
+2. **Name match** — the Space name against Center names, slugs, and their aliases.
+3. **Content classification** — a sampled set of task/subtask titles classified through
+   `acb_llm`'s tiered routing. **EVAL-LOCKED**, like `routes/tasks/ai.py::propose`.
+
+The plan is **pre-filled from existing grants** on re-run, so a mapping the owner has
+already confirmed is stable and a re-import can never silently re-map a Space. Suggestions
+are proposals: nothing is applied from this endpoint.
+
+**Step 2 — the import.** The owner's confirmed mapping is passed to
+`POST /projects/import/clickup`, which pulls with an owner-connected `task_accounts`
+credential: Spaces → root projects, Folders → subprojects, Lists → subprojects (leaf
+containers), tasks + subtasks → `pm_tasks` with `parent_task_id`, per-list statuses →
+root-project `pm_task_statuses` (union by name, `category` mapped from ClickUp status type),
+assignees → emails via the member map `schema_cache` already holds, everything stamped
+`source='import'` + `clickup_id`. Each **mapped** Space's root project also gets a
+`group:<slug>` grant — that grant is the entire mechanism by which the Space becomes a
+Center's slice.
+
+**Unmapped Spaces still import, in full.** They simply receive **no group grant**, which
+leaves them reachable in `/projects` for `data:org:read` holders (the People Center's
+full-portfolio view) and for anyone assigned to their tasks — so nothing is stranded or
+invisible to the owner. Mapping one later is a grant write, never a re-import.
+
+Re-runnable: upsert on `clickup_id`; **during coexistence a re-import is last-import-wins
+on ClickUp-sourced fields only** (never on rows/fields the sync marks locally newer, §7.2).
+Import summary reports per-entity counts; parity check = ClickUp count vs `pm_*` count per
+Space.
 
 ### 7.2 Coexistence — two-way sync (WS-27c), the genuinely novel surface
 Nothing in the repo does bidirectional reconciliation today; this is designed here, not
@@ -505,14 +537,55 @@ documents) and manual conflict queues (an approval inbox for field merges would 
 owner). **Cost:** `clickup_snapshot` storage per linked task and a merge function that must
 be property-tested (§10).
 
-**Open questions for the owner (deliberately unimplemented):**
-- Does the People Center's full-portfolio view satisfy the "even more teams and centers if
-  needed" requirement via `data:org:read` + group grants, or is a dedicated portfolio/
-  program layer (projects grouped across departments) wanted in v1?
-- During coexistence, may **agents** edit ClickUp-linked `pm_tasks` (their edits then sync
-  outward through the broker), or are agents restricted to native-only projects until
-  cutover?
-- Which ClickUp Spaces are in scope for the first import (all, or a pilot department)?
+~~**Open questions for the owner (deliberately unimplemented):** portfolio layer? · agent
+writes during coexistence? · first-import scope?~~ — **ALL THREE ANSWERED 2026-08-06.** Kept
+struck rather than deleted so the answers below read as decisions taken, not defaults
+inherited. They are D-PM-8, D-PM-9 and D-PM-10.
+
+**D-PM-8 — No portfolio/program layer; grants are the only grouping axis.**
+`DECISION (owner-answered 2026-08-06).` A project may carry several grants at once, so a
+genuinely cross-department initiative appears in both Centers without a second grouping
+axis, and the People Center sees the whole forest through `data:org:read` (§4).
+**Rejected:** a `pm_programs` table above departments — it is a second axis every view,
+filter and picker would have to carry, for an expressiveness the grant model already has.
+**Cost:** a cross-cutting initiative is expressed as multiple grants on one project (or a
+shared parent project), not as a named program. If named programs are wanted later they are
+purely additive — a table plus a nullable column — and nothing in §3 forecloses them.
+
+**D-PM-9 — Agent edits to ClickUp-linked tasks are treated exactly like human edits.**
+`DECISION (owner-answered 2026-08-06 — the agent proposed queueing agent-originated pushes
+for approval and was overruled).` An agent may work any task it can see, native or linked,
+and its edits sync outward through the same `_broker_gate` path as the owner's own.
+**Rejected:** (a) asymmetric approval for agent-originated pushes — it would have made
+agents second-class actors in a model whose whole point (D-PM-4) is one actor vocabulary;
+(b) restricting agents to native-only projects until cutover — that would leave agents
+useless on the existing portfolio for the entire coexistence period, which is most of
+WS-27's life. **Cost, stated once and plainly:** `_broker_gate` auto-applies by default
+(`ACTION_BROKER_ENFORCE` unset), so during coexistence a mistaken agent edit reaches the
+live ClickUp workspace with no human in between. Three properties bound that cost and
+**none of them is a gate — do not describe them as one**: every agent edit is attributable
+(`created_by='agent:<name>'` on the activity, plus the broker audit row), reversible from
+the timeline (§3.8's `field_change` carries old and new), and the whole class becomes
+queue-on-approval the moment `ACTION_BROKER_ENFORCE` is flipped — itself an owner gate, and
+one whose two flip-blockers (BO-1a, BO-1b) WS-27c already depends on. **Consequence that
+motivated the call:** WS-27f's agent dispatch is demoable against real portfolio data
+during coexistence rather than only against tasks created after cutover.
+
+**D-PM-10 — ClickUp Spaces map to Centers explicitly, from agent-proposed suggestions;
+unmapped Spaces still import and stay reachable.**
+`DECISION (owner-answered 2026-08-06).` Mechanism in §7.1: a `plan` endpoint proposes a
+Center per Space from assignee-overlap, name match, and an EVAL-LOCKED content
+classification, with the evidence attached; the owner confirms; the import applies the
+confirmed mapping as `group:<slug>` grants. **Rejected:** (a) making the mapping a required
+precondition of import — it would block the import on a decision the owner may reasonably
+want to take *after* seeing the data; (b) auto-applying suggestions — a wrong auto-map
+grants one Center visibility of another department's work, which is the single error class
+this app must never make silently; (c) giving unmapped Spaces an `org` grant — harmless
+today with one member, wrong the moment colleagues land, and invisible when it turns wrong.
+**Cost:** the importer grows a plan endpoint and an LLM-backed suggester carrying its own
+eval lock, and the owner performs one confirmation step per import run. **Scope note:** this
+supersedes the earlier "pilot Space vs all Spaces" framing — scope is now a per-Space
+decision the plan step surfaces, so both a pilot and a full import are the same code path.
 
 ---
 
@@ -530,13 +603,25 @@ grant read model answers 404-not-403 for a non-granted caller and honours `email
 `org` subjects + assigned-to-me, proven hermetically; (5) status transition writes all
 three effects (§3.8); (6) `pm.*` events are emitted through `event_hooks.emit_event`.
 
-**WS-27b — ClickUp org importer.** 🟢 AGENT-SAFE to build · 🔴 **running it against the
-production workspace is OWNER-GATE** (§6 of `work_plan.md`).
-Done when: (1) `POST /projects/import/clickup` maps Space/Folder/List/task/subtask/status/
-assignee per §7.1 with provenance, re-runnably; (2) the response reports per-entity
-imported/updated/skipped counts and a parity summary; (3) permission floor is
-`admin:access:manage` (the WS-26b finding: `integrations:use:*` gates nothing); (4) a
-dry-run mode reports counts writing nothing.
+**WS-27b — ClickUp org importer + the Space→Center mapping plan.** 🟢 AGENT-SAFE to build ·
+🔴 **running either endpoint against the production workspace is OWNER-GATE** (§6 of
+`work_plan.md`).
+Done when: (1) `POST /projects/import/clickup/plan` returns one row per Space with counts,
+a suggested Center, a confidence, and the evidence, from all three §7.1 signals — and
+**writes nothing**, proven by a test that asserts no INSERT/UPDATE reaches the session;
+(2) the plan pre-fills from existing `group:` grants, so a re-run of an already-confirmed
+mapping proposes the same mapping (fenced by a test — this is what stops a re-import
+silently re-mapping a Space); (3) the LLM classifier is EVAL-LOCKED and the plan degrades
+to the two deterministic signals when it is unavailable, never failing the whole plan;
+(4) `POST /projects/import/clickup` maps Space/Folder/List/task/subtask/status/assignee per
+§7.1 with provenance, re-runnably, and applies the confirmed mapping as `group:<slug>`
+grants; (5) **a Space absent from the mapping still imports in full and receives no group
+grant**, and a test proves it is then visible to a `data:org:read` holder and to an
+assignee, and invisible to an unrelated Center's member (the D-PM-10 (c) rejection made
+executable); (6) the response reports per-entity imported/updated/skipped counts, the
+grants applied, and a parity summary; (7) permission floor is `admin:access:manage` (the
+WS-26b finding: `integrations:use:*` gates nothing); (8) a dry-run mode reports counts
+writing nothing.
 
 **WS-27c — two-way coexistence sync.** 🟡 **blocked on BO-1a + BO-1b (WS-1)**; build
 AGENT-SAFE once they land · 🔴 enabling push against the real workspace is OWNER-GATE.
@@ -585,6 +670,7 @@ Windows box against the live DB. **Name the files.**
 ```bash
 uv run pytest tests/unit/test_projects_routes.py tests/unit/test_projects_grants.py \
               tests/unit/test_projects_migration.py tests/unit/test_projects_sync.py \
+              tests/unit/test_projects_import_mapping.py \
               tests/unit/test_projects_personal_mirror.py \
               tests/unit/test_org_access_control.py tests/unit/test_org_access_enforcement.py
 cd workbench/control_plane && npx tsc --noEmit && npm test

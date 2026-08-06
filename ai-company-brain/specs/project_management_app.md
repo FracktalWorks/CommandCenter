@@ -4,25 +4,31 @@
 > module, sliced into every other Center) · **Created:** 2026-08-05 · **Updated:** 2026-08-06
 > (owner pass — §8's three open questions are answered as **D-PM-8/9/10**; §7.1 gains the
 > Space→Center mapping step and WS-27b's done-whens grew with it) ·
-> **Status:** 🟢 **WS-27a + WS-27b BUILT** (2026-08-06, branch
+> **Status:** 🟢 **WS-27a + WS-27b + WS-27d BUILT** (2026-08-06, branch
 > `claude/paca-research-task-management-a1f6zd`, PR #367) — migration `146_projects.sql`
 > (§3.1–§3.10), `feature:projects` registered on both sides, the `routes/projects/` API (§4
-> minus `sync.py`) live behind the feature gate on the `gateway/db.py` seam, and the ClickUp
-> importer with its Space→Center mapping plan (§7.1). **Not deployed and never run** — the
-> migration has not been applied anywhere and neither import endpoint has been executed
-> against the live tenant. · **WS-27c–g: 🟡 SPEC, nothing built.** ·
+> minus `sync.py`) live behind the feature gate on the `gateway/db.py` seam, the ClickUp
+> importer with its Space→Center mapping plan (§7.1), and the `/projects` UI with its Center
+> projections (§5). **Not deployed and never run** — the migration has not been applied
+> anywhere and neither import endpoint has been executed against the live tenant. ·
+> **WS-27c, e, f, g: 🟡 SPEC, nothing built.** ·
 > **Owner:** vjvarada · **Board row: WS-27**
 >
 > **Verified 2026-08-06:** 140 hermetic cases across
 > `test_projects_{routes,grants,migration,import_mapping}.py` (no DB, no ClickUp, no LLM),
 > plus the unchanged org-access and CRM fences — 298 passed on the combined set.
-> **Nine mutants measured red and reverted byte-identical:** WS-27a's five (unscoped
+> Frontend: **315 vitest cases** and `tsc --noEmit` clean.
+> **Fifteen mutants measured red and reverted byte-identical:** WS-27a's five (unscoped
 > visibility clause, dropped assignee escape, transition skipping its activity,
-> `completed_at` never cleared on reopen, removed Epic-root rule) and WS-27b's four
+> `completed_at` never cleared on reopen, removed Epic-root rule), WS-27b's four
 > (applying the suggestion instead of the confirmed mapping, refusing to import an unmapped
-> Space, a plan that writes, and a re-import that duplicates).
+> Space, a plan that writes, and a re-import that duplicates), and WS-27d's six (an unknown
+> Center yielding an empty forest, `planDrop` never materialising, a board drop hard-coding
+> status, unpositioned tasks sorting to the top, a missing nav pane, a Center linking at a
+> forked route).
 >
-> **Not built, on purpose:** no UI (WS-27d), no sync (WS-27c — blocked on BO-1a/BO-1b), and
+> **Not built, on purpose:** no sync (WS-27c — blocked on BO-1a/BO-1b), no personal mirror
+> (WS-27e), no automation/agent dispatch (WS-27f), and
 > `schema.generated.sql` was NOT regenerated — it needs a migrated live DB and is stale
 > repo-wide, so it stays an owner-run chore (the WS-26a precedent).
 >
@@ -662,7 +668,13 @@ three-way merge takes the newest side per field and writes a `sync` activity for
 conflict, property-tested over generated edit interleavings; (4) `GET /projects/sync/
 status` + `/conflicts` report truthfully (a failed push is never shown synced).
 
-**WS-27d — UI + Center projections.** 🟢 AGENT-SAFE.
+**WS-27d — UI + Center projections.** ✅ **BUILT 2026-08-06**
+(`src/app/projects/` + the BFF proxy; 34 vitest cases, 6 mutants red).
+One finding recorded: `featureForPath` is fed `usePathname()`, which carries **no query
+string**, so `/projects?center=<slug>` never reaches the route guard — the slice URL is
+gated on the bare `/projects` path. A first version of the registration test asserted the
+query-string form and was wrong about the contract, not about the code; no speculative
+query-stripping was added to the shared `access.ts` for a case that cannot occur.
 Done when: (1) `/projects` renders tree + list + board + task panel + timeline against the
 real API via the BFF proxy; (2) drag-drop writes fractional positions (one upsert per drop)
 and cross-column drags patch the `column_by` field; (3) nav/access registration per §5 with

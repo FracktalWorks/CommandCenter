@@ -149,6 +149,22 @@ export type EffectTokens = {
   motionEasing: string;
 };
 
+/**
+ * Themes for the third-party surfaces that carry their own theme vocabulary.
+ *
+ * Monaco and Shiki cannot be driven by our CSS tokens — each ships a closed
+ * set of named themes. Before this, both branched on dark/light only, so a
+ * code block looked identical on Fluent and Material while everything around
+ * it changed. Naming the equivalent per theme is what makes a code view part
+ * of the theme rather than an island in it.
+ */
+export type SurfaceTokens = {
+  /** Monaco editor theme id. Only its four built-ins are valid. */
+  monaco: { dark: string; light: string };
+  /** Shiki highlighting theme; must be a name Shiki bundles. */
+  shiki: { dark: string; light: string };
+};
+
 /** Identifier of an icon pack understood by `<Icon>`. */
 export type IconPackId = "lucide" | "fluent" | "material";
 
@@ -167,6 +183,7 @@ export type Theme = {
   typography: TypographyTokens;
   shape: ShapeTokens;
   effects: EffectTokens;
+  surfaces: SurfaceTokens;
   colors: {
     dark: ColorTokens;
     light: ColorTokens;

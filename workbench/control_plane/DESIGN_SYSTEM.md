@@ -284,6 +284,7 @@ Where things live:
 | `src/lib/theme/types.ts` | Token vocabulary — what a theme is allowed to set |
 | `src/lib/theme/css.ts` | Manifests → `html[data-theme="…"]` CSS scopes |
 | `src/lib/theme/store.ts` | Active theme, density, accent; org default vs member override |
+| `src/lib/theme/surfaces.ts` | Monaco / Shiki theme resolution for the active theme |
 | `src/lib/theme/boot.ts` | Pre-paint script that applies the stored theme (no flash) |
 | `src/components/Icon.tsx` | The themed icon primitive |
 | `scripts/build-icon-packs.mjs` | Regenerates the pruned icon packs (`npm run build:icons`) |
@@ -301,6 +302,16 @@ outrank them on specificity (0,1,1 vs 0,1,0), so they never apply in a normal
 session. They must stay identical to the `rapidtool` manifest —
 `src/lib/theme/themes.test.ts` parses the stylesheet and fails if they drift.
 **Change how the app looks by editing the manifest, not `globals.css`.**
+
+**Third-party surfaces.** Monaco and Shiki ship closed sets of named themes and
+cannot be driven by our CSS tokens, so each theme names its equivalents in
+`surfaces`. Read them with `useMonacoTheme()` / `useShikiTheme()` — never branch
+on `resolvedTheme === "light"`, which sees two states where the app has eight.
+A unit test checks the names against Monaco's built-ins and the Shiki bundle,
+because a typo there is invisible until someone opens a code view.
+
+xyflow's `colorMode` legitimately stays dark/light: it only drives the
+library's own chrome, and our nodes are styled with our tokens already.
 
 **Preference resolution:** member override → organisation default → built-in
 default. Members' choices are per-browser (localStorage); the org default is

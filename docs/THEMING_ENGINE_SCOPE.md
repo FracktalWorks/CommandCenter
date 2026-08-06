@@ -1,6 +1,8 @@
 # CommandCenter Theming Engine — Scoping Document
 
-**Status:** Phases 1–4 built and shipped. See "What was built" below; the rest
+**Status:** Built and shipped through the coverage work (phases 1–4 plus the
+full icon migration, org-default backend, contrast gate and third-party
+surfaces). See "What was built" below; the rest
 of this document is the original research and remains the design rationale.
 **Scope:** `workbench/control_plane` (Next.js 16 · React 19 · Tailwind CSS v4)
 **Goal:** A theming engine that can restyle the entire Control Plane — colors,
@@ -34,11 +36,24 @@ before the first frame.
 Adding a theme is a manifest entry — no component, CSS or Tailwind change.
 
 **Icons** go through `<Icon name="Plus" />`, using Lucide names as the shared
-vocabulary so migrating a call site is a one-line edit. Non-Lucide packs are
-pruned Iconify collections (~80 KB each, 187 icons) built by
-`scripts/build-icon-packs.mjs`, fetched lazily only when a theme needs them and
-rendered offline. All 28 sidebar glyphs swap; unmigrated call sites keep
-rendering Lucide, so the migration is incremental and never breaks.
+vocabulary. **Every call site in the app is migrated** — 158 files; the only
+modules still importing `lucide-react` are `Icon.tsx` (the primitive, which
+falls back to Lucide) and `lib/icons.tsx` (the resolver used by server
+components and by `iconSvg.ts`'s static-string rendering, neither of which can
+run hooks). All 251 Lucide icons the app uses resolve in both non-Lucide packs.
+Those packs are pruned Iconify collections (275 icons, ~115 KB and ~106 KB)
+built by `scripts/build-icon-packs.mjs`, fetched lazily only when a theme needs
+them, and rendered offline.
+
+`themedIcon(name)` returns a memoised component bound to one name, for tables
+that store an icon rather than rendering it inline; `ThemedIcon` is its type.
+
+**Third-party surfaces** — Monaco and Shiki — name their equivalents per theme
+in `surfaces`, so a code view follows the theme rather than only the colour
+mode. Fluent highlights with VS Code's own dark-plus, Material with
+material-theme, Graphite with the minimal themes. xyflow's `colorMode` stays
+dark/light on purpose: it drives only that library's chrome, and our nodes
+already use our tokens.
 
 **Preferences** resolve member override → org default → built-in. Personal
 choices are per-browser. The **org default persists in Postgres** —
@@ -62,24 +77,37 @@ regress, and fixing one forces its entry to be deleted so the list cannot go
 stale. New themes must meet AA outright. Two shortfalls introduced by the new
 Fluent and Material themes were fixed rather than recorded.
 
-**Verified.** 172 frontend unit tests (manifests, CSS generation, icon
-registry, contrast), 22 gateway tests, and 14 browser tests
+**Verified.** 359 frontend unit tests (manifests, CSS generation, icon
+registry, contrast, surface themes), 22 gateway tests, and 14 browser tests
 (`e2e/theming.spec.ts`) asserting computed styles and real glyph swapping —
 the only place CSS cascade order can actually be checked. A drift guard parses
 `globals.css` and fails if its no-JavaScript fallback diverges from the default
-manifest. The migration and the full store→route round trip were exercised
-against a real Postgres 16.
+manifest.
 
-⚠️ **Deploy step:** `infra/postgres/schema.generated.sql` was NOT regenerated —
-replaying all 145 migrations needs the `pgvector` and `age` extensions, which
-were unavailable here, and the file must never be hand-edited. Run
-`scripts/apply_migrations.sh` then `scripts/dump_schema.sh` on a real
-deployment and commit the refreshed snapshot.
+**Migrations were applied and verified** against a real Postgres 16 with
+`pgvector` and `age` installed: all 143 numbered migrations replay cleanly in
+order, twice (they are idempotent, and the deploy runner re-runs them every
+time), and the store → route round trip works end to end.
 
-**Not done (Phase 5).** Shared `<Button>` / `<Input>` primitives, and migrating
-the remaining ~155 files that still import `lucide-react` directly. Neither
-blocks anything: those call sites already theme correctly for colour, radius
-and font, and simply keep Lucide glyphs until migrated.
+⚠️ **`infra/postgres/schema.generated.sql` was deliberately NOT regenerated.**
+Doing so from a clean replay would have DELETED ~71 tables of real schema. That
+file was dumped from a Postgres instance shared with LiteLLM, Langfuse and
+mem0, whose tables come from their own migrations, not this repo's. It is also
+badly stale on its own terms — missing 86 tables the numbered migrations
+create (crm, gtd, wa, workflows, apps, org access control). Refreshing it
+needs a dump from a real deployment running all three systems, and is a
+pre-existing chore unrelated to theming.
+
+**Not done (Phase 5).** Shared `<Button>` / `<Input>` primitives. Until they
+exist, themes differ in colour, shape, font, effects and icons, but not in
+component *behaviour* — no Fluent inner borders, no Material state layers — and
+the `--heading-weight` / `--label-weight` tokens have nowhere to apply.
+
+Also outstanding: ~120 hardcoded hex colours, 54 of them in
+`genUITemplates.tsx` (the templates agent-generated UI is built from) and 41 in
+the observability pixel-art sprites, which are artwork and arguably should stay
+hardcoded. And seven pairs in the original RapidTool palette sit below WCAG AA;
+they are pinned as a ratchet, and fixing them is a brand decision.
 
 ---
 

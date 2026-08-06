@@ -53,6 +53,10 @@ const rapidtool: Theme = {
     motionDuration: "0.2s",
     motionEasing: "cubic-bezier(0.25, 0.46, 0.45, 0.94)",
   },
+  surfaces: {
+    monaco: { dark: "vs-dark", light: "vs" },
+    shiki: { dark: "github-dark", light: "github-light" },
+  },
   colors: {
     dark: {
       background: "hsl(220 13% 8%)",
@@ -153,6 +157,10 @@ const fluent: Theme = {
     motionDuration: "0.15s",
     motionEasing: "cubic-bezier(0.33, 0, 0.67, 1)",
   },
+  surfaces: {
+    monaco: { dark: "vs-dark", light: "vs" },
+    shiki: { dark: "dark-plus", light: "light-plus" },
+  },
   colors: {
     dark: {
       background: "hsl(0 0% 13%)",
@@ -246,6 +254,10 @@ const material: Theme = {
     motionDuration: "0.2s",
     motionEasing: "cubic-bezier(0.2, 0, 0, 1)",
   },
+  surfaces: {
+    monaco: { dark: "vs-dark", light: "vs" },
+    shiki: { dark: "material-theme-darker", light: "material-theme-lighter" },
+  },
   colors: {
     dark: {
       background: "hsl(270 12% 9%)",
@@ -333,6 +345,10 @@ const graphite: Theme = {
     shadow: "0 1px 2px hsl(0 0% 0% / 0.2)",
     motionDuration: "0.12s",
     motionEasing: "ease-out",
+  },
+  surfaces: {
+    monaco: { dark: "hc-black", light: "hc-light" },
+    shiki: { dark: "min-dark", light: "min-light" },
   },
   colors: {
     dark: {

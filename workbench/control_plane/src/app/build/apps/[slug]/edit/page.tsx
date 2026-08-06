@@ -23,6 +23,7 @@ import {
 } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useTheme } from "next-themes";
+import { useMonacoTheme } from "@/lib/theme/surfaces";
 import Editor from "@monaco-editor/react";
 import AgentChat from "@/components/AgentChat";
 import SandboxedHtml from "@/components/SandboxedHtml";
@@ -835,6 +836,7 @@ function Workshop({ slug }: { slug: string }) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { resolvedTheme } = useTheme();
+  const monacoTheme = useMonacoTheme();
   const theme: "light" | "dark" = resolvedTheme === "light" ? "light" : "dark";
 
   const [app, setApp] = useState<AppMeta | null>(null);
@@ -2115,7 +2117,7 @@ function Workshop({ slug }: { slug: string }) {
                     <Editor
                       height="100%"
                       language={monacoLanguage(selectedPath)}
-                      theme={theme === "dark" ? "vs-dark" : "light"}
+                      theme={monacoTheme}
                       value={editedContent}
                       onChange={(v) => setEditedContent(v ?? "")}
                       options={{

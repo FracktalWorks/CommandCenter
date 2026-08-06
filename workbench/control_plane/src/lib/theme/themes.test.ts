@@ -8,7 +8,7 @@
  * parses the stylesheet and fails if the two ever diverge.
  */
 
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
@@ -119,5 +119,48 @@ describe("globals.css fallback matches the default manifest", () => {
     expect(GLOBALS).toContain("--color-primary: var(--primary)");
     expect(GLOBALS).toContain("--font-sans: var(--font-app)");
     expect(GLOBALS).toContain("--radius-lg: var(--radius)");
+  });
+});
+
+describe("third-party surface themes", () => {
+  // Monaco silently falls back to its default for an unknown id, and Shiki
+  // throws at render time — neither surfaces a typo anywhere a type-checker or
+  // a page load would catch it. So the names are checked against reality here.
+  const MONACO_BUILT_INS = new Set(["vs", "vs-dark", "hc-black", "hc-light"]);
+
+  it.each(THEMES.map((t) => [t.id, t] as const))(
+    "%s names Monaco themes that exist",
+    (_id, theme) => {
+      for (const mode of ["dark", "light"] as const) {
+        expect(
+          MONACO_BUILT_INS.has(theme.surfaces.monaco[mode]),
+          `${theme.id}/${mode} → ${theme.surfaces.monaco[mode]}`,
+        ).toBe(true);
+      }
+    },
+  );
+
+  it.each(THEMES.map((t) => [t.id, t] as const))(
+    "%s names Shiki themes that Shiki actually bundles",
+    (_id, theme) => {
+      for (const mode of ["dark", "light"] as const) {
+        const name = theme.surfaces.shiki[mode];
+        expect(
+          existsSync(
+            fileURLToPath(new URL(`../../../node_modules/@shikijs/themes/dist/${name}.mjs`, import.meta.url)),
+          ),
+          `${theme.id}/${mode} → ${name} is not a bundled Shiki theme`,
+        ).toBe(true);
+      }
+    },
+  );
+
+  it("gives the dark and light modes different surface themes", () => {
+    // A theme reusing one highlighting theme for both modes renders dark code
+    // on a light page, or vice versa.
+    for (const theme of THEMES) {
+      expect(theme.surfaces.shiki.dark).not.toBe(theme.surfaces.shiki.light);
+      expect(theme.surfaces.monaco.dark).not.toBe(theme.surfaces.monaco.light);
+    }
   });
 });

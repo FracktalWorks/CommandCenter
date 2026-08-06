@@ -12,6 +12,7 @@ import Icon from "@/components/Icon";
 import { useCallback, useEffect, useRef, useState } from "react";
 import Editor from "@monaco-editor/react";
 import { useTheme } from "next-themes";
+import { useMonacoTheme } from "@/lib/theme/surfaces";
 import {
   createModule,
   deleteModule,
@@ -33,6 +34,7 @@ const STATUS_BADGE: Record<string, string> = {
 
 export default function ModuleStudio() {
   const { resolvedTheme } = useTheme();
+  const monacoTheme = useMonacoTheme();
   const [modules, setModules] = useState<ModuleSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -417,7 +419,7 @@ export default function ModuleStudio() {
             <Editor
               height="100%"
               language="python"
-              theme={resolvedTheme === "light" ? "light" : "vs-dark"}
+              theme={monacoTheme}
               value={code}
               onChange={(v) => setCode(v ?? "")}
               options={{

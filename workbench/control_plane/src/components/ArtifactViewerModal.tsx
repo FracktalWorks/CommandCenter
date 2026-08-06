@@ -21,6 +21,7 @@ import SandboxedHtml from "@/components/SandboxedHtml";
 import SandboxedReact from "@/components/SandboxedReact";
 import { buildIconMap, iconsUsedIn } from "@/lib/iconSvg";
 import { useTheme } from "next-themes";
+import { useShikiTheme } from "@/lib/theme/surfaces";
 import { classifyArtifact, extOf, isRenderable } from "@/lib/artifactKind";
 import type { FileEntry } from "./ArtifactSidebar";
 
@@ -92,6 +93,9 @@ function formatBytes(bytes: number): string {
 
 function CodeBlock({ code, lang }: { code: string; lang: string }) {
   const [html, setHtml] = useState<string | null>(null);
+  // Follows the active THEME, not just the colour mode: Fluent highlights with
+  // VS Code's own dark-plus, Material with material-theme, and so on.
+  const shikiTheme = useShikiTheme();
 
   useEffect(() => {
     let cancelled = false;
@@ -100,7 +104,7 @@ function CodeBlock({ code, lang }: { code: string; lang: string }) {
         const { codeToHtml } = await import("shiki");
         const result = await codeToHtml(code, {
           lang,
-          theme: "github-dark",
+          theme: shikiTheme,
         });
         if (!cancelled) setHtml(result);
       } catch {
@@ -109,7 +113,7 @@ function CodeBlock({ code, lang }: { code: string; lang: string }) {
       }
     })();
     return () => { cancelled = true; };
-  }, [code, lang]);
+  }, [code, lang, shikiTheme]);
 
   if (html) {
     return (

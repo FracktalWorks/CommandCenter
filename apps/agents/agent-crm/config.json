@@ -1,0 +1,38 @@
+{
+  "name": "CRM Assistant",
+  "description": "Answers questions about the native CRM — finds leads, deals, contacts and organizations, reads the pipeline by stage, opens a record, and reads its history. Read-only; it cannot modify CRM records.",
+  "version": "0.1.0",
+  "author": "CommandCenter",
+  "tags": [
+    "crm",
+    "sales",
+    "pipeline",
+    "leads",
+    "deals"
+  ],
+  "integrations": [],
+  "optional_integrations": [],
+  "runtime": "maf",
+  "sharing": {
+    "instancing": "shared",
+    "visibility": "organization",
+    "shareable": true,
+    "outputs_visibility": "instance"
+  },
+  "icon": "KanbanSquare",
+  "category": "apps",
+  "tool_scope": [
+    "ask_questions",
+    "remember",
+    "recall_timeline",
+    "save_memory",
+    "emit_generative_ui",
+    "call_agent"
+  ],
+  "own_tool_scope": [
+    "search_crm",
+    "get_pipeline",
+    "get_record",
+    "get_timeline"
+  ]
+}

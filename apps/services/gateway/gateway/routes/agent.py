@@ -406,6 +406,7 @@ _KNOWN_AGENTS: frozenset[str] = frozenset(
         "email-assistant",
         "whatsapp-assistant",
         "app-builder",
+        "crm-assistant",
     ]
 )
 
@@ -495,6 +496,32 @@ _AGENT_REGISTRY: list[dict] = [
         # BYOK LiteLLM tiers.
         "agent_runtime": "maf",
         "local_path": "apps/agents/agent-whatsapp-assistant",
+        "integrations": [],
+        "optional_integrations": [],
+    },
+    {
+        "name": "crm-assistant",
+        "description": (
+            "CRM Assistant — answers questions about the native CRM: finds "
+            "leads, deals, contacts and organizations, reads the deal pipeline "
+            "by stage with its counts and ₹ totals, opens a record in full, "
+            "and reads its history of notes, calls, meetings and stage "
+            "changes. Read-only; it cannot modify CRM records."
+        ),
+        "tags": ["crm", "sales", "pipeline", "leads", "deals", "apps"],
+        "status": "live",
+        # crm-assistant is a MAF agent (apps/agents/agent-crm: agents.py
+        # build_agents() + config.json "runtime": "maf"). Like its two
+        # siblings it must stay "maf" — labelling it github-copilot routes it
+        # through the Copilot SDK and fails with a 402 instead of using the
+        # BYOK LiteLLM tiers.
+        "agent_runtime": "maf",
+        # The directory is agent-crm; the agent is crm-assistant. This entry is
+        # what maps one to the other — there is no derivation from the name.
+        "local_path": "apps/agents/agent-crm",
+        # Reads the NATIVE CRM through the gateway, never Zoho: the Zoho
+        # credential belongs to the sync engine (D-CRM-7/D-CRM-8), so this
+        # agent needs no integration of its own.
         "integrations": [],
         "optional_integrations": [],
     },

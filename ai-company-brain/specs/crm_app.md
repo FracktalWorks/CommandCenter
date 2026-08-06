@@ -1,8 +1,9 @@
 # CRM App — Master Plan (native CRM; Zoho CRM retirement path)
 
 > **Product:** CommandCenter · **Feature:** CRM (Sales Center's primary module) · **Created:** 2026-08-05
-> **Status:** 🟢 **WS-26a + WS-26b + WS-26c ALL BUILT** (2026-08-05/06), merged together on
-> branch `ws-26-crm-app`.
+> **Status:** 🟢 **WS-26a + WS-26b + WS-26c BUILT AND DEPLOYED** (2026-08-05/06) ·
+> 🟢 **WS-26d read half BUILT** (2026-08-06). 26a–c merged together on branch
+> `ws-26-crm-app`.
 > **26a** — migration `144_crm.sql` (§3.1–§3.10), `feature:crm`
 > registered on both sides, `gateway/db.py` engine seam with `routes/tasks/core.py` converted
 > as its proof, and the `routes/crm/` API (§4 minus `import_zoho.py`) live behind the feature
@@ -19,12 +20,23 @@
 > endpoints (`routes/crm/deal_contacts.py`, one primary per deal enforced on the shared
 > `core.link_deal_contact` seam), `organization_name` on the deal list + board payloads, the
 > `NOT_NULL_DEFAULTED` null guard, and the three review residuals.
-> **None of it is deployed** — migrations 144 and 145 have not been applied anywhere, no
-> backfill has been run, and **nothing has ever written the Zoho tenant**: enabling the flag,
-> the first backfill and any hand-run cycle against prod are OWNER-GATE (`work_plan.md` §6).
-> Because the migrations are unapplied, live rendering, drag persistence and deep links are
-> **owner-verified after they apply**; everything below is fixture-level.
-> · **WS-26d–e: 🟡 SPEC, nothing built.** · **Owner:** vjvarada · **Board row:** WS-26
+> **26d (read half)** (branch `ws-26d-agent-crm`) — `apps/agents/agent-crm/` (`crm-assistant`,
+> `runtime:"maf"`, `OpenAIChatCompletionClient`, `X-CC-Agent`) with four READ tools
+> (`search_crm`, `get_pipeline`, `get_record`, `get_timeline`) over the existing `/crm` routes,
+> registered in `_KNOWN_AGENTS` + `_AGENT_REGISTRY` + `agent_registry.json`; and `"crm"` added
+> to the WhatsApp `_KNOWN_SYSTEMS` allowlist **parse-only** (§6). The email-thread timeline
+> join, `CRM_AUTO_LEAD`, and every write tool are explicitly NOT in it — see §9.
+>
+> **Deployment state, measured 2026-08-06:** migrations **144 and 145 are applied on prod**
+> and `/crm` is **live**. The Zoho backfill has been **run and is complete** — 737
+> organizations, 1,189 contacts, 1,516 leads, 551 deals, 1,909 notes; **zero dirty rows and
+> zero unmatched owners**. §7.1's pre-flip curl check was verified against the tenant: the
+> RFC-1123 `If-Modified-Since` header is honored (304). **Nothing has ever written the Zoho
+> tenant** — that is still true, and stays true until the owner flips `CRM_ZOHO_SYNC`:
+> enabling the flag and any hand-run push cycle against prod remain OWNER-GATE
+> (`work_plan.md` §6).
+> · **WS-26d write half + email join: 🟡 SPEC.** · **WS-26e: 🟡 SPEC, nothing built.**
+> · **Owner:** vjvarada · **Board row:** WS-26
 >
 > ⚠️ **`.env.example` cannot carry `CRM_ZOHO_SYNC`** — plan-guard blocks agent writes to it, so
 > the variable is documented here and in `acb_common/settings.py` only. Same for the
@@ -341,14 +353,31 @@ Runtime twin: `src/lib/centers.test.ts`.
 - **Tasks:** v1 keeps CRM follow-ups as `crm_activities type='task'` (due date, completion,
   timeline-visible). Deep `gtd_items` linking is deferred — recorded future work, not v1.
 - **WhatsApp (Phase D):** `routes/whatsapp/transport/context.py::_KNOWN_SYSTEMS` gains
-  `"crm"`; `wa_contacts.entity_ref` can then point at CRM records (the "crm" block there is
-  documented as an unfilled later phase — this fills it).
+  `"crm"` — **BUILT 2026-08-06, and PARSE-ONLY.** That constant is an allowlist read by
+  `parse_entity_ref`, so adding `"crm"` changes exactly one behaviour: a
+  `crm:<kind>:<uuid>` ref that somebody sets by hand parses into an `EntityRef` instead of
+  being discarded as an unknown system. **Nothing writes `wa_contacts.entity_ref` — for any
+  system, anywhere in the repo** (pinned structurally by `tests/unit/test_crm_agent.py`), so
+  there is no CRM linker yet; and the `crm` block on `ChatContextModel` is still `None`,
+  which is the other half of parse-only. Writing the ref and filling that block is a later
+  slice, and it owes both halves together — a link the drawer cannot render is not a link.
 - **Agent (Phase D):** `apps/agents/agent-crm/` (name `crm-assistant`; `runtime:"maf"`,
-  `OpenAIChatCompletionClient`, `X-CC-Agent` headers — the `agent-email-assistant` template).
-  Tools: `search_crm`, `get_pipeline`, `get_record`, `get_timeline`, `create_lead`,
-  `update_deal_status`, `log_activity`, `convert_lead`; writes risk-annotated, deletes
-  confirmation-gated fail-closed. Registered in `_KNOWN_AGENTS` + `_AGENT_REGISTRY`
-  (`routes/agent.py`) + `agent_registry.json`, which also makes it orchestrator-routable.
+  `OpenAIChatCompletionClient`, `X-CC-Agent` headers — the `agent-email-assistant` template,
+  **including its `_headers()` fail-closed identity rule**: a run that cannot resolve its
+  acting user refuses rather than calling the gateway with the bearer alone, which
+  `acb_auth/deps.py` §1b would read as SERVICE_ACCESS).
+  **READ half BUILT 2026-08-06** — `search_crm`, `get_pipeline`, `get_record`,
+  `get_timeline`, each a thin wrapper over the existing `/crm` routes (the agent never
+  queries the DB). Read-only is enforced at the transport: `_ALLOWED_METHODS = {"GET"}`,
+  checked inside the single round-trip helper every tool goes through, and the module
+  deliberately ships no `_post`/`_patch`/`_delete` helper at all.
+  **Write half STILL SPEC** — `create_lead`, `update_deal_status`, `log_activity`,
+  `convert_lead`; writes risk-annotated, deletes confirmation-gated fail-closed. Blocked on
+  the spec naming that confirmation mechanism (§9, blocker B5).
+  Registered in `_KNOWN_AGENTS` + `_AGENT_REGISTRY` (`routes/agent.py`) +
+  `agent_registry.json`. **Orchestrator routability comes from `_AGENT_REGISTRY`** —
+  `orchestrator/agents.py:303-307` imports it directly (plus `_load_dynamic_agents()`); no
+  runtime code reads `agent_registry.json`, which is kept for the catalog only.
   The existing `agent_registry.json` `sales` entry (codeless) and `agents.json`
   `agent-sales-assistant` (external repo) are untouched — different names, no collision.
 - **Graph mirror consumers (Phase E):** `orchestrator/sales_views.py` and
@@ -606,6 +635,18 @@ WS-2 (the standing "rotate Zoho token" P0 becomes "revoke", strictly better).
   This also re-opens WS-1's struck clause on our terms — the "Zoho write client" its row
   said didn't exist is now specced here, and its broker handlers are WS-26b's, not BO-1's.
   Accepted consequence: broker enforcement ON turns the sync supervised.
+- **D-CRM-9 — `DECISION (owner, 2026-08-06)`: agent-originated CRM writes enter the Zoho
+  push queue exactly like human ones.** Agent-originated and (future)
+  `CRM_AUTO_LEAD`-originated CRM writes are treated identically to a person's: every native
+  write is born `zoho_dirty = true` (`routes/crm/core.py::mark_dirty_on_insert` /
+  `mark_dirty_on_update`) and pushes on the next sync cycle, which `POST /crm/sync/zoho` runs
+  with or without `CRM_ZOHO_SYNC`. Faithful two-way sync (D-CRM-7) applies to every native
+  write regardless of author — **no special case, no held-back tier.** The safety boundary
+  for agent writes is the confirmation gate on the tools themselves (the future write-tools
+  slice), not a fork in the sync semantics. Read together with the create-half rule the
+  mechanism already has: a row arriving WITH a `zoho_id` came from Zoho and is not born
+  dirty, so "native write" here means exactly what the code already keys on. This resolves
+  the WS-26d audit's push-queue blocker; the confirmation mechanism (B5) is still open.
 
 **Build-time decisions, recorded post-hoc (WS-26a implementer, 2026-08-05 — owner may
 overrule any of them):**
@@ -951,12 +992,50 @@ Done when:
    `npm test` green; the gateway addendum's tests join the named `test_crm_*.py` files.
 
 ### WS-26d — Integrations · 🟢 AGENT-SAFE except the flag
-Done when: email threads appear in contact/lead/deal timelines by address join;
-`CRM_AUTO_LEAD` exists, defaults OFF, and its OFF-state is byte-identical email-app
-behavior (regression-tested); WhatsApp `_KNOWN_SYSTEMS` includes `"crm"`; `agent-crm`
-builds via `build_agents()`, registered in both registries, discoverable by the
-orchestrator; write tools risk-annotated; delete tools confirmation-gated fail-closed.
-**Flipping `CRM_AUTO_LEAD` = OWNER-GATE (§6).**
+**Audited 2026-08-06 → GO-NARROWED.** The ticket as written bundled four independent
+things behind one done-when, and three of them were not dispatchable: the email-thread
+join had no testable, caller-scoped done-when; `CRM_AUTO_LEAD` named no hook to attach to;
+and the write tools named no confirm/risk mechanism. So the slice was narrowed to the two
+halves that were fully specified.
+
+**BUILT 2026-08-06 (branch `ws-26d-agent-crm`):**
+1. **`agent-crm` — the READ half.** `apps/agents/agent-crm/` (`crm-assistant`,
+   `runtime:"maf"`, `OpenAIChatCompletionClient`, `X-CC-Agent`) on the
+   `agent-email-assistant` template **including its `_headers()` fail-closed identity
+   rule**; four read tools — `search_crm`, `get_pipeline`, `get_record`, `get_timeline` —
+   each a thin wrapper over the existing `/crm` routes carrying the caller's
+   `X-User-Email`, so the agent inherits the route's authorization instead of holding a
+   second opinion about it. Registered in `_KNOWN_AGENTS`, `_AGENT_REGISTRY` and
+   `agent_registry.json`; `build_agents()` constructs one native MAF `Agent`. Read-only is
+   a property of the transport (`_ALLOWED_METHODS = {"GET"}` checked in the one round-trip
+   helper), asserted three ways in the test file: behaviourally (a POST raises before the
+   request is built), structurally (no verb helper exists), and by observation (every call
+   the four tools make is a GET).
+2. **WhatsApp `_KNOWN_SYSTEMS` gains `"crm"` — PARSE-ONLY**, per §6. Nothing writes
+   `wa_contacts.entity_ref` yet and the `crm` context block stays `None`; both halves are
+   pinned by test so "we added the constant" is never mistaken for "the link works".
+
+**STILL OPEN, and why** (audit doc-blocker IDs — distinct from §8's build-time decisions
+B1–B6, which are a different numbering):
+- **B3 — email-thread timeline join.** Needs a testable, caller-scoped done-when: which
+  mailbox is joined, whose access decides it, and what the join returns for a CRM record
+  whose `email` matches nothing. D-CRM-5 says read-time address join, no link table; it
+  does not say what that means for a colleague who cannot read the mailbox it joins.
+- **B4 — `CRM_AUTO_LEAD`.** Names no hook. The settings field is deliberately NOT added:
+  a flag with nothing behind it is worse than no flag. Owes the named email-app seam it
+  attaches to, plus the regression that proves its OFF-state is byte-identical.
+- **B5 — write tools** (`create_lead`, `update_deal_status`, `log_activity`,
+  `convert_lead`). Owes a NAMED confirm/risk mechanism — `request_confirmation` on the
+  tool, the Action-Broker gate, or both, and which one covers which verb. "Confirmation-
+  gated fail-closed" is a property, not a mechanism.
+- **B7 — test-file naming** for those slices, so the §10 verify line can be written before
+  the code rather than after.
+- **B6/D-CRM-9 — RESOLVED 2026-08-06.** The push-queue question ("do agent writes reach
+  Zoho like human writes?") is owner-answered: yes, identically. See §8 D-CRM-9. It no
+  longer blocks the write half; B5 still does.
+
+**Flipping `CRM_AUTO_LEAD` = OWNER-GATE (§6)** — and per D-CRM-9 the ON-state queues each
+auto-created lead for push into the live Zoho tenant.
 
 ### WS-26e — Cutover + retirement · 🔴 OWNER-GATE end-to-end
 Final import + parity report; §6 consumers repointed; §7.4 inventory retired; Zoho refresh
@@ -974,14 +1053,19 @@ PR (R4).
                   tests/unit/test_org_access_control.py \
                   tests/unit/test_org_access_enforcement.py -q
 
+    # WS-26d read half — the agent + the parse-only WhatsApp constant:
+    uv run pytest tests/unit/test_crm_agent.py \
+                  tests/unit/test_agent_gateway_identity.py \
+                  tests/unit/test_whatsapp_context.py -q
+
     cd workbench/control_plane && npx tsc --noEmit && npm test
 
-**Owner-verified after migrations 144 and 145 apply** (nothing below can be checked from the repo,
-and WS-26c deliberately did not reach for a database): the board renders real lanes in
-`position` order with their ₹ totals; dragging a card persists and the card stays put on
-reload; `?deal=<id>` opens the sheet on a real record and Back closes it; the convert modal's
-matches are the ones the server picks; a lost move is refused without a reason and accepted
-with one.
+**Owner-verified — migrations 144 and 145 are applied on prod as of 2026-08-06** (none of
+this can be checked from the repo, and WS-26c deliberately did not reach for a database):
+the board renders real lanes in `position` order with their ₹ totals; dragging a card
+persists and the card stays put on reload; `?deal=<id>` opens the sheet on a real record and
+Back closes it; the convert modal's matches are the ones the server picks; a lost move is
+refused without a reason and accepted with one.
 
 ⚠️ Never `uv run pytest tests/unit/` bare — whole-directory collection hangs on the Windows
 box against the live DB. Name the files. The pr-check gates that bind: ruff

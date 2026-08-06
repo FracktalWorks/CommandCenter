@@ -25,12 +25,20 @@ from sqlalchemy import text
 # Known entity-ref systems (``<system>:<kind>:<id>``) the linker writes onto
 # wa_contacts.entity_ref. Kept small + explicit so an unknown system degrades to
 # "unlinked" rather than a broken deep-link.
-_KNOWN_SYSTEMS = {"zoho", "odoo", "clickup"}
+#
+# ⚠️ ``"crm"`` is PARSE-ONLY as of WS-26d (spec ``crm_app.md`` §6/§9). Nothing
+# in this repo writes ``entity_ref = "crm:<kind>:<uuid>"`` yet — the linker that
+# would is a later slice — so adding it here means exactly one thing: a ref that
+# somebody sets by hand parses into an ``EntityRef`` instead of being discarded
+# as an unknown system. The ``crm`` block on ``ChatContextModel`` below stays
+# ``None`` either way; filling it is that same later slice, and a test pins both
+# halves so "we added the constant" is never mistaken for "the link works".
+_KNOWN_SYSTEMS = {"zoho", "odoo", "clickup", "crm"}
 
 
 class EntityRef(BaseModel):
-    system: str            # 'zoho' | 'odoo' | 'clickup'
-    kind: str              # e.g. 'contact' | 'partner' | 'lead'
+    system: str            # 'zoho' | 'odoo' | 'clickup' | 'crm'
+    kind: str              # e.g. 'contact' | 'partner' | 'lead' | 'deal'
     id: str
 
 

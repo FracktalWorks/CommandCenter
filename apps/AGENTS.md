@@ -32,6 +32,7 @@ Run *inside* the orchestrator/gateway process — no server of their own.
 - agent-apis-config/ -- API discovery and configuration assistant
 - agent-email-assistant/ -- Email AI assistant: read, search, summarize, draft replies across Gmail and Microsoft accounts
 - agent-whatsapp-assistant/ -- WhatsApp inbox briefing, triage, and reply drafting (drafts only)
+- agent-crm/ -- CRM assistant (`crm-assistant`): search, pipeline, record and timeline reads over the native CRM. ⚠️ **The directory is `agent-crm`, the agent is `crm-assistant`** — nothing derives one from the other; the `local_path` in `_AGENT_REGISTRY` is the whole mapping. **READ-ONLY by construction:** `_ALLOWED_METHODS = {"GET"}` is checked inside the single `_request` helper every tool goes through, and the module deliberately ships no `_post`/`_patch`/`_delete` helper, so the WS-26d write half must arrive together with the confirmation gate it owes rather than as a helper somebody can call. Every tool calls the gateway's `/crm` routes with the caller's `X-User-Email` — the agent never opens a DB session, so authorization has exactly one implementation (the route's)
 - agent-app-builder/ -- App Workshop builder (Custom Apps): Copilot-SDK engine; each chat session runs in its app's workspace via the executor's `allow_session_workspace` binding; enforces the platform contract (window.cc only — see docs/app-workshop/README.md §4.0)
 
 ## `skills/` — importable tool packages

@@ -38,6 +38,7 @@ REPO = Path(__file__).resolve().parents[2]
 CLIENTS = [
     ("whatsapp", REPO / "apps/agents/agent-whatsapp-assistant/agents.py"),
     ("email", REPO / "apps/agents/agent-email-assistant/agents.py"),
+    ("crm", REPO / "apps/agents/agent-crm/agents.py"),
     ("task-gtd", REPO / "apps/skills/skill-task-gtd/skill_task_gtd/core.py"),
 ]
 
@@ -82,7 +83,10 @@ def test_the_acting_user_travels_with_the_token(
 
 def _headers_source(path: Path) -> str:
     """The body of ``_headers``, up to the next top-level ``def``."""
-    src = path.read_text()
+    # Explicit encoding: these files carry non-ASCII (₹, emoji), and a bare
+    # read_text() takes the platform default — cp1252 on Windows — so this
+    # fence raised UnicodeDecodeError instead of checking anything.
+    src = path.read_text(encoding="utf-8")
     start = src.index("def _headers(")
     rest = src[start:]
     end = rest.find("\ndef ", 1)

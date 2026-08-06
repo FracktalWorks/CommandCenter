@@ -23,6 +23,7 @@ members = [
     "action-broker",
     "agent-apis-config",
     "agent-app-builder",
+    "agent-crm",
     "agent-email-assistant",
     "agent-orchestrator",
     "agent-task-manager",
@@ -268,6 +269,25 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [{ name = "agent-framework-github-copilot" }]
+
+[[package]]
+name = "agent-crm"
+version = "0.1.0"
+source = { editable = "apps/agents/agent-crm" }
+dependencies = [
+    { name = "acb-common" },
+    { name = "acb-skills" },
+    { name = "agent-framework-core" },
+    { name = "agent-framework-openai" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "acb-common", editable = "packages/acb_common" },
+    { name = "acb-skills", editable = "packages/acb_skills" },
+    { name = "agent-framework-core", specifier = ">=1.8.0" },
+    { name = "agent-framework-openai", specifier = ">=1.7.0" },
+]
 
 [[package]]
 name = "agent-email-assistant"

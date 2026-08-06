@@ -95,6 +95,37 @@ else
   echo "  !! $BACKUP_SCRIPT not found — applying migrations WITHOUT a backup." >&2
 fi
 
+# --- Prove the prelude PARSES before betting the whole ladder on it ----------
+#
+# Learned the hard way on the very first deploy that carried it: the prelude
+# shipped as `SET lock_timeout = 5s;` — unquoted — and Postgres answers
+# "trailing junk after numeric literal". Under ON_ERROR_STOP=1 that failed the
+# FIRST migration, so a guard whose entire purpose was to stop a stalled session
+# blocking deploys blocked every deploy itself. The tests missed it because they
+# asserted the string was PRESENT, not that it was valid SQL, and the harness's
+# fake psql drained stdin without parsing it.
+#
+# Two lessons, both encoded here:
+#   1. Quote the value. '5s' and '5000' are both accepted; a bare 5s is not.
+#   2. A safety feature must not be able to brick the thing it protects. If the
+#      prelude does not parse — a typo'd MIGRATION_LOCK_TIMEOUT, a server that
+#      spells it differently — say so LOUDLY and fall back to running without
+#      it. Degrading to the previous behaviour is survivable; making the box
+#      undeployable is not.
+LOCK_PRELUDE="SET lock_timeout = '$MIGRATION_LOCK_TIMEOUT';"
+if ! printf '%s\n' "$LOCK_PRELUDE" \
+     | docker exec -i "$PG_CONTAINER" \
+         psql -v ON_ERROR_STOP=1 -U "$PG_USER" -d "$PG_DB" -q \
+         >/dev/null 2>/tmp/lock_probe_err; then
+  echo "  !! lock_timeout prelude REJECTED by this server:" >&2
+  sed 's/^/     /' /tmp/lock_probe_err >&2
+  echo "  !! MIGRATION_LOCK_TIMEOUT='$MIGRATION_LOCK_TIMEOUT' is not a value it" >&2
+  echo "     accepts. Applying migrations WITHOUT a lock timeout — a stale" >&2
+  echo "     reader can once again freeze a table for every later query." >&2
+  echo "     Fix the value; do not leave this in place." >&2
+  LOCK_PRELUDE=""
+fi
+
 say "Applying migrations to db '$PG_DB' as '$PG_USER' (container: $PG_CONTAINER)"
 
 # Apply 02+ in numeric order. Only NUMBERED migration files (NN_*.sql) are
@@ -119,10 +150,12 @@ for f in $(ls "$MIGRATIONS_DIR"/[0-9][0-9]*_*.sql | sort -V); do
   printf "    - %s ... " "$base"
   attempt=1
   while :; do
-    # `SET lock_timeout` is prepended to the stream rather than passed as a psql
-    # flag so it lands in the SAME session as the migration, ahead of any BEGIN
-    # the file opens. Session-level, so one SET covers every statement in it.
-    if { printf 'SET lock_timeout = %s;\n' "$MIGRATION_LOCK_TIMEOUT"; cat "$f"; } \
+    # The prelude is prepended to the stream rather than passed as a psql flag so
+    # it lands in the SAME session as the migration, ahead of any BEGIN the file
+    # opens. Session-level, so one SET covers every statement in it. Empty when
+    # the probe above rejected it, in which case the migration runs exactly as it
+    # did before this guard existed.
+    if { [ -n "$LOCK_PRELUDE" ] && printf '%s\n' "$LOCK_PRELUDE"; cat "$f"; } \
          | docker exec -i "$PG_CONTAINER" \
              psql -v ON_ERROR_STOP=1 -U "$PG_USER" -d "$PG_DB" -q \
              >/dev/null 2>/tmp/migrate_err; then

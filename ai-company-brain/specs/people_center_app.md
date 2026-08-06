@@ -243,10 +243,43 @@ restriction that already exists and must not be re-implemented here.
 
 ## 7. Tickets
 
-**WS-28a — the key-shape fix (P-1, P-2).** 🟢 AGENT-SAFE.
+**WS-28a — the key-shape fix (P-1, P-2).** ✅ **BUILT 2026-08-06**
+(migration `148_people_key_shape.sql` + `scripts/import_hr_people.py`; 22 static/hermetic
+cases, 11 mutants red, 1 equivalent).
 Done when: `gtd_people` no longer uniquely constrains `name`; a partial unique index exists
 on `lower(email)`; a status CHECK exists; and a test proves two people may share a name and
 may not share an address.
+
+**What P-1 did not name, and it matters:** `scripts/import_hr_people.py` upserts
+`ON CONFLICT (name)`. Dropping `UNIQUE(name)` leaves that with no constraint to infer, so
+the importer fails outright — "no unique or exclusion constraint matching the ON CONFLICT
+specification". The fix is a **`source_key`** column (`<source>:<lower(name)>`) with its own
+partial unique index. That key is honest about what it claims: the HR snapshot is a JSON
+object keyed by name, so names are unique *within that file* whether or not they are unique
+among humans. It also means a person hand-added in the People Center is never overwritten by
+a snapshot re-import. Backfilled **before** the constraint is dropped, while `name` is still
+guaranteed distinct — which is what makes the backfill collision-free by construction.
+
+**Nothing in this migration may block a deploy**, and that shaped both changes.
+`apply_migrations.sh` replays every `02+` migration on every deploy under
+`set -euo pipefail` + `ON_ERROR_STOP=1`; main has already been bitten twice this month by a
+migration that stopped deploys. Both new constraints could plausibly fail on live rows:
+
+- **A duplicate address** would fail `CREATE UNIQUE INDEX`. The loser's address is moved to
+  a new `email_conflict` column instead — visible, reversible, non-blocking. Losing an
+  address silently would be worse than the ambiguity this fixes; aborting the deploy would
+  be worse than both. The winner is chosen **deterministically** (`updated_at`, then
+  `created_at`, then `id`) so a re-run against a restored backup cannot pick differently.
+- **An unanticipated status value** would fail the CHECK. Migration 49 documented
+  `'active' | 'inactive' | …` and the `…` is the problem. Known legacy spellings are mapped
+  (`inactive|former|left` → `alumni`); anything else is **left alone rather than rewritten**,
+  and the constraint is added `NOT VALID` then validated in a guarded block. New writes are
+  enforced either way; a legacy offender leaves the constraint un-validated with a `NOTICE`
+  instead of stopping the deploy.
+
+⚠️ **`schema.generated.sql` is NOT refreshed** — `scripts/dump_schema.sh` needs a live
+database with the ladder applied, which this build had no access to. Regenerate it on the
+first deploy that applies 148, per `infra/postgres/README.md` step 3.
 
 **WS-28b — directory + person page.** 🟢 AGENT-SAFE.
 Done when: `/people` lists and filters; the person page renders all four panels; the HR

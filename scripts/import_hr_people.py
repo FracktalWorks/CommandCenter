@@ -22,17 +22,41 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
+#: The source this importer owns. Part of `source_key`, so a row hand-added in
+#: the People Center is never overwritten by a snapshot re-import.
+SOURCE = "agent-project-manager"
+
+
+def source_key(name: str) -> str:
+    """The importer's upsert key — per SOURCE, not per person.
+
+    Migration 148 dropped `UNIQUE(name)` from `gtd_people` (People Center P-1):
+    two real people may share a name, and the old constraint said they could
+    not. This script still needs *some* stable key or a re-import would insert a
+    second copy of everyone, and `ON CONFLICT (name)` now has no constraint to
+    infer — it would fail outright.
+
+    `source_key` is the honest one. The HR snapshot is a JSON object keyed by
+    name, so names are unique **within that file** whether or not they are
+    unique among humans; this key claims exactly that and nothing more.
+    """
+    return f"{SOURCE}:{name.strip().lower()}"
+
+
 UPSERT = """
 INSERT INTO gtd_people
     (name, email, role, department, team, reports_to, status, skills,
      resume_summary, years_experience, domain,
      capacity_hours_per_week, current_load_hours_per_week,
-     available_hours_per_week, clickup_user_id, synced_at, updated_at)
+     available_hours_per_week, clickup_user_id, source, source_key,
+     synced_at, updated_at)
 VALUES
     (:name, :email, :role, :department, :team, :reports_to, :status, :skills,
      :resume_summary, :years_experience, :domain,
-     :capacity, :load, :available, :clickup_user_id, now(), now())
-ON CONFLICT (name) DO UPDATE SET
+     :capacity, :load, :available, :clickup_user_id, :source, :source_key,
+     now(), now())
+ON CONFLICT (source_key) WHERE source_key IS NOT NULL DO UPDATE SET
+    name = EXCLUDED.name,
     email = COALESCE(EXCLUDED.email, gtd_people.email),
     role = EXCLUDED.role,
     department = EXCLUDED.department,
@@ -85,6 +109,8 @@ def build_rows(hr: dict, resumes: dict) -> list[dict]:
                         skills.append(s)
                 rows.append({
                     "name": name,
+                    "source": SOURCE,
+                    "source_key": source_key(name),
                     "email": m.get("email") or prof.get("email"),
                     "role": m.get("role"),
                     "department": dept.get("name"),
@@ -108,6 +134,23 @@ def build_rows(hr: dict, resumes: dict) -> list[dict]:
                         if m.get("clickup_user_id") is not None else None
                     ),
                 })
+
+    # Migration 148 put a partial UNIQUE on lower(email). Two snapshot members
+    # carrying the same address would now fail the whole import on a unique
+    # violation, so the duplicate is dropped to NULL here — at the source, where
+    # the row is still identifiable — rather than discovered as a psql error.
+    # First occurrence keeps the address; the person still imports, they just
+    # arrive without an email until somebody says which one is theirs.
+    seen_emails: set[str] = set()
+    for row in rows:
+        address = (row.get("email") or "").strip().lower()
+        if not address:
+            row["email"] = None
+            continue
+        if address in seen_emails:
+            row["email"] = None
+            continue
+        seen_emails.add(address)
     return rows
 
 

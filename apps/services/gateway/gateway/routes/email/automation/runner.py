@@ -1503,6 +1503,11 @@ async def _process_past_emails_job(
                 store = get_key_store()
                 creds = json.loads(store.decrypt(acc.credentials_encrypted))
                 provider = _instantiate_provider(acc.provider, creds)
+                # End the transaction the SELECT above opened before the network
+                # round-trip — a session parked `idle in transaction` across a
+                # provider call is what queues a migration's ALTER TABLE behind
+                # it (2026-08-06). Nothing pending; this only ends it.
+                await db.commit()
                 if not await provider.authenticate():
                     provider = None
 

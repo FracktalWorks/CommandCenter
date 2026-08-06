@@ -1152,6 +1152,28 @@ async def _maybe_classify_threads(account_id: str) -> None:
                 # CC send. Capped per cycle; threads past the cap are left
                 # UNWRITTEN (not blind-AWAITING) so they retry next cycle.
                 if sent_handled < _REPLY_DETERMINE_CAP:
+                    # End OUR transaction before the model call.
+                    #
+                    # `_mark_thread_replied` opens its own session and spends a
+                    # full LLM determination in it. Ours has been in a
+                    # transaction since the reads above, so without this commit
+                    # it sits `idle in transaction` — holding ACCESS SHARE on
+                    # every table it touched — for the length of that call,
+                    # times up to _REPLY_DETERMINE_CAP consecutive sent threads.
+                    #
+                    # That is the exact shape that took production down on
+                    # 2026-08-06: a session parked mid-LLM-call, a migration's
+                    # ALTER TABLE queued behind its lock, and Postgres's FIFO
+                    # lock queue then stalling every later reader of that table.
+                    #
+                    # The acb_llm wall-clock ceiling and the 600s
+                    # idle_in_transaction_session_timeout bound that damage;
+                    # this removes its cause. The ceiling alone is NOT enough
+                    # here — 40 capped calls idle well past 600s, at which point
+                    # Postgres kills this session and the upserts accumulated
+                    # below are lost with it. Committing first is what makes the
+                    # backstop and this loop safe together.
+                    await db.commit()
                     await _mark_thread_replied(account_id, r.thread_id)
                     sent_handled += 1
                 # else: overflow — leave it for the next cycle, never guess.

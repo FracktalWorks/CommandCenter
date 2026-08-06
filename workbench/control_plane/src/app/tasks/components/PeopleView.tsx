@@ -1,5 +1,6 @@
 "use client";
 
+import Button from "@/components/ui/Button";
 import Icon from "@/components/Icon";
 import { useEffect, useMemo, useState } from "react";
 import { useTaskStore } from "../lib/taskStore";
@@ -95,12 +96,9 @@ export function PeopleView() {
               className="w-40 bg-transparent text-xs text-foreground outline-none placeholder:text-muted-foreground"
             />
           </div>
-          <button
-            onClick={() => setEditing("new")}
-            className="flex items-center gap-1.5 rounded-md bg-primary px-3 py-2 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90"
-          >
+          <Button size="none" radius="keep" layout="flex items-center" onClick={() => setEditing("new")} className="gap-1.5 rounded-md px-3 py-2 text-xs">
             <Icon name="Plus" size={14} /> Add person
-          </button>
+          </Button>
         </div>
       </div>
 

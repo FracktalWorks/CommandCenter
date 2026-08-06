@@ -9,6 +9,7 @@
  * Grid / List views change how the current directory's contents appear.
  */
 
+import Button from "@/components/ui/Button";
 import Icon from "@/components/Icon";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import ArtifactViewerModal from "@/components/ArtifactViewerModal";
@@ -412,9 +413,9 @@ export default function ArtifactsPage() {
               </p>
             </div>
           </div>
-          <button onClick={fetchArtifacts} className="rounded-lg p-2 text-muted-foreground hover:text-foreground hover:bg-secondary tech-transition" title="Refresh">
+          <Button variant="ghost" size="icon" layout="" onClick={fetchArtifacts} title="Refresh">
             <Icon name="RefreshCw" size={15} className={loading ? "animate-spin" : ""} />
-          </button>
+          </Button>
         </div>
 
         {/* Stats */}

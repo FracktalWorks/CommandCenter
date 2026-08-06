@@ -13,6 +13,7 @@
  *   /api/agent/workspace/{sessionId}/file?path={rel_path}
  */
 
+import Button from "@/components/ui/Button";
 import Icon from "@/components/Icon";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useViewMode } from "@/components/ViewModeProvider";
@@ -247,13 +248,9 @@ export default function ArtifactCard({
           </button>
         )}
         {!isMobile && (
-          <button
-            onClick={(e) => { e.stopPropagation(); handleOpen(); }}
-            className="rounded-lg p-1.5 text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
-            title={isDoc ? "Open in modal viewer" : "Open in viewer"}
-          >
+          <Button variant="ghost" size="icon-sm" layout="" onClick={(e) => { e.stopPropagation(); handleOpen(); }} title={isDoc ? "Open in modal viewer" : "Open in viewer"}>
             <Icon name="Maximize2" size={14} />
-          </button>
+          </Button>
         )}
         <a
           href={fileUrl}

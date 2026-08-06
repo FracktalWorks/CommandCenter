@@ -1,5 +1,6 @@
 "use client";
 
+import Button from "@/components/ui/Button";
 import Icon from "@/components/Icon";
 import type { ThemedIcon } from "@/components/Icon";
 import { useMemo, useRef, useState, useEffect } from "react";
@@ -205,14 +206,10 @@ export function TaskToolbar({ items }: { items: GtdItem[] }) {
       />
 
       {active && (
-        <button
-          type="button"
-          onClick={clearFilters}
-          className="tech-transition inline-flex h-7 items-center gap-1 rounded-md px-2 text-[11px] font-medium text-muted-foreground hover:bg-secondary hover:text-foreground"
-        >
+        <Button variant="ghost" size="none" radius="keep" layout="inline-flex items-center" type="button" onClick={clearFilters} className="h-7 gap-1 rounded-md px-2 text-[11px]">
           <Icon name="X" className="h-3 w-3" />
           Clear{nFacets > 1 ? " all" : ""}
-        </button>
+        </Button>
       )}
 
       {/* Group-by + Sort — pushed right */}

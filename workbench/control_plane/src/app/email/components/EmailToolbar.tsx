@@ -1,5 +1,6 @@
 "use client";
 
+import Button from "@/components/ui/Button";
 import AppIcon, { themedIcon } from "@/components/Icon";
 import { useState } from "react";
 import { useEmailStore, isRealFolder } from "../lib/emailStore";
@@ -54,14 +55,10 @@ export function EmailToolbar() {
   return (
     <div className="flex items-center gap-1 px-3 py-2.5 border-b border-border flex-shrink-0 bg-card overflow-x-auto scrollbar-hide">
       {/* Compose — always available */}
-      <button
-        title="New Email"
-        onClick={() => openCompose()}
-        className="flex items-center gap-1.5 px-3 py-2 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors flex-shrink-0"
-      >
+      <Button size="none" radius="keep" layout="flex items-center" title="New Email" onClick={() => openCompose()} className="gap-1.5 px-3 py-2 rounded-md flex-shrink-0">
         <AppIcon name="Pencil" size={15} />
         <span className="text-xs font-medium">New</span>
-      </button>
+      </Button>
 
       {selectedEmail ? (
         <>

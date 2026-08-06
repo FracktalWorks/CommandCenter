@@ -8,6 +8,7 @@
  * or dismiss the banner and configure later in the Integrations page.
  */
 
+import Button from "@/components/ui/Button";
 import Icon from "@/components/Icon";
 import { useState, useRef, useEffect, useCallback, useMemo, useSyncExternalStore } from "react";
 import React from "react";
@@ -1533,12 +1534,9 @@ export default function AgentChat({
           </a>
         )}
         {isRoom && (
-          <button
-            onClick={() => setRailOpen((v) => !v)}
-            className="ml-auto shrink-0 rounded-md px-1.5 py-0.5 text-[11px] text-muted-foreground hover:bg-secondary hover:text-foreground tech-transition lg:hidden"
-          >
+          <Button variant="ghost" size="none" radius="keep" layout="" onClick={() => setRailOpen((v) => !v)} className="ml-auto shrink-0 rounded-md px-1.5 py-0.5 text-[11px] lg:hidden">
             {railOpen ? "Hide room" : "Room"}
-          </button>
+          </Button>
         )}
       </div>
       )}
@@ -2056,13 +2054,10 @@ export default function AgentChat({
 
               {/* Thinking mode — compact dropdown (saves space, easier tap on mobile) */}
               <div className="relative">
-                <button type="button"
-                  onClick={() => setShowThinkMenu((v) => !v)}
-                  className="flex items-center gap-1 px-2 py-1 rounded-md hover:bg-secondary hover:text-foreground tech-transition text-muted-foreground"
-                  title={THINK_MODES.find((t) => t.mode === thinkMode)?.title}>
+                <Button variant="ghost" size="none" radius="keep" layout="flex items-center" type="button" onClick={() => setShowThinkMenu((v) => !v)} title={THINK_MODES.find((t) => t.mode === thinkMode)?.title} className="gap-1 px-2 py-1 rounded-md">
                   <span>{THINK_MODES.find((t) => t.mode === thinkMode)?.label ?? "Auto"}</span>
                   <span className="text-muted-foreground/50 text-[9px]">▾</span>
-                </button>
+                </Button>
                 {showThinkMenu && (
                   <div className="absolute bottom-full left-0 mb-1.5 w-44 rounded-lg border border-border bg-popover shadow-xl z-50 py-1 tech-glass-subtle"
                     onMouseLeave={() => setShowThinkMenu(false)}>

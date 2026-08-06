@@ -1,5 +1,6 @@
 "use client";
 
+import Button from "@/components/ui/Button";
 import Icon from "@/components/Icon";
 import { useState } from "react";
 import {
@@ -230,14 +231,9 @@ export function PlanDayPanel({
                 : dateLabel}
             </p>
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="Close"
-            className="rounded-md p-1 text-muted-foreground hover:bg-secondary hover:text-foreground"
-          >
+          <Button variant="ghost" size="icon-xs" radius="keep" layout="" type="button" onClick={onClose} aria-label="Close" className="rounded-md">
             <Icon name="X" className="h-4 w-4" />
-          </button>
+          </Button>
         </div>
 
         {/* Plan-through horizon — how far into the day (or night) to schedule.
@@ -326,17 +322,13 @@ export function PlanDayPanel({
               </span>
             </label>
             {onOpenSettings && (
-              <button
-                type="button"
-                onClick={() => {
+              <Button variant="text" size="none" layout="inline-flex items-center" type="button" onClick={() => {
                   onClose();
                   onOpenSettings();
-                }}
-                className="inline-flex items-center gap-1 text-[10px] font-medium text-muted-foreground hover:text-foreground"
-              >
+                }} className="gap-1 text-[10px]">
                 <Icon name="Settings2" className="h-3 w-3" />
                 Standing prompt
-              </button>
+              </Button>
             )}
           </div>
           <div className="flex items-center gap-2">
@@ -350,19 +342,14 @@ export function PlanDayPanel({
               placeholder="e.g. “low energy”, “calls only”, “deep work”, “work for 2 more hours”, “until 2am”"
               className="min-w-0 flex-1 rounded-md border border-border bg-background/60 px-3 py-2 text-base text-foreground focus:border-primary/50 focus:outline-none sm:text-sm"
             />
-            <button
-              type="button"
-              onClick={() => void run(note)}
-              disabled={loading}
-              className="tech-transition inline-flex shrink-0 items-center gap-1.5 rounded-md bg-primary px-3 py-2 text-[12px] font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
-            >
+            <Button size="none" radius="keep" layout="inline-flex items-center" type="button" onClick={() => void run(note)} disabled={loading} className="shrink-0 gap-1.5 rounded-md px-3 py-2 text-[12px]">
               {loading ? (
                 <Icon name="Loader2" className="h-3.5 w-3.5 animate-spin" />
               ) : (
                 <Icon name="Wand2" className="h-3.5 w-3.5" />
               )}
               {plan ? "Redo" : isReplan ? "Fit" : "Plan"}
-            </button>
+            </Button>
           </div>
           <p className="mt-1 text-[10px] text-muted-foreground">
             {isReplan
@@ -511,25 +498,16 @@ export function PlanDayPanel({
           className="flex shrink-0 items-center justify-end gap-2 border-t border-border px-4 py-3"
           style={{ paddingBottom: "max(0.75rem, env(safe-area-inset-bottom))" }}
         >
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-md px-3 py-2 text-[12px] font-medium text-muted-foreground hover:text-foreground"
-          >
+          <Button variant="text" size="none" radius="keep" layout="" type="button" onClick={onClose} className="rounded-md px-3 py-2 text-[12px]">
             Cancel
-          </button>
-          <button
-            type="button"
-            onClick={apply}
-            disabled={!plan || (plan.blocks.length === 0 && plan.evicted.length === 0)}
-            className="tech-transition inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-2 text-[12px] font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
-          >
+          </Button>
+          <Button size="none" radius="keep" layout="inline-flex items-center" type="button" onClick={apply} disabled={!plan || (plan.blocks.length === 0 && plan.evicted.length === 0)} className="gap-1.5 rounded-md px-3 py-2 text-[12px]">
             <Icon name="Check" className="h-3.5 w-3.5" />
             Apply
             {plan?.blocks.length
               ? ` ${plan.blocks.length} block${plan.blocks.length === 1 ? "" : "s"}`
               : " plan"}
-          </button>
+          </Button>
         </div>
       </div>
     </div>

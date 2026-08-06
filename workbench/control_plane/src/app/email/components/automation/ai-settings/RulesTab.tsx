@@ -4,6 +4,7 @@
 // actions), the action-config sub-editors, and the Rules-tab dialogs (Add rule,
 // Process past emails, artifact picker). Extracted from AISettingsView.tsx.
 
+import Button from "@/components/ui/Button";
 import Icon from "@/components/Icon";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
@@ -447,12 +448,9 @@ export function RulesTab({
               <Icon name="History" size={13} /> Past emails
             </button>
           )}
-          <button
-            onClick={() => setShowAdd(true)}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90 transition-colors whitespace-nowrap"
-          >
+          <Button layout="flex items-center" onClick={() => setShowAdd(true)} className="whitespace-nowrap">
             <Icon name="Plus" size={13} /> Add rule
-          </button>
+          </Button>
         </div>
       </div>
       {showAdd && accountId && (
@@ -492,18 +490,14 @@ export function RulesTab({
               Newsletter, Marketing, Calendar, Receipt, Notification, Cold Email)
               or create your own.
             </div>
-            <button
-              onClick={installDefaults}
-              disabled={installing}
-              className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90 transition-colors disabled:opacity-50"
-            >
+            <Button size="none" layout="flex items-center" onClick={installDefaults} disabled={installing} className="gap-1.5 px-3 py-2 text-xs">
               {installing ? (
                 <Icon name="Loader2" className="animate-spin" size={13} />
               ) : (
                 <Icon name="Sparkles" size={13} />
               )}
               Install default rules
-            </button>
+            </Button>
           </div>
         )}
         {rules.map((rule) => (
@@ -890,13 +884,9 @@ function RuleEditor({
           >
             Cancel
           </button>
-          <button
-            onClick={() => onSave(draft)}
-            disabled={!valid}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90 transition-colors disabled:opacity-50"
-          >
+          <Button layout="flex items-center" onClick={() => onSave(draft)} disabled={!valid}>
             <Icon name="Check" size={13} /> {rule.id ? "Save" : "Create"}
-          </button>
+          </Button>
         </>
       }
     >
@@ -1239,13 +1229,9 @@ function ActionConfig({
         <div className="flex items-center gap-0.5 flex-shrink-0">
           {menuItems.length > 0 && (
             <div className="relative">
-              <button
-                onClick={() => setMenuOpen((o) => !o)}
-                title="More options"
-                className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-secondary"
-              >
+              <Button variant="ghost" size="icon-xs" radius="keep" layout="" onClick={() => setMenuOpen((o) => !o)} title="More options" className="rounded">
                 <Icon name="MoreHorizontal" size={14} />
-              </button>
+              </Button>
               {menuOpen && (
                 <>
                   <div className="fixed inset-0 z-10" onClick={() => setMenuOpen(false)} />
@@ -1946,18 +1932,15 @@ function ActionAttachments({
           <Icon name="FolderOpen" size={12} /> Choose from artifacts
         </button>
         {attachments.some((a) => !a.ai_selected) && (
-          <button
-            onClick={() =>
+          <Button variant="text" size="none" layout="" onClick={() =>
               onChange(
                 attachments.map((a) => ({ ...a, ai_selected: !a.ai_selected })),
               )
-            }
-            className="text-[10px] text-muted-foreground hover:text-foreground"
-          >
+            } className="text-[10px]">
             {attachments.every((a) => a.ai_selected)
               ? "Always attach these"
               : "Let the assistant choose which to attach"}
-          </button>
+          </Button>
         )}
       </div>
       {err && (
@@ -2197,14 +2180,10 @@ function AddRuleDialog({
           >
             Add rule manually
           </button>
-          <button
-            onClick={create}
-            disabled={busy || !text.trim()}
-            className="ml-auto flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90 transition-colors disabled:opacity-50"
-          >
+          <Button layout="flex items-center" onClick={create} disabled={busy || !text.trim()} className="ml-auto">
             {busy ? <Icon name="Loader2" className="animate-spin" size={13} /> : <Icon name="Wand2" size={13} />}
             Create rules
-          </button>
+          </Button>
         </>
       }
     >

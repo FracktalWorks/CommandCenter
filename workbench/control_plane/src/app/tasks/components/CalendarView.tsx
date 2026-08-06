@@ -10,6 +10,7 @@
 // AppShell). Specs: calendar_timeboxing.md, calendar_focus_os.md,
 // calendar_ai_review.md.
 
+import Button from "@/components/ui/Button";
 import Icon from "@/components/Icon";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -413,29 +414,15 @@ export function CalendarView() {
         <Icon name="CalendarDays" className="h-5 w-5 shrink-0 text-primary" />
         <h1 className="text-base font-semibold text-foreground">{title}</h1>
         <div className="ml-2 flex items-center gap-0.5">
-          <button
-            type="button"
-            aria-label="Previous"
-            onClick={() => step(-1)}
-            className="tech-transition rounded-md p-1 text-muted-foreground hover:bg-secondary hover:text-foreground"
-          >
+          <Button variant="ghost" size="icon-xs" radius="keep" layout="" type="button" aria-label="Previous" onClick={() => step(-1)} className="rounded-md">
             <Icon name="ChevronLeft" className="h-4 w-4" />
-          </button>
-          <button
-            type="button"
-            onClick={() => setAnchor(startOfDay(new Date()))}
-            className="tech-transition rounded-md px-2 py-1 text-[12px] font-medium text-muted-foreground hover:bg-secondary hover:text-foreground"
-          >
+          </Button>
+          <Button variant="ghost" size="none" radius="keep" layout="" type="button" onClick={() => setAnchor(startOfDay(new Date()))} className="rounded-md px-2 py-1 text-[12px]">
             Today
-          </button>
-          <button
-            type="button"
-            aria-label="Next"
-            onClick={() => step(1)}
-            className="tech-transition rounded-md p-1 text-muted-foreground hover:bg-secondary hover:text-foreground"
-          >
+          </Button>
+          <Button variant="ghost" size="icon-xs" radius="keep" layout="" type="button" aria-label="Next" onClick={() => step(1)} className="rounded-md">
             <Icon name="ChevronRight" className="h-4 w-4" />
-          </button>
+          </Button>
         </div>
         {/* Actions: share the row with the title on desktop (ml-auto), but on
             mobile take a FULL second row so the pills never get squeezed into
@@ -569,16 +556,12 @@ export function CalendarView() {
           >
             Begin (5 min)
           </button>
-          <button
-            type="button"
-            onClick={() => {
+          <Button variant="text" size="none" radius="keep" layout="" type="button" onClick={() => {
               saveFocusPrefs({ startupDoneOn: dayKey() });
               setStartupOffered(false);
-            }}
-            className="tech-transition shrink-0 rounded-md px-2 py-1 text-muted-foreground hover:text-foreground"
-          >
+            }} className="shrink-0 rounded-md px-2 py-1">
             Skip
-          </button>
+          </Button>
         </div>
       )}
 

@@ -1,5 +1,6 @@
 "use client";
 
+import Button from "@/components/ui/Button";
 import Icon from "@/components/Icon";
 import { useEffect, useState } from "react";
 import {
@@ -153,14 +154,9 @@ export function EndOfDayReview({
               {dateLabel}
             </p>
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="Close"
-            className="rounded-md p-1 text-muted-foreground hover:bg-secondary hover:text-foreground"
-          >
+          <Button variant="ghost" size="icon-xs" radius="keep" layout="" type="button" onClick={onClose} aria-label="Close" className="rounded-md">
             <Icon name="X" className="h-4 w-4" />
-          </button>
+          </Button>
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
@@ -375,22 +371,13 @@ export function EndOfDayReview({
         )}
 
         <div className="flex items-center justify-end gap-2 border-t border-border px-4 py-3">
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-md px-3 py-2 text-[12px] font-medium text-muted-foreground hover:text-foreground"
-          >
+          <Button variant="text" size="none" radius="keep" layout="" type="button" onClick={onClose} className="rounded-md px-3 py-2 text-[12px]">
             Not yet
-          </button>
-          <button
-            type="button"
-            onClick={closeDay}
-            title="Save tomorrow's seeds and end the work day — permission to stop"
-            className="tech-transition inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-2 text-[12px] font-medium text-primary-foreground hover:opacity-90"
-          >
+          </Button>
+          <Button size="none" radius="keep" layout="inline-flex items-center" type="button" onClick={closeDay} title="Save tomorrow's seeds and end the work day — permission to stop" className="gap-1.5 rounded-md px-3 py-2 text-[12px]">
             <Icon name="Moon" className="h-3.5 w-3.5" />
             Close the day
-          </button>
+          </Button>
         </div>
       </div>
     </div>

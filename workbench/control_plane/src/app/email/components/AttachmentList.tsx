@@ -1,5 +1,6 @@
 "use client";
 
+import Button from "@/components/ui/Button";
 import Icon from "@/components/Icon";
 import { useState } from "react";
 import { Attachment } from "../lib/types";
@@ -132,16 +133,13 @@ export function AttachmentList({
         })}
       </div>
       {overflow > 0 && (
-        <button
-          onClick={() => setExpanded((e) => !e)}
-          className="mt-2 inline-flex items-center gap-1 text-[11px] font-medium text-muted-foreground hover:text-foreground transition-colors"
-        >
+        <Button variant="text" size="none" layout="inline-flex items-center" onClick={() => setExpanded((e) => !e)} className="mt-2 gap-1 text-[11px]">
           <Icon name="ChevronDown"
             size={12}
             className={`transition-transform ${expanded ? "rotate-180" : ""}`}
           />
           {expanded ? "Show fewer" : `Show all ${total} attachments`}
-        </button>
+        </Button>
       )}
 
       {/* Pop-up viewer — images, PDFs and documents all render here. Read-only:

@@ -8,6 +8,7 @@
  * the published app full-page, drafts (and editors) jump into the Workshop.
  */
 
+import Button from "@/components/ui/Button";
 import Icon from "@/components/Icon";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
@@ -459,18 +460,14 @@ export default function CustomAppsPage() {
           >
             <Icon name="RefreshCw" className={`w-4 h-4 ${loading ? "animate-spin" : ""}`} />
           </button>
-          <button
-            onClick={() => createApp("")}
-            disabled={creating}
-            className="rounded-lg bg-primary px-3 sm:px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 tech-transition flex items-center gap-1.5 disabled:opacity-50"
-          >
+          <Button size="lg" layout="flex items-center" onClick={() => createApp("")} disabled={creating}>
             {creating ? (
               <Icon name="Loader2" className="w-4 h-4 animate-spin" />
             ) : (
               <Icon name="Plus" className="w-4 h-4" />
             )}
             New app
-          </button>
+          </Button>
         </div>
       </div>
 
@@ -519,13 +516,9 @@ export default function CustomAppsPage() {
                 placeholder="Describe the tool you need… e.g. “A board that shows every printer's service history and next due date”"
                 className="flex-1 bg-transparent outline-none text-[13px] text-foreground placeholder:text-muted-foreground"
               />
-              <button
-                type="submit"
-                disabled={creating || !describe.trim()}
-                className="rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground hover:opacity-90 tech-transition disabled:opacity-50 shrink-0"
-              >
+              <Button size="none" layout="" type="submit" disabled={creating || !describe.trim()} className="px-3 py-1.5 text-xs font-semibold shrink-0">
                 {creating ? "Creating…" : "Build it"}
-              </button>
+              </Button>
             </form>
             <div className="flex items-center gap-2 flex-wrap">
               <span className="text-[11px] text-muted-foreground">Try:</span>

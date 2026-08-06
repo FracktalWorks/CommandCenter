@@ -11,6 +11,7 @@
  * projections) — the email is the snapshot, this is the live ledger.
  */
 
+import Button from "@/components/ui/Button";
 import AppIcon, { themedIcon } from "@/components/Icon";
 import { useEffect, useState, useCallback } from "react";
 import { getDigest, resolveThread, sendDigest, snoozeEmail } from "../../lib/api";
@@ -150,14 +151,10 @@ export function DashboardView({
         >
           <AppIcon name="Settings2" size={13} /> Configure
         </button>
-        <button
-          onClick={send}
-          disabled={sending || loading}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90 transition-colors disabled:opacity-50"
-        >
+        <Button layout="flex items-center" onClick={send} disabled={sending || loading}>
           {sending ? <AppIcon name="Loader2" className="animate-spin" size={13} /> : <AppIcon name="Send" size={13} />}
           Send to my inbox
-        </button>
+        </Button>
       </div>
 
       {showConfig && accountId && (

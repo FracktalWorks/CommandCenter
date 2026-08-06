@@ -12,6 +12,7 @@
  * role system is one role per employee.
  */
 
+import Button from "@/components/ui/Button";
 import Icon from "@/components/Icon";
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
@@ -101,13 +102,10 @@ export default function RolesPage() {
             </p>
           </div>
         </div>
-        <button
-          onClick={() => setCreating(true)}
-          className="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground tech-transition hover:opacity-90 sm:px-4"
-        >
+        <Button size="lg" layout="flex items-center" onClick={() => setCreating(true)}>
           <Icon name="Plus" size={15} />
           New role
-        </button>
+        </Button>
       </div>
 
       {error && (
@@ -156,13 +154,9 @@ export default function RolesPage() {
                       {r.member_count} member{r.member_count === 1 ? "" : "s"}
                     </span>
                     {!r.is_system && (
-                      <button
-                        onClick={() => void remove(r.slug)}
-                        className="rounded-lg bg-destructive/10 p-2 text-destructive tech-transition hover:bg-destructive/20"
-                        title="Delete role"
-                      >
+                      <Button variant="destructive" size="icon" layout="" onClick={() => void remove(r.slug)} title="Delete role">
                         <Icon name="Trash2" size={14} />
-                      </button>
+                      </Button>
                     )}
                   </div>
                 </div>
@@ -365,14 +359,10 @@ function CreateRoleDialog({
             >
               Cancel
             </button>
-            <button
-              onClick={() => void submit()}
-              disabled={busy || !name.trim() || selected.size === 0}
-              className="flex items-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground tech-transition hover:opacity-90 disabled:opacity-50"
-            >
+            <Button size="none" layout="flex items-center" onClick={() => void submit()} disabled={busy || !name.trim() || selected.size === 0} className="gap-1.5 px-4 py-2 text-sm">
               {busy && <Icon name="Loader2" size={14} className="animate-spin" />}
               Create role
-            </button>
+            </Button>
           </div>
         </div>
       </div>

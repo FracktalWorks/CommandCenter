@@ -11,6 +11,7 @@
  * (onActivity → debounce → refetch + POST /sync), and a fallback poll.
  */
 
+import Button from "@/components/ui/Button";
 import Icon from "@/components/Icon";
 import {
   Suspense,
@@ -139,12 +140,9 @@ function CheckpointsPanel({
                 Current
               </span>
             ) : confirmSha !== c.sha ? (
-              <button
-                onClick={() => setConfirmSha(c.sha)}
-                className="text-[10px] rounded-md border border-border px-2 py-1 text-muted-foreground hover:text-foreground hover:border-primary/30 tech-transition shrink-0"
-              >
+              <Button variant="secondary" size="none" radius="keep" layout="" onClick={() => setConfirmSha(c.sha)} className="text-[10px] rounded-md px-2 py-1 shrink-0">
                 Restore
-              </button>
+              </Button>
             ) : null}
           </div>
           {confirmSha === c.sha && (
@@ -152,16 +150,12 @@ function CheckpointsPanel({
               <span className="text-[10px] text-muted-foreground flex-1">
                 Restore this checkpoint?
               </span>
-              <button
-                onClick={() => restoreCheckpoint(c.sha)}
-                disabled={restoringSha === c.sha}
-                className="text-[10px] rounded-md bg-primary px-2 py-1 font-medium text-primary-foreground hover:opacity-90 tech-transition disabled:opacity-50 flex items-center gap-1"
-              >
+              <Button size="none" radius="keep" layout="flex items-center" onClick={() => restoreCheckpoint(c.sha)} disabled={restoringSha === c.sha} className="text-[10px] rounded-md px-2 py-1 gap-1">
                 {restoringSha === c.sha && (
                   <Icon name="Loader2" className="w-3 h-3 animate-spin" />
                 )}
                 Confirm
-              </button>
+              </Button>
               <button
                 onClick={() => setConfirmSha(null)}
                 className="text-[10px] rounded-md border border-border px-2 py-1 text-muted-foreground hover:text-foreground tech-transition"
@@ -618,12 +612,9 @@ function PublishModal({
               the Workshop meanwhile.
             </p>
           </div>
-          <button
-            onClick={onClose}
-            className="mt-1 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 tech-transition"
-          >
+          <Button size="none" layout="" onClick={onClose} className="mt-1 px-4 py-2 text-sm">
             Done
-          </button>
+          </Button>
         </div>
       </div>
     );
@@ -649,12 +640,9 @@ function PublishModal({
               {inviteWarning}
             </p>
           </div>
-          <button
-            onClick={onPublished}
-            className="mt-1 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 tech-transition"
-          >
+          <Button size="none" layout="" onClick={onPublished} className="mt-1 px-4 py-2 text-sm">
             Done
-          </button>
+          </Button>
         </div>
       </div>
     );
@@ -745,14 +733,9 @@ function PublishModal({
                       className="inline-flex items-center gap-1 rounded-full border border-border bg-secondary px-2.5 py-1 text-xs text-foreground"
                     >
                       {email}
-                      <button
-                        type="button"
-                        onClick={() => removeShareEmail(email)}
-                        aria-label={`Remove ${email}`}
-                        className="rounded-full p-0.5 text-muted-foreground hover:text-foreground tech-transition"
-                      >
+                      <Button variant="text" size="none" radius="keep" layout="" type="button" onClick={() => removeShareEmail(email)} aria-label={`Remove ${email}`} className="rounded-full p-0.5">
                         <Icon name="X" className="w-3 h-3" />
-                      </button>
+                      </Button>
                     </span>
                   ))}
                 </div>
@@ -806,24 +789,17 @@ function PublishModal({
         )}
 
         <div className="flex justify-end gap-2">
-          <button
-            onClick={onClose}
-            className="rounded-lg border border-border px-3 sm:px-4 py-2 text-sm text-muted-foreground hover:text-foreground hover:border-primary/30 tech-transition"
-          >
+          <Button variant="secondary" size="none" layout="" onClick={onClose} className="px-3 sm:px-4 py-2 text-sm">
             Cancel
-          </button>
-          <button
-            onClick={publish}
-            disabled={busy}
-            className="rounded-lg bg-primary px-3 sm:px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 tech-transition flex items-center gap-1.5 disabled:opacity-50"
-          >
+          </Button>
+          <Button size="lg" layout="flex items-center" onClick={publish} disabled={busy}>
             {busy ? (
               <Icon name="Loader2" className="w-4 h-4 animate-spin" />
             ) : (
               <Icon name="Rocket" className="w-4 h-4" />
             )}
             Publish
-          </button>
+          </Button>
         </div>
       </div>
     </div>
@@ -1634,12 +1610,9 @@ function Workshop({ slug }: { slug: string }) {
     return (
       <div className="flex flex-col items-center justify-center h-full gap-3">
         <p className="text-sm text-destructive">{loadError}</p>
-        <button
-          onClick={() => router.push("/build/apps")}
-          className="rounded-lg border border-border px-3 sm:px-4 py-2 text-sm text-muted-foreground hover:text-foreground hover:border-primary/30 tech-transition"
-        >
+        <Button variant="secondary" size="none" layout="" onClick={() => router.push("/build/apps")} className="px-3 sm:px-4 py-2 text-sm">
           Back to Custom Apps
-        </button>
+        </Button>
       </div>
     );
   }
@@ -1657,12 +1630,9 @@ function Workshop({ slug }: { slug: string }) {
     <div className="flex flex-col h-full min-h-0">
       {/* ── Topbar ──────────────────────────────────────────────────── */}
       <div className="flex items-center gap-3 px-3 sm:px-4 py-2 border-b border-border bg-card shrink-0">
-        <button
-          onClick={() => router.push("/build/apps")}
-          className="flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-sm text-muted-foreground hover:text-foreground hover:bg-secondary tech-transition"
-        >
+        <Button variant="ghost" size="none" layout="flex items-center" onClick={() => router.push("/build/apps")} className="gap-1.5 px-2 py-1.5 text-sm">
           <Icon name="ArrowLeft" className="w-4 h-4" /> Apps
-        </button>
+        </Button>
         <div className="flex items-center gap-2 min-w-0">
           <div className="w-7 h-7 rounded-lg border border-border bg-gradient-to-br from-primary/20 to-accent/15 flex items-center justify-center text-sm shrink-0">
             {app.icon || "▦"}
@@ -1802,12 +1772,9 @@ function Workshop({ slug }: { slug: string }) {
           </button>
         )}
 
-        <button
-          onClick={() => setShowPublish(true)}
-          className="rounded-lg bg-primary px-3 sm:px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 tech-transition flex items-center gap-1.5 shrink-0"
-        >
+        <Button size="lg" layout="flex items-center" onClick={() => setShowPublish(true)} className="shrink-0">
           <Icon name="Rocket" className="w-4 h-4" /> Publish
-        </button>
+        </Button>
       </div>
 
       {/* ── Split main ──────────────────────────────────────────────── */}
@@ -1905,10 +1872,7 @@ function Workshop({ slug }: { slug: string }) {
               {/* Console drawer — frame errors mirrored by the cc SDK. */}
               <div className="border-t border-border bg-card shrink-0">
                 <div className="flex items-center gap-2 px-3 py-1.5">
-                  <button
-                    onClick={() => setConsoleOpen((o) => !o)}
-                    className="flex items-center gap-1.5 font-mono text-[11px] text-muted-foreground hover:text-foreground tech-transition"
-                  >
+                  <Button variant="text" size="none" layout="flex items-center" onClick={() => setConsoleOpen((o) => !o)} className="gap-1.5 font-mono text-[11px]">
                     {consoleOpen ? (
                       <Icon name="ChevronDown" className="w-3 h-3 shrink-0" />
                     ) : (
@@ -1922,7 +1886,7 @@ function Workshop({ slug }: { slug: string }) {
                         {consoleEvents.length === 1 ? "error" : "errors"}
                       </span>
                     )}
-                  </button>
+                  </Button>
                   <div className="flex-1" />
                   {consoleEvents.length > 0 && (
                     <button
@@ -1974,13 +1938,9 @@ function Workshop({ slug }: { slug: string }) {
                   <span className="text-[10px] uppercase tracking-wide text-muted-foreground truncate">
                     {app.slug}
                   </span>
-                  <button
-                    onClick={() => setShowNewFile((s) => !s)}
-                    title="New file"
-                    className="p-1 rounded hover:bg-secondary text-muted-foreground hover:text-foreground tech-transition shrink-0"
-                  >
+                  <Button variant="ghost" size="icon-xs" radius="keep" layout="" onClick={() => setShowNewFile((s) => !s)} title="New file" className="rounded shrink-0">
                     <Icon name="Plus" className="w-3.5 h-3.5" />
-                  </button>
+                  </Button>
                 </div>
                 {showNewFile && (
                   <div className="flex items-center gap-1 px-2 pb-1.5">
@@ -1995,12 +1955,9 @@ function Workshop({ slug }: { slug: string }) {
                       placeholder="src/Widget.tsx"
                       className="flex-1 min-w-0 rounded-md border border-border bg-background px-1.5 py-1 font-mono text-[11px] text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
                     />
-                    <button
-                      onClick={createFile}
-                      className="text-[10px] rounded-md bg-primary px-1.5 py-1 font-medium text-primary-foreground hover:opacity-90 tech-transition shrink-0"
-                    >
+                    <Button size="none" radius="keep" layout="" onClick={createFile} className="text-[10px] rounded-md px-1.5 py-1 shrink-0">
                       Add
-                    </button>
+                    </Button>
                   </div>
                 )}
                 {files.length === 0 ? (
@@ -2023,8 +1980,7 @@ function Workshop({ slug }: { slug: string }) {
               <div className="flex-1 min-w-0 flex flex-col min-h-0">
                 <div className="flex items-center gap-2 px-3 py-1.5 border-b border-border shrink-0">
                   {isMobile && (
-                    <button
-                      onClick={() =>
+                    <Button variant="secondary" size="none" radius="keep" layout="flex items-center" onClick={() =>
                         openMobileDrawer(
                           <div className="flex flex-col p-2">
                             <div className="px-2 py-1.5 text-[10px] uppercase tracking-wide text-muted-foreground truncate">
@@ -2050,13 +2006,10 @@ function Workshop({ slug }: { slug: string }) {
                             )}
                           </div>
                         )
-                      }
-                      title="Files"
-                      className="flex items-center gap-1.5 text-[11px] rounded-md border border-border px-2 py-1 text-muted-foreground hover:text-foreground hover:border-primary/30 tech-transition shrink-0"
-                    >
+                      } title="Files" className="gap-1.5 text-[11px] rounded-md px-2 py-1 shrink-0">
                       <Icon name="Folder" className="w-3 h-3" />
                       Files
-                    </button>
+                    </Button>
                   )}
                   {selectedPath ? (
                     <>
@@ -2083,19 +2036,14 @@ function Workshop({ slug }: { slug: string }) {
                     </span>
                   )}
                   {selectedPath && (
-                    <button
-                      onClick={saveFile}
-                      disabled={!fileDirty || savingFile}
-                      title="Save (⌘S / Ctrl+S)"
-                      className="flex items-center gap-1.5 text-[11px] rounded-md border border-border px-2 py-1 text-muted-foreground hover:text-foreground hover:border-primary/30 tech-transition disabled:opacity-40 shrink-0"
-                    >
+                    <Button variant="secondary" size="none" radius="keep" layout="flex items-center" onClick={saveFile} disabled={!fileDirty || savingFile} title="Save (⌘S / Ctrl+S)" className="gap-1.5 text-[11px] rounded-md px-2 py-1 shrink-0">
                       {savingFile ? (
                         <Icon name="Loader2" className="w-3 h-3 animate-spin" />
                       ) : (
                         <Icon name="Save" className="w-3 h-3" />
                       )}
                       Save
-                    </button>
+                    </Button>
                   )}
                 </div>
                 <div className="flex-1 min-h-0">
@@ -2186,19 +2134,14 @@ function Workshop({ slug }: { slug: string }) {
                   {testScenarios.length} passing
                 </span>
                 <div className="flex-1" />
-                <button
-                  onClick={() => runScenarios(testScenarios)}
-                  disabled={runningTestIds.size > 0}
-                  title="Run all scenarios"
-                  className="flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground hover:border-primary/30 tech-transition disabled:opacity-50 shrink-0"
-                >
+                <Button variant="secondary" layout="flex items-center" onClick={() => runScenarios(testScenarios)} disabled={runningTestIds.size > 0} title="Run all scenarios" className="shrink-0">
                   {runningTestIds.size > 0 ? (
                     <Icon name="Loader2" className="w-3.5 h-3.5 animate-spin" />
                   ) : (
                     <Icon name="Play" className="w-3.5 h-3.5" />
                   )}
                   Run all
-                </button>
+                </Button>
               </div>
               <div className="flex-1 min-h-0 overflow-y-auto p-3 flex flex-col gap-2">
                 {testScenarios.map((scenario) => {
@@ -2248,19 +2191,14 @@ function Workshop({ slug }: { slug: string }) {
                               ? "Fail"
                               : "Not run"}
                         </span>
-                        <button
-                          onClick={() => runScenarios([scenario])}
-                          disabled={running}
-                          title="Run this scenario"
-                          className="flex items-center gap-1 rounded-md border border-border px-2 py-1 text-[10px] text-muted-foreground hover:text-foreground hover:border-primary/30 tech-transition disabled:opacity-50 shrink-0"
-                        >
+                        <Button variant="secondary" size="none" radius="keep" layout="flex items-center" onClick={() => runScenarios([scenario])} disabled={running} title="Run this scenario" className="gap-1 rounded-md px-2 py-1 text-[10px] shrink-0">
                           {running ? (
                             <Icon name="Loader2" className="w-3 h-3 animate-spin" />
                           ) : (
                             <Icon name="Play" className="w-3 h-3" />
                           )}
                           Run
-                        </button>
+                        </Button>
                       </div>
                       {expanded && (
                         <div className="border-t border-border px-3 py-2.5 text-[11px] flex flex-col gap-1.5">
@@ -2371,13 +2309,9 @@ function Workshop({ slug }: { slug: string }) {
                       until an admin grants it at publish.
                     </p>
                   </div>
-                  <button
-                    onClick={() => dismissCapability(scope)}
-                    aria-label="Dismiss"
-                    className="shrink-0 p-0.5 rounded text-muted-foreground hover:text-foreground tech-transition"
-                  >
+                  <Button variant="text" size="none" radius="keep" layout="" onClick={() => dismissCapability(scope)} aria-label="Dismiss" className="shrink-0 p-0.5 rounded">
                     <Icon name="X" className="w-3.5 h-3.5" />
-                  </button>
+                  </Button>
                 </div>
               ))}
             </div>
@@ -2416,13 +2350,9 @@ function Workshop({ slug }: { slug: string }) {
                         ✦ Fix with AI
                       </button>
                     </div>
-                    <button
-                      onClick={() => dismissFailingTest(result.scenarioId)}
-                      aria-label="Dismiss"
-                      className="shrink-0 p-0.5 rounded text-muted-foreground hover:text-foreground tech-transition"
-                    >
+                    <Button variant="text" size="none" radius="keep" layout="" onClick={() => dismissFailingTest(result.scenarioId)} aria-label="Dismiss" className="shrink-0 p-0.5 rounded">
                       <Icon name="X" className="w-3.5 h-3.5" />
-                    </button>
+                    </Button>
                   </div>
                 );
               })}
@@ -2508,30 +2438,24 @@ function Workshop({ slug }: { slug: string }) {
               />
               Always allow for this app
             </label>
-            <button
-              onClick={() => {
+            <Button variant="secondary" size="none" layout="" onClick={() => {
                 pendingConfirm.resolve({
                   approved: false,
                   remember: rememberTool,
                 });
                 setPendingConfirm(null);
-              }}
-              className="rounded-lg border border-border px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground hover:border-primary/30 tech-transition"
-            >
+              }} className="px-3 py-1.5 text-xs">
               Deny
-            </button>
-            <button
-              onClick={() => {
+            </Button>
+            <Button size="none" layout="" onClick={() => {
                 pendingConfirm.resolve({
                   approved: true,
                   remember: rememberTool,
                 });
                 setPendingConfirm(null);
-              }}
-              className="rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90 tech-transition"
-            >
+              }} className="px-3 py-1.5 text-xs">
               Approve
-            </button>
+            </Button>
           </div>
         </div>
       )}

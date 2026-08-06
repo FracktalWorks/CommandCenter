@@ -5,6 +5,7 @@
 // The bulk-run sweep state lives in the email store so it survives unmount.
 // Extracted from AISettingsView.tsx.
 
+import Button from "@/components/ui/Button";
 import Icon from "@/components/Icon";
 import { useCallback, useEffect, useState } from "react";
 import { listEmails } from "../../../lib/api";
@@ -234,12 +235,9 @@ export function TestTab({ accountId }: { accountId: string | null }) {
                   ) : isRunning ? (
                     <Icon name="Loader2" className="animate-spin text-muted-foreground" size={14} />
                   ) : (
-                    <button
-                      onClick={() => runOne(e.id)}
-                      className="flex items-center gap-1 px-2.5 py-1 rounded-md bg-primary text-primary-foreground text-[11px] font-medium hover:bg-primary/90 transition-colors"
-                    >
+                    <Button size="none" radius="keep" layout="flex items-center" onClick={() => runOne(e.id)} className="gap-1 px-2.5 py-1 rounded-md text-[11px]">
                       <Icon name="Sparkles" size={12} /> {applyMode ? "Run" : "Test"}
-                    </button>
+                    </Button>
                   )}
                 </div>
               </div>

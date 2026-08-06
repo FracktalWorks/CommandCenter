@@ -1,5 +1,6 @@
 "use client";
 
+import Button from "@/components/ui/Button";
 import Icon from "@/components/Icon";
 import { useState, useEffect, useRef } from "react";
 import { useEmailStore } from "../lib/emailStore";
@@ -259,12 +260,9 @@ export function ComposePanel({
         {/* Header */}
         <div className="shrink-0 flex items-center justify-between px-4 py-3 border-b border-border bg-secondary/50">
           <span className="text-sm font-medium text-foreground">New Message</span>
-          <button
-            onClick={onClose}
-            className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
-          >
+          <Button variant="ghost" size="icon-xs" radius="keep" layout="" onClick={onClose} className="rounded">
             <Icon name="X" size={16} />
-          </button>
+          </Button>
         </div>
 
         {/* Fields — the scrolling region when the window hits its max height */}
@@ -415,25 +413,17 @@ export function ComposePanel({
               onPick={(ref) => setArtifacts((prev) =>
                 prev.some((a) => a.path === ref.path) ? prev : [...prev, ref])}
             />
-            <button
-              onClick={() => {
+            <Button variant="ghost" size="none" radius="keep" layout="" onClick={() => {
                 // Discard removes the auto-saved draft (closing via X keeps it).
                 if (draftIdRef.current) void deleteEmail(draftIdRef.current);
                 onClose();
-              }}
-              disabled={sending}
-              className="px-3 py-1.5 text-xs rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors disabled:opacity-50"
-            >
+              }} disabled={sending} className="px-3 py-1.5 text-xs rounded-md">
               Discard
-            </button>
-            <button
-              onClick={handleSend}
-              disabled={sending || !to.trim()}
-              className="px-4 py-1.5 text-xs rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors font-medium disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5"
-            >
+            </Button>
+            <Button size="none" radius="keep" layout="flex items-center" onClick={handleSend} disabled={sending || !to.trim()} className="px-4 py-1.5 text-xs rounded-md gap-1.5">
               {sending && <Icon name="Loader2" size={12} className="animate-spin" />}
               {sending ? "Sending…" : "Send"}
-            </button>
+            </Button>
           </div>
         </div>
       </div>

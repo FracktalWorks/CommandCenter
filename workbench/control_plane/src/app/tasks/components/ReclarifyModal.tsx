@@ -1,5 +1,6 @@
 "use client";
 
+import Button from "@/components/ui/Button";
 import Icon from "@/components/Icon";
 import { useEffect } from "react";
 import { useTaskStore } from "../lib/taskStore";
@@ -50,14 +51,9 @@ export function ReclarifyModal() {
             <Icon name="RefreshCw" className="h-3.5 w-3.5 text-primary" />
             Re-clarify task
           </span>
-          <button
-            type="button"
-            onClick={close}
-            aria-label="Close"
-            className="tech-transition rounded-md p-1 text-muted-foreground hover:bg-secondary hover:text-foreground"
-          >
+          <Button variant="ghost" size="icon-xs" radius="keep" layout="" type="button" onClick={close} aria-label="Close" className="rounded-md">
             <Icon name="X" className="h-4 w-4" />
-          </button>
+          </Button>
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto">
           <ClarifyPanel key={item.id} item={item} reclarify onDone={close} />

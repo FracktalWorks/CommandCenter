@@ -1,5 +1,6 @@
 "use client";
 
+import Button from "@/components/ui/Button";
 import AppIcon, { themedIcon } from "@/components/Icon";
 import { AutomationFeature } from "../../lib/types";
 import { AISettingsView } from "./AISettingsView";
@@ -84,13 +85,9 @@ export function AutomationView({
     <div className="flex flex-col h-full w-full bg-background">
       {/* Header */}
       <div className="flex items-center gap-3 px-4 py-2.5 border-b border-border flex-shrink-0 bg-card">
-        <button
-          onClick={onClose}
-          className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
-          aria-label="Back to inbox"
-        >
+        <Button variant="ghost" size="icon-sm" radius="keep" layout="" onClick={onClose} aria-label="Back to inbox" className="rounded-md">
           <AppIcon name="ArrowLeft" size={16} />
-        </button>
+        </Button>
         <div className="w-7 h-7 rounded-lg bg-primary/15 text-primary flex items-center justify-center flex-shrink-0">
           <Icon size={15} />
         </div>

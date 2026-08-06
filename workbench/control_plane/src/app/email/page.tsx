@@ -1,5 +1,6 @@
 "use client";
 
+import Button from "@/components/ui/Button";
 import AppIcon, { themedIcon } from "@/components/Icon";
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useViewMode } from "@/components/ViewModeProvider";
@@ -780,15 +781,11 @@ export default function EmailPage() {
             <div className="flex items-center gap-1 flex-1 basis-0 justify-end min-w-fit">
               <MailboxActions selectedEmail={selectedEmail} />
               <div className="w-px h-4 bg-border" />
-              <button
-                onClick={() => setPaletteOpen(true)}
-                title="Command palette (Ctrl/Cmd+K)"
-                className="flex items-center gap-1 px-2 py-1 rounded text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
-              >
+              <Button variant="ghost" size="none" radius="keep" layout="flex items-center" onClick={() => setPaletteOpen(true)} title="Command palette (Ctrl/Cmd+K)" className="gap-1 px-2 py-1 rounded">
                 <span className="text-[10px] border border-border rounded px-1 leading-tight">
                   ⌘K
                 </span>
-              </button>
+              </Button>
             </div>
           </div>
         )}
@@ -796,13 +793,9 @@ export default function EmailPage() {
         {/* ── MOBILE: detail top bar (back button) ── */}
         {isMobile && mobileView === "detail" && selectedEmail && (
           <div className="flex items-center gap-2 px-2 py-2 border-b border-border flex-shrink-0 bg-card">
-            <button
-              onClick={handleBack}
-              className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
-              aria-label="Back to inbox"
-            >
+            <Button variant="ghost" size="icon-sm" radius="keep" layout="" onClick={handleBack} aria-label="Back to inbox" className="rounded">
               <AppIcon name="ArrowLeft" size={16} />
-            </button>
+            </Button>
             <div className="flex-1 min-w-0">
               <div className="text-xs font-medium text-foreground truncate">
                 {selectedEmail.subject}
@@ -848,15 +841,9 @@ export default function EmailPage() {
                   {unreadCount} unread
                 </span>
               )}
-              <button
-                onClick={() => selectedAccountId && triggerSync(selectedAccountId)}
-                disabled={!selectedAccountId || syncing}
-                className="p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors disabled:opacity-40"
-                aria-label="Refresh"
-                title="Refresh"
-              >
+              <Button variant="ghost" size="icon-sm" layout="" onClick={() => selectedAccountId && triggerSync(selectedAccountId)} disabled={!selectedAccountId || syncing} aria-label="Refresh" title="Refresh">
                 <AppIcon name="RefreshCw" size={16} className={syncing ? "animate-spin" : ""} />
-              </button>
+              </Button>
             </div>
           </div>
         )}

@@ -1,5 +1,6 @@
 "use client";
 
+import Button from "@/components/ui/Button";
 import AppIcon, { themedIcon } from "@/components/Icon";
 import { useEffect, useRef, useState } from "react";
 import { Email } from "../lib/types";
@@ -300,18 +301,12 @@ function CardAction({
   onClick: () => void;
 }) {
   return (
-    <button
-      type="button"
-      title={label}
-      aria-label={label}
-      onClick={(e) => {
+    <Button variant="ghost" size="icon-sm" radius="keep" layout="" type="button" title={label} aria-label={label} onClick={(e) => {
         e.stopPropagation();
         onClick();
-      }}
-      className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
-    >
+      }} className="rounded">
       <Icon size={13} />
-    </button>
+    </Button>
   );
 }
 
@@ -631,13 +626,9 @@ export function DraftCard({
             className={`${INPUT} w-full`}
           />
           {!showCc && (
-            <button
-              type="button"
-              onClick={() => setShowCc(true)}
-              className="text-[10px] text-muted-foreground hover:text-foreground whitespace-nowrap px-1"
-            >
+            <Button variant="text" size="none" layout="" type="button" onClick={() => setShowCc(true)} className="text-[10px] whitespace-nowrap px-1">
               Cc/Bcc
-            </button>
+            </Button>
           )}
         </div>
         {showCc && (
@@ -694,18 +685,14 @@ export function DraftCard({
         </div>
       )}
       <div className="flex items-center gap-2 mt-2">
-        <button
-          onClick={send}
-          disabled={sending || recipients().length === 0}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90 transition-colors disabled:opacity-50"
-        >
+        <Button layout="flex items-center" onClick={send} disabled={sending || recipients().length === 0}>
           {sending ? (
             <AppIcon name="Loader2" className="animate-spin" size={13} />
           ) : (
             <AppIcon name="Send" size={13} />
           )}
           Send
-        </button>
+        </Button>
         <button
           onClick={discard}
           className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-border text-xs text-muted-foreground hover:text-destructive hover:bg-secondary transition-colors"

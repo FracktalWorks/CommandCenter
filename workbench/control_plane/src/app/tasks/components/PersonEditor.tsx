@@ -1,5 +1,6 @@
 "use client";
 
+import Button from "@/components/ui/Button";
 import Icon from "@/components/Icon";
 import { useMemo, useRef, useState } from "react";
 import { useTaskStore } from "../lib/taskStore";
@@ -132,12 +133,9 @@ export function PersonEditor({
           <h2 className="text-sm font-semibold text-foreground">
             {person ? `Edit ${person.name}` : "Add person"}
           </h2>
-          <button
-            onClick={onClose}
-            className="rounded-md p-1 text-muted-foreground hover:bg-secondary hover:text-foreground"
-          >
+          <Button variant="ghost" size="icon-xs" radius="keep" layout="" onClick={onClose} className="rounded-md">
             <Icon name="X" size={16} />
-          </button>
+          </Button>
         </div>
 
         {/* Body */}
@@ -281,20 +279,13 @@ export function PersonEditor({
         {/* Footer */}
         <div className="flex items-center gap-2 border-t border-border px-4 py-3">
           <div className="flex-1" />
-          <button
-            onClick={onClose}
-            className="rounded-md px-3 py-1.5 text-xs text-muted-foreground hover:bg-secondary hover:text-foreground"
-          >
+          <Button variant="ghost" size="none" radius="keep" layout="" onClick={onClose} className="rounded-md px-3 py-1.5 text-xs">
             Cancel
-          </button>
-          <button
-            onClick={save}
-            disabled={saving || !name.trim()}
-            className="flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50"
-          >
+          </Button>
+          <Button radius="keep" layout="flex items-center" onClick={save} disabled={saving || !name.trim()} className="rounded-md">
             {saving && <Icon name="Loader2" size={13} className="animate-spin" />}
             {person ? "Save changes" : "Add person"}
-          </button>
+          </Button>
         </div>
       </div>
     </div>

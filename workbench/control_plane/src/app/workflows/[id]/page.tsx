@@ -7,6 +7,7 @@
  * status onto the canvas over SSE.
  */
 
+import Button from "@/components/ui/Button";
 import Icon from "@/components/Icon";
 import {
   Suspense,
@@ -1114,16 +1115,11 @@ function EditorInner({ id }: { id: string }) {
               <Icon name="ChevronDown" className="w-3.5 h-3.5" />
             </button>
           </div>
-          <button
-            onClick={onPublish}
-            disabled={busy !== null || !canPublish}
-            title={
+          <Button size="none" layout="flex items-center" onClick={onPublish} disabled={busy !== null || !canPublish} title={
               canPublish
                 ? undefined
                 : "Publishing needs the workflows:publish permission — ask an admin. You can still edit and Test this draft."
-            }
-            className="rounded-lg bg-primary px-2.5 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90 tech-transition flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
+            } className="px-2.5 py-1.5 text-xs gap-1">
             {busy === "publish" ? (
               <Icon name="Loader2" className="w-3.5 h-3.5 animate-spin" />
             ) : published ? (
@@ -1132,7 +1128,7 @@ function EditorInner({ id }: { id: string }) {
               <Icon name="Rocket" className="w-3.5 h-3.5" />
             )}
             Publish
-          </button>
+          </Button>
         </div>
       </div>
 
@@ -1302,13 +1298,9 @@ function EditorInner({ id }: { id: string }) {
               placeholder="Describe an automation to generate… e.g. “When a lead emails, log it to Zoho and draft a reply”"
               className="flex-1 min-w-0 bg-transparent text-xs text-foreground placeholder:text-muted-foreground focus:outline-none"
             />
-            <button
-              type="submit"
-              disabled={!describe.trim()}
-              className="shrink-0 rounded-lg bg-primary px-2.5 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90 tech-transition disabled:opacity-40"
-            >
+            <Button size="none" layout="" type="submit" disabled={!describe.trim()} className="shrink-0 px-2.5 py-1.5 text-xs">
               Generate
-            </button>
+            </Button>
           </form>
         </div>
         <NodeInspector

@@ -1,5 +1,6 @@
 "use client";
 
+import Button from "@/components/ui/Button";
 import Icon from "@/components/Icon";
 import { GtdItem } from "../../lib/types";
 import {
@@ -154,17 +155,12 @@ export function NowNextBar({
             </button>
           </>
         ) : (
-          <button
-            type="button"
-            onClick={onFillGap}
-            title="See what fits in this gap — 2-minute pile first"
-            className="min-w-0 flex-1 truncate text-left text-[12px] text-muted-foreground hover:text-foreground"
-          >
+          <Button variant="text" size="none" layout="" type="button" onClick={onFillGap} title="See what fits in this gap — 2-minute pile first" className="min-w-0 flex-1 truncate text-left text-[12px]">
             Open right now —{" "}
             <span className="font-medium text-primary">
               fill the gap with quick wins?
             </span>
-          </button>
+          </Button>
         )}
       </div>
 

@@ -1,5 +1,6 @@
 "use client";
 
+import Button from "@/components/ui/Button";
 import AppIcon, { themedIcon } from "@/components/Icon";
 import type { ThemedIcon } from "@/components/Icon";
 import { useMemo } from "react";
@@ -237,28 +238,20 @@ export function ListsSidebar({
             </button>
           </div>
         ))}
-        <button
-          type="button"
-          onClick={() => {
+        <Button variant="ghost" size="none" layout="flex items-center" type="button" onClick={() => {
             openWorkspaces();
             onNavigate?.();
-          }}
-          className="tech-transition flex w-full items-center gap-2.5 rounded-lg px-2 py-2 text-left text-[13px] text-muted-foreground hover:bg-secondary hover:text-foreground"
-        >
+          }} className="w-full gap-2.5 px-2 py-2 text-left text-[13px]">
           <AppIcon name="Plug" className="h-3.5 w-3.5 shrink-0" />
           <span className="flex-1">Connect workspace…</span>
-        </button>
-        <button
-          type="button"
-          onClick={() => {
+        </Button>
+        <Button variant="ghost" size="none" layout="flex items-center" type="button" onClick={() => {
             openSettings();
             onNavigate?.();
-          }}
-          className="tech-transition flex w-full items-center gap-2.5 rounded-lg px-2 py-2 text-left text-[13px] text-muted-foreground hover:bg-secondary hover:text-foreground"
-        >
+          }} className="w-full gap-2.5 px-2 py-2 text-left text-[13px]">
           <AppIcon name="Settings2" className="h-3.5 w-3.5 shrink-0" />
           <span className="flex-1">Settings</span>
-        </button>
+        </Button>
       </div>
     </nav>
   );

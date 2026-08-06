@@ -11,6 +11,7 @@
  * via `onSaved` so an embedding screen (AI-Settings) can sync its local copy.
  */
 
+import Button from "@/components/ui/Button";
 import Icon from "@/components/Icon";
 import { useEffect, useState } from "react";
 import {
@@ -90,14 +91,10 @@ export function DigestSettingsDialog({
       onClose={onClose}
       maxWidth="max-w-md"
       footer={
-        <button
-          onClick={save}
-          disabled={saving || !s}
-          className="ml-auto flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90 transition-colors disabled:opacity-50"
-        >
+        <Button layout="flex items-center" onClick={save} disabled={saving || !s} className="ml-auto">
           {saving ? <Icon name="Loader2" className="animate-spin" size={13} /> : <Icon name="Check" size={13} />}
           Save
-        </button>
+        </Button>
       }
     >
       {!s ? (

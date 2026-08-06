@@ -1,5 +1,6 @@
 "use client";
 
+import Button from "@/components/ui/Button";
 import Icon from "@/components/Icon";
 import { useState, useCallback, KeyboardEvent } from "react";
 import { useTaskStore } from "../lib/taskStore";
@@ -38,13 +39,9 @@ export function CaptureBar() {
         aria-label="Capture a new task"
       />
       {value.trim() && (
-        <button
-          type="button"
-          onClick={submit}
-          className="tech-transition flex items-center gap-1 rounded-md bg-primary px-2 py-1 text-[11px] font-medium text-primary-foreground hover:opacity-90"
-        >
+        <Button size="none" radius="keep" layout="flex items-center" type="button" onClick={submit} className="gap-1 rounded-md px-2 py-1 text-[11px]">
           Add <Icon name="CornerDownLeft" className="h-3 w-3" />
-        </button>
+        </Button>
       )}
     </div>
   );

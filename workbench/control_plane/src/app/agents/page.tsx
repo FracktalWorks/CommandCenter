@@ -12,6 +12,7 @@
  *   3. Register → agent appears in picker on the Chat page
  */
 
+import Button from "@/components/ui/Button";
 import AppIcon from "@/components/Icon";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
@@ -182,10 +183,7 @@ function PendingCommits({ agentName }: { agentName: string }) {
 
   return (
     <div className="mt-3 border-t border-border pt-3">
-      <button
-        onClick={toggle}
-        className="flex items-center gap-2 text-xs text-muted-foreground hover:text-foreground transition-colors w-full text-left"
-      >
+      <Button variant="text" size="none" layout="flex items-center" onClick={toggle} className="gap-2 text-xs w-full text-left">
         <span className="font-medium">Self-mutation commits</span>
         {pendingCount > 0 && (
           <span className="rounded-full bg-primary px-1.5 py-0.5 text-[10px] font-semibold text-white">
@@ -194,7 +192,7 @@ function PendingCommits({ agentName }: { agentName: string }) {
         )}
         {loading && <span className="text-[10px] text-muted-foreground">loading…</span>}
         <span className="ml-auto text-muted-foreground/70">{open ? "▲" : "▼"}</span>
-      </button>
+      </Button>
 
       {open && (
         <div className="mt-2 flex flex-col gap-2">
@@ -567,10 +565,7 @@ function AgentSkillsPanel({ agentName }: { agentName: string }) {
 
   return (
     <div className="mt-3 border-t border-border pt-3">
-      <button
-        onClick={toggle}
-        className="flex items-center gap-2 text-xs text-muted-foreground hover:text-foreground transition-colors w-full text-left"
-      >
+      <Button variant="text" size="none" layout="flex items-center" onClick={toggle} className="gap-2 text-xs w-full text-left">
         <span className="font-medium">Skills</span>
         {fetched && !loading && families.length > 0 && (
           <span className="text-[10px] text-muted-foreground">
@@ -579,7 +574,7 @@ function AgentSkillsPanel({ agentName }: { agentName: string }) {
         )}
         {loading && <span className="text-[10px] text-muted-foreground">loading…</span>}
         <span className="ml-auto text-muted-foreground/70">{open ? "▲" : "▼"}</span>
-      </button>
+      </Button>
 
       {open && (
         <div className="mt-2 flex flex-col gap-1.5">
@@ -668,13 +663,9 @@ function AgentSkillsPanel({ agentName }: { agentName: string }) {
                 className="w-full rounded-lg border border-border bg-secondary px-3 py-1.5 text-xs text-foreground placeholder-muted-foreground focus:border-primary focus:outline-none"
               />
               <div className="flex items-center gap-1.5">
-                <button
-                  onClick={() => void save()}
-                  disabled={saving}
-                  className="rounded bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50 transition-colors"
-                >
+                <Button size="none" radius="keep" layout="" onClick={() => void save()} disabled={saving} className="rounded px-3 py-1.5 text-xs">
                   {saving ? "Saving…" : "Save skills"}
-                </button>
+                </Button>
                 <button
                   onClick={() => { setEnabled(baseline); setReason(""); }}
                   disabled={saving}
@@ -1035,20 +1026,12 @@ function AddAgentModal({
               </div>
 
               <div className="flex justify-end gap-2 pt-1">
-                <button
-                  onClick={onClose}
-                  className="rounded-lg border border-border px-4 py-2 text-sm text-muted-foreground hover:border-primary/30 hover:text-foreground transition-colors"
-                >
+                <Button variant="secondary" size="none" layout="" onClick={onClose} className="px-4 py-2 text-sm">
                   Cancel
-                </button>
-                <button
-                  disabled={!form.repoUrl.trim() || !form.name.trim() || configLoading}
-                  onClick={handleFormSubmit}
-                  title={configLoading ? "Fetching config.json…" : undefined}
-                  className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40 transition-colors"
-                >
+                </Button>
+                <Button size="none" layout="" disabled={!form.repoUrl.trim() || !form.name.trim() || configLoading} onClick={handleFormSubmit} title={configLoading ? "Fetching config.json…" : undefined} className="px-4 py-2 text-sm">
                   {configLoading ? "Fetching…" : "Next →"}
-                </button>
+                </Button>
               </div>
             </div>
           )}
@@ -1191,12 +1174,9 @@ function AddAgentModal({
                 {errorMsg}
               </div>
               <div className="flex justify-end gap-2">
-                <button
-                  onClick={() => setStep("form")}
-                  className="rounded-lg border border-border px-4 py-2 text-sm text-muted-foreground hover:border-primary/30 hover:text-foreground transition-colors"
-                >
+                <Button variant="secondary" size="none" layout="" onClick={() => setStep("form")} className="px-4 py-2 text-sm">
                   Back
-                </button>
+                </Button>
               </div>
             </div>
           )}
@@ -1981,14 +1961,9 @@ function AgentSidePanel({
                   <span className="w-1.5 h-1.5 rounded-full bg-success" />
                   Up to date
                 </span>
-                <button
-                  onClick={checkUpdates}
-                  disabled={checking}
-                  className="rounded-lg border border-border px-2.5 py-1.5 text-xs text-muted-foreground hover:border-primary/30 hover:text-foreground disabled:opacity-50 transition-colors"
-                  title="Force-check for remote updates"
-                >
+                <Button variant="secondary" size="none" layout="" onClick={checkUpdates} disabled={checking} title="Force-check for remote updates" className="px-2.5 py-1.5 text-xs">
                   <AppIcon name="RefreshCw" className={`w-3 h-3 ${checking ? "animate-spin" : ""}`} />
-                </button>
+                </Button>
               </div>
             )}
 
@@ -2237,10 +2212,9 @@ export default function AgentsPage() {
             className="p-2 rounded-lg border border-border text-muted-foreground hover:bg-secondary transition-colors">
             <AppIcon name="RefreshCw" className="w-4 h-4" />
           </button>
-          <button onClick={() => setShowAdd(true)}
-            className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-primary hover:opacity-90 text-sm font-medium text-primary-foreground transition-colors">
+          <Button size="none" layout="flex items-center" onClick={() => setShowAdd(true)} className="gap-1.5 px-3 py-2 text-sm">
             <AppIcon name="Plus" className="w-4 h-4" /><span className="hidden sm:inline">Add Agent</span>
-          </button>
+          </Button>
         </div>
       </div>
 

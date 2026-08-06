@@ -6,6 +6,7 @@
  * generated notes + draft action items on top of slice 0's transcript view.
  */
 
+import Button from "@/components/ui/Button";
 import Icon, { themedIcon } from "@/components/Icon";
 import { use, useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
@@ -454,26 +455,15 @@ export default function MeetingPage({
         </div>
         <div className="flex items-center gap-2 shrink-0">
           {notesMd && (
-            <button
-              onClick={() => setShowEmail(true)}
-              className="shrink-0 rounded-lg border border-border px-2.5 sm:px-3 py-2 text-sm text-muted-foreground hover:text-foreground hover:border-primary/30 tech-transition"
-              aria-label="Draft a follow-up email"
-              title="Draft a follow-up email"
-            >
+            <Button variant="secondary" size="none" layout="" onClick={() => setShowEmail(true)} aria-label="Draft a follow-up email" title="Draft a follow-up email" className="shrink-0 px-2.5 sm:px-3 py-2 text-sm">
               <span className="flex items-center gap-1.5">
                 <Icon name="Mail" className="w-4 h-4" />
                 <span className="hidden sm:inline">Follow-up</span>
               </span>
-            </button>
+            </Button>
           )}
           {meeting && meeting.segments.length > 0 && (
-            <button
-              onClick={onSummarize}
-              disabled={summarizing || busy}
-              className="shrink-0 rounded-lg border border-border px-2.5 sm:px-3 py-2 text-sm text-muted-foreground hover:text-foreground hover:border-primary/30 tech-transition disabled:opacity-60"
-              aria-label={notesMd ? "Regenerate notes" : "Generate notes"}
-              title={notesMd ? "Regenerate notes" : "Generate notes"}
-            >
+            <Button variant="secondary" size="none" layout="" onClick={onSummarize} disabled={summarizing || busy} aria-label={notesMd ? "Regenerate notes" : "Generate notes"} title={notesMd ? "Regenerate notes" : "Generate notes"} className="shrink-0 px-2.5 sm:px-3 py-2 text-sm">
               <span className="flex items-center gap-1.5">
                 {summarizing ? (
                   <Icon name="Loader2" className="w-4 h-4 animate-spin" />
@@ -486,24 +476,17 @@ export default function MeetingPage({
                   {notesMd ? "Regenerate" : "Generate notes"}
                 </span>
               </span>
-            </button>
+            </Button>
           )}
-          <button
-            onClick={async () => {
+          <Button variant="secondary" size="none" layout="" onClick={async () => {
               setRefreshing(true);
               await refresh();
               setRefreshing(false);
-            }}
-            disabled={refreshing}
-            className="rounded-lg border border-border p-2 text-sm text-muted-foreground hover:text-foreground hover:border-primary/30 tech-transition disabled:opacity-60"
-            aria-label="Refresh"
-            title="Refresh"
-          >
+            }} disabled={refreshing} aria-label="Refresh" title="Refresh" className="p-2 text-sm">
             <Icon name="RefreshCw" className={`w-4 h-4 ${refreshing ? "animate-spin" : ""}`} />
-          </button>
+          </Button>
           {meeting && (
-            <button
-              onClick={async () => {
+            <Button variant="destructive" size="none" layout="" onClick={async () => {
                 if (!confirm("Delete this meeting, its audio and transcript?"))
                   return;
                 setDeleting(true);
@@ -516,18 +499,13 @@ export default function MeetingPage({
                   );
                   setDeleting(false);
                 }
-              }}
-              disabled={deleting}
-              className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive hover:bg-destructive/20 tech-transition disabled:opacity-60"
-              aria-label="Delete this meeting"
-              title="Delete this meeting"
-            >
+              }} disabled={deleting} aria-label="Delete this meeting" title="Delete this meeting" className="px-3 py-2 text-sm">
               {deleting ? (
                 <Icon name="Loader2" className="w-4 h-4 animate-spin" />
               ) : (
                 <Icon name="Trash2" className="w-4 h-4" />
               )}
-            </button>
+            </Button>
           )}
         </div>
       </div>
@@ -642,13 +620,9 @@ export default function MeetingPage({
                   placeholder="email@…"
                   className="w-32 rounded-md border border-border bg-background px-2 py-1 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
                 />
-                <button
-                  onClick={addAttendee}
-                  className="p-1 rounded-md border border-border text-muted-foreground hover:text-foreground hover:border-primary/30 tech-transition"
-                  aria-label="Add attendee"
-                >
+                <Button variant="secondary" size="icon-xs" radius="keep" layout="" onClick={addAttendee} aria-label="Add attendee" className="rounded-md">
                   <Icon name="Plus" className="w-3.5 h-3.5" />
-                </button>
+                </Button>
               </span>
             </div>
           )}
@@ -1067,14 +1041,9 @@ export default function MeetingPage({
                     {actions.some(
                       (a) => a.status === "draft" && a.confidence >= 0.8
                     ) && (
-                      <button
-                        onClick={onApproveAll}
-                        disabled={actioning !== null}
-                        title="Tasks are created, emails sent (or drafted when the recipient is unclear), documents drafted"
-                        className="text-[11px] rounded-md border border-border px-2 py-1 text-muted-foreground hover:text-foreground hover:border-primary/30 tech-transition disabled:opacity-60"
-                      >
+                      <Button variant="secondary" size="none" radius="keep" layout="" onClick={onApproveAll} disabled={actioning !== null} title="Tasks are created, emails sent (or drafted when the recipient is unclear), documents drafted" className="text-[11px] rounded-md px-2 py-1">
                         Dispatch all ≥80%
-                      </button>
+                      </Button>
                     )}
                   </div>
                   <div className="space-y-2">
@@ -1338,18 +1307,14 @@ export default function MeetingPage({
               </div>
             )}
             <div className="flex items-center gap-2 mt-4">
-              <button
-                onClick={() => void saveSpeaker()}
-                disabled={savingSpeaker}
-                className="flex items-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-xs font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50 tech-transition"
-              >
+              <Button size="none" layout="flex items-center" onClick={() => void saveSpeaker()} disabled={savingSpeaker} className="gap-1.5 px-4 py-2 text-xs">
                 {savingSpeaker ? (
                   <Icon name="Loader2" className="w-3.5 h-3.5 animate-spin" />
                 ) : (
                   <Icon name="Check" className="w-3.5 h-3.5" />
                 )}
                 Save
-              </button>
+              </Button>
               {speakerNames[editingSpeaker] && (
                 <button
                   onClick={() => {

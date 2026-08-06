@@ -1,5 +1,6 @@
 "use client";
 
+import Button from "@/components/ui/Button";
 import AppIcon from "@/components/Icon";
 import { useRef, useState } from "react";
 import { apiUploadAttachment } from "../lib/api";
@@ -131,30 +132,19 @@ export function AttachmentComposer({
           className="hidden"
           onChange={(e) => void addFiles(e.target.files)}
         />
-        <button
-          type="button"
-          disabled={uploading}
-          onClick={() => fileRef.current?.click()}
-          title="Attach a photo or file"
-          className="tech-transition inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-[11px] text-muted-foreground hover:bg-secondary hover:text-foreground disabled:opacity-50"
-        >
+        <Button variant="ghost" size="none" radius="keep" layout="inline-flex items-center" type="button" disabled={uploading} onClick={() => fileRef.current?.click()} title="Attach a photo or file" className="gap-1 rounded-md px-1.5 py-1 text-[11px]">
           {uploading ? (
             <AppIcon name="Loader2" className="h-3.5 w-3.5 animate-spin" />
           ) : (
             <AppIcon name="Paperclip" className="h-3.5 w-3.5" />
           )}
           {!compact && (uploading ? "Uploading…" : "Attach")}
-        </button>
+        </Button>
         {!linkOpen ? (
-          <button
-            type="button"
-            onClick={() => setLinkOpen(true)}
-            title="Add a link"
-            className="tech-transition inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-[11px] text-muted-foreground hover:bg-secondary hover:text-foreground"
-          >
+          <Button variant="ghost" size="none" radius="keep" layout="inline-flex items-center" type="button" onClick={() => setLinkOpen(true)} title="Add a link" className="gap-1 rounded-md px-1.5 py-1 text-[11px]">
             <AppIcon name="Link2" className="h-3.5 w-3.5" />
             {!compact && "Link"}
-          </button>
+          </Button>
         ) : (
           <span className="flex flex-1 items-center gap-1">
             <input

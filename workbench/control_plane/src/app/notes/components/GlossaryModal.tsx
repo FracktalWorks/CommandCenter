@@ -6,6 +6,7 @@
  * product names, people and customers get spelled right.
  */
 
+import Button from "@/components/ui/Button";
 import Icon from "@/components/Icon";
 import { useEffect, useState } from "react";
 import {
@@ -91,18 +92,13 @@ export default function GlossaryModal({ onClose }: { onClose: () => void }) {
               placeholder="Add a term (e.g. TwinDragon, Penrose)…"
               className="flex-1 rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
             />
-            <button
-              onClick={add}
-              disabled={busy || !input.trim()}
-              className="p-2 rounded-lg bg-primary text-primary-foreground hover:opacity-90 tech-transition disabled:opacity-50"
-              aria-label="Add term"
-            >
+            <Button size="icon" layout="" onClick={add} disabled={busy || !input.trim()} aria-label="Add term">
               {busy ? (
                 <Icon name="Loader2" className="w-4 h-4 animate-spin" />
               ) : (
                 <Icon name="Plus" className="w-4 h-4" />
               )}
-            </button>
+            </Button>
           </div>
 
           {loading ? (

@@ -21,6 +21,7 @@
  * every row looks deliberately configured hides the two rows that actually are.
  */
 
+import Button from "@/components/ui/Button";
 import Icon from "@/components/Icon";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
@@ -216,14 +217,10 @@ export default function MemberAccessPage() {
             </p>
           </div>
         </div>
-        <button
-          onClick={() => void save()}
-          disabled={!dirty || saving}
-          className="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground tech-transition hover:opacity-90 disabled:opacity-40 sm:px-4"
-        >
+        <Button size="lg" layout="flex items-center" onClick={() => void save()} disabled={!dirty || saving}>
           {saving ? <Icon name="Loader2" size={14} className="animate-spin" /> : <Icon name="Save" size={14} />}
           {dirty ? "Save changes" : "Saved"}
-        </button>
+        </Button>
       </div>
 
       {(error || notice) && (

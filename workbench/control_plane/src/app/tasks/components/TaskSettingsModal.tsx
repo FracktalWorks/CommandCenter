@@ -1,5 +1,6 @@
 "use client";
 
+import Button from "@/components/ui/Button";
 import Icon from "@/components/Icon";
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { useTaskStore } from "../lib/taskStore";
@@ -121,14 +122,9 @@ function SettingsPanel() {
           <h2 className="text-sm font-semibold text-foreground">
             Task Manager settings
           </h2>
-          <button
-            type="button"
-            onClick={close}
-            aria-label="Close"
-            className="tech-transition ml-auto rounded-md p-1.5 text-muted-foreground hover:bg-secondary hover:text-foreground"
-          >
+          <Button variant="ghost" size="icon-sm" radius="keep" layout="" type="button" onClick={close} aria-label="Close" className="ml-auto rounded-md">
             <Icon name="X" className="h-4 w-4" />
-          </button>
+          </Button>
         </div>
 
         <div className="flex flex-col gap-5 overflow-y-auto p-4">
@@ -418,13 +414,9 @@ function StageEditor({
           className="min-w-0 flex-1 bg-transparent px-0.5 py-1 text-[13px] text-foreground placeholder:text-muted-foreground focus:outline-none"
         />
         {adding.trim() && (
-          <button
-            type="button"
-            onClick={add}
-            className="tech-transition shrink-0 rounded-md bg-primary px-2 py-1 text-[11px] font-medium text-primary-foreground hover:opacity-90"
-          >
+          <Button size="none" radius="keep" layout="" type="button" onClick={add} className="shrink-0 rounded-md px-2 py-1 text-[11px]">
             Add
-          </button>
+          </Button>
         )}
       </div>
     </div>

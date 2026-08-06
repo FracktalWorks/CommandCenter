@@ -13,6 +13,7 @@
  * See ai-company-brain/specs/whatsapp_calls_note_taker.md.
  */
 
+import Button from "@/components/ui/Button";
 import Icon from "@/components/Icon";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -501,18 +502,14 @@ export default function WhatsAppCallsPage() {
             }
             className="flex-1 rounded-lg border border-border bg-background px-3 py-2 font-mono text-xs text-foreground placeholder:text-muted-foreground/70 focus:outline-none focus:ring-1 focus:ring-ring"
           />
-          <button
-            onClick={() => void dial()}
-            disabled={busy || !target.trim() || !bridgeUp}
-            className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-xs font-medium text-primary-foreground hover:opacity-90 tech-transition disabled:opacity-50"
-          >
+          <Button size="none" onClick={() => void dial()} disabled={busy || !target.trim() || !bridgeUp} className="gap-1.5 px-4 py-2 text-xs">
             {busy ? (
               <Icon name="Loader2" className="h-3.5 w-3.5 animate-spin" />
             ) : (
               <Icon name="Phone" className="h-3.5 w-3.5" />
             )}
             {busy ? "Calling…" : "Call"}
-          </button>
+          </Button>
         </div>
 
         {mode === "group" && (
@@ -553,12 +550,9 @@ export default function WhatsAppCallsPage() {
               <Icon name="Stethoscope" className="h-3.5 w-3.5" />
               Calling readiness
             </h2>
-            <button
-              onClick={() => void runDiagnostics()}
-              className="text-[10px] text-muted-foreground hover:text-foreground"
-            >
+            <Button variant="text" size="none" layout="" onClick={() => void runDiagnostics()} className="text-[10px]">
               Re-check
-            </button>
+            </Button>
           </div>
           {diag === null ? (
             <Icon name="Loader2" className="h-4 w-4 animate-spin text-muted-foreground" />
@@ -786,18 +780,12 @@ export default function WhatsAppCallsPage() {
               Debug report {copied && <span className="text-success">· copied</span>}
             </h2>
             <div className="flex gap-2">
-              <button
-                onClick={() => void navigator.clipboard.writeText(report)}
-                className="text-[10px] text-muted-foreground hover:text-foreground"
-              >
+              <Button variant="text" size="none" layout="" onClick={() => void navigator.clipboard.writeText(report)} className="text-[10px]">
                 Copy again
-              </button>
-              <button
-                onClick={() => setReport(null)}
-                className="text-[10px] text-muted-foreground hover:text-foreground"
-              >
+              </Button>
+              <Button variant="text" size="none" layout="" onClick={() => setReport(null)} className="text-[10px]">
                 Dismiss
-              </button>
+              </Button>
             </div>
           </div>
           <textarea

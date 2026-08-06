@@ -1,5 +1,6 @@
 "use client";
 
+import Button from "@/components/ui/Button";
 import Icon from "@/components/Icon";
 import { useState } from "react";
 import { useTaskStore } from "../lib/taskStore";
@@ -82,14 +83,9 @@ function WorkspacesPanel() {
           <h2 className="text-sm font-semibold text-foreground">
             PM-tool workspaces
           </h2>
-          <button
-            type="button"
-            onClick={close}
-            aria-label="Close"
-            className="tech-transition ml-auto rounded-md p-1 text-muted-foreground hover:bg-secondary hover:text-foreground"
-          >
+          <Button variant="ghost" size="icon-xs" radius="keep" layout="" type="button" onClick={close} aria-label="Close" className="ml-auto rounded-md">
             <Icon name="X" className="h-4 w-4" />
-          </button>
+          </Button>
         </div>
 
         <div className="flex flex-col gap-4 overflow-y-auto p-4">
@@ -135,27 +131,16 @@ function WorkspacesPanel() {
                         </p>
                       )}
                     </div>
-                    <button
-                      type="button"
-                      title="Pull this workspace's tasks into the GTD views"
-                      disabled={syncing}
-                      onClick={() => void syncNow(a.id)}
-                      className="tech-transition rounded-md p-1.5 text-muted-foreground hover:bg-secondary hover:text-foreground disabled:opacity-50"
-                    >
+                    <Button variant="ghost" size="icon-sm" radius="keep" layout="" type="button" title="Pull this workspace's tasks into the GTD views" disabled={syncing} onClick={() => void syncNow(a.id)} className="rounded-md">
                       {syncing ? (
                         <Icon name="Loader2" className="h-3.5 w-3.5 animate-spin" />
                       ) : (
                         <Icon name="Cloud" className="h-3.5 w-3.5" />
                       )}
-                    </button>
-                    <button
-                      type="button"
-                      title="Re-fetch projects/members/stages"
-                      onClick={() => void refreshAccountSchema(a.id)}
-                      className="tech-transition rounded-md p-1.5 text-muted-foreground hover:bg-secondary hover:text-foreground"
-                    >
+                    </Button>
+                    <Button variant="ghost" size="icon-sm" radius="keep" layout="" type="button" title="Re-fetch projects/members/stages" onClick={() => void refreshAccountSchema(a.id)} className="rounded-md">
                       <Icon name="RefreshCw" className="h-3.5 w-3.5" />
-                    </button>
+                    </Button>
                     <button
                       type="button"
                       title="Disconnect workspace"
@@ -186,19 +171,14 @@ function WorkspacesPanel() {
                   className="flex-1 bg-transparent text-base text-foreground placeholder:text-muted-foreground focus:outline-none sm:text-sm"
                 />
               </div>
-              <button
-                type="button"
-                disabled={!token.trim() || busy === "find" || backend !== "live"}
-                onClick={() => void findWorkspaces()}
-                className="tech-transition inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:opacity-40"
-              >
+              <Button size="none" layout="inline-flex items-center" type="button" disabled={!token.trim() || busy === "find" || backend !== "live"} onClick={() => void findWorkspaces()} className="shrink-0 gap-1.5 px-3 py-2 text-sm">
                 {busy === "find" ? (
                   <Icon name="Loader2" className="h-4 w-4 animate-spin" />
                 ) : (
                   <Icon name="Plus" className="h-4 w-4" />
                 )}
                 Find workspaces
-              </button>
+              </Button>
             </div>
             <p className="mt-1 px-1 text-[10px] text-muted-foreground">
               ClickUp → Settings → Apps → API Token. The token is encrypted at

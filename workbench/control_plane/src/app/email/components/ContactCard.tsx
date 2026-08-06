@@ -19,6 +19,7 @@
  * above / to the left near an edge, and becomes a bottom sheet on mobile).
  */
 
+import Button from "@/components/ui/Button";
 import AppIcon, { themedIcon, type ThemedIcon } from "@/components/Icon";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -440,20 +441,12 @@ function ContactPopover({
 
       {/* Actions */}
       <div className="flex items-center gap-2 px-4 pb-3">
-        <button
-          type="button"
-          onClick={mailTo}
-          className="flex-1 inline-flex items-center justify-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90 tech-transition"
-        >
+        <Button type="button" onClick={mailTo} className="flex-1">
           <AppIcon name="Mail" size={12} /> Email
-        </button>
-        <button
-          type="button"
-          onClick={searchTheirMail}
-          className="flex-1 inline-flex items-center justify-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground hover:border-primary/30 tech-transition"
-        >
+        </Button>
+        <Button variant="secondary" type="button" onClick={searchTheirMail} className="flex-1">
           <AppIcon name="Search" size={12} /> All mail
-        </button>
+        </Button>
       </div>
 
       {error ? (

@@ -7,6 +7,7 @@
  * set up yet" state when no provider key is configured.
  */
 
+import Button from "@/components/ui/Button";
 import Icon from "@/components/Icon";
 import { useEffect, useState } from "react";
 import { botJoin, getBotConfig } from "../lib/api";
@@ -92,13 +93,9 @@ export default function JoinCallModal({
               are on the roadmap.)
             </p>
           </div>
-          <button
-            onClick={onClose}
-            className="rounded-lg p-1 text-muted-foreground hover:bg-secondary hover:text-foreground tech-transition"
-            aria-label="Close"
-          >
+          <Button variant="ghost" size="icon-xs" layout="" onClick={onClose} aria-label="Close">
             <Icon name="X" className="h-4 w-4" />
-          </button>
+          </Button>
         </div>
 
         {configured === false ? (
@@ -166,24 +163,17 @@ export default function JoinCallModal({
             </p>
 
             <div className="mt-3 flex justify-end gap-2">
-              <button
-                onClick={onClose}
-                className="rounded-lg px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground tech-transition"
-              >
+              <Button variant="text" size="none" layout="" onClick={onClose} className="px-3 py-1.5 text-xs">
                 {anySuccess ? "Done" : "Cancel"}
-              </button>
-              <button
-                onClick={() => void dispatch()}
-                disabled={busy || configured === null || !urls.trim()}
-                className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90 tech-transition disabled:opacity-50"
-              >
+              </Button>
+              <Button layout="inline-flex items-center" onClick={() => void dispatch()} disabled={busy || configured === null || !urls.trim()}>
                 {busy ? (
                   <Icon name="Loader2" className="h-3.5 w-3.5 animate-spin" />
                 ) : (
                   <Icon name="Video" className="h-3.5 w-3.5" />
                 )}
                 {busy ? "Sending…" : "Send notetaker"}
-              </button>
+              </Button>
             </div>
           </>
         )}

@@ -1,5 +1,6 @@
 "use client";
 
+import Button from "@/components/ui/Button";
 import Icon from "@/components/Icon";
 import { useEffect, useRef, useState } from "react";
 
@@ -47,12 +48,9 @@ export function Modal({
               </div>
             )}
           </div>
-          <button
-            onClick={onClose}
-            className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors flex-shrink-0"
-          >
+          <Button variant="ghost" size="icon-xs" radius="keep" layout="" onClick={onClose} className="rounded flex-shrink-0">
             <Icon name="X" size={16} />
-          </button>
+          </Button>
         </div>
         <div className="px-4 py-4 space-y-3 overflow-y-auto">{children}</div>
         {footer && (

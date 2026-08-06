@@ -1,5 +1,6 @@
 "use client";
 
+import Button from "@/components/ui/Button";
 import Icon from "@/components/Icon";
 import { useState } from "react";
 import { Email } from "../lib/types";
@@ -48,29 +49,19 @@ export function MailboxActions({ selectedEmail }: { selectedEmail: Email | null 
 
   return (
     <div className="flex items-center gap-1">
-      <button
-        onClick={() => selectedAccountId && triggerSync(selectedAccountId)}
-        disabled={!selectedAccountId || syncing}
-        className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors disabled:opacity-40"
-        title={
+      <Button variant="ghost" size="icon-sm" radius="keep" layout="" onClick={() => selectedAccountId && triggerSync(selectedAccountId)} disabled={!selectedAccountId || syncing} title={
           processing
             ? "Processing new mail — applying rules, labels & auto-archive…"
             : "Refresh — sync new mail, drafts & changes from the server"
-        }
-      >
+        } className="rounded">
         <Icon name="RefreshCw" size={15} className={syncing ? "animate-spin" : ""} />
-      </button>
+      </Button>
 
-      <button
-        onClick={() =>
+      <Button variant="ghost" size="icon-sm" radius="keep" layout="" onClick={() =>
           selectedEmail && updateEmail(selectedEmail.id, { folder: "junk" })
-        }
-        disabled={!selectedEmail}
-        className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors disabled:opacity-40"
-        title="Mark as spam"
-      >
+        } disabled={!selectedEmail} title="Mark as spam" className="rounded">
         <Icon name="AlertTriangle" size={15} />
-      </button>
+      </Button>
 
       {/* Mailbox settings (gear) */}
       <div className="relative">

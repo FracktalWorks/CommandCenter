@@ -10,6 +10,7 @@
  *        modules /api/workflows/modules*
  */
 
+import Button from "@/components/ui/Button";
 import Icon from "@/components/Icon";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
@@ -151,18 +152,14 @@ export default function WorkflowsPage() {
             <Icon name="RefreshCw" className={`w-4 h-4 ${loading ? "animate-spin" : ""}`} />
           </button>
           {tab === "workflows" && (
-            <button
-              onClick={onCreate}
-              disabled={creating}
-              className="rounded-lg bg-primary px-3 sm:px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 tech-transition flex items-center gap-1.5 disabled:opacity-50"
-            >
+            <Button size="lg" layout="flex items-center" onClick={onCreate} disabled={creating}>
               {creating ? (
                 <Icon name="Loader2" className="w-4 h-4 animate-spin" />
               ) : (
                 <Icon name="Plus" className="w-4 h-4" />
               )}
               New workflow
-            </button>
+            </Button>
           )}
         </div>
       </div>
@@ -252,12 +249,9 @@ export default function WorkflowsPage() {
                     No workflows yet. Build your first automation — trigger →
                     agents → tools → done.
                   </p>
-                  <button
-                    onClick={onCreate}
-                    className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 tech-transition"
-                  >
+                  <Button size="none" layout="" onClick={onCreate} className="px-4 py-2 text-sm">
                     Create a workflow
-                  </button>
+                  </Button>
                 </div>
               )}
               {!loading && !error && filtered.length > 0 && (
@@ -285,13 +279,9 @@ export default function WorkflowsPage() {
                             <Icon name="Loader2" className="w-3.5 h-3.5 animate-spin text-muted-foreground" />
                           ) : (
                             <span className="hidden group-hover:flex items-center gap-1">
-                              <button
-                                onClick={(e) => onDuplicate(e, wf.id)}
-                                title="Duplicate workflow"
-                                className="p-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary tech-transition"
-                              >
+                              <Button variant="ghost" size="icon-xs" radius="keep" layout="" onClick={(e) => onDuplicate(e, wf.id)} title="Duplicate workflow" className="rounded-md">
                                 <Icon name="Copy" className="w-3.5 h-3.5" />
-                              </button>
+                              </Button>
                               <button
                                 onClick={(e) => onDelete(e, wf.id)}
                                 title={

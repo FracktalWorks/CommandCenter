@@ -1,5 +1,6 @@
 "use client";
 
+import Button from "@/components/ui/Button";
 import Icon from "@/components/Icon";
 import { useEffect } from "react";
 import { useTaskStore } from "../lib/taskStore";
@@ -85,12 +86,9 @@ export function DeleteConfirmModal() {
           </button>
         </div>
         <div className="flex items-center justify-end gap-2 border-t border-border px-4 py-3">
-          <button
-            onClick={cancelPendingDelete}
-            className="rounded-lg px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground"
-          >
+          <Button variant="text" size="none" layout="" onClick={cancelPendingDelete} className="px-3 py-1.5 text-xs">
             Cancel
-          </button>
+          </Button>
           <button
             onClick={confirmPendingDelete}
             autoFocus

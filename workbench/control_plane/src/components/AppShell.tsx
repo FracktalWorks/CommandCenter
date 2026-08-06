@@ -13,6 +13,7 @@
  * rely on plain Tailwind responsive prefixes (kept in sync via the viewport meta).
  */
 
+import Button from "@/components/ui/Button";
 import AppIcon, { themedIcon, type ThemedIcon } from "@/components/Icon";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -241,21 +242,15 @@ function MobileBottomNavInner({
       </nav>
       <div className="mt-auto border-t border-border p-3 space-y-2">
         <ThemeToggleMenuItem onClick={close} />
-        <button
-          onClick={() => { toggleView(); close(); }}
-          className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm text-muted-foreground hover:bg-secondary hover:text-foreground tech-transition"
-        >
+        <Button variant="ghost" size="none" layout="flex items-center" onClick={() => { toggleView(); close(); }} className="w-full gap-3 px-3 py-2.5 text-sm">
           <AppIcon name="Monitor" size={16} className="shrink-0" />
           Desktop view
-        </button>
+        </Button>
         {session?.user && (
-          <button
-            onClick={() => signOut({ callbackUrl: "/signin" })}
-            className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm text-muted-foreground hover:bg-secondary hover:text-foreground tech-transition"
-          >
+          <Button variant="ghost" size="none" layout="flex items-center" onClick={() => signOut({ callbackUrl: "/signin" })} className="w-full gap-3 px-3 py-2.5 text-sm">
             <AppIcon name="LogOut" size={16} className="shrink-0" />
             Sign out
-          </button>
+          </Button>
         )}
         {session?.user && (
           <div className="px-3 pt-1">
@@ -311,35 +306,23 @@ function MobileBottomNavInner({
         </button>
         {isEmailPage && (
           <>
-            <button
-              onClick={() => dispatchNav("email-accounts")}
-              className="flex flex-1 min-w-0 flex-col items-center gap-0.5 px-1 py-1 rounded-lg transition-colors text-muted-foreground hover:text-foreground"
-            >
+            <Button variant="text" size="none" layout="flex items-center" onClick={() => dispatchNav("email-accounts")} className="flex-1 min-w-0 flex-col gap-0.5 px-1 py-1">
               <AppIcon name="Mail" size={20} />
               <span className="text-[10px] font-medium leading-none">Inbox</span>
-            </button>
-            <button
-              onClick={() => dispatchNav("email-automation")}
-              className="flex flex-1 min-w-0 flex-col items-center gap-0.5 px-1 py-1 rounded-lg transition-colors text-muted-foreground hover:text-foreground"
-            >
+            </Button>
+            <Button variant="text" size="none" layout="flex items-center" onClick={() => dispatchNav("email-automation")} className="flex-1 min-w-0 flex-col gap-0.5 px-1 py-1">
               <AppIcon name="Zap" size={20} />
               <span className="text-[10px] font-medium leading-none">Automation</span>
-            </button>
-            <button
-              onClick={() => dispatchNav("email-ai")}
-              className="flex flex-1 min-w-0 flex-col items-center gap-0.5 px-1 py-1 rounded-lg transition-colors text-muted-foreground hover:text-foreground"
-            >
+            </Button>
+            <Button variant="text" size="none" layout="flex items-center" onClick={() => dispatchNav("email-ai")} className="flex-1 min-w-0 flex-col gap-0.5 px-1 py-1">
               <AppIcon name="MessageCircle" size={20} />
               <span className="text-[10px] font-medium leading-none">AI Chat</span>
-            </button>
+            </Button>
           </>
         )}
         {isChatPage && (
           <>
-            <button
-              onClick={() => dispatchNav("chats")}
-              className="relative flex flex-1 min-w-0 flex-col items-center gap-0.5 px-1 py-1 rounded-lg transition-colors text-muted-foreground hover:text-foreground"
-            >
+            <Button variant="text" size="none" layout="flex items-center" onClick={() => dispatchNav("chats")} className="relative flex-1 min-w-0 flex-col gap-0.5 px-1 py-1">
               <AppIcon name="MessageCircle" size={20} />
               {activeCount > 0 && (
                 <span className="absolute -top-0.5 right-2 flex items-center justify-center min-w-[16px] h-4 px-1 rounded-full bg-success text-success-foreground text-[9px] font-bold animate-pulse">
@@ -347,14 +330,11 @@ function MobileBottomNavInner({
                 </span>
               )}
               <span className="text-[10px] font-medium leading-none">Chats</span>
-            </button>
-            <button
-              onClick={() => dispatchNav("files")}
-              className="flex flex-1 min-w-0 flex-col items-center gap-0.5 px-1 py-1 rounded-lg transition-colors text-muted-foreground hover:text-foreground"
-            >
+            </Button>
+            <Button variant="text" size="none" layout="flex items-center" onClick={() => dispatchNav("files")} className="flex-1 min-w-0 flex-col gap-0.5 px-1 py-1">
               <AppIcon name="FolderOpen" size={20} />
               <span className="text-[10px] font-medium leading-none">Files</span>
-            </button>
+            </Button>
           </>
         )}
         {isTasksPage && (

@@ -1,5 +1,6 @@
 "use client";
 
+import Button from "@/components/ui/Button";
 import Icon from "@/components/Icon";
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import {
@@ -1008,19 +1009,14 @@ export function BulkUnsubscribeView({
               </span>
             )}
           </span>
-          <button
-            onClick={autoCategorize}
-            disabled={categorizing}
-            title="Apply the categories these emails' senders, domains and learned patterns already imply"
-            className="ml-auto flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-primary text-primary-foreground text-[11px] font-medium hover:bg-primary/90 transition-colors disabled:opacity-50"
-          >
+          <Button size="none" radius="keep" layout="flex items-center" onClick={autoCategorize} disabled={categorizing} title="Apply the categories these emails' senders, domains and learned patterns already imply" className="ml-auto gap-1.5 px-2.5 py-1 rounded-md text-[11px]">
             {categorizing ? (
               <Icon name="Loader2" className="animate-spin" size={12} />
             ) : (
               <Icon name="Sparkles" size={12} />
             )}
             Categorize
-          </button>
+          </Button>
         </div>
       )}
 
@@ -1118,13 +1114,9 @@ export function BulkUnsubscribeView({
               </ActionBtn>
             </>
           )}
-          <button
-            onClick={clearSelection}
-            title="Clear selection"
-            className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
-          >
+          <Button variant="ghost" size="icon-sm" radius="keep" layout="" onClick={clearSelection} title="Clear selection" className="rounded">
             <Icon name="X" size={13} />
-          </button>
+          </Button>
         </div>
       )}
 
@@ -1241,24 +1233,19 @@ export function BulkUnsubscribeView({
                     onChange={() => toggleOne(s.email)}
                     className="accent-primary flex-shrink-0"
                   />
-                  <button
-                    onClick={() =>
+                  <Button variant="ghost" size="none" radius="keep" layout="" onClick={() =>
                       setExpanded(expanded === s.email ? null : s.email)
-                    }
-                    title={
+                    } title={
                       expanded === s.email
                         ? "Hide this sender's messages"
                         : "Show this sender's messages"
-                    }
-                    aria-label="Toggle messages"
-                    className="p-0.5 rounded text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors flex-shrink-0"
-                  >
+                    } aria-label="Toggle messages" className="p-0.5 rounded flex-shrink-0">
                     {expanded === s.email ? (
                       <Icon name="ChevronDown" size={13} />
                     ) : (
                       <Icon name="ChevronRight" size={13} />
                     )}
-                  </button>
+                  </Button>
                   <div
                     className="flex-1 min-w-0"
                     title="Right-click to fix this sender's categorization"
@@ -1514,28 +1501,19 @@ export function BulkUnsubscribeView({
                 {o.label}
               </button>
             ))}
-            <button
-              onClick={() => setBackfillOpen(false)}
-              className="px-1.5 py-0.5 text-muted-foreground hover:text-foreground"
-              title="Cancel"
-            >
+            <Button variant="text" size="none" layout="" onClick={() => setBackfillOpen(false)} title="Cancel" className="px-1.5 py-0.5">
               <Icon name="X" size={11} />
-            </button>
+            </Button>
           </div>
         ) : (
-          <button
-            onClick={() => setBackfillOpen(true)}
-            disabled={categorizing}
-            title="Download older mail from your mailbox and categorize it — no AI calls"
-            className="ml-auto flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-primary text-primary-foreground text-[11px] font-medium hover:bg-primary/90 transition-colors disabled:opacity-50"
-          >
+          <Button size="none" radius="keep" layout="flex items-center" onClick={() => setBackfillOpen(true)} disabled={categorizing} title="Download older mail from your mailbox and categorize it — no AI calls" className="ml-auto gap-1.5 px-2.5 py-1 rounded-md text-[11px]">
             {categorizing ? (
               <Icon name="Loader2" className="animate-spin" size={12} />
             ) : (
               <Icon name="Clock" size={12} />
             )}
             Clean older mail
-          </button>
+          </Button>
         )}
       </div>
       {/* Archive old mail — age-based bulk archive across ALL senders. Pinned to the
@@ -1569,19 +1547,14 @@ export function BulkUnsubscribeView({
           />
           Only read
         </label>
-        <button
-          onClick={archiveOldMail}
-          disabled={busy === "__sweep__"}
-          title="Archive old inbox mail in one sweep (all senders)"
-          className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-primary text-primary-foreground text-[11px] font-medium hover:bg-primary/90 transition-colors disabled:opacity-50 ml-auto"
-        >
+        <Button size="none" radius="keep" layout="flex items-center" onClick={archiveOldMail} disabled={busy === "__sweep__"} title="Archive old inbox mail in one sweep (all senders)" className="gap-1.5 px-2.5 py-1 rounded-md text-[11px] ml-auto">
           {busy === "__sweep__" ? (
             <Icon name="Loader2" className="animate-spin" size={12} />
           ) : (
             <Icon name="Archive" size={12} />
           )}
           Archive old mail
-        </button>
+        </Button>
       </div>
 
       {fixSender && accountId && (
@@ -1782,13 +1755,9 @@ function SenderMessages({
             />
           ) : (
             <>
-              <button
-                onClick={() => act(m.id, "archive")}
-                title="Archive this message"
-                className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors flex-shrink-0"
-              >
+              <Button variant="ghost" size="icon-xs" radius="keep" layout="" onClick={() => act(m.id, "archive")} title="Archive this message" className="rounded flex-shrink-0">
                 <Icon name="Archive" size={12} />
-              </button>
+              </Button>
               <button
                 onClick={() => act(m.id, "trash")}
                 title="Delete this message (move to Trash)"

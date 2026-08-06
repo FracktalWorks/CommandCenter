@@ -22,6 +22,7 @@
  * current selection — so they work in the chat app too.
  */
 
+import Button from "@/components/ui/Button";
 import AppIcon from "@/components/Icon";
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
@@ -564,14 +565,10 @@ function DraftResultCard({
               {state === "saving" ? <AppIcon name="Loader2" size={11} className="animate-spin" /> : <AppIcon name="PenLine" size={11} />}
               Save to Drafts
             </button>
-            <button
-              onClick={send}
-              disabled={!canAct || state === "saving" || state === "sending"}
-              className="flex items-center gap-1 text-[10px] px-2 py-1 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
-            >
+            <Button size="none" radius="keep" layout="flex items-center" onClick={send} disabled={!canAct || state === "saving" || state === "sending"} className="gap-1 text-[10px] px-2 py-1 rounded-md">
               {state === "sending" ? <AppIcon name="Loader2" size={11} className="animate-spin" /> : <AppIcon name="Send" size={11} />}
               Send
-            </button>
+            </Button>
           </>
         )}
         {state === "error" && (
@@ -1378,30 +1375,15 @@ function EmailRow({
                   <AppIcon name="Tag" size={11} />
                 )}
               </button>
-              <button
-                onClick={markRead}
-                title="Mark as read"
-                aria-label="Mark as read"
-                className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-secondary"
-              >
+              <Button variant="ghost" size="icon-xs" radius="keep" layout="" onClick={markRead} title="Mark as read" aria-label="Mark as read" className="rounded">
                 <AppIcon name="MailOpen" size={11} />
-              </button>
-              <button
-                onClick={archive}
-                title="Archive"
-                aria-label="Archive"
-                className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-secondary"
-              >
+              </Button>
+              <Button variant="ghost" size="icon-xs" radius="keep" layout="" onClick={archive} title="Archive" aria-label="Archive" className="rounded">
                 <AppIcon name="Archive" size={11} />
-              </button>
-              <button
-                onClick={() => openEmail(row.id)}
-                title="Open in inbox"
-                aria-label="Open in inbox"
-                className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-secondary"
-              >
+              </Button>
+              <Button variant="ghost" size="icon-xs" radius="keep" layout="" onClick={() => openEmail(row.id)} title="Open in inbox" aria-label="Open in inbox" className="rounded">
                 <AppIcon name="ExternalLink" size={11} />
-              </button>
+              </Button>
             </>
           )}
         </div>

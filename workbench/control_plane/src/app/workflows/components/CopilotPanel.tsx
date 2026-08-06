@@ -9,6 +9,7 @@
  * modules land in the org library with auto-created provenance.
  */
 
+import Button from "@/components/ui/Button";
 import Icon from "@/components/Icon";
 import { useEffect, useRef, useState } from "react";
 import { askCopilot } from "../lib/api";
@@ -189,14 +190,9 @@ export default function CopilotPanel({
             placeholder="Describe a change…"
             className="flex-1 resize-none rounded-lg border border-input bg-background px-2.5 py-1.5 text-[11px] text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
           />
-          <button
-            onClick={() => send()}
-            disabled={busy || !prompt.trim()}
-            className="self-end rounded-lg bg-primary p-2 text-primary-foreground hover:opacity-90 tech-transition disabled:opacity-50"
-            title="Send"
-          >
+          <Button size="icon" layout="" onClick={() => send()} disabled={busy || !prompt.trim()} title="Send" className="self-end">
             <Icon name="Sparkles" className="w-3.5 h-3.5" />
-          </button>
+          </Button>
         </div>
       </div>
     </div>

@@ -23,6 +23,7 @@
 // `C` capture hotkey (page.tsx) opens the capture palette on top of the room:
 // a stray thought is one keystroke to the inbox and the timer never stops.
 
+import Button from "@/components/ui/Button";
 import Icon, { themedIcon, type ThemedIcon } from "@/components/Icon";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTaskStore } from "../lib/taskStore";
@@ -378,29 +379,17 @@ function FocusRoom({ itemId }: { itemId: string }) {
             </span>
           </button>
           {!finished && (
-            <button
-              type="button"
-              onClick={togglePause}
-              aria-label={pausedAt != null ? "Resume timer" : "Pause timer"}
-              title={pausedAt != null ? "Resume" : "Pause"}
-              className="tech-transition shrink-0 rounded-md p-1.5 text-muted-foreground hover:bg-secondary hover:text-foreground"
-            >
+            <Button variant="ghost" size="icon-sm" radius="keep" layout="" type="button" onClick={togglePause} aria-label={pausedAt != null ? "Resume timer" : "Pause timer"} title={pausedAt != null ? "Resume" : "Pause"} className="shrink-0 rounded-md">
               {pausedAt != null ? (
                 <Icon name="Play" className="h-3.5 w-3.5" fill="currentColor" />
               ) : (
                 <Icon name="Pause" className="h-3.5 w-3.5" />
               )}
-            </button>
+            </Button>
           )}
-          <button
-            type="button"
-            onClick={expand}
-            aria-label="Expand focus mode"
-            title="Expand"
-            className="tech-transition shrink-0 rounded-md p-1.5 text-muted-foreground hover:bg-secondary hover:text-foreground"
-          >
+          <Button variant="ghost" size="icon-sm" radius="keep" layout="" type="button" onClick={expand} aria-label="Expand focus mode" title="Expand" className="shrink-0 rounded-md">
             <Icon name="Maximize2" className="h-3.5 w-3.5" />
-          </button>
+          </Button>
           <button
             type="button"
             onClick={endSession}
@@ -440,15 +429,9 @@ function FocusRoom({ itemId }: { itemId: string }) {
             </button>
           ))}
         </div>
-        <button
-          type="button"
-          onClick={minimize}
-          aria-label="Minimize focus mode"
-          title="Minimize (esc) — the timer keeps running in a corner dock"
-          className="tech-transition ml-auto rounded-md p-1.5 text-muted-foreground hover:bg-secondary hover:text-foreground"
-        >
+        <Button variant="ghost" size="icon-sm" radius="keep" layout="" type="button" onClick={minimize} aria-label="Minimize focus mode" title="Minimize (esc) — the timer keeps running in a corner dock" className="ml-auto rounded-md">
           <Icon name="Minimize2" className="h-4 w-4" />
-        </button>
+        </Button>
         <button
           type="button"
           onClick={endSession}
@@ -521,13 +504,9 @@ function FocusRoom({ itemId }: { itemId: string }) {
                 <Icon name="ChevronRight" className="h-3.5 w-3.5" />
               </button>
             )}
-            <button
-              type="button"
-              onClick={clearSession}
-              className="mt-3 text-[12px] text-muted-foreground hover:text-foreground"
-            >
+            <Button variant="text" size="none" layout="" type="button" onClick={clearSession} className="mt-3 text-[12px]">
               Back to calendar
-            </button>
+            </Button>
           </>
         ) : (
           <>
@@ -556,13 +535,9 @@ function FocusRoom({ itemId }: { itemId: string }) {
                   <div className="mt-0.5 text-[11px] capitalize text-success">
                     {breakKind} break
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => startWork(false)}
-                    className="mt-1.5 text-[11px] text-muted-foreground hover:text-foreground"
-                  >
+                  <Button variant="text" size="none" layout="" type="button" onClick={() => startWork(false)} className="mt-1.5 text-[11px]">
                     skip → back to work
-                  </button>
+                  </Button>
                 </Ring>
               ) : (
                 <Ring progress={ringProgress} tone="primary">
@@ -604,13 +579,9 @@ function FocusRoom({ itemId }: { itemId: string }) {
                     {b.label}
                   </button>
                 ))}
-                <button
-                  type="button"
-                  onClick={() => startWork(true)}
-                  className="text-[11px] text-muted-foreground hover:text-foreground"
-                >
+                <Button variant="text" size="none" layout="" type="button" onClick={() => startWork(true)} className="text-[11px]">
                   skip
-                </button>
+                </Button>
               </div>
             )}
 

@@ -1,5 +1,6 @@
 "use client";
 
+import Button from "@/components/ui/Button";
 import Icon from "@/components/Icon";
 import { useMemo, useState } from "react";
 import { useTaskStore } from "../lib/taskStore";
@@ -85,14 +86,9 @@ export function DelegateDialog({
             <Icon name="UserPlus" className="h-4 w-4 text-primary" />
             Delegate to {assignee.name}
           </span>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="Close"
-            className="tech-transition rounded-md p-1 text-muted-foreground hover:bg-secondary hover:text-foreground"
-          >
+          <Button variant="ghost" size="icon-xs" radius="keep" layout="" type="button" onClick={onClose} aria-label="Close" className="rounded-md">
             <Icon name="X" className="h-4 w-4" />
-          </button>
+          </Button>
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
@@ -204,19 +200,10 @@ export function DelegateDialog({
         </div>
 
         <div className="flex shrink-0 items-center justify-end gap-2 border-t border-border px-4 py-3">
-          <button
-            type="button"
-            onClick={onClose}
-            className="tech-transition rounded-md px-3 py-1.5 text-[12px] font-medium text-muted-foreground hover:bg-secondary hover:text-foreground"
-          >
+          <Button variant="ghost" size="none" radius="keep" layout="" type="button" onClick={onClose} className="rounded-md px-3 py-1.5 text-[12px]">
             Cancel
-          </button>
-          <button
-            type="button"
-            disabled={!canSubmit}
-            onClick={submit}
-            className="tech-transition inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-[12px] font-medium text-primary-foreground hover:opacity-90 disabled:opacity-40"
-          >
+          </Button>
+          <Button size="none" radius="keep" layout="inline-flex items-center" type="button" disabled={!canSubmit} onClick={submit} className="gap-1.5 rounded-md px-3 py-1.5 text-[12px]">
             {busy ? (
               <Icon name="Loader2" className="h-3.5 w-3.5 animate-spin" />
             ) : (
@@ -225,7 +212,7 @@ export function DelegateDialog({
               </span>
             )}
             Delegate &amp; create in ClickUp
-          </button>
+          </Button>
         </div>
       </div>
     </div>

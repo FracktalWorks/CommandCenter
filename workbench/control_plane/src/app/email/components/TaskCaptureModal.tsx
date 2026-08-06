@@ -1,5 +1,6 @@
 "use client";
 
+import Button from "@/components/ui/Button";
 import Icon from "@/components/Icon";
 import { useCallback, useEffect, useState } from "react";
 import {
@@ -497,25 +498,17 @@ export function TaskCaptureModal({
 
         {/* Footer */}
         <div className="flex items-center justify-end gap-2 px-4 py-3 border-t border-border flex-shrink-0">
-          <button
-            onClick={onClose}
-            disabled={saving}
-            className="rounded-lg px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground disabled:opacity-40"
-          >
+          <Button variant="text" size="none" layout="" onClick={onClose} disabled={saving} className="px-3 py-1.5 text-xs">
             Cancel
-          </button>
-          <button
-            onClick={handleSave}
-            disabled={loading || saving || !draft?.title.trim()}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90 disabled:opacity-40"
-          >
+          </Button>
+          <Button layout="inline-flex items-center" onClick={handleSave} disabled={loading || saving || !draft?.title.trim()}>
             {saving ? (
               <Icon name="Loader2" size={13} className="animate-spin" />
             ) : (
               <Icon name="ArrowRight" size={13} />
             )}
             {already ? "Add anyway" : "Add task"}
-          </button>
+          </Button>
         </div>
       </div>
     </div>

@@ -1,5 +1,6 @@
 "use client";
 
+import Button from "@/components/ui/Button";
 import AppIcon, { themedIcon, type ThemedIcon } from "@/components/Icon";
 import { useEffect, useRef, useState } from "react";
 import { useTaskStore } from "../lib/taskStore";
@@ -228,14 +229,9 @@ function QuickCapturePanel() {
           <span className="ml-auto text-[11px] text-muted-foreground">
             Capture only — clarify later
           </span>
-          <button
-            type="button"
-            onClick={close}
-            aria-label="Close"
-            className="tech-transition rounded-md p-1 text-muted-foreground hover:bg-secondary hover:text-foreground"
-          >
+          <Button variant="ghost" size="icon-xs" radius="keep" layout="" type="button" onClick={close} aria-label="Close" className="rounded-md">
             <AppIcon name="X" className="h-4 w-4" />
-          </button>
+          </Button>
         </div>
 
         {mode === "single" ? (
@@ -532,9 +528,9 @@ function CaptureWhen({
           {kind === "remind" ? <AppIcon name="Bell" className="h-3 w-3" /> : <AppIcon name="CalendarClock" className="h-3 w-3" />}
           {kind === "remind" ? "Remind" : "Due"} {dateLabel}
         </span>
-        <button type="button" onClick={() => setOpen(true)} className="text-[11px] text-muted-foreground hover:text-foreground">
+        <Button variant="text" size="none" layout="" type="button" onClick={() => setOpen(true)} className="text-[11px]">
           Change
-        </button>
+        </Button>
         <button type="button" onClick={onClear} className="text-[11px] text-muted-foreground hover:text-destructive">
           Clear
         </button>
@@ -585,13 +581,9 @@ function CaptureWhen({
             {k === "remind" ? "Remind me" : "Due date"}
           </button>
         ))}
-        <button
-          type="button"
-          onClick={() => setOpen(false)}
-          className="ml-auto text-[11px] font-medium text-muted-foreground hover:text-foreground"
-        >
+        <Button variant="text" size="none" layout="" type="button" onClick={() => setOpen(false)} className="ml-auto text-[11px]">
           Done
-        </button>
+        </Button>
       </div>
       <div className="flex flex-wrap items-center gap-1.5">
         {opts.map((o) => (

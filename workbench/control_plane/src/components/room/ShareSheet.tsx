@@ -19,6 +19,7 @@
  * mysterious failure three turns later.
  */
 
+import Button from "@/components/ui/Button";
 import Icon from "@/components/Icon";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -123,13 +124,9 @@ export function ShareSheet({
               {room.title || "Untitled"} · everyone you add reads the transcript
             </p>
           </div>
-          <button
-            onClick={onClose}
-            className="rounded-md p-1 text-muted-foreground hover:bg-secondary hover:text-foreground"
-            aria-label="Close"
-          >
+          <Button variant="ghost" size="icon-xs" radius="keep" layout="" onClick={onClose} aria-label="Close" className="rounded-md">
             <Icon name="X" className="h-4 w-4" />
-          </button>
+          </Button>
         </header>
 
         <div className="max-h-[70vh] overflow-y-auto px-5 py-4">

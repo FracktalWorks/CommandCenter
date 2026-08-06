@@ -21,6 +21,7 @@
  *   drill-down  GET /api/observability/runs?agent=
  */
 
+import Button from "@/components/ui/Button";
 import Icon, { themedIcon, type ThemedIcon } from "@/components/Icon";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -683,9 +684,9 @@ function AgentDrawer({
               spend{windowDays ? ` · ${windowDays}d` : ""}{spend?.calls ? ` · ${spend.calls}×` : ""}
             </div>
           </div>
-          <button onClick={onClose} className="text-muted-foreground hover:text-foreground text-lg px-2" aria-label="Close">
+          <Button variant="text" size="none" layout="" onClick={onClose} aria-label="Close" className="text-lg px-2">
             ✕
-          </button>
+          </Button>
         </header>
 
         <div className="flex gap-1 p-2 border-b border-border">

@@ -12,6 +12,7 @@
  * pill when both are minimized, so neither is clipped by the menu bar.
  */
 
+import Button from "@/components/ui/Button";
 import Icon from "@/components/Icon";
 import { usePathname, useRouter } from "next/navigation";
 import { useTaskStore } from "@/app/tasks/lib/taskStore";
@@ -88,17 +89,13 @@ export function RecordingDock() {
 
         {!finalizing && (
           <>
-            <button
-              onClick={() => (paused ? resume() : pause())}
-              className="rounded-lg p-1.5 text-muted-foreground hover:text-foreground hover:bg-secondary tech-transition"
-              aria-label={paused ? "Resume" : "Pause"}
-            >
+            <Button variant="ghost" size="icon-sm" layout="" onClick={() => (paused ? resume() : pause())} aria-label={paused ? "Resume" : "Pause"}>
               {paused ? (
                 <Icon name="Play" className="w-4 h-4" />
               ) : (
                 <Icon name="Pause" className="w-4 h-4" />
               )}
-            </button>
+            </Button>
             <button
               onClick={() => void onStop()}
               className="rounded-lg bg-destructive/15 p-1.5 text-destructive hover:bg-destructive/25 tech-transition"

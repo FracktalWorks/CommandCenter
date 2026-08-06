@@ -19,6 +19,7 @@
  * watches it stream in.
  */
 
+import Button from "@/components/ui/Button";
 import Icon from "@/components/Icon";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
@@ -172,22 +173,14 @@ export default function DocumentPane({ sessionId, path, name, live }: DocumentPa
       {dirty && <span className="text-[10px] text-accent">● unsaved</span>}
       <div className="ml-auto flex items-center gap-1">
         {previewable && mode === "edit" && (
-          <button
-            onClick={() => setMode("preview")}
-            className="flex items-center gap-1 rounded px-2 py-1 text-[11px] text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
-            title="Rendered preview"
-          >
+          <Button variant="ghost" size="none" radius="keep" layout="flex items-center" onClick={() => setMode("preview")} title="Rendered preview" className="gap-1 rounded px-2 py-1 text-[11px]">
             <Icon name="Eye" size={12} /> Preview
-          </button>
+          </Button>
         )}
         {editable && mode === "preview" && (
-          <button
-            onClick={startEdit}
-            className="flex items-center gap-1 rounded px-2 py-1 text-[11px] text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
-            title="Edit"
-          >
+          <Button variant="ghost" size="none" radius="keep" layout="flex items-center" onClick={startEdit} title="Edit" className="gap-1 rounded px-2 py-1 text-[11px]">
             <Icon name="Pencil" size={12} /> Edit
-          </button>
+          </Button>
         )}
         {mode === "edit" && (
           <>
@@ -199,14 +192,9 @@ export default function DocumentPane({ sessionId, path, name, live }: DocumentPa
             >
               <Icon name="Save" size={12} /> {saving ? "Saving…" : "Save"}
             </button>
-            <button
-              onClick={cancelEdit}
-              disabled={saving}
-              className="flex items-center gap-1 rounded px-2 py-1 text-[11px] text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
-              title="Discard changes"
-            >
+            <Button variant="ghost" size="none" radius="keep" layout="flex items-center" onClick={cancelEdit} disabled={saving} title="Discard changes" className="gap-1 rounded px-2 py-1 text-[11px]">
               <Icon name="RotateCcw" size={12} />
-            </button>
+            </Button>
           </>
         )}
         <a

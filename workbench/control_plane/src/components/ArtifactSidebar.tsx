@@ -11,6 +11,7 @@
  *   artifactUpdates  — new FileEntry objects pushed in from SSE (ST-AV-06); merged into tree
  */
 
+import Button from "@/components/ui/Button";
 import Icon from "@/components/Icon";
 import { useCallback, useEffect, useRef, useState } from "react";
 
@@ -494,21 +495,13 @@ export default function ArtifactSidebar({
             )}
           </div>
           <div className="flex items-center gap-1">
-            <button
-              onClick={fetchTree}
-              className="rounded p-1 text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
-              title="Refresh file tree"
-            >
+            <Button variant="ghost" size="icon-xs" radius="keep" layout="" onClick={fetchTree} title="Refresh file tree" className="rounded">
               <Icon name="RefreshCw" size={12} className={loading ? "animate-spin" : ""} />
-            </button>
-            <button
-              onClick={onToggle}
-              className="rounded p-1 text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
-              title="Collapse file browser"
-            >
+            </Button>
+            <Button variant="ghost" size="icon-xs" radius="keep" layout="" onClick={onToggle} title="Collapse file browser" className="rounded">
               {/* Chevron points toward the edge the panel collapses into. */}
               {side === "right" ? <Icon name="ChevronRight" size={14} /> : <Icon name="ChevronLeft" size={14} />}
-            </button>
+            </Button>
           </div>
         </div>
       )}

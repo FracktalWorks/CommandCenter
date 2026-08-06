@@ -17,6 +17,7 @@
  *   onCancel   — called if user dismisses before completing
  */
 
+import Button from "@/components/ui/Button";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import type { AgentEntry } from "@/app/api/agent/list/route";
 import type { IntegrationStatus } from "@/app/api/integrations/status/route";
@@ -178,13 +179,9 @@ function IntegrationFormCard({
       {/* Actions */}
       {!state.saved && !state.skipped && (
         <div className="flex gap-3 pt-1">
-          <button
-            onClick={onSave}
-            disabled={!allFilled || state.saving}
-            className="flex-1 py-2 rounded-lg bg-primary hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed text-sm font-medium text-primary-foreground transition-colors"
-          >
+          <Button size="none" layout="" onClick={onSave} disabled={!allFilled || state.saving} className="flex-1 py-2 text-sm">
             {state.saving ? "Saving…" : "Save & continue"}
-          </button>
+          </Button>
           <button
             onClick={onTest}
             disabled={!allFilled || state.testing}
@@ -418,12 +415,9 @@ export default function AddAgentWizard({
                 Step {Math.min(stepIndex + 1, totalSteps)} of {totalSteps}
               </p>
             </div>
-            <button
-              onClick={onCancel}
-              className="text-muted-foreground hover:text-foreground transition-colors text-sm"
-            >
+            <Button variant="text" size="none" layout="" onClick={onCancel} className="text-sm">
               ✕
-            </button>
+            </Button>
           </div>
           <ProgressBar current={stepIndex + 1} total={totalSteps} />
         </div>
@@ -660,12 +654,9 @@ export default function AddAgentWizard({
                     Start chatting →
                   </button>
                 ) : (
-                  <button
-                    onClick={() => setStepIndex(1)}
-                    className="px-5 py-2 rounded-lg bg-primary hover:opacity-90 text-sm font-medium text-primary-foreground transition-colors"
-                  >
+                  <Button size="none" layout="" onClick={() => setStepIndex(1)} className="px-5 py-2 text-sm">
                     Set up integrations →
-                  </button>
+                  </Button>
                 )}
               </>
             )}

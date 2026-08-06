@@ -13,6 +13,7 @@
  *   other               → hex-dump excerpt + download button
  */
 
+import Button from "@/components/ui/Button";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -542,13 +543,9 @@ export default function ArtifactViewerModal({ sessionId, entry, onClose, onDelet
                 )}
               </>
             )}
-            <button
-              onClick={onClose}
-              className="rounded p-1 text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors text-lg leading-none"
-              title="Close"
-            >
+            <Button variant="ghost" size="none" radius="keep" layout="" onClick={onClose} title="Close" className="rounded p-1 text-lg leading-none">
               ×
-            </button>
+            </Button>
           </div>
         </div>
 

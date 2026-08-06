@@ -9,6 +9,7 @@
  * notes, and we hand off to the meeting detail view.
  */
 
+import Button from "@/components/ui/Button";
 import Icon from "@/components/Icon";
 import { use, useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
@@ -195,12 +196,9 @@ export default function SessionPage({
             <p className="text-xs text-muted-foreground">
               Finish or stop it before starting a new one.
             </p>
-            <button
-              onClick={() => router.push(`/notes/session/${meetingId}`)}
-              className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 tech-transition"
-            >
+            <Button size="none" layout="" onClick={() => router.push(`/notes/session/${meetingId}`)} className="px-4 py-2 text-sm">
               Go to the active recording
-            </button>
+            </Button>
           </div>
         )}
 

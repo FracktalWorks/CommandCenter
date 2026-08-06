@@ -5,6 +5,7 @@
 // knowledge base, learned preferences/patterns, cold senders, org domains).
 // Extracted from AISettingsView.tsx.
 
+import Button from "@/components/ui/Button";
 import Icon from "@/components/Icon";
 import { useCallback, useEffect, useState } from "react";
 import {
@@ -704,12 +705,9 @@ function WritingStyleDialog({
       description="Define your tone and style — used to draft replies in your voice."
       onClose={onClose}
       footer={
-        <button
-          onClick={() => onSave(draft)}
-          className="ml-auto flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90 transition-colors"
-        >
+        <Button layout="flex items-center" onClick={() => onSave(draft)} className="ml-auto">
           <Icon name="Check" size={13} /> Save
-        </button>
+        </Button>
       }
     >
       <textarea
@@ -743,12 +741,9 @@ function PersonalInstructionsDialog({
       description="Tell the AI about yourself and how you'd like it to handle your emails."
       onClose={onClose}
       footer={
-        <button
-          onClick={() => onSave(draft)}
-          className="ml-auto flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90 transition-colors"
-        >
+        <Button layout="flex items-center" onClick={() => onSave(draft)} className="ml-auto">
           <Icon name="Check" size={13} /> Save
-        </button>
+        </Button>
       }
     >
       <Field label="About you">
@@ -789,12 +784,9 @@ function SignatureDialog({
       description="Appended to the bottom of your replies. Use rich text or full HTML — links and images supported."
       onClose={onClose}
       footer={
-        <button
-          onClick={() => onSave(draft)}
-          className="ml-auto flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90 transition-colors"
-        >
+        <Button layout="flex items-center" onClick={() => onSave(draft)} className="ml-auto">
           <Icon name="Check" size={13} /> Save
-        </button>
+        </Button>
       }
     >
       <SignatureEditor
@@ -933,12 +925,9 @@ function FollowUpDialog({
             {scanning ? <Icon name="Loader2" className="animate-spin" size={13} /> : <Icon name="RefreshCcw" size={13} />}
             Find follow-ups now
           </button>
-          <button
-            onClick={() => onSave(draft)}
-            className="ml-auto flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90 transition-colors"
-          >
+          <Button layout="flex items-center" onClick={() => onSave(draft)} className="ml-auto">
             <Icon name="Check" size={13} /> Save
-          </button>
+          </Button>
         </>
       }
     >
@@ -1134,14 +1123,10 @@ function KnowledgeBase({ accountId }: { accountId: string | null }) {
             className={`${INPUT_CLS} resize-none`}
           />
           <div className="flex items-center gap-2">
-            <button
-              onClick={save}
-              disabled={busy || !editing.title.trim()}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90 transition-colors disabled:opacity-50"
-            >
+            <Button layout="flex items-center" onClick={save} disabled={busy || !editing.title.trim()}>
               {busy ? <Icon name="Loader2" className="animate-spin" size={13} /> : <Icon name="Check" size={13} />}
               Save
-            </button>
+            </Button>
             <button
               onClick={() => setEditing(null)}
               className="px-3 py-1.5 rounded-lg border border-border text-xs text-muted-foreground hover:bg-secondary transition-colors"

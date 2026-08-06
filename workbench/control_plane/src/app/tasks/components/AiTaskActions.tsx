@@ -1,5 +1,6 @@
 "use client";
 
+import Button from "@/components/ui/Button";
 import Icon from "@/components/Icon";
 import { useState } from "react";
 import { useTaskStore } from "../lib/taskStore";
@@ -165,22 +166,13 @@ export function AiTaskActions({ item }: { item: GtdItem }) {
                   )}
                 </div>
                 <div className="mt-2.5 flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={apply}
-                    disabled={chosen.size === 0}
-                    className="tech-transition inline-flex items-center gap-1.5 rounded-md bg-primary px-2.5 py-1.5 text-[12px] font-medium text-primary-foreground hover:opacity-90 disabled:opacity-40"
-                  >
+                  <Button size="none" radius="keep" layout="inline-flex items-center" type="button" onClick={apply} disabled={chosen.size === 0} className="gap-1.5 rounded-md px-2.5 py-1.5 text-[12px]">
                     <Icon name="Check" className="h-3.5 w-3.5" />
                     Apply {chosen.size > 0 ? chosen.size : ""}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setFillOpen(false)}
-                    className="tech-transition rounded-md px-2 py-1.5 text-[12px] font-medium text-muted-foreground hover:bg-secondary hover:text-foreground"
-                  >
+                  </Button>
+                  <Button variant="ghost" size="none" radius="keep" layout="" type="button" onClick={() => setFillOpen(false)} className="rounded-md px-2 py-1.5 text-[12px]">
                     Cancel
-                  </button>
+                  </Button>
                 </div>
                 <p className="mt-1.5 text-[10px] text-muted-foreground">
                   Only empty fields are suggested — nothing you&apos;ve set is

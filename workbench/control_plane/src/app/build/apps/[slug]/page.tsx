@@ -8,6 +8,7 @@
  * user/storage/ai calls with the VIEWER's session (docs/app-workshop §4.4).
  */
 
+import Button from "@/components/ui/Button";
 import AppIcon, { themedIcon } from "@/components/Icon";
 import type { ThemedIcon } from "@/components/Icon";
 import { use, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -411,12 +412,9 @@ export default function AppRunPage({
     return (
       <div className="flex flex-col items-center justify-center h-full gap-3">
         <p className="text-sm text-destructive">{error ?? "App not found."}</p>
-        <button
-          onClick={() => router.push("/build/apps")}
-          className="rounded-lg border border-border px-3 sm:px-4 py-2 text-sm text-muted-foreground hover:text-foreground hover:border-primary/30 tech-transition"
-        >
+        <Button variant="secondary" size="none" layout="" onClick={() => router.push("/build/apps")} className="px-3 sm:px-4 py-2 text-sm">
           Back to Custom Apps
-        </button>
+        </Button>
       </div>
     );
   }
@@ -451,28 +449,19 @@ export default function AppRunPage({
         <span className="hidden sm:flex items-center gap-1.5 text-[11px] text-muted-foreground border border-border rounded-full px-2.5 py-1 shrink-0">
           runs as {viewerEmail}
         </span>
-        <button
-          onClick={forkApp}
-          disabled={forking}
-          title="Duplicate this app as your own editable copy"
-          className="rounded-lg border border-border px-2 sm:px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground hover:border-primary/30 tech-transition flex items-center gap-1.5 shrink-0 disabled:opacity-50"
-        >
+        <Button variant="secondary" size="none" layout="flex items-center" onClick={forkApp} disabled={forking} title="Duplicate this app as your own editable copy" className="px-2 sm:px-3 py-1.5 text-xs gap-1.5 shrink-0">
           {forking ? (
             <AppIcon name="Loader2" className="w-3.5 h-3.5 animate-spin" />
           ) : (
             <AppIcon name="GitFork" className="w-3.5 h-3.5" />
           )}
           <span className="hidden sm:inline">Fork</span>
-        </button>
+        </Button>
         {canEdit && (
-          <button
-            onClick={() => router.push(`/build/apps/${slug}/edit`)}
-            title="Open in Workshop"
-            className="rounded-lg border border-border px-2 sm:px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground hover:border-primary/30 tech-transition flex items-center gap-1.5 shrink-0"
-          >
+          <Button variant="secondary" size="none" layout="flex items-center" onClick={() => router.push(`/build/apps/${slug}/edit`)} title="Open in Workshop" className="px-2 sm:px-3 py-1.5 text-xs gap-1.5 shrink-0">
             <AppIcon name="Wrench" className="w-3.5 h-3.5" />
             <span className="hidden sm:inline">Open in Workshop</span>
-          </button>
+          </Button>
         )}
         <div className="relative shrink-0" ref={infoRef}>
           <button
@@ -534,12 +523,9 @@ export default function AppRunPage({
                               live
                             </span>
                           ) : canEdit && confirmVersion !== v.version ? (
-                            <button
-                              onClick={() => setConfirmVersion(v.version)}
-                              className="text-[10px] rounded-md border border-border px-2 py-0.5 text-muted-foreground hover:text-foreground hover:border-primary/30 tech-transition shrink-0"
-                            >
+                            <Button variant="secondary" size="none" radius="keep" layout="" onClick={() => setConfirmVersion(v.version)} className="text-[10px] rounded-md px-2 py-0.5 shrink-0">
                               Make live
-                            </button>
+                            </Button>
                           ) : null}
                         </div>
                         {canEdit && !isCurrent && confirmVersion === v.version && (
@@ -547,16 +533,12 @@ export default function AppRunPage({
                             <span className="text-[10px] text-muted-foreground flex-1">
                               Make v{v.version} live?
                             </span>
-                            <button
-                              onClick={() => makeLive(v.version)}
-                              disabled={rollbackBusy}
-                              className="text-[10px] rounded-md bg-primary px-2 py-1 font-medium text-primary-foreground hover:opacity-90 tech-transition disabled:opacity-50 flex items-center gap-1"
-                            >
+                            <Button size="none" radius="keep" layout="flex items-center" onClick={() => makeLive(v.version)} disabled={rollbackBusy} className="text-[10px] rounded-md px-2 py-1 gap-1">
                               {rollbackBusy && (
                                 <AppIcon name="Loader2" className="w-3 h-3 animate-spin" />
                               )}
                               Confirm
-                            </button>
+                            </Button>
                             <button
                               onClick={() => setConfirmVersion(null)}
                               className="text-[10px] rounded-md border border-border px-2 py-1 text-muted-foreground hover:text-foreground tech-transition"
@@ -605,12 +587,9 @@ export default function AppRunPage({
               Workshop first.
             </p>
             {canEdit && (
-              <button
-                onClick={() => router.push(`/build/apps/${slug}/edit`)}
-                className="rounded-lg bg-primary px-3 sm:px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 tech-transition"
-              >
+              <Button size="none" layout="" onClick={() => router.push(`/build/apps/${slug}/edit`)} className="px-3 sm:px-4 py-2 text-sm">
                 Open Workshop
-              </button>
+              </Button>
             )}
           </div>
         )}
@@ -664,20 +643,13 @@ export default function AppRunPage({
             )}
 
             <div className="flex justify-end gap-2">
-              <button
-                onClick={() => router.push("/build/apps")}
-                className="rounded-lg border border-border px-3 sm:px-4 py-2 text-sm text-muted-foreground hover:text-foreground hover:border-primary/30 tech-transition"
-              >
+              <Button variant="secondary" size="none" layout="" onClick={() => router.push("/build/apps")} className="px-3 sm:px-4 py-2 text-sm">
                 Not now
-              </button>
-              <button
-                onClick={allowConsent}
-                disabled={consentBusy}
-                className="rounded-lg bg-primary px-3 sm:px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 tech-transition flex items-center gap-1.5 disabled:opacity-50"
-              >
+              </Button>
+              <Button size="lg" layout="flex items-center" onClick={allowConsent} disabled={consentBusy}>
                 {consentBusy && <AppIcon name="Loader2" className="w-4 h-4 animate-spin" />}
                 Allow
-              </button>
+              </Button>
             </div>
           </div>
         </div>
@@ -714,30 +686,24 @@ export default function AppRunPage({
               />
               Always allow for this app
             </label>
-            <button
-              onClick={() => {
+            <Button variant="secondary" size="none" layout="" onClick={() => {
                 pendingConfirm.resolve({
                   approved: false,
                   remember: rememberTool,
                 });
                 setPendingConfirm(null);
-              }}
-              className="rounded-lg border border-border px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground hover:border-primary/30 tech-transition"
-            >
+              }} className="px-3 py-1.5 text-xs">
               Deny
-            </button>
-            <button
-              onClick={() => {
+            </Button>
+            <Button size="none" layout="" onClick={() => {
                 pendingConfirm.resolve({
                   approved: true,
                   remember: rememberTool,
                 });
                 setPendingConfirm(null);
-              }}
-              className="rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90 tech-transition"
-            >
+              }} className="px-3 py-1.5 text-xs">
               Approve
-            </button>
+            </Button>
           </div>
         </div>
       )}

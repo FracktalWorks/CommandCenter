@@ -1,5 +1,6 @@
 "use client";
 
+import Button from "@/components/ui/Button";
 import Icon from "@/components/Icon";
 import { useMemo, useState } from "react";
 import { GtdItem } from "../../lib/types";
@@ -134,25 +135,16 @@ export function ScheduleSheet({
               {at ? ` · from ${fmtClock(at)}` : " · first free slot"}
             </p>
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="Close"
-            className="rounded-md p-1 text-muted-foreground hover:bg-secondary hover:text-foreground"
-          >
+          <Button variant="ghost" size="icon-xs" radius="keep" layout="" type="button" onClick={onClose} aria-label="Close" className="rounded-md">
             <Icon name="X" className="h-4 w-4" />
-          </button>
+          </Button>
         </div>
 
         <div className="px-3 pb-2">
-          <button
-            type="button"
-            onClick={onPlan}
-            className="tech-transition flex w-full items-center justify-center gap-1.5 rounded-md bg-primary px-3 py-2.5 text-[13px] font-semibold text-primary-foreground hover:opacity-90"
-          >
+          <Button size="none" radius="keep" layout="flex items-center justify-center" type="button" onClick={onPlan} className="w-full gap-1.5 rounded-md px-3 py-2.5 text-[13px] font-semibold">
             <Icon name="Wand2" className="h-4 w-4" />
             Rebuild my day with AI
-          </button>
+          </Button>
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-4">

@@ -10,6 +10,7 @@
  *   Plugins — Claude-style self-describing plugins
  */
 
+import Button from "@/components/ui/Button";
 import Icon, { themedIcon } from "@/components/Icon";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import type { IntegrationStatus } from "@/app/api/integrations/status/route";
@@ -243,11 +244,10 @@ function CredentialForm({ api, onSaved }: {
         </div>
       ))}
       {err && <p className="text-xs text-destructive bg-destructive/10 rounded-lg px-3 py-2">{err}</p>}
-      <button onClick={() => void save()} disabled={saving}
-        className="w-full py-2.5 rounded-lg bg-primary hover:opacity-90 disabled:opacity-40 text-sm font-medium text-primary-foreground transition-colors flex items-center justify-center gap-2">
+      <Button size="none" layout="flex items-center justify-center" onClick={() => void save()} disabled={saving} className="w-full py-2.5 text-sm gap-2">
         {saving ? <Icon name="Loader2" className="w-3.5 h-3.5 animate-spin" /> : done ? <Icon name="Check" className="w-3.5 h-3.5" /> : null}
         {saving ? "Saving…" : done ? "Saved!" : "Save credentials"}
-      </button>
+      </Button>
     </div>
   );
 }
@@ -442,19 +442,14 @@ function ClickUpConnector({ onChange }: { onChange?: () => void }) {
               className="flex-1 bg-transparent text-sm text-foreground placeholder-muted-foreground focus:outline-none"
             />
           </div>
-          <button
-            type="button"
-            disabled={!token.trim() || busy === "find"}
-            onClick={() => void findWorkspaces()}
-            className="shrink-0 inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:opacity-40 transition-colors"
-          >
+          <Button size="none" layout="inline-flex items-center" type="button" disabled={!token.trim() || busy === "find"} onClick={() => void findWorkspaces()} className="shrink-0 gap-1.5 px-3 py-2 text-sm">
             {busy === "find" ? (
               <Icon name="Loader2" className="w-4 h-4 animate-spin" />
             ) : (
               <Icon name="Plus" className="w-4 h-4" />
             )}
             Find
-          </button>
+          </Button>
         </div>
         <p className="mt-1 text-[10px] text-muted-foreground">
           ClickUp → Settings → Apps → API Token. Stored per-workspace, encrypted
@@ -694,9 +689,9 @@ function ApiSidePanel({ api, agents, onClose, onRefresh }: {
             </div>
           </div>
         </div>
-        <button onClick={onClose} className="text-muted-foreground hover:text-foreground p-1 rounded transition-colors mt-0.5">
+        <Button variant="text" size="icon-xs" radius="keep" layout="" onClick={onClose} className="rounded mt-0.5">
           <Icon name="X" className="w-4 h-4" />
-        </button>
+        </Button>
       </div>
 
       <div className="flex-1 overflow-y-auto p-5 space-y-5">
@@ -756,10 +751,9 @@ function ApiSidePanel({ api, agents, onClose, onRefresh }: {
                 {testing ? <Icon name="Loader2" className="w-3 h-3 animate-spin" /> : <Icon name="RefreshCw" className="w-3 h-3" />}
                 {testing ? "Testing…" : "Test"}
               </button>
-              <button onClick={() => setMode("edit")}
-                className="flex-1 py-2 rounded-lg bg-primary hover:opacity-90 text-xs font-medium text-primary-foreground transition-colors">
+              <Button size="none" layout="" onClick={() => setMode("edit")} className="flex-1 py-2 text-xs">
                 {api.configured ? "Update" : "Configure"}
-              </button>
+              </Button>
             </div>
             {testResult && (
               <div className={`text-xs rounded-lg px-3 py-2 flex items-start gap-2 ${testResult.ok ? "text-success bg-success/10 border border-success/20" : "text-destructive bg-destructive/10 border border-destructive/20"}`}>
@@ -909,11 +903,10 @@ function DiscoverModal({ onClose, onSaved }: { onClose: () => void; onSaved: () 
                     className="w-full pl-9 pr-3 py-2.5 rounded-lg bg-secondary border border-border text-sm text-foreground placeholder-muted-foreground focus:outline-none focus:border-primary transition-colors"
                   />
                 </div>
-                <button onClick={() => void discover()} disabled={!q.trim() || discovering}
-                  className="px-4 py-2 rounded-lg bg-primary hover:opacity-90 disabled:opacity-40 text-sm font-medium text-primary-foreground flex items-center gap-2 shrink-0 transition-colors">
+                <Button size="none" layout="flex items-center" onClick={() => void discover()} disabled={!q.trim() || discovering} className="px-4 py-2 text-sm gap-2 shrink-0">
                   {discovering ? <Icon name="Loader2" className="w-4 h-4 animate-spin" /> : <Icon name="Sparkles" className="w-4 h-4" />}
                   {discovering ? "Searching…" : "Discover"}
-                </button>
+                </Button>
               </div>
               <div>
                 <div className="text-[10px] text-muted uppercase tracking-wider mb-2">Try these</div>
@@ -966,11 +959,10 @@ function DiscoverModal({ onClose, onSaved }: { onClose: () => void; onSaved: () 
                   className="px-4 py-2 rounded-lg border border-border text-sm text-muted-foreground hover:bg-secondary transition-colors">
                   ← Back
                 </button>
-                <button onClick={() => void saveDefinitions()} disabled={selected.size === 0 || savingDefs}
-                  className="flex-1 py-2 rounded-lg bg-primary hover:opacity-90 disabled:opacity-40 text-sm font-medium text-primary-foreground flex items-center justify-center gap-2 transition-colors">
+                <Button size="none" layout="flex items-center justify-center" onClick={() => void saveDefinitions()} disabled={selected.size === 0 || savingDefs} className="flex-1 py-2 text-sm gap-2">
                   {savingDefs ? <Icon name="Loader2" className="w-3.5 h-3.5 animate-spin" /> : <Icon name="ArrowRight" className="w-3.5 h-3.5" />}
                   {savingDefs ? "Adding…" : `Add ${selected.size} API${selected.size !== 1 ? "s" : ""}`}
-                </button>
+                </Button>
               </div>
             </>
           )}
@@ -1040,10 +1032,9 @@ function DiscoverModal({ onClose, onSaved }: { onClose: () => void; onSaved: () 
                   className="px-4 py-2 rounded-lg border border-border text-sm text-muted-foreground hover:bg-secondary transition-colors">
                   {configIdx < configQueue.length - 1 ? "Skip →" : "Finish"}
                 </button>
-                <button onClick={() => void advanceOrFinish(false)} disabled={savingCreds}
-                  className="flex-1 py-2 rounded-lg bg-primary hover:opacity-90 disabled:opacity-40 text-sm font-medium text-primary-foreground transition-colors">
+                <Button size="none" layout="" onClick={() => void advanceOrFinish(false)} disabled={savingCreds} className="flex-1 py-2 text-sm">
                   {savingCreds ? "Saving…" : configIdx < configQueue.length - 1 ? "Save & next →" : "Save & finish"}
-                </button>
+                </Button>
               </div>
             </>
           )}
@@ -1142,10 +1133,9 @@ function ApisTab() {
             className="p-1.5 rounded-lg border border-border text-muted-foreground hover:bg-secondary transition-colors">
             <Icon name="RefreshCw" className="w-3.5 h-3.5" />
           </button>
-          <button onClick={() => setShowDiscover(true)}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary hover:opacity-90 text-xs font-medium text-primary-foreground transition-colors">
+          <Button layout="flex items-center" onClick={() => setShowDiscover(true)}>
             <Icon name="Plus" className="w-3.5 h-3.5" /><span className="hidden sm:inline">Add API</span>
-          </button>
+          </Button>
         </div>
       </div>
 
@@ -1358,10 +1348,9 @@ function EmailTab() {
             className="p-1.5 rounded-lg border border-border text-muted-foreground hover:bg-secondary transition-colors">
             <Icon name="RefreshCw" className="w-3.5 h-3.5" />
           </button>
-          <button onClick={() => setShowAdd(true)}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary hover:opacity-90 text-xs font-medium text-primary-foreground transition-colors">
+          <Button layout="flex items-center" onClick={() => setShowAdd(true)}>
             <Icon name="Plus" className="w-3.5 h-3.5" /><span className="hidden sm:inline">Add Account</span>
-          </button>
+          </Button>
         </div>
       </div>
 
@@ -1422,10 +1411,9 @@ function EmailTab() {
           <div className="flex flex-col items-center justify-center h-48 gap-3 text-muted-foreground text-sm">
             <Icon name="Mail" className="w-8 h-8 opacity-30" />
             <p>No email accounts connected.</p>
-            <button onClick={() => setShowAdd(true)}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary hover:opacity-90 text-xs font-medium text-primary-foreground transition-colors">
+            <Button layout="flex items-center" onClick={() => setShowAdd(true)}>
               <Icon name="Plus" className="w-3.5 h-3.5" /> Connect your first account
-            </button>
+            </Button>
           </div>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
@@ -1447,15 +1435,13 @@ function EmailTab() {
                   </div>
                   <div className="flex items-center gap-1">
                     {(account.provider === "gmail" || account.provider === "microsoft") && (
-                      <button onClick={() => handleReconnect(account.provider)} title="Reconnect (re-authorize)"
-                        className="p-1 rounded-md hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors">
+                      <Button variant="ghost" size="icon-xs" radius="keep" layout="" onClick={() => handleReconnect(account.provider)} title="Reconnect (re-authorize)" className="rounded-md">
                         <Icon name="RotateCcw" className="w-3.5 h-3.5" />
-                      </button>
+                      </Button>
                     )}
-                    <button onClick={() => handleSync(account.id)} title="Sync now"
-                      className="p-1 rounded-md hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors">
+                    <Button variant="ghost" size="icon-xs" radius="keep" layout="" onClick={() => handleSync(account.id)} title="Sync now" className="rounded-md">
                       <Icon name="RefreshCw" className="w-3.5 h-3.5" />
-                    </button>
+                    </Button>
                     <button onClick={() => handleDelete(account.id)} title="Remove"
                       className="p-1 rounded-md hover:bg-red-500/10 text-muted-foreground hover:text-red-400 transition-colors">
                       <Icon name="X" className="w-3.5 h-3.5" />
@@ -1718,11 +1704,10 @@ function AddIMAPModal({
 
           {error && <p className="text-xs text-destructive bg-destructive/10 rounded-lg px-3 py-2">{error}</p>}
 
-          <button onClick={handleSave} disabled={saving}
-            className="w-full py-2.5 rounded-lg bg-primary hover:opacity-90 disabled:opacity-40 text-sm font-medium text-primary-foreground transition-colors flex items-center justify-center gap-2">
+          <Button size="none" layout="flex items-center justify-center" onClick={handleSave} disabled={saving} className="w-full py-2.5 text-sm gap-2">
             {saving ? <Icon name="Loader2" className="w-3.5 h-3.5 animate-spin" /> : null}
             {saving ? "Connecting…" : "Connect Account"}
-          </button>
+          </Button>
         </div>
         <p className="mt-4 text-[10px] text-muted-foreground text-center">
           Credentials are encrypted at rest with AES-256-GCM
@@ -1807,10 +1792,9 @@ function McpsTab() {
                 {loading ? "Loading…" : `${connectedCount} server${connectedCount !== 1 ? "s" : ""} registered`}
               </p>
             </div>
-            <button onClick={() => setShowAdd(true)}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary hover:opacity-90 text-xs font-medium text-primary-foreground shrink-0 transition-colors">
+            <Button layout="flex items-center" onClick={() => setShowAdd(true)} className="shrink-0">
               <Icon name="Plus" className="w-3.5 h-3.5" /> Add MCP Server
-            </button>
+            </Button>
           </div>
           <p className="text-sm text-muted-foreground mt-2 leading-relaxed max-w-xl">
             MCP is an open standard (by Anthropic) that lets agents connect to external tools. Register any MCP
@@ -1875,10 +1859,9 @@ function McpsTab() {
             <div className="text-sm font-medium text-foreground">No MCP servers registered</div>
             <div className="text-xs text-muted-foreground mt-0.5">Add your first MCP server to give agents new capabilities.</div>
           </div>
-          <button onClick={() => setShowAdd(true)}
-            className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-primary hover:opacity-90 text-xs font-medium text-primary-foreground transition-colors">
+          <Button size="none" layout="flex items-center" onClick={() => setShowAdd(true)} className="gap-1.5 px-4 py-2 text-xs">
             <Icon name="Plus" className="w-3.5 h-3.5" /> Add MCP Server
-          </button>
+          </Button>
         </div>
       ) : null}
 
@@ -2016,10 +1999,9 @@ function AddMcpModal({ onClose, onAdded }: { onClose: () => void; onAdded: () =>
           {err && <p className="text-xs text-destructive bg-destructive/10 rounded-lg px-3 py-2">{err}</p>}
           <div className="flex gap-2 pt-1">
             <button onClick={onClose} className="flex-1 py-2 rounded-lg border border-border text-sm text-muted-foreground hover:bg-secondary transition-colors">Cancel</button>
-            <button onClick={save} disabled={!form.name.trim() || saving}
-              className="flex-1 py-2 rounded-lg bg-primary hover:opacity-90 disabled:opacity-40 text-sm font-medium text-primary-foreground transition-colors">
+            <Button size="none" layout="" onClick={save} disabled={!form.name.trim() || saving} className="flex-1 py-2 text-sm">
               {saving ? "Saving…" : "Add Server"}
-            </button>
+            </Button>
           </div>
         </div>
       </div>
@@ -2081,10 +2063,9 @@ function PluginsTab() {
                 {loading ? "Loading…" : `${plugins.length} plugin${plugins.length !== 1 ? "s" : ""} installed`}
               </p>
             </div>
-            <button onClick={() => setShowInstall(true)}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary hover:opacity-90 text-xs font-medium text-primary-foreground shrink-0 transition-colors">
+            <Button layout="flex items-center" onClick={() => setShowInstall(true)} className="shrink-0">
               <Icon name="Plus" className="w-3.5 h-3.5" /> Install Plugin
-            </button>
+            </Button>
           </div>
           <p className="text-sm text-muted-foreground mt-2 leading-relaxed max-w-xl">
             Plugins are self-describing tool packages — each one ships a manifest, an OpenAPI spec, and auth config.
@@ -2138,10 +2119,9 @@ function PluginsTab() {
             <div className="text-sm font-medium text-foreground">No plugins installed</div>
             <div className="text-xs text-muted-foreground mt-0.5">Install a plugin from a manifest URL to give agents new SaaS capabilities.</div>
           </div>
-          <button onClick={() => setShowInstall(true)}
-            className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-primary hover:opacity-90 text-xs font-medium text-primary-foreground transition-colors">
+          <Button size="none" layout="flex items-center" onClick={() => setShowInstall(true)} className="gap-1.5 px-4 py-2 text-xs">
             <Icon name="Plus" className="w-3.5 h-3.5" /> Install Plugin
-          </button>
+          </Button>
         </div>
       ) : null}
 
@@ -2236,7 +2216,7 @@ function InstallPluginModal({ onClose, onInstalled }: { onClose: () => void; onI
                 Plugin <span className="font-mono">{result.name}</span> registered with {result.tools_count} tool{result.tools_count !== 1 ? "s" : ""}.
                 {result.auth_type !== "none" && <> Auth type: {result.auth_type}.</>}
               </div>
-              <button onClick={onClose} className="w-full py-2 rounded-lg bg-primary hover:opacity-90 text-sm font-medium text-primary-foreground transition-colors">Done</button>
+              <Button size="none" layout="" onClick={onClose} className="w-full py-2 text-sm">Done</Button>
             </div>
           ) : (
             <>
@@ -2252,11 +2232,10 @@ function InstallPluginModal({ onClose, onInstalled }: { onClose: () => void; onI
               {err && <p className="text-xs text-destructive bg-destructive/10 rounded-lg px-3 py-2 flex items-start gap-2"><Icon name="AlertCircle" className="w-3.5 h-3.5 mt-0.5 shrink-0" /> {err}</p>}
               <div className="flex gap-2 pt-1">
                 <button onClick={onClose} className="flex-1 py-2 rounded-lg border border-border text-sm text-muted-foreground hover:bg-secondary transition-colors">Cancel</button>
-                <button onClick={install} disabled={!manifestUrl.trim() || installing}
-                  className="flex-1 py-2 rounded-lg bg-primary hover:opacity-90 disabled:opacity-40 text-sm font-medium text-primary-foreground flex items-center justify-center gap-2 transition-colors">
+                <Button size="none" layout="flex items-center justify-center" onClick={install} disabled={!manifestUrl.trim() || installing} className="flex-1 py-2 text-sm gap-2">
                   {installing ? <Icon name="Loader2" className="w-3.5 h-3.5 animate-spin" /> : <Icon name="Plus" className="w-3.5 h-3.5" />}
                   {installing ? "Installing…" : "Install"}
-                </button>
+                </Button>
               </div>
             </>
           )}

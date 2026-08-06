@@ -1,5 +1,6 @@
 "use client";
 
+import Button from "@/components/ui/Button";
 import Icon from "@/components/Icon";
 import { useEffect, useRef, useState } from "react";
 import type { DraftStep, DraftRevision } from "../lib/useDraftSession";
@@ -231,15 +232,9 @@ export function DraftAssistant({
               </span>
             )}
             {steps.length > 0 && (
-              <button
-                type="button"
-                onClick={() => setManualExpand(!expanded)}
-                title={expanded ? "Hide activity" : "Show what the AI did"}
-                aria-expanded={expanded}
-                className="p-0.5 rounded text-muted-foreground hover:text-foreground hover:bg-secondary tech-transition"
-              >
+              <Button variant="ghost" size="none" radius="keep" layout="" type="button" onClick={() => setManualExpand(!expanded)} title={expanded ? "Hide activity" : "Show what the AI did"} aria-expanded={expanded} className="p-0.5 rounded">
                 {expanded ? <Icon name="ChevronUp" size={13} /> : <Icon name="ChevronDown" size={13} />}
-              </button>
+              </Button>
             )}
           </div>
         </div>
@@ -295,31 +290,21 @@ export function DraftAssistant({
           className="flex-1 bg-transparent text-xs text-foreground placeholder:text-muted-foreground outline-none min-w-0 disabled:opacity-60"
         />
         {hasDraft && revisions.length > 1 && !busy && (
-          <button
-            type="button"
-            onClick={() => {
+          <Button variant="ghost" size="icon-xs" radius="keep" layout="" type="button" onClick={() => {
               const prev = revisions[revisions.length - 2];
               if (prev) onRestore(prev.id);
-            }}
-            title="Go back to the previous version"
-            className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-secondary tech-transition flex-shrink-0"
-          >
+            }} title="Go back to the previous version" className="rounded flex-shrink-0">
             <Icon name="Undo2" size={13} />
-          </button>
+          </Button>
         )}
-        <button
-          type="button"
-          onClick={onRunClick}
-          disabled={busy}
-          className="px-2.5 py-1 text-xs rounded-md bg-primary text-primary-foreground hover:bg-primary/90 tech-transition disabled:opacity-50 flex items-center gap-1 flex-shrink-0"
-        >
+        <Button size="none" radius="keep" layout="flex items-center" type="button" onClick={onRunClick} disabled={busy} className="px-2.5 py-1 text-xs rounded-md gap-1 flex-shrink-0">
           {busy ? (
             <Icon name="Loader2" size={12} className="animate-spin" aria-hidden />
           ) : (
             <Icon name="CornerDownLeft" size={12} aria-hidden />
           )}
           {runLabel}
-        </button>
+        </Button>
         <button
           type="button"
           onClick={onClose}

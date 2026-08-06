@@ -24,6 +24,7 @@
  * gateway's, and this is only a courtesy (`lib/access.ts:126-129`).
  */
 
+import Button from "@/components/ui/Button";
 import Icon from "@/components/Icon";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
@@ -421,13 +422,10 @@ export default function MembersPage() {
           >
             Roles
           </Link>
-          <button
-            onClick={() => setInviting(true)}
-            className="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground tech-transition hover:opacity-90 sm:px-4"
-          >
+          <Button size="lg" layout="flex items-center" onClick={() => setInviting(true)}>
             <Icon name="Plus" size={15} />
             Invite
-          </button>
+          </Button>
         </div>
       </div>
 
@@ -665,20 +663,14 @@ function MemberRow({
           </span>
         )}
         {actions.canActivate && (
-          <button
-            onClick={() => void setStatus(member.email, "active")}
-            className="rounded-lg border border-border px-2.5 py-1.5 text-[11px] text-muted-foreground tech-transition hover:border-primary/30 hover:text-foreground"
-          >
+          <Button variant="secondary" size="none" layout="" onClick={() => void setStatus(member.email, "active")} className="px-2.5 py-1.5 text-[11px]">
             Activate
-          </button>
+          </Button>
         )}
         {actions.canSuspend && (
-          <button
-            onClick={() => void setStatus(member.email, "suspended")}
-            className="rounded-lg bg-destructive/10 px-2.5 py-1.5 text-[11px] text-destructive tech-transition hover:bg-destructive/20"
-          >
+          <Button variant="destructive" size="none" layout="" onClick={() => void setStatus(member.email, "suspended")} className="px-2.5 py-1.5 text-[11px]">
             Suspend
-          </button>
+          </Button>
         )}
         {actions.canRemove && (
           <button
@@ -1031,25 +1023,17 @@ function RequestRow({
       </select>
 
       <div className="flex items-center gap-2">
-        <button
-          onClick={() => void act("approve")}
-          disabled={busy}
-          className="flex items-center gap-1.5 rounded-lg bg-primary px-2.5 py-1.5 text-[11px] font-medium text-primary-foreground tech-transition hover:opacity-90 disabled:opacity-50"
-        >
+        <Button size="none" layout="flex items-center" onClick={() => void act("approve")} disabled={busy} className="gap-1.5 px-2.5 py-1.5 text-[11px]">
           {busy ? (
             <Icon name="Loader2" size={12} className="animate-spin" />
           ) : (
             <Icon name="Check" size={12} />
           )}
           Approve
-        </button>
-        <button
-          onClick={() => void act("deny")}
-          disabled={busy}
-          className="rounded-lg bg-destructive/10 px-2.5 py-1.5 text-[11px] text-destructive tech-transition hover:bg-destructive/20 disabled:opacity-50"
-        >
+        </Button>
+        <Button variant="destructive" size="none" layout="" onClick={() => void act("deny")} disabled={busy} className="px-2.5 py-1.5 text-[11px]">
           Deny
-        </button>
+        </Button>
       </div>
     </div>
   );
@@ -1171,14 +1155,10 @@ function InviteDialog({
           >
             Cancel
           </button>
-          <button
-            onClick={() => void submit()}
-            disabled={busy || !email.includes("@")}
-            className="flex items-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground tech-transition hover:opacity-90 disabled:opacity-50"
-          >
+          <Button size="none" layout="flex items-center" onClick={() => void submit()} disabled={busy || !email.includes("@")} className="gap-1.5 px-4 py-2 text-sm">
             {busy && <Icon name="Loader2" size={14} className="animate-spin" />}
             Invite
-          </button>
+          </Button>
         </div>
       </div>
     </div>

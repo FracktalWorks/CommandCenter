@@ -14,6 +14,7 @@
  * reading it.
  */
 
+import Button from "@/components/ui/Button";
 import Icon from "@/components/Icon";
 import { useCallback, useState } from "react";
 import { AgentAvatar, useAgentAvatars } from "@/components/AgentAvatar";
@@ -104,13 +105,9 @@ export function PresenceRail({
   return (
     <aside className="flex w-full flex-col gap-5 overflow-y-auto border-l border-border bg-sidebar px-3 py-4 text-sm lg:w-72">
       {onClose && (
-        <button
-          onClick={onClose}
-          className="self-end rounded-md p-1 text-muted-foreground hover:bg-secondary hover:text-foreground lg:hidden"
-          aria-label="Close room panel"
-        >
+        <Button variant="ghost" size="icon-xs" radius="keep" layout="" onClick={onClose} aria-label="Close room panel" className="self-end rounded-md lg:hidden">
           <Icon name="X" className="h-4 w-4" />
-        </button>
+        </Button>
       )}
 
       {/* ── People ───────────────────────────────────────────────────────── */}
@@ -179,13 +176,9 @@ export function PresenceRail({
         <h3 className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-faint">
           Agents here
           {room.you.canManage && addable.length > 0 && (
-            <button
-              onClick={() => setAdding((v) => !v)}
-              className="ml-auto rounded-md p-0.5 text-muted-foreground hover:bg-secondary hover:text-foreground"
-              title="Add an agent to this room"
-            >
+            <Button variant="ghost" size="none" radius="keep" layout="" onClick={() => setAdding((v) => !v)} title="Add an agent to this room" className="ml-auto rounded-md p-0.5">
               <Icon name="Plus" className="h-3.5 w-3.5" />
-            </button>
+            </Button>
           )}
         </h3>
 
@@ -233,19 +226,15 @@ export function PresenceRail({
           <ul className="mt-1 max-h-48 space-y-0.5 overflow-y-auto rounded-lg border border-border bg-background p-1">
             {addable.map((name) => (
               <li key={name}>
-                <button
-                  disabled={busy !== null}
-                  onClick={() =>
+                <Button variant="ghost" size="none" radius="keep" layout="flex items-center" disabled={busy !== null} onClick={() =>
                     act(name, async () => {
                       await addRoomAgent(room.sessionId, name, "mentioned");
                       setAdding(false);
                     })
-                  }
-                  className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] text-muted-foreground hover:bg-secondary hover:text-foreground disabled:opacity-50"
-                >
+                  } className="w-full gap-2 rounded-md px-2 py-1.5 text-left text-[13px]">
                   <Icon name="UserPlus" className="h-3 w-3" />
                   {name}
-                </button>
+                </Button>
               </li>
             ))}
           </ul>

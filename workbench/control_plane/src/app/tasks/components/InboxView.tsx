@@ -1,5 +1,6 @@
 "use client";
 
+import Button from "@/components/ui/Button";
 import AppIcon, { themedIcon, type ThemedIcon } from "@/components/Icon";
 import {
   useEffect,
@@ -317,13 +318,9 @@ export function InboxView() {
               className="min-w-0 flex-1 bg-transparent text-sm text-foreground placeholder:text-muted-foreground focus:outline-none"
             />
             {value.trim() ? (
-              <button
-                type="button"
-                onClick={submit}
-                className="tech-transition inline-flex shrink-0 items-center gap-1 rounded-md bg-primary px-2 py-1 text-xs font-medium text-primary-foreground hover:opacity-90"
-              >
+              <Button size="none" radius="keep" layout="inline-flex items-center" type="button" onClick={submit} className="shrink-0 gap-1 rounded-md px-2 py-1 text-xs">
                 Add <AppIcon name="CornerDownLeft" className="h-3 w-3" />
-              </button>
+              </Button>
             ) : (
               <kbd className="shrink-0 rounded border border-border px-1.5 py-0.5 text-[10px] text-muted-foreground">
                 ↵
@@ -420,16 +417,10 @@ export function InboxView() {
                   }}
                   className="min-w-0 flex-1 rounded-md border border-border bg-background/70 px-2 py-1 text-[11px] text-foreground focus:border-primary/50 focus:outline-none sm:w-64"
                 />
-                <button
-                  type="button"
-                  aria-label="Save name"
-                  disabled={!dupRenameValue.trim()}
-                  onClick={() => { resolveDupNotice("rename", dupRenameValue); setDupRenaming(false); }}
-                  className="tech-transition inline-flex items-center gap-1 rounded-md bg-primary px-2 py-1 text-[11px] font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
-                >
+                <Button size="none" radius="keep" layout="inline-flex items-center" type="button" aria-label="Save name" disabled={!dupRenameValue.trim()} onClick={() => { resolveDupNotice("rename", dupRenameValue); setDupRenaming(false); }} className="gap-1 rounded-md px-2 py-1 text-[11px]">
                   <AppIcon name="Check" className="h-3.5 w-3.5" />
                   Save
-                </button>
+                </Button>
                 <button
                   type="button"
                   aria-label="Cancel rename"
@@ -467,14 +458,10 @@ export function InboxView() {
                     </button>
                   </>
                 )}
-                <button
-                  type="button"
-                  onClick={() => { setDupRenameValue(dupNotice.title); setDupRenaming(true); }}
-                  className="tech-transition inline-flex items-center gap-1 text-[11px] font-medium text-muted-foreground hover:text-foreground"
-                >
+                <Button variant="text" size="none" layout="inline-flex items-center" type="button" onClick={() => { setDupRenameValue(dupNotice.title); setDupRenaming(true); }} className="gap-1 text-[11px]">
                   <AppIcon name="Pencil" className="h-3 w-3" />
                   Rename existing
-                </button>
+                </Button>
                 <button
                   type="button"
                   aria-label="Dismiss"
@@ -509,14 +496,9 @@ export function InboxView() {
                 <BulkBtn icon={themedIcon("Trash2")} danger onClick={bulkDelete}>
                   Delete
                 </BulkBtn>
-                <button
-                  type="button"
-                  onClick={clearSelection}
-                  className="tech-transition rounded-md p-1 text-muted-foreground hover:text-foreground"
-                  aria-label="Clear selection"
-                >
+                <Button variant="text" size="icon-xs" radius="keep" layout="" type="button" onClick={clearSelection} aria-label="Clear selection" className="rounded-md">
                   <AppIcon name="X" className="h-4 w-4" />
-                </button>
+                </Button>
               </div>
             </div>
           ) : (

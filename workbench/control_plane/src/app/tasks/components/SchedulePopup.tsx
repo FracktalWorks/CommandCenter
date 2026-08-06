@@ -1,5 +1,6 @@
 "use client";
 
+import Button from "@/components/ui/Button";
 import Icon from "@/components/Icon";
 import { useMemo, useState } from "react";
 import { useTaskStore } from "../lib/taskStore";
@@ -117,14 +118,9 @@ export function SchedulePopup() {
               {item.title}
             </p>
           </div>
-          <button
-            type="button"
-            onClick={closeSchedule}
-            aria-label="Close"
-            className="rounded-md p-1 text-muted-foreground hover:bg-secondary hover:text-foreground"
-          >
+          <Button variant="ghost" size="icon-xs" radius="keep" layout="" type="button" onClick={closeSchedule} aria-label="Close" className="rounded-md">
             <Icon name="X" className="h-4 w-4" />
-          </button>
+          </Button>
         </div>
 
         <div className="flex flex-col gap-2 px-4 py-3">
@@ -171,18 +167,14 @@ export function SchedulePopup() {
                 onChange={(e) => setCustom(e.target.value)}
                 className="min-w-0 flex-1 rounded-md border border-border bg-background px-2 py-1.5 text-[12px] text-foreground focus:border-primary/50 focus:outline-none"
               />
-              <button
-                type="button"
-                onClick={() => {
+              <Button size="sm" radius="keep" layout="inline-flex items-center" type="button" onClick={() => {
                   const v = custom || toLocalInput(presets[0]?.at ?? now);
                   const d = new Date(v);
                   if (!Number.isNaN(d.getTime())) commit(d);
-                }}
-                className="tech-transition inline-flex shrink-0 items-center gap-1 rounded-md bg-primary px-2.5 py-1.5 text-[12px] font-medium text-primary-foreground hover:opacity-90"
-              >
+                }} className="shrink-0 rounded-md">
                 <Icon name="Check" className="h-3.5 w-3.5" />
                 Set
-              </button>
+              </Button>
             </div>
           </div>
 

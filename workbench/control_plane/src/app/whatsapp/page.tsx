@@ -8,6 +8,7 @@
 // buttons — capability arrives in later phases as streams / settings / drawers,
 // never as more always-on chrome on the queue.
 
+import Button from "@/components/ui/Button";
 import AppIcon from "@/components/Icon";
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
@@ -1089,18 +1090,14 @@ function Conversation({
                   placeholder="Type a reply…  (⌘↵ to send)"
                   className="min-h-[40px] flex-1 resize-none rounded-lg border border-border bg-background px-3 py-2 text-[12px] outline-none focus:border-primary"
                 />
-                <button
-                  onClick={doSendText}
-                  disabled={!text.trim() || sending}
-                  className="flex h-9 items-center gap-1.5 rounded-lg bg-primary px-3 text-[12px] font-semibold text-primary-foreground hover:opacity-90 disabled:opacity-50"
-                >
+                <Button size="none" layout="flex items-center" onClick={doSendText} disabled={!text.trim() || sending} className="h-9 gap-1.5 px-3 text-[12px] font-semibold">
                   {sending ? (
                     <AppIcon name="Loader2" className="h-3.5 w-3.5 animate-spin" />
                   ) : (
                     <AppIcon name="Send" className="h-3.5 w-3.5" />
                   )}
                   Send
-                </button>
+                </Button>
               </div>
             </div>
           ) : (

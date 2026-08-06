@@ -1,5 +1,6 @@
 "use client";
 
+import Button from "@/components/ui/Button";
 import AppIcon, { themedIcon } from "@/components/Icon";
 import { useState, useEffect, useRef } from "react";
 import { Email } from "../lib/types";
@@ -1099,13 +1100,9 @@ export function EmailDetail({ email }: EmailDetailProps) {
               />
               {/* Reveal Cc/Bcc on a sender-only reply where they're hidden. */}
               {!showReplyCc && (
-                <button
-                  type="button"
-                  onClick={() => setShowReplyCc(true)}
-                  className="text-[10px] text-muted-foreground hover:text-foreground whitespace-nowrap px-1 flex-shrink-0"
-                >
+                <Button variant="text" size="none" layout="" type="button" onClick={() => setShowReplyCc(true)} className="text-[10px] whitespace-nowrap px-1 flex-shrink-0">
                   Cc/Bcc
-                </button>
+                </Button>
               )}
             </div>
             {showReplyCc && (
@@ -1252,37 +1249,23 @@ export function EmailDetail({ email }: EmailDetailProps) {
                       prev.some((a) => a.path === ref.path) ? prev : [...prev, ref]);
                   }}
                 />
-                <button
-                  className="px-2 sm:px-3 py-1 text-xs rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors flex items-center gap-1"
-                  onClick={popOutToComposer}
-                  title="Open in the full composer (Bcc, attachments)"
-                  aria-label="Pop out to full composer"
-                >
+                <Button variant="ghost" size="none" radius="keep" layout="flex items-center" onClick={popOutToComposer} title="Open in the full composer (Bcc, attachments)" aria-label="Pop out to full composer" className="px-2 sm:px-3 py-1 text-xs rounded-md gap-1">
                   <AppIcon name="ExternalLink" size={13} />
                   <span className="hidden sm:inline">Pop out</span>
-                </button>
-                <button
-                  className="px-2 sm:px-3 py-1 text-xs rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors flex items-center gap-1"
-                  onClick={() => {
+                </Button>
+                <Button variant="ghost" size="none" radius="keep" layout="flex items-center" onClick={() => {
                     // Discard the auto-saved draft too (the X keeps it instead).
                     if (draftIdRef.current) void deleteEmail(draftIdRef.current);
                     setSendErr(null);
                     resetReplySession();
-                  }}
-                  title="Discard this draft"
-                  aria-label="Discard this draft"
-                >
+                  }} title="Discard this draft" aria-label="Discard this draft" className="px-2 sm:px-3 py-1 text-xs rounded-md gap-1">
                   <AppIcon name="Trash2" size={13} />
                   <span className="hidden sm:inline">Discard</span>
-                </button>
-                <button
-                  className="px-4 py-1 text-xs rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50 flex items-center gap-1.5"
-                  disabled={!replyTo.trim() || !replyBody.trim()}
-                  onClick={handleInlineSend}
-                >
+                </Button>
+                <Button size="none" radius="keep" layout="flex items-center" disabled={!replyTo.trim() || !replyBody.trim()} onClick={handleInlineSend} className="px-4 py-1 text-xs rounded-md gap-1.5">
                   <AppIcon name="Send" size={12} />
                   Send
-                </button>
+                </Button>
               </div>
             </div>
           </div>

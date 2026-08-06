@@ -8,6 +8,7 @@
  * send time — no base64 round-trip in the browser).
  */
 
+import Button from "@/components/ui/Button";
 import Icon from "@/components/Icon";
 import { useState, useEffect, useRef } from "react";
 import { listEmailArtifacts, type EmailArtifact } from "../lib/api";
@@ -51,17 +52,11 @@ export function ArtifactAttachPicker({
 
   return (
     <div className="relative" ref={ref}>
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        title="Attach an AI-generated file"
-        aria-label="Attach an AI-generated file"
-        className="px-2 py-1 text-xs rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors flex items-center gap-1"
-      >
+      <Button variant="ghost" size="none" radius="keep" layout="flex items-center" type="button" onClick={() => setOpen((v) => !v)} title="Attach an AI-generated file" aria-label="Attach an AI-generated file" className="px-2 py-1 text-xs rounded-md gap-1">
         {/* Icon-only on phones — composer footers must fit the whole action
             row (incl. Send) on a narrow screen. */}
         <Icon name="Sparkles" size={13} /> <span className="hidden sm:inline">AI files</span>
-      </button>
+      </Button>
       {open && (
         <div className="absolute bottom-full right-0 mb-1.5 w-64 max-h-60 overflow-y-auto rounded-lg border border-border bg-popover shadow-xl z-[70] py-1">
           {loading ? (

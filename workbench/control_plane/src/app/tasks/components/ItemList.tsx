@@ -1,5 +1,6 @@
 "use client";
 
+import Button from "@/components/ui/Button";
 import AppIcon, { themedIcon, type ThemedIcon } from "@/components/Icon";
 import { useMemo, useState, useSyncExternalStore } from "react";
 import { useTaskStore, itemsForView } from "../lib/taskStore";
@@ -386,14 +387,9 @@ export function ItemList() {
                 clearSelection();
               }}
             />
-            <button
-              type="button"
-              onClick={clearSelection}
-              aria-label="Cancel selection"
-              className="tech-transition rounded-md p-1 text-muted-foreground hover:text-foreground"
-            >
+            <Button variant="text" size="icon-xs" radius="keep" layout="" type="button" onClick={clearSelection} aria-label="Cancel selection" className="rounded-md">
               <AppIcon name="X" className="h-4 w-4" />
-            </button>
+            </Button>
           </div>
         </div>
       )}

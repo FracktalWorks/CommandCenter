@@ -1,5 +1,6 @@
 "use client";
 
+import Button from "@/components/ui/Button";
 import AppIcon, { themedIcon, type ThemedIcon } from "@/components/Icon";
 import { useMemo, useState } from "react";
 import { useTaskStore } from "../lib/taskStore";
@@ -492,13 +493,9 @@ function AddInline({
   };
   if (!editing) {
     return (
-      <button
-        type="button"
-        onClick={() => setEditing(true)}
-        className="tech-transition inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground hover:bg-secondary hover:text-foreground"
-      >
+      <Button variant="ghost" size="none" radius="keep" layout="inline-flex items-center" type="button" onClick={() => setEditing(true)} className="gap-0.5 rounded px-1.5 py-0.5 text-[10px]">
         <AppIcon name="Plus" className="h-3 w-3" /> {label}
-      </button>
+      </Button>
     );
   }
   return (
@@ -549,13 +546,9 @@ function AddProjectRow({
         className="min-w-0 flex-1 bg-transparent text-[12px] text-foreground placeholder:text-muted-foreground/60 focus:outline-none"
       />
       {name.trim() && (
-        <button
-          type="button"
-          onClick={commit}
-          className="shrink-0 rounded bg-primary px-1.5 py-0.5 text-[10px] font-medium text-primary-foreground hover:opacity-90"
-        >
+        <Button size="none" radius="keep" layout="" type="button" onClick={commit} className="shrink-0 rounded px-1.5 py-0.5 text-[10px]">
           Add
-        </button>
+        </Button>
       )}
     </div>
   );

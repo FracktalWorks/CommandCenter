@@ -6,6 +6,7 @@
  * a cron expression. All kinds converge on the same run entrypoint.
  */
 
+import Button from "@/components/ui/Button";
 import Icon from "@/components/Icon";
 import { useMemo, useState } from "react";
 import type { TriggerSpec } from "../lib/types";
@@ -84,12 +85,9 @@ export default function TriggerPanel({
           <Icon name="Zap" className="w-3.5 h-3.5 text-amber-500" />
           Triggers
         </span>
-        <button
-          onClick={onClose}
-          className="p-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary tech-transition"
-        >
+        <Button variant="ghost" size="icon-xs" radius="keep" layout="" onClick={onClose} className="rounded-md">
           <Icon name="X" className="w-3.5 h-3.5" />
-        </button>
+        </Button>
       </div>
 
       <div className="p-3 space-y-4 text-xs">

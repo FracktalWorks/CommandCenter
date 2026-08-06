@@ -1,5 +1,6 @@
 "use client";
 
+import Button from "@/components/ui/Button";
 import Icon from "@/components/Icon";
 import { useTaskStore } from "../lib/taskStore";
 
@@ -39,14 +40,9 @@ export function EliminatePopup() {
               {item.title}
             </p>
           </div>
-          <button
-            type="button"
-            onClick={closeEliminate}
-            aria-label="Close"
-            className="rounded-md p-1 text-muted-foreground hover:bg-secondary hover:text-foreground"
-          >
+          <Button variant="ghost" size="icon-xs" radius="keep" layout="" type="button" onClick={closeEliminate} aria-label="Close" className="rounded-md">
             <Icon name="X" className="h-4 w-4" />
-          </button>
+          </Button>
         </div>
 
         <div className="flex flex-col gap-2 px-4 py-3">

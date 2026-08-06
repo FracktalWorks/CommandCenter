@@ -1,5 +1,6 @@
 "use client";
 
+import Button from "@/components/ui/Button";
 import Icon from "@/components/Icon";
 import { useEffect } from "react";
 import { useTaskStore } from "../lib/taskStore";
@@ -67,14 +68,9 @@ export function UndoToast() {
           u
         </kbd>
       </button>
-      <button
-        type="button"
-        onClick={dismissUndo}
-        aria-label="Dismiss"
-        className="tech-transition rounded-md p-0.5 text-muted-foreground hover:text-foreground"
-      >
+      <Button variant="text" size="none" radius="keep" layout="" type="button" onClick={dismissUndo} aria-label="Dismiss" className="rounded-md p-0.5">
         <Icon name="X" className="h-3.5 w-3.5" />
-      </button>
+      </Button>
     </div>
   );
 }

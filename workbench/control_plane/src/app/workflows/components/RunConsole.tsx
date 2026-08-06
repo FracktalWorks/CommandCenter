@@ -8,6 +8,7 @@
  * are painted onto the canvas via onPaintRun.
  */
 
+import Button from "@/components/ui/Button";
 import Icon from "@/components/Icon";
 import { useEffect, useRef, useState } from "react";
 import { getRun, listRuns } from "../lib/api";
@@ -152,17 +153,13 @@ export default function RunConsole({
             running
           </span>
         )}
-        <button
-          onClick={onToggle}
-          className="ml-auto p-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary tech-transition"
-          title={collapsed ? "Expand console" : "Collapse console"}
-        >
+        <Button variant="ghost" size="icon-xs" radius="keep" layout="" onClick={onToggle} title={collapsed ? "Expand console" : "Collapse console"} className="ml-auto rounded-md">
           {collapsed ? (
             <Icon name="ChevronUp" className="w-4 h-4" />
           ) : (
             <Icon name="ChevronDown" className="w-4 h-4" />
           )}
-        </button>
+        </Button>
       </div>
 
       {!collapsed && tab === "console" && (
@@ -176,13 +173,10 @@ export default function RunConsole({
                   ? ` · ${new Date(inspected.started_at).toLocaleString()}`
                   : ""}
               </span>
-              <button
-                onClick={clearInspection}
-                className="ml-auto flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary tech-transition"
-              >
+              <Button variant="ghost" size="none" radius="keep" layout="flex items-center" onClick={clearInspection} className="ml-auto gap-1 text-[10px] px-1.5 py-0.5 rounded-md">
                 <Icon name="X" className="w-3 h-3" />
                 back to live
-              </button>
+              </Button>
             </div>
           )}
           {shownEvents.length === 0 && (

@@ -1,5 +1,6 @@
 "use client";
 
+import Button from "@/components/ui/Button";
 import Icon from "@/components/Icon";
 import { useState } from "react";
 import {
@@ -99,14 +100,9 @@ export function CalendarSettings({
         </div>
         <div className="flex shrink-0 items-center justify-between px-3 pb-2 pt-2">
           <span className="font-semibold text-foreground">Calendar settings</span>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="Close"
-            className="rounded p-1 text-muted-foreground hover:text-foreground"
-          >
+          <Button variant="text" size="icon-xs" radius="keep" layout="" type="button" onClick={onClose} aria-label="Close" className="rounded">
             <Icon name="X" className="h-4 w-4" />
-          </button>
+          </Button>
         </div>
 
         {/* Scrollable body — everything below the header scrolls, with

@@ -18,6 +18,7 @@
  * meeting before you'd said what it was. Template now lives in prep.
  */
 
+import Button from "@/components/ui/Button";
 import Icon from "@/components/Icon";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
@@ -263,15 +264,11 @@ export default function NotesPage() {
                 behind it, instead of three sibling buttons. */}
             <div className="relative" onClick={(e) => e.stopPropagation()}>
               <div className="flex">
-                <button
-                  onClick={onPrepare}
-                  className="tech-transition rounded-l-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90"
-                  title="Set up a meeting — agenda, briefing, who's coming — before it starts"
-                >
+                <Button size="none" radius="keep" layout="" onClick={onPrepare} title="Set up a meeting — agenda, briefing, who's coming — before it starts" className="rounded-l-lg px-4 py-2 text-sm">
                   <span className="flex items-center gap-1.5">
                     <Icon name="CalendarPlus" className="h-4 w-4" /> New meeting
                   </span>
-                </button>
+                </Button>
                 <button
                   onClick={() => setShowNewMenu((v) => !v)}
                   aria-label="More ways to start"

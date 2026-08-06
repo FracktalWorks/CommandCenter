@@ -17,6 +17,7 @@
  * after it.
  */
 
+import Button from "@/components/ui/Button";
 import Icon from "@/components/Icon";
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
@@ -517,12 +518,9 @@ export default function MeetingPrep({ meeting, onChanged, onSendBot }: Props) {
         <span className="mr-1 text-xs text-muted-foreground">
           Start when you&apos;re ready —
         </span>
-        <button
-          onClick={() => router.push(`/notes/session/${id}`)}
-          className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:opacity-90"
-        >
+        <Button size="none" layout="inline-flex items-center" onClick={() => router.push(`/notes/session/${id}`)} className="gap-1.5 px-3 py-2 text-sm">
           <Icon name="Mic" className="h-4 w-4" /> Record here
-        </button>
+        </Button>
         <button
           onClick={onSendBot}
           className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-sm hover:bg-secondary"

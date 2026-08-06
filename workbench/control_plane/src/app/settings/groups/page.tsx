@@ -15,6 +15,7 @@
  * explicit decision made on their member page.
  */
 
+import Button from "@/components/ui/Button";
 import Icon from "@/components/Icon";
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
@@ -133,13 +134,10 @@ export default function GroupsPage() {
             </p>
           </div>
         </div>
-        <button
-          onClick={() => setCreating(true)}
-          className="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground tech-transition hover:opacity-90 sm:px-4"
-        >
+        <Button size="lg" layout="flex items-center" onClick={() => setCreating(true)}>
           <Icon name="Plus" size={15} />
           New team
-        </button>
+        </Button>
       </div>
 
       {error && (
@@ -207,21 +205,14 @@ export default function GroupsPage() {
                     <span className="text-[11px] text-muted-foreground">
                       {g.member_count} member{g.member_count === 1 ? "" : "s"}
                     </span>
-                    <button
-                      onClick={() => setAddingTo(g)}
-                      className="flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1.5 text-[11px] text-muted-foreground tech-transition hover:border-primary/30 hover:text-foreground"
-                    >
+                    <Button variant="secondary" size="none" layout="flex items-center" onClick={() => setAddingTo(g)} className="gap-1.5 px-2.5 py-1.5 text-[11px]">
                       <Icon name="UserPlus" size={12} />
                       Add member
-                    </button>
+                    </Button>
                     {!g.is_center && (
-                      <button
-                        onClick={() => void removeGroup(g.slug)}
-                        className="rounded-lg bg-destructive/10 p-2 text-destructive tech-transition hover:bg-destructive/20"
-                        title="Delete team (must be empty)"
-                      >
+                      <Button variant="destructive" size="icon" layout="" onClick={() => void removeGroup(g.slug)} title="Delete team (must be empty)">
                         <Icon name="Trash2" size={14} />
-                      </button>
+                      </Button>
                     )}
                   </div>
                 </div>
@@ -418,14 +409,10 @@ function CreateGroupDialog({
           >
             Cancel
           </button>
-          <button
-            onClick={() => void submit()}
-            disabled={busy || !slug}
-            className="flex items-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground tech-transition hover:opacity-90 disabled:opacity-50"
-          >
+          <Button size="none" layout="flex items-center" onClick={() => void submit()} disabled={busy || !slug} className="gap-1.5 px-4 py-2 text-sm">
             {busy && <Icon name="Loader2" size={14} className="animate-spin" />}
             Create team
-          </button>
+          </Button>
         </div>
       </div>
     </div>
@@ -525,14 +512,10 @@ function EditGroupDialog({
           >
             Cancel
           </button>
-          <button
-            onClick={() => void submit()}
-            disabled={busy}
-            className="flex items-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground tech-transition hover:opacity-90 disabled:opacity-50"
-          >
+          <Button size="none" layout="flex items-center" onClick={() => void submit()} disabled={busy} className="gap-1.5 px-4 py-2 text-sm">
             {busy && <Icon name="Loader2" size={14} className="animate-spin" />}
             Save
-          </button>
+          </Button>
         </div>
       </div>
     </div>
@@ -679,14 +662,10 @@ function AddMemberDialog({
           >
             Cancel
           </button>
-          <button
-            onClick={() => void submit()}
-            disabled={busy || !email || candidates.length === 0}
-            className="flex items-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground tech-transition hover:opacity-90 disabled:opacity-50"
-          >
+          <Button size="none" layout="flex items-center" onClick={() => void submit()} disabled={busy || !email || candidates.length === 0} className="gap-1.5 px-4 py-2 text-sm">
             {busy && <Icon name="Loader2" size={14} className="animate-spin" />}
             Add
-          </button>
+          </Button>
         </div>
       </div>
     </div>

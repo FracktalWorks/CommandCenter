@@ -1,5 +1,6 @@
 "use client";
 
+import Button from "@/components/ui/Button";
 import AppIcon, { themedIcon } from "@/components/Icon";
 import type { ThemedIcon } from "@/components/Icon";
 import { useEffect, useState } from "react";
@@ -555,21 +556,13 @@ export function TaskDetail({
             <span className="min-w-0 flex-1 text-[12.5px] text-foreground">
               No longer your action? Remove it from My Next Actions — it stays on ClickUp.
             </span>
-            <button
-              type="button"
-              onClick={() => { updateItem(item.id, { isMine: false }); setOfferDropFromNext(false); }}
-              className="tech-transition inline-flex items-center gap-1.5 rounded-md bg-primary px-2.5 py-1.5 text-[12px] font-medium text-primary-foreground hover:opacity-90"
-            >
+            <Button size="none" radius="keep" layout="inline-flex items-center" type="button" onClick={() => { updateItem(item.id, { isMine: false }); setOfferDropFromNext(false); }} className="gap-1.5 rounded-md px-2.5 py-1.5 text-[12px]">
               <AppIcon name="UserMinus" className="h-3.5 w-3.5" />
               Remove from My Next Actions
-            </button>
-            <button
-              type="button"
-              onClick={() => setOfferDropFromNext(false)}
-              className="tech-transition rounded-md px-2.5 py-1.5 text-[12px] font-medium text-muted-foreground hover:bg-secondary hover:text-foreground"
-            >
+            </Button>
+            <Button variant="ghost" size="none" radius="keep" layout="" type="button" onClick={() => setOfferDropFromNext(false)} className="rounded-md px-2.5 py-1.5 text-[12px]">
               Keep
-            </button>
+            </Button>
           </div>
         )}
 
@@ -687,10 +680,7 @@ export function TaskDetail({
                 <AppIcon name="Clock" className="h-3.5 w-3.5" />
                 Not yet pushed to {item.provider ?? "the tool"}
               </span>
-              <button
-                type="button"
-                disabled={pushState === "busy"}
-                onClick={async () => {
+              <Button size="none" radius="keep" layout="inline-flex items-center" type="button" disabled={pushState === "busy"} onClick={async () => {
                   setPushState("busy");
                   try {
                     await pushItem(item.id);
@@ -698,12 +688,10 @@ export function TaskDetail({
                   } catch (e) {
                     setPushState(e instanceof Error ? e.message : "Push failed");
                   }
-                }}
-                className="tech-transition inline-flex items-center gap-1 rounded-md bg-primary px-2.5 py-1.5 text-[11px] font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
-              >
+                }} className="gap-1 rounded-md px-2.5 py-1.5 text-[11px]">
                 <AppIcon name="UploadCloud" className="h-3.5 w-3.5" />
                 {pushState === "busy" ? "Pushing…" : "Push now"}
-              </button>
+              </Button>
             </div>
             {pushState !== "idle" && pushState !== "busy" && (
               <p className="mt-1 text-[10px] text-destructive">{pushState}</p>
@@ -842,13 +830,9 @@ function LocalSubtasksSection({ item }: { item: GtdItem }) {
                 className="min-w-0 flex-1 bg-transparent px-0.5 py-0.5 text-[13px] text-foreground placeholder:text-muted-foreground focus:outline-none"
               />
               {adding.trim() && (
-                <button
-                  type="button"
-                  onClick={() => void add()}
-                  className="tech-transition shrink-0 rounded-md bg-primary px-2 py-1 text-[11px] font-medium text-primary-foreground hover:opacity-90"
-                >
+                <Button size="none" radius="keep" layout="" type="button" onClick={() => void add()} className="shrink-0 rounded-md px-2 py-1 text-[11px]">
                   Add
-                </button>
+                </Button>
               )}
             </div>
           )}

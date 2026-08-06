@@ -1,5 +1,6 @@
 "use client";
 
+import Button from "@/components/ui/Button";
 import Icon from "@/components/Icon";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useEmailStore, FOLDER_ALL } from "../lib/emailStore";
@@ -114,14 +115,10 @@ export function SearchBar() {
       >
         {/* ── Scope dropdown: says WHERE we're searching ── */}
         <div className="relative flex-shrink-0">
-          <button
-            onClick={() => setScopeOpen((v) => !v)}
-            title="Choose where to search"
-            className="flex items-center gap-1 pl-2.5 pr-2 py-1.5 rounded-l-md text-[11px] text-muted-foreground hover:text-foreground transition-colors max-w-[140px]"
-          >
+          <Button variant="text" size="none" radius="keep" layout="flex items-center" onClick={() => setScopeOpen((v) => !v)} title="Choose where to search" className="gap-1 pl-2.5 pr-2 py-1.5 rounded-l-md text-[11px] max-w-[140px]">
             <span className="truncate">{scopeName}</span>
             <Icon name="ChevronDown" size={11} className="flex-shrink-0" />
-          </button>
+          </Button>
           {scopeOpen && (
             <>
               <div className="fixed inset-0 z-20" onClick={() => setScopeOpen(false)} />
@@ -212,14 +209,9 @@ export function SearchBar() {
         )}
 
         {active && (
-          <button
-            onClick={clearSearch}
-            title="Clear search"
-            aria-label="Clear search"
-            className="p-1 rounded text-muted-foreground hover:text-foreground transition-colors flex-shrink-0"
-          >
+          <Button variant="text" size="icon-xs" radius="keep" layout="" onClick={clearSearch} title="Clear search" aria-label="Clear search" className="rounded flex-shrink-0">
             <Icon name="X" size={13} />
-          </button>
+          </Button>
         )}
 
         {/* ── Filter menu: the discoverable half of the typed grammar ── */}

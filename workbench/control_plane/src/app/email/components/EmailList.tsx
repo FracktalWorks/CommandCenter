@@ -1,5 +1,6 @@
 "use client";
 
+import Button from "@/components/ui/Button";
 import AppIcon, { themedIcon } from "@/components/Icon";
 import { useState, useRef, useEffect, useCallback } from "react";
 import { Email } from "../lib/types";
@@ -288,25 +289,17 @@ export function EmailList({
           <ToolbarBtn icon={themedIcon("Flag")} label="Flag" onClick={() => bulkUpdate({ isFlagged: true })} />
           <ToolbarBtn icon={themedIcon("Archive")} label="Archive" onClick={() => bulkUpdate({ folder: "archive" })} />
           <ToolbarBtn icon={themedIcon("Trash2")} label="Delete" onClick={bulkDelete} />
-          <button
-            onClick={clearSelection}
-            title="Clear selection"
-            className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
-          >
+          <Button variant="ghost" size="icon-sm" radius="keep" layout="" onClick={clearSelection} title="Clear selection" className="rounded">
             <AppIcon name="X" size={13} />
-          </button>
+          </Button>
         </div>
       ) : (
         <div className="flex items-center gap-0.5 px-2 py-1.5 border-b border-border flex-shrink-0 overflow-x-auto scrollbar-hide">
           {/* Compose — always available, even with nothing selected */}
-          <button
-            title="New Email"
-            onClick={onCompose}
-            className="flex items-center gap-1 px-2.5 py-1.5 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors flex-shrink-0"
-          >
+          <Button size="none" radius="keep" layout="flex items-center" title="New Email" onClick={onCompose} className="gap-1 px-2.5 py-1.5 rounded-md flex-shrink-0">
             <AppIcon name="Pencil" size={12} />
             <span className="text-[10px] font-medium">New</span>
-          </button>
+          </Button>
 
           {selectedEmail ? (
             <>
@@ -350,13 +343,9 @@ export function EmailList({
           <span className="text-foreground/70">
             Filtered by label <b className="text-primary">{selectedLabel}</b>
           </span>
-          <button
-            onClick={() => selectLabel(null)}
-            title="Clear label filter"
-            className="ml-auto flex items-center gap-0.5 text-muted-foreground hover:text-foreground"
-          >
+          <Button variant="text" size="none" layout="flex items-center" onClick={() => selectLabel(null)} title="Clear label filter" className="ml-auto gap-0.5">
             <AppIcon name="X" size={11} /> Clear
-          </button>
+          </Button>
         </div>
       )}
 
@@ -569,11 +558,7 @@ export function EmailList({
                 provider. Tapping it also works if auto-load hasn't fired. */}
             {(hasMore || canPageProvider) && (
               <div ref={sentinelRef} className="p-2">
-                <button
-                  onClick={handleManualLoad}
-                  disabled={loadingMore || backfilling}
-                  className="w-full flex items-center justify-center gap-1.5 py-2 rounded-md text-xs text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors disabled:opacity-50"
-                >
+                <Button variant="ghost" size="none" radius="keep" layout="flex items-center justify-center" onClick={handleManualLoad} disabled={loadingMore || backfilling} className="w-full gap-1.5 py-2 rounded-md text-xs">
                   {(loadingMore || backfilling) && (
                     <AppIcon name="Loader2" size={12} className="animate-spin" />
                   )}
@@ -584,7 +569,7 @@ export function EmailList({
                       : hasMore
                         ? `Load more (${emails.length} of ${total})`
                         : "Load older messages from server"}
-                </button>
+                </Button>
               </div>
             )}
           </>
@@ -1059,12 +1044,8 @@ function ToolbarBtn({
   onClick?: (e: React.MouseEvent) => void;
 }) {
   return (
-    <button
-      title={label}
-      onClick={onClick}
-      className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
-    >
+    <Button variant="ghost" size="icon-sm" radius="keep" layout="" title={label} onClick={onClick} className="rounded">
       <Icon size={13} />
-    </button>
+    </Button>
   );
 }

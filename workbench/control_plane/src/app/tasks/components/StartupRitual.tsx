@@ -7,6 +7,7 @@
 // Completion (or dismissal) stamps today in focusPrefs so it offers once/day;
 // the streak counts completions only.
 
+import Button from "@/components/ui/Button";
 import Icon from "@/components/Icon";
 import { useEffect, useMemo, useState } from "react";
 import { GtdItem } from "../lib/types";
@@ -162,14 +163,9 @@ export function StartupRitual({
               streak {streak} 🔥
             </span>
           )}
-          <button
-            type="button"
-            onClick={dismiss}
-            aria-label="Skip today"
-            className="rounded-md p-1 text-muted-foreground hover:bg-secondary hover:text-foreground"
-          >
+          <Button variant="ghost" size="icon-xs" radius="keep" layout="" type="button" onClick={dismiss} aria-label="Skip today" className="rounded-md">
             <Icon name="X" className="h-4 w-4" />
-          </button>
+          </Button>
         </div>
 
         <div className="flex items-center gap-1.5 border-b border-border px-4 py-2">
@@ -203,17 +199,13 @@ export function StartupRitual({
               </p>
               <div className="mt-4 flex items-center gap-2">
                 {!breathing ? (
-                  <button
-                    type="button"
-                    onClick={() => {
+                  <Button size="none" radius="keep" layout="inline-flex items-center" type="button" onClick={() => {
                       setBreatheLeft(BREATHE_SECS);
                       setBreathing(true);
-                    }}
-                    className="tech-transition inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-2 text-[12px] font-semibold text-primary-foreground hover:opacity-90"
-                  >
+                    }} className="gap-1.5 rounded-md px-3 py-2 text-[12px] font-semibold">
                     <Icon name="Wind" className="h-3.5 w-3.5" />
                     Begin
-                  </button>
+                  </Button>
                 ) : (
                   <button
                     type="button"
@@ -227,14 +219,10 @@ export function StartupRitual({
                   </button>
                 )}
                 {!breathing && (
-                  <button
-                    type="button"
-                    onClick={() => setStep(1)}
-                    className="tech-transition inline-flex items-center gap-1 rounded-md px-3 py-2 text-[12px] font-medium text-muted-foreground hover:text-foreground"
-                  >
+                  <Button variant="text" size="none" radius="keep" layout="inline-flex items-center" type="button" onClick={() => setStep(1)} className="gap-1 rounded-md px-3 py-2 text-[12px]">
                     Skip
                     <Icon name="ArrowRight" className="h-3.5 w-3.5" />
-                  </button>
+                  </Button>
                 )}
               </div>
             </div>
@@ -289,14 +277,10 @@ export function StartupRitual({
                   due within 2 weeks — the planner will weigh them.
                 </div>
               )}
-              <button
-                type="button"
-                onClick={() => setStep(2)}
-                className="tech-transition inline-flex items-center justify-center gap-1.5 rounded-md bg-primary px-3 py-2 text-[12px] font-semibold text-primary-foreground hover:opacity-90"
-              >
+              <Button size="none" radius="keep" type="button" onClick={() => setStep(2)} className="gap-1.5 rounded-md px-3 py-2 text-[12px] font-semibold">
                 Pick the One Thing
                 <Icon name="ArrowRight" className="h-3.5 w-3.5" />
-              </button>
+              </Button>
             </div>
           )}
 
@@ -363,21 +347,13 @@ export function StartupRitual({
 
         {step === 2 && (
           <div className="flex items-center justify-end gap-2 border-t border-border px-4 py-3">
-            <button
-              type="button"
-              onClick={() => finish(false)}
-              className="rounded-md px-3 py-2 text-[12px] font-medium text-muted-foreground hover:text-foreground"
-            >
+            <Button variant="text" size="none" radius="keep" layout="" type="button" onClick={() => finish(false)} className="rounded-md px-3 py-2 text-[12px]">
               Just start
-            </button>
-            <button
-              type="button"
-              onClick={() => finish(true)}
-              className="tech-transition inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-2 text-[12px] font-semibold text-primary-foreground hover:opacity-90"
-            >
+            </Button>
+            <Button size="none" radius="keep" layout="inline-flex items-center" type="button" onClick={() => finish(true)} className="gap-1.5 rounded-md px-3 py-2 text-[12px] font-semibold">
               <Icon name="Wand2" className="h-3.5 w-3.5" />
               Rebuild my day
-            </button>
+            </Button>
           </div>
         )}
       </div>

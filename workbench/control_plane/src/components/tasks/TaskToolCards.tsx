@@ -22,6 +22,7 @@
  * `full_id: <uuid>` (lists) or `(id: <uuid>)` (schedules) for exactly this.
  */
 
+import Button from "@/components/ui/Button";
 import AppIcon from "@/components/Icon";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
@@ -211,22 +212,12 @@ function TaskRowView({ row }: { row: TaskRow }) {
           <AppIcon name="Loader2" size={12} className="animate-spin text-muted-foreground mx-1" />
         ) : (
           <>
-            <button
-              onClick={complete}
-              title="Mark done"
-              aria-label="Mark done"
-              className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-secondary"
-            >
+            <Button variant="ghost" size="icon-xs" radius="keep" layout="" onClick={complete} title="Mark done" aria-label="Mark done" className="rounded">
               <AppIcon name="CheckCircle2" size={11} />
-            </button>
-            <button
-              onClick={() => openTask(row.id)}
-              title="Open in Tasks"
-              aria-label="Open in Tasks"
-              className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-secondary"
-            >
+            </Button>
+            <Button variant="ghost" size="icon-xs" radius="keep" layout="" onClick={() => openTask(row.id)} title="Open in Tasks" aria-label="Open in Tasks" className="rounded">
               <AppIcon name="ExternalLink" size={11} />
-            </button>
+            </Button>
           </>
         )}
       </div>

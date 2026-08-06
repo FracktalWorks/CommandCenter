@@ -1,5 +1,6 @@
 "use client";
 
+import Button from "@/components/ui/Button";
 import AppIcon, { themedIcon } from "@/components/Icon";
 import type { ThemedIcon } from "@/components/Icon";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -721,26 +722,17 @@ export function ClarifyPanel({
                   className="w-full resize-y rounded-md border border-border bg-background/60 px-3 py-2 text-base text-foreground focus:border-primary/50 focus:outline-none sm:text-sm"
                 />
                 <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => void reclarifyWithNote()}
-                    disabled={noteBusy || !note.trim()}
-                    className="tech-transition inline-flex items-center gap-1.5 rounded-md bg-primary px-2.5 py-1.5 text-[12px] font-medium text-primary-foreground hover:opacity-90 disabled:opacity-40"
-                  >
+                  <Button size="none" radius="keep" layout="inline-flex items-center" type="button" onClick={() => void reclarifyWithNote()} disabled={noteBusy || !note.trim()} className="gap-1.5 rounded-md px-2.5 py-1.5 text-[12px]">
                     {noteBusy ? (
                       <AppIcon name="Loader2" className="h-3.5 w-3.5 animate-spin" />
                     ) : (
                       <AppIcon name="Wand2" className="h-3.5 w-3.5" />
                     )}
                     Re-clarify with this
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => { setNoteOpen(false); setNote(""); }}
-                    className="tech-transition rounded-md px-2 py-1.5 text-[12px] font-medium text-muted-foreground hover:text-foreground"
-                  >
+                  </Button>
+                  <Button variant="text" size="none" radius="keep" layout="" type="button" onClick={() => { setNoteOpen(false); setNote(""); }} className="rounded-md px-2 py-1.5 text-[12px]">
                     Cancel
-                  </button>
+                  </Button>
                 </div>
               </div>
             )}
@@ -800,22 +792,13 @@ export function ClarifyPanel({
               </div>
             )}
             <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={acceptTitle}
-                disabled={!suggestedTitle}
-                className="tech-transition inline-flex items-center gap-1.5 rounded-md bg-primary px-2.5 py-1.5 text-[12px] font-medium text-primary-foreground hover:opacity-90 disabled:opacity-40"
-              >
+              <Button size="none" radius="keep" layout="inline-flex items-center" type="button" onClick={acceptTitle} disabled={!suggestedTitle} className="gap-1.5 rounded-md px-2.5 py-1.5 text-[12px]">
                 <AppIcon name="Check" className="h-3.5 w-3.5" />
                 Use this title
-              </button>
-              <button
-                type="button"
-                onClick={keepTitle}
-                className="tech-transition rounded-md px-2.5 py-1.5 text-[12px] font-medium text-muted-foreground hover:bg-secondary hover:text-foreground"
-              >
+              </Button>
+              <Button variant="ghost" size="none" radius="keep" layout="" type="button" onClick={keepTitle} className="rounded-md px-2.5 py-1.5 text-[12px]">
                 Keep original
-              </button>
+              </Button>
             </div>
           </div>
         )}
@@ -962,17 +945,12 @@ export function ClarifyPanel({
               silently no-opping — when the decision can't build yet; the form
               below force-opens in that case to show what's missing. */}
           <div className="mt-2.5 flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              onClick={() => void apply()}
-              disabled={creatingTarget || !canApply}
-              className="tech-transition inline-flex items-center gap-1.5 rounded-md bg-primary px-2.5 py-1.5 text-[12px] font-medium text-primary-foreground hover:opacity-90 disabled:opacity-60"
-            >
+            <Button size="none" radius="keep" layout="inline-flex items-center" type="button" onClick={() => void apply()} disabled={creatingTarget || !canApply} className="gap-1.5 rounded-md px-2.5 py-1.5 text-[12px]">
               {creatingTarget ? <AppIcon name="Loader2" className="h-3.5 w-3.5 animate-spin" /> : <AppIcon name="Check" className="h-3.5 w-3.5" />}
               {bigSuggestion
                 ? `Accept & create all ${subtasks.length || 1} step${subtasks.length === 1 ? "" : "s"}`
                 : "Accept & next"}
-            </button>
+            </Button>
             {!showForm && (
               <button
                 type="button"
@@ -1390,22 +1368,13 @@ function ProjectSuggestBanner({
           : `Assigned to you — it'll show up in My Next Actions${synced ? ", and on ClickUp" : ""}.`}
       </p>
       <div className="flex flex-wrap items-center gap-2">
-        <button
-          type="button"
-          disabled={busy}
-          onClick={() => { setBusy(true); onFile(); }}
-          className="tech-transition inline-flex items-center gap-1.5 rounded-md bg-primary px-2.5 py-1.5 text-[12px] font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
-        >
+        <Button size="none" radius="keep" layout="inline-flex items-center" type="button" disabled={busy} onClick={() => { setBusy(true); onFile(); }} className="gap-1.5 rounded-md px-2.5 py-1.5 text-[12px]">
           {busy ? <AppIcon name="Loader2" className="h-3.5 w-3.5 animate-spin" /> : <AppIcon name="Check" className="h-3.5 w-3.5" />}
           File it here
-        </button>
-        <button
-          type="button"
-          onClick={onDismiss}
-          className="tech-transition ml-auto rounded-md px-2.5 py-1.5 text-[12px] font-medium text-muted-foreground hover:bg-secondary hover:text-foreground"
-        >
+        </Button>
+        <Button variant="ghost" size="none" radius="keep" layout="" type="button" onClick={onDismiss} className="ml-auto rounded-md px-2.5 py-1.5 text-[12px]">
           Choose another place
-        </button>
+        </Button>
       </div>
     </div>
   );
@@ -1441,22 +1410,13 @@ function ParentSuggestBanner({
         File it as a subtask under this task instead of a standalone one.
       </p>
       <div className="flex flex-wrap items-center gap-2">
-        <button
-          type="button"
-          disabled={busy}
-          onClick={async () => { setBusy(true); try { await onFileUnder(); } finally { setBusy(false); } }}
-          className="tech-transition inline-flex items-center gap-1.5 rounded-md bg-primary px-2.5 py-1.5 text-[12px] font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
-        >
+        <Button size="none" radius="keep" layout="inline-flex items-center" type="button" disabled={busy} onClick={async () => { setBusy(true); try { await onFileUnder(); } finally { setBusy(false); } }} className="gap-1.5 rounded-md px-2.5 py-1.5 text-[12px]">
           {busy ? <AppIcon name="Loader2" className="h-3.5 w-3.5 animate-spin" /> : <AppIcon name="ListTree" className="h-3.5 w-3.5" />}
           File as subtask
-        </button>
-        <button
-          type="button"
-          onClick={onDismiss}
-          className="tech-transition ml-auto rounded-md px-2.5 py-1.5 text-[12px] font-medium text-muted-foreground hover:bg-secondary hover:text-foreground"
-        >
+        </Button>
+        <Button variant="ghost" size="none" radius="keep" layout="" type="button" onClick={onDismiss} className="ml-auto rounded-md px-2.5 py-1.5 text-[12px]">
           It&apos;s its own task
-        </button>
+        </Button>
       </div>
     </div>
   );
@@ -1546,36 +1506,21 @@ function DuplicateBanner({
             Updates the task everywhere it lives (including ClickUp) and drops this inbox item.
           </p>
           <div className="flex items-center gap-2">
-            <button
-              type="button"
-              disabled={busy !== null || !canRename}
-              onClick={() => void run("rename", () => onRename(renameTitle))}
-              className="tech-transition inline-flex items-center gap-1.5 rounded-md bg-primary px-2.5 py-1.5 text-[12px] font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
-            >
+            <Button size="none" radius="keep" layout="inline-flex items-center" type="button" disabled={busy !== null || !canRename} onClick={() => void run("rename", () => onRename(renameTitle))} className="gap-1.5 rounded-md px-2.5 py-1.5 text-[12px]">
               {busy === "rename" ? <AppIcon name="Loader2" className="h-3.5 w-3.5 animate-spin" /> : <AppIcon name="Check" className="h-3.5 w-3.5" />}
               Save name
-            </button>
-            <button
-              type="button"
-              disabled={busy !== null}
-              onClick={() => { setRenaming(false); setRenameTitle(captureTitle); }}
-              className="tech-transition rounded-md px-2.5 py-1.5 text-[12px] font-medium text-muted-foreground hover:bg-secondary hover:text-foreground disabled:opacity-50"
-            >
+            </Button>
+            <Button variant="ghost" size="none" radius="keep" layout="" type="button" disabled={busy !== null} onClick={() => { setRenaming(false); setRenameTitle(captureTitle); }} className="rounded-md px-2.5 py-1.5 text-[12px]">
               Cancel
-            </button>
+            </Button>
           </div>
         </div>
       ) : (
         <div className="flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            disabled={busy !== null}
-            onClick={() => void run("merge", onMerge)}
-            className="tech-transition inline-flex items-center gap-1.5 rounded-md bg-primary px-2.5 py-1.5 text-[12px] font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
-          >
+          <Button size="none" radius="keep" layout="inline-flex items-center" type="button" disabled={busy !== null} onClick={() => void run("merge", onMerge)} className="gap-1.5 rounded-md px-2.5 py-1.5 text-[12px]">
             {busy === "merge" ? <AppIcon name="Loader2" className="h-3.5 w-3.5 animate-spin" /> : <AppIcon name="Plus" className="h-3.5 w-3.5" />}
             Add to existing task
-          </button>
+          </Button>
           <button
             type="button"
             disabled={busy !== null}
@@ -1594,14 +1539,9 @@ function DuplicateBanner({
             {busy === "drop" ? <AppIcon name="Loader2" className="h-3.5 w-3.5 animate-spin" /> : <AppIcon name="Trash2" className="h-3.5 w-3.5" />}
             Delete this inbox item
           </button>
-          <button
-            type="button"
-            disabled={busy !== null}
-            onClick={onDismiss}
-            className="tech-transition ml-auto rounded-md px-2.5 py-1.5 text-[12px] font-medium text-muted-foreground hover:bg-secondary hover:text-foreground disabled:opacity-50"
-          >
+          <Button variant="ghost" size="none" radius="keep" layout="" type="button" disabled={busy !== null} onClick={onDismiss} className="ml-auto rounded-md px-2.5 py-1.5 text-[12px]">
             Not a duplicate
-          </button>
+          </Button>
         </div>
       )}
     </div>
@@ -1716,13 +1656,9 @@ function SubtaskEditor({
           className="min-w-0 flex-1 bg-transparent px-0.5 py-0.5 text-[13px] text-foreground placeholder:text-muted-foreground focus:outline-none"
         />
         {draft.trim() && (
-          <button
-            type="button"
-            onClick={add}
-            className="tech-transition shrink-0 rounded-md bg-primary px-2 py-0.5 text-[11px] font-medium text-primary-foreground hover:opacity-90"
-          >
+          <Button size="none" radius="keep" layout="" type="button" onClick={add} className="shrink-0 rounded-md px-2 py-0.5 text-[11px]">
             Add
-          </button>
+          </Button>
         )}
       </div>
     </div>

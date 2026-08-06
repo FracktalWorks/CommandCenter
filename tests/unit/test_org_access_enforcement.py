@@ -147,6 +147,14 @@ GATED_ROUTERS: dict[str, set[str]] = {
     # router carrying a gate is not self-evidence, which is why the module is
     # named here deliberately rather than discovered.
     "gateway.routes.crm": set(),
+    # WS-27 — native project management. No exemptions and none expected: every
+    # /projects route is member-facing, and WS-27b's ClickUp importer will be
+    # gated on `admin:access:manage` ON TOP of the feature rather than exempted
+    # from it. Same registry-as-opinion rule as the CRM entry above — and it
+    # matters more here, because this feature gates DATA as well as navigation:
+    # a route that lost its gate would expose another department's work, not
+    # just a nav pane.
+    "gateway.routes.projects": set(),
     "gateway.routes.chat": set(),
     "gateway.routes.actions": set(),
     "gateway.routes.integrations": set(),

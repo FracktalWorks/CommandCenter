@@ -3,8 +3,23 @@
 > **Product:** CommandCenter · **Feature:** Projects (the People Center's primary work-management
 > module, sliced into every other Center) · **Created:** 2026-08-05 · **Updated:** 2026-08-06
 > (owner pass — §8's three open questions are answered as **D-PM-8/9/10**; §7.1 gains the
-> Space→Center mapping step and WS-27b's done-whens grew with it) · **Status:** 🔲 **SPEC,
-> nothing built** — no migration, no routes, no UI · **Owner:** vjvarada · **Board row: WS-27**
+> Space→Center mapping step and WS-27b's done-whens grew with it) ·
+> **Status:** 🟢 **WS-27a BUILT** (2026-08-06, branch
+> `claude/paca-research-task-management-a1f6zd`) — migration `145_projects.sql` (§3.1–§3.10),
+> `feature:projects` registered on both sides, and the `routes/projects/` API (§4 minus
+> `sync.py`) live behind the feature gate on the `gateway/db.py` seam. **Not deployed** — the
+> migration has not been applied anywhere. · **WS-27b–g: 🟡 SPEC, nothing built.** ·
+> **Owner:** vjvarada · **Board row: WS-27**
+>
+> **Verified 2026-08-06:** 115 hermetic cases across `test_projects_{routes,grants,migration}.py`
+> (no DB, no network), plus 324 unchanged cases in the org-access and CRM fences — 439 passed.
+> Five mutants measured red and reverted byte-identical: an unscoped visibility clause, a
+> dropped assignee escape, a transition that skips its activity, a `completed_at` never
+> cleared on reopen, and a removed Epic-root rule.
+>
+> **Not in WS-27a, on purpose:** no UI (WS-27d), no ClickUp importer or sync (WS-27b/c), and
+> `schema.generated.sql` was NOT regenerated — it needs a migrated live DB and is stale
+> repo-wide, so it stays an owner-run chore (the WS-26a precedent).
 >
 > **Not in WS-27a, on purpose:** sprints, custom fields, time tracking, a docs/wiki surface,
 > and the ACP-style "hand a task to the owner's local coding CLI" — all recorded as non-goals

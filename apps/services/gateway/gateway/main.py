@@ -972,6 +972,16 @@ except Exception:  # pragma: no cover
     pass
 
 try:
+    # WS-27 — native project management (spec:
+    # ai-company-brain/specs/project_management_app.md). Departments, projects,
+    # subprojects, tasks and subtasks, grant-scoped into every Center.
+    from gateway.routes.projects import router as _projects_router
+
+    app.include_router(_projects_router)
+except Exception:  # pragma: no cover
+    pass
+
+try:
     from gateway.routes.settings import router as _settings_router
 
     app.include_router(_settings_router)

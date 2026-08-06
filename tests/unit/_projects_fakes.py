@@ -1,0 +1,732 @@
+"""In-memory doubles for the ``gateway.routes.projects`` package.
+
+One fake, shared by every ``test_projects_*.py``: two copies of a DB mirror
+drift, and the copy that drifts is the one that stops failing (the
+``_admin_fakes.py`` lesson, restated by ``_crm_fakes.py``).
+
+Not named ``test_*``, so pytest imports it without collecting it.
+
+Convention: route functions are called directly as async functions with
+``core._get_db`` monkeypatched onto each SUT submodule, so nothing here touches
+Postgres and no TestClient is started.
+
+⚠️ **This is a MIRROR, and a mirror can only agree with itself.** It reads the
+statement *text* to decide which rows a clause addresses. That matters most for
+the visibility clause: the grant closure is applied **only when the statement
+actually contains the ``pm_project_grants`` subquery**, so a route that drops
+its visibility clause stops being filtered here too and its 404 test goes red.
+A fake that re-implemented the predicate in Python and applied it regardless
+would pass against an unscoped route — which is the whole defect class this
+package exists to avoid.
+
+Its blind spots, stated so nobody reads a green suite as more than it is:
+
+* **Foreign keys and therefore cascades.** Deleting a ``pm_projects`` row leaves
+  seeded ``pm_tasks`` where they are; Postgres would take them. The delete
+  routes' blast-radius counts are asserted against the statement text and the
+  pre-delete counts, never against survivors here.
+* **CHECK constraints.** The ``category`` / ``source`` / ``type`` vocabularies
+  and ``pm_activities``' "at least one target" are enforced by the database;
+  the API's matching guards are asserted structurally in
+  ``test_projects_migration.py`` and behaviourally against each route's 422.
+* **RESTRICT.** ``pm_tasks.status_id``'s restrict is Postgres's; the route's
+  409-with-a-count is what is tested here.
+
+An unreadable WHERE clause raises rather than matching every row: a clause the
+fake cannot read must never silently mean "the whole table".
+"""
+
+from __future__ import annotations
+
+import re
+from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
+from typing import Any
+from uuid import uuid4
+
+# ── Statement shapes the routes actually emit ───────────────────────────────
+
+_FROM_RE = re.compile(
+    r"(?:INSERT\s+INTO|UPDATE|DELETE\s+FROM|FROM)\s+([a-z_][a-z0-9_]*)", re.I
+)
+_WHERE_RE = re.compile(
+    r"\bWHERE\b(.*?)(?:\bORDER\s+BY\b|\bLIMIT\b|\bRETURNING\b|$)", re.I | re.S
+)
+_ORDER_RE = re.compile(r"\bORDER\s+BY\s+(?:\w+\.)?([a-z_][a-z0-9_]*)\s*(ASC|DESC)?", re.I)
+_LIMIT_RE = re.compile(r"\bLIMIT\s+:(\w+)", re.I)
+_OFFSET_RE = re.compile(r"\bOFFSET\s+:(\w+)", re.I)
+_INSERT_COLS_RE = re.compile(r"INSERT\s+INTO\s+\w+\s*\(([^)]*)\)", re.I)
+_SET_RE = re.compile(r"\bSET\b(.*?)(?:\bWHERE\b|\bRETURNING\b|$)", re.I | re.S)
+_BOUND_RE = re.compile(r":(\w+)")
+_CONFLICT_RE = re.compile(r"ON\s+CONFLICT\s*\(([^)]*)\)", re.I)
+
+#: ``<col> = CAST(:param AS uuid)``, with an optional table alias.
+_UUID_EQ = re.compile(r"(?:\w+\.)?(\w+)\s*=\s*CAST\(:(\w+)\s+AS\s+uuid\)", re.I)
+#: ``lower(<col>) = :param``
+_LOWER_EQ = re.compile(r"lower\((?:\w+\.)?(\w+)\)\s*=\s*:(\w+)", re.I)
+#: ``<col> = :param`` — never inside a lower() or a CAST.
+_PLAIN_EQ = re.compile(r"(?<!lower\()\b(?:\w+\.)?(\w+)\s*=\s*:(\w+)\b")
+#: ``<col> = 'literal'``
+_LITERAL_EQ = re.compile(r"\b(?:\w+\.)?(\w+)\s*=\s*'([^']*)'")
+#: ``<col> IS [NOT] NULL``
+_IS_NULL = re.compile(r"\b(?:\w+\.)?(\w+)\s+IS\s+(NOT\s+)?NULL", re.I)
+#: ``<col> ILIKE :q``
+_ILIKE = re.compile(r"(?:\w+\.)?(\w+)\s+ILIKE\s+:(\w+)", re.I)
+#: The column a subquery restricts: ``t.project_id IN ( WITH RECURSIVE …``
+_IN_SUBQUERY = re.compile(
+    r"(?:\w+\.)?(\w+)\s+IN\s*\(\s*WITH\s+RECURSIVE\s+(\w+)", re.I
+)
+
+
+_SUBQUERY_RE = re.compile(r"\b(SELECT|WITH)\b", re.I)
+
+
+def _strip_subqueries(where: str) -> tuple[str, list[str]]:
+    """Split a WHERE into its top-level text and its subquery blocks.
+
+    Only blocks that actually contain a subquery are removed. ``CAST(:id AS
+    uuid)`` keeps its parentheses and stays in the remainder — stripping it too
+    would leave ``id = CAST`` and every id predicate would silently stop
+    matching, which is the failure mode where a fake quietly returns the wrong
+    row instead of raising.
+
+    The simple column predicates then run against the remainder only, so a
+    column named inside an ``EXISTS`` over another table (``a.assignee``) can
+    never be mistaken for a column of the row being filtered.
+    """
+    out: list[str] = []
+    blocks: list[str] = []
+    depth = 0
+    current: list[str] = []
+    for char in where:
+        if char == "(":
+            depth += 1
+            if depth == 1:
+                current = []
+                continue
+        elif char == ")":
+            depth -= 1
+            if depth == 0:
+                block = "".join(current)
+                if _SUBQUERY_RE.search(block):
+                    blocks.append(block)
+                else:
+                    out.append(f"({block})")
+                continue
+        if depth == 0:
+            out.append(char)
+        else:
+            current.append(char)
+    return "".join(out), blocks
+
+
+def _values_exprs(statement: str) -> list[str]:
+    """The expressions inside ``VALUES (...)``, in order, split on depth-1 commas.
+
+    A balanced scan rather than a regex, because values are wrapped in
+    ``CAST(... AS uuid)`` and a non-greedy ``\\((.*?)\\)`` stops inside the first
+    cast — which produced one expression for a three-column insert and a row of
+    NULLs. Expressions rather than bind names, because a column may be written
+    as a **literal** (``is_system`` is a hard-coded ``false``), and dropping
+    those would misalign every value after it.
+    """
+    head = statement.upper().find(" VALUES ")
+    if head < 0:
+        return []
+    start = statement.find("(", head)
+    if start < 0:
+        return []
+    depth = 0
+    current: list[str] = []
+    out: list[str] = []
+    for char in statement[start:]:
+        if char == "(":
+            depth += 1
+            if depth == 1:
+                continue
+        elif char == ")":
+            depth -= 1
+            if depth == 0:
+                out.append("".join(current).strip())
+                break
+        if depth == 1 and char == ",":
+            out.append("".join(current).strip())
+            current = []
+            continue
+        current.append(char)
+    return out
+
+
+def _literal(expr: str) -> Any:
+    """A VALUES expression that binds nothing → the value Postgres would store."""
+    text_value = expr.strip()
+    lowered = text_value.lower()
+    if lowered in ("true", "false"):
+        return lowered == "true"
+    if lowered == "null":
+        return None
+    if lowered.startswith("now()"):
+        return _now()
+    if text_value.startswith("'") and text_value.endswith("'"):
+        return text_value[1:-1]
+    try:
+        return int(text_value)
+    except ValueError:
+        return None
+
+
+class _Result:
+    """The slice of the SQLAlchemy result surface these routes use."""
+
+    def __init__(self, rows: list[Any], scalar: Any = None):
+        self._rows = rows
+        self._scalar = scalar
+
+    def fetchone(self) -> Any:
+        return self._rows[0] if self._rows else None
+
+    def first(self) -> Any:
+        return self.fetchone()
+
+    def fetchall(self) -> list[Any]:
+        return list(self._rows)
+
+    def scalar(self) -> Any:
+        return self._scalar
+
+
+def _now() -> datetime:
+    return datetime.now(UTC)
+
+
+#: Column defaults migration 145 declares. Kept here so a row read back after an
+#: INSERT looks like Postgres would have returned it.
+_DEFAULTS: dict[str, dict[str, Any]] = {
+    "pm_projects": {
+        "status": "active", "source": "manual", "parent_project_id": None,
+        "position": None, "archived_at": None, "clickup_id": None,
+        "clickup_kind": None, "task_prefix": None, "lead": None,
+        "description": None,
+    },
+    "pm_project_grants": {},
+    "pm_task_statuses": {"color": "gray", "position": 0, "is_default": False},
+    "pm_task_types": {"is_default": False, "is_system": False, "icon": None,
+                      "color": None},
+    "pm_task_counters": {"last_value": 0},
+    "pm_tasks": {
+        "source": "manual", "parent_task_id": None, "type_id": None,
+        "description": None, "importance": None, "estimate_mins": None,
+        "start_date": None, "due_at": None, "completed_at": None,
+        "tags": [], "archived_at": None, "clickup_id": None,
+        "clickup_synced_at": None, "task_number": 1,
+    },
+    "pm_task_assignees": {},
+    "pm_task_links": {},
+    "pm_activities": {"body": None, "meta": None, "task_id": None,
+                      "project_id": None, "deleted_at": None},
+    "pm_views": {"view_type": "list", "config": {}, "position": None},
+    "pm_view_task_positions": {"group_key": None},
+}
+
+_TIMESTAMPED = {
+    "pm_projects", "pm_tasks", "pm_task_statuses", "pm_task_types",
+    "pm_activities", "pm_views",
+}
+
+
+class FakeProjectsDB:
+    """An in-memory ``pm_*`` schema that answers the package's statements."""
+
+    def __init__(self) -> None:
+        self.tables: dict[str, list[dict[str, Any]]] = {}
+        self.statements: list[str] = []
+        #: ``(statement, params)`` in order — how a test proves a write happened
+        #: with the values it expects rather than merely that a write happened.
+        self.calls: list[tuple[str, dict[str, Any]]] = []
+        self.committed = 0
+        self.closed = False
+
+    # seeding ------------------------------------------------------------
+    def seed(self, table: str, **columns: Any) -> SimpleNamespace:
+        row = {
+            "id": columns.pop("id", str(uuid4())),
+            **_DEFAULTS.get(table, {}),
+            **columns,
+        }
+        if table in _TIMESTAMPED:
+            row.setdefault("created_at", _now() - timedelta(days=1))
+            row.setdefault("updated_at", _now() - timedelta(days=1))
+        self.tables.setdefault(table, []).append(row)
+        return SimpleNamespace(**row)
+
+    def rows(self, table: str) -> list[dict[str, Any]]:
+        return self.tables.get(table, [])
+
+    def statements_touching(self, needle: str) -> list[str]:
+        return [s for s in self.statements if needle in s]
+
+    def activities(self, kind: str | None = None) -> list[dict[str, Any]]:
+        """Timeline rows, with ``meta`` decoded.
+
+        The stored value is the JSON **string** the route bound — which is
+        faithful: raw ``text()`` over asyncpg hands jsonb back as a string too,
+        which is why ``core.from_jsonb`` exists. Decoding it here lets a test
+        read ``meta["from"]`` the way the API's own consumer does, instead of
+        asserting against a serialization detail.
+        """
+        import json
+
+        out: list[dict[str, Any]] = []
+        for row in self.rows("pm_activities"):
+            if kind is not None and row.get("type") != kind:
+                continue
+            copy = dict(row)
+            if isinstance(copy.get("meta"), str):
+                copy["meta"] = json.loads(copy["meta"])
+            out.append(copy)
+        return out
+
+    # convenience scaffolding --------------------------------------------
+    def seed_project(
+        self, *, name: str = "Root", parent: str | None = None,
+        subject: str | None = "org", **columns: Any,
+    ) -> SimpleNamespace:
+        """A project, its default status, and (optionally) one grant.
+
+        ``subject=None`` seeds a project nobody has been granted — the shape
+        every 404 test needs.
+        """
+        project = self.seed(
+            "pm_projects", name=name, parent_project_id=parent,
+            created_by="owner@fracktal.in", **columns,
+        )
+        if subject is not None:
+            self.seed(
+                "pm_project_grants", project_id=project.id, subject=subject,
+                created_by="owner@fracktal.in",
+            )
+        return project
+
+    def seed_status(
+        self, project_id: str, *, name: str = "To do", category: str = "todo",
+        is_default: bool = True, position: int = 10,
+    ) -> SimpleNamespace:
+        return self.seed(
+            "pm_task_statuses", project_id=project_id, name=name,
+            category=category, is_default=is_default, position=position,
+        )
+
+    def seed_task(
+        self, project_id: str, status_id: str, *, root: str | None = None,
+        title: str = "A task", **columns: Any,
+    ) -> SimpleNamespace:
+        return self.seed(
+            "pm_tasks", project_id=project_id, root_project_id=root or project_id,
+            status_id=status_id, title=title, created_by="owner@fracktal.in",
+            **columns,
+        )
+
+    # session surface ----------------------------------------------------
+    async def commit(self) -> None:
+        self.committed += 1
+
+    async def close(self) -> None:
+        self.closed = True
+
+    async def execute(self, sql: Any, params: dict | None = None) -> _Result:
+        statement = " ".join(str(sql).split())
+        args = dict(params or {})
+        self.statements.append(statement)
+        self.calls.append((statement, args))
+        head = statement.split(None, 1)[0].upper()
+        table = self._table(statement)
+        if head == "INSERT":
+            return self._insert(statement, table, args)
+        if head == "UPDATE":
+            return self._update(statement, table, args)
+        if head == "DELETE":
+            return self._delete(statement, table, args)
+        return self._select(statement, table, args)
+
+    def _table(self, sql: str) -> str:
+        match = _FROM_RE.search(sql)
+        if match is None:  # pragma: no cover — every statement names a table
+            raise AssertionError(f"fake could not find a table in: {sql}")
+        return match.group(1)
+
+    # verbs --------------------------------------------------------------
+    def _insert(self, statement: str, table: str, args: dict) -> _Result:
+        # The task counter is a read-modify-write in one statement; modelling it
+        # as a plain insert would hand every task number 1 and hide a collision
+        # the real UNIQUE(root_project_id, task_number) would have caught.
+        if table == "pm_task_counters":
+            rows = self.tables.setdefault(table, [])
+            root = str(args.get("root"))
+            for row in rows:
+                if str(row.get("project_id")) == root:
+                    row["last_value"] = int(row.get("last_value") or 0) + 1
+                    return _Result([SimpleNamespace(**row)])
+            row = {"project_id": root, "last_value": 1}
+            rows.append(row)
+            return _Result([SimpleNamespace(**row)])
+
+        columns = [
+            c.strip() for c in _INSERT_COLS_RE.search(statement).group(1).split(",")
+        ]
+        # A column NAMED in the INSERT takes the bound value even when that value
+        # is None — Postgres applies a DEFAULT only to an omitted column, and
+        # collapsing the two would hide "the route explicitly sent NULL".
+        # `VALUES (CAST(:root AS uuid), :name, …)` binds by POSITION, not by
+        # column name, so the statement's own bind order is the authority and a
+        # same-named parameter is only the fallback.
+        exprs = _values_exprs(statement)
+        if len(exprs) == len(columns):
+            values = {}
+            for column, expr in zip(columns, exprs, strict=True):
+                bound = _BOUND_RE.search(expr)
+                values[column] = (
+                    args.get(bound.group(1)) if bound else _literal(expr)
+                )
+        else:
+            values = {c: args.get(c) for c in columns}
+
+        conflict = _CONFLICT_RE.search(statement)
+        if conflict:
+            keys = [k.strip() for k in conflict.group(1).split(",")]
+            for row in self.tables.setdefault(table, []):
+                if all(str(row.get(k)) == str(values.get(k)) for k in keys):
+                    if "DO UPDATE" in statement.upper():
+                        row.update({k: v for k, v in values.items() if v is not None})
+                    return _Result([SimpleNamespace(**row)])
+
+        row = {"id": str(uuid4()), **_DEFAULTS.get(table, {}), **values}
+        if table in _TIMESTAMPED:
+            row.setdefault("created_at", _now())
+            row.setdefault("updated_at", _now())
+        self.tables.setdefault(table, []).append(row)
+        return _Result([SimpleNamespace(**row)])
+
+    def _update(self, statement: str, table: str, args: dict) -> _Result:
+        assignments = _SET_RE.search(statement)
+        matched = self._matching(statement, table, args)
+        for row in matched:
+            for part in (assignments.group(1) if assignments else "").split(","):
+                column, _, value = part.partition("=")
+                column, value = column.strip(), value.strip()
+                if not column or "." in column:
+                    continue
+                bound = _BOUND_RE.search(value)
+                if bound:
+                    row[column] = args.get(bound.group(1))
+                elif value.lower().startswith("now()"):
+                    row[column] = _now()
+                elif value.lower() in ("false", "true"):
+                    row[column] = value.lower() == "true"
+        return _Result([SimpleNamespace(**r) for r in matched])
+
+    def _delete(self, statement: str, table: str, args: dict) -> _Result:
+        matched = self._matching(statement, table, args)
+        self.tables[table] = [
+            r for r in self.tables.get(table, []) if r not in matched
+        ]
+        return _Result([SimpleNamespace(**r) for r in matched])
+
+    def _select(self, statement: str, table: str, args: dict) -> _Result:
+        # `WITH RECURSIVE sub AS (…) SELECT count(*) FROM sub` — the subtree
+        # size, asked by the project delete before it destroys anything. It does
+        # not start with SELECT, so the generic count path never sees it and the
+        # route would have reported zero.
+        if re.match(r"^\s*WITH\s+RECURSIVE\s+sub\b", statement, re.I):
+            subtree = self._subtree_ids(str(args.get("pid")))
+            if re.search(r"SELECT\s+count\(\*\)\s+FROM\s+sub", statement, re.I):
+                return _Result([], scalar=len(subtree))
+            return _Result([SimpleNamespace(id=i) for i in sorted(subtree)])
+
+        matched = self._matching(statement, table, args)
+        if statement.upper().startswith("SELECT COUNT(*)"):
+            return _Result([], scalar=len(matched))
+        matched = self._ordered(statement, matched)
+        matched = self._paged(statement, matched, args)
+        return _Result([SimpleNamespace(**r) for r in matched])
+
+    # visibility ---------------------------------------------------------
+    def visible_project_ids(self, email: str, groups: list[str]) -> set[str]:
+        """The grant closure: directly granted projects, plus their descendants.
+
+        Deliberately computed the same way the SQL does — seeds, then descend —
+        rather than by walking each project's ancestry, so a subtree granted
+        without its parent resolves identically in both.
+        """
+        wanted = {str(g).lower() for g in groups}
+        seeds = {
+            str(g.get("project_id")) for g in self.rows("pm_project_grants")
+            if (
+                g.get("subject") == "org"
+                or str(g.get("subject") or "").lower() == (email or "").lower()
+                or str(g.get("subject") or "").lower() in wanted
+            )
+        }
+        out = set(seeds)
+        changed = True
+        while changed:
+            changed = False
+            for project in self.rows("pm_projects"):
+                parent = project.get("parent_project_id")
+                if parent is not None and str(parent) in out and str(project["id"]) not in out:
+                    out.add(str(project["id"]))
+                    changed = True
+        return out
+
+    def _subtree_ids(self, root_id: str) -> set[str]:
+        out = {str(root_id)}
+        changed = True
+        while changed:
+            changed = False
+            for project in self.rows("pm_projects"):
+                parent = project.get("parent_project_id")
+                if parent is not None and str(parent) in out and str(project["id"]) not in out:
+                    out.add(str(project["id"]))
+                    changed = True
+        return out
+
+    def _assignees_of(self, task_id: str) -> set[str]:
+        return {
+            str(a.get("assignee") or "").lower()
+            for a in self.rows("pm_task_assignees")
+            if str(a.get("task_id")) == str(task_id)
+        }
+
+    # predicate ----------------------------------------------------------
+    def _matching(
+        self, statement: str, table: str, args: dict,
+    ) -> list[dict[str, Any]]:
+        """The rows a statement's WHERE addresses.
+
+        Split in two — subquery blocks, then plain column predicates — because
+        the two read different halves of the clause and mixing them made one
+        function nobody could follow. Either half may be the one that "saw" a
+        readable clause; only if NEITHER did do we refuse.
+        """
+        rows = list(self.tables.get(table, []))
+        clause = _WHERE_RE.search(statement)
+        if clause is None:
+            return rows
+        where = clause.group(1)
+        top, blocks = _strip_subqueries(where)
+
+        rows, seen_sub = self._apply_subqueries(rows, table, blocks, where, args)
+        rows, seen_top = self._apply_columns(rows, top, args)
+
+        if not (seen_sub or seen_top):
+            raise AssertionError(
+                f"fake could not read the WHERE clause — refusing to match every "
+                f"row of {table}: {statement}"
+            )
+        return rows
+
+    def _apply_subqueries(
+        self, rows: list[dict], table: str, blocks: list[str], where: str,
+        args: dict,
+    ) -> tuple[list[dict], bool]:
+        seen = False
+
+        # The grant closure — applied ONLY when the statement actually carries
+        # the subquery. A route that loses its visibility clause therefore stops
+        # being filtered here, and its 404 test fails.
+        if any("pm_project_grants" in b for b in blocks):
+            seen = True
+            visible = self.visible_project_ids(
+                str(args.get("vis_email") or ""), list(args.get("vis_groups") or []),
+            )
+            column_match = _IN_SUBQUERY.search(where)
+            column = column_match.group(1) if column_match else "id"
+            assignee_escape = any(
+                "pm_task_assignees" in b and "vis_email" in b for b in blocks
+            )
+            me = str(args.get("vis_email") or "").lower()
+            rows = [
+                r for r in rows
+                if str(r.get(column)) in visible
+                or (assignee_escape and me in self._assignees_of(r.get("id")))
+            ]
+
+        # `WITH RECURSIVE sub` — a project-subtree filter, used by the task list,
+        # the move re-stamp and the delete counts.
+        if any("RECURSIVE sub" in b for b in blocks):
+            seen = True
+            subtree = self._subtree_ids(str(args.get("pid")))
+            key = "id" if table == "pm_projects" else "project_id"
+            rows = [r for r in rows if str(r.get(key)) in subtree]
+
+        # EXISTS over pm_task_assignees with a non-visibility parameter: the
+        # `?assignee=` list filter and /assigned-to-me.
+        for block in blocks:
+            if "pm_task_assignees" not in block or "vis_email" in block:
+                continue
+            bound = [b for b in _BOUND_RE.findall(block) if b != "tid"]
+            if not bound:
+                continue
+            seen = True
+            who = str(args.get(bound[-1]) or "").lower()
+            rows = [r for r in rows if who in self._assignees_of(r.get("id"))]
+
+        # NOT EXISTS over pm_task_statuses — /assigned-to-me hiding closed work.
+        if any("pm_task_statuses" in b and "category" in b for b in blocks):
+            seen = True
+            closed = {
+                str(s["id"]) for s in self.rows("pm_task_statuses")
+                if s.get("category") in ("done", "cancelled")
+            }
+            rows = [r for r in rows if str(r.get("status_id")) not in closed]
+
+        return rows, seen
+
+    def _apply_columns(
+        self, rows: list[dict], top: str, args: dict,
+    ) -> tuple[list[dict], bool]:
+        seen = False
+        for column, param in _UUID_EQ.findall(top):
+            seen = True
+            rows = [r for r in rows if str(r.get(column)) == str(args.get(param))]
+        for column, param in _LOWER_EQ.findall(top):
+            seen = True
+            want = str(args.get(param) or "").lower()
+            rows = [r for r in rows if str(r.get(column) or "").lower() == want]
+        for column, param in _PLAIN_EQ.findall(top):
+            seen = True
+            rows = [r for r in rows if r.get(column) == args.get(param)]
+        for column, literal in _LITERAL_EQ.findall(top):
+            seen = True
+            rows = [r for r in rows if str(r.get(column)) == literal]
+        for column, negated in _IS_NULL.findall(top):
+            seen = True
+            rows = [r for r in rows if (r.get(column) is not None) is bool(negated)]
+        ilike = _ILIKE.findall(top)
+        if ilike:
+            seen = True
+            needle = str(args.get(ilike[0][1]) or "").strip("%").lower()
+            rows = [
+                r for r in rows
+                if any(needle in str(r.get(c) or "").lower() for c, _ in ilike)
+            ]
+        if re.search(r"\bAND\s+is_default\b", top, re.I):
+            seen = True
+            rows = [r for r in rows if r.get("is_default")]
+        if re.search(r"\bTRUE\b", top, re.I):
+            # The unrestricted (`data:org:read`) form of the visibility clause.
+            # It is a readable clause that filters nothing, which is different
+            # from a clause the fake failed to parse — hence `seen`, not a skip.
+            seen = True
+        return rows, seen
+
+    def _ordered(self, statement: str, rows: list[dict]) -> list[dict]:
+        order = _ORDER_RE.search(statement)
+        if order is None:
+            return rows
+        column = order.group(1)
+        reverse = (order.group(2) or "ASC").upper() == "DESC"
+        return sorted(
+            rows,
+            key=lambda r: (r.get(column) is None, _sortable(r.get(column))),
+            reverse=reverse,
+        )
+
+    def _paged(self, statement: str, rows: list[dict], args: dict) -> list[dict]:
+        offset = _OFFSET_RE.search(statement)
+        if offset:
+            rows = rows[int(args.get(offset.group(1), 0)):]
+        limit = _LIMIT_RE.search(statement)
+        if limit:
+            rows = rows[: int(args.get(limit.group(1), len(rows)))]
+        elif re.search(r"\bLIMIT\s+1\b", statement, re.I):
+            rows = rows[:1]
+        return rows
+
+
+def _sortable(value: Any) -> Any:
+    """A total order across the mixed types one column can hold in a fake."""
+    if value is None:
+        return ""
+    if isinstance(value, datetime):
+        return value.timestamp()
+    if isinstance(value, bool | int | float):
+        return float(value)
+    return str(value)
+
+
+# ── Principals ──────────────────────────────────────────────────────────────
+
+def projects_user(
+    email: str = "owner@fracktal.in", *, features: str = "*",
+) -> Any:
+    """A caller holding ``feature:projects``.
+
+    Built with the real ``build_access`` so the permission the routes are gated
+    on is the one this principal actually resolves.
+    """
+    from acb_auth import UserContext, UserRole, build_access
+
+    return UserContext(
+        email=email, role=UserRole.EMPLOYEE, access=build_access([features]),
+    )
+
+
+def member_user(email: str) -> Any:
+    """A colleague holding the feature but **not** ``data:org:read``.
+
+    This is the principal every scoping test needs: without it a suite proves
+    only that the owner (who holds ``*``) can see everything, which is true of
+    an unscoped route too.
+    """
+    from acb_auth import UserContext, UserRole, build_access
+
+    return UserContext(
+        email=email, role=UserRole.EMPLOYEE,
+        access=build_access(["feature:projects"]),
+    )
+
+
+def page(number: int = 1, size: int = 50) -> Any:
+    """A ``core.Page`` built without FastAPI, with the same defaults.
+
+    ``_crm_fakes``' ``_params()`` convention: the parameter defaults in the
+    signature are FastAPI ``Query`` objects, so a handler called directly must
+    be handed a real one rather than left to resolve it.
+    """
+    from gateway.routes.projects.core import Page
+
+    return Page(page=number, page_size=size)
+
+
+def bind_db(monkeypatch: Any, fake: FakeProjectsDB, modules: tuple[Any, ...]) -> None:
+    """Point each submodule's ``_get_db`` seam at ``fake``.
+
+    Per-module and not per-package because each module imports ``_get_db`` from
+    ``core`` by name, so patching ``core`` alone would not reach them.
+    """
+    async def _get_db() -> FakeProjectsDB:
+        return fake
+
+    for module in modules:
+        monkeypatch.setattr(module, "_get_db", _get_db)
+
+
+def silence_events(monkeypatch: Any, modules: tuple[Any, ...]) -> list[tuple[str, dict]]:
+    """Capture ``core.emit`` calls instead of reaching the event bus.
+
+    Returned list is ``(event_type, payload)`` in order, so a test can assert
+    that a mutation announced itself — WS-27f's automation binding is built on
+    these events, and a write that silently stops emitting would break it with
+    every route test still green.
+    """
+    captured: list[tuple[str, dict]] = []
+
+    async def _emit(event_type: str, payload: dict) -> None:
+        captured.append((event_type, payload))
+
+    for module in modules:
+        # raising=False: only the modules that actually mutate import `emit`.
+        # Demanding it everywhere would make adding a read-only module fail a
+        # test that has nothing to do with it.
+        monkeypatch.setattr(module, "emit", _emit, raising=False)
+    return captured

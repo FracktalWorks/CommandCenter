@@ -940,7 +940,28 @@ fails loudly and is caught. Before the first enable, confirm which form the tena
 
 A `304` (or a short body) means RFC 1123 is honoured. A full first page means it is being
 ignored — switch the format in `client._with_modified_since`, which is the single place
-both readers build it. ⚠️ `.env.example` cannot
+both readers build it. **Measured 2026-08-06 against the live tenant: RFC 1123 is
+honoured** (`304`, empty body, against a `200`/1537-byte control).
+
+⚠️ **Tenant limitation found on the first live cycle, same day: Zoho returns no
+`Modified_Time` for any module here, and no `Created_Time` for `Deals`.** Leads,
+Accounts, Contacts and Notes carry `Created_Time`, which `modified_time()`'s fallback
+chain picks up; `Deals` carries neither (0 of 551 parse, and naming the fields in
+`fields=` returns them empty — a per-module field permission on this tenant, not our
+query). Two consequences, both now handled rather than assumed away:
+1. **The watermark.** `advance_cursor` gained an untimestamped-but-clean branch: a batch
+   where everything applied with zero failures adopts the cycle's start. Without it the
+   `Deals` cursor stayed NULL and the module re-pulled all 551 records every ten minutes
+   forever, while every other module converged to one or two.
+2. **LWW for deals is one-sided, deliberately.** With no Zoho timestamp,
+   `_zoho_changed_since_agreement` reads "changed" and `_later` reads "not later", so a
+   dirty deal always resolves **native-wins**. That is the recoverable direction the
+   helper's own docstring argues for (the other silently discards a colleague's typing)
+   and it is left as-is: `Last_Activity_Time` and `Stage_Modified_Time` ARE returned for
+   deals, but neither means "last modified", and using a semantically-wrong field would
+   flip conflicts toward the unrecoverable side. Revisit only if the tenant's field
+   permissions change — and if they do, the cursor branch above becomes dead code for
+   `Deals` rather than wrong. ⚠️ `.env.example` cannot
 document the new flag (plan-guard protects it); the PR body must carry the var for the
 owner. Also owed by this ticket: add `CRM_ZOHO_SYNC` (and `CRM_AUTO_LEAD`) to
 `.claude/hooks/plan-guard.mjs` OWNER_GATES per that file's own "§6 changes update

@@ -16,7 +16,7 @@
   "sharing": {
     "instancing": "shared",
     "visibility": "organization",
-    "shareable": true,
+    "shareable": false,
     "outputs_visibility": "instance"
   },
   "icon": "KanbanSquare",

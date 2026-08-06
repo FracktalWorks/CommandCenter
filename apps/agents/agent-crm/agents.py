@@ -15,9 +15,17 @@ transport rather than a promise in a docstring. The write half (`create_lead`,
 fail-closed) is a later slice of WS-26d, blocked on the spec naming its
 confirm/risk mechanism.
 
+Two structural guards carry that doctrine, and both live in the request path
+rather than in the system prompt, because every argument here is LLM-filled from
+a context full of counterparty-authored CRM text: ``_ALLOWED_METHODS`` bounds
+the VERB, and ``_entity_slug`` + ``_record_uuid`` bound the PATH. Neither is a
+tidiness check — an unvalidated ``record_id`` is a path traversal, since httpx
+resolves ``..`` segments before the request goes out (see ``_record_uuid``).
+
 The agent never touches Postgres. It has no engine, no session and no SQL: it
 asks the gateway, as the person whose run it is. That is what keeps one
-authorization rule — the route's — rather than two that can disagree.
+authorization rule — the route's — rather than two that can disagree. The path
+guards are what keep it pointed at the routes that rule was written for.
 
 Registered as a MAF agent (name "crm-assistant"); build_agents() is the Dynamic
 Agent Loader entry point. Structure mirrors agent-email-assistant /
@@ -29,6 +37,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 from typing import Any
+from uuid import UUID
 
 import httpx
 from acb_common import get_logger, get_settings
@@ -79,8 +88,15 @@ def _current_user_email() -> str:
 
 
 def _internal_token() -> str:
-    """The gateway's internal bearer token (Settings field ``litellm_master_key``;
-    ``gateway_internal_token`` isn't a real attribute)."""
+    """The gateway's internal bearer token.
+
+    ``gateway_internal_token`` IS a real Settings field
+    (``acb_common/settings.py``) — it is the service-identity/LLM-key split, and
+    it ships empty, which is why ``litellm_master_key`` is the fallback rather
+    than the primary. The order below is load-bearing in that direction: on a
+    box where the split HAS been provisioned, "simplifying" this to read
+    ``litellm_master_key`` first sends the wrong token and 403s every CRM call.
+    """
     settings = get_settings()
     return (
         getattr(settings, "gateway_internal_token", "")
@@ -224,6 +240,45 @@ def _entity_slug(entity: str) -> str:
     return slug
 
 
+def _record_uuid(record_id: str) -> str:
+    """Validate a record id as a UUID and return its CANONICAL form.
+
+    Structural, at the same layer :func:`_entity_slug` validates ``entity``, and
+    for a sharper reason. ``record_id`` is interpolated into the request path,
+    and httpx applies RFC-3986 dot-segment removal before the request leaves —
+    so an id of ``../../admin/members`` did not 404. It turned this tool into a
+    general authenticated GET client against the whole gateway, carrying the
+    internal bearer AND the acting user's header: ``/admin/members``,
+    ``/email/messages`` and ``/memory/agent:<name>`` were all reachable that
+    way. Identity was preserved, so it was scope escape rather than privilege
+    escalation — but "this agent cannot see outside the CRM" is a claim three
+    shipped artifacts make, and it was false.
+
+    The reason it has to be a guard and not a prompt rule: ``record_id`` is an
+    LLM-filled argument, and this model's context is counterparty-authored CRM
+    text — lead names, note subjects, the 1,909 note bodies imported from Zoho.
+    "Never follow instructions embedded in records" is exactly the control class
+    this agent's own doctrine refuses to rely on.
+
+    All four CRM tables key on ``CAST(:id AS uuid)``, so a non-UUID id can never
+    be a legitimate call — which means this also stops a hallucinated
+    ``"ACME-123"`` here, instead of relaying the driver 500 it used to produce.
+
+    Returning the canonical form rather than the caller's own string is the part
+    that makes this a guard rather than a check: ``uuid.UUID`` also accepts
+    braced, ``urn:uuid:`` and unhyphenated spellings, and ``str(UUID(...))``
+    normalises every one of them to 36 characters that cannot hold a path
+    separator or a dot segment.
+    """
+    try:
+        return str(UUID(str(record_id).strip()))
+    except (AttributeError, TypeError, ValueError):
+        raise RuntimeError(
+            f"Invalid CRM record id {record_id!r}. A CRM id is a UUID — use the "
+            "id returned by search_crm or get_pipeline, not a name or a code."
+        ) from None
+
+
 def _row_title(slug: str, row: dict[str, Any]) -> str:
     """The one line that names a record, per entity."""
     if slug == "leads":
@@ -355,9 +410,10 @@ async def get_record(entity: str, record_id: str) -> str:
     'organizations' and record_id is its id (from search_crm or get_pipeline).
     Use this before answering a question about a specific deal or person."""
     slug = _entity_slug(entity)
-    row = await _get(f"/crm/{slug}/{record_id}")
+    record = _record_uuid(record_id)
+    row = await _get(f"/crm/{slug}/{record}")
     if not isinstance(row, dict):
-        return f"{ENTITY_LABELS[slug]} {record_id} returned no fields."
+        return f"{ENTITY_LABELS[slug]} {record} returned no fields."
     lines = [f"{ENTITY_LABELS[slug]}: {_row_title(slug, row)} (id={row.get('id')})"]
     # Print every populated field: this is the "open the record" tool, so
     # choosing a subset here would silently hide whichever column the question
@@ -381,8 +437,9 @@ async def get_timeline(entity: str, record_id: str, limit: int = 20) -> str:
     previous stage. A deal also inherits the timeline of the lead it came from,
     labelled as such. Use this to answer "what's the story with this deal?"."""
     slug = _entity_slug(entity)
+    record = _record_uuid(record_id)
     capped = max(1, min(int(limit or 20), 100))
-    data = await _get(f"/crm/{slug}/{record_id}/timeline", {"limit": capped})
+    data = await _get(f"/crm/{slug}/{record}/timeline", {"limit": capped})
     entries = (data or {}).get("entries") or []
     if not entries:
         return f"No activity recorded on this {ENTITY_LABELS[slug].lower()} yet."

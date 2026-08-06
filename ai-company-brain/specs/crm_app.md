@@ -1011,9 +1011,34 @@ halves that were fully specified.
    helper), asserted three ways in the test file: behaviourally (a POST raises before the
    request is built), structurally (no verb helper exists), and by observation (every call
    the four tools make is a GET).
+   ⚠️ **Diff review found the method allowlist was only half the boundary, and the other
+   half was missing.** `record_id` went into the path unvalidated, and httpx removes `..`
+   segments before sending, so `get_record("deals", "../../admin/members")` issued
+   `GET /admin/members` carrying the internal bearer and the caller's `X-User-Email`;
+   `/admin/members/{email}/access`, `/email/messages`, `/whatsapp/chats` and
+   `/memory/agent:<name>` were all reachable. Identity was preserved, so it was scope
+   escape rather than privilege escalation — but "cannot see outside the CRM" is a claim
+   this spec, the `_AGENT_REGISTRY` description and `apps/AGENTS.md` all make. Fixed by
+   `_record_uuid`, which validates AND canonicalises at the same layer `_entity_slug`
+   validates the entity (every CRM table keys on `CAST(:id AS uuid)`, so a non-UUID id is
+   never legitimate — which also stops a hallucinated `"ACME-123"` producing a driver 500).
+   The trigger is what this slice creates: `record_id` is LLM-filled and the model's
+   context is counterparty-authored CRM text, so a system-prompt rule was the wrong control
+   class. **A future tool must route path segments through `_entity_slug`/`_record_uuid`** —
+   an AST fence over every `/crm` f-string enforces it, and it caught a deliberately
+   half-applied mutation during review.
 2. **WhatsApp `_KNOWN_SYSTEMS` gains `"crm"` — PARSE-ONLY**, per §6. Nothing writes
    `wa_contacts.entity_ref` yet and the `crm` context block stays `None`; both halves are
    pinned by test so "we added the constant" is never mistaken for "the link works".
+
+**Build-time decision, this slice:** `config.json` declares `sharing.shareable: false`,
+matching both sibling assistants. Inert today (`is_shareable()` has no runtime consumer),
+but it is the safe default to record now rather than to discover later: when sharing is
+wired, `assert_can_run_agent_in_session` folds on `can_run_agent` — i.e. `agents:run:*`,
+which every member holds — and **never on `feature:*`**, while `feature:crm` is
+`is_default false` (migration 144). A shareable CRM agent would therefore put CRM records
+into a transcript a non-`feature:crm` member can read. Revisit together with D-CRM-3's
+`group:` grants at WS-14, not before.
 
 **STILL OPEN, and why** (audit doc-blocker IDs — distinct from §8's build-time decisions
 B1–B6, which are a different numbering):

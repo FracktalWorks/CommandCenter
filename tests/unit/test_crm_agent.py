@@ -435,6 +435,124 @@ def test_entity_aliases_resolve_to_the_route_slug(given: str, expected: str) -> 
     assert _M._entity_slug(given) == expected
 
 
+# ── 4a. The record id is a UUID, or the request is never built ──────────────
+#
+# This fence was invisible to the first 48 cases because every one of them
+# passed `str(uuid4())`. It is not a validation nicety: `record_id` is
+# interpolated into the path, httpx removes `..` segments before sending, and
+# the tool therefore became a general authenticated GET client against the whole
+# gateway — carrying the internal bearer AND the acting user's header.
+#
+# The payloads below are the ones measured reaching real routes: they are kept
+# verbatim so this file records what the hole actually was, not a sanitised
+# rendering of it.
+
+_TRAVERSALS = [
+    ("../../admin/members", "/admin/members"),
+    ("x/../../../email/messages", "/email/messages/timeline"),
+    ("../../memory/agent:email-assistant", "/memory/agent:email-assistant"),
+    ("../../admin/members/owner@fracktal.in/access", None),
+    ("../../whatsapp/chats", None),
+    ("..%2F..%2Fadmin%2Fmembers", None),
+    ("../pipeline", None),
+]
+
+
+@pytest.mark.parametrize("payload", [p for p, _ in _TRAVERSALS])
+@pytest.mark.parametrize("tool", ["get_record", "get_timeline"])
+async def test_a_traversal_id_is_refused_before_any_request_is_built(
+    tool: str, payload: str, monkeypatch,
+) -> None:
+    calls = _fake_gateway(monkeypatch, _responder)
+    with pytest.raises(RuntimeError, match="Invalid CRM record id"):
+        await getattr(_M, tool)("deals", payload)
+    assert calls == [], (
+        f"{tool}({payload!r}) reached the gateway at "
+        f"{[c['path'] for c in calls]} — the agent can read outside the CRM"
+    )
+
+
+@pytest.mark.parametrize(
+    "bad", ["ACME-123", "", "   ", "12345", "deal-42", "null", "undefined"],
+)
+@pytest.mark.parametrize("tool", ["get_record", "get_timeline"])
+async def test_a_non_uuid_id_is_refused_here_not_relayed_as_a_driver_500(
+    tool: str, bad: str, monkeypatch,
+) -> None:
+    """Second-order win: all four tables key on ``CAST(:id AS uuid)``, so a
+    hallucinated id used to come back as a 500 from the driver."""
+    calls = _fake_gateway(monkeypatch, _responder)
+    with pytest.raises(RuntimeError, match="Invalid CRM record id"):
+        await getattr(_M, tool)("leads", bad)
+    assert calls == []
+
+
+@pytest.mark.parametrize("tool", ["get_record", "get_timeline"])
+async def test_a_real_uuid_still_works(tool: str, monkeypatch) -> None:
+    """The guard must not cost the legitimate call — the failure mode of a fence
+    added under review is that it refuses everything and nobody notices."""
+    calls = _fake_gateway(monkeypatch, _responder)
+    await getattr(_M, tool)("deals", _ID)
+    assert len(calls) == 1
+    assert calls[0]["path"].startswith(f"/crm/deals/{_ID}")
+
+
+@pytest.mark.parametrize(
+    "template",
+    ["{0}", "{{{0}}}", "urn:uuid:{0}", "  {0}  "],
+    ids=["plain", "braced", "urn", "padded"],
+)
+def test_alternate_uuid_spellings_are_normalised_to_the_canonical_form(
+    template: str,
+) -> None:
+    """``uuid.UUID`` accepts braced/urn/unhyphenated forms, so the guard returns
+    ``str(UUID(...))`` rather than the caller's string: whatever spelling the
+    model produced, what reaches the path is 36 characters that cannot hold a
+    separator."""
+    assert _M._record_uuid(template.format(_ID)) == _ID
+
+
+def test_unhyphenated_and_uppercase_ids_normalise_too() -> None:
+    assert _M._record_uuid(_ID.replace("-", "")) == _ID
+    assert _M._record_uuid(_ID.upper()) == _ID
+
+
+def test_the_path_guard_is_structural_not_a_docstring() -> None:
+    """The fence in the same spirit as the ``_ALLOWED_METHODS`` one.
+
+    Every f-string that builds a ``/crm`` path may interpolate ONLY names that
+    can hold a validated value: ``slug`` (from ``_entity_slug``) and ``record``
+    (from ``_record_uuid``). A tool added later that drops a raw parameter —
+    ``record_id``, ``entity``, ``query`` — straight into the path fails here,
+    which is the exact mistake this commit is repairing.
+    """
+    validated = {"slug", "record"}
+    source = (_AGENT_DIR / "agents.py").read_text(encoding="utf-8")
+    offenders: list[str] = []
+    for node in ast.walk(ast.parse(source)):
+        if not isinstance(node, ast.JoinedStr) or not node.values:
+            continue
+        head = node.values[0]
+        if not (isinstance(head, ast.Constant)
+                and isinstance(head.value, str)
+                and head.value.startswith("/crm")):
+            continue
+        for part in node.values:
+            if not isinstance(part, ast.FormattedValue):
+                continue
+            name = getattr(part.value, "id", None)
+            if name not in validated:
+                offenders.append(
+                    f"line {node.lineno}: interpolates "
+                    f"{name or ast.dump(part.value)!r}"
+                )
+    assert offenders == [], (
+        "a /crm path interpolates something no validator produced: "
+        f"{offenders}. Route it through _entity_slug/_record_uuid and bind the "
+        "result to `slug`/`record`."
+    )
+
+
 def test_an_unknown_entity_is_refused_not_defaulted() -> None:
     """The list kernel refuses an unknown sort key rather than falling back;
     answering about the wrong record type is the same class of silent wrong."""

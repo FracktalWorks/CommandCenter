@@ -163,7 +163,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 // ---------------------------------------------------------------------------
 
 import { MessageCircle, FolderOpen, Menu as MenuIcon, Filter, LayoutGrid, Play, FileCode, FlaskConical } from "lucide-react";
-import { resolveIcon } from "@/lib/icons";
+import ThemedIcon from "@/components/Icon";
 
 function MobileBottomNavInner({
   pathname,
@@ -220,7 +220,6 @@ function MobileBottomNavInner({
             <div className="flex flex-col gap-0.5">
               {section.items.map((p) => {
                 const active = pathname?.startsWith(p.href);
-                const Icon = resolveIcon(p.icon);
                 return (
                   <Link
                     key={p.href}
@@ -233,7 +232,7 @@ function MobileBottomNavInner({
                     }`}
                   >
                     <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-secondary text-muted-foreground">
-                      <Icon size={15} strokeWidth={active ? 2.5 : 2} />
+                      <ThemedIcon name={p.icon} size={15} strokeWidth={active ? 2.5 : 2} />
                     </span>
                     <span className="text-sm font-medium">{p.label}</span>
                   </Link>

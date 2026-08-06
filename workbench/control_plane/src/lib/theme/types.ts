@@ -1,0 +1,227 @@
+/**
+ * Theming engine — manifest types.
+ *
+ * A theme is DATA, not code. Every visual decision the Control Plane makes is
+ * a design token, and a theme is a bundle of token values plus a choice of
+ * icon pack and font stacks. Swapping themes therefore restyles the whole app
+ * without touching a single component.
+ *
+ * Two axes, deliberately independent:
+ *   • style — "rapidtool" | "fluent" | "material" | …  (the theme identity)
+ *   • mode  — "dark" | "light"                          (per-theme variant)
+ *
+ * The style axis lives on `<html data-theme="…">`; the mode axis stays on the
+ * `.light` / `.dark` class managed by next-themes. Every theme MUST supply
+ * both modes, so the two axes never interfere.
+ */
+
+/**
+ * Semantic colour tokens. Names mirror the shadcn/ui convention already used
+ * across the app, which keeps us compatible with the wider ecosystem of theme
+ * generators (tweakcn and friends export exactly this vocabulary).
+ *
+ * Values are raw CSS colours — `hsl(…)`, `oklch(…)` or hex all work, because
+ * Tailwind v4 consumes them through `var()` without parsing.
+ */
+export type ColorTokens = {
+  background: string;
+  foreground: string;
+  card: string;
+  cardForeground: string;
+  popover: string;
+  popoverForeground: string;
+  primary: string;
+  primaryForeground: string;
+  secondary: string;
+  secondaryForeground: string;
+  muted: string;
+  mutedForeground: string;
+  accent: string;
+  accentForeground: string;
+  destructive: string;
+  destructiveForeground: string;
+  border: string;
+  input: string;
+  ring: string;
+  success: string;
+  successForeground: string;
+  warning: string;
+  warningForeground: string;
+
+  /**
+   * Sidebar surface overrides. Optional — when a theme omits one it falls back
+   * to the matching core token, so a theme only spells out what it wants to
+   * differ from the main surface.
+   */
+  sidebarBackground?: string;
+  sidebarForeground?: string;
+  sidebarPrimary?: string;
+  sidebarPrimaryForeground?: string;
+  sidebarAccent?: string;
+  sidebarAccentForeground?: string;
+  sidebarBorder?: string;
+  sidebarRing?: string;
+};
+
+/** Which colour tokens every theme must define (used by validation + tests). */
+export const REQUIRED_COLOR_TOKENS = [
+  "background",
+  "foreground",
+  "card",
+  "cardForeground",
+  "popover",
+  "popoverForeground",
+  "primary",
+  "primaryForeground",
+  "secondary",
+  "secondaryForeground",
+  "muted",
+  "mutedForeground",
+  "accent",
+  "accentForeground",
+  "destructive",
+  "destructiveForeground",
+  "border",
+  "input",
+  "ring",
+  "success",
+  "successForeground",
+  "warning",
+  "warningForeground",
+] as const satisfies readonly (keyof ColorTokens)[];
+
+/**
+ * Shape tokens — the geometry half of a theme's personality. Fluent is nearly
+ * square (2–4px), Material is heavily rounded (16–20px), our default sits in
+ * between at 12px.
+ */
+export type ShapeTokens = {
+  /** Base corner radius; drives `rounded-sm/md/lg` through `@theme inline`. */
+  radius: string;
+  /** Default border width for cards, inputs and outline buttons. */
+  borderWidth: string;
+};
+
+/**
+ * Typography tokens. Font *stacks* rather than family names, so a theme can
+ * prefer a platform font it can't bundle (Segoe UI on Windows) and fall back
+ * to a self-hosted one. The `var(--font-*)` handles are registered by
+ * `next/font` in the root layout.
+ */
+export type TypographyTokens = {
+  /** UI font stack → `--font-app`, consumed by Tailwind's `font-sans`. */
+  app: string;
+  /** Monospace stack → `--font-mono`, for code and metrics. */
+  mono: string;
+  /** Optional display stack for headings; defaults to `app`. */
+  display?: string;
+  /** Tracking applied to headings — Material runs tight, Fluent neutral. */
+  headingLetterSpacing: string;
+  /** Font weight used for headings and emphasised labels. */
+  headingWeight: string;
+  /** Font weight used for buttons and interactive labels. */
+  labelWeight: string;
+};
+
+/**
+ * Effect tokens — the "material" half of the personality: how surfaces blur,
+ * whether things glow, how motion feels. A flat design system (Material)
+ * switches glass and glow off and expresses depth with shadow instead.
+ */
+export type EffectTokens = {
+  /** Backdrop blur radius for `.tech-glass`; `0px` disables the effect. */
+  glassBlur: string;
+  /** Opacity of glass surfaces — 1 renders them fully opaque (flat themes). */
+  glassOpacity: string;
+  /**
+   * Opacity for glass that sits over page content — modals, drawers, popovers.
+   * Always at or above `glassOpacity`: these surfaces carry text that has to
+   * stay readable against whatever happens to be behind them.
+   */
+  glassOpacityStrong: string;
+  /** Strength multiplier for `.tech-glow`; `0` switches glowing off. */
+  glowStrength: string;
+  /** Elevation shadow used by cards and popovers. */
+  shadow: string;
+  /** Duration for `.tech-transition`. */
+  motionDuration: string;
+  /** Easing curve for `.tech-transition`. */
+  motionEasing: string;
+};
+
+/** Identifier of an icon pack understood by `<Icon>`. */
+export type IconPackId = "lucide" | "fluent" | "material";
+
+/** A complete theme definition. */
+export type Theme = {
+  /** URL/attribute-safe identifier — the `data-theme` value. */
+  id: string;
+  /** Human-readable name shown in Settings. */
+  name: string;
+  /** One-line description of the look, shown under the name in the gallery. */
+  description: string;
+  /** Attribution for themes derived from a public design system. */
+  inspiration?: string;
+  /** Icon pack this theme renders `<Icon>` with. */
+  iconPack: IconPackId;
+  typography: TypographyTokens;
+  shape: ShapeTokens;
+  effects: EffectTokens;
+  colors: {
+    dark: ColorTokens;
+    light: ColorTokens;
+  };
+};
+
+/** Colour mode, orthogonal to the theme's style identity. */
+export type ThemeMode = "dark" | "light";
+
+/** UI density — a user preference, not a theme property. */
+export type Density = "compact" | "default" | "comfortable";
+
+/** Scale factor applied to the root font size for each density setting. */
+export const DENSITY_SCALE: Record<Density, number> = {
+  compact: 0.92,
+  default: 1,
+  comfortable: 1.08,
+};
+
+/**
+ * The user's resolved appearance preferences. Persisted per user, with an
+ * org-wide default supplied by the backend so a company can standardise on
+ * one look while individuals opt out.
+ */
+export type AppearancePreferences = {
+  /** Theme id; `null` means "inherit the organisation default". */
+  themeId: string | null;
+  /** Colour mode; `null` means "inherit the organisation default". */
+  mode: ThemeMode | null;
+  /** UI density; `null` means "inherit the organisation default". */
+  density: Density | null;
+  /**
+   * Optional primary-colour override applied on top of the chosen theme.
+   * Any CSS colour; `null` keeps the theme's own primary.
+   */
+  accent: string | null;
+};
+
+/** Appearance settings as stored/served by the backend. */
+export type AppearanceSettings = {
+  /** Organisation-wide default, set by admins. */
+  org: {
+    themeId: string;
+    mode: ThemeMode;
+    density: Density;
+    /** When false, members may not deviate from the org default. */
+    allowUserOverride: boolean;
+  };
+  /** The signed-in member's personal overrides. */
+  user: AppearancePreferences;
+  /**
+   * False when the gateway has no appearance store, so `org` is the built-in
+   * default rather than something an admin chose. Settings uses this to
+   * explain why the org controls are unavailable instead of silently
+   * accepting edits that cannot be saved.
+   */
+  orgManaged: boolean;
+};

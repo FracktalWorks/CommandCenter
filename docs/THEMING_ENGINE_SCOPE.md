@@ -1,12 +1,63 @@
 # CommandCenter Theming Engine — Scoping Document
 
-**Status:** Scoping / research — no implementation yet
+**Status:** Phases 1–4 built and shipped. See "What was built" below; the rest
+of this document is the original research and remains the design rationale.
 **Scope:** `workbench/control_plane` (Next.js 16 · React 19 · Tailwind CSS v4)
 **Goal:** A theming engine that can restyle the entire Control Plane — colors,
 fonts, radii, shadows, icon packs, component "personality" — switchable on the
 fly from Settings, with company-wide defaults. Example target themes: the
 current RapidTool look, a Microsoft Fluent/Metro ("Lumia") look, a Google
 Material look.
+
+---
+
+## 0. What was built
+
+Four themes, switchable from **Settings → Appearance**, each changing colours,
+fonts, corner radius, effects and the icon pack across every page:
+
+| Theme | Look | Icons | Fonts |
+|---|---|---|---|
+| **RapidTool** (default) | The original design, preserved token-for-token | Lucide | Geist |
+| **Fluent** | Microsoft Fluent 2 — 4px corners, acrylic, no glow | Fluent System Icons | Segoe UI → Inter |
+| **Material** | Google Material 3 — 16px corners, flat + elevation | Material Symbols Rounded | Roboto |
+| **Graphite** | Low-distraction monochrome, monospace headings | Lucide | Geist / Geist Mono |
+
+**How it works.** A theme is a manifest in `src/lib/theme/themes.ts` — colours
+for both modes, font stacks, shape, effects, icon pack. `css.ts` compiles every
+manifest to an `html[data-theme="…"]` custom-property scope, inlined once in
+the document head, so switching is a single attribute write with no fetch and
+no flash. *Style* (`data-theme`) and *mode* (the next-themes `.light` class)
+are independent axes. A pre-paint boot script applies the stored preference
+before the first frame.
+
+Adding a theme is a manifest entry — no component, CSS or Tailwind change.
+
+**Icons** go through `<Icon name="Plus" />`, using Lucide names as the shared
+vocabulary so migrating a call site is a one-line edit. Non-Lucide packs are
+pruned Iconify collections (~80 KB each, 187 icons) built by
+`scripts/build-icon-packs.mjs`, fetched lazily only when a theme needs them and
+rendered offline. All 28 sidebar glyphs swap; unmigrated call sites keep
+rendering Lucide, so the migration is incremental and never breaks.
+
+**Preferences** resolve member override → org default → built-in. Personal
+choices are per-browser; the org default comes from
+`GET/PUT /api/settings/appearance` and is cached locally so it survives first
+paint. Admins can lock the org to one theme. The route validates every field
+before forwarding, and falls back to built-in defaults with `orgManaged:
+false` when the gateway has no appearance store — so the feature works today
+without backend changes, and the UI says so rather than silently dropping edits.
+
+**Verified.** 37 unit tests (`src/lib/theme/*.test.ts`) plus 14 browser tests
+(`e2e/theming.spec.ts`) asserting computed styles and real glyph swapping —
+the only place CSS cascade order can actually be checked. A drift guard parses
+`globals.css` and fails if its no-JavaScript fallback diverges from the default
+manifest.
+
+**Not done (Phase 5).** Shared `<Button>` / `<Input>` primitives, and migrating
+the remaining ~155 files that still import `lucide-react` directly. Neither
+blocks anything: those call sites already theme correctly for colour, radius
+and font, and simply keep Lucide glyphs until migrated.
 
 ---
 

@@ -4,10 +4,9 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import { useSession, signOut } from "next-auth/react";
-import { ChevronDown, ChevronLeft, ChevronRight, LogOut, Command } from "lucide-react";
 import { NAV_SECTIONS, visibleSections, type NavPane, type NavSection } from "@/lib/nav";
 import { useAccess } from "@/components/AccessProvider";
-import { resolveIcon } from "@/lib/icons";
+import ThemedIcon from "@/components/Icon";
 import ThemeToggle from "@/components/ThemeToggle";
 
 /** Mirrors gateway/routes/apps/pins.py's PinnedApp — GET /api/apps/pins. */
@@ -124,7 +123,7 @@ export default function Sidebar() {
           <Link href="/" className="block min-w-0">
             <div className="flex items-center gap-2">
               <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-primary text-primary-foreground">
-                <Command size={15} strokeWidth={2.5} />
+                <ThemedIcon name="Command" size={15} strokeWidth={2.5} />
               </span>
               <div>
                 <div className="text-sm font-semibold tracking-tight text-sidebar-foreground leading-tight">CommandCenter</div>
@@ -138,7 +137,7 @@ export default function Sidebar() {
           className="shrink-0 rounded-lg p-1.5 text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground tech-transition"
           title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
         >
-          {collapsed ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
+          {collapsed ? <ThemedIcon name="ChevronRight" size={16} /> : <ThemedIcon name="ChevronLeft" size={16} />}
         </button>
       </div>
 
@@ -176,7 +175,7 @@ export default function Sidebar() {
                 className="ml-2 shrink-0 rounded-lg p-1.5 text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground tech-transition"
                 title="Sign out"
               >
-                <LogOut size={14} />
+                <ThemedIcon name="LogOut" size={14} />
               </button>
               <ThemeToggle />
             </div>
@@ -262,7 +261,8 @@ function NavSectionBlock({
         }`}
       >
         <span>{section.label}</span>
-        <ChevronDown
+        <ThemedIcon
+          name="ChevronDown"
           size={12}
           className={`shrink-0 text-muted-foreground/50 group-hover:text-muted-foreground tech-transition ${
             folded ? "-rotate-90" : ""
@@ -306,7 +306,6 @@ function NavLink({
   pinnedApps?: PinnedApp[];
 }) {
   const active = pathname?.startsWith(pane.href);
-  const Icon = resolveIcon(pane.icon);
 
   if (collapsed) {
     return (
@@ -320,7 +319,7 @@ function NavLink({
             : "text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground"
         }`}
       >
-        <Icon size={18} strokeWidth={active ? 2.5 : 2} />
+        <ThemedIcon name={pane.icon} size={18} strokeWidth={active ? 2.5 : 2} />
         {badge !== undefined && badge > 0 && (
           <span className="absolute -top-0.5 -right-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-amber-500 text-[8px] font-bold text-white">
             {badge > 9 ? "9+" : badge}
@@ -342,7 +341,7 @@ function NavLink({
         }`}
       >
         <div className="flex items-center gap-2.5">
-          <Icon size={16} strokeWidth={active ? 2.5 : 2} />
+          <ThemedIcon name={pane.icon} size={16} strokeWidth={active ? 2.5 : 2} />
           <span className="font-medium text-[13px]">{pane.label}</span>
           {badge !== undefined && badge > 0 && (
             <span className="ml-auto rounded-full bg-amber-500 px-1.5 py-0.5 text-[10px] font-bold text-white">

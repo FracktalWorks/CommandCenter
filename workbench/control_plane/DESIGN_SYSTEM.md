@@ -5,10 +5,37 @@ agent-generated UI MUST follow these conventions.
 
 ---
 
+## The design system is themeable
+
+The Control Plane ships several themes — RapidTool (default), Fluent
+(Microsoft), Material (Google) and Graphite — and members switch between them
+in **Settings → Appearance**. A theme changes colours, fonts, corner radius,
+effects **and the icon pack**, all at once, across every page.
+
+This works only because components describe intent (`bg-primary`,
+`rounded-lg`, `<Icon name="Plus">`) rather than appearance (`bg-[#0ea5e9]`,
+`rounded-[12px]`, `<Plus />`). Hardcoding any visual value opts that element
+out of theming: it will look correct on the default theme and wrong on every
+other one.
+
+**The three rules that keep the app themeable:**
+
+1. **Never hardcode a colour.** Use the semantic tokens below.
+2. **Never hardcode a radius, blur, shadow or transition.** Use `rounded-*`,
+   `tech-glass`, `tech-elevated`, `tech-transition`.
+3. **Never import from `lucide-react` in a component.** Use
+   `<Icon name="Plus" />` from `@/components/Icon`.
+
+Themes are data: `src/lib/theme/themes.ts`. Adding one is a manifest entry —
+no component, CSS or Tailwind change. See "Theming engine" at the end of this
+document.
+
+---
+
 ## Color Tokens (HSL — Tailwind CSS v4)
 
-Defined in `src/app/globals.css` as CSS custom properties. Always use the
-semantic token name, never a raw hex value.
+Every theme supplies a full set of these; the table shows the default theme's
+values. Always use the semantic token name, never a raw hex value.
 
 | Token | Dark (default) | Light (.light) | Usage |
 |---|---|---|---|
@@ -137,16 +164,47 @@ Interactive cards (agent tiles, provider cards, API cards) use:
 
 ## Icons
 
-Use **lucide-react** exclusively. Import icons directly:
+Use the **`<Icon>`** component. It renders the glyph from whichever pack the
+active theme asks for — Lucide, Fluent System Icons, or Material Symbols.
 
 ```tsx
-import { Zap, Plus, RefreshCw, X, Loader2 } from "lucide-react";
+import Icon from "@/components/Icon";
+
+<Icon name="Plus" size={16} />
+<Icon name="AlertTriangle" size={14} className="text-warning" />
 ```
 
+**Lucide names are the vocabulary.** `name` is always a Lucide component name
+(`Plus`, `Trash2`, `MessageCircle`); other packs map onto those names. Any of
+Lucide's ~1,600 names works — one without a mapping simply renders the Lucide
+glyph on every theme, which is a safe default, not an error.
+
+Migrating an existing call site is a one-line change:
+
+```diff
+- import { Plus } from "lucide-react";
++ import Icon from "@/components/Icon";
+- <Plus size={16} />
++ <Icon name="Plus" size={16} />
+```
+
+**Do not import from `lucide-react` in a component.** A direct import pins that
+glyph to Lucide, so it stays Lucide-shaped while everything around it turns
+Fluent or Material.
+
+Two deliberate exceptions, both because they cannot run React hooks:
+`resolveIcon()` in `@/lib/icons` (used by server components) and
+`iconSvg.ts` (renders to a static SVG string for the HTML sandbox).
+
 Common icon sizes:
-- Inline with text: `w-3.5 h-3.5` or `w-4 h-4`
-- Standalone buttons: `w-4 h-4` or `w-5 h-5`
-- Card/tile icons: `w-5 h-5`
+- Inline with text: `size={14}` or `size={16}`
+- Standalone buttons: `size={16}` or `size={18}`
+- Card/tile icons: `size={20}`
+
+To add a mapping for a new icon, add it to `MAP` in
+`scripts/build-icon-packs.mjs` and run `npm run build:icons`. The script
+resolves candidates against the real collections, so a name that does not
+exist fails loudly rather than shipping a blank square.
 
 ---
 
@@ -171,12 +229,17 @@ Every page follows this structure:
 
 ## Tech Utilities (from globals.css)
 
+All of these are token-driven, so their behaviour changes with the theme — a
+flat theme like Material renders `tech-glass` opaque and `tech-glow` invisible
+rather than needing a separate code path.
+
 | Class | Purpose |
 |---|---|
-| `tech-transition` | Smooth 200ms cubic-bezier transition on all properties |
-| `tech-glass` | Frosted glass panel (backdrop-blur + semi-transparent bg) |
-| `tech-glass-subtle` | Softer glass effect |
-| `tech-glow` | Primary-color box-shadow glow |
+| `tech-transition` | Themed transition on all properties (`--motion-duration` / `--motion-easing`) |
+| `tech-glass` | Frosted panel — blur and opacity from `--glass-blur` / `--glass-opacity` |
+| `tech-glass-subtle` | Same material at higher opacity, for modals and drawers over live content |
+| `tech-glow` | Primary-colour glow, scaled by `--glow-strength` (0 disables it) |
+| `tech-elevated` | Elevation shadow from `--elevation` — how flat themes express depth |
 | `pb-safe` / `pt-safe` | iOS safe-area padding |
 
 ---
@@ -197,9 +260,53 @@ Every page follows this structure:
 4. **Use consistent spacing.** Page-level padding is `px-4 sm:px-6`.
    Content padding is `p-4`. Gaps between grid items are `gap-3`.
 
-5. **Support dark + light themes.** All color usage must work with both
-   `:root` (dark) and `.light` class themes. Test with ThemeToggle.
+5. **Support every theme, in both modes.** Colour usage must work in dark and
+   light, and must not assume the default theme's shape or effects. Check a
+   new surface against Fluent (square corners, no glow) and Material (round
+   corners, flat) as well as the default — those two catch nearly every
+   hardcoded value.
 
 6. **Mobile-responsive.** Use `sm:` breakpoint prefixes. Side panels slide
    up from the bottom on mobile (`sm:hidden` + fixed bottom sheet).
    Grid columns: `grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5`.
+
+7. **Use `<Icon>`, never a direct `lucide-react` import.** See Icons above.
+
+---
+
+## Theming engine
+
+Where things live:
+
+| File | Role |
+|---|---|
+| `src/lib/theme/themes.ts` | The themes themselves. **Add a theme here and nowhere else.** |
+| `src/lib/theme/types.ts` | Token vocabulary — what a theme is allowed to set |
+| `src/lib/theme/css.ts` | Manifests → `html[data-theme="…"]` CSS scopes |
+| `src/lib/theme/store.ts` | Active theme, density, accent; org default vs member override |
+| `src/lib/theme/boot.ts` | Pre-paint script that applies the stored theme (no flash) |
+| `src/components/Icon.tsx` | The themed icon primitive |
+| `scripts/build-icon-packs.mjs` | Regenerates the pruned icon packs (`npm run build:icons`) |
+| `src/app/settings/appearance/` | The Settings UI |
+
+**Two independent axes.** *Style* (which theme) lives on
+`<html data-theme="…">`; *mode* (dark/light) stays on the `.light` / `.dark`
+class managed by next-themes. Every theme defines both modes, so the axes never
+interact. Structural tokens — radius, fonts, effects — are emitted once on the
+theme's base scope and inherited by its light scope.
+
+**Why `globals.css` still contains the default theme's values.** Those
+`:root` / `.light` blocks are the no-JavaScript fallback. The generated scopes
+outrank them on specificity (0,1,1 vs 0,1,0), so they never apply in a normal
+session. They must stay identical to the `rapidtool` manifest —
+`src/lib/theme/themes.test.ts` parses the stylesheet and fails if they drift.
+**Change how the app looks by editing the manifest, not `globals.css`.**
+
+**Preference resolution:** member override → organisation default → built-in
+default. Members' choices are per-browser (localStorage); the org default is
+served by the gateway and cached locally so it survives the first paint. An
+admin can lock the org to one theme by turning off personal overrides.
+
+Coverage: `src/lib/theme/*.test.ts` (manifests, CSS generation, icon registry)
+and `e2e/theming.spec.ts` (computed styles and real glyph swapping in a
+browser — the only place cascade order can actually be verified).

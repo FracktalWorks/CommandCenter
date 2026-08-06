@@ -1003,6 +1003,16 @@ except Exception:  # pragma: no cover
     pass
 
 try:
+    # WS-28 — the People Center's directory (spec:
+    # ai-company-brain/specs/people_center_app.md). Its own feature gate, but
+    # the HR projection is imported from routes/tasks, never re-implemented.
+    from gateway.routes.people import router as _people_router
+
+    app.include_router(_people_router)
+except Exception:  # pragma: no cover
+    pass
+
+try:
     from gateway.routes.settings import router as _settings_router
 
     app.include_router(_settings_router)

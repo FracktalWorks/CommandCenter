@@ -498,6 +498,25 @@ def test_crm_is_registered_on_both_sides() -> None:
     assert "crm" in _catalog_slugs()
 
 
+def test_projects_is_registered_on_both_sides() -> None:
+    """WS-27a's registration, which was left to the generic pair and should not
+    have been — for exactly the reason stated above: those pass when BOTH sides
+    are missing a slug, so they cannot catch a feature nobody registered."""
+    assert "projects" in FEATURES
+    assert "projects" in _catalog_slugs()
+
+
+def test_people_is_registered_on_both_sides() -> None:
+    """WS-28b's registration (`people_center_app.md` §6, step 4, by name).
+
+    The People Center's directory needs its OWN slug rather than riding
+    `feature:tasks`: a manager who needs the org chart and the assignee picker
+    should not have to be handed the personal GTD task manager to get them.
+    """
+    assert "people" in FEATURES
+    assert "people" in _catalog_slugs()
+
+
 def test_agent_service_is_not_assignable_to_people() -> None:
     assert "agent_service" in SYSTEM_ROLES
     assert "agent_service" not in ASSIGNABLE_SYSTEM_ROLES

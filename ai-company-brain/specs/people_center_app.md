@@ -281,10 +281,46 @@ migration that stopped deploys. Both new constraints could plausibly fail on liv
 database with the ladder applied, which this build had no access to. Regenerate it on the
 first deploy that applies 148, per `infra/postgres/README.md` step 3.
 
-**WS-28b — directory + person page.** 🟢 AGENT-SAFE.
+**WS-28b — directory + person page.** ✅ **BUILT 2026-08-06**
+(mig `149_people.sql`, `routes/people/`, `src/app/people/`; 32 hermetic + 28 vitest cases,
+11 mutants red).
 Done when: `/people` lists and filters; the person page renders all four panels; the HR
 projection is honoured with a "restricted" empty state distinct from "none"; writes are
 gated on `admin:members:manage` and absent (not disabled) without it.
+
+**The permission story here is a projection, not a refusal**, and that shaped everything.
+Four decisions worth reading:
+
+- **The gate is new; the projection is imported.** `routes/people/core.py` re-exports
+  `tasks.core.can_read_hr_fields` rather than defining its own — two answers to "may this
+  caller see skills" are two answers waiting to drift, and a test asserts the *identity* of
+  the function object, not merely that both agree today.
+- **Three filters are the same rule wearing different hats.** The `q` skills clause, the
+  `skill` filter and `has_capacity` are all dropped without `admin:members:read`, because
+  matching on a column that is then stripped turns the search box into an oracle for the
+  field the projection exists to hide. Dropping them silently would be its own defect, so
+  the response carries **`hr_visible`** and the UI states it once at the top instead of
+  leaving a blank strip to be misread as "nobody filled it in".
+- **Load is computed, and says when it cannot be.** `current_load_hours_per_week` is a
+  number somebody typed once. The bar counts open assigned tasks — and carries
+  `unestimated`, because a task with no estimate adds no hours and a bar built from the sum
+  alone shows somebody holding thirty un-estimated tasks as completely free. When nothing
+  is estimated the bar refuses to draw a percentage rather than drawing a confident zero.
+- **The work panel is scoped by the VIEWER**, via the Projects grant closure, and answers
+  `available: false` without `feature:projects` — "this surface is not yours" and "they
+  have nothing open" must not render identically.
+
+**Registration is five places, not four** — §6 lists `FEATURES`, `feature_catalog`,
+`nav.ts`/`access.ts` and `centers.ts`, and there is a fifth that is hand-maintained and easy
+to miss: `test_org_access_enforcement.GATED_ROUTERS`. A router absent from that registry is
+not passing, it is *unchecked*. Also added: `test_projects_is_registered_on_both_sides`,
+which WS-27a never wrote — the generic pair passes when **both** sides are missing a slug,
+so only a named test catches a feature nobody registered.
+
+The person-page **writes stay on `/tasks/people`** under `admin:members:manage`. The
+`/api/people` proxy is **GET-only** for that reason: forwarding write verbs to endpoints the
+gateway does not serve would mint a second, hollow write path, and the first person to find
+it would reasonably assume it worked.
 
 **WS-28c — org chart.** 🟢 AGENT-SAFE.
 Done when: the tree renders from `manager_id`, unmanaged people surface as roots, a

@@ -5,6 +5,7 @@
 > **Slice 3 re-scoped 2026-08-03 (truth pass, §8.3).** The one-line Slice 3 asked for three things and **one of them is already shipped**: describe→generate→refine full-graph authoring landed as F14 (`39b1e17a`) and is **struck**. "Parallel fan-out" is also shipped (`engine/graph.py:17`; MAF's superstep scheduler routes it) — the unbuilt half is **fan-in/join**, restated as such. What genuinely remains is **fan-in/join (8.3b), loops (8.3c), and a template gallery (8.3a — nothing exists)**. Two owner decisions recorded the same day: Command Center is an **internal Fracktal tool** (§1.4) and **loops are approved** despite §11 R1 (§8.3c).
 > **Parent RFC:** [`docs/workflow-editor/README.md`](../../docs/workflow-editor/README.md) — stack selection (React Flow), the compile-to-MAF-Workflows decision, data model, editor UX, trigger taxonomy. Read it for *how*; this doc is *what, why, and why now*. Interactive mockup: `docs/workflow-editor/mockup.html`.
 > **Reference precedents:** [`task_manager_app.md`](task_manager_app.md) (app spec shape) · [`docs/app-workshop/README.md`](../../docs/app-workshop/README.md) §4.0 (the platform contract this app also enforces).
+> **Engine uplift backlog — §13 (added 2026-08-06).** A code-verified read of Paca's automation engine ([`paca_pm_research_2026-08.md`](paca_pm_research_2026-08.md) §4–§6) against this engine, as eight scoped items **U1–U8** with done-whens, plus the `pm.*` binding that already ships and the five Paca features deliberately refused. §13 is **backlog, not built work**; it does not change Slice 3 (§8.3) or Slice 4 (§8.4).
 > **Policy amendment:** ADR-028 (see `system_architecture.md`) amends ADR-014 and `project_plan.md` C-09 / §2 non-goals — see §10.
 
 ---
@@ -219,6 +220,8 @@ Aligned to RFC §9, resequenced so each slice ships value:
 - **Slice 3:** three items — **8.3a templates**, **8.3b fan-in/join**, **8.3c loops**. Fully specified with per-item acceptance, gate labels and verification in **§8.3**; the old one-line version was 16 words and asked for one thing that already shipped. (Workflow-as-tool for the orchestrator shipped early — F13, Slice 2.)
 - **Slice 4:** blocked. Named dependencies and the reason in **§8.4** — it is *not* "post-BO‑20" in the vague sense.
 
+**Not a slice: §13 (Paca engine uplift, U1–U8).** Deliberately kept out of the slice sequence — the items are independent of one another and of the slices, and folding them into Slice 3 would repeat the mistake §8.3's truth pass corrected (a one-line slice hiding several unrelated problems). One of them, **U1**, is the near-term one: it is WS-27f's first half and the only item another workstream is waiting on. **U5 is blocked on 8.3b** and must not be started before it.
+
 ### 8.3 Slice 3 — specified (truth pass, verified against code 2026-08-03)
 
 **What was struck.** *"Describe→generate→refine full-graph authoring"* is **DONE — delivered by F14 in commit `39b1e17a`** ("feat(workflows): Workflow Copilot + semantic capability search"). `POST /workflows/{id}/copilot` (`copilot.py:1-12`) emits the **FULL updated graph** — the system prompt says so literally at `copilot.py:51` (`"graph": {...} // FULL updated graph, or null if no change`) — with a named-issue repair round against the same validators publish uses, and auto-creates the modules the graph needs. §2 already records this twice (F12 *"Superseded by F14"*, F14 *"Must (shipped)"*). Dispatching it would have sent an implementer to rebuild a live endpoint. **Do not re-open it.**
@@ -343,3 +346,152 @@ Anything in Slice 4 that looks reachable today is reachable only because its dep
    ```
 
    Green means **73 passed** in CI (`ubuntu-latest`). On Windows the honest expectation is **69 passed / 4 failed**, all four being the `preexec_fn` module-sandbox defect catalogued in §8.3 — see that section before reporting a regression. Items 1–5 above are Slice-1/2 criteria and are met; Slice 3's criteria are per-item in §8.3a/b/c, not here.
+
+---
+
+## 13. Paca automation-engine reference — the uplift backlog and the WS-27 binding
+
+> **Added 2026-08-06.** Source: [`paca_pm_research_2026-08.md`](paca_pm_research_2026-08.md) §4 (automation graph), §5 (agent dispatch), §6 (MCP tool design) — a code-verified read of `Paca-AI/paca` @ v0.11.0, Apache-2.0. **Reference-only:** that file owns no work; this section owns the work it implies for *this* app. Paca's stack (Go/chi + sqlx, Valkey streams, OpenHands sandboxes) does not survive translation — **we take schema shapes and execution discipline, never code.**
+>
+> **Why this section exists.** WS-27 (`project_management_app.md`) needed automation and, per **D6 (`work_plan.md` §3)** and ADR-028, did not build one — `/workflows` is the only engine, so a Projects-owned rules engine would have been a single-owner violation. WS-27 therefore contributes *events and node types* and files the engine-shaped findings **here**, where the engine is owned. Everything below is backlog with an acceptance standard, not built work. Nothing in §13 is claimed as shipped.
+>
+> ⚠️ **Two Paca documents will mislead a re-deriver.** Paca's `docs/architecture/repository-structure.md` says "Go + Gin" (the API is **chi v5**), and `docs/architecture/automation-workflows.md` documents the **v0.10 design that was dropped** — migration `000027` `DROP TABLE … CASCADE`d it and replaced it with the graph model described here. Re-derive from `000027_add_automation_graph.sql` and `worker/automation_consumer.go`, **never** from Paca's architecture docs.
+
+### 13.1 The binding that already exists (verified against code, 2026-08-06)
+
+The Projects app is **already wired to this engine**, on the seam the ClickUp receiver uses. No new bus was built, and none should be:
+
+| Link | Where | State |
+|---|---|---|
+| Projects emits | `routes/projects/core.py:909` `emit()` → `ingestion.event_hooks.emit_event("projects", …)` | **Shipped.** Best-effort by construction — a workflow that cannot run must never fail the task write that triggered it |
+| The seam is registered | `gateway/main.py:1122-1125` — `register_event_sink(workflows.triggers.dispatch_event)` at startup | **Shipped** (pre-existing; WS-27 added no transport) |
+| The engine listens | `triggers.py::dispatch_event` — one run per **published** workflow whose enabled `kind='event'` trigger matches `(source, event_type)` | **Shipped** |
+| The engine can act on tasks | *(nothing)* — the node catalog (`engine/graph.py:35-45`) has `trigger, agent, tool, module, condition, set, approval, wait, output`. **No task-mutation node type exists.** | **U1, below** |
+
+**The eleven `pm.*` topics live on the seam today** (`source="projects"`): `pm.task.created`, `pm.task.updated`, `pm.task.status_changed`, `pm.task.assigned`, `pm.task.moved`, `pm.task.deleted`, `pm.task.comment_added`, `pm.project.created`, `pm.project.updated`, `pm.project.moved`, `pm.project.deleted`. An event trigger with `{"source": "projects"}` and no `event_type` matches all eleven (`event_trigger_matches`, `triggers.py:35`).
+
+So the engine can already **hear** about projects and cannot yet **act on** them. That asymmetry is the whole near-term gap, and it is U1.
+
+**Two caveats on the existing path, both pre-existing and both recorded elsewhere** — restated because a `pm.*` automation inherits them: a workflow fires only when **published** (`triggers.py:57`), and `dispatch_event` **swallows every error** by design, so a failed dispatch is currently invisible (BO‑20b slice 2's scope, §8.4).
+
+### 13.2 What Paca's engine is, in one paragraph
+
+`automations` (`draft|active|archived`) + `automation_nodes(kind ∈ trigger|condition|action, type, config jsonb, pos_x, pos_y)` + `automation_edges(source_handle NULL)` + `automation_runs` + `automation_run_steps` (per-node `input_snapshot` / `output_snapshot` / `error`), plus at-most-once bookkeeping tables for due-date and cron fires and hashed webhook tokens (`pacahk_` prefix; rotation revokes the prior token). **One JSONB `config` per node** serves 9 trigger types, conditions, 3 action types, and unbounded plugin-contributed types with no wide null-column set. The consumer (`worker/automation_consumer.go`, 1602 lines) reads the **ordinary activity stream** — the engine is "a sibling reader, not a special case wired into the HTTP handler" — maps field changes to candidate trigger types (zero candidates ⇒ cheap ack), re-fetches the authoritative task, walks the graph with a `visited` set, records a step row per node, and **mutates through the ordinary task service** so an automation's edit gets identical validation and writes an `automation.applied` activity with a nil actor.
+
+Structurally we already agree with all of that: our graph is DB-persisted config (D1), our node config is JSONB, our runs are rows, and our engine reads the same event seam the receivers write. **The gaps are in the vocabulary and the trace, not the architecture** — which is why this is an uplift backlog and not a rewrite.
+
+### 13.3 The uplift items
+
+Each item states Paca's design, **what this repo actually has today** (cited, verified — not assumed), the gap, and a done-when written to §8.3's standard: *an assertion a test can make, on a validator or a status code, never a screenshot.*
+
+Sequencing note: **U1 is the only item WS-27 is waiting on.** U2–U8 are independent of Projects and can be picked up in any order. None of them is a Slice-3 item — §8.3a/b/c stand unchanged, and U5 in particular is **downstream of 8.3b** and must not be started before it.
+
+#### U1 — A task-mutation action node (`pm.update_task`) ✅ **AGENT-SAFE** · *this is WS-27f*
+
+**Paca:** three action types only — `update_task`, `trigger_ai_agent`, `call_api`. `update_task` is itself a **consolidation**: it merged five prior single-field actions (`set_status`, `set_assignee`, `set_priority`, …) into one multi-field patch. That consolidation is the lesson, recorded by Paca as an explicit one; a per-field node set is the thing to *not* build.
+
+**Here:** no node type touches an internal app. The `tool` node reaches *external* systems through the Integration Registry; there is no in-platform equivalent, so an automation can currently observe a `pm.*` event and do nothing about the task.
+
+**Design constraints, non-negotiable:**
+- **One multi-field node, not one per field** — Paca's consolidation lesson, adopted before we make its mistake.
+- **Mutate through the ordinary task service**, never raw SQL. The automation's edit must take the same validation path a human's PATCH takes (status-transition effects, cycle guards, `pm_activities` write) — this is Paca's discipline and it is also how the edit stays auditable.
+- **Actor string `system:workflow:<workflow_id>`**, inside the existing `email | agent:<name>` vocabulary (research §2.5 / table row 5). A new actor shape would fork the vocabulary the whole platform reads.
+- **"Already in target state" check before writing** (research §9): what makes a crashed walk safe to retry. Skip-because-already-there is a recorded step outcome, not a silent no-op.
+- **Write-class?** A `pm.*` mutation is an *internal* write, so it does **not** need the `write_without_approval` publish gate that outward integration writes need (§3.2). State this explicitly in the node's catalog metadata, because the default reading of "write" would gate it and nobody wants an approval on "move the task to Done".
+
+**Done when:**
+1. A published workflow triggered by `{"source": "projects", "event_type": "pm.task.status_changed"}` mutates a second task through `pm.update_task`, and the target task carries a `pm_activities` row whose actor is `system:workflow:<id>`.
+2. The node validates at publish: unknown field ⇒ named `GraphIssue`; missing task reference ⇒ named `GraphIssue`. Neither reaches run time.
+3. Re-running the same node against a task already in the target state records a step outcome (skipped/no-op) and writes **no** activity row — asserted, so idempotency is pinned rather than hoped for.
+4. The node appears in `GET /workflows/catalog` (D7 — served, never hard-coded in the UI).
+5. An automation edit is **indistinguishable in validation** from a human edit: a transition the API would refuse from a human is refused from the node too, with the same error.
+
+#### U2 — N-branch switch conditions ✅ **AGENT-SAFE**
+
+**Paca:** a condition is an ordered N-branch switch — first-true-wins, with a **reserved `else` handle**. Each branch is a **flat single comparison** (field × operator); there is deliberately no AND/OR nesting. A `validOperatorsByField` table rejects unimplemented field/operator combos **at validation time** instead of silently evaluating false at run time.
+
+**Here:** the condition node is exactly two handles. `BRANCHING_TYPES = frozenset({"condition"})` (`graph.py:50`) and the edge check refuses any handle that is not `"true"` or `"false"` (`graph.py:275-278`). Evaluation is a single closed-vocabulary comparison — `evaluate_condition(left, op, right)` (`handlers.py:81`), no `eval()`, operators `equals|contains|is_empty|…` and their negations.
+
+**The gap is fan-out of branches, not the comparison.** Our flat-single-comparison choice already matches Paca's; a five-way status router today needs four chained condition nodes, which is unreadable on canvas and quadruples the node count in run history.
+
+Two things to steal beyond the shape: **first-true-wins ordering must be explicit in the serialized run-model** (relying on JSON array order in the edit-model repeats 8.3b's "edge order is not stable" defect), and **`else` must be reserved** — a maker branch literally named `else` has to be rejected at validation.
+
+**Done when:** a condition node with N branches + `else` validates, publishes, and routes down exactly one handle; branch order is explicit in `workflow_versions.serialized` and survives a re-draw of the edges; an unreachable branch (one no comparison can select) is a named non-blocking publish `warning`; and the existing two-handle graphs still validate byte-identically (the change is additive — pinned by the existing engine tests staying green unchanged).
+
+#### U3 — Per-node **input** snapshots in run history ✅ **AGENT-SAFE** · *closes a real G6 gap*
+
+**Paca:** `automation_run_steps` persists **both** `input_snapshot` and `output_snapshot` per node, plus `error`.
+
+**Here:** `workflow_runs.node_results` (`132_workflows.sql:81`) is a JSONB **column**, one slot per node: `{status, output|error, duration_ms}` (`runner.py:44,180`). **The input is not recorded.** F9's drill-in therefore replays what each node *produced*, never what it *received*.
+
+**Why this matters more than it sounds.** §2 F9 and §1.2 G6 both promise "per-node **inputs**/outputs"; the schema does not deliver the first half. When a `{{ref}}` resolves to something unexpected, the run history shows the wrong output and gives no way to see the wrong input that caused it — the single most common debugging question a maker will ask, and today it is unanswerable without re-running.
+
+**Done when:** each entry in `node_results` carries the node's resolved config/input alongside its output; **secret-shaped values are redacted on the way in** (reuse `SECRET_PATTERNS`, `graph.py:52-58` — a resolved integration argument must never be persisted in a run row); the payload is size-bounded like the module output bound; the editor's history drill-in shows input and output side by side; and **old runs without inputs still render** (the field is additive and nullable — asserted against a fixture of the current shape, because a migration that breaks history drill-in for existing runs is worse than the gap).
+
+#### U4 — Task retargeting (`self | parent | children | blocks | …`) ⚠️ **AGENT-SAFE, but sequence it after U1**
+
+**Paca:** a condition *or* an action can aim at `self | parent | children | blocks | is_blocked_by | relates_to | duplicates | other(id)`. Multi-valued targets **fan out** — an action runs per resolved task; a condition combines via all/any.
+
+**Here:** nothing analogous, because U1 does not exist yet. Our data model already supports every one of those targets: `pm_tasks.parent_task_id` (self-FK) and `pm_task_links` with the `blocks|relates_to|duplicates` vocabulary (migration `146_projects.sql`).
+
+**This is what makes automations useful rather than toy-like** — "when every child is Done, move the parent to Done" is the canonical PM automation and needs `children` + an all-combiner. Note it is **not** the same feature as 8.3b's graph-level fan-in: retargeting fans out over *rows*, inside one node; 8.3b fans in over *edges*, between nodes. Do not conflate them, and do not let one ticket claim both.
+
+**Done when:** each target keyword resolves to the right row set with a bounded fan-out cap (a named failure when exceeded, never an unbounded walk); a condition over a multi-valued target combines by an explicit `all`/`any` chosen in config, never an implicit default; a target resolving to **zero** tasks is a recorded no-op step, not an error; and each fanned-out action records its own step outcome so history shows *which* children were touched.
+
+#### U5 — Stateless AND-join (`predecessor_done`) 🚧 **BLOCKED on §8.3b**
+
+**Paca:** the `predecessor_done` trigger is an AND-join over watched tasks that is **stateless** — it re-derives every watched task's live status *category* on each fire rather than keeping a counter, which makes it idempotent under at-least-once redelivery. The **dependency map UI is derived on read** from active `predecessor_done` nodes and never separately maintained.
+
+**Here:** the engine refuses fan-in outright — `"a node may have only one incoming edge (v1)"` (`graph.py:303-311`).
+
+**Why blocked, precisely:** §8.3b must first settle the merge shape, quorum rule, and pause/replay interaction for graph-level joins. A `predecessor_done` trigger built before that decision would either invent a second join semantics or quietly constrain 8.3b's. **Do not start U5 before 8.3b is decided.**
+
+The transferable discipline is the *statelessness*, and it is transferable independently: **re-derive, don't count.** Our `pm_task_statuses.category` CHECK (`backlog|todo|in_progress|done|cancelled`) is exactly the machine-readable semantic Paca's join reads. A counter column would drift under redelivery; a live re-derivation cannot.
+
+**Done when:** 8.3b has landed; the trigger holds no persisted counter (asserted by schema — there is no column to drift); firing the same source event twice produces one downstream effect; and the dependency map is computed on read from active nodes with **no** maintained table.
+
+#### U6 — At-most-once fire bookkeeping for time-based triggers ✅ **AGENT-SAFE**
+
+**Paca:** dedicated bookkeeping tables record due-date and cron fires so a redelivery cannot double-fire.
+
+**Here:** we solve the cron half differently and, on the evidence, **better** — CAS on `workflow_triggers.last_fired_at` means exactly one worker wins each tick, clock skew included, and downtime collapses to one catch-up fire rather than a storm (§3.3a, D6). **No table needed; do not add one.**
+
+**The genuine gap is the other half: there is no due-date trigger at all.** Paca's `due_date_reached` (offset minutes, polled) has no equivalent here, and "ping the assignee 24h before a task is due" is the single most-requested PM automation there is. It belongs to the **schedule scanner** (`scheduler.py`) — the loop that already polls and already CAS-claims — not to the event seam, because no event fires when a due date merely *arrives*.
+
+**Done when:** a `pm.task.due_in(offset_minutes)` trigger fires once per task per offset (asserted across a simulated scanner restart, which is where a naive implementation double-fires); changing a task's due date re-arms rather than double-firing; and the claim rides the existing CAS discipline rather than introducing a second one.
+
+#### U7 — Agent dispatch from a node ✅ **AGENT-SAFE** · *the second half of WS-27f*
+
+**Paca:** `trigger_ai_agent` action → `{message, member_id}` → the assignment consumer writes an `agent_conversations` row and appends to `paca:agent:triggers`; an `agent.session.started` activity lands **on the task** so the handoff is visible in the timeline immediately; the agent then writes back **through the ordinary API under its own identity** (API key + `X-Agent-ID`, permission-checked as its own project member — a stated "Boundary Rule": the AI service never writes to Postgres directly).
+
+**Here:** the `agent` node already dispatches to the orchestrator (`orchestrator.executor.run_agent`, `source="workflow"`). **The gap is task context, not dispatch** — assigning a `pm_tasks` row to `agent:<name>` emits `pm.task.assigned` and stops there.
+
+Two things to carry: the **session must be visible as a task activity** the instant it starts (not only in run history, which nobody browsing a task will open), and the agent's write-back must go through the ordinary gateway API under its own identity. We are stronger than Paca on the second — `EffectiveAccess.intersect()` already narrows an agent by the acting member; Paca has no equivalent — so this is adoption of a *shape* we can enforce harder than the source does.
+
+**Owner constraint, already settled and not re-openable here:** an agent's edit to a ClickUp-linked task is treated **exactly like a human edit** (owner decision, WS-27b). No approval queue for agent pushes.
+
+**Done when:** assigning a task to `agent:<name>` starts an orchestrator run whose session is visible as a `pm_activities` row on the task within the same request; the agent's write-back arrives through the ordinary task API under its own actor string; and a failed dispatch marks the activity failed rather than leaving a session that appears to be running forever.
+
+#### U8 — Agent-facing tool surface: the collapse lesson ✅ **AGENT-SAFE** · *design guidance, not a ticket*
+
+**Paca's MCP server** exposed **16 automation tools**, found it confused calling agents, and deliberately collapsed to **4** (`get/create/update/delete_automation`) taking rich nested payloads with **per-item outcomes** (one bad entry doesn't block its siblings) and **lenient removes** (removing something absent is a no-op) so a partial-failure retry is safe. Also: **internal UUIDs are never agent-facing** — nodes are addressed by task id, transitions by status id, and the tool layer resolves, so the agent never needs a read round-trip before it can write. And `ListTools` is **permission-filtered** — the tool list is computed from the caller's actual permissions.
+
+**Here:** F13 already chose the collapsed shape independently — `list_workflows`/`run_workflow`/`get_workflow_run`, three generic tools rather than one per workflow, explicitly "so the catalog scales without bloating agent tool schemas". Paca's experience is **confirming evidence for a decision already made**, and the reason this item is guidance rather than a ticket.
+
+What is *not* yet adopted, and should bind any future agent-facing tool in this app: per-item outcomes on batch payloads, lenient removes, no internal UUIDs in the agent-facing contract, and permission-filtered tool listing. **Record it here so the next tool surface starts from the collapsed design rather than rediscovering it at 16 tools.**
+
+### 13.4 What is deliberately refused
+
+Not oversights — decisions, so a future reader does not "fix" them:
+
+| Paca feature | Refused because |
+|---|---|
+| A separate automation engine + its own tables | **ADR-028 / D6 (`work_plan.md` §3)** — `/workflows` is the only engine. Everything above is an uplift *to this app*, never a sibling |
+| `call_api` action node | We have integration `tool` nodes resolved through the Registry (§3.2). Paca's own `call_api` stores headers visible to any project reader — a gap its source comments acknowledge. **Do not reproduce it** |
+| A worker process consuming an activity stream | D6 (`workflows_app.md` §9): supervised asyncio loops in the gateway, not a worker daemon. BO‑20's durable consumer is the platform's answer, and it already exists in shape |
+| WASM plugin runtime contributing node types | ADR-028: no second runtime. App Workshop + the skills registry answer this concern differently and already |
+| Tags as a bare JSONB array | Research table row 13 — the weakest part of Paca's model; refused for Projects and equally here |
+
+### 13.5 Where the numbers are
+
+Effort-shaped grouping for whoever picks this up, so the section can be sequenced without re-reading it: **U1 is WS-27f's first half and the only item anything is waiting on. U7 is its second half.** U2 and U3 are self-contained engine work with no cross-app dependency — U3 is the one that closes a promise §1.2 G6 and §2 F9 already make in writing, which arguably ranks it first of the two. U4 waits on U1 by construction. U5 waits on §8.3b by decision. U6 is independent and is the highest-value *new trigger*. U8 is guidance that binds the next tool surface and consumes no ticket.

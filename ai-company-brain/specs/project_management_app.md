@@ -401,6 +401,17 @@ per-step input/output snapshots, due-date-offset triggers, the derived dependenc
 are **`workflows_app.md` backlog items** (single owner, D6); this spec records the demand
 and stops.
 
+**Written down 2026-08-06 — `workflows_app.md` §13.** The demand is no longer only recorded
+here as a sentence: the engine spec now carries a full Paca-referenced uplift backlog,
+**U1–U8**, each with the Paca design, this engine's measured current state, and a done-when.
+The mapping from this section is exact: **U1 is the `pm.update_task` node** (WS-27f's first
+half) and **U7 is agent dispatch** (§6.4, WS-27f's second half); U2/U3/U6 are the switch,
+step snapshots and due-date trigger named above; **U4** (task retargeting over
+`parent|children|blocks|…`) is the item this section had not named and is what makes "when
+every child is Done, move the parent to Done" expressible at all. Nothing in §13 is built —
+it is the reference an implementer picks up, so WS-27f no longer has to re-derive the engine
+work from Paca's source.
+
 ### 6.4 Agents — assignment is dispatch
 Assigning `agent:<name>` (WS-27f): the `pm.task.assigned` event carries the agent target; a
 consumer creates the run through the existing orchestrator dispatch (the same seam chat

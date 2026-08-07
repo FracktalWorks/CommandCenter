@@ -8,7 +8,7 @@
  * a comment in the same stream, which is the point of the shared spine.
  */
 import Icon from "@/components/Icon";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import {
   type ActivityRow,
@@ -25,6 +25,7 @@ import {
   withAssignee,
   withoutAssignee,
 } from "../lib/assignees";
+import { insertMention, notDeliveredNotice } from "../lib/notifications";
 
 interface Props {
   task: TaskRow;
@@ -78,12 +79,17 @@ export function TaskPanel({
 }: Props) {
   const [timeline, setTimeline] = useState<ActivityRow[]>([]);
   const [comment, setComment] = useState("");
+  const [notDelivered, setNotDelivered] = useState<string | null>(null);
+  const commentBox = useRef<HTMLTextAreaElement | null>(null);
   const [assignee, setAssignee] = useState("");
   const [subtask, setSubtask] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [files, setFiles] = useState<AttachmentRow[]>([]);
   const assignees = task.assignees ?? [];
+  // Agents are excluded: an agent cannot receive a notification (migration
+  // 152's CHECK), so offering to mention one would promise nothing.
+  const mentionable = assignees.filter((who) => !who.startsWith("agent:"));
 
   useEffect(() => {
     let live = true;
@@ -222,15 +228,34 @@ export function TaskPanel({
     if (!body) return;
     setBusy(true);
     setError(null);
+    setNotDelivered(null);
     try {
-      await projectsApi.comment(task.id, body);
+      const posted = await projectsApi.comment(task.id, body);
       setComment("");
+      // WS-27j: a mention that reached nobody is said out loud. The comment
+      // still posted, so this is a notice rather than an error — but silence
+      // would leave the author believing a colleague was pulled in.
+      setNotDelivered(notDeliveredNotice(posted.not_notified ?? []));
       await reload();
     } catch (err) {
       setError(String((err as Error).message));
     } finally {
       setBusy(false);
     }
+  }
+
+  /** Insert `@address` at the caret, so nobody has to type the token by hand. */
+  function mention(who: string) {
+    const box = commentBox.current;
+    const at = box ? box.selectionStart : comment.length;
+    const next = insertMention(comment, at, who);
+    setComment(next.body);
+    // Restoring the caret is what makes the picker usable twice in a row:
+    // React resets it to the end of the new value otherwise.
+    requestAnimationFrame(() => {
+      box?.focus();
+      box?.setSelectionRange(next.caret, next.caret);
+    });
   }
 
   return (
@@ -418,12 +443,34 @@ export function TaskPanel({
 
       <div className="border-t border-border p-3">
         <textarea
+          ref={commentBox}
           value={comment}
           onChange={(e) => setComment(e.target.value)}
           placeholder="Add a comment…"
           rows={2}
           className="w-full rounded-md border border-border bg-background px-2 py-1.5 text-sm text-foreground"
         />
+        {/* Mentionable people are this task's assignees. A full directory
+            picker is WS-28e's job; these are who a comment names in practice,
+            and typing the address by hand still works for anyone else. */}
+        {mentionable.length ? (
+          <div className="mt-1 flex flex-wrap items-center gap-1">
+            <span className="text-[10px] text-muted-foreground">Mention</span>
+            {mentionable.map((who) => (
+              <button
+                key={who}
+                type="button"
+                onClick={() => mention(who)}
+                className="rounded-full border border-border px-1.5 py-0.5 text-[10px] text-muted-foreground hover:text-foreground"
+              >
+                @{who.split("@")[0]}
+              </button>
+            ))}
+          </div>
+        ) : null}
+        {notDelivered ? (
+          <p className="mt-1 text-[11px] text-muted-foreground">{notDelivered}</p>
+        ) : null}
         <button
           type="button"
           onClick={addComment}

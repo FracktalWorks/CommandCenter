@@ -425,6 +425,88 @@ async def test_get_timeline_hits_the_timeline_route(monkeypatch) -> None:
     assert "Intro call" in out
 
 
+async def test_get_timeline_renders_an_email_thread_in_full(monkeypatch) -> None:
+    """WS-26d-email — the agent is the THIRD consumer of the timeline shape,
+    and it had the same binary dispatch the UI did: "not a status change" meant
+    "an activity", so an email entry came out as ``email_thread: (no subject)``
+    with the sender, subject, snippet and status all dropped.
+
+    That is not a cosmetic loss. ``_timeline`` merges every source and THEN
+    truncates to this tool's limit, so on a mail-heavy deal the twenty rows the
+    model gets back were twenty blank ones — and it would answer "what's the
+    story with this deal?" with nothing, from a record full of history.
+    """
+    entries = {"entries": [
+        {"kind": "email_thread", "at": "2026-08-04T14:00:00Z", "origin": "own",
+         "email_thread": {
+             "thread_id": "thread-1", "account_id": "acct-1",
+             "message_id": "msg-1", "subject": "Re: quote for 40 units",
+             "snippet": "Can you hold that price to month end",
+             "folder": "INBOX", "from_name": "Ravi Menon",
+             "from_email": "ravi@acme.example",
+             "received_at": "2026-08-04T14:00:00Z", "status": "NEEDS_REPLY"}},
+        {"kind": "status_change", "at": "2026-08-01T10:00:00Z", "origin": "lead",
+         "status_change": {"from_status": "New", "to_status": "Qualified",
+                           "changed_by": "sales@fracktal.in",
+                           "dwell_seconds": 172800}},
+        {"kind": "activity", "at": "2026-07-30T09:00:00Z", "origin": "own",
+         "activity": {"type": "call", "subject": "Intro call",
+                      "created_by": "sales@fracktal.in"}},
+    ]}
+    _fake_gateway(monkeypatch, lambda _c: entries)
+    out = await _M.get_timeline("deals", _ID)
+
+    assert "Re: quote for 40 units" in out
+    assert "Ravi Menon" in out and "ravi@acme.example" in out
+    # D-CRM-12 — sender, subject, status, date; NEVER the snippet. The join is
+    # caller-scoped, but an agent answer lands in a chat transcript and a ROOM
+    # has other participants who can read it: sender+subject says a
+    # conversation exists, a snippet publishes its CONTENT. The `/crm` UI keeps
+    # the snippet on purpose — a browser has an audience of one.
+    assert "Can you hold that price to month end" not in out
+    # The status vocabulary is spoken, not echoed as a wire token.
+    assert "[Needs reply]" in out and "NEEDS_REPLY" not in out
+    # The email branch must not have eaten the other two.
+    assert "New → Qualified" in out
+    assert "Intro call" in out
+    # And it is never mistaken for an activity.
+    assert "email_thread: (no subject)" not in out
+
+
+async def test_get_timeline_survives_a_thin_email_thread(monkeypatch) -> None:
+    """Every field but the ids is optional on the wire. A thread with no
+    subject, no sender and no status still renders one honest line — the
+    ``.get()`` tolerance the rest of this tool is written with."""
+    _fake_gateway(monkeypatch, lambda _c: {"entries": [
+        {"kind": "email_thread", "at": "2026-08-04T14:00:00Z", "origin": "lead",
+         "email_thread": {"thread_id": "t", "account_id": "a",
+                          "message_id": "m"}},
+        # A kind this build has never heard of must not take the answer down.
+        {"kind": "future_kind", "at": "2026-08-03T09:00:00Z", "origin": "own"},
+    ]})
+    out = await _M.get_timeline("deals", _ID)
+
+    assert "(no subject)" in out
+    assert "unknown sender" in out
+    assert "[from its lead]" in out
+    assert "[]" not in out  # an absent status prints nothing, not empty brackets
+
+
+async def test_get_timeline_shows_an_unrecognised_thread_status_verbatim(
+    monkeypatch,
+) -> None:
+    """Same rule as the UI's ``threadStatusLabel``: the email app owns this
+    vocabulary and may grow it, and hiding a value we do not recognise is how
+    an agent starts disagreeing with the screen the user is looking at."""
+    _fake_gateway(monkeypatch, lambda _c: {"entries": [
+        {"kind": "email_thread", "at": "2026-08-04T14:00:00Z", "origin": "own",
+         "email_thread": {"thread_id": "t", "account_id": "a",
+                          "message_id": "m", "subject": "Hi",
+                          "status": "SNOOZED"}},
+    ]})
+    assert "[SNOOZED]" in await _M.get_timeline("deals", _ID)
+
+
 @pytest.mark.parametrize(
     ("given", "expected"),
     [("lead", "leads"), ("Deals", "deals"), ("opportunity", "deals"),

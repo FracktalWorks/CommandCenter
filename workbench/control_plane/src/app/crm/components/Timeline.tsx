@@ -13,12 +13,21 @@
  * `status_change` and `system` entries are read-only by construction — the
  * gateway refuses to edit or delete them (409), because a funnel with
  * editable history is not a record of anything.
+ *
+ * Email threads are the third kind (WS-26d-email). ⚠️ They are scoped to the
+ * SIGNED-IN CALLER's mailboxes, not to the record: two colleagues opening the
+ * same lead can legitimately see different threads, and somebody with no
+ * mailbox connected sees none at all. The dispatch below goes through
+ * `timelineBranch` rather than a ternary, because a ternary makes "not a
+ * status change" mean "an activity" and `ActivityEntry` reads `entry.activity!`
+ * — a `!` tsc cannot see past.
  */
 
 import Icon from "@/components/Icon";
 import Button from "@/components/ui/Button";
 import { useState } from "react";
 import { dateTime, dwellLabel } from "../lib/format";
+import { threadStatusLabel, timelineBranch, timelineKey } from "../lib/timeline";
 import type { TimelineEntry } from "../lib/types";
 
 type Composable = "note" | "call" | "meeting" | "task";
@@ -123,18 +132,42 @@ export default function Timeline({
         )}
         <ol className="space-y-3">
           {entries.map((entry, index) => (
-            <li key={`${entry.kind}-${entry.activity?.id ?? entry.status_change?.id ?? index}`}>
-              {entry.kind === "status_change" ? (
-                <StatusEntry entry={entry} />
-              ) : (
-                <ActivityEntry entry={entry} onToggleTask={onToggleTask} />
-              )}
+            <li key={timelineKey(entry, index)}>
+              <Entry entry={entry} onToggleTask={onToggleTask} />
             </li>
           ))}
         </ol>
       </div>
     </div>
   );
+}
+
+/**
+ * One entry, routed to its renderer by the pure `timelineBranch`.
+ *
+ * The `"unknown"` arm renders nothing on purpose. It is reachable only when the
+ * gateway sends a kind this build does not know, or a kind with no payload —
+ * and in that state the two alternatives are worse: an empty row reads as data
+ * loss on a record somebody is trying to trust, and falling through to
+ * `ActivityEntry` throws on `entry.activity!`.
+ */
+function Entry({
+  entry,
+  onToggleTask,
+}: {
+  entry: TimelineEntry;
+  onToggleTask: (activityId: string, completed: boolean) => void;
+}) {
+  switch (timelineBranch(entry)) {
+    case "status_change":
+      return <StatusEntry entry={entry} />;
+    case "email_thread":
+      return <EmailEntry entry={entry} />;
+    case "activity":
+      return <ActivityEntry entry={entry} onToggleTask={onToggleTask} />;
+    default:
+      return null;
+  }
 }
 
 /** The inherited-history marker. A deal's own words and its lead's are both
@@ -170,6 +203,57 @@ function StatusEntry({ entry }: { entry: TimelineEntry }) {
             <>
               <span>·</span>
               <span>after {dwell}</span>
+            </>
+          )}
+          <Origin origin={entry.origin} />
+        </p>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * One email conversation — the newest message in it, standing for the thread.
+ *
+ * Read-only, and there is no reply affordance on purpose: this timeline shows
+ * mail the caller can already read in the email app, and a compose box here
+ * would be a second, unsupervised way to send from their mailbox.
+ */
+function EmailEntry({ entry }: { entry: TimelineEntry }) {
+  const thread = entry.email_thread;
+  // Never `entry.email_thread!`: the `!` is exactly what let a payload-less
+  // entry reach `ActivityEntry` and throw, and tsc cannot see past it.
+  if (!thread) return null;
+  const status = threadStatusLabel(thread.status);
+
+  return (
+    <div className="flex items-start gap-2">
+      <Icon name="Mail" className="mt-0.5 w-3.5 h-3.5 shrink-0 text-muted-foreground" />
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-xs text-foreground">
+          {thread.subject || "(no subject)"}
+        </p>
+        {thread.snippet && (
+          <p className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">
+            {thread.snippet}
+          </p>
+        )}
+        <p className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[10px] text-muted-foreground">
+          <span className="uppercase">email</span>
+          <span>·</span>
+          <span>{dateTime(thread.received_at)}</span>
+          {(thread.from_name || thread.from_email) && (
+            <>
+              <span>·</span>
+              <span className="truncate">
+                {thread.from_name || thread.from_email}
+              </span>
+            </>
+          )}
+          {status && (
+            <>
+              <span>·</span>
+              <span>{status}</span>
             </>
           )}
           <Origin origin={entry.origin} />

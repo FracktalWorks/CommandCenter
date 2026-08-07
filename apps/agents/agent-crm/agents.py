@@ -430,12 +430,55 @@ async def get_record(entity: str, record_id: str) -> str:
     return "\n".join(lines)
 
 
+#: ``email_thread_status.status`` → the words a human uses for it. A mirror of
+#: ``workbench/control_plane/src/app/crm/lib/timeline.ts::threadStatusLabel``,
+#: including its rule for a value neither side recognises: show it verbatim
+#: rather than drop it. The email app owns this vocabulary and may grow it.
+_THREAD_STATUS_LABELS: dict[str, str] = {
+    "NEEDS_REPLY": "Needs reply",
+    "AWAITING": "Awaiting reply",
+    "FYI": "FYI",
+    "DONE": "Done",
+}
+
+
+def _email_line(thread: dict[str, Any]) -> str:
+    """One ``email_thread`` entry as prose: sender, subject, status.
+
+    ⚠️ **Never the snippet or any body text — D-CRM-12.** The timeline join is
+    caller-scoped, so this is the asking person's own mail; but an agent answer
+    does not stay with the asker, it lands in a chat transcript, and a ROOM has
+    other participants who can read it. Sender+subject says a conversation
+    exists; a snippet publishes its CONTENT to everybody present. The `/crm`
+    UI's `EmailEntry` deliberately DOES show the snippet — the payload is
+    unchanged and a browser has an audience of one. This is the one place where
+    what the screen may show and what the agent may say have to differ.
+    """
+    name, address = thread.get("from_name"), thread.get("from_email")
+    both = f"{name} <{address}>" if name and address else ""
+    who = both or name or address or "unknown sender"
+    raw_status = str(thread.get("status") or "").strip()
+    status = _THREAD_STATUS_LABELS.get(raw_status.upper(), raw_status)
+    return (
+        f"email from {who}: {thread.get('subject') or '(no subject)'}"
+        + (f" [{status}]" if status else "")
+    )
+
+
 @_annotate_risk(read_only=True, idempotent=True)
 async def get_timeline(entity: str, record_id: str, limit: int = 20) -> str:
     """What has happened to a CRM record, newest first: logged notes, calls,
-    meetings and tasks, plus every status change with how long it sat in the
-    previous stage. A deal also inherits the timeline of the lead it came from,
-    labelled as such. Use this to answer "what's the story with this deal?"."""
+    meetings and tasks, every status change with how long it sat in the
+    previous stage, and email threads with this record's people. A deal also
+    inherits the timeline of the lead it came from, labelled as such. Use this
+    to answer "what's the story with this deal?".
+
+    ⚠️ The email entries are the ASKING PERSON's own mail — the CRM is shared
+    but a mailbox is not, so somebody else looking at the same record may see
+    different threads and somebody with no mailbox connected sees none. Never
+    report "there has been no email" as a fact about the record. Each thread is
+    given as sender, subject and status only, never its contents (D-CRM-12) —
+    do not speculate about what an email said."""
     slug = _entity_slug(entity)
     record = _record_uuid(record_id)
     capped = max(1, min(int(limit or 20), 100))
@@ -459,6 +502,19 @@ async def get_timeline(entity: str, record_id: str, limit: int = 20) -> str:
                 f"{change.get('from_status') or '—'} → "
                 f"{change.get('to_status') or '?'}"
                 f"{held} (by {change.get('changed_by') or 'unknown'})"
+            )
+            continue
+        if entry.get("kind") == "email_thread":
+            # A third branch, not a fall-through. The dispatch used to be
+            # binary — "not a status change" meant "an activity" — so an email
+            # entry rendered as `email_thread: (no subject)` with the sender,
+            # subject, snippet and status all dropped. Since `_timeline` merges
+            # every source and THEN truncates, a mail-heavy deal answered
+            # "what's the story with this deal?" with twenty blank rows and no
+            # history at all.
+            out.append(
+                f"• {when}{inherited} — "
+                f"{_email_line(entry.get('email_thread') or {})}"
             )
             continue
         act = entry.get("activity") or {}

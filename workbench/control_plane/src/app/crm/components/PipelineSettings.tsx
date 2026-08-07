@@ -24,6 +24,7 @@ import { Input } from "@/components/ui/Input";
 import { useState } from "react";
 import { statusTone, TONE_COLORS } from "../lib/board";
 import {
+  backfillRan,
   changedFields,
   reorder,
   validateLostReasonDraft,
@@ -234,12 +235,19 @@ function StageReport({ report }: { report: StageMetadataReport }) {
         </p>
       )}
 
-      <p className="text-muted-foreground">
-        Close dates: {report.closed_at.stamped} stamped from Zoho&apos;s closing
-        date{report.applied ? "" : ` (${report.closed_at.eligible} eligible)`},{" "}
-        {report.closed_at.missing_close_date} left blank because the tenant gave
-        no date.
-      </p>
+      {/* Only when the backfill actually ran. On the D-CRM-11 stop and on any
+          unavailable outcome the database is never opened, and printing
+          "0 stamped, 0 left blank" there reports a measurement nobody took —
+          next to a banner saying nothing was read. */}
+      {backfillRan(report) && report.closed_at && (
+        <p className="text-muted-foreground">
+          Close dates: {report.closed_at.stamped} stamped from Zoho&apos;s
+          closing date
+          {report.applied ? "" : ` (${report.closed_at.eligible} eligible)`},{" "}
+          {report.closed_at.missing_close_date} left blank because the tenant
+          gave no date.
+        </p>
+      )}
       {report.probability.outcome === "no_data" && (
         <p className="text-muted-foreground">
           Zoho carries no per-stage probability for this layout — set them below.
@@ -679,6 +687,7 @@ function ReasonRow({
   const [label, setLabel] = useState(reason.label);
   const [served, setServed] = useState(reason.label);
   const [invalid, setInvalid] = useState<string | null>(null);
+  const [confirming, setConfirming] = useState(false);
   if (served !== reason.label) {
     setServed(reason.label);
     setLabel(reason.label);
@@ -722,9 +731,90 @@ function ReasonRow({
         icon="Trash2"
         aria-label="Delete"
         disabled={saving}
-        onClick={() => void onRemove()}
+        onClick={() => setConfirming(true)}
       />
       {invalid && <p className="w-full text-xs text-destructive">{invalid}</p>}
+      {confirming && (
+        <DeleteReasonDialog
+          reason={reason}
+          saving={saving}
+          onCancel={() => setConfirming(false)}
+          onConfirm={async () => {
+            setConfirming(false);
+            await onRemove();
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * The one destructive control on this screen, and it does not look like one.
+ *
+ * `crm_deals.lost_reason_id` is `ON DELETE SET NULL`, so deleting a reason does
+ * not fail and does not warn — it silently blanks the attribution on every deal
+ * that cited it, and that attribution is exactly what WS-26g's lost-reason
+ * breakdown reads. The row keeps its `lost_note`, so the loss is partial and
+ * therefore invisible: nothing on screen changes, and the report is simply
+ * thinner next quarter.
+ *
+ * So the dialog names the consequence rather than asking "are you sure". It
+ * does NOT claim a count — the endpoint does not return one, and inventing
+ * "this will affect N deals" would be worse than saying nothing. Counting
+ * before deleting is the better answer and is deferred, recorded in the ticket.
+ */
+function DeleteReasonDialog({
+  reason,
+  saving,
+  onCancel,
+  onConfirm,
+}: {
+  reason: LostReason;
+  saving: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <button
+        aria-label="Cancel"
+        onClick={onCancel}
+        className="absolute inset-0 bg-background/80 backdrop-blur-sm"
+      />
+      <div className="relative w-full max-w-sm rounded-xl border border-border bg-card shadow-xl">
+        <header className="border-b border-border px-4 py-3">
+          <h2 className="text-base font-bold text-foreground">
+            Delete &ldquo;{reason.label}&rdquo;?
+          </h2>
+        </header>
+        <div className="space-y-2 px-4 py-3 text-xs text-muted-foreground">
+          <p>
+            Every deal closed for this reason keeps its note but{" "}
+            <span className="text-foreground">loses the reason itself</span> —
+            the lost-reason breakdown in the reports will no longer count them.
+          </p>
+          <p>
+            Nothing on the board changes, so this is not something you will
+            notice later. Renaming the reason keeps the attribution; deleting it
+            does not.
+          </p>
+        </div>
+        <footer className="flex items-center justify-end gap-2 border-t border-border px-4 py-3">
+          <Button variant="secondary" size="sm" onClick={onCancel}>
+            Cancel
+          </Button>
+          <Button
+            variant="destructive"
+            size="sm"
+            icon="Trash2"
+            loading={saving}
+            onClick={onConfirm}
+          >
+            Delete anyway
+          </Button>
+        </footer>
+      </div>
     </div>
   );
 }

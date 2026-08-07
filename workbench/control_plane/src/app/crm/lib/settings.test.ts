@@ -1,15 +1,22 @@
 import { describe, expect, it } from "vitest";
 import {
+  applyPatches,
+  backfillRan,
   changedFields,
   CLAMPED_PROBABILITY,
   moveItem,
   POSITION_STEP,
   renumber,
   reorder,
+  reorderFailureMessage,
   validateLostReasonDraft,
   validateStatusDraft,
 } from "./settings";
-import type { StatusType } from "./types";
+import type {
+  ClosedAtBackfill,
+  StageMetadataReport,
+  StatusType,
+} from "./types";
 
 // The admin API has no bulk reorder — it has a per-row PATCH — so what a drop
 // SENDS is decided here (WS-26f f2, done-when 5).
@@ -93,6 +100,101 @@ describe("reorder", () => {
       { id: "b", position: 20 },
       { id: "c", position: 30 },
     ]);
+  });
+});
+
+describe("applyPatches", () => {
+  it("issues every patch and reports the failures together", async () => {
+    // Stopping at the first refusal leaves the rows already written holding
+    // their NEW numbers and the rest their old ones — duplicate positions,
+    // which the lanes on screen cannot show and the next drag compounds.
+    const sent: string[] = [];
+    const failures = await applyPatches(
+      [lane("a", 10), lane("b", 20), lane("c", 30)],
+      async (patch) => {
+        sent.push(patch.id);
+        if (patch.id === "b") throw new Error("Status not found");
+      }
+    );
+
+    expect(sent).toEqual(["a", "b", "c"]);
+    expect(failures).toEqual(["Status not found"]);
+  });
+
+  it("returns nothing when every patch lands", async () => {
+    expect(await applyPatches([lane("a", 10)], async () => {})).toEqual([]);
+  });
+
+  it("issues them in order, one at a time", async () => {
+    // Serial rather than Promise.all: N writes to one column, and a race is
+    // not a better failure mode than a slow loop.
+    const order: string[] = [];
+    await applyPatches([lane("a", 10), lane("b", 20)], async (patch) => {
+      order.push(`start:${patch.id}`);
+      await Promise.resolve();
+      order.push(`end:${patch.id}`);
+    });
+    expect(order).toEqual(["start:a", "end:a", "start:b", "end:b"]);
+  });
+
+  it("survives a thrown non-Error", async () => {
+    const failures = await applyPatches([lane("a", 10)], async () => {
+      throw "boom";
+    });
+    expect(failures).toEqual(["boom"]);
+  });
+});
+
+describe("reorderFailureMessage", () => {
+  it("names the arithmetic and what the reader is now looking at", () => {
+    // A bare "request failed" next to a grid that re-read into a third order
+    // is how somebody drags again and makes it worse.
+    const message = reorderFailureMessage(["Status not found"], 4);
+    expect(message).toContain("1 of 4");
+    expect(message).toContain("the order shown is the server's");
+    expect(message).toContain("Status not found");
+  });
+});
+
+// ── The close-date section is only printed when it was computed ───────────
+
+describe("backfillRan", () => {
+  const counts: ClosedAtBackfill = {
+    eligible: 0,
+    stamped: 0,
+    missing_close_date: 0,
+  };
+  const report = (over: Partial<StageMetadataReport>) =>
+    ({ outcome: "dry_run", closed_at: counts, ...over }) as StageMetadataReport;
+
+  it("is true for the two outcomes that opened the database", () => {
+    expect(backfillRan(report({ outcome: "dry_run" }))).toBe(true);
+    expect(backfillRan(report({ outcome: "applied" }))).toBe(true);
+  });
+
+  it("is false when the gateway left the section absent", () => {
+    // null means "not evaluated", never "evaluated and found nothing".
+    expect(backfillRan(report({ outcome: "stopped", closed_at: null }))).toBe(
+      false
+    );
+    expect(
+      backfillRan(report({ outcome: "unavailable", closed_at: null }))
+    ).toBe(false);
+  });
+
+  it("is false on a stop even if counts somehow arrive", () => {
+    // The second condition, and the reason both are ANDed: a future server
+    // that started sending a zeroed section on a stop still cannot make this
+    // UI print "0 close dates missing" about data nobody read.
+    expect(backfillRan(report({ outcome: "stopped" }))).toBe(false);
+    expect(backfillRan(report({ outcome: "unavailable" }))).toBe(false);
+  });
+
+  it("is true for a real run that found nothing to stamp", () => {
+    // Zero IS a measurement here — it is only a lie when nothing was measured.
+    expect(backfillRan(report({ outcome: "applied", closed_at: counts }))).toBe(
+      true
+    );
   });
 });
 

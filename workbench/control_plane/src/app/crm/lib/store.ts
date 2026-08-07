@@ -17,7 +17,11 @@ import * as api from "./api";
 import { CrmError } from "./api";
 import { applyMove, toBoardLanes, type BoardLane, type DealMove } from "./board";
 import { listQuery } from "./filters";
-import type { PositionPatch } from "./settings";
+import {
+  applyPatches,
+  reorderFailureMessage,
+  type PositionPatch,
+} from "./settings";
 import { isEntity, type CrmView } from "./urlState";
 import type {
   Contact,
@@ -392,13 +396,15 @@ export const useCrmStore = create<CrmState>((set, get) => ({
   async reorderStatuses(kind, patches) {
     set({ saving: true, error: null });
     try {
-      // Serial, not Promise.all: these are N writes to the same table and a
-      // partial failure must leave a readable order rather than a race.
-      for (const patch of patches) {
-        await api.patchStatus(kind, patch.id, { position: patch.position });
+      // Every patch is issued even after one fails (`applyPatches`): stopping
+      // at the first refusal leaves the rows already written holding their new
+      // numbers and the rest their old ones, i.e. duplicate positions.
+      const failures = await applyPatches(patches, (patch) =>
+        api.patchStatus(kind, patch.id, { position: patch.position })
+      );
+      if (failures.length) {
+        set({ error: reorderFailureMessage(failures, patches.length) });
       }
-    } catch (err) {
-      set({ error: message(err) });
     } finally {
       set({ saving: false });
       await get().loadVocabulary();
@@ -437,11 +443,12 @@ export const useCrmStore = create<CrmState>((set, get) => ({
   async reorderLostReasons(patches) {
     set({ saving: true, error: null });
     try {
-      for (const patch of patches) {
-        await api.patchLostReason(patch.id, { position: patch.position });
+      const failures = await applyPatches(patches, (patch) =>
+        api.patchLostReason(patch.id, { position: patch.position })
+      );
+      if (failures.length) {
+        set({ error: reorderFailureMessage(failures, patches.length) });
       }
-    } catch (err) {
-      set({ error: message(err) });
     } finally {
       set({ saving: false });
       await get().loadVocabulary();

@@ -298,6 +298,59 @@ async def test_more_than_one_pipeline_stops_before_anything_is_written(
     assert report.stages == []
 
 
+@pytest.mark.parametrize(
+    "outcome",
+    ["stopped", "unavailable"],
+)
+async def test_a_run_that_never_opened_the_database_reports_no_close_dates(
+    db: FakeCrmDB, tenant: FakeTenant, outcome: str,
+) -> None:
+    """``closed_at`` is **absent**, not zeroed, when the backfill never ran.
+
+    The model's default used to be ``ClosedAtBackfill()``, so a stop and a
+    scope refusal both answered "0 stamped, 0 missing a close date" — a
+    MEASUREMENT this endpoint never took, printed next to a banner saying
+    nothing was read. "0 close dates missing" reads as reassurance about data
+    nobody looked at, which is the exact species of quiet lie f4 exists to
+    avoid on the deal rows themselves.
+    """
+    seed_native_pipeline(db)
+    db.seed(
+        "crm_deals", name="Won deal", status_id=next(
+            r["id"] for r in db.rows("crm_deal_statuses") if r["name"] == "Closed Won"
+        ),
+        closed_at=None, expected_close_date=None,
+    )
+    if outcome == "stopped":
+        tenant.pipelines = [
+            pipeline("Standard", stage("Qualification", 1)),
+            pipeline("Renewals", stage("Renewal Due", 1)),
+        ]
+    else:
+        tenant.layout_error = ZohoScopeError(LAYOUTS_SCOPE, "invalid oauth scope")
+
+    report = await run(apply=True)
+
+    assert report.outcome == outcome
+    assert report.closed_at is None
+    assert writes(db) == []
+
+
+@pytest.mark.parametrize("apply", [False, True])
+async def test_a_run_that_did_open_the_database_always_reports_a_section(
+    db: FakeCrmDB, tenant: FakeTenant, apply: bool,
+) -> None:
+    """The other half of the sentinel: absent means "not evaluated", so a real
+    run must never leave it absent — including one that found nothing to do."""
+    seed_native_pipeline(db)
+    tenant.pipelines = [pipeline("Standard", stage("Qualification", 1))]
+
+    report = await run(apply=apply)
+
+    assert report.closed_at is not None
+    assert report.closed_at.stamped == 0
+
+
 # ── done-when 2 · idempotency ───────────────────────────────────────────────
 
 async def test_apply_renumbers_retypes_and_creates_the_missing_lanes(
@@ -435,6 +488,41 @@ async def test_a_probability_that_was_read_is_reported_as_read(
 
     assert report.probability.outcome == "read"
     assert report.probability.values == 1
+
+
+async def test_a_refused_layout_read_never_claims_the_probability_was_absent(
+    db: FakeCrmDB, tenant: FakeTenant,
+) -> None:
+    """The fourth outcome, and the one a default was quietly answering for.
+
+    ``no_data`` is a statement ABOUT a layout — "Zoho carries none for this
+    one, set them by hand". When the layout read itself is refused there is no
+    layout to say it about, and saying it anyway points the owner at the
+    settings grid when the thing to change is the API version constant.
+    """
+    seed_native_pipeline(db)
+    tenant.layout_error = ZohoApiVersionError("v8", "settings/layouts", "nope")
+
+    report = await run(apply=True)
+
+    assert report.probability.outcome == "unavailable"
+    assert report.probability.outcome != "no_data"
+    assert "v8" in (report.probability.detail or "")
+    assert report.missing_scope is None
+    assert writes(db) == []
+
+
+async def test_a_tenant_with_no_deals_layout_is_also_unavailable_not_no_data(
+    db: FakeCrmDB, tenant: FakeTenant,
+) -> None:
+    seed_native_pipeline(db)
+    tenant.layouts = []
+
+    report = await run(apply=True)
+
+    assert report.outcome == "unavailable"
+    assert report.probability.outcome == "unavailable"
+    assert writes(db) == []
 
 
 async def test_a_refused_api_version_is_reported_not_walked_downward(

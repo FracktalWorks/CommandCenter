@@ -769,6 +769,92 @@ async def test_the_terminal_probabilities_are_still_settable(
     assert (lost.type, lost.probability) == ("lost", 0)
 
 
+# The clamp judges a TRANSITION, not a resting state. `import_zoho.ensure_status`
+# mints an unseen Zoho stage at probability 0 and guesses its type from the name,
+# so every pull can create a won-type lane at 0% — a row that already contradicts
+# D-CRM-10 the moment it exists. Judging the resting state made those lanes
+# unmanageable by the very grid that exists to fix them.
+
+def _legacy_won_lane(db: FakeCrmDB):
+    """The shape a Zoho pull mints: won by name-guess, probability 0."""
+    return db.seed(
+        "crm_deal_statuses", name="Order Won", position=70, type="won",
+        probability=0,
+    )
+
+
+async def test_a_position_only_patch_never_trips_the_clamp(
+    db: FakeCrmDB,
+) -> None:
+    """The one that was broken: reordering is the settings grid's whole job,
+    and it PATCHes `position` alone on every lane that moved. A 422 about a
+    probability the caller never mentioned aborts the reorder loop partway and
+    leaves duplicate positions — a worse state than either order."""
+    seeded = _legacy_won_lane(db)
+
+    patched = await crm_admin.patch_status(
+        "deal", str(seeded.id), crm_admin.StatusIn(position=20), USER,
+    )
+
+    assert patched.position == 20
+    assert (patched.type, patched.probability) == ("won", 0)
+
+
+async def test_a_rename_only_patch_on_a_contradictory_lane_succeeds(
+    db: FakeCrmDB,
+) -> None:
+    """Same rule, the other everyday edit: the first thing an owner does to an
+    importer-minted lane is give it the team's name for it."""
+    seeded = _legacy_won_lane(db)
+
+    patched = await crm_admin.patch_status(
+        "deal", str(seeded.id),
+        crm_admin.StatusIn(name="Order Delivered", color="green"), USER,
+    )
+
+    assert patched.name == "Order Delivered"
+    assert patched.color == "green"
+
+
+async def test_is_default_and_colour_are_not_forecast_decisions(
+    db: FakeCrmDB,
+) -> None:
+    seeded = _legacy_won_lane(db)
+    patched = await crm_admin.patch_status(
+        "deal", str(seeded.id), crm_admin.StatusIn(is_default=True), USER,
+    )
+    assert patched.is_default is True
+
+
+async def test_the_clamp_still_fires_when_the_payload_names_the_probability(
+    db: FakeCrmDB,
+) -> None:
+    """The narrowing must not become a hole: touching the FORECAST on the same
+    contradictory lane is still judged, because that is a transition."""
+    seeded = _legacy_won_lane(db)
+
+    with pytest.raises(HTTPException) as exc:
+        await crm_admin.patch_status(
+            "deal", str(seeded.id), crm_admin.StatusIn(probability=40), USER,
+        )
+
+    assert exc.value.status_code == 422
+    assert "D-CRM-10" in str(exc.value.detail)
+    assert db.rows("crm_deal_statuses")[0]["probability"] == 0
+
+
+async def test_the_way_out_of_a_contradictory_lane_is_still_open(
+    db: FakeCrmDB,
+) -> None:
+    """And the repair itself lands: 0 → 100 on a won lane is exactly the edit
+    f1's apply performs and f2's grid offers."""
+    seeded = _legacy_won_lane(db)
+    patched = await crm_admin.patch_status(
+        "deal", str(seeded.id), crm_admin.StatusIn(probability=100), USER,
+    )
+    assert patched.probability == 100
+
+
 async def test_retyping_a_stage_to_won_without_moving_its_probability_is_422(
     db: FakeCrmDB,
 ) -> None:

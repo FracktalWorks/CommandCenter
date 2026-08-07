@@ -1447,6 +1447,34 @@ metadata probe comes back empty-handed.)*
 >    indistinguishable from "this tenant configured nothing", and both write
 >    nothing — so the cost of getting it wrong is a silent no-op, which is the one
 >    outcome this endpoint exists to prevent.
+>
+> **Review repairs, 2026-08-07 (diff review, same branch):**
+> - **The D-CRM-10 clamp judges a TRANSITION, not a resting state.** It fires
+>   only when the payload names `type` or `probability`. Reading the stored row
+>   unconditionally made the importer's own output unmanageable: `ensure_status`
+>   mints an unseen Zoho stage at probability 0 and guesses its type from the
+>   name, so a pull creates won-type lanes at 0% — and a position-only PATCH on
+>   one answered 422 about a probability the caller never mentioned, aborting
+>   f2's reorder loop partway and leaving duplicate positions. The rule is "you
+>   may not MOVE a stage into a contradiction", not "you may not touch one".
+> - **`closed_at` is absent, not zeroed, when the backfill never ran.** The stop
+>   and the unavailable outcomes return before the database is opened, and a
+>   zeroed section there reported a measurement nobody took ("0 close dates
+>   missing", next to a banner saying nothing was read). `null` is the sentinel
+>   on both sides; the UI reads it through `settings.ts::backfillRan`.
+> - **The probability probe has a fourth outcome, `unavailable`.** A refused
+>   layout read (or a tenant with no Deals layout) used to leave the probe at its
+>   `no_data` default — a claim ABOUT a layout nobody had, pointing the owner at
+>   the settings grid when the thing to change was the API version constant.
+> - **A reorder issues every PATCH and reports the failures together**
+>   (`settings.ts::applyPatches`). Stopping at the first refusal left the written
+>   rows on their new numbers and the rest on their old ones.
+> - **Deleting a lost reason is confirmed** — `crm_deals.lost_reason_id` is
+>   `ON DELETE SET NULL`, so a misclick silently strips the attribution WS-26g's
+>   lost-reason breakdown reads, and nothing on screen changes to show it. The
+>   dialog names that consequence. ⚠️ **Count-before-delete is DEFERRED** (the
+>   admin API returns no usage count for a reason, unlike the 409 that guards a
+>   status still holding deals); the confirm gate is what shipped.
 
 **Root cause, verified in code.** `import_zoho.py::_ensure_status` appends an unseen
 Zoho stage past the last `position` with `probability = 0` — the right refusal at import

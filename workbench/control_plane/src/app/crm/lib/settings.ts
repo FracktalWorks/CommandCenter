@@ -16,7 +16,7 @@
 //      says so before the request, because "422" in a toast is not an answer
 //      to "why can I not save this row".
 
-import type { StatusType } from "./types";
+import type { StageMetadataReport, StatusType } from "./types";
 
 /** Lanes are numbered in tens so a lane can be inserted between two by hand. */
 export const POSITION_STEP = 10;
@@ -76,6 +76,70 @@ export function reorder<T extends Reorderable>(
       .filter((item) => before.get(item.id) !== item.position)
       .map((item) => ({ id: item.id, position: item.position })),
   };
+}
+
+/**
+ * Did the close-date backfill actually run for this report?
+ *
+ * Two independent conditions, deliberately ANDed. The gateway leaves
+ * `closed_at` **absent** unless it opened the database (the D-CRM-11 stop and
+ * every unavailable outcome return before it does), and the outcome says the
+ * same thing a second way. Either alone would be enough today; together they
+ * mean a future server that starts sending a zeroed section on a stop still
+ * cannot make this UI print "0 close dates missing" about data nobody read.
+ */
+export function backfillRan(
+  report: Pick<StageMetadataReport, "outcome" | "closed_at">
+): boolean {
+  if (report.closed_at === null || report.closed_at === undefined) return false;
+  return report.outcome === "dry_run" || report.outcome === "applied";
+}
+
+/**
+ * Issue every patch. Collect the failures. Never stop at the first one.
+ *
+ * A reorder is N writes to ONE column, and abandoning it partway is worse than
+ * either the old order or the new one: the rows already written hold their new
+ * numbers and the rest hold their old ones, so the grid ends up with duplicate
+ * positions — a state the lanes on screen cannot show and the next drag
+ * compounds. Every patch is therefore attempted and the failures are reported
+ * together, with the re-read that follows showing whatever the server actually
+ * holds.
+ *
+ * Serial rather than `Promise.all` for the same reason it always was: these are
+ * N writes to the same table and a race is not a better failure mode.
+ */
+export async function applyPatches(
+  patches: PositionPatch[],
+  send: (patch: PositionPatch) => Promise<unknown>
+): Promise<string[]> {
+  const failures: string[] = [];
+  for (const patch of patches) {
+    try {
+      await send(patch);
+    } catch (err) {
+      failures.push(err instanceof Error ? err.message : String(err));
+    }
+  }
+  return failures;
+}
+
+/**
+ * What a partly-applied reorder says.
+ *
+ * It names the arithmetic (how many of how many) and then the one thing the
+ * reader needs to act on: the order below is the server's, not theirs. A bare
+ * "request failed" next to a grid that re-read into a third order is how
+ * somebody drags again and makes it worse.
+ */
+export function reorderFailureMessage(
+  failures: string[],
+  total: number
+): string {
+  return (
+    `${failures.length} of ${total} lanes could not be reordered — the order ` +
+    `shown is the server's, not the one you dropped. ${failures[0]}`
+  );
 }
 
 // ── D-CRM-10, client side ─────────────────────────────────────────────────

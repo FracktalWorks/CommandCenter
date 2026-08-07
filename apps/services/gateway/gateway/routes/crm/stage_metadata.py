@@ -132,13 +132,25 @@ class OrphanLane(BaseModel):
 class ProbabilityProbe(BaseModel):
     """Whether the per-stage probability could be read, and if not, why not.
 
-    ``no_scope`` and ``no_data`` are different sentences to an owner: one is
-    "re-mint the token with this scope", the other is "Zoho does not carry this
-    for your tenant, set them by hand in the settings tab". Collapsing them
-    into one "unavailable" is the failure this field exists to prevent.
+    Four outcomes, and the distinctions are the point — each sends the owner
+    somewhere different:
+
+    * ``read`` — values came back; the repair applies them.
+    * ``no_scope`` — re-mint the token with the named ``scope``.
+    * ``no_data`` — the layout WAS read and carries no probability; set them by
+      hand in the settings tab. This is the only one that is a statement ABOUT
+      the layout, so it must never be the answer when no layout was read.
+    * ``unavailable`` — we never got far enough to look (the layout read was
+      refused, or the tenant returned no Deals layout). Points at the API
+      version constant, not at f2.
+
+    Collapsing any of these into one "unavailable" is the failure this field
+    exists to prevent; so is letting the default speak for a read that never
+    happened, which is why :class:`Metadata` starts at ``unavailable`` and only
+    a code path that actually held the layout overwrites it.
     """
 
-    outcome: str  # "read" | "no_scope" | "no_data"
+    outcome: str  # "read" | "no_scope" | "no_data" | "unavailable"
     scope: str | None = None
     detail: str | None = None
     values: int = 0
@@ -167,7 +179,12 @@ class StageMetadataReport(BaseModel):
     probability: ProbabilityProbe
     stages: list[StageChange] = []
     orphans: list[OrphanLane] = []
-    closed_at: ClosedAtBackfill = ClosedAtBackfill()
+    #: ⚠️ **None means the backfill never ran**, not "it ran and found nothing".
+    #: On the D-CRM-11 stop and on every unavailable outcome the database is
+    #: never opened, so a zero here would be a MEASUREMENT this endpoint never
+    #: took — and "0 close dates missing" reads as reassurance about data
+    #: nobody looked at. Only the dry-run and applied paths set it.
+    closed_at: ClosedAtBackfill | None = None
     #: How many lanes this run would change (or did). Zero on a second apply —
     #: that is done-when 2's idempotency, measured rather than asserted.
     changed: int = 0
@@ -409,8 +426,14 @@ class Metadata:
     layouts_seen: int = 0
     pipelines: list[dict[str, Any]] = field(default_factory=list)
     probabilities: dict[str, int] = field(default_factory=dict)
+    #: Starts at ``unavailable`` — "we never got far enough to look" — and is
+    #: overwritten ONLY by a path that actually held the layout. Defaulting it
+    #: to ``no_data`` made a refused layout read answer "Zoho carries no
+    #: per-stage probability for this layout", a statement about a layout
+    #: nobody had, pointing the owner at the settings grid when the thing to
+    #: change was the API version constant.
     probe: ProbabilityProbe = field(
-        default_factory=lambda: ProbabilityProbe(outcome="no_data"),
+        default_factory=lambda: ProbabilityProbe(outcome="unavailable"),
     )
     missing_scope: str | None = None
     errors: list[str] = field(default_factory=list)
@@ -442,12 +465,19 @@ async def fetch_metadata(zoho: Any) -> Metadata:
         meta.errors.append(f"layout metadata unavailable: {exc}")
         return meta
     except ZohoApiVersionError as exc:
+        # The probe stays `unavailable`: nothing was read, so "this layout
+        # carries no probability" would be a claim about a layout we never saw.
+        meta.probe = ProbabilityProbe(outcome="unavailable", detail=str(exc)[:200])
         meta.errors.append(f"layout metadata unavailable: {exc}")
         return meta
 
     meta.layouts_seen = len(layouts)
     meta.layout = pick_deals_layout(layouts)
     if meta.layout is None:
+        meta.probe = ProbabilityProbe(
+            outcome="unavailable",
+            detail="Zoho returned no Deals layout to read the Stage picklist from.",
+        )
         meta.errors.append("Zoho returned no Deals layout to read a pipeline from.")
         return meta
 
@@ -621,9 +651,11 @@ async def import_zoho_stages(
 
         if apply:
             await apply_repair(db, plan)
-        report.closed_at = await backfill_closed_at(
-            db, plan.types_after, apply=apply,
-        )
+        # This is the ONLY place `closed_at` is set, and that is the point: the
+        # stop and the unavailable branches leave it None, so the report can
+        # never print a count for a computation that did not happen.
+        backfill = await backfill_closed_at(db, plan.types_after, apply=apply)
+        report.closed_at = backfill
         if apply:
             await db.commit()
     finally:
@@ -632,7 +664,7 @@ async def import_zoho_stages(
     _log.info(
         "crm.stages.repair",
         applied=apply, actor=who, changed=report.changed,
-        orphans=len(report.orphans), closed_at=report.closed_at.stamped,
+        orphans=len(report.orphans), closed_at=backfill.stamped,
         probability=report.probability.outcome,
     )
     return report

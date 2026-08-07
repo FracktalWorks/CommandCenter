@@ -94,15 +94,20 @@ def _status_wire(row: Any) -> StatusModel:
 CLAMPED_PROBABILITY: dict[str, int] = {"won": 100, "lost": 0}
 
 
+#: The two fields whose movement the clamp judges. A PATCH naming neither is
+#: not a forecast decision and must never be refused on forecast grounds.
+CLAMPED_FIELDS: frozenset[str] = frozenset({"type", "probability"})
+
+
 def _effective(
     values: dict[str, Any], existing: Any, column: str, fallback: Any,
 ) -> Any:
     """The value a write will LEAVE on the row — payload, else row, else default.
 
-    The clamp has to read this rather than the payload: a PATCH naming only
-    ``type`` and a PATCH naming only ``probability`` each contradict the rule
-    on their own, and a check that saw only what was sent would wave both
-    through and leave the row lying.
+    Once the clamp has decided to fire, it has to read this rather than the
+    payload alone: a PATCH naming only ``type`` and a PATCH naming only
+    ``probability`` each contradict the rule on their own, and a check that saw
+    only what was sent would wave both through and leave the row lying.
     """
     if column in values:
         return values[column]
@@ -130,6 +135,24 @@ def _validate_status(
             detail="Lead statuses have no probability — that column is deal-only.",
         )
     if kind != "deal":
+        return
+    # ⚠️ **The clamp judges a TRANSITION, not a resting state.** It fires only
+    # when the payload itself names `type` or `probability`; a PATCH that
+    # touches neither is not a forecast decision and cannot be refused on
+    # forecast grounds.
+    #
+    # Reading the stored row unconditionally was a shipped defect. The Zoho
+    # importer's `ensure_status` mints an unseen stage at `probability = 0`
+    # and guesses its type from the name, so every pull can create a won-type
+    # lane at 0% — a row that already contradicts D-CRM-10 the moment it
+    # exists. Judging the resting state made those lanes **un-renameable,
+    # un-recolourable and un-reorderable**: a position-only PATCH answered 422
+    # about a probability the caller never mentioned, which aborted the
+    # settings grid's reorder loop partway and left duplicate positions
+    # behind. The rule the owner needs is "you may not MOVE a stage into a
+    # contradiction", not "you may not touch a stage that is already in one" —
+    # and f2's grid is the surface for getting out of one.
+    if not (CLAMPED_FIELDS & values.keys()):
         return
 
     probability = _effective(values, existing, "probability", 0)

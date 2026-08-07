@@ -54,8 +54,12 @@ export type StageChange = {
 export type OrphanLane = { name: string; position: number; deals: number };
 
 export type ProbabilityProbe = {
-  /** "read" · "no_scope" (re-mint the token) · "no_data" (set them by hand). */
-  outcome: "read" | "no_scope" | "no_data";
+  /**
+   * "read" · "no_scope" (re-mint the token) · "no_data" (the layout WAS read
+   * and carries none — set them by hand) · "unavailable" (we never got far
+   * enough to look; points at the API version, not at the settings grid).
+   */
+  outcome: "read" | "no_scope" | "no_data" | "unavailable";
   scope?: string | null;
   detail?: string | null;
   values: number;
@@ -79,7 +83,12 @@ export type StageMetadataReport = {
   probability: ProbabilityProbe;
   stages: StageChange[];
   orphans: OrphanLane[];
-  closed_at: ClosedAtBackfill;
+  /**
+   * ⚠️ **null means the backfill never ran**, not "it ran and found nothing" —
+   * the stop and the unavailable outcomes return before the database is
+   * opened. Read it through `settings.ts::backfillRan`, never directly.
+   */
+  closed_at: ClosedAtBackfill | null;
   changed: number;
   notes: string[];
   errors: string[];

@@ -1428,10 +1428,20 @@ metadata probe comes back empty-handed.)*
 >    same PR makes the admin API 422 a won-type lane that does not forecast 100
 >    (D-CRM-10), so creating one at 0 would mint a row f2's own grid refuses to
 >    save. "Probability 0" still holds for every stage the probe cannot type.
-> 2. **The layouts read is `/crm/v2`, the pipeline read is `/crm/v8`** — there is no
->    v8 anywhere else in this tree, so the version is named once
->    (`client.SETTINGS_API_VERSION`) and a refusal is a reported outcome rather
->    than a walk down the version list.
+> 2. **Both settings reads go to `/crm/v8`; every record reader stays on
+>    `/crm/v2`.** `settings/pipeline` does not exist on v2, and the layouts read
+>    is scoped to the same pipeline call, so both go through one helper
+>    (`client._settings_json`) against one constant,
+>    `client.SETTINGS_API_VERSION = "v8"` — the only v8 in the tree, named once
+>    so there is exactly one thing to change. The other **eight** reads are
+>    untouched on v2 — the six module readers, `list_deleted` and `list_users`.
+>    A tenant that refuses
+>    the version raises `ZohoApiVersionError` and the run **reports it and
+>    writes nothing**; it is never walked down the version list, because the
+>    endpoint that answers on an older version is a different endpoint with
+>    different fields. ⚠️ If the first real dry run comes back with a version
+>    refusal, the thing to change is that one constant — there is no v2 layouts
+>    call to go hunting for.
 > 3. **The response key is read tolerantly** (`pipeline` then `pipelines`; a
 >    pipeline's stages from `maps` then `stages`). Misreading it is
 >    indistinguishable from "this tenant configured nothing", and both write
@@ -1512,8 +1522,17 @@ Zoho tenant on the next cycle.
    dirty-marking path). NULL-date rows counted in the report, not invented.
 5. Settings grids render from the live GETs; reorder issues renumbered PATCHes; the
    won=100/lost=0 clamp is tested on BOTH sides (client validation message, server 422).
-6. Weighted math: pure-function tests for NULL/0/100/mixed probability and the
-   open/ongoing-only filter; lane + header render it through the BFF against fixtures.
+6. Weighted math, **split across the two places it is computed** *(amended 2026-08-07
+   by the WS-26f audit's correction C4 — the original clause said "lane + header render
+   it through the BFF against fixtures", which a rows-derived lane total would have
+   satisfied while being wrong)*: the **lane** figure is a whole-lane SQL aggregate
+   surfaced as `weighted` on `PipelineLane` (`pipeline.py` and `lib/types.ts`), because
+   `get_pipeline` caps `rows` at `per_lane` and the frontend sends no cap — a
+   rows-derived lane total is explicitly not acceptable, and the lane number is bound by
+   tests against the SQL (including the `COALESCE` onto the stage default). The **pure
+   function** stays in `board.ts` for the header rollup over lanes and the record-sheet
+   math, bound by fixture tests for NULL/0/100/mixed probability and the
+   open/ongoing-only filter — `on_hold` excluded, with its own named assertion.
 7. Running `?apply=true` against prod is **OWNER-GATE** (work_plan §6) — everything
    before that line is agent-safe.
 

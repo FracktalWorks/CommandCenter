@@ -164,6 +164,10 @@ class TaskModel(BaseModel):
     due_at: str | None = None
     completed_at: str | None = None
     tags: list[str] = []
+    #: WS-27l — values keyed by `pm_custom_fields.field_key`. Always present,
+    #: never null: "no custom values" and "they have not loaded" must not be the
+    #: same thing to a client.
+    custom_fields: dict = {}
     created_by: str | None = None
     source: str = "manual"
     clickup_id: str | None = None
@@ -185,6 +189,7 @@ class TaskIn(BaseModel):
     start_date: str | None = None
     due_at: str | None = None
     tags: list[str] | None = None
+    custom_fields: dict | None = None
     source: str | None = None
 
 
@@ -293,7 +298,19 @@ DIRECTIONS: dict[str, str] = {"asc": "ASC", "desc": "DESC"}
 
 #: Columns declared ``JSONB`` in migration 145. asyncpg has no codec for a bare
 #: Python dict, so these are serialized here and cast in the statement.
-JSONB_COLUMNS: frozenset[str] = frozenset({"meta", "config", "clickup_snapshot"})
+JSONB_COLUMNS: frozenset[str] = frozenset({
+    "meta", "config", "clickup_snapshot",
+    # WS-27l. Same rule, same reason — a bare dict has no asyncpg codec,
+    # so it is serialized here and cast in the statement.
+    "custom_fields",
+})
+
+#: JSONB columns declared ``NOT NULL DEFAULT '{}'``, where absent means an
+#: EMPTY object rather than null. Kept apart from the rest because the
+#: distinction is real: ``meta`` genuinely has a "no meta" state, whereas
+#: "this task has no custom values" and "they have not loaded" must not read
+#: the same to a client (migration 155).
+JSONB_OBJECT_COLUMNS: frozenset[str] = frozenset({"custom_fields"})
 
 #: ``TEXT[]``. asyncpg binds a Python list natively, so these must NOT go
 #: through the jsonb path — serializing one would store the literal string
@@ -343,7 +360,10 @@ def row_to_model(row: Any, model: type[BaseModel]) -> Any:
     for name in model.model_fields:
         raw = getattr(row, name, None)
         if name in JSONB_COLUMNS:
-            data[name] = from_jsonb(raw)
+            parsed = from_jsonb(raw)
+            if parsed is None and name in JSONB_OBJECT_COLUMNS:
+                parsed = {}
+            data[name] = parsed
         elif name in ARRAY_COLUMNS:
             data[name] = list(raw) if raw is not None else []
         else:

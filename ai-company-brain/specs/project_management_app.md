@@ -86,8 +86,9 @@ extra middle phase two-way sync demands.
 **Non-goals (v1 — record departures here per `user_management_contract.md` §7):**
 - **Sprints.** Paca has them; we don't run Scrum. The schema leaves room (nothing blocks a
   later `pm_sprints` + a `sprint` view context); no table now.
-- **Custom fields.** Paca's `field_key`→JSONB pattern is the recorded additive path; v1
-  fields live in the schema.
+- ~~**Custom fields.**~~ Paca's `field_key`→JSONB pattern was the recorded additive path,
+  and **WS-27l took it 2026-08-07** (§11.9). The departure from the recorded plan is one
+  line: deleting a definition also strips its values, which Paca does not do.
 - **Tags as a first-class registry.** v1 is `tags TEXT[]` on tasks (searchable, no colors);
   Paca's bare-JSONB tags are its weakest area and a registry is additive later.
 - **Time tracking, docs/wiki, dashboards-in-app.** Notes and the Center dashboards
@@ -940,7 +941,7 @@ interesting it is to build.
 | 1 | ~~**Attachments**~~ | — | **WS-27i ✅ BUILT 2026-08-06** |
 | 2 | ~~**Notifications + @mentions**~~ | — | **WS-27j ✅ BUILT 2026-08-07** |
 | 3 | ~~**Filters, grouping and saved views**~~ | — | **WS-27k ✅ BUILT 2026-08-07** |
-| 4 | **Custom fields** — no definitions table, no values | ClickUp's signature feature. Paca's shape (`custom_field_definitions` + a JSONB column keyed by `field_key`) is proven and portable | **WS-27l** |
+| 4 | ~~**Custom fields**~~ | — | **WS-27l ✅ BUILT 2026-08-07** |
 | 5 | **Tags** — refused Paca's bare JSONB array (research row 13) and nothing replaced it | The refusal was right and left a hole. A tag registry with rename/merge is the version worth having | **WS-27m** |
 | 6 | **Bulk edit / multi-select** | Re-triaging fifty imported tasks one at a time is how an import gets abandoned — this one gates the migration itself | **WS-27n** |
 | 7 | **Recurring tasks** | Every operations cadence is recurring. Without it those live in someone's head or in ClickUp | **WS-27o** |
@@ -1242,3 +1243,72 @@ was expected, and a naive value is read as UTC rather than inheriting the connec
 TimeZone. Two tests: one on the bound value's *type*, one refusing any `CAST(:param AS
 timestamp…)` anywhere in the builder, so the next `after=` filter written the obvious way
 fails in CI instead of in production.
+
+### 11.9 WS-27l — custom fields (built 2026-08-07)
+
+ClickUp's signature feature, and the fourth row of the parity backlog. Migration
+`155_projects_custom_fields.sql`, `routes/projects/custom_fields.py`, `lib/customFields.ts`,
+a field block in the task panel and a manager dialog behind **Fields** in the header. 47
+hermetic + 36 vitest cases, 23 mutants red, 35 checks against a real Postgres.
+
+The shape is the one §5's non-goals recorded as the additive path: **definitions in a table,
+values denormalised onto the task as JSONB keyed by `field_key`.**
+
+**Why not a row per (task, field).** That is the textbook EAV answer and it costs a join per
+field on every board paint — five custom fields across two hundred imported tasks is a
+thousand rows to gather and re-pivot, per render. The JSONB column arrives with the task for
+free, which is what makes the denormalisation worth its cost.
+
+**What the denormalisation costs, stated rather than discovered.** A value is not
+referentially tied to its definition, so the *database* cannot stop a key no definition owns
+from being written. That guarantee moves into Python, and it is why the validation is the
+feature rather than a formality:
+
+* **An unknown key is a 422**, not a silent drop. A typo that no-ops looks exactly like a
+  save, and the sender finds out weeks later.
+* **A patch MERGES.** A client that knows about three of five fields must not wipe the other
+  two by sending what it knows — and an older client, or an automation written before a field
+  existed, is precisely that client.
+* **An explicit `null` CLEARS the key**, removing it rather than storing a null. It is the
+  only way to express "unset this", and a stored null would make "never filled in" and
+  "deliberately emptied" the same value in every filter downstream.
+* **`true` is not the number 1.** `isinstance(True, int)` is True in Python, so a number
+  branch reached before the boolean one accepts both, in both directions. The coercers are
+  one-per-type in a dispatch dict specifically so that ordering cannot be undone by accident.
+
+**The deliberate departure from Paca: deleting a definition strips its values.** Paca's
+research notes record "deleting a definition does not clean task data" as an accepted cost
+(§2.3). It is not accepted here. A key left behind in the JSONB is invisible — no definition
+means no column, no form row, no filter — right up until somebody creates a field with the
+same name, and then every old value resurfaces carrying the new meaning. The count of tasks
+cleared is reported (R7/R8), for the same reason `delete_view` reports its cascade.
+
+**Two things a definition may not change once values exist**, both because the stored values
+would stop meaning what they say: **`field_key` is never editable** — it is the identity
+every value is filed under, and changing it orphans the lot in one statement — and
+**`field_type` is refused with a 409 naming the count**, because "Customer" going from text to
+select cannot re-interpret what is already written. Dropping a *select option* some task still
+holds is refused the same way; adding one is free. The UI shows the derived key while the name
+is still being typed, since that is the last moment anybody can change it.
+
+**Custom fields are revertible, which makes them first-class.** `patch_task` folds a custom
+edit into the SAME `field_change` activity under namespaced keys (`custom.<key>`) rather than
+inventing an activity type — `record_activity` refuses a type the migration's CHECK does not
+list, the trap that made every attachment upload answer 422, and a custom field changing *is*
+a field change. Revert then restores it by **merging onto what the task holds now**, never by
+writing back the whole object: another field may have been edited since, and replacing the
+blob would silently undo that too — a revert that reverts more than it names.
+
+**A bug this ticket's own tests caught before it shipped.** `changedValues` compared a form's
+boolean against a `null` baseline, so a task with an unanswered checkbox sent `open: false` on
+*every* save and posted a timeline entry for an edit nobody made. A checkbox has no "unset"
+state to render — an unticked box and a never-answered field are the same pixels — so `false`
+is the baseline for a boolean and `null` for everything else.
+
+**A fence that was quietly a subset check.** `test_projects_routes` asserted that a list of
+paths was mounted, which catches the module somebody remembered to add a path for — i.e. the
+one least likely to have been forgotten. It now also reads the package directory and asserts
+that **every module declaring a `@router` route is imported by `__init__.py`**, which is the
+trap `department_centers.md` C1 documents: a module left out mounts nothing while every test
+that calls its functions directly still passes. Verified by deleting the import and watching
+it fail.

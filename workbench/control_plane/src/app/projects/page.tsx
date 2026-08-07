@@ -21,9 +21,11 @@ import {
   type ProjectRow,
   type StatusRow,
   type TaskRow,
+  type FieldRow,
   type ViewRow,
   projectsApi,
 } from "./lib/api";
+import { FieldManager } from "./components/FieldManager";
 import { FilterBar } from "./components/FilterBar";
 import { ImportClickUp } from "./components/ImportClickUp";
 import { MyWork } from "./components/MyWork";
@@ -88,6 +90,12 @@ function ProjectsWorkspace() {
   const [views, setViews] = useState<ViewRow[]>([]);
   const [activeViewId, setActiveViewId] = useState<string | null>(null);
   const [me, setMe] = useState("");
+
+  // WS-27l — the selected node's custom field definitions. Root-scoped, so the
+  // whole subtree shares one set; held here rather than in the panel because
+  // the panel opens and closes far more often than these change.
+  const [fields, setFields] = useState<FieldRow[]>([]);
+  const [managingFields, setManagingFields] = useState(false);
 
   useEffect(() => {
     // Only for the "Mine" toggle. `fetchAccess` never throws, and an empty
@@ -175,6 +183,27 @@ function ProjectsWorkspace() {
   useEffect(() => {
     if (selected) void loadProject(selected);
   }, [selected, loadProject]);
+
+  useEffect(() => {
+    if (!selected) {
+      setFields([]);
+      return;
+    }
+    let live = true;
+    projectsApi
+      .fields(selected.id)
+      .then((res) => {
+        if (live) setFields(res.rows);
+      })
+      // A board that works without its custom columns beats a board that
+      // refuses to load because their definitions did not arrive.
+      .catch(() => {
+        if (live) setFields([]);
+      });
+    return () => {
+      live = false;
+    };
+  }, [selected]);
 
   // Saved views belong to the selected node, and are re-read whenever it
   // changes — a chip from the previous project would apply filters that make
@@ -481,6 +510,16 @@ function ProjectsWorkspace() {
             >
               ClickUp
             </Button>
+            {selected && !mine ? (
+              <Button
+                variant="ghost"
+                size="sm"
+                icon="SlidersHorizontal"
+                onClick={() => setManagingFields(true)}
+              >
+                Fields
+              </Button>
+            ) : null}
             <NotificationBell onOpenTask={openTaskById} />
           </div>
           <div className={`flex shrink-0 gap-1 ${mine ? "hidden" : ""}`}>
@@ -574,6 +613,7 @@ function ProjectsWorkspace() {
         <TaskPanel
           task={openTask}
           statuses={panelStatuses}
+          fields={fields}
           onClose={() => setOpenTask(null)}
           onTaskAdded={() => {
             if (selected) void loadProject(selected);
@@ -584,6 +624,17 @@ function ProjectsWorkspace() {
               current.map((t) => (t.id === fresh.id ? { ...t, ...fresh } : t))
             );
           }}
+        />
+      ) : null}
+
+      {managingFields && selected ? (
+        <FieldManager
+          projectId={selected.id}
+          projectName={selected.name}
+          onClose={() => setManagingFields(false)}
+          // Kept in sync while the dialog is open, so a field added here shows
+          // on the next task opened without closing anything first.
+          onChanged={setFields}
         />
       ) : null}
 

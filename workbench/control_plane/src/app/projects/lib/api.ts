@@ -35,6 +35,12 @@ export interface TaskRow {
   assignees?: string[];
   view_position?: number | null;
   view_group_key?: string | null;
+  /**
+   * WS-27l — values keyed by `field_key`. Always an object, never absent: the
+   * column is `NOT NULL DEFAULT '{}'`, so a missing key means the field is
+   * unset rather than that the values have not loaded.
+   */
+  custom_fields?: Record<string, unknown>;
 }
 
 export interface StatusRow {
@@ -77,6 +83,26 @@ export interface ViewRow {
    */
   config: Record<string, unknown>;
   position?: number | null;
+}
+
+/** WS-27l — a custom field definition. Shape mirrors the gateway's row. */
+export interface FieldRow {
+  id: string;
+  project_id: string;
+  field_key: string;
+  name: string;
+  description?: string | null;
+  field_type:
+    | "text"
+    | "number"
+    | "date"
+    | "select"
+    | "multi_select"
+    | "boolean"
+    | "url";
+  options: string[];
+  position: number;
+  created_by?: string | null;
 }
 
 export interface GrantRow {
@@ -162,6 +188,29 @@ export const projectsApi = {
       method: "POST",
       body: JSON.stringify({ body }),
     }),
+
+  fields: (projectId: string) =>
+    call<{ rows: FieldRow[]; total: number }>(`nodes/${projectId}/fields`),
+
+  createField: (projectId: string, payload: Record<string, unknown>) =>
+    call<FieldRow>(`nodes/${projectId}/fields`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+
+  patchField: (fieldId: string, payload: Record<string, unknown>) =>
+    call<FieldRow>(`fields/${fieldId}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
+
+  /** Deletes the definition AND every value filed under it — the count comes back. */
+  deleteField: (fieldId: string) =>
+    call<{
+      deleted: string;
+      field_key: string;
+      cascaded: { values_cleared: number };
+    }>(`fields/${fieldId}`, { method: "DELETE" }),
 
   views: (projectId: string) =>
     call<{ rows: ViewRow[]; total: number }>(`nodes/${projectId}/views`),

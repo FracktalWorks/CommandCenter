@@ -1,0 +1,243 @@
+"use client";
+
+/**
+ * Projects · managing custom field definitions (WS-27l).
+ *
+ * Definitions are root-scoped, exactly as statuses and types are, so this
+ * manages the whole tree's fields from whichever node is selected.
+ *
+ * **Two things this dialog says out loud, because the API refuses them and a
+ * refusal nobody predicted reads as a bug:**
+ *
+ * * the key is shown while the name is still being typed, and marked permanent
+ *   — it cannot be renamed later, since every stored value is filed under it;
+ * * deleting a field says it will remove the values too, before the click, and
+ *   reports how many it removed after.
+ */
+
+import Icon from "@/components/Icon";
+import Badge from "@/components/ui/Badge";
+import Button from "@/components/ui/Button";
+import { Input } from "@/components/ui/Input";
+import { useEffect, useState } from "react";
+
+import { type FieldRow, projectsApi } from "../lib/api";
+import {
+  FIELD_TYPES,
+  FIELD_TYPE_LABELS,
+  type FieldType,
+  keyPreview,
+  needsOptions,
+  ordered,
+} from "../lib/customFields";
+
+const SELECT =
+  "cc-control rounded-lg border border-border bg-background px-2 py-1.5 " +
+  "text-xs text-foreground outline-none focus:border-primary/50";
+
+interface Props {
+  projectId: string;
+  projectName: string;
+  onClose: () => void;
+  onChanged: (fields: FieldRow[]) => void;
+}
+
+export function FieldManager({ projectId, projectName, onClose, onChanged }: Props) {
+  const [fields, setFields] = useState<FieldRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  const [name, setName] = useState("");
+  const [type, setType] = useState<FieldType>("text");
+  const [options, setOptions] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const load = async () => {
+    try {
+      const res = await projectsApi.fields(projectId);
+      setFields(res.rows);
+      onChanged(res.rows);
+    } catch (err) {
+      setError(String((err as Error).message));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId]);
+
+  async function create(event: React.FormEvent) {
+    event.preventDefault();
+    if (!name.trim()) return;
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      await projectsApi.createField(projectId, {
+        name: name.trim(),
+        field_type: type,
+        options: needsOptions(type)
+          ? options
+              .split(",")
+              .map((o) => o.trim())
+              .filter(Boolean)
+          : [],
+      });
+      setName("");
+      setOptions("");
+      await load();
+    } catch (err) {
+      setError(String((err as Error).message));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function remove(field: FieldRow) {
+    setError(null);
+    setNotice(null);
+    try {
+      const gone = await projectsApi.deleteField(field.id);
+      const cleared = gone.cascaded.values_cleared;
+      // Reported rather than assumed: losing data silently is what makes people
+      // stop trusting a delete button.
+      setNotice(
+        cleared
+          ? `Removed “${field.name}” and cleared it from ${cleared} task${
+              cleared === 1 ? "" : "s"
+            }.`
+          : `Removed “${field.name}”. No task was using it.`
+      );
+      await load();
+    } catch (err) {
+      setError(String((err as Error).message));
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 p-4">
+      <div className="flex max-h-full w-full max-w-lg flex-col overflow-hidden rounded-lg border border-border bg-card">
+        <header className="flex items-center justify-between border-b border-border px-3 py-2">
+          <div className="min-w-0">
+            <h3 className="text-sm font-medium text-foreground">Custom fields</h3>
+            <p className="truncate text-xs text-muted-foreground">
+              Shared by {projectName} and everything under it
+            </p>
+          </div>
+          <Button variant="ghost" size="icon" icon="X" aria-label="Close" onClick={onClose} />
+        </header>
+
+        {error ? (
+          <p className="border-b border-border bg-muted px-3 py-2 text-xs text-foreground">
+            {error}
+          </p>
+        ) : null}
+        {notice ? (
+          <p className="border-b border-border px-3 py-2 text-xs text-muted-foreground">
+            {notice}
+          </p>
+        ) : null}
+
+        <div className="min-h-0 flex-1 overflow-y-auto p-3">
+          {loading ? (
+            <p className="text-xs text-muted-foreground">Loading…</p>
+          ) : fields.length === 0 ? (
+            <p className="text-xs text-muted-foreground">
+              No custom fields yet. Add one below — it appears on every task in
+              this project and everything under it.
+            </p>
+          ) : (
+            <ul className="space-y-1">
+              {ordered(fields as never).map((field) => (
+                <li
+                  key={field.id}
+                  className="flex items-center gap-2 rounded-md border border-border px-2 py-1.5"
+                >
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-sm text-foreground">
+                      {field.name}
+                    </span>
+                    <span className="block truncate text-[11px] text-muted-foreground">
+                      {field.field_key}
+                      {field.options.length ? ` · ${field.options.join(", ")}` : ""}
+                    </span>
+                  </span>
+                  <Badge>{FIELD_TYPE_LABELS[field.field_type as FieldType]}</Badge>
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    icon="Trash2"
+                    aria-label={`Delete ${field.name}`}
+                    title={`Delete “${field.name}” and clear it from every task`}
+                    onClick={() => void remove(field as FieldRow)}
+                  />
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+
+        <form onSubmit={create} className="border-t border-border p-3">
+          <div className="flex flex-wrap items-end gap-2">
+            <label className="min-w-[8rem] flex-1 text-[11px] text-muted-foreground">
+              Name
+              <Input
+                inputSize="sm"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="Customer PO"
+                aria-label="Field name"
+              />
+            </label>
+            <label className="text-[11px] text-muted-foreground">
+              Type
+              <select
+                aria-label="Field type"
+                className={`${SELECT} block`}
+                value={type}
+                onChange={(e) => setType(e.target.value as FieldType)}
+              >
+                {FIELD_TYPES.map((option) => (
+                  <option key={option} value={option}>
+                    {FIELD_TYPE_LABELS[option]}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <Button type="submit" size="sm" loading={busy} disabled={!name.trim()}>
+              Add
+            </Button>
+          </div>
+
+          {needsOptions(type) ? (
+            <label className="mt-2 block text-[11px] text-muted-foreground">
+              Choices, comma separated
+              <Input
+                inputSize="sm"
+                value={options}
+                onChange={(e) => setOptions(e.target.value)}
+                placeholder="EU, IN, US"
+                aria-label="Choices"
+              />
+            </label>
+          ) : null}
+
+          {name.trim() ? (
+            // Shown BEFORE the field exists, because this is the last moment
+            // anybody can change it: the key is what every stored value is
+            // filed under and the API refuses to rename it.
+            <p className="mt-2 flex items-center gap-1 text-[11px] text-muted-foreground">
+              <Icon name="Key" size={11} />
+              Key <code className="text-foreground">{keyPreview(name)}</code> —
+              permanent once created.
+            </p>
+          ) : null}
+        </form>
+      </div>
+    </div>
+  );
+}

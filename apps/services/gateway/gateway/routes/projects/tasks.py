@@ -40,6 +40,7 @@ from gateway.routes.projects.core import (
     count_where,
     diff_changes,
     emit,
+    from_jsonb,
     insert_row,
     load_default_status,
     load_visible_project,
@@ -55,6 +56,7 @@ from gateway.routes.projects.core import (
     update_row,
     validate_choice,
 )
+from gateway.routes.projects.custom_fields import apply_values, load_definitions
 from gateway.routes.projects.filters import (
     attach_assignees,
     build_task_filters,
@@ -304,11 +306,25 @@ async def patch_task(
                        f"'{guarded}'.",
             )
     new_status = values.pop("status_id", None)
+    custom = values.pop("custom_fields", None)
 
     db = await _get_db()
     try:
         vis = await resolve_visibility(db, user)
         before = await load_visible_task(db, vis, task_id)
+
+        # WS-27l. Merged against the definitions on the task's OWN root, not the
+        # caller's current project: a task opened from My work can belong to a
+        # project the board is not showing, and validating against the wrong
+        # project's fields would refuse a perfectly good value.
+        custom_changes: dict[str, Any] = {}
+        if custom is not None:
+            definitions = await load_definitions(db, str(before.root_project_id))
+            merged, custom_changes = apply_values(
+                from_jsonb(before.custom_fields), custom, definitions,
+            )
+            if custom_changes:
+                values["custom_fields"] = merged
 
         after = before
         if values:
@@ -317,6 +333,16 @@ async def patch_task(
             )
             after = await update_row(db, "pm_tasks", task_id, values)
             changes = diff_changes(before, after, _TRACKED_TASK_FIELDS)
+            # Folded into the SAME `field_change` entry, under namespaced keys,
+            # rather than given an activity type of its own. `record_activity`
+            # refuses a type the migration's CHECK does not list — the trap that
+            # made every attachment upload answer 422 — and a custom field
+            # changing IS a field change, so a new vocabulary word would buy a
+            # migration and a second timeline shape for nothing.
+            changes.extend(
+                {"field": f"custom.{key}", "old": moved["from"], "new": moved["to"]}
+                for key, moved in sorted(custom_changes.items())
+            )
             if changes:
                 await record_activity(
                     db, activity_type="field_change", created_by=actor(user),

@@ -16,6 +16,8 @@ real and the assertion is a genuine check on it.
 
 from __future__ import annotations
 
+import re
+
 import pytest
 from fastapi import HTTPException
 from gateway.routes.projects import activities as pm_activities
@@ -87,8 +89,50 @@ def test_every_feature_module_is_actually_mounted() -> None:
         "/projects/nodes/{project_id}/views",
         "/projects/views/{view_id}/positions",
         "/projects/assigned-to-me",
+        "/projects/nodes/{project_id}/fields",
+        "/projects/fields/{field_id}",
     ):
         assert expected in paths, f"{expected} is not mounted"
+
+
+def test_every_module_in_the_package_is_imported_by_init() -> None:
+    """The general form of the trap above, which the list does not close.
+
+    That list is a SUBSET check: it catches a module somebody remembered to add
+    a path for, which is exactly the module least likely to have been forgotten.
+    A new feature module left out of ``__init__.py`` mounts nothing, every test
+    calling its functions directly still passes, and no assertion anywhere
+    fails. This one reads the directory instead of a list, so the next module
+    is covered whether or not anybody remembers.
+
+    ``sync.py`` would be the one legitimate absence (WS-27c, blocked on WS-1)
+    and is named here rather than skipped silently — when it lands, deleting its
+    name from this set is how it gets mounted.
+    """
+    from pathlib import Path
+
+    import gateway.routes.projects as package
+
+    directory = Path(package.__file__).parent
+    # Only modules that DECLARE routes. `filters`, `mapping`, `automation` and
+    # `agent_dispatch` are services imported by the modules that do, and
+    # importing them here would assert something that is not true of them.
+    declares_routes = {
+        f.stem for f in directory.glob("*.py")
+        if f.stem not in {"__init__", "core"}
+        and re.search(r"^@router\.", f.read_text(encoding="utf-8"), re.M)
+    }
+    assert declares_routes, "the glob found no route modules — the check is vacuous"
+    imported = set(re.findall(
+        r"from gateway\.routes\.projects import (\w+)",
+        Path(package.__file__).read_text(encoding="utf-8"),
+    ))
+    deliberately_absent: set[str] = set()
+    missing = declares_routes - imported - deliberately_absent
+    assert not missing, (
+        f"{sorted(missing)} are in the package but not imported by __init__.py — "
+        f"their routes mount NOTHING while every direct-call test still passes"
+    )
 
 
 def test_the_package_adds_no_database_engine() -> None:

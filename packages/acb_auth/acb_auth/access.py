@@ -17,9 +17,12 @@ from __future__ import annotations
 
 import os
 import time
-from typing import Any
 
 from acb_common import get_logger
+
+# The one shared pool (BO-10) — see the Engine section below. Re-exported under
+# the private name this module has always used.
+from acb_common.db import get_session_factory as _get_session_factory
 
 from acb_auth.permissions import (
     LEGACY_ROLE_MAP,
@@ -42,36 +45,27 @@ SERVICE_ACCESS = EffectiveAccess(
 )
 
 _cache: dict[str, tuple[float, EffectiveAccess]] = {}
-_ENGINE: Any = None
-_SESSION_FACTORY: Any = None
 #: Set once the access tables are confirmed missing, so we degrade to the
 #: legacy mapping without re-querying a failing table on every request.
 _tables_missing = False
 
 
-# ── Engine (same recipe as gateway routes/apps/_common.py) ──────────────────
-
-def _get_session_factory() -> Any:
-    global _ENGINE, _SESSION_FACTORY
-    if _SESSION_FACTORY is None:
-        from sqlalchemy.ext.asyncio import (  # noqa: PLC0415
-            async_sessionmaker,
-            create_async_engine,
-        )
-        from acb_common import get_settings  # noqa: PLC0415
-
-        settings = get_settings()
-        db_url = os.environ.get("DATABASE_URL", settings.database_url)
-        if "postgresql+psycopg" in db_url:
-            db_url = db_url.replace("postgresql+psycopg", "postgresql+asyncpg")
-        elif db_url.startswith("postgresql://"):
-            db_url = db_url.replace("postgresql://", "postgresql+asyncpg://")
-        _ENGINE = create_async_engine(
-            db_url, echo=False, pool_pre_ping=True,
-            pool_size=5, max_overflow=10, pool_recycle=1800,
-        )
-        _SESSION_FACTORY = async_sessionmaker(_ENGINE, expire_on_commit=False)
-    return _SESSION_FACTORY
+# ── Engine (the one shared pool — acb_common.db, BO-10) ─────────────────────
+#
+# This module used to build its own 5+10 engine. It ran *inside* the gateway
+# process alongside the route packages' pools, so it was the reason the gateway
+# could never get to one pool by converting routes alone — hence the seam living
+# in `acb_common`, the only package both sides already depend on.
+#
+# Two things came free with the move. This engine never carried the connect-phase
+# and `idle in transaction` bounds that came out of the 2026-08-06 incident
+# (`acb_common.db.engine_connect_args`) — a permission resolution that hung used
+# to hold its lock indefinitely. And it resolved `DATABASE_URL` with its own copy
+# of the coercion, which is now one function.
+#
+# `_get_session_factory` is imported at the top of this module. It keeps the
+# private name so `tests/unit/test_signin_requests.py`, which monkeypatches it
+# onto a fixture engine, keeps working.
 
 
 # ── Cache ───────────────────────────────────────────────────────────────────

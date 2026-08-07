@@ -19,8 +19,10 @@ from gateway.routes.email import automation, core, digest, transport  # noqa: F4
 
 # Flatten submodule namespaces into the package so the historical public surface
 # (incl. private ``_helpers`` the scheduler/tests import by name) is preserved.
-# NOTE: reassigned module globals (e.g. core._ENGINE) live on their submodule;
-# read those via ``email.core.<name>``, not the flattened copy.
+# NOTE: this copies BINDINGS once, at import. A name later reassigned on its
+# submodule (or monkeypatched there by a test) diverges from the flattened copy
+# — read and patch those via ``email.<submodule>.<name>``, never through the
+# package namespace.
 for _mod in (core, transport, automation, digest):
     for _k, _v in vars(_mod).items():
         if not _k.startswith("__"):

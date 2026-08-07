@@ -11,12 +11,17 @@
  *
  * Writes are absent rather than disabled: without `admin:members:manage` there
  * is no edit control to grey out, because disabled-button theatre teaches
- * people to hunt for permissions they may never get.
+ * people to hunt for permissions they may never get. The gateway answers that
+ * question as `can_manage` on the read, so the page knows before it draws.
  */
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
+import Button from "@/components/ui/Button";
+
+import { PersonEditor } from "./components/PersonEditor";
 import { PersonPanel } from "./components/PersonPanel";
-import { type PersonRow, peopleApi } from "./lib/api";
+import { type PersonDetail, type PersonRow, peopleApi } from "./lib/api";
+import { DEFAULT_STATUS } from "./lib/form";
 import {
   groupByDepartment,
   initials,
@@ -33,6 +38,7 @@ const TONE: Record<string, string> = {
 export default function PeoplePage() {
   const [rows, setRows] = useState<PersonRow[]>([]);
   const [hrVisible, setHrVisible] = useState(true);
+  const [canManage, setCanManage] = useState(false);
   const [facets, setFacets] = useState<{
     departments: Array<{ department: string; total: number }>;
     statuses: string[];
@@ -43,6 +49,17 @@ export default function PeoplePage() {
   const [openId, setOpenId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  /**
+   * `undefined` = the editor is closed, `null` = creating, a person = editing.
+   * Three states rather than a boolean beside a person, because those two can
+   * disagree and "open, editing nobody" would render a create form titled with
+   * somebody's name.
+   */
+  const [editing, setEditing] = useState<PersonDetail | null | undefined>(
+    undefined,
+  );
+  /** Bumped after a save; both the list and the open panel re-read on it. */
+  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
     let live = true;
@@ -56,6 +73,7 @@ export default function PeoplePage() {
         if (!live) return;
         setRows(res.rows);
         setHrVisible(res.hr_visible);
+        setCanManage(res.can_manage);
         setError(null);
       } catch (err) {
         if (live) setError(String((err as Error).message));
@@ -66,7 +84,9 @@ export default function PeoplePage() {
     return () => {
       live = false;
     };
-  }, [q, department, status]);
+  }, [q, department, status, reloadKey]);
+
+  const onSaved = useCallback(() => setReloadKey((n) => n + 1), []);
 
   useEffect(() => {
     let live = true;
@@ -96,6 +116,12 @@ export default function PeoplePage() {
             <span className="text-xs text-muted-foreground">
               {loading ? "loading…" : `${rows.length} in the directory`}
             </span>
+            <span className="flex-1" />
+            {canManage ? (
+              <Button size="sm" icon="Plus" onClick={() => setEditing(null)}>
+                Add person
+              </Button>
+            ) : null}
           </div>
           <input
             value={q}
@@ -213,7 +239,23 @@ export default function PeoplePage() {
       </main>
 
       {openId ? (
-        <PersonPanel personId={openId} onClose={() => setOpenId(null)} />
+        <PersonPanel
+          personId={openId}
+          reloadKey={reloadKey}
+          onClose={() => setOpenId(null)}
+          onEdit={setEditing}
+        />
+      ) : null}
+
+      {editing !== undefined ? (
+        <PersonEditor
+          person={editing}
+          hrVisible={hrVisible}
+          directory={rows}
+          statuses={facets.statuses.length ? facets.statuses : [DEFAULT_STATUS]}
+          onSaved={onSaved}
+          onClose={() => setEditing(undefined)}
+        />
       ) : null}
     </div>
   );

@@ -2,7 +2,11 @@
  * People Center · the browser's client for /api/people/*.
  *
  * Read-only, matching the proxy. Writes live on the tasks API under
- * `admin:members:manage` and are not reachable from here.
+ * `admin:members:manage` and go through `./write.ts`, not through here.
+ *
+ * The reads do carry `can_manage` — whether the caller MAY write is a fact
+ * about the viewer that only the gateway can answer, and the editor has to
+ * know it before it draws rather than discover it on the click.
  */
 
 export interface PersonRow {
@@ -29,7 +33,10 @@ export interface PersonDetail extends PersonRow {
   has_login: boolean;
   email_conflict?: string | null;
   manager?: string | null;
+  /** The ClickUp link — read under this name, written as `clickup_user_id`. */
+  provider_user_id?: string | null;
   hr_visible: boolean;
+  can_manage: boolean;
   load?: {
     open_tasks: number;
     estimated_hours: number;
@@ -80,9 +87,12 @@ export const peopleApi = {
       }
     }
     const query = qs.toString();
-    return call<{ rows: PersonRow[]; total: number; hr_visible: boolean }>(
-      `${query ? `?${query}` : ""}`
-    );
+    return call<{
+      rows: PersonRow[];
+      total: number;
+      hr_visible: boolean;
+      can_manage: boolean;
+    }>(`${query ? `?${query}` : ""}`);
   },
 
   facets: () =>

@@ -322,17 +322,30 @@ The person-page **writes stay on `/tasks/people`** under `admin:members:manage`.
 gateway does not serve would mint a second, hollow write path, and the first person to find
 it would reasonably assume it worked.
 
-**WS-28b-write — the person write half.** 🟢 AGENT-SAFE. *(Minted 2026-08-06, and it is a
+**WS-28b-write — the person write half.** ✅ **BUILT 2026-08-07.** *(Minted 2026-08-06 as a
 REGRESSION to close, not a new idea.)*
 The tasks app's People view was removed the same day (owner-directed scope narrowing,
 `task_manager_app.md` §6.0), and `PersonEditor` went with it. That was the only UI for
-creating a person, editing their skills, and uploading a résumé. **The API is untouched** —
+creating a person, editing their skills, and uploading a résumé. **The API was untouched** —
 `POST /tasks/people`, `PATCH /tasks/people/{id}`, `POST /tasks/people/{id}/resume`, all on
-`admin:members:manage` — and `taskStore.uploadPersonResume` still wraps it, so nothing was
-deleted. But until this lands, an admin cannot do any of it from the product.
-Done when: the person page grows edit + résumé upload for a holder of
-`admin:members:manage`; the controls are **absent** rather than disabled without it (§3.2);
-and the résumé upload reports what it merged, as `PersonEditor` did.
+`admin:members:manage` — but until this landed, an admin could not do any of it from the
+product.
+Shipped: `people/components/PersonEditor.tsx` (create + edit + résumé, themed through
+`Button`/`Input`/`Icon`), `people/lib/form.ts` (the pure half) and `people/lib/write.ts`
+(the write client). The proxy decision above is **unchanged**: `write.ts` calls
+`/api/tasks/people`, never `/api/people`, so no write verb was added to the GET-only proxy.
+The controls are absent without `admin:members:manage`, driven by a new **`can_manage`** flag
+on the directory and person reads — the UI cannot hide-rather-than-disable unless the read
+tells it, and discovering the answer from a 403 after the click is the behaviour §3.2 rejects.
+
+**Restoring it turned up three ways migration 148 had already broken the write routes**, all
+of which would have failed at the database rather than at the request — see §10.
+
+**WS-28b-write-2 — assign a login from the person page.** 🟡 Not filed as a defect; named so
+its absence is a decision. `has_login` is displayed and cannot be acted on: an admin who sees
+"directory-only" still has to go to `/settings/members` to invite them. The join is
+`lower(email)` on both sides, so the action is well-defined — it belongs with WS-28f's seats
+matrix rather than bolted onto the editor.
 
 **WS-28c — org chart.** 🟢 AGENT-SAFE.
 Done when: the tree renders from `manager_id`, unmanaged people surface as roots, a
@@ -373,12 +386,53 @@ propose-a-change path is agent-safe; applying a membership change is the owner's
 ⚠️ Never `uv run pytest tests/unit/` bare — name the files.
 
 ```bash
-uv run pytest tests/unit/test_people_directory.py tests/unit/test_people_org_chart.py \
-              tests/unit/test_people_capability.py tests/unit/test_people_migration.py \
-              tests/unit/test_tasks_people_scoping.py tests/unit/test_org_access_control.py
-cd workbench/control_plane && npx tsc --noEmit && npm test
+uv run pytest tests/unit/test_people_directory.py tests/unit/test_people_write.py \
+              tests/unit/test_people_key_shape.py tests/unit/test_tasks_people_scoping.py \
+              tests/unit/test_org_access_control.py tests/unit/test_org_access_enforcement.py
+cd workbench/control_plane && npx tsc --noEmit && npm test && npx vitest run src/lib/theme/
 ```
+
+Every file above **exists**. The previous version of this block named three that do not
+(`test_people_org_chart.py`, `test_people_capability.py`, `test_people_migration.py` — they
+belong to WS-28c/d and to a migration test that ended up called `test_people_key_shape.py`),
+and pytest answers a missing path by collecting *nothing* and exiting non-zero. A
+verification command that cannot run is a verification command nobody runs; add a file here
+when its ticket lands, not when its ticket is written.
 
 `test_tasks_people_scoping.py` is in the list deliberately: WS-24 N4's 35 cases are the
 fence around the HR projection, and any new read path over `gtd_people` must leave them
-green rather than route around them.
+green rather than route around them. `src/lib/theme/` is in it because the theming engine's
+conformance gate carries a frozen debt baseline that a new component can only make worse.
+
+---
+
+## 10. Migration 148 changed the table under the write routes
+
+Found while restoring WS-28b-write, and worth recording as a pattern rather than as three
+bugs: **148 was written for the read side, and nothing checked the write side against it.**
+Each of the three would have surfaced as a 500 in front of an admin mid-typing, not as a
+test failure.
+
+1. **The status vocabulary moved and the editor did not.** 148 replaced migration 49's
+   `'active' | 'inactive' | …` with a CHECK on `active | contractor | alumni | invited`. The
+   deleted `PersonEditor` offered `active / inactive / on_leave`; restoring it verbatim would
+   have shipped a status select where two of three options are refused by Postgres with a
+   `CheckViolation`. Fixed by making the vocabulary **one tuple**
+   (`tasks/core.py:PEOPLE_STATUSES`, re-exported as `people/core.py:STATUSES`) that the
+   filter, the facets response, the editor's select and the write validation all read, and by
+   validating in the route so the answer is a 400 that lists the four words.
+
+2. **`create_person` still refused a duplicate NAME.** 148 dropped `UNIQUE(name)` on the
+   explicit argument that two real people share a name and one of them was being locked out.
+   The route-level `LOWER(name)` 409 preserved exactly the behaviour the migration existed to
+   remove. Removed; what must be unique is the address, because that is the join key.
+
+3. **Nothing checked the address that 148 made unique.** The new partial unique index on
+   `lower(email)` turns a duplicate into an `IntegrityError` — a 500 naming a constraint. Now
+   pre-checked, case-insensitively on both sides (R10), answering 409 with the name of the
+   row already holding it; and a blank address is stored as NULL, because `''` is not NULL
+   and two blanks would collide under the same index.
+
+**The general lesson:** a migration that changes a table's *shape* has to be walked against
+every route that writes it, not only the ones that read it. The read routes were built after
+148 and were correct by construction. The write routes predated it and were never revisited.

@@ -29,6 +29,7 @@ from acb_auth import UserContext, get_current_user
 from fastapi import Depends, HTTPException, UploadFile
 from gateway.routes.tasks.attachments import _safe_name, _storage_dir
 from gateway.routes.tasks.core import (
+    PEOPLE_STATUSES,
     _get_db,
     _uid,
     can_read_hr_fields,
@@ -267,30 +268,91 @@ async def _get_person_row(db: Any, person_id: str) -> Any:
     return row
 
 
+def _validate_status(status: str | None) -> None:
+    """Refuse a status the database will refuse, and say what is allowed.
+
+    Migration 148 gave `gtd_people.status` a CHECK. Without this the route
+    would hand an illegal value straight to Postgres, which answers with a
+    `CheckViolation` — a 500 whose text names a constraint rather than the four
+    words the caller may type. The vocabulary is imported (never re-listed), so
+    a fifth status cannot be accepted here and rejected there.
+    """
+    if status is not None and status not in PEOPLE_STATUSES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown status '{status}'. One of: {list(PEOPLE_STATUSES)}.",
+        )
+
+
+def _clean_email(email: str | None) -> str | None:
+    """Trim, and turn a blank into NULL.
+
+    `''` is not NULL to Postgres, so two people saved with an empty address
+    would collide under 148's partial unique index — the one case the migration
+    had to clean up in the existing data, and it is worth not re-creating it
+    one row at a time. A trailing space is the same defect wearing a disguise:
+    it makes two identical addresses look distinct to `lower(email)`.
+    """
+    clean = (email or "").strip()
+    return clean or None
+
+
+async def _email_taken_by(db: Any, email: str | None, *,
+                          exclude_id: str | None = None) -> str | None:
+    """The name of the person already holding this address, or ``None``.
+
+    Migration 148 put a partial UNIQUE on `lower(email)` so an email→person
+    join is unambiguous. That makes a duplicate address a *database* error —
+    an opaque 500 at exactly the moment an admin is typing somebody in. Checked
+    here so the answer is a 409 that names the other row, which is the only
+    form of this message anyone can act on.
+
+    Case-insensitive on both sides (R10), matching the index's `lower(email)`.
+    ``exclude_id`` is what lets a PATCH re-save a person's own address.
+    """
+    clean = (email or "").strip().lower()
+    if not clean:
+        return None
+    sql = "SELECT name FROM gtd_people WHERE lower(email) = :email"
+    params: dict[str, Any] = {"email": clean}
+    if exclude_id:
+        sql += " AND id <> CAST(:exclude AS UUID)"
+        params["exclude"] = exclude_id
+    row = (await db.execute(text(sql + " LIMIT 1"), params)).fetchone()
+    return str(row.name) if row is not None else None
+
+
 @router.post("/people", response_model=OrgPersonModel, status_code=201,
              dependencies=[require_people_write()])
 async def create_person(
     body: PersonWrite,
     user: UserContext = Depends(get_current_user),
 ):
-    """Add a person to the org (manual entry). `name` is required + unique.
+    """Add a person to the org (manual entry). `name` is required; the EMAIL is
+    what has to be unique.
 
     Admin-only (`admin:members:manage`)."""
     name = (body.name or "").strip()
     if not name:
         raise HTTPException(status_code=400, detail="name is required")
+    _validate_status(body.status)
     skills = [s.strip() for s in (body.skills or []) if s and s.strip()]
     skills_source = {s: "manual" for s in skills}
     available = _available(body.capacity_hours_per_week, body.current_load_hours_per_week)
     pid = str(uuid4())
     db = await _get_db()
     try:
-        dup = (await db.execute(
-            text("SELECT 1 FROM gtd_people WHERE LOWER(name) = LOWER(:n)"),
-            {"n": name})).fetchone()
-        if dup:
-            raise HTTPException(status_code=409,
-                                detail=f"A person named '{name}' already exists.")
+        # Duplicate NAMES are allowed, and refusing them was the bug.
+        # Migration 148 dropped `UNIQUE(name)` on the argument that two real
+        # people share a name and one of them was being locked out of the
+        # directory; keeping a route-level 409 would have preserved exactly the
+        # behaviour the migration was written to remove. What must be unique is
+        # the address, because that is the join key.
+        holder = await _email_taken_by(db, body.email)
+        if holder:
+            raise HTTPException(
+                status_code=409,
+                detail=f"{body.email} already belongs to {holder}.")
         await db.execute(text(
             """INSERT INTO gtd_people
                (id, name, email, role, title, department, team, reports_to,
@@ -304,7 +366,8 @@ async def create_person(
                 CAST(:skills_source AS JSONB), :domain, :resume_summary,
                 :years_experience, :capacity, :load, :available,
                 :clickup_user_id, 'manual', :updated_by, now())"""),
-            {"id": pid, "name": name, "email": body.email, "role": body.role,
+            {"id": pid, "name": name, "email": _clean_email(body.email),
+             "role": body.role,
              "title": body.title, "department": body.department, "team": body.team,
              "reports_to": body.reports_to, "manager_id": body.manager_id,
              "status": body.status or "active", "skills": skills,
@@ -334,9 +397,22 @@ async def update_person(
 
     Admin-only (`admin:members:manage`)."""
     fields = body.model_dump(exclude_unset=True)
+    if "status" in fields:
+        _validate_status(fields["status"])
+    if "email" in fields:
+        fields["email"] = _clean_email(fields["email"])
     db = await _get_db()
     try:
         row = await _get_person_row(db, person_id)
+        # `exclude_id` is why this is not the create-path check: re-saving a
+        # person without touching their address must not report them as their
+        # own duplicate.
+        if "email" in fields:
+            holder = await _email_taken_by(db, fields["email"], exclude_id=person_id)
+            if holder:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"{fields['email']} already belongs to {holder}.")
         set_parts: list[str] = ["updated_at = now()", "updated_by = :updated_by"]
         params: dict[str, Any] = {"id": person_id, "updated_by": _uid(user)}
         # Plain columns (name/email/role/title/…): pass straight through.

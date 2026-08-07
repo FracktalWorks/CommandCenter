@@ -11,34 +11,24 @@
 //     email/tasks use for their mobile sub-navigation.
 // Icons are the native lucide set.
 
+import AppIcon, { themedIcon } from "@/components/Icon";
+import type { ThemedIcon } from "@/components/Icon";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect } from "react";
-import {
-  Activity,
-  Inbox,
-  MessageSquare,
-  MessageSquareText,
-  Phone,
-  Plus,
-  SlidersHorizontal,
-  Smartphone,
-  Tags,
-  type LucideIcon,
-} from "lucide-react";
 import { useViewMode } from "@/components/ViewModeProvider";
 import { useMobileDrawer } from "@/components/AppShell";
 
-type Tab = { href: string; label: string; icon: LucideIcon; exact?: boolean };
+type Tab = { href: string; label: string; icon: ThemedIcon; exact?: boolean };
 
 const TABS: Tab[] = [
-  { href: "/whatsapp", label: "Inbox", icon: Inbox, exact: true },
-  { href: "/whatsapp/calls", label: "Calls", icon: Phone },
-  { href: "/whatsapp/insights", label: "Pulse", icon: Activity },
-  { href: "/whatsapp/settings/categories", label: "Categories", icon: Tags },
-  { href: "/whatsapp/settings/replies", label: "Replies", icon: MessageSquareText },
-  { href: "/whatsapp/settings/rules", label: "Rules", icon: SlidersHorizontal },
-  { href: "/whatsapp/numbers", label: "Numbers", icon: Smartphone },
+  { href: "/whatsapp", label: "Inbox", icon: themedIcon("Inbox"), exact: true },
+  { href: "/whatsapp/calls", label: "Calls", icon: themedIcon("Phone") },
+  { href: "/whatsapp/insights", label: "Pulse", icon: themedIcon("Activity") },
+  { href: "/whatsapp/settings/categories", label: "Categories", icon: themedIcon("Tags") },
+  { href: "/whatsapp/settings/replies", label: "Replies", icon: themedIcon("MessageSquareText") },
+  { href: "/whatsapp/settings/rules", label: "Rules", icon: themedIcon("SlidersHorizontal") },
+  { href: "/whatsapp/numbers", label: "Numbers", icon: themedIcon("Smartphone") },
 ];
 
 const isTabActive = (t: Tab, pathname: string | null) =>
@@ -56,7 +46,7 @@ function SectionNavDrawer({
     <div className="flex flex-col p-2">
       <div className="flex items-center gap-2 px-3 py-2">
         <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-primary/15 text-primary">
-          <MessageSquare className="h-3.5 w-3.5" />
+          <AppIcon name="MessageSquare" className="h-3.5 w-3.5" />
         </span>
         <span className="text-[13px] font-semibold">WhatsApp</span>
       </div>
@@ -85,7 +75,7 @@ function SectionNavDrawer({
           onClick={onNavigate}
           className="flex items-center justify-center gap-1.5 rounded-md bg-primary px-3 py-2.5 text-sm font-semibold text-primary-foreground hover:opacity-90"
         >
-          <Plus className="h-4 w-4 shrink-0" />
+          <AppIcon name="Plus" className="h-4 w-4 shrink-0" />
           Connect a number
         </Link>
       </div>
@@ -128,7 +118,7 @@ export default function WhatsAppLayout({ children }: { children: React.ReactNode
       <aside className="flex w-14 shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground md:w-52">
         <div className="flex h-12 shrink-0 items-center gap-2 border-b border-sidebar-border px-3">
           <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-primary/15 text-primary">
-            <MessageSquare className="h-3.5 w-3.5" />
+            <AppIcon name="MessageSquare" className="h-3.5 w-3.5" />
           </span>
           <span className="hidden text-[13px] font-semibold md:block">WhatsApp</span>
         </div>
@@ -161,7 +151,7 @@ export default function WhatsAppLayout({ children }: { children: React.ReactNode
             title="Connect a number"
             className="flex items-center justify-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-[12px] font-semibold text-primary-foreground hover:opacity-90"
           >
-            <Plus className="h-3.5 w-3.5 shrink-0" />
+            <AppIcon name="Plus" className="h-3.5 w-3.5 shrink-0" />
             <span className="hidden md:inline">Connect</span>
           </Link>
         </div>

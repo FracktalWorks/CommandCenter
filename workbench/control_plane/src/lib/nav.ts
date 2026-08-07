@@ -147,6 +147,17 @@ export const NAV_SECTIONS: NavSection[] = [
         note: "Departments, projects and team tasks",
         feature: "projects",
       },
+      // The people behind the work, next to it. Its own feature slug rather
+      // than riding `tasks`: a manager who needs the org chart and the
+      // assignee picker should not have to be handed the personal GTD task
+      // manager to get them (people_center_app.md §6).
+      {
+        href: "/people",
+        label: "People",
+        icon: "Users",
+        note: "Directory, skills and org chart",
+        feature: "people",
+      },
     ],
   },
 
@@ -234,6 +245,15 @@ export const NAV_SECTIONS: NavSection[] = [
         icon: "UserCog",
         note: "People · teams · roles · per-user access",
         adminOnly: true,
+      },
+      {
+        // Ungated on purpose: choosing your own theme is a personal
+        // preference, not an admin capability. The org-wide default on the
+        // same page is authorized at the gateway.
+        href: "/settings/appearance",
+        label: "Appearance",
+        icon: "Palette",
+        note: "Themes · colour mode · density · accent",
       },
     ],
   },

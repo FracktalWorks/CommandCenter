@@ -12,7 +12,7 @@
  * in ../lib/board.ts — this file is the pixels and the HTML5 drag events.
  */
 
-import { Building2, IndianRupee, Plus, User } from "lucide-react";
+import Icon from "@/components/Icon";
 import { useState } from "react";
 import { needsLostReason, planMove, type BoardLane, type DealMove } from "../lib/board";
 import { compactMoney, money, shortEmail, stageAgeLabel } from "../lib/format";
@@ -90,7 +90,7 @@ export default function KanbanBoard({
                 </span>
               </header>
               <div className="flex items-center gap-1 border-b border-border px-3 py-1.5 text-[10px] text-muted-foreground">
-                <IndianRupee className="w-3 h-3" />
+                <Icon name="IndianRupee" className="w-3 h-3" />
                 {/* The lane total covers the whole lane; the cards below are
                     one page of it. A header that counted only what it
                     returned would lie about the busy lane somebody is
@@ -133,7 +133,7 @@ export default function KanbanBoard({
           onClick={onCreate}
           className="flex h-9 w-[180px] shrink-0 items-center justify-center gap-1.5 rounded-xl border border-dashed border-border text-xs text-muted-foreground hover:border-primary/40 hover:text-foreground tech-transition"
         >
-          <Plus className="w-3.5 h-3.5" />
+          <Icon name="Plus" className="w-3.5 h-3.5" />
           New deal
         </button>
       </div>
@@ -167,7 +167,7 @@ function DealCard({
           browser never joins the org list, which is paged at 100. */}
       {deal.organization_name && (
         <p className="mt-1 flex items-center gap-1 truncate text-[10px] text-muted-foreground">
-          <Building2 className="w-3 h-3 shrink-0" />
+          <Icon name="Building2" className="w-3 h-3 shrink-0" />
           {deal.organization_name}
         </p>
       )}
@@ -183,7 +183,7 @@ function DealCard({
         </span>
       </div>
       <div className="mt-1.5 flex items-center gap-1 text-[10px] text-muted-foreground">
-        <User className="w-3 h-3 shrink-0" />
+        <Icon name="User" className="w-3 h-3 shrink-0" />
         <span className="truncate">{shortEmail(deal.owner_email)}</span>
         {warnLost && (
           <span className="ml-auto text-[10px] text-warning" title="Marking this lost will ask for a reason">

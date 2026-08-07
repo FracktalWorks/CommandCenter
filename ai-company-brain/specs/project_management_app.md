@@ -4,14 +4,15 @@
 > module, sliced into every other Center) · **Created:** 2026-08-05 · **Updated:** 2026-08-06
 > (owner pass — §8's three open questions are answered as **D-PM-8/9/10**; §7.1 gains the
 > Space→Center mapping step and WS-27b's done-whens grew with it) ·
-> **Status:** 🟢 **WS-27a + WS-27b + WS-27d BUILT** (2026-08-06, branch
+> **Status:** 🟢 **WS-27a + WS-27b + WS-27d + WS-27e BUILT** (2026-08-06, branch
 > `claude/paca-research-task-management-a1f6zd`, PR #367) — migration `146_projects.sql`
 > (§3.1–§3.10), `feature:projects` registered on both sides, the `routes/projects/` API (§4
 > minus `sync.py`) live behind the feature gate on the `gateway/db.py` seam, the ClickUp
 > importer with its Space→Center mapping plan (§7.1), and the `/projects` UI with its Center
-> projections (§5). **Not deployed and never run** — the migration has not been applied
-> anywhere and neither import endpoint has been executed against the live tenant. ·
-> **WS-27c, e, f, g: 🟡 SPEC, nothing built.** ·
+> projections (§5), and the personal lens (§3.11-§3.12, §6.1) on migration
+> `147_projects_personal.sql`. **Not deployed and never run** — neither migration has been
+> applied anywhere and neither import endpoint has been executed against the live tenant. ·
+> **WS-27c, f, g, h: 🟡 SPEC, nothing built.** ·
 > **Owner:** vjvarada · **Board row: WS-27**
 >
 > **Verified 2026-08-06:** 140 hermetic cases across
@@ -25,10 +26,16 @@
 > Space, a plan that writes, and a re-import that duplicates), and WS-27d's six (an unknown
 > Center yielding an empty forest, `planDrop` never materialising, a board drop hard-coding
 > status, unpositioned tasks sorting to the top, a missing nav pane, a Center linking at a
-> forked route).
+> forked route). **WS-27e adds six more:** an overlay keyed by task rather than per member,
+> a personal-only completion that leaves the board behind, `is_triaged` always true, an
+> inbox that drops its personal-project arm, a disposition filter matching only the stored
+> value, and a tickler that ignores `defer_until`. ⚠️ Two of those first **survived** and
+> the fake was at fault, not the tests — it applied the inbox's arms unconditionally instead
+> of keying them off the statement, the exact mirror failure `_projects_fakes.py`'s own
+> docstring warns about. Found by mutation, not by review.
 >
-> **Not built, on purpose:** no sync (WS-27c — blocked on BO-1a/BO-1b), no personal mirror
-> (WS-27e), no automation/agent dispatch (WS-27f), and
+> **Not built, on purpose:** no sync (WS-27c — blocked on BO-1a/BO-1b), no automation or
+> agent dispatch (WS-27f), no `gtd_items` retirement (WS-27h), and
 > `schema.generated.sql` was NOT regenerated — it needs a migrated live DB and is stale
 > repo-wide, so it stays an owner-run chore (the WS-26a precedent).
 >
@@ -287,7 +294,8 @@ on tasks). No engine 13.
 | `activities.py` | `GET /projects/tasks/{id}/timeline` · `POST /projects/tasks/{id}/comments` · `PATCH/DELETE /projects/comments/{id}` · `POST /projects/activities/{id}/revert` (field_change only) |
 | `admin.py` | statuses + types CRUD per root project (`RESTRICT` delete answers 409 naming the count in use) |
 | `views.py` | views CRUD · `PUT /projects/views/{id}/positions` (bulk upsert) |
-| `me.py` | `GET /projects/assigned-to-me` — the personal lens's read (§6.1) |
+| `me.py` | `GET /projects/assigned-to-me` — the flat "what is mine" read |
+| `personal.py` (WS-27e) | `GET /projects/my/inbox` · `GET/POST /projects/my/project` · `POST /projects/my/tasks` · `PATCH /projects/tasks/{id}/personal` · `POST /projects/tasks/{id}/{complete,defer}` · `GET /projects/my/contexts` |
 | `mapping.py` (WS-27b) | no routes — the three suggestion signals and their combination, kept apart from the importer because a proposal and an application are different acts (D-PM-10) |
 | `import_clickup.py` (WS-27b) | `POST /projects/import/clickup/plan` (proposes a Center per Space, writes nothing) · `POST /projects/import/clickup` (applies the confirmed mapping) |
 | `sync.py` (WS-27c) | `POST /projects/sync` · `GET /projects/sync/status` · `GET /projects/sync/conflicts` |
@@ -361,7 +369,10 @@ upsert per drop (the board's cross-column drag patches whatever field `column_by
 
 ### 6.1 Personal tasks (`/tasks`) — the org↔personal seam this spec exists for
 The requirement: a `pm_task` assigned to a member appears in their personal GTD system, and
-completing it in either place is one fact. Mechanism is **D-PM-6** (§8): the Tasks app's
+completing it in either place is one fact. **Since 2026-08-06 that is true by construction
+rather than by synchronisation** — there is one row, and the personal view is a lens over
+it (D-PM-6 revised). What follows describes the superseded mirror; it is kept for the
+reader who needs to know what was rejected. ~~Mechanism is the Tasks app's
 existing provider machinery mirrors `pm_tasks` where `lower(assignee) = user` into
 `gtd_items` as `source='SYNCED'` rows (internal provider `commandcenter`, no credentials,
 no broker gate — it is not an outward write). The GTD overlay (disposition, context,
@@ -389,6 +400,17 @@ status/assignee filters). Paca-grade engine uplifts — multi-branch switch cond
 per-step input/output snapshots, due-date-offset triggers, the derived dependency map —
 are **`workflows_app.md` backlog items** (single owner, D6); this spec records the demand
 and stops.
+
+**Written down 2026-08-06 — `workflows_app.md` §13.** The demand is no longer only recorded
+here as a sentence: the engine spec now carries a full Paca-referenced uplift backlog,
+**U1–U8**, each with the Paca design, this engine's measured current state, and a done-when.
+The mapping from this section is exact: **U1 is the `pm.update_task` node** (WS-27f's first
+half) and **U7 is agent dispatch** (§6.4, WS-27f's second half); U2/U3/U6 are the switch,
+step snapshots and due-date trigger named above; **U4** (task retargeting over
+`parent|children|blocks|…`) is the item this section had not named and is what makes "when
+every child is Done, move the parent to Done" expressible at all. Nothing in §13 is built —
+it is the reference an implementer picks up, so WS-27f no longer has to re-derive the engine
+work from Paca's source.
 
 ### 6.4 Agents — assignment is dispatch
 Assigning `agent:<name>` (WS-27f): the `pm.task.assigned` event carries the agent target; a
@@ -488,6 +510,25 @@ Final import + parity counts per Space · flip the sync to **pull-only mirror** 
 edits still land; pushes stop) · a soak window where the org works in `/projects` · then
 stop the pull.
 
+### 7.5 The `gtd_items` retirement (WS-27h) — the cost D-PM-6's revision accepted
+
+One store means the old one goes. Sequenced **after** WS-27e (which is the destination) and
+independent of the ClickUp work, because it is a move between two tables we own:
+
+1. `/tasks` reads a **union** of `gtd_items` and `pm_tasks` during coexistence, so the app
+   keeps working while rows move.
+2. Every `gtd_items` row migrates: `LOCAL` rows into the owner's personal project; `SYNCED`
+   rows onto their `pm_tasks` counterpart by `clickup_id`, with the GTD overlay landing in
+   `pm_task_personal`. The disposition vocabulary is **unchanged on purpose** (§3.12), so
+   this is a copy rather than a translation.
+3. `items.py`'s 27 `user_id` predicates retire with the table they scope. They are untouched
+   by WS-27e, deliberately — the blast radius WS-14 C1 measured belongs to this ticket.
+4. `gtd_projects`, `gtd_spaces`, `gtd_folders` retire with it; `gtd_people` does **not** —
+   that is the People Center's store (`specs/people_center_app.md`).
+
+⚠️ **Not started, and it is the largest single piece of WS-27 remaining.** Until it lands
+there are two personal task stores, which is the state this decision exists to end.
+
 ### 7.4 Retirement inventory (WS-27g, second half)
 System A ClickUp arm: `ingestion/sources/clickup/` (client, normaliser, webhook),
 `scheduler.py`'s ClickUp job, `scripts/clickup_sync.py`, `/webhooks/clickup` from
@@ -547,16 +588,51 @@ slice. **Rejected:** `gtd_item_sort_key`-style single order (one global order ca
 N views) . **Cost:** one side table and materialise-on-first-drag semantics the UI must
 implement faithfully.
 
-**D-PM-6 — The personal connection is the Tasks app's provider seam, run internally.**
+~~**D-PM-6 — The personal connection is the Tasks app's provider seam, run internally.**
 `DECISION (agent-proposed, owner may overrule).` §6.1's mechanism: `pm_tasks` mirrored into
-`gtd_items` as `source='SYNCED'` under an internal `commandcenter` provider — every GTD
-feature works unchanged, the overlay contract already exists, and the mirror is in-DB
-(cheap, transactional, no broker). **Rejected:** (a) a read-union inside `/tasks` (touches
-the 27-predicate blast radius C1 already measured, and the GTD overlay has no home for
-un-mirrored rows); (b) linking `gtd_items` rows by hand (two sources of truth with no
-reconcile discipline). **Cost:** row duplication inside one database, and the internal
-provider must be exempted from `_broker_gate` (it is not an outward write — assert that in
-its tests).
+`gtd_items` as `source='SYNCED'` under an internal `commandcenter` provider…~~
+— **SUPERSEDED 2026-08-06.** Kept struck rather than deleted because the replacement is
+only legible against what it replaces: the mirror was the thing rejected, and a reader who
+finds `pm_task_personal` without this will wonder why the obvious answer was not taken.
+
+**D-PM-6 (revised) — ONE task store. The personal manager is a lens, not a copy.**
+`DECISION (owner-directed 2026-08-06: "the personal task manager should be a proper
+extension of the project system … a cohesive whole that should fit within each other".)`
+
+`pm_tasks` is **the** task table. Three consequences, and they are the whole design:
+
+1. **Assignment is not a sync.** A task assigned to a member is the row in their inbox.
+   Completing it there completes it for the project at the same instant, because there is
+   one row and one status. The mirror would have had two rows for one fact, and every
+   feature built afterwards — search, calendar, agents, reporting, the weekly review —
+   would have had to know about both.
+2. **Private work is a personal project.** An ordinary `pm_projects` row carrying
+   `personal_owner`, granted to that one address (§3.11). Nothing about tasks, boards,
+   timelines, automation or agent dispatch needs a special case; it is a project whose
+   grant happens to name a person. Personal projects are excluded from every *team* read —
+   "My tasks" is not a department — which is presentation, not access.
+3. **The GTD overlay is per-member** (§3.12, `pm_task_personal`). Two people assigned the
+   same task hold different dispositions: the person doing it says NEXT, the person who
+   delegated it says WAITING. A single column on `pm_tasks` could not express that, and it
+   is what delegation looks like rather than an edge case.
+
+**Rejected:** (a) the mirror, above — cohesion was the owner's stated requirement and a
+mirror is by construction two things; (b) keeping `gtd_items` for private todos and merging
+in the UI (owner-answered: two task tables forever, and every future feature has to handle
+both — the seam that quietly drifts); (c) rewriting `/tasks` onto `pm_tasks` in one pass
+(same end state, but ~11.8k lines and 68 endpoints at once, and a regression there breaks
+the owner's daily driver).
+
+**Cost, and it is real:** `gtd_items` becomes legacy and needs its own retirement
+(**WS-27h**, §7.5) — a second retirement project running beside ClickUp's. `/tasks` reads a
+union of both stores until it lands. The 27 owner-scoped predicates in `items.py` are
+untouched by this ticket and are WS-27h's problem, deliberately.
+
+**A property worth stating because it falls out rather than being built:** `disposition` is
+NULL until a member triages, and the read *derives* one from the task's status. So "never
+looked at" and "deliberately filed to INBOX" stay distinguishable — which is the only
+question the Weekly Review exists to ask, and a column defaulting to `'INBOX'` would have
+destroyed it silently.
 
 **D-PM-7 — Sync conflicts: three-way merge, newest-wins per field, conflicts logged to the
 timeline.** `DECISION (agent-proposed, owner may overrule).` §7.2. **Rejected:** whole-row
@@ -682,21 +758,129 @@ and cross-column drags patch the `column_by` field; (3) nav/access registration 
 slice pre-filters by its group — with a vitest asserting the `?center=` param filters
 presentation only.
 
-**WS-27e — personal-task connection + people binding.** 🟢 AGENT-SAFE.
-Done when: (1) an assigned `pm_task` appears in the assignee's `/tasks` inbox as a
-`SYNCED` row with the correct GTD disposition mapping; (2) re-sync never clobbers the
-overlay (the existing contract's test extended to the internal provider); (3) completion
-round-trips both directions; (4) the internal provider is asserted broker-exempt; (5)
-assignee suggestions read the capability layer with N4's projection intact.
+**Authoring landed 2026-08-06** (`lib/assignees.ts` + edits to `page.tsx`, `ProjectTree`,
+`TaskPanel`; 17 vitest cases, 7 mutants red). WS-27d shipped a UI that could **read and
+drag but never create**: `createProject`, `createTask` and `setAssignees` existed in the
+client and were wired to nothing, so a member could only work with rows a ClickUp import
+had put there. Four surfaces close it, each placed where the answer already is:
 
-**WS-27f — automation + agent dispatch.** 🟢 AGENT-SAFE (the node types land in
-`workflows_app.md`'s tree per D6 and are recorded there in the same PR).
+- **New department** from the sidebar header, **new subproject** from a `+` on the node
+  itself — the parent is on screen, and a dialog that asks "which parent?" is how a
+  fifty-node tree acquires mis-parented rows.
+- **New task** from a one-field row above the board. Status is deliberately **not sent**:
+  the API picks the project's default (`create_task`), so the browser never has to know
+  which lane a new task starts in.
+- **Subtask** from the task panel. A subtask is a task with a parent (§3.5) — one endpoint,
+  one table, so it inherits statuses, timeline and assignment whole.
+- **Assignees** as removable chips plus one input. This is where **D-PM-4 stops being a
+  schema note**: an agent and a person go in the same field, and the only difference on
+  screen is an icon. Handing work to an agent is now literally the same gesture as handing
+  it to a colleague — which is the precondition for WS-27f's dispatch being reachable at
+  all, since `pm.task.assigned` is what it keys off.
+
+Two details worth keeping: `withAssignee` returns the **same array** when the assignee is
+already present, and the caller skips the PUT on that identity — a re-assert must not emit
+`pm.task.assigned` and re-dispatch an agent run. And `parseAssignees` splits on commas,
+semicolons and newlines but **never on spaces**, because a pasted `Priya <priya@x.com>`
+would otherwise shred into tokens that assign work to nobody.
+
+**WS-27e — the personal lens (one store).** ✅ **BUILT 2026-08-06**
+(migration `147_projects_personal.sql`, `routes/projects/personal.py`; 31 hermetic cases,
+6 mutants red). **Its shape changed with D-PM-6's revision** — this was specced as a mirror
+into `gtd_items` and is built as a lens over `pm_tasks`, so the done-whens below are
+restated against what was actually built rather than what the mirror would have owed.
+Done when: (1) an assigned `pm_task` appears in the assignee's inbox **with no sync** —
+same row, same id — with the correct derived disposition; (2) a member's triage cannot move
+the team's board and a status change cannot overwrite a stated disposition, both proven
+structurally; (3) completing from the inbox moves the shared status and writes the
+transition's three effects; (4) two assignees hold independent dispositions; (5) a personal
+project is created once, granted to its owner alone, and excluded from every team read;
+(6) no route here accepts a `?member=` in any form.
+
+**The surface landed 2026-08-06** (`src/app/projects/components/MyWork.tsx` +
+`lib/mywork.ts`; 17 vitest cases, 7 mutants red). WS-27e had shipped API-only, which meant
+the cohesion the revision bought was true in the schema and invisible to a member. **"My
+work" sits above the project tree in the same app** — not a second surface and not a second
+nav entry, because a personal lens reached from somewhere else re-teaches exactly the split
+D-PM-6 was revised to remove. Four decisions worth recording, each of which could
+reasonably have gone the other way:
+
+- **Four lanes, not eight.** `INBOX | NEXT | WAITING | SOMEDAY` are work states and get
+  lanes; `PROJECT | REFERENCE` are filing states and collapse into one "Filed" lane shown
+  only when occupied; `DONE | TRASH` the endpoint already excludes. Eight lanes would make
+  the daily view a filing cabinet.
+- **Empty work lanes still render.** "You have triaged nothing into today" is a real and
+  useful state, and a lane that vanishes when empty cannot say it. Only "Filed" hides.
+- **Undated tasks sort BELOW dated ones.** A task nobody dated is not more urgent than one
+  due tomorrow, and the opposite order is how a personal list stops being read.
+- **Untriaged is stated in the row, not implied by a missing badge**, and counted in the
+  header. That count is the Weekly Review's whole question and is only answerable because
+  the server derives dispositions instead of storing them on first read (§3.12).
+
+Completing from a row calls `POST /tasks/{id}/complete`, which moves the **shared** status
+— the checkbox carries a title saying so. Triage buttons call
+`PATCH /tasks/{id}/personal` and cannot touch a shared field. One repair the surface forced:
+`TaskPanel` previously read the *selected project's* statuses, which is wrong for a task
+opened from My work — it may belong to any project the member is assigned into — so the
+panel's statuses are now resolved from the task's own root project.
+
+**WS-27f — automation + agent dispatch.** ✅ **BUILT 2026-08-06**
+(`routes/projects/automation.py` + `agent_dispatch.py`, the `pm_task` node type in
+`workflows/engine/`, `PM_EVENT_TOPICS` in the catalog; 34 hermetic cases, 10 mutants red).
+Both halves of `workflows_app.md` §13 — **U1** the task-mutation node, **U7** dispatch.
+The node types land in `workflows_app.md`'s tree per D6 and are recorded there.
+
+**Six decisions worth reading before changing any of it:**
+
+- **The engine imports a service, not a route.** `apply_task_patch` is transport-free and
+  reuses `apply_status_transition`, `update_row`, `record_activity` — so an automation's
+  edit is *indistinguishable in validation* from a human's PATCH and lands the same
+  timeline row. That is Paca's "mutate through the ordinary service" rule as code.
+- **Status is named, never keyed** (`"Done"`, or the category as a fallback). Statuses are
+  per-project rows, so a graph pinned to one project's status UUID could only ever automate
+  that project — the opposite of what an automation is for. An unknown lane fails with the
+  project's actual lane names in the message.
+- **A `pm_task` node is NOT write-class.** The `write_without_approval` publish gate fires
+  for `tool` nodes reaching *external* systems; an internal task move must not need an
+  approval step. That exemption is now pinned by a test rather than true by accident.
+- **"Already in target state" writes nothing** — and the test asserts **no `UPDATE` is
+  issued**, not merely that no activity was written. `update_row` stamps `updated_at`, so a
+  redundant write is invisible in a diff while leaving the task looking freshly touched;
+  an automation firing on `pm.task.updated` would bump every task it inspected, forever.
+- **Assignment is dispatch, from a sink.** `PUT /tasks/{id}/assignees` emits and returns;
+  `agent_dispatch.on_event` is registered beside the workflows dispatcher. A slow or broken
+  agent therefore cannot fail the act of assigning somebody a task. Only **newly added**
+  assignees dispatch — `set_assignees` emits the added set, so a re-assert cannot start a
+  second run, and both sides say so.
+- **The handoff activity is committed BEFORE the run starts** (Paca's
+  `agent.session.started`), and the failure path writes too. A dispatch that fails silently
+  leaves a session that appears to be running forever and nobody knows to pick the work up.
+
+**One engine defect found and fixed:** `templating.resolve_value` keeps an unresolvable
+`{{ref}}` **as-is at run time by design**, and `{{trigger.missing}}` passes the publish gate
+because its *root* is legal. The literal would have reached Postgres as a would-be uuid and
+come back "Task not found", sending the maker to look for a task rather than at their
+reference. The node now fails with `task id did not resolve: '…'`.
+
+Done when: (1) an event-triggered workflow mutates a task and the target carries a
+`pm_activities` row actored `system:workflow:<id>`; (2) unknown field and missing target
+both fail at **publish** with named issues; (3) re-running against a task already in the
+target state records a skip and writes nothing; (4) the node is served by
+`GET /workflows/catalog` (D7); (5) assigning `agent:<name>` starts a run whose session is on
+the task timeline within the same request.
 Done when: (1) `pm.*` events reach `dispatch_event` (proven at the `emit_event` seam);
 (2) the `pm.update_task` action mutates through the ordinary service and stamps
 `system:workflow:<id>`; (3) assigning `agent:<name>` produces an orchestrator run, an
 immediate `agent_run` activity, and a closing activity on completion/failure; (4) the
 `skill-projects` tool family lets an agent read/update its assigned task under its own
 identity, permission-intersected.
+
+**WS-27h — `gtd_items` retirement.** 🟡 sequenced after WS-27e; the data move itself is
+🔴 **OWNER-GATE** (it rewrites the owner's live task store).
+Done when: (1) `/tasks` serves a union with no visible regression; (2) every `gtd_items`
+row has a `pm_tasks` counterpart and the counts match per disposition; (3) the overlay
+landed in `pm_task_personal` with dispositions preserved exactly; (4) `items.py`'s
+owner-scoped predicates and the `gtd_*` task tables are gone. See §7.5.
 
 **WS-27g — cutover + ClickUp retirement.** 🔴 **OWNER-GATE end-to-end** (final import,
 parity sign-off, sync flips, consumer repoint, token revocation, constraint-8 amendment —
@@ -723,3 +907,101 @@ SUT submodule), the migration asserted idempotent **statically** over its text, 
 claims checked against `tests/unit/_schema_cascade.py`'s derived FK graph (the N8 lesson:
 never report a destroyed row as kept), and mutants for each new guard measured red and
 reverted byte-identical.
+
+---
+
+## 11. ClickUp parity — the measured gap, and how it gets closed
+
+> **Added 2026-08-06** against the owner's standing requirement: *"I want to be able to do
+> everything that I was doing from ClickUp and more."* WS-27g retires ClickUp, and it cannot
+> honestly be called until this list is short. **Measured against the built tree** (twelve
+> `pm_*` tables, 34 endpoints) rather than recalled — every "have" below is a table or a
+> route that exists today.
+
+### 11.1 What is already there
+
+Hierarchy (departments → projects → subprojects → tasks → subtasks, two self-FKs) ·
+statuses-as-data with a semantic category · task types · assignees in one vocabulary for
+people **and** agents · comments and a single activity timeline **with field-level revert** ·
+`blocks | relates_to | duplicates` links · per-view fractional ordering · board and list
+surfaces · the personal lens · grant scoping with Center projections · the ClickUp importer ·
+a `pm_task` automation node and assignment→agent dispatch.
+
+Several of those ClickUp does **not** have — revert, agents as assignees, per-Center
+projections of one board. That is the "and more" half, and it is already true.
+
+### 11.2 What is missing, in the order it hurts
+
+Ordered by *what stops somebody using this instead of ClickUp on a Monday*, not by how
+interesting it is to build.
+
+| # | Gap | Why it blocks | Ticket |
+|---|---|---|---|
+| 1 | ~~**Attachments**~~ | — | **WS-27i ✅ BUILT 2026-08-06** |
+| 2 | **Notifications + @mentions** — nothing notifies anybody | Assignment is silent. A tool nobody hears from is a tool nobody opens, and the whole assignment→agent chain assumes somebody noticed | **WS-27j** |
+| 3 | **Filters, grouping and saved views** — `pm_views` exists; the UI has a board/list toggle and nothing else | "My open bugs in Ops, grouped by assignee" is a daily question with no answer. The **table is already there**, so this is a UI ticket, not a schema one | **WS-27k** |
+| 4 | **Custom fields** — no definitions table, no values | ClickUp's signature feature. Paca's shape (`custom_field_definitions` + a JSONB column keyed by `field_key`) is proven and portable | **WS-27l** |
+| 5 | **Tags** — refused Paca's bare JSONB array (research row 13) and nothing replaced it | The refusal was right and left a hole. A tag registry with rename/merge is the version worth having | **WS-27m** |
+| 6 | **Bulk edit / multi-select** | Re-triaging fifty imported tasks one at a time is how an import gets abandoned — this one gates the migration itself | **WS-27n** |
+| 7 | **Recurring tasks** | Every operations cadence is recurring. Without it those live in someone's head or in ClickUp | **WS-27o** |
+| 8 | **Dependency and subtask UI** — `pm_task_links` and `parent_task_id` both exist, unreachable from the board | Data with no surface is a promise the product does not keep | **WS-27p** |
+| 9 | **Calendar / timeline view** | The third view ClickUp users actually use, after list and board | **WS-27q** |
+| 10 | **Global task search** | `?q=` exists on the list endpoint; there is no search surface | **WS-27r** |
+
+**Deliberately NOT on this list:** sprints (a stated non-goal, §1), time tracking and
+checklists (Paca moved both out of core into plugins — the growth path is subtraction), and
+Gantt. If any is wanted, it is a decision to record, not an omission to fix.
+
+### 11.3 Sequencing, and the one dependency that matters
+
+**WS-27n (bulk edit) gates WS-27g.** The cutover imports a real workspace, and an import
+that cannot be re-triaged in bulk is an import somebody abandons halfway — leaving two live
+systems, which is the exact state the retirement exists to end. Build it before the cutover,
+not after.
+
+**1 → 2 → 3 are the daily-use tier** and should go first as a block: a member who can
+attach a file, hear about an assignment, and filter their board can run a day here. 4-5
+(custom fields, tags) are the *modelling* tier — they change what a task can say. 6-10 are
+reach.
+
+Every one is 🟢 **AGENT-SAFE** to build. The gates stay where they already are: running the
+importer against production, confirming a Space→Center mapping, and the WS-27g cutover are
+owner acts (`work_plan.md` §6), and nothing in §11 changes that.
+
+### 11.4 WS-27i — attachments (built 2026-08-06)
+
+Migration `150_projects_attachments.sql`, `routes/projects/attachments.py`, the Files
+section of the task panel. 25 hermetic cases, 10 mutants red.
+
+**One file store, not two.** `gtd_attachments` already IS Paca's "central files registry"
+(research §2.7) — owner, name, mime, size, path — so the bytes and the upload rules are
+**imported** from the capture flow rather than copied. A second table with a second storage
+directory would have meant two places to back up, two size limits to keep in step and two
+answers to "is this extension allowed".
+
+**What differs is who may READ, and that is the entire reason for the join.**
+`gtd_attachments` is owner-scoped end to end; `pm_task_attachments` makes a file readable by
+anyone who can see a task it hangs off. Two consequences, both security properties rather
+than conveniences:
+
+- **There is no attach-by-id endpoint.** Upload and attach are one call. A caller who could
+  name an arbitrary `attachment_id` could attach somebody else's private capture to a task
+  they own and read it back — privilege escalation dressed as a feature.
+- **A personal capture stays unreachable here**, because it has no join row.
+
+Detaching **keeps the bytes**: the same file may hang off another task, and deleting the row
+from under it would turn one person's tidy-up into somebody else's broken link. Detaching
+something already gone is a no-op, not a 404 (Paca's lenient-removes lesson, research §6).
+
+**A bug caught before it shipped:** the projects BFF proxy re-serialised every POST as JSON.
+A multipart upload would have failed `req.json()`, fallen into the `catch(() => ({}))`, and
+reached the gateway **with no file at all — while still answering 201**. The proxy now passes
+a non-JSON body through byte-for-byte. `workflows_app.md` §3.3b documents the identical trap
+for HMAC-signed webhook bodies; this was that trap on the upload path.
+
+**A test that was asserting the wrong thing:** the first traversal test checked the file's
+path on disk, which is safe *by construction* (`<uuid><suffix>` — the supplied name never
+reaches it), so a mutant removing `_safe_name` entirely survived. What that function actually
+protects is the **stored name**, which is echoed into the descriptor, rendered in the UI, and
+handed to `FileResponse(filename=…)` — i.e. into a `Content-Disposition` header, where
+separators, quotes and newlines matter. Both properties are now asserted separately.

@@ -13,7 +13,7 @@
  * entirely in the field list.
  */
 
-import { X } from "lucide-react";
+import Icon from "@/components/Icon";
 import { useViewMode } from "@/components/ViewModeProvider";
 import FieldsPanel from "./FieldsPanel";
 import Timeline from "./Timeline";
@@ -103,7 +103,7 @@ export default function RecordSheet({
             className="rounded-lg border border-border p-2 text-muted-foreground hover:bg-secondary tech-transition"
             aria-label="Close record"
           >
-            <X className="w-4 h-4" />
+            <Icon name="X" className="w-4 h-4" />
           </button>
         </header>
 

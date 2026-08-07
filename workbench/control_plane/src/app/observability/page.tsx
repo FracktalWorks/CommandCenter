@@ -21,11 +21,10 @@
  *   drill-down  GET /api/observability/runs?agent=
  */
 
+import Button from "@/components/ui/Button";
+import Icon, { themedIcon, type ThemedIcon } from "@/components/Icon";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import {
-  AppWindow, Bot, Building2, Coins, Cpu, History as HistoryIcon, Radio, Server,
-} from "lucide-react";
 
 import { CHARACTER_LIBRARY } from "./character-library.generated";
 import { TopDownOffice, TOPDOWN_STYLE } from "./office-topdown";
@@ -240,7 +239,7 @@ function ServerRack({ blades }: { blades: ModelBlade[] }) {
   return (
     <div className="rounded-xl border border-border bg-card/60 p-3">
       <div className="obs-pixel text-[10px] uppercase tracking-wide text-muted-foreground mb-2 flex items-center gap-1.5">
-        <Server size={12} />
+        <Icon name="Server" size={12} />
         <span>Model servers</span>
         <span className="rounded bg-secondary/50 px-1.5 py-0.5">{blades.length} live</span>
       </div>
@@ -334,7 +333,7 @@ function ActivityRow({ e, onOpen, aliases }: { e: ActivityEvent; onOpen: (name: 
           isRunLike ? "bg-secondary/40 text-foreground border-border" : "bg-violet-500/10 text-violet-500 border-violet-500/20"
         }`}
       >
-        {isAgent ? <Bot size={11} /> : isApp ? <AppWindow size={11} /> : <Cpu size={11} />}
+        {isAgent ? <Icon name="Bot" size={11} /> : isApp ? <Icon name="AppWindow" size={11} /> : <Icon name="Cpu" size={11} />}
         {isAgent ? "Agent" : isApp ? "App" : "Model"}
       </span>
       <div className="min-w-0 flex-1">
@@ -565,7 +564,7 @@ function HistoryView({ onOpen, aliases }: { onOpen: (name: string) => void; alia
         <p className="text-sm text-muted-foreground p-4 animate-pulse">Loading history…</p>
       ) : runs.length === 0 ? (
         <div className="flex flex-col items-center justify-center h-40 text-center gap-2">
-          <HistoryIcon size={26} className="text-muted-foreground/50" />
+          <Icon name="History" size={26} className="text-muted-foreground/50" />
           <p className="text-sm text-muted-foreground">No runs recorded yet.</p>
           <p className="text-xs text-muted-foreground/60">
             Completed agent runs appear here — this list is durable (it survives restarts, unlike the live feed).
@@ -678,16 +677,16 @@ function AgentDrawer({
           </div>
           <div className="text-right shrink-0">
             <div className="flex items-center gap-1 justify-end text-emerald-500 text-sm font-semibold">
-              <Coins size={13} />
+              <Icon name="Coins" size={13} />
               {spend ? fmtCost(spend.cost) : "—"}
             </div>
             <div className="text-[10px] text-muted-foreground/70">
               spend{windowDays ? ` · ${windowDays}d` : ""}{spend?.calls ? ` · ${spend.calls}×` : ""}
             </div>
           </div>
-          <button onClick={onClose} className="text-muted-foreground hover:text-foreground text-lg px-2" aria-label="Close">
+          <Button variant="text" size="none" layout="" onClick={onClose} aria-label="Close" className="text-lg px-2">
             ✕
-          </button>
+          </Button>
         </header>
 
         <div className="flex gap-1 p-2 border-b border-border">
@@ -1057,11 +1056,11 @@ export default function ObservabilityPage() {
   const todayCost = cost?.days.length ? cost.days[cost.days.length - 1].cost : 0;
   const workingNow = roster.filter((a) => a.status === "working" || hotSet.has(a.name)).length;
 
-  const TABS: Array<{ id: Tab; label: string; Icon: typeof Bot }> = [
-    { id: "office", label: "Office", Icon: Building2 },
-    { id: "feed", label: "Live feed", Icon: Radio },
-    { id: "history", label: "History", Icon: HistoryIcon },
-    { id: "cost", label: "Cost", Icon: Coins },
+  const TABS: Array<{ id: Tab; label: string; Icon: ThemedIcon }> = [
+    { id: "office", label: "Office", Icon: themedIcon("Building2") },
+    { id: "feed", label: "Live feed", Icon: themedIcon("Radio") },
+    { id: "history", label: "History", Icon: themedIcon("History") },
+    { id: "cost", label: "Cost", Icon: themedIcon("Coins") },
   ];
 
   return (
@@ -1078,11 +1077,11 @@ export default function ObservabilityPage() {
         </div>
         <div className="flex items-center gap-4 text-xs">
           <div className="flex items-center gap-2">
-            <span className="flex items-center gap-1 text-muted-foreground"><Bot size={13} /> {workingNow} working</span>
+            <span className="flex items-center gap-1 text-muted-foreground"><Icon name="Bot" size={13} /> {workingNow} working</span>
             <span className="text-muted-foreground/40">·</span>
-            <span className="flex items-center gap-1 text-violet-500"><Cpu size={13} /> {blades.length} models</span>
+            <span className="flex items-center gap-1 text-violet-500"><Icon name="Cpu" size={13} /> {blades.length} models</span>
             <span className="text-muted-foreground/40">·</span>
-            <span className="flex items-center gap-1 text-emerald-500"><Coins size={13} /> {fmtCost(todayCost)} today</span>
+            <span className="flex items-center gap-1 text-emerald-500"><Icon name="Coins" size={13} /> {fmtCost(todayCost)} today</span>
           </div>
           <div className="flex items-center gap-1.5">
             <span className={`h-2 w-2 rounded-full ${connected ? "bg-success/80 obs-led" : "bg-muted-foreground/40"}`} />

@@ -1,15 +1,8 @@
 "use client";
 
+import Button from "@/components/ui/Button";
+import Icon from "@/components/Icon";
 import { useMemo, useState } from "react";
-import {
-  Clock,
-  Zap,
-  X,
-  CalendarPlus,
-  Check,
-  Wand2,
-  Play,
-} from "lucide-react";
 import { GtdItem } from "../../lib/types";
 import { durationLabel } from "../../lib/utils";
 import { priorityRank } from "../../lib/priority";
@@ -130,7 +123,7 @@ export function ScheduleSheet({
           <span className="h-1 w-10 rounded-full bg-border" />
         </div>
         <div className="flex items-center gap-2 px-4 py-2.5">
-          <CalendarPlus className="h-4 w-4 shrink-0 text-primary" />
+          <Icon name="CalendarPlus" className="h-4 w-4 shrink-0 text-primary" />
           <div className="min-w-0 flex-1">
             <h2 className="truncate text-sm font-semibold text-foreground">
               {gap
@@ -142,25 +135,16 @@ export function ScheduleSheet({
               {at ? ` · from ${fmtClock(at)}` : " · first free slot"}
             </p>
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="Close"
-            className="rounded-md p-1 text-muted-foreground hover:bg-secondary hover:text-foreground"
-          >
-            <X className="h-4 w-4" />
-          </button>
+          <Button variant="ghost" size="icon-xs" radius="keep" layout="" type="button" onClick={onClose} aria-label="Close" className="rounded-md">
+            <Icon name="X" className="h-4 w-4" />
+          </Button>
         </div>
 
         <div className="px-3 pb-2">
-          <button
-            type="button"
-            onClick={onPlan}
-            className="tech-transition flex w-full items-center justify-center gap-1.5 rounded-md bg-primary px-3 py-2.5 text-[13px] font-semibold text-primary-foreground hover:opacity-90"
-          >
-            <Wand2 className="h-4 w-4" />
+          <Button size="none" radius="keep" layout="flex items-center justify-center" type="button" onClick={onPlan} className="w-full gap-1.5 rounded-md px-3 py-2.5 text-[13px] font-semibold">
+            <Icon name="Wand2" className="h-4 w-4" />
             Rebuild my day with AI
-          </button>
+          </Button>
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-4">
@@ -174,7 +158,7 @@ export function ScheduleSheet({
               {twoMinute.length > 0 && (
                 <>
                   <p className="mb-1 flex items-center gap-1 px-1 text-[10px] font-semibold uppercase tracking-wide text-primary">
-                    <Zap className="h-3 w-3" /> 2-minute pile ({twoMinute.length})
+                    <Icon name="Zap" className="h-3 w-3" /> 2-minute pile ({twoMinute.length})
                     — just do it
                   </p>
                   <div className="mb-2.5 flex flex-col gap-1">
@@ -195,7 +179,7 @@ export function ScheduleSheet({
                           title="Done — no scheduling ceremony for small wins"
                           className="tech-transition inline-flex shrink-0 items-center gap-1 rounded-md bg-success/15 px-2 py-1 text-[11px] font-medium text-success hover:bg-success/25"
                         >
-                          <Check className="h-3 w-3" strokeWidth={3} />
+                          <Icon name="Check" className="h-3 w-3" strokeWidth={3} />
                           Done
                         </button>
                       </div>
@@ -228,12 +212,12 @@ export function ScheduleSheet({
                         </span>
                         <span className="mt-0.5 flex items-center gap-2 text-[10px] text-muted-foreground">
                           <span className="inline-flex items-center gap-0.5">
-                            <Clock className="h-3 w-3" />
+                            <Icon name="Clock" className="h-3 w-3" />
                             {durationLabel(t.timeEstimateMins ?? DEFAULT_BLOCK_MINS)}
                           </span>
                           {t.energy && (
                             <span className="inline-flex items-center gap-0.5 capitalize">
-                              <Zap className="h-3 w-3" />
+                              <Icon name="Zap" className="h-3 w-3" />
                               {t.energy}
                             </span>
                           )}
@@ -255,12 +239,12 @@ export function ScheduleSheet({
                       <span className="inline-flex shrink-0 items-center gap-1 rounded-md bg-primary/10 px-2 py-1 text-[11px] font-medium text-primary">
                         {gap ? (
                           <>
-                            <Play className="h-3 w-3" fill="currentColor" />
+                            <Icon name="Play" className="h-3 w-3" fill="currentColor" />
                             Start
                           </>
                         ) : (
                           <>
-                            <CalendarPlus className="h-3.5 w-3.5" />
+                            <Icon name="CalendarPlus" className="h-3.5 w-3.5" />
                             {at ? fmtClock(at) : "Timebox"}
                           </>
                         )}

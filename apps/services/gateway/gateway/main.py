@@ -386,6 +386,18 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     except Exception:
         pass
 
+    # Flush audit writes that are still on worker threads. `acb_audit.record`
+    # is non-blocking on the event loop (BO-10), which means an event recorded
+    # moments before shutdown is in flight rather than committed; exiting here
+    # would cancel it. Last, and after every loop above, so writes those loops
+    # made on their way out are included. Bounded internally — a wedged audit
+    # DB cannot hold the shutdown open.
+    try:
+        from acb_audit import drain as drain_audit
+        await drain_audit()
+    except Exception:
+        pass
+
     _log.info("gateway.shutdown")
 
 
@@ -1003,6 +1015,16 @@ except Exception:  # pragma: no cover
     pass
 
 try:
+    # WS-28 — the People Center's directory (spec:
+    # ai-company-brain/specs/people_center_app.md). Its own feature gate, but
+    # the HR projection is imported from routes/tasks, never re-implemented.
+    from gateway.routes.people import router as _people_router
+
+    app.include_router(_people_router)
+except Exception:  # pragma: no cover
+    pass
+
+try:
     from gateway.routes.settings import router as _settings_router
 
     app.include_router(_settings_router)
@@ -1123,6 +1145,13 @@ try:
         from ingestion.event_hooks import register_event_sink
 
         register_event_sink(_wf_dispatch)
+        # WS-27f: assignment IS dispatch. A SECOND sink beside the workflows
+        # dispatcher rather than a call inside `PUT /tasks/{id}/assignees` —
+        # a slow or broken agent must not be able to fail the act of assigning
+        # somebody a task.
+        from gateway.routes.projects.agent_dispatch import on_event as _pm_agent_dispatch
+
+        register_event_sink(_pm_agent_dispatch)
     except Exception:  # pragma: no cover - ingestion optional in some deploys
         pass
 except Exception:  # pragma: no cover

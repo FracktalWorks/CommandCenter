@@ -10,7 +10,7 @@
  * travels WITH the move so a single PATCH either lands or does not.
  */
 
-import { X } from "lucide-react";
+import Icon from "@/components/Icon";
 import { useState } from "react";
 import type { LostReason } from "../lib/types";
 
@@ -51,7 +51,7 @@ export default function LostReasonModal({
             onClick={onCancel}
             className="rounded-lg border border-border p-2 text-muted-foreground hover:bg-secondary tech-transition"
           >
-            <X className="w-4 h-4" />
+            <Icon name="X" className="w-4 h-4" />
           </button>
         </header>
 

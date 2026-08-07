@@ -27,6 +27,8 @@ interface ConfirmationCardProps {
   disabled?: boolean;
 }
 
+import Button from "@/components/ui/Button";
+
 export default function ConfirmationCard({
   title,
   detail,
@@ -70,13 +72,15 @@ export default function ConfirmationCard({
         >
           ✓ Approve
         </button>
-        <button
+        <Button
+          variant="secondary"
+          size="sm"
+          icon="X"
           onClick={onReject}
           disabled={disabled}
-          className="text-[12px] px-4 py-1.5 rounded-lg bg-secondary text-foreground hover:bg-secondary disabled:opacity-40 transition-colors"
         >
-          ✕ Reject
-        </button>
+          Reject
+        </Button>
         <span className="text-[10px] text-muted-foreground ml-auto">
           Agent is waiting for your decision
         </span>

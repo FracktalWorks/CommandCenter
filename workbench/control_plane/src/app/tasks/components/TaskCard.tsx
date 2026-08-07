@@ -1,20 +1,7 @@
 "use client";
 
+import Icon, { themedIcon } from "@/components/Icon";
 import { useState } from "react";
-import {
-  Clock,
-  AlertTriangle,
-  FolderKanban,
-  Zap,
-  Mail,
-  Paperclip,
-  ListTree,
-  GripVertical,
-  Check,
-  CalendarClock,
-  Trash2,
-  Waves,
-} from "lucide-react";
 import { GtdItem } from "../lib/types";
 import { useTaskStore } from "../lib/taskStore";
 import { useCardActions } from "../lib/useCardActions";
@@ -90,7 +77,7 @@ export function TaskCard({
     {
       kind: "item",
       label: "Schedule on calendar",
-      icon: CalendarClock,
+      icon: themedIcon("CalendarClock"),
       onSelect: actions.schedule,
     },
     { kind: "sep" },
@@ -107,13 +94,13 @@ export function TaskCard({
     {
       kind: "item",
       label: actions.isDone ? "Mark as not done" : "Mark as Done",
-      icon: Check,
+      icon: themedIcon("Check"),
       onSelect: actions.toggleDone,
     },
     {
       kind: "item",
       label: "Eliminate…",
-      icon: Trash2,
+      icon: themedIcon("Trash2"),
       danger: true,
       onSelect: actions.eliminate,
     },
@@ -151,7 +138,7 @@ export function TaskCard({
           title="Deep work — needs an unbroken flow state"
           className="inline-flex items-center gap-1 rounded border border-sky-500/30 bg-sky-500/10 px-1.5 py-0.5 text-[10px] font-medium text-sky-600 dark:text-sky-400"
         >
-          <Waves className="h-3 w-3" />
+          <Icon name="Waves" className="h-3 w-3" />
           Deep
         </span>
       )}
@@ -163,7 +150,7 @@ export function TaskCard({
       )}
       {item.timeEstimateMins ? (
         <span className="inline-flex items-center gap-1 text-[10px] text-muted-foreground">
-          <Zap className="h-3 w-3" />
+          <Icon name="Zap" className="h-3 w-3" />
           {durationLabel(item.timeEstimateMins)}
         </span>
       ) : null}
@@ -174,13 +161,13 @@ export function TaskCard({
             overdue ? "font-medium text-destructive" : "text-muted-foreground",
           ].join(" ")}
         >
-          {overdue ? <AlertTriangle className="h-3 w-3" /> : <Clock className="h-3 w-3" />}
+          {overdue ? <Icon name="AlertTriangle" className="h-3 w-3" /> : <Icon name="Clock" className="h-3 w-3" />}
           {relativeTime(item.dueAt)}
         </span>
       )}
       {atts > 0 && (
         <span className="inline-flex items-center gap-0.5 text-[10px] text-muted-foreground">
-          <Paperclip className="h-3 w-3" />
+          <Icon name="Paperclip" className="h-3 w-3" />
           {atts}
         </span>
       )}
@@ -189,7 +176,7 @@ export function TaskCard({
           className="inline-flex items-center gap-0.5 text-[10px] text-muted-foreground"
           title={`${item.subtaskCount} subtask${item.subtaskCount === 1 ? "" : "s"}`}
         >
-          <ListTree className="h-3 w-3" />
+          <Icon name="ListTree" className="h-3 w-3" />
           {item.subtaskCount}
         </span>
       ) : null}
@@ -198,7 +185,7 @@ export function TaskCard({
           className="inline-flex items-center gap-1 text-[10px] text-muted-foreground"
           title={`From email — ${item.origin.fromName || item.origin.fromEmail || ""}`}
         >
-          <Mail className="h-3 w-3" />
+          <Icon name="Mail" className="h-3 w-3" />
         </span>
       )}
       {/* Priority signal — LIST ROW only. The matrix-cell PILL (what it IS)
@@ -252,7 +239,7 @@ export function TaskCard({
             {meta}
             {project && (
               <span className="hidden items-center gap-1 text-[10px] text-muted-foreground sm:inline-flex">
-                <FolderKanban className="h-3 w-3" />
+                <Icon name="FolderKanban" className="h-3 w-3" />
                 <span className="max-w-[120px] truncate">{project.outcome}</span>
               </span>
             )}
@@ -309,7 +296,7 @@ export function TaskCard({
           />
         ) : (
           draggable && (
-            <GripVertical className="absolute right-1.5 top-1.5 h-3.5 w-3.5 text-muted-foreground/30 opacity-0 transition-opacity group-hover:opacity-100" />
+            <Icon name="GripVertical" className="absolute right-1.5 top-1.5 h-3.5 w-3.5 text-muted-foreground/30 opacity-0 transition-opacity group-hover:opacity-100" />
           )
         )}
         {/* Top corners: priority pill top-LEFT (above the title — always shown
@@ -338,7 +325,7 @@ export function TaskCard({
         )}
         {project && (
           <span className="inline-flex w-fit items-center gap-1 rounded bg-secondary px-1.5 py-0.5 text-[10px] text-muted-foreground">
-            <FolderKanban className="h-3 w-3" />
+            <Icon name="FolderKanban" className="h-3 w-3" />
             <span className="max-w-[160px] truncate">{project.outcome}</span>
           </span>
         )}
@@ -379,7 +366,7 @@ function ScheduleButton({ onClick }: { onClick: () => void }) {
       aria-label="Schedule on calendar"
       className="tech-transition rounded p-1 text-muted-foreground/70 hover:bg-secondary hover:text-primary"
     >
-      <CalendarClock className="h-3.5 w-3.5" />
+      <Icon name="CalendarClock" className="h-3.5 w-3.5" />
     </button>
   );
 }

@@ -10,7 +10,8 @@
  * opened and saved is a form nobody opens.
  */
 
-import { Check, Star, UserMinus, X } from "lucide-react";
+import Icon from "@/components/Icon";
+import Button from "@/components/ui/Button";
 import { useState } from "react";
 import { money, shortDate } from "../lib/format";
 import StatusPill from "./StatusPill";
@@ -122,12 +123,9 @@ export default function FieldsPanel({
                 converted
               </span>
             ) : (
-              <button
-                onClick={onConvert}
-                className="ml-auto rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90 tech-transition"
-              >
+              <Button variant="primary" size="sm" onClick={onConvert} className="ml-auto">
                 Convert
-              </button>
+              </Button>
             ))}
         </div>
       )}
@@ -169,7 +167,7 @@ export default function FieldsPanel({
                         : "text-muted-foreground hover:text-foreground"
                     }`}
                   >
-                    <Star
+                    <Icon name="Star"
                       className="w-3.5 h-3.5"
                       fill={is_primary ? "currentColor" : "none"}
                     />
@@ -179,7 +177,7 @@ export default function FieldsPanel({
                     title="Remove from this deal (the contact record is kept)"
                     className="p-1 rounded text-muted-foreground hover:text-destructive tech-transition"
                   >
-                    <UserMinus className="w-3.5 h-3.5" />
+                    <Icon name="UserMinus" className="w-3.5 h-3.5" />
                   </button>
                 </li>
               ))}
@@ -266,14 +264,14 @@ function EditableField({
               className="p-1 rounded text-muted-foreground hover:text-success tech-transition"
               aria-label="Save"
             >
-              <Check className="w-3.5 h-3.5" />
+              <Icon name="Check" className="w-3.5 h-3.5" />
             </button>
             <button
               onClick={() => setEditing(false)}
               className="p-1 rounded text-muted-foreground hover:text-foreground tech-transition"
               aria-label="Cancel"
             >
-              <X className="w-3.5 h-3.5" />
+              <Icon name="X" className="w-3.5 h-3.5" />
             </button>
           </div>
         ) : (

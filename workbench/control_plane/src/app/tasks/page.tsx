@@ -1,16 +1,14 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { PanelLeft, Plus, ArrowLeft, Sparkles } from "lucide-react";
+import Icon from "@/components/Icon";
 import { useViewMode } from "@/components/ViewModeProvider";
 import { useMobileDrawer } from "@/components/AppShell";
 import { useTaskStore } from "./lib/taskStore";
 import { ListsSidebar } from "./components/ListsSidebar";
 import { CaptureBar } from "./components/CaptureBar";
 import { ItemList } from "./components/ItemList";
-import { ItemDetail } from "./components/ItemDetail";
 import { AssistantRail } from "./components/AssistantRail";
-import { PeopleView } from "./components/PeopleView";
 import { InboxView } from "./components/InboxView";
 import { EngageView } from "./components/EngageView";
 import { CalendarView } from "./components/CalendarView";
@@ -33,8 +31,6 @@ export default function TasksPage() {
   const { isMobile } = useViewMode();
   const { open: openDrawer, close: closeDrawer } = useMobileDrawer();
   const selectedView = useTaskStore((s) => s.selectedView);
-  const selectedProjectId = useTaskStore((s) => s.selectedProjectId);
-  const selectProject = useTaskStore((s) => s.selectProject);
   const selectView = useTaskStore((s) => s.selectView);
   const openQuickCapture = useTaskStore((s) => s.openQuickCapture);
   const quickCaptureOpen = useTaskStore((s) => s.quickCaptureOpen);
@@ -45,9 +41,7 @@ export default function TasksPage() {
   // not an always-on right rail.
   const [assistantOpen, setAssistantOpen] = useState(false);
   const isInbox = selectedView === "inbox";
-  const isProjects = selectedView === "projects";
   const isEngage = selectedView === "engage";
-  const isPeople = selectedView === "people";
   const isCalendar = selectedView === "calendar";
 
   // Load live data from the gateway once; stays on the bundled mock data when
@@ -127,21 +121,6 @@ export default function TasksPage() {
           <EngageView />
         ) : isCalendar ? (
           <CalendarView />
-        ) : isProjects && selectedProjectId ? (
-          // A selected project → full-screen roll-up with a Back affordance.
-          <div className="flex h-full flex-col">
-            <button
-              type="button"
-              onClick={() => selectProject(null)}
-              className="tech-transition flex shrink-0 items-center gap-1.5 border-b border-border bg-card px-4 py-2.5 text-sm text-muted-foreground hover:text-foreground"
-            >
-              <ArrowLeft className="h-4 w-4" />
-              Back
-            </button>
-            <div className="min-h-0 flex-1">
-              <ItemDetail />
-            </div>
-          </div>
         ) : (
           <ItemList />
         )}
@@ -167,7 +146,7 @@ export default function TasksPage() {
           active={leftOpen}
           onClick={() => setLeftOpen((v) => !v)}
           label="Toggle lists"
-          icon={PanelLeft}
+          icon="PanelLeft"
         />
         <span className="text-xs font-medium text-muted-foreground">
           Task Manager
@@ -177,7 +156,7 @@ export default function TasksPage() {
           onClick={() => openQuickCapture("single")}
           className="tech-transition ml-2 inline-flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs text-muted-foreground hover:border-primary/40 hover:text-foreground"
         >
-          <Plus className="h-3.5 w-3.5" />
+          <Icon name="Plus" className="h-3.5 w-3.5" />
           Capture
           <kbd className="rounded border border-border px-1 text-[9px]">C</kbd>
         </button>
@@ -193,7 +172,7 @@ export default function TasksPage() {
               : "border-border text-muted-foreground hover:border-primary/40 hover:text-foreground",
           ].join(" ")}
         >
-          <Sparkles className="h-3.5 w-3.5" />
+          <Icon name="Sparkles" className="h-3.5 w-3.5" />
           Assistant
         </button>
       </div>
@@ -226,31 +205,12 @@ export default function TasksPage() {
           <div className="min-w-0 flex-1 overflow-hidden border-r border-border">
             <EngageView />
           </div>
-        ) : isPeople ? (
-          /* People: the HR roster — full-width management surface (like Engage). */
-          <div className="min-w-0 flex-1 overflow-hidden border-r border-border">
-            <PeopleView />
-          </div>
         ) : isCalendar ? (
           /* Calendar: the timeboxing surface — full-width day/week/month grid
              (spec: calendar_timeboxing.md), no list/detail split. */
           <div className="min-w-0 flex-1 overflow-hidden border-r border-border">
             <CalendarView />
           </div>
-        ) : isProjects ? (
-          /* Projects keep the list + project-detail split (a project isn't a
-             task card — its detail is a roll-up of its actions). */
-          <>
-            <div className="flex w-[260px] shrink-0 flex-col overflow-hidden border-r border-border lg:w-[300px] xl:w-[340px]">
-              <CaptureBar />
-              <div className="min-h-0 flex-1">
-                <ItemList />
-              </div>
-            </div>
-            <div className="min-w-0 flex-1 overflow-hidden border-r border-border">
-              <ItemDetail />
-            </div>
-          </>
         ) : (
           /* Task views (Next/Waiting/Someday/Calendar): a full-width list/board.
              Clicking a task opens it as a pop-up card (TaskFocusModal,
@@ -282,13 +242,14 @@ function PanelToggle({
   active,
   onClick,
   label,
-  icon: Icon,
+  icon,
   className = "",
 }: {
   active: boolean;
   onClick: () => void;
   label: string;
-  icon: typeof PanelLeft;
+  /** Lucide icon NAME. */
+  icon: string;
   className?: string;
 }) {
   return (
@@ -305,7 +266,7 @@ function PanelToggle({
         className,
       ].join(" ")}
     >
-      <Icon className="h-4 w-4" />
+      <Icon name={icon} className="h-4 w-4" />
     </button>
   );
 }

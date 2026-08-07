@@ -1,7 +1,8 @@
 "use client";
 
+import Button from "@/components/ui/Button";
+import Icon from "@/components/Icon";
 import { useState } from "react";
-import { AlertTriangle, RefreshCw, Settings2, RotateCw, Eraser, Loader2 } from "lucide-react";
 import { Email } from "../lib/types";
 import { useEmailStore } from "../lib/emailStore";
 import { resyncAccount } from "../lib/api";
@@ -48,29 +49,19 @@ export function MailboxActions({ selectedEmail }: { selectedEmail: Email | null 
 
   return (
     <div className="flex items-center gap-1">
-      <button
-        onClick={() => selectedAccountId && triggerSync(selectedAccountId)}
-        disabled={!selectedAccountId || syncing}
-        className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors disabled:opacity-40"
-        title={
+      <Button variant="ghost" size="icon-sm" radius="keep" layout="" onClick={() => selectedAccountId && triggerSync(selectedAccountId)} disabled={!selectedAccountId || syncing} title={
           processing
             ? "Processing new mail — applying rules, labels & auto-archive…"
             : "Refresh — sync new mail, drafts & changes from the server"
-        }
-      >
-        <RefreshCw size={15} className={syncing ? "animate-spin" : ""} />
-      </button>
+        } className="rounded">
+        <Icon name="RefreshCw" size={15} className={syncing ? "animate-spin" : ""} />
+      </Button>
 
-      <button
-        onClick={() =>
+      <Button variant="ghost" size="icon-sm" radius="keep" layout="" onClick={() =>
           selectedEmail && updateEmail(selectedEmail.id, { folder: "junk" })
-        }
-        disabled={!selectedEmail}
-        className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors disabled:opacity-40"
-        title="Mark as spam"
-      >
-        <AlertTriangle size={15} />
-      </button>
+        } disabled={!selectedEmail} title="Mark as spam" className="rounded">
+        <Icon name="AlertTriangle" size={15} />
+      </Button>
 
       {/* Mailbox settings (gear) */}
       <div className="relative">
@@ -83,7 +74,7 @@ export function MailboxActions({ selectedEmail }: { selectedEmail: Email | null 
           }`}
           title="Mailbox settings"
         >
-          <Settings2 size={15} />
+          <Icon name="Settings2" size={15} />
         </button>
         {showSettings && (
           <>
@@ -101,9 +92,9 @@ export function MailboxActions({ selectedEmail }: { selectedEmail: Email | null 
                 className="w-full flex items-start gap-2 px-3 py-2 text-left hover:bg-secondary transition-colors disabled:opacity-50"
               >
                 {resyncing === "full" ? (
-                  <Loader2 size={13} className="animate-spin mt-0.5 flex-shrink-0" />
+                  <Icon name="Loader2" size={13} className="animate-spin mt-0.5 flex-shrink-0" />
                 ) : (
-                  <RotateCw size={13} className="mt-0.5 flex-shrink-0 text-muted-foreground" />
+                  <Icon name="RotateCw" size={13} className="mt-0.5 flex-shrink-0 text-muted-foreground" />
                 )}
                 <span>
                   <span className="block text-xs text-foreground">Resync mailbox</span>
@@ -118,9 +109,9 @@ export function MailboxActions({ selectedEmail }: { selectedEmail: Email | null 
                 className="w-full flex items-start gap-2 px-3 py-2 text-left hover:bg-secondary transition-colors disabled:opacity-50"
               >
                 {resyncing === "purge" ? (
-                  <Loader2 size={13} className="animate-spin mt-0.5 flex-shrink-0" />
+                  <Icon name="Loader2" size={13} className="animate-spin mt-0.5 flex-shrink-0" />
                 ) : (
-                  <Eraser size={13} className="mt-0.5 flex-shrink-0 text-muted-foreground" />
+                  <Icon name="Eraser" size={13} className="mt-0.5 flex-shrink-0 text-muted-foreground" />
                 )}
                 <span>
                   <span className="block text-xs text-foreground">Hard resync</span>
@@ -137,7 +128,7 @@ export function MailboxActions({ selectedEmail }: { selectedEmail: Email | null 
                 disabled={!selectedAccountId || syncing}
                 className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-secondary transition-colors disabled:opacity-50"
               >
-                <RefreshCw size={13} className={`flex-shrink-0 text-muted-foreground ${syncing ? "animate-spin" : ""}`} />
+                <Icon name="RefreshCw" size={13} className={`flex-shrink-0 text-muted-foreground ${syncing ? "animate-spin" : ""}`} />
                 <span className="text-xs text-foreground">Sync new mail now</span>
               </button>
               {resyncMsg && (

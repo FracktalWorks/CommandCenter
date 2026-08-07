@@ -7,31 +7,21 @@
  * block looks the same wherever it appears — that identity is the point.
  */
 
-import {
-  Bot,
-  Boxes,
-  GitBranch,
-  LogOut,
-  SlidersHorizontal,
-  Timer,
-  UserCheck,
-  Wrench,
-  Zap,
-} from "lucide-react";
+import { themedIcon } from "@/components/Icon";
 import type { NodeType } from "./types";
 
 export type IconComponent = React.ComponentType<{ className?: string }>;
 
 export const NODE_ICON: Record<NodeType, IconComponent> = {
-  trigger: Zap,
-  agent: Bot,
-  tool: Wrench,
-  module: Boxes,
-  condition: GitBranch,
-  set: SlidersHorizontal,
-  approval: UserCheck,
-  wait: Timer,
-  output: LogOut,
+  trigger: themedIcon("Zap"),
+  agent: themedIcon("Bot"),
+  tool: themedIcon("Wrench"),
+  module: themedIcon("Boxes"),
+  condition: themedIcon("GitBranch"),
+  set: themedIcon("SlidersHorizontal"),
+  approval: themedIcon("UserCheck"),
+  wait: themedIcon("Timer"),
+  output: themedIcon("LogOut"),
 };
 
 /** The card's eyebrow — what kind of block this is, not what it is called. */
@@ -61,4 +51,4 @@ export const CATEGORY_LABEL: Record<string, string> = {
  * newer gateway). Read these as `NODE_ICON[type] ?? FALLBACK_ICON` — indexing,
  * not a call, so the icon component is not "created during render".
  */
-export const FALLBACK_ICON: IconComponent = Zap;
+export const FALLBACK_ICON: IconComponent = themedIcon("Zap");

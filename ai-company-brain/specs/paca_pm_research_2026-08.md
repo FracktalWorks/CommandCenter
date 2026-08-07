@@ -200,6 +200,14 @@ AND-join/idempotency discipline. WS-27 emits task events into the existing
 types; deeper engine uplifts (multi-branch switch, step snapshots, dependency map) are
 recorded as `workflows_app.md` backlog, not duplicated.
 
+**Written up 2026-08-06 → [`workflows_app.md`](workflows_app.md) §13.** This section's
+findings now have a home that owns work: eight items **U1–U8**, each pairing the Paca design
+above with that engine's *measured* current state and a done-when. Read §13, not this
+section, when implementing — §13 also records the five Paca features **deliberately refused**
+(`call_api`'s reader-visible headers, a sibling worker process, the WASM plugin runtime, a
+second engine, and a per-fire bookkeeping table where our CAS on `last_fired_at` is already
+better), so the refusals do not read as oversights to a later implementer.
+
 ## 5. Agent integration — the dispatch chain
 
 The chain is fully event-driven; the HTTP handler never calls the agent runtime:

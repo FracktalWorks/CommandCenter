@@ -149,12 +149,45 @@ async def _get_module_code(module_id: str) -> str | None:
     return row.code if row is not None else None
 
 
-def build_node_services(actor: str) -> NodeServices:
+def _pm_task_updater(workflow_id: str) -> Any:
+    """The Projects write seam, with this workflow's identity bound in.
+
+    The import is inside the closure so the workflows package gains no
+    import-time dependency on an app package, and so a deployment without
+    Projects fails the one node that needs it rather than the whole engine.
+    """
+
+    async def _update(task_id: str, fields: dict[str, Any]) -> dict[str, Any]:
+        try:
+            from gateway.routes.projects.automation import (
+                TaskPatchError,
+                apply_task_patch,
+                workflow_actor,
+            )
+        except Exception as exc:  # pragma: no cover — Projects ships with the gateway
+            raise NodeExecutionError("the Projects app is not available") from exc
+        db = await _get_db()
+        try:
+            result = await apply_task_patch(
+                db, task_id, fields, actor=workflow_actor(workflow_id),
+            )
+            await db.commit()
+            return result
+        except TaskPatchError as exc:
+            raise NodeExecutionError(str(exc)) from exc
+        finally:
+            await db.close()
+
+    return _update
+
+
+def build_node_services(actor: str, workflow_id: str = "") -> NodeServices:
     return NodeServices(
         run_agent=_run_agent_node,
         run_tool=execute_tool,
         get_module_code=_get_module_code,
         actor=actor,
+        update_task=_pm_task_updater(workflow_id),
     )
 
 
@@ -361,7 +394,7 @@ async def _execute_run(
         outcome = await execute_workflow(
             serialized,
             trigger_payload,
-            build_node_services(actor),
+            build_node_services(actor, workflow_id),
             variables=variables,
             emit=emit,
             precomputed=precomputed,

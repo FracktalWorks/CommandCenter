@@ -13,9 +13,9 @@
  * shown by RecordingDock are filtered out so the two never stack up.
  */
 
+import Icon from "@/components/Icon";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { Bot, Radio } from "lucide-react";
 import { listLiveSessions } from "../lib/api";
 import { useRecordingStore } from "../lib/recordingStore";
 import type { LiveSession } from "../lib/types";
@@ -77,9 +77,9 @@ export function LiveDock() {
           </span>
         </span>
         {first.source === "bot" ? (
-          <Bot className="h-4 w-4 shrink-0 text-muted-foreground" />
+          <Icon name="Bot" className="h-4 w-4 shrink-0 text-muted-foreground" />
         ) : (
-          <Radio className="h-4 w-4 shrink-0 text-muted-foreground" />
+          <Icon name="Radio" className="h-4 w-4 shrink-0 text-muted-foreground" />
         )}
       </button>
     </div>

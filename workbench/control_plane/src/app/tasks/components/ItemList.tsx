@@ -1,34 +1,13 @@
 "use client";
 
+import Button from "@/components/ui/Button";
+import AppIcon, { themedIcon, type ThemedIcon } from "@/components/Icon";
 import { useMemo, useState, useSyncExternalStore } from "react";
-import {
-  Inbox,
-  ListChecks,
-  Clock,
-  Calendar,
-  Lightbulb,
-  CheckCircle2,
-  AlertTriangle,
-  Loader2,
-  HardDrive,
-  Cloud,
-  LayoutList,
-  Columns3,
-  Archive,
-  ArchiveRestore,
-  Trash2,
-  CheckSquare,
-  Target,
-  Zap,
-  X,
-  Sparkles,
-} from "lucide-react";
 import { useTaskStore, itemsForView } from "../lib/taskStore";
 import { isUntagged } from "../lib/priority";
 import { ViewKey } from "../lib/types";
 import { isWaitingOverdue } from "../lib/waiting";
 import { applyFilters, applySort, type GroupBy } from "../lib/ordering";
-import { ProjectsList } from "./ProjectsList";
 import { TaskCard } from "./TaskCard";
 import { TaskBoard } from "./TaskBoard";
 import { TaskListGrouped } from "./TaskListGrouped";
@@ -63,17 +42,17 @@ function setModePersist(m: "list" | "board") {
 
 const VIEW_META: Record<
   string,
-  { title: string; icon: typeof Inbox; hint: string }
+  { title: string; icon: ThemedIcon; hint: string }
 > = {
-  inbox: { title: "Inbox", icon: Inbox, hint: "Capture, then clarify each item to zero." },
-  next: { title: "My Next Actions", icon: ListChecks, hint: "Tasks assigned to you, grouped by status and sorted by priority — the very next physical step for each." },
-  priority: { title: "Priority", icon: Target, hint: "Your open work by the founder matrix — Founder Fire first, Eliminate last." },
-  engage: { title: "Engage · Now", icon: Zap, hint: "What you can pick up right now, matched to your energy." },
-  waiting: { title: "Waiting For", icon: Clock, hint: "Delegated or blocked on someone else." },
-  calendar: { title: "Calendar", icon: Calendar, hint: "Date-specific actions — the hard landscape." },
-  someday: { title: "Someday / Maybe", icon: Lightbulb, hint: "Incubating. Reviewed weekly." },
-  done: { title: "Done", icon: CheckCircle2, hint: "Completed tasks. They stay here until you archive them." },
-  archive: { title: "Archive", icon: Archive, hint: "Archived tasks — hidden from active views. Restore anytime." },
+  inbox: { title: "Inbox", icon: themedIcon("Inbox"), hint: "Capture, then clarify each item to zero." },
+  next: { title: "My Next Actions", icon: themedIcon("ListChecks"), hint: "Tasks assigned to you, grouped by status and sorted by priority — the very next physical step for each." },
+  priority: { title: "Priority", icon: themedIcon("Target"), hint: "Your open work by the founder matrix — Founder Fire first, Eliminate last." },
+  engage: { title: "Engage · Now", icon: themedIcon("Zap"), hint: "What you can pick up right now, matched to your energy." },
+  waiting: { title: "Waiting For", icon: themedIcon("Clock"), hint: "Delegated or blocked on someone else." },
+  calendar: { title: "Calendar", icon: themedIcon("Calendar"), hint: "Date-specific actions — the hard landscape." },
+  someday: { title: "Someday / Maybe", icon: themedIcon("Lightbulb"), hint: "Incubating. Reviewed weekly." },
+  done: { title: "Done", icon: themedIcon("CheckCircle2"), hint: "Completed tasks. They stay here until you archive them." },
+  archive: { title: "Archive", icon: themedIcon("Archive"), hint: "Archived tasks — hidden from active views. Restore anytime." },
 };
 
 export function ItemList() {
@@ -133,10 +112,6 @@ export function ItemList() {
     const nowMs = Date.now();
     return visible.filter((i) => isWaitingOverdue(i, nowMs)).length;
   }, [view, visible]);
-
-  if (view === "projects") {
-    return <ProjectsList />;
-  }
 
   const meta = VIEW_META[view] ?? VIEW_META.inbox;
   const Icon = meta.icon;
@@ -215,7 +190,7 @@ export function ItemList() {
                     : "text-muted-foreground hover:text-foreground",
                 ].join(" ")}
               >
-                <LayoutList className="h-3 w-3" />
+                <AppIcon name="LayoutList" className="h-3 w-3" />
                 List
               </button>
               <button
@@ -230,7 +205,7 @@ export function ItemList() {
                     : "text-muted-foreground hover:text-foreground",
                 ].join(" ")}
               >
-                <Columns3 className="h-3 w-3" />
+                <AppIcon name="Columns3" className="h-3 w-3" />
                 Board
               </button>
             </div>
@@ -247,9 +222,9 @@ export function ItemList() {
               title="Filtered by source — change it in the sidebar"
             >
               {sourceFilter === "local" ? (
-                <HardDrive className="h-3 w-3" />
+                <AppIcon name="HardDrive" className="h-3 w-3" />
               ) : (
-                <Cloud className="h-3 w-3" />
+                <AppIcon name="Cloud" className="h-3 w-3" />
               )}
               {sourceFilter === "local" ? "Mine" : "ClickUp"}
             </span>
@@ -276,7 +251,7 @@ export function ItemList() {
                   : "border-border text-muted-foreground hover:border-primary/40 hover:text-foreground",
               ].join(" ")}
             >
-              <CheckSquare className="h-3 w-3" />
+              <AppIcon name="CheckSquare" className="h-3 w-3" />
               Select
             </button>
           )}
@@ -296,13 +271,13 @@ export function ItemList() {
         <p className="mt-0.5 text-[11px] text-muted-foreground">{meta.hint}</p>
         {view === "waiting" && overdueCount > 0 && (
           <p className="mt-1 inline-flex items-center gap-1 text-[11px] font-medium text-destructive">
-            <AlertTriangle className="h-3 w-3" />
+            <AppIcon name="AlertTriangle" className="h-3 w-3" />
             {overdueCount} overdue — needs a nudge
           </p>
         )}
         {untaggedCount > 0 && (
           <p className="mt-1 inline-flex items-center gap-1 text-[11px] text-muted-foreground/80">
-            <AlertTriangle className="h-3 w-3" />
+            <AppIcon name="AlertTriangle" className="h-3 w-3" />
             {untaggedCount} not yet judged — in{" "}
             <span className="font-medium">Eliminate</span> by default until you
             flag them important or leveraged.
@@ -316,7 +291,7 @@ export function ItemList() {
 
       {loading ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-2 p-8 text-center">
-          <Loader2 className="h-6 w-6 animate-spin text-muted-foreground/60" />
+          <AppIcon name="Loader2" className="h-6 w-6 animate-spin text-muted-foreground/60" />
           <p className="text-xs text-muted-foreground">Loading…</p>
         </div>
       ) : visible.length === 0 ? (
@@ -381,7 +356,7 @@ export function ItemList() {
           <div className="ml-auto flex items-center gap-1.5">
             {isArchiveView ? (
               <BulkAction
-                icon={ArchiveRestore}
+                icon={themedIcon("ArchiveRestore")}
                 label="Restore"
                 onClick={() => {
                   bulkArchive([...selectedIds], false);
@@ -390,7 +365,7 @@ export function ItemList() {
               />
             ) : (
               <BulkAction
-                icon={Archive}
+                icon={themedIcon("Archive")}
                 label="Archive"
                 onClick={() => {
                   bulkArchive([...selectedIds], true);
@@ -399,7 +374,7 @@ export function ItemList() {
               />
             )}
             <BulkAction
-              icon={Trash2}
+              icon={themedIcon("Trash2")}
               label="Delete"
               danger
               onClick={() => {
@@ -407,14 +382,9 @@ export function ItemList() {
                 clearSelection();
               }}
             />
-            <button
-              type="button"
-              onClick={clearSelection}
-              aria-label="Cancel selection"
-              className="tech-transition rounded-md p-1 text-muted-foreground hover:text-foreground"
-            >
-              <X className="h-4 w-4" />
-            </button>
+            <Button variant="text" size="icon-xs" radius="keep" layout="" type="button" onClick={clearSelection} aria-label="Cancel selection" className="rounded-md">
+              <AppIcon name="X" className="h-4 w-4" />
+            </Button>
           </div>
         </div>
       )}
@@ -428,7 +398,7 @@ function BulkAction({
   onClick,
   danger = false,
 }: {
-  icon: typeof Archive;
+  icon: ThemedIcon;
   label: string;
   onClick: () => void;
   danger?: boolean;
@@ -495,9 +465,9 @@ function ContextBackfillButton({ count }: { count: number }) {
       className="tech-transition ml-auto inline-flex items-center gap-1.5 rounded-md border border-primary/30 bg-primary/5 px-2 py-1 text-[11px] font-medium text-primary hover:bg-primary/10 disabled:opacity-50"
     >
       {busy ? (
-        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+        <AppIcon name="Loader2" className="h-3.5 w-3.5 animate-spin" />
       ) : (
-        <Sparkles className="h-3.5 w-3.5" />
+        <AppIcon name="Sparkles" className="h-3.5 w-3.5" />
       )}
       {done ?? `Assign context · ${count}`}
     </button>
@@ -515,7 +485,7 @@ function EmptyState({ view }: { view: ViewKey }) {
           : "Nothing here yet.";
   return (
     <div className="flex flex-1 flex-col items-center justify-center gap-2 p-8 text-center">
-      <CheckCircle2 className="h-8 w-8 text-success/70" />
+      <AppIcon name="CheckCircle2" className="h-8 w-8 text-success/70" />
       <p className="text-sm text-muted-foreground">{msg}</p>
     </div>
   );

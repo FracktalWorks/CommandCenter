@@ -1,6 +1,6 @@
 "use client";
 
-import { HardDrive, Cloud } from "lucide-react";
+import AppIcon from "@/components/Icon";
 import { ProviderKind, Source } from "../lib/types";
 import { sourceBadge } from "../lib/utils";
 
@@ -16,7 +16,7 @@ export function SourceBadge({
   size?: "sm" | "xs";
 }) {
   const { label, tone } = sourceBadge(source, provider);
-  const Icon = tone === "local" ? HardDrive : Cloud;
+  const iconName = tone === "local" ? "HardDrive" : "Cloud";
   const dim = size === "xs" ? "h-2.5 w-2.5" : "h-3 w-3";
   return (
     <span
@@ -29,7 +29,7 @@ export function SourceBadge({
       ].join(" ")}
       title={tone === "local" ? "Local — stored in CommandCenter" : `Synced — ${label}`}
     >
-      <Icon className={dim} />
+      <AppIcon name={iconName} className={dim} />
       {label}
     </span>
   );

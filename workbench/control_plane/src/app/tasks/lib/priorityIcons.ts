@@ -5,43 +5,31 @@
 // section headers. Replaces the old emoji so the pills match the app's lucide
 // icon language.
 
-import {
-  ArrowDownWideNarrow,
-  Ban,
-  CalendarClock,
-  CircleAlert,
-  Flame,
-  FlaskConical,
-  Rocket,
-  Siren,
-  Target,
-  TrendingUp,
-  UserPlus,
-  type LucideIcon,
-} from "lucide-react";
+import { themedIcon } from "@/components/Icon";
+import type { ThemedIcon } from "@/components/Icon";
 import type { ActionMode, PriorityCell } from "./priority";
 
 /** Priority level → icon. Matches CELL_META's order/meaning:
  *  🔥 critical, 🚨 urgent, 📈 high-leverage, ❗ important,
  *  🚀 quick-leverage, 🧪 speculative-bet, ↓ low-priority. */
-export const CELL_ICON: Record<PriorityCell, LucideIcon> = {
-  critical: Flame,
-  urgent: Siren,
-  "high-leverage": TrendingUp,
-  important: CircleAlert,
-  "quick-leverage": Rocket,
-  "speculative-bet": FlaskConical,
-  "low-priority": ArrowDownWideNarrow,
+export const CELL_ICON: Record<PriorityCell, ThemedIcon> = {
+  critical: themedIcon("Flame"),
+  urgent: themedIcon("Siren"),
+  "high-leverage": themedIcon("TrendingUp"),
+  important: themedIcon("CircleAlert"),
+  "quick-leverage": themedIcon("Rocket"),
+  "speculative-bet": themedIcon("FlaskConical"),
+  "low-priority": themedIcon("ArrowDownWideNarrow"),
 };
 
 /** Action-mode / suggestion → icon: 🎯 do, 🙋 delegate (hand to a person),
  *  📅 schedule, 🚫 drop (eliminate/ignore). Shared by the Suggestion column,
  *  the card suggestion nudge, and the mode group headers. */
-export const MODE_ICON: Record<ActionMode, LucideIcon> = {
-  do: Target,
-  delegate: UserPlus,
-  schedule: CalendarClock,
-  drop: Ban,
+export const MODE_ICON: Record<ActionMode, ThemedIcon> = {
+  do: themedIcon("Target"),
+  delegate: themedIcon("UserPlus"),
+  schedule: themedIcon("CalendarClock"),
+  drop: themedIcon("Ban"),
 };
 
 /** The icon for a grouped section header, given the grouping axis and the
@@ -50,7 +38,7 @@ export const MODE_ICON: Record<ActionMode, LucideIcon> = {
 export function groupIcon(
   by: "priority" | "mode" | "energy" | "context" | "none" | string,
   key: string,
-): LucideIcon | null {
+): ThemedIcon | null {
   if (by === "priority") return CELL_ICON[key as PriorityCell] ?? null;
   if (by === "mode") return MODE_ICON[key as ActionMode] ?? null;
   return null;

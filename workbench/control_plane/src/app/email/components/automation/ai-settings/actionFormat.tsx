@@ -5,10 +5,7 @@
 // from AISettingsView.tsx so the same action → {label, icon, color, text} mapping
 // is defined ONCE and every surface renders actions identically.
 
-import {
-  Archive, Tag, MailOpen, Star, ShieldAlert, Trash2, FolderInput,
-  Reply, Forward, PenLine, Webhook, Zap,
-} from "lucide-react";
+import AppIcon from "@/components/Icon";
 import type { RuleAction, RuleActionType, RuleConditions } from "../../../lib/types";
 
 export const ACTION_TYPES: RuleActionType[] = [
@@ -40,23 +37,23 @@ export const ACTION_META: Record<RuleActionType, { label: string; description: s
  * the action chips under a rule, the Test/History result popovers, the action
  * editor card, and the inferred icon on each Add-rule example.
  */
-export const ACTION_ICON: Record<RuleActionType, React.ElementType> = {
-  ARCHIVE: Archive,
-  LABEL: Tag,
-  MARK_READ: MailOpen,
-  STAR: Star,
-  MARK_SPAM: ShieldAlert,
-  TRASH: Trash2,
-  MOVE_FOLDER: FolderInput,
-  REPLY: Reply,
-  FORWARD: Forward,
-  DRAFT_EMAIL: PenLine,
-  CALL_WEBHOOK: Webhook,
+export const ACTION_ICON: Record<RuleActionType, string> = {
+  ARCHIVE: "Archive",
+  LABEL: "Tag",
+  MARK_READ: "MailOpen",
+  STAR: "Star",
+  MARK_SPAM: "ShieldAlert",
+  TRASH: "Trash2",
+  MOVE_FOLDER: "FolderInput",
+  REPLY: "Reply",
+  FORWARD: "Forward",
+  DRAFT_EMAIL: "PenLine",
+  CALL_WEBHOOK: "Webhook",
 };
 
 export function ActionIcon({ type, size = 11 }: { type: string; size?: number }) {
-  const Icon = ACTION_ICON[type as RuleActionType] ?? Zap;
-  return <Icon size={size} className="flex-shrink-0" />;
+  const name = ACTION_ICON[type as RuleActionType] ?? "Zap";
+  return <AppIcon name={name} size={size} className="flex-shrink-0" />;
 }
 
 /**

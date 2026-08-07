@@ -1,5 +1,6 @@
 "use client";
 
+import Button from "@/components/ui/Button";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import type { IntegrationStatus } from "@/app/api/integrations/status/route";
 import GitHubDeviceConnect from "@/components/GitHubDeviceConnect";
@@ -397,12 +398,9 @@ export default function IntegrationSetup({
     return (
       <div className="flex flex-col items-center justify-center h-full gap-4">
         <p className="text-success text-sm">All integrations are configured.</p>
-        <button
-          onClick={onComplete}
-          className="px-4 py-2 rounded-lg bg-primary hover:opacity-90 text-sm text-primary-foreground transition-colors"
-        >
+        <Button size="none" layout="" onClick={onComplete} className="px-4 py-2 text-sm">
           Start chatting
-        </button>
+        </Button>
       </div>
     );
   }

@@ -6,8 +6,9 @@
  * product names, people and customers get spelled right.
  */
 
+import Button from "@/components/ui/Button";
+import Icon from "@/components/Icon";
 import { useEffect, useState } from "react";
-import { Loader2, Plus, X } from "lucide-react";
 import {
   addGlossaryTerm,
   deleteGlossaryTerm,
@@ -73,7 +74,7 @@ export default function GlossaryModal({ onClose }: { onClose: () => void }) {
             className="p-1.5 rounded-lg text-muted-foreground hover:bg-secondary tech-transition"
             aria-label="Close"
           >
-            <X className="w-4 h-4" />
+            <Icon name="X" className="w-4 h-4" />
           </button>
         </div>
 
@@ -91,23 +92,18 @@ export default function GlossaryModal({ onClose }: { onClose: () => void }) {
               placeholder="Add a term (e.g. TwinDragon, Penrose)…"
               className="flex-1 rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
             />
-            <button
-              onClick={add}
-              disabled={busy || !input.trim()}
-              className="p-2 rounded-lg bg-primary text-primary-foreground hover:opacity-90 tech-transition disabled:opacity-50"
-              aria-label="Add term"
-            >
+            <Button size="icon" layout="" onClick={add} disabled={busy || !input.trim()} aria-label="Add term">
               {busy ? (
-                <Loader2 className="w-4 h-4 animate-spin" />
+                <Icon name="Loader2" className="w-4 h-4 animate-spin" />
               ) : (
-                <Plus className="w-4 h-4" />
+                <Icon name="Plus" className="w-4 h-4" />
               )}
-            </button>
+            </Button>
           </div>
 
           {loading ? (
             <div className="flex items-center justify-center py-8">
-              <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
+              <Icon name="Loader2" className="w-5 h-5 animate-spin text-muted-foreground" />
             </div>
           ) : terms.length === 0 ? (
             <p className="text-xs text-muted-foreground text-center py-6">
@@ -127,7 +123,7 @@ export default function GlossaryModal({ onClose }: { onClose: () => void }) {
                     className="text-muted-foreground hover:text-destructive"
                     aria-label={`Remove ${t.term}`}
                   >
-                    <X className="w-3 h-3" />
+                    <Icon name="X" className="w-3 h-3" />
                   </button>
                 </span>
               ))}

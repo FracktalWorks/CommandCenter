@@ -107,7 +107,7 @@ def starter_index_html(name: str) -> str:
     """The single-file starter app: on-brand via the platform's PRE-INJECTED
     design system, with a commented ``window.cc`` usage example (the bridge
     + the ``--cc-*`` tokens and ``.cc-*`` block-kit classes below are
-    injected by the run/preview frame itself — ``SandboxedHtml.tsx``'s
+    injected by the run/preview frame itself — ``lib/theme/sandbox-frame.ts``'s
     ``buildSrcDoc``, the exact same styling every CommandCenter report and
     generative-UI card already uses. Never redeclare these — see RFC §4.1
     and ``apps/agents/agent-app-builder/instructions.md``'s Design section).

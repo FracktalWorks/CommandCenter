@@ -18,21 +18,10 @@
  * meeting before you'd said what it was. Template now lives in prep.
  */
 
+import Button from "@/components/ui/Button";
+import Icon from "@/components/Icon";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import {
-  AudioLines,
-  BookMarked,
-  CalendarPlus,
-  Clock,
-  Loader2,
-  Mic,
-  Search,
-  Settings2,
-  Upload,
-  Users,
-  Video,
-} from "lucide-react";
 import { createMeeting, formatClock, listMeetings, uploadRecording } from "./lib/api";
 import { bandOf, groupIntoBands, isPrepared, outcomeLine } from "./lib/bands";
 import { useViewMode } from "@/components/ViewModeProvider";
@@ -239,7 +228,7 @@ export default function NotesPage() {
               className="tech-transition flex-1 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground"
             >
               <span className="flex items-center justify-center gap-1.5">
-                <CalendarPlus className="h-4 w-4" /> New meeting
+                <Icon name="CalendarPlus" className="h-4 w-4" /> New meeting
               </span>
             </button>
             <button
@@ -247,7 +236,7 @@ export default function NotesPage() {
               className="tech-transition shrink-0 rounded-lg border border-border p-2 text-muted-foreground"
               aria-label="Note Taker settings"
             >
-              <Settings2 className="h-4 w-4" />
+              <Icon name="Settings2" className="h-4 w-4" />
             </button>
           </div>
         )}
@@ -260,7 +249,7 @@ export default function NotesPage() {
               title="Glossary — teach transcription your jargon"
               aria-label="Glossary"
             >
-              <BookMarked className="h-4 w-4" />
+              <Icon name="BookMarked" className="h-4 w-4" />
             </button>
             <button
               onClick={() => setShowSettings(true)}
@@ -268,22 +257,18 @@ export default function NotesPage() {
               title="Note Taker settings — copilot behaviour, meeting types, defaults"
               aria-label="Note Taker settings"
             >
-              <Settings2 className="h-4 w-4" />
+              <Icon name="Settings2" className="h-4 w-4" />
             </button>
 
             {/* One primary action. Everything that starts a meeting lives
                 behind it, instead of three sibling buttons. */}
             <div className="relative" onClick={(e) => e.stopPropagation()}>
               <div className="flex">
-                <button
-                  onClick={onPrepare}
-                  className="tech-transition rounded-l-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90"
-                  title="Set up a meeting — agenda, briefing, who's coming — before it starts"
-                >
+                <Button size="none" radius="keep" layout="" onClick={onPrepare} title="Set up a meeting — agenda, briefing, who's coming — before it starts" className="rounded-l-lg px-4 py-2 text-sm">
                   <span className="flex items-center gap-1.5">
-                    <CalendarPlus className="h-4 w-4" /> New meeting
+                    <Icon name="CalendarPlus" className="h-4 w-4" /> New meeting
                   </span>
-                </button>
+                </Button>
                 <button
                   onClick={() => setShowNewMenu((v) => !v)}
                   aria-label="More ways to start"
@@ -302,7 +287,7 @@ export default function NotesPage() {
                     }}
                     className="flex w-full items-center gap-2.5 px-3 py-2.5 text-left text-sm hover:bg-secondary"
                   >
-                    <Mic className="h-4 w-4 text-muted-foreground" />
+                    <Icon name="Mic" className="h-4 w-4 text-muted-foreground" />
                     <span>
                       Record here
                       <span className="block text-[11px] text-muted-foreground">
@@ -317,7 +302,7 @@ export default function NotesPage() {
                     }}
                     className="flex w-full items-center gap-2.5 px-3 py-2.5 text-left text-sm hover:bg-secondary"
                   >
-                    <Video className="h-4 w-4 text-muted-foreground" />
+                    <Icon name="Video" className="h-4 w-4 text-muted-foreground" />
                     <span>
                       Send a notetaker
                       <span className="block text-[11px] text-muted-foreground">
@@ -334,9 +319,9 @@ export default function NotesPage() {
                     className="flex w-full items-center gap-2.5 px-3 py-2.5 text-left text-sm hover:bg-secondary disabled:opacity-60"
                   >
                     {uploading ? (
-                      <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                      <Icon name="Loader2" className="h-4 w-4 animate-spin text-muted-foreground" />
                     ) : (
-                      <Upload className="h-4 w-4 text-muted-foreground" />
+                      <Icon name="Upload" className="h-4 w-4 text-muted-foreground" />
                     )}
                     <span>
                       {uploading ? "Uploading…" : "Upload a recording"}
@@ -355,7 +340,7 @@ export default function NotesPage() {
       <div className="flex-1 overflow-y-auto">
         <div className="mx-auto max-w-3xl space-y-5 px-4 py-4 sm:px-6">
           <div className="relative">
-            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            <Icon name="Search" className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <input
               value={query}
               onChange={(e) => {
@@ -380,11 +365,11 @@ export default function NotesPage() {
 
           {loading ? (
             <div className="flex items-center justify-center py-16 text-muted-foreground">
-              <Loader2 className="h-5 w-5 animate-spin" />
+              <Icon name="Loader2" className="h-5 w-5 animate-spin" />
             </div>
           ) : meetings.length === 0 ? (
             <div className="space-y-3 rounded-xl border border-border bg-card p-8 text-center">
-              <AudioLines className="mx-auto h-8 w-8 text-muted-foreground" />
+              <Icon name="AudioLines" className="mx-auto h-8 w-8 text-muted-foreground" />
               <p className="text-sm font-semibold text-foreground">No meetings yet</p>
               <p className="mx-auto max-w-sm text-xs text-muted-foreground">
                 Start with <span className="text-foreground">New meeting</span> to
@@ -450,13 +435,13 @@ export default function NotesPage() {
                               <span>{whenLabel(m)}</span>
                               {m.duration_s != null && (
                                 <span className="flex items-center gap-1">
-                                  <Clock className="h-3 w-3" />
+                                  <Icon name="Clock" className="h-3 w-3" />
                                   {formatClock(m.duration_s)}
                                 </span>
                               )}
                               {m.segment_count > 0 && (
                                 <span className="flex items-center gap-1">
-                                  <Users className="h-3 w-3" />
+                                  <Icon name="Users" className="h-3 w-3" />
                                   {m.segment_count} segments
                                 </span>
                               )}

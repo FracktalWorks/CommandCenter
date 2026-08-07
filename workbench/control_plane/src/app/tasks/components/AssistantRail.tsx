@@ -15,9 +15,9 @@
  *   3. wires the GTD quick actions into the composer (user reviews & sends).
  */
 
+import Icon from "@/components/Icon";
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { useSession } from "next-auth/react";
-import { Sparkles, Plus, MessagesSquare, Trash2, X } from "lucide-react";
 import AgentChat from "@/components/AgentChat";
 import {
   getSessions, createSession, upsertSession, deleteSession,
@@ -150,7 +150,7 @@ export function AssistantRail({ onClose }: { onClose?: () => void } = {}) {
       <div className="flex items-center justify-between px-4 h-9 border-b border-sidebar-border flex-shrink-0">
         <div className="flex items-center gap-2">
           <div className="w-5 h-5 rounded-full bg-primary/20 text-primary flex items-center justify-center">
-            <Sparkles size={11} />
+            <Icon name="Sparkles" size={11} />
           </div>
           <span className="text-xs font-semibold text-sidebar-foreground">
             Assistant
@@ -166,14 +166,14 @@ export function AssistantRail({ onClose }: { onClose?: () => void } = {}) {
                 : "text-muted-foreground hover:text-sidebar-foreground hover:bg-sidebar-accent"
             }`}
           >
-            <MessagesSquare size={14} />
+            <Icon name="MessagesSquare" size={14} />
           </button>
           <button
             onClick={newSession}
             title="New chat"
             className="p-1 rounded text-muted-foreground hover:text-sidebar-foreground hover:bg-sidebar-accent transition-colors"
           >
-            <Plus size={15} />
+            <Icon name="Plus" size={15} />
           </button>
           {onClose && (
             <button
@@ -182,7 +182,7 @@ export function AssistantRail({ onClose }: { onClose?: () => void } = {}) {
               aria-label="Close assistant"
               className="p-1 rounded text-muted-foreground hover:text-sidebar-foreground hover:bg-sidebar-accent transition-colors"
             >
-              <X size={15} />
+              <Icon name="X" size={15} />
             </button>
           )}
         </div>
@@ -199,7 +199,7 @@ export function AssistantRail({ onClose }: { onClose?: () => void } = {}) {
               onClick={() => setShowSessions(false)}
               className="text-muted-foreground hover:text-foreground"
             >
-              <X size={12} />
+              <Icon name="X" size={12} />
             </button>
           </div>
           {taskSessions.length === 0 ? (
@@ -241,7 +241,7 @@ export function AssistantRail({ onClose }: { onClose?: () => void } = {}) {
                   title="Delete conversation"
                   className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive flex-shrink-0"
                 >
-                  <Trash2 size={12} />
+                  <Icon name="Trash2" size={12} />
                 </button>
               </div>
             ))

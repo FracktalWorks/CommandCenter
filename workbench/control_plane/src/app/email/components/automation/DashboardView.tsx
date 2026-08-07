@@ -11,12 +11,9 @@
  * projections) — the email is the snapshot, this is the live ledger.
  */
 
+import Button from "@/components/ui/Button";
+import AppIcon, { themedIcon } from "@/components/Icon";
 import { useEffect, useState, useCallback } from "react";
-import {
-  Loader2, Send, Mail, MailOpen, Reply, Paperclip, Check, Newspaper,
-  Settings2, Hourglass, ExternalLink, Clock, CheckCheck, XCircle,
-  AlertTriangle, ChevronRight, PenLine, BellRing, Sparkles,
-} from "lucide-react";
 import { getDigest, resolveThread, sendDigest, snoozeEmail } from "../../lib/api";
 import { DigestData, DigestThread } from "../../lib/types";
 import { DigestSettingsDialog } from "./DigestSettingsDialog";
@@ -152,16 +149,12 @@ export function DashboardView({
           onClick={() => setShowConfig(true)}
           className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-border text-xs text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors ml-auto"
         >
-          <Settings2 size={13} /> Configure
+          <AppIcon name="Settings2" size={13} /> Configure
         </button>
-        <button
-          onClick={send}
-          disabled={sending || loading}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90 transition-colors disabled:opacity-50"
-        >
-          {sending ? <Loader2 className="animate-spin" size={13} /> : <Send size={13} />}
+        <Button layout="flex items-center" onClick={send} disabled={sending || loading}>
+          {sending ? <AppIcon name="Loader2" className="animate-spin" size={13} /> : <AppIcon name="Send" size={13} />}
           Send to my inbox
-        </button>
+        </Button>
       </div>
 
       {showConfig && accountId && (
@@ -173,7 +166,7 @@ export function DashboardView({
 
       {sentTo && (
         <div className="px-3 sm:px-5 py-2 text-xs text-emerald-400 bg-emerald-500/10 border-b border-border flex items-center gap-1.5">
-          <Check size={12} /> Digest sent to {sentTo}
+          <AppIcon name="Check" size={12} /> Digest sent to {sentTo}
         </div>
       )}
       {error && (
@@ -185,7 +178,7 @@ export function DashboardView({
       <div className="flex-1 overflow-y-auto px-4 sm:px-5 py-4 space-y-5">
         {loading ? (
           <div className="flex items-center justify-center h-40 text-muted-foreground gap-2 text-sm">
-            <Loader2 className="animate-spin" size={16} /> Building dashboard…
+            <AppIcon name="Loader2" className="animate-spin" size={16} /> Building dashboard…
           </div>
         ) : !data ? null : (
           <>
@@ -193,7 +186,7 @@ export function DashboardView({
                 present when the setting is on (empty string otherwise). */}
             {data.brief && (
               <div className="flex items-start gap-2 rounded-xl border border-primary/30 bg-primary/5 px-4 py-3">
-                <Sparkles size={15} className="text-primary flex-shrink-0 mt-0.5" />
+                <AppIcon name="Sparkles" size={15} className="text-primary flex-shrink-0 mt-0.5" />
                 <p className="text-sm text-foreground leading-snug">{data.brief}</p>
               </div>
             )}
@@ -204,15 +197,15 @@ export function DashboardView({
                 so "Waiting on them 104" under a "Last day" toggle stops reading
                 as one day's mail. */}
             <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-              <Stat icon={Mail} label="In inbox" value={t!.inbox}
+              <Stat icon={themedIcon("Mail")} label="In inbox" value={t!.inbox}
                 sub={period === "day" ? "last day" : "last week"} />
-              <Stat icon={MailOpen} label="Unread" value={t!.unread}
+              <Stat icon={themedIcon("MailOpen")} label="Unread" value={t!.unread}
                 sub={period === "day" ? "last day" : "last week"} />
-              <Stat icon={Reply} label="Needs reply" value={t!.needs_reply}
+              <Stat icon={themedIcon("Reply")} label="Needs reply" value={t!.needs_reply}
                 sub="all open" accent />
-              <Stat icon={Hourglass} label="Waiting on them"
+              <Stat icon={themedIcon("Hourglass")} label="Waiting on them"
                 value={t!.awaiting ?? 0} sub="all open" />
-              <Stat icon={Paperclip} label="Attachments" value={t!.attachments}
+              <Stat icon={themedIcon("Paperclip")} label="Attachments" value={t!.attachments}
                 sub={period === "day" ? "last day" : "last week"} />
             </div>
 
@@ -221,7 +214,7 @@ export function DashboardView({
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
               <div className="bg-card border border-border rounded-xl p-4">
                 <h3 className="text-xs font-semibold text-foreground mb-3 flex items-center gap-1.5">
-                  <Reply size={13} className="text-primary" /> Needs your reply
+                  <AppIcon name="Reply" size={13} className="text-primary" /> Needs your reply
                   <span
                     className="text-[10px] font-normal text-muted-foreground"
                     title="Ranked by urgency — importance and unread lift a thread above older ones"
@@ -253,28 +246,28 @@ export function DashboardView({
                                 title="Draft a reply with AI — opens the thread with a draft ready"
                                 onClick={() => onDraftReply(b.message_id!)}
                               >
-                                <PenLine size={12} />
+                                <AppIcon name="PenLine" size={12} />
                               </RowBtn>
                             )}
                             <RowBtn
                               title="Mark done — this loop is closed"
                               onClick={() => markDone("backlog", b)}
                             >
-                              <CheckCheck size={12} />
+                              <AppIcon name="CheckCheck" size={12} />
                             </RowBtn>
                             {b.message_id && (
                               <RowBtn
                                 title="Snooze until tomorrow 8:00"
                                 onClick={() => snoozeDay(b)}
                               >
-                                <Clock size={12} />
+                                <AppIcon name="Clock" size={12} />
                               </RowBtn>
                             )}
                             <RowBtn
                               title="Dismiss — never mind this thread (files it as FYI without claiming it's done)"
                               onClick={() => dismiss("backlog", b)}
                             >
-                              <XCircle size={12} />
+                              <AppIcon name="XCircle" size={12} />
                             </RowBtn>
                           </>
                         }
@@ -286,7 +279,7 @@ export function DashboardView({
 
               <div className="bg-card border border-border rounded-xl p-4">
                 <h3 className="text-xs font-semibold text-foreground mb-3 flex items-center gap-1.5">
-                  <Hourglass size={13} className="text-primary" /> Waiting on them
+                  <AppIcon name="Hourglass" size={13} className="text-primary" /> Waiting on them
                   <CountBadge n={t!.awaiting ?? 0} />
                 </h3>
                 {!data.awaiting?.length ? (
@@ -313,20 +306,20 @@ export function DashboardView({
                                 title="Nudge — open the thread with an AI follow-up draft ready"
                                 onClick={() => onNudge(b.message_id!)}
                               >
-                                <BellRing size={12} />
+                                <AppIcon name="BellRing" size={12} />
                               </RowBtn>
                             )}
                             <RowBtn
                               title="Mark done — no longer waiting on this; closes the loop"
                               onClick={() => markDone("awaiting", b)}
                             >
-                              <CheckCheck size={12} />
+                              <AppIcon name="CheckCheck" size={12} />
                             </RowBtn>
                             <RowBtn
                               title="Dismiss — stop tracking this thread (files it as FYI)"
                               onClick={() => dismiss("awaiting", b)}
                             >
-                              <XCircle size={12} />
+                              <AppIcon name="XCircle" size={12} />
                             </RowBtn>
                           </>
                         }
@@ -341,7 +334,7 @@ export function DashboardView({
             {data.commitments && data.commitments.length > 0 && (
               <div className="bg-card border border-border rounded-xl p-4">
                 <h3 className="text-xs font-semibold text-foreground mb-3 flex items-center gap-1.5">
-                  <Check size={13} className="text-primary" /> Commitments
+                  <AppIcon name="Check" size={13} className="text-primary" /> Commitments
                   <CountBadge n={data.commitments.length} />
                 </h3>
                 <div className="space-y-1.5">
@@ -368,7 +361,7 @@ export function DashboardView({
                         <span className="text-foreground truncate flex items-center gap-1 min-w-0">
                           <span className="truncate">{c.title}</span>
                           {openable && (
-                            <ChevronRight
+                            <AppIcon name="ChevronRight"
                               size={11}
                               className="text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0"
                             />
@@ -396,7 +389,7 @@ export function DashboardView({
               {/* By category */}
               <div className="bg-card border border-border rounded-xl p-4">
                 <h3 className="text-xs font-semibold text-foreground mb-3 flex items-center gap-1.5">
-                  <Newspaper size={13} className="text-primary" /> By category
+                  <AppIcon name="Newspaper" size={13} className="text-primary" /> By category
                 </h3>
                 <div className="space-y-1.5">
                   {data.by_category.length === 0 && (
@@ -421,7 +414,7 @@ export function DashboardView({
                       <span className="text-foreground flex items-center gap-1">
                         {c.category}
                         {onFilterLabel && (
-                          <ChevronRight
+                          <AppIcon name="ChevronRight"
                             size={11}
                             className="text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity"
                           />
@@ -438,7 +431,7 @@ export function DashboardView({
               {/* Noisy senders */}
               <div className="bg-card border border-border rounded-xl p-4">
                 <h3 className="text-xs font-semibold text-foreground mb-3 flex items-center gap-1.5">
-                  <Mail size={13} className="text-primary" /> Noisy senders you never answer
+                  <AppIcon name="Mail" size={13} className="text-primary" /> Noisy senders you never answer
                 </h3>
                 <div className="space-y-1.5">
                   {data.top_senders.length === 0 && (
@@ -463,7 +456,7 @@ export function DashboardView({
                       <span className="text-foreground truncate flex items-center gap-1 min-w-0">
                         <span className="truncate">{s.name || s.email}</span>
                         {onFilterSender && (
-                          <ChevronRight
+                          <AppIcon name="ChevronRight"
                             size={11}
                             className="text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0"
                           />
@@ -511,7 +504,7 @@ function ThreadRow({
       title={openable ? "Open this conversation" : undefined}
     >
       {row.important && (
-        <AlertTriangle
+        <AppIcon name="AlertTriangle"
           size={11}
           className="text-amber-500 flex-shrink-0"
           aria-label="High importance"
@@ -549,7 +542,7 @@ function ThreadRow({
         {actions}
         {openable && (
           <RowBtn title="Open" onClick={() => onOpen!(row.message_id!)}>
-            <ExternalLink size={12} />
+            <AppIcon name="ExternalLink" size={12} />
           </RowBtn>
         )}
       </span>

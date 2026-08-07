@@ -33,7 +33,6 @@
  */
 
 import { createElement } from "react";
-import { useTheme } from "next-themes";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
@@ -42,7 +41,6 @@ import SandboxedReact from "@/components/SandboxedReact";
 import { renderTemplate } from "@/components/genUITemplates";
 import { tableCells, tableColumns, text } from "@/lib/genUiText";
 import { resolveIcon } from "@/lib/icons";
-import { buildIconMap } from "@/lib/iconSvg";
 
 // ─── Schema ────────────────────────────────────────────────────────────────
 
@@ -81,11 +79,10 @@ const s = text;
 // ─── Node renderer ───────────────────────────────────────────────────────
 
 function Node({
-  node, onAction, theme, depth = 0,
+  node, onAction, depth = 0,
 }: {
   node: GenUINode;
   onAction?: (action: string) => void;
-  theme: "light" | "dark";
   depth?: number;
 }): React.ReactElement | null {
   // Depth guard — a pathological/looping tree can't blow the stack.
@@ -96,7 +93,7 @@ function Node({
   const kids = Array.isArray(node.children) ? node.children : [];
 
   const renderKids = () =>
-    kids.map((k, i) => <Node key={i} node={k} onAction={onAction} theme={theme} depth={depth + 1} />);
+    kids.map((k, i) => <Node key={i} node={k} onAction={onAction} depth={depth + 1} />);
 
   switch (type) {
     case "card":
@@ -311,16 +308,14 @@ function Node({
       if (!code) return null;
       const height =
         typeof props.height === "number" ? props.height : undefined;
-      // Pre-resolve any Lucide icons the agent declared into inline SVG so the
-      // sandbox can use them with no network (ccIcon / [data-cc-icon]).
-      const icons = buildIconMap(props.icons);
+      // The frame resolves the icons the agent declared into inline SVG, from
+      // the active theme's pack, with no network (ccIcon / [data-cc-icon]).
       return (
         <SandboxedHtml
           html={code}
           height={height}
           onAction={onAction}
-          theme={theme}
-          icons={icons}
+          iconNames={props.icons}
         />
       );
     }
@@ -333,14 +328,12 @@ function Node({
       const code = s(props.code);
       if (!code) return null;
       const height = typeof props.height === "number" ? props.height : undefined;
-      const icons = buildIconMap(props.icons);
       return (
         <SandboxedReact
           code={code}
           height={height}
           onAction={onAction}
-          theme={theme}
-          icons={icons}
+          iconNames={props.icons}
         />
       );
     }
@@ -370,8 +363,6 @@ export default function GenerativeUINode({
   spec: unknown;
   onAction?: (action: string) => void;
 }): React.ReactElement | null {
-  const { resolvedTheme } = useTheme();
-  const theme: "light" | "dark" = resolvedTheme === "light" ? "light" : "dark";
   const root =
     spec && typeof spec === "object"
       ? ((spec as Record<string, unknown>).root
@@ -379,5 +370,5 @@ export default function GenerativeUINode({
         ?? spec)
       : spec;
   if (!root || typeof root !== "object") return null;
-  return <Node node={root as GenUINode} onAction={onAction} theme={theme} />;
+  return <Node node={root as GenUINode} onAction={onAction} />;
 }

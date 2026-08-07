@@ -1,7 +1,8 @@
 "use client";
 
+import Button from "@/components/ui/Button";
+import Icon from "@/components/Icon";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Search, X, ChevronDown, SlidersHorizontal, Sparkles, Check } from "lucide-react";
 import { useEmailStore, FOLDER_ALL } from "../lib/emailStore";
 import {
   SearchFilter,
@@ -114,14 +115,10 @@ export function SearchBar() {
       >
         {/* ── Scope dropdown: says WHERE we're searching ── */}
         <div className="relative flex-shrink-0">
-          <button
-            onClick={() => setScopeOpen((v) => !v)}
-            title="Choose where to search"
-            className="flex items-center gap-1 pl-2.5 pr-2 py-1.5 rounded-l-md text-[11px] text-muted-foreground hover:text-foreground transition-colors max-w-[140px]"
-          >
+          <Button variant="text" size="none" radius="keep" layout="flex items-center" onClick={() => setScopeOpen((v) => !v)} title="Choose where to search" className="gap-1 pl-2.5 pr-2 py-1.5 rounded-l-md text-[11px] max-w-[140px]">
             <span className="truncate">{scopeName}</span>
-            <ChevronDown size={11} className="flex-shrink-0" />
-          </button>
+            <Icon name="ChevronDown" size={11} className="flex-shrink-0" />
+          </Button>
           {scopeOpen && (
             <>
               <div className="fixed inset-0 z-20" onClick={() => setScopeOpen(false)} />
@@ -148,7 +145,7 @@ export function SearchBar() {
                   >
                     <span className="truncate">{o.label}</span>
                     {scope === o.key && (
-                      <Check size={11} className="text-primary flex-shrink-0" />
+                      <Icon name="Check" size={11} className="text-primary flex-shrink-0" />
                     )}
                   </button>
                 ))}
@@ -158,7 +155,7 @@ export function SearchBar() {
         </div>
 
         <div className="w-px h-4 bg-border flex-shrink-0" />
-        <Search size={13} className="text-muted-foreground flex-shrink-0 ml-0.5" />
+        <Icon name="Search" size={13} className="text-muted-foreground flex-shrink-0 ml-0.5" />
 
         {/* ── Pills + input share a scrollable row ── */}
         <div className="flex items-center gap-1 flex-1 min-w-0 overflow-x-auto scrollbar-hide py-1">
@@ -182,7 +179,7 @@ export function SearchBar() {
                     c ? "hover:bg-black/15" : "hover:bg-primary/20"
                   }`}
                 >
-                  <X size={9} />
+                  <Icon name="X" size={9} />
                 </button>
               </span>
             );
@@ -207,19 +204,14 @@ export function SearchBar() {
             title="Results ranked by meaning, not just keywords"
             className="flex-shrink-0 inline-flex items-center gap-0.5 text-[9px] font-medium text-primary bg-primary/10 rounded px-1 py-0.5"
           >
-            <Sparkles size={9} /> Smart
+            <Icon name="Sparkles" size={9} /> Smart
           </span>
         )}
 
         {active && (
-          <button
-            onClick={clearSearch}
-            title="Clear search"
-            aria-label="Clear search"
-            className="p-1 rounded text-muted-foreground hover:text-foreground transition-colors flex-shrink-0"
-          >
-            <X size={13} />
-          </button>
+          <Button variant="text" size="icon-xs" radius="keep" layout="" onClick={clearSearch} title="Clear search" aria-label="Clear search" className="rounded flex-shrink-0">
+            <Icon name="X" size={13} />
+          </Button>
         )}
 
         {/* ── Filter menu: the discoverable half of the typed grammar ── */}
@@ -234,7 +226,7 @@ export function SearchBar() {
                 : "text-muted-foreground hover:text-foreground hover:bg-secondary"
             }`}
           >
-            <SlidersHorizontal size={13} />
+            <Icon name="SlidersHorizontal" size={13} />
           </button>
           {filterOpen && (
             <>
@@ -433,7 +425,7 @@ function FilterMenu({
                     />
                     <span className="truncate">{name}</span>
                   </span>
-                  {has(f) && <Check size={11} className="text-primary flex-shrink-0" />}
+                  {has(f) && <Icon name="Check" size={11} className="text-primary flex-shrink-0" />}
                 </button>
               );
             })

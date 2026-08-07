@@ -10,21 +10,10 @@
  *        modules /api/workflows/modules*
  */
 
+import Button from "@/components/ui/Button";
+import Icon from "@/components/Icon";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import {
-  AlertTriangle,
-  Boxes,
-  Clock,
-  Copy,
-  Loader2,
-  Plus,
-  RefreshCw,
-  Search,
-  Trash2,
-  Workflow as WorkflowIcon,
-  Zap,
-} from "lucide-react";
 import Tabs from "@/components/Tabs";
 import FilterPills from "@/components/FilterPills";
 import ModuleStudio from "./components/ModuleStudio";
@@ -160,29 +149,25 @@ export default function WorkflowsPage() {
             title="Refresh"
             className="p-2 rounded-lg border border-border text-muted-foreground hover:bg-secondary tech-transition"
           >
-            <RefreshCw className={`w-4 h-4 ${loading ? "animate-spin" : ""}`} />
+            <Icon name="RefreshCw" className={`w-4 h-4 ${loading ? "animate-spin" : ""}`} />
           </button>
           {tab === "workflows" && (
-            <button
-              onClick={onCreate}
-              disabled={creating}
-              className="rounded-lg bg-primary px-3 sm:px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 tech-transition flex items-center gap-1.5 disabled:opacity-50"
-            >
+            <Button size="lg" layout="flex items-center" onClick={onCreate} disabled={creating}>
               {creating ? (
-                <Loader2 className="w-4 h-4 animate-spin" />
+                <Icon name="Loader2" className="w-4 h-4 animate-spin" />
               ) : (
-                <Plus className="w-4 h-4" />
+                <Icon name="Plus" className="w-4 h-4" />
               )}
               New workflow
-            </button>
+            </Button>
           )}
         </div>
       </div>
 
       <Tabs
         tabs={[
-          { id: "workflows", label: "Workflows", icon: WorkflowIcon, count: rows.length },
-          { id: "modules", label: "Module Studio", icon: Boxes },
+          { id: "workflows", label: "Workflows", icon: "Workflow", count: rows.length },
+          { id: "modules", label: "Module Studio", icon: "Boxes" },
         ]}
         activeTab={tab}
         onTabChange={setTab}
@@ -220,7 +205,7 @@ export default function WorkflowsPage() {
               onChange={setFilter}
             />
             <div className="relative pr-3 sm:pr-4 shrink-0">
-              <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
+              <Icon name="Search" className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
               <input
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
@@ -234,7 +219,7 @@ export default function WorkflowsPage() {
             <div className="p-4 sm:p-6">
               {loading && (
                 <div className="flex flex-col items-center justify-center h-40 gap-3">
-                  <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
+                  <Icon name="Loader2" className="w-5 h-5 animate-spin text-muted-foreground" />
                   <p className="text-sm text-muted-foreground">Loading workflows…</p>
                 </div>
               )}
@@ -251,7 +236,7 @@ export default function WorkflowsPage() {
               )}
               {!loading && !error && filtered.length === 0 && rows.length > 0 && (
                 <div className="flex flex-col items-center justify-center h-48 gap-3 text-center">
-                  <Search className="w-8 h-8 text-muted-foreground/50" />
+                  <Icon name="Search" className="w-8 h-8 text-muted-foreground/50" />
                   <p className="text-sm text-muted-foreground">
                     No workflows match. Try a different search or filter.
                   </p>
@@ -259,17 +244,14 @@ export default function WorkflowsPage() {
               )}
               {!loading && !error && rows.length === 0 && (
                 <div className="flex flex-col items-center justify-center h-48 gap-3 text-center">
-                  <WorkflowIcon className="w-8 h-8 text-muted-foreground/50" />
+                  <Icon name="Workflow" className="w-8 h-8 text-muted-foreground/50" />
                   <p className="text-sm text-muted-foreground">
                     No workflows yet. Build your first automation — trigger →
                     agents → tools → done.
                   </p>
-                  <button
-                    onClick={onCreate}
-                    className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 tech-transition"
-                  >
+                  <Button size="none" layout="" onClick={onCreate} className="px-4 py-2 text-sm">
                     Create a workflow
-                  </button>
+                  </Button>
                 </div>
               )}
               {!loading && !error && filtered.length > 0 && (
@@ -290,20 +272,16 @@ export default function WorkflowsPage() {
                     >
                       <div className="flex items-start justify-between gap-2">
                         <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-primary/20 to-accent/15 flex items-center justify-center shrink-0">
-                          <WorkflowIcon className="w-5 h-5 text-primary" />
+                          <Icon name="Workflow" className="w-5 h-5 text-primary" />
                         </div>
                         <div className="flex items-center gap-1">
                           {actioning === wf.id ? (
-                            <Loader2 className="w-3.5 h-3.5 animate-spin text-muted-foreground" />
+                            <Icon name="Loader2" className="w-3.5 h-3.5 animate-spin text-muted-foreground" />
                           ) : (
                             <span className="hidden group-hover:flex items-center gap-1">
-                              <button
-                                onClick={(e) => onDuplicate(e, wf.id)}
-                                title="Duplicate workflow"
-                                className="p-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary tech-transition"
-                              >
-                                <Copy className="w-3.5 h-3.5" />
-                              </button>
+                              <Button variant="ghost" size="icon-xs" radius="keep" layout="" onClick={(e) => onDuplicate(e, wf.id)} title="Duplicate workflow" className="rounded-md">
+                                <Icon name="Copy" className="w-3.5 h-3.5" />
+                              </Button>
                               <button
                                 onClick={(e) => onDelete(e, wf.id)}
                                 title={
@@ -317,7 +295,7 @@ export default function WorkflowsPage() {
                                     : "text-muted-foreground hover:text-destructive hover:bg-secondary"
                                 }`}
                               >
-                                <Trash2 className="w-3.5 h-3.5" />
+                                <Icon name="Trash2" className="w-3.5 h-3.5" />
                               </button>
                             </span>
                           )}
@@ -336,13 +314,13 @@ export default function WorkflowsPage() {
                       </div>
                       {wf.status === "disabled" && wf.disabled_reason && (
                         <div className="mt-2 flex items-start gap-1.5 rounded-lg border border-warning/20 bg-warning/10 px-2 py-1.5 text-[10px] leading-snug text-warning">
-                          <AlertTriangle className="w-3 h-3 shrink-0 mt-px" />
+                          <Icon name="AlertTriangle" className="w-3 h-3 shrink-0 mt-px" />
                           <span className="line-clamp-2">{wf.disabled_reason}</span>
                         </div>
                       )}
                       <div className="mt-3 flex items-center gap-3 text-[10px] text-muted-foreground">
                         <span className="flex items-center gap-1">
-                          <Zap className="w-3 h-3" />
+                          <Icon name="Zap" className="w-3 h-3" />
                           {wf.trigger_count ?? 0} trigger
                           {(wf.trigger_count ?? 0) === 1 ? "" : "s"}
                         </span>
@@ -356,7 +334,7 @@ export default function WorkflowsPage() {
                         )}
                         {wf.updated_at && (
                           <span className="flex items-center gap-1 ml-auto">
-                            <Clock className="w-3 h-3" />
+                            <Icon name="Clock" className="w-3 h-3" />
                             {new Date(wf.updated_at).toLocaleDateString()}
                           </span>
                         )}

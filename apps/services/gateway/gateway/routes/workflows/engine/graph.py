@@ -43,11 +43,31 @@ NODE_TYPES = frozenset(
         "approval",
         "wait",
         "output",
+        # WS-27f / §13 U1 — the first node type that acts on an INTERNAL app.
+        # Not a `tool`: tools reach external systems through the Integration
+        # Registry and carry the write-class approval gate, which a task moving
+        # to Done must not need.
+        "pm_task",
     }
 )
 
 #: Node types whose outgoing edges carry branch handles.
 BRANCHING_TYPES = frozenset({"condition"})
+
+#: What a ``pm_task`` node may set.
+#:
+#: **Deliberately a copy** of `routes/projects/automation.PATCHABLE_FIELDS`
+#: (plus `status`), not an import: this engine is transport-free and must not
+#: acquire an import edge into an app package to validate a graph. The house
+#: answer to a copied vocabulary is a both-ways fence, and there is one —
+#: `test_projects_automation.py` fails if either side grows a field the other
+#: lacks, in either direction.
+PM_TASK_FIELDS = frozenset(
+    {
+        "title", "description", "importance", "due_at", "start_date",
+        "estimate_mins", "status",
+    }
+)
 
 #: Very conservative "this looks like a secret" patterns — publish refuses a
 #: graph containing one anywhere in node config (platform contract rung 3:
@@ -425,6 +445,46 @@ def _validate_node_config(
         issues.append(GraphIssue("missing_config", "set node needs assignments", nid))
     elif ntype == "wait":
         _validate_wait_config(nid, config, issues)
+    elif ntype == "pm_task":
+        _validate_pm_task_config(nid, config, issues)
+
+
+def _validate_pm_task_config(
+    nid: str, config: dict[str, Any], issues: list[GraphIssue]
+) -> None:
+    """A task node needs a task to act on and something to do to it.
+
+    Both checks land at PUBLISH rather than at run time, which is the whole
+    point of the gate: an automation whose target is missing should fail while
+    the maker is looking at the canvas, not silently at 3am against a task that
+    turns out not to exist.
+
+    Field NAMES are checked here; field values are not, because a value may be
+    a ``{{ref}}`` that only resolves during a run.
+    """
+    if not str(config.get("task_id") or "").strip():
+        issues.append(
+            GraphIssue("missing_config", "task node needs a task id", nid)
+        )
+    fields = config.get("fields")
+    if not isinstance(fields, dict) or not fields:
+        issues.append(
+            GraphIssue(
+                "missing_config",
+                "task node needs at least one field to set",
+                nid,
+            )
+        )
+        return
+    unknown = sorted(k for k in fields if k not in PM_TASK_FIELDS)
+    if unknown:
+        issues.append(
+            GraphIssue(
+                "unknown_field",
+                f"task node cannot set {unknown} — one of {sorted(PM_TASK_FIELDS)}",
+                nid,
+            )
+        )
 
 
 def _validate_wait_config(nid: str, config: dict[str, Any], issues: list[GraphIssue]) -> None:

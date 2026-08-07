@@ -1,28 +1,7 @@
 "use client";
 
 import { useMemo } from "react";
-import {
-  Inbox,
-  ListChecks,
-  Clock,
-  Calendar,
-  FolderKanban,
-  Users,
-  Lightbulb,
-  Mountain,
-  Cloud,
-  Plug,
-  HardDrive,
-  Layers,
-  Sparkles,
-  Archive,
-  CheckCircle2,
-  RefreshCw,
-  Loader2,
-  AlertTriangle,
-  type LucideIcon,
-  Settings2,
-} from "lucide-react";
+import Icon from "@/components/Icon";
 import { useTaskStore, viewCounts } from "../lib/taskStore";
 import { relativeTime } from "../lib/utils";
 import { ViewKey } from "../lib/types";
@@ -30,7 +9,8 @@ import { ViewKey } from "../lib/types";
 type NavRow = {
   view: ViewKey;
   label: string;
-  icon: LucideIcon;
+  /** Lucide icon NAME — the theme picks the pack (see DESIGN_SYSTEM.md). */
+  icon: string;
   /** show the count badge */
   showCount?: boolean;
   /** not yet built — rendered disabled with a "soon" tag */
@@ -43,19 +23,21 @@ type NavRow = {
 // sidebar entries. Priority and Engage were removed as standalone views for
 // that reason.
 const PRIMARY: NavRow[] = [
-  { view: "inbox", label: "Inbox", icon: Inbox, showCount: true },
-  { view: "next", label: "My Next Actions", icon: ListChecks, showCount: true },
-  { view: "waiting", label: "Waiting For", icon: Clock, showCount: true },
-  { view: "calendar", label: "Calendar", icon: Calendar, showCount: true },
-  { view: "projects", label: "Projects", icon: FolderKanban },
-  { view: "people", label: "People", icon: Users },
-  { view: "someday", label: "Someday / Maybe", icon: Lightbulb, showCount: true },
-  { view: "done", label: "Done", icon: CheckCircle2, showCount: true },
-  { view: "archive", label: "Archive", icon: Archive },
+  { view: "inbox", label: "Inbox", icon: "Inbox", showCount: true },
+  { view: "next", label: "My Next Actions", icon: "ListChecks", showCount: true },
+  { view: "waiting", label: "Waiting For", icon: "Clock", showCount: true },
+  { view: "calendar", label: "Calendar", icon: "Calendar", showCount: true },
+  // Projects and People were removed here 2026-08-06 (owner decision): this
+  // app is the personal lens. The company's projects live in `/projects` and
+  // the directory in `/people`, each a whole app rather than a cramped tab
+  // behind a task manager.
+  { view: "someday", label: "Someday / Maybe", icon: "Lightbulb", showCount: true },
+  { view: "done", label: "Done", icon: "CheckCircle2", showCount: true },
+  { view: "archive", label: "Archive", icon: "Archive" },
 ];
 
 const SECONDARY: NavRow[] = [
-  { view: "horizons", label: "Horizons of Focus", icon: Mountain, soon: true },
+  { view: "horizons", label: "Horizons of Focus", icon: "Mountain", soon: true },
 ];
 
 export function ListsSidebar({
@@ -70,7 +52,6 @@ export function ListsSidebar({
   assistantActive?: boolean;
 } = {}) {
   const items = useTaskStore((s) => s.items);
-  const projects = useTaskStore((s) => s.projects);
   const selectedView = useTaskStore((s) => s.selectedView);
   const selectedContext = useTaskStore((s) => s.selectedContext);
   const selectViewRaw = useTaskStore((s) => s.selectView);
@@ -79,8 +60,6 @@ export function ListsSidebar({
   const openSettings = useTaskStore((s) => s.openSettings);
   const loadArchive = useTaskStore((s) => s.loadArchive);
   const loadDone = useTaskStore((s) => s.loadDone);
-  const loadLocalHierarchy = useTaskStore((s) => s.loadLocalHierarchy);
-  const loadPeople = useTaskStore((s) => s.loadPeople);
   const sourceFilter = useTaskStore((s) => s.sourceFilter);
   const setSourceFilter = useTaskStore((s) => s.setSourceFilter);
   const syncNow = useTaskStore((s) => s.syncNow);
@@ -91,10 +70,6 @@ export function ListsSidebar({
     if (v === "archive") void loadArchive();
     // DONE tasks are excluded from the normal hydrate too — load on open.
     if (v === "done") void loadDone();
-    // The Projects tree (local spaces/folders) is loaded lazily on open.
-    if (v === "projects") void loadLocalHierarchy();
-    // The People roster (full HR records) is loaded lazily on open.
-    if (v === "people") void loadPeople();
     onNavigate?.();
   };
   // Counts must honor the All / Mine / ClickUp source toggle, otherwise the
@@ -119,11 +94,11 @@ export function ListsSidebar({
           <div className="flex items-center gap-0.5 rounded-lg border border-border bg-background p-0.5">
             {(
               [
-                { id: "all", label: "All", Icon: Layers },
-                { id: "local", label: "Mine", Icon: HardDrive },
-                { id: "synced", label: "ClickUp", Icon: Cloud },
+                { id: "all", label: "All", icon: "Layers" },
+                { id: "local", label: "Mine", icon: "HardDrive" },
+                { id: "synced", label: "ClickUp", icon: "Cloud" },
               ] as const
-            ).map(({ id, label, Icon }) => (
+            ).map(({ id, label, icon }) => (
               <button
                 key={id}
                 type="button"
@@ -143,7 +118,7 @@ export function ListsSidebar({
                     : "text-muted-foreground hover:text-foreground",
                 ].join(" ")}
               >
-                <Icon className="h-3 w-3 shrink-0" />
+                <Icon name={icon} className="h-3 w-3 shrink-0" />
                 {label}
               </button>
             ))}
@@ -152,8 +127,7 @@ export function ListsSidebar({
       )}
 
       {PRIMARY.map((row) => {
-        const count =
-          row.view === "projects" ? projects.length : counts[row.view];
+        const count = counts[row.view];
         // My Next Actions stays highlighted even when an in-view @context pill is
         // active (selectedContext set) — it's still the Next Actions view.
         const active =
@@ -197,7 +171,7 @@ export function ListsSidebar({
                 : "text-muted-foreground hover:bg-secondary hover:text-foreground",
             ].join(" ")}
           >
-            <Sparkles className="h-4 w-4 shrink-0" />
+            <Icon name="Sparkles" className="h-4 w-4 shrink-0" />
             <span className="flex-1">Assistant</span>
           </button>
         </div>
@@ -212,7 +186,7 @@ export function ListsSidebar({
             key={a.id}
             className="flex items-center gap-2.5 rounded-lg px-2 py-1.5 text-[13px] text-muted-foreground"
           >
-            <Cloud className="h-3.5 w-3.5 shrink-0 text-primary/70" />
+            <Icon name="Cloud" className="h-3.5 w-3.5 shrink-0 text-primary/70" />
             <div className="min-w-0 flex-1">
               <span className="block truncate">{a.label}</span>
               {/* Sync visibility: last pull time (or the error), so it's clear
@@ -227,7 +201,7 @@ export function ListsSidebar({
               >
                 {a.syncError ? (
                   <>
-                    <AlertTriangle className="h-2.5 w-2.5 shrink-0" />
+                    <Icon name="AlertTriangle" className="h-2.5 w-2.5 shrink-0" />
                     Sync failed
                   </>
                 ) : syncing ? (
@@ -250,9 +224,9 @@ export function ListsSidebar({
               className="tech-transition shrink-0 rounded-md p-1 text-muted-foreground/70 hover:bg-secondary hover:text-foreground disabled:opacity-50"
             >
               {syncing ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                <Icon name="Loader2" className="h-3.5 w-3.5 animate-spin" />
               ) : (
-                <RefreshCw className="h-3.5 w-3.5" />
+                <Icon name="RefreshCw" className="h-3.5 w-3.5" />
               )}
             </button>
           </div>
@@ -265,7 +239,7 @@ export function ListsSidebar({
           }}
           className="tech-transition flex w-full items-center gap-2.5 rounded-lg px-2 py-2 text-left text-[13px] text-muted-foreground hover:bg-secondary hover:text-foreground"
         >
-          <Plug className="h-3.5 w-3.5 shrink-0" />
+          <Icon name="Plug" className="h-3.5 w-3.5 shrink-0" />
           <span className="flex-1">Connect workspace…</span>
         </button>
         <button
@@ -276,7 +250,7 @@ export function ListsSidebar({
           }}
           className="tech-transition flex w-full items-center gap-2.5 rounded-lg px-2 py-2 text-left text-[13px] text-muted-foreground hover:bg-secondary hover:text-foreground"
         >
-          <Settings2 className="h-3.5 w-3.5 shrink-0" />
+          <Icon name="Settings2" className="h-3.5 w-3.5 shrink-0" />
           <span className="flex-1">Settings</span>
         </button>
       </div>
@@ -295,7 +269,6 @@ function NavButton({
   count?: number;
   onClick: () => void;
 }) {
-  const Icon = row.icon;
   return (
     <button
       type="button"
@@ -310,7 +283,7 @@ function NavButton({
             : "text-muted-foreground hover:bg-secondary hover:text-foreground",
       ].join(" ")}
     >
-      <Icon className="h-4 w-4 shrink-0" />
+      <Icon name={row.icon} className="h-4 w-4 shrink-0" />
       <span className="flex-1 truncate">{row.label}</span>
       {row.soon ? (
         <span className="rounded bg-muted px-1.5 py-0.5 text-[9px] font-medium uppercase text-muted-foreground">

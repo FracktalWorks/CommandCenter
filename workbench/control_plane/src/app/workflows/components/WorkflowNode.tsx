@@ -18,9 +18,9 @@
  * canvas; issue badges come from design-time validation.
  */
 
+import AppIcon from "@/components/Icon";
 import { memo } from "react";
 import { Handle, Position, type NodeProps } from "@xyflow/react";
-import { AlertTriangle, Loader2 } from "lucide-react";
 import { NODE_CATEGORY_STYLE, categoryForType } from "../lib/types";
 import { FALLBACK_ICON, NODE_ICON, NODE_KIND_LABEL } from "../lib/nodeVisuals";
 import type { NodeType } from "../lib/types";
@@ -140,14 +140,14 @@ function WorkflowNodeInner(props: NodeProps) {
                 title={`${issues} validation issue${issues === 1 ? "" : "s"} — see the inspector`}
                 className="flex items-center gap-0.5 text-warning"
               >
-                <AlertTriangle className="w-3 h-3" />
+                <AppIcon name="AlertTriangle" className="w-3 h-3" />
                 {issues > 1 && (
                   <span className="text-[9px] font-medium">{issues}</span>
                 )}
               </span>
             )}
             {status === "running" && (
-              <Loader2 className="w-3 h-3 text-primary animate-spin" />
+              <AppIcon name="Loader2" className="w-3 h-3 text-primary animate-spin" />
             )}
           </span>
         </div>

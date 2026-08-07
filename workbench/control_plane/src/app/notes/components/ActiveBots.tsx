@@ -7,9 +7,9 @@
  * processing. Multiple bots show at once — that's the multi-meeting fan-out.
  */
 
+import Icon from "@/components/Icon";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { AlertTriangle, Loader2, Radio, Square, Video } from "lucide-react";
 import { listActiveBots, stopBot } from "../lib/api";
 import type { MeetingBot, MeetingBotStatus } from "../lib/types";
 
@@ -106,7 +106,7 @@ export default function ActiveBots({ reloadSignal, onChange }: ActiveBotsProps) 
   return (
     <div className="space-y-2">
       <div className="flex items-center gap-1.5 px-1">
-        <Video className="h-3.5 w-3.5 text-primary" />
+        <Icon name="Video" className="h-3.5 w-3.5 text-primary" />
         <span className="text-[11px] font-semibold uppercase tracking-wide text-primary">
           Notetakers ({running} in meetings)
         </span>
@@ -129,7 +129,7 @@ export default function ActiveBots({ reloadSignal, onChange }: ActiveBotsProps) 
               className="flex min-w-0 flex-1 items-center gap-3 text-left"
               title="Open this meeting"
             >
-              <Video
+              <Icon name="Video"
                 className={`h-5 w-5 shrink-0 ${
                   bad ? "text-destructive" : "text-primary"
                 }`}
@@ -158,7 +158,7 @@ export default function ActiveBots({ reloadSignal, onChange }: ActiveBotsProps) 
                 title="Open the live console (transcript + copilot)"
                 aria-label="Open live console"
               >
-                <Radio className="h-4 w-4" />
+                <Icon name="Radio" className="h-4 w-4" />
               </button>
             )}
             {!bad && (
@@ -170,16 +170,16 @@ export default function ActiveBots({ reloadSignal, onChange }: ActiveBotsProps) 
                 aria-label="Stop notetaker"
               >
                 {stopping === b.meeting_id ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
+                  <Icon name="Loader2" className="h-4 w-4 animate-spin" />
                 ) : (
-                  <Square className="h-4 w-4 fill-current" />
+                  <Icon name="Square" className="h-4 w-4 fill-current" />
                 )}
               </button>
             )}
           </div>
           {bad && (
             <p className="mt-2 flex items-start gap-1.5 rounded-lg bg-destructive/10 px-2.5 py-1.5 text-[11px] leading-relaxed text-destructive">
-              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              <Icon name="AlertTriangle" className="mt-0.5 h-3.5 w-3.5 shrink-0" />
               <span>{explainText(b)}</span>
             </p>
           )}

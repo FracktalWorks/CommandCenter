@@ -15,6 +15,7 @@
  * write auto-applies through the broker (chokepointed + audited, no hold).
  */
 
+import Button from "@/components/ui/Button";
 import { useCallback, useEffect, useState } from "react";
 
 import type { PendingAction } from "@/app/api/actions/pending/route";
@@ -87,12 +88,9 @@ export default function ApprovalsPage() {
             {rows.length}
           </span>
         )}
-        <button
-          onClick={() => void load()}
-          className="ml-auto text-xs text-muted-foreground hover:text-foreground transition-colors"
-        >
+        <Button variant="text" size="none" layout="" onClick={() => void load()} className="ml-auto text-xs">
           {loading ? "Refreshing…" : "Refresh"}
-        </button>
+        </Button>
       </div>
       <p className="mt-1 text-xs text-muted-foreground">
         Outward writes an agent proposed through the Action Broker. Approving

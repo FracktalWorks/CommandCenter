@@ -228,15 +228,24 @@ export interface Target {
   accountId?: string;
 }
 
-/** The left-rail views. */
+/** The left-rail views.
+ *
+ * **Personal only.** `projects` and `people` were removed 2026-08-06 (owner
+ * decision): this app manages the tasks that are *yours*. The company's
+ * departments, projects and team tasks live in `/projects`, and the directory
+ * lives in `/people` — one surface each, rather than a second half-copy of both
+ * behind a task manager.
+ *
+ * `GtdProject` itself survives: a task still belongs to a project and the cards
+ * still name it. What went is the *browsing* surface, which was the ClickUp
+ * Space → Folder → List hierarchy — precisely what `/projects` now owns.
+ */
 export type ViewKey =
   | "inbox"
   | "next"
   | "priority"
   | "waiting"
   | "calendar"
-  | "projects"
-  | "people"
   | "someday"
   | "reference"
   | "done"

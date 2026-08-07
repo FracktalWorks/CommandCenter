@@ -1,17 +1,8 @@
 "use client";
 
+import Button from "@/components/ui/Button";
+import Icon from "@/components/Icon";
 import { useEffect, useRef, useState } from "react";
-import {
-  Sparkles,
-  Loader2,
-  X,
-  CornerDownLeft,
-  Check,
-  ChevronDown,
-  ChevronUp,
-  AlertTriangle,
-  Undo2,
-} from "lucide-react";
 import type { DraftStep, DraftRevision } from "../lib/useDraftSession";
 
 /**
@@ -27,7 +18,7 @@ import type { DraftStep, DraftRevision } from "../lib/useDraftSession";
 function StepIcon({ state }: { state: DraftStep["state"] }) {
   if (state === "running") {
     return (
-      <Loader2
+      <Icon name="Loader2"
         size={11}
         className="text-primary animate-spin flex-shrink-0 mt-[3px]"
         aria-hidden
@@ -36,7 +27,7 @@ function StepIcon({ state }: { state: DraftStep["state"] }) {
   }
   if (state === "failed") {
     return (
-      <AlertTriangle
+      <Icon name="AlertTriangle"
         size={11}
         className="text-warning flex-shrink-0 mt-[3px]"
         aria-hidden
@@ -44,7 +35,7 @@ function StepIcon({ state }: { state: DraftStep["state"] }) {
     );
   }
   return (
-    <Check size={11} className="text-success flex-shrink-0 mt-[3px]" aria-hidden />
+    <Icon name="Check" size={11} className="text-success flex-shrink-0 mt-[3px]" aria-hidden />
   );
 }
 
@@ -241,15 +232,9 @@ export function DraftAssistant({
               </span>
             )}
             {steps.length > 0 && (
-              <button
-                type="button"
-                onClick={() => setManualExpand(!expanded)}
-                title={expanded ? "Hide activity" : "Show what the AI did"}
-                aria-expanded={expanded}
-                className="p-0.5 rounded text-muted-foreground hover:text-foreground hover:bg-secondary tech-transition"
-              >
-                {expanded ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
-              </button>
+              <Button variant="ghost" size="none" radius="keep" layout="" type="button" onClick={() => setManualExpand(!expanded)} title={expanded ? "Hide activity" : "Show what the AI did"} aria-expanded={expanded} className="p-0.5 rounded">
+                {expanded ? <Icon name="ChevronUp" size={13} /> : <Icon name="ChevronDown" size={13} />}
+              </Button>
             )}
           </div>
         </div>
@@ -278,7 +263,7 @@ export function DraftAssistant({
       )}
 
       <div className="px-4 py-2 flex items-center gap-2">
-        <Sparkles size={13} className="text-primary flex-shrink-0" aria-hidden />
+        <Icon name="Sparkles" size={13} className="text-primary flex-shrink-0" aria-hidden />
         <input
           ref={inputRef}
           type="text"
@@ -305,31 +290,21 @@ export function DraftAssistant({
           className="flex-1 bg-transparent text-xs text-foreground placeholder:text-muted-foreground outline-none min-w-0 disabled:opacity-60"
         />
         {hasDraft && revisions.length > 1 && !busy && (
-          <button
-            type="button"
-            onClick={() => {
+          <Button variant="ghost" size="icon-xs" radius="keep" layout="" type="button" onClick={() => {
               const prev = revisions[revisions.length - 2];
               if (prev) onRestore(prev.id);
-            }}
-            title="Go back to the previous version"
-            className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-secondary tech-transition flex-shrink-0"
-          >
-            <Undo2 size={13} />
-          </button>
+            }} title="Go back to the previous version" className="rounded flex-shrink-0">
+            <Icon name="Undo2" size={13} />
+          </Button>
         )}
-        <button
-          type="button"
-          onClick={onRunClick}
-          disabled={busy}
-          className="px-2.5 py-1 text-xs rounded-md bg-primary text-primary-foreground hover:bg-primary/90 tech-transition disabled:opacity-50 flex items-center gap-1 flex-shrink-0"
-        >
+        <Button size="none" radius="keep" layout="flex items-center" type="button" onClick={onRunClick} disabled={busy} className="px-2.5 py-1 text-xs rounded-md gap-1 flex-shrink-0">
           {busy ? (
-            <Loader2 size={12} className="animate-spin" aria-hidden />
+            <Icon name="Loader2" size={12} className="animate-spin" aria-hidden />
           ) : (
-            <CornerDownLeft size={12} aria-hidden />
+            <Icon name="CornerDownLeft" size={12} aria-hidden />
           )}
           {runLabel}
-        </button>
+        </Button>
         <button
           type="button"
           onClick={onClose}
@@ -338,7 +313,7 @@ export function DraftAssistant({
           title="Close"
           aria-label="Close AI drafting"
         >
-          <X size={14} />
+          <Icon name="X" size={14} />
         </button>
       </div>
       {/* Keeps the collapsed summary reachable for screen readers. */}

@@ -11,7 +11,7 @@
  *
  * Usage:
  *   <Tabs
- *     tabs={[{ id: "apis", label: "APIs", icon: Zap }, ...]}
+ *     tabs={[{ id: "apis", label: "APIs", icon: "Zap" }, ...]}
  *     activeTab={tab}
  *     onTabChange={setTab}
  *     variant="underline"
@@ -19,12 +19,17 @@
  */
 
 import React from "react";
-import type { LucideIcon } from "lucide-react";
+import Icon from "@/components/Icon";
 
 export interface TabDef {
   id: string;
   label: string;
-  icon?: LucideIcon;
+  /**
+   * Lucide icon NAME, e.g. "Zap". A name rather than a component so a tab bar
+   * cannot pin its icons to one pack while the rest of the app follows the
+   * theme — see DESIGN_SYSTEM.md.
+   */
+  icon?: string;
   /** Optional badge count shown next to label */
   count?: number;
   /** Optional tooltip / aria-description */
@@ -59,7 +64,6 @@ export default function Tabs({
         role="tablist"
       >
         {tabs.map((t) => {
-          const Icon = t.icon;
           const active = activeTab === t.id;
           return (
             <button
@@ -74,7 +78,7 @@ export default function Tabs({
                   : "border-transparent text-muted-foreground hover:text-foreground hover:bg-secondary/50"
               }`}
             >
-              {Icon && <Icon className="w-3.5 h-3.5" />}
+              {t.icon && <Icon name={t.icon} className="w-3.5 h-3.5" />}
               {t.label}
               {t.count !== undefined && (
                 <span className="ml-1 text-[10px] opacity-60">{t.count}</span>
@@ -96,7 +100,6 @@ export default function Tabs({
         role="tablist"
       >
         {tabs.map((t) => {
-          const Icon = t.icon;
           const active = activeTab === t.id;
           return (
             <button
@@ -111,7 +114,7 @@ export default function Tabs({
                   : "text-muted-foreground hover:text-foreground"
               }`}
             >
-              {Icon && <Icon className="w-3.5 h-3.5" />}
+              {t.icon && <Icon name={t.icon} className="w-3.5 h-3.5" />}
               {t.label}
               {t.count !== undefined && (
                 <span className="ml-1 opacity-50">{t.count}</span>

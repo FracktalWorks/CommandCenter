@@ -12,11 +12,8 @@
 //              generator, and the knowledge entries the builder suggested
 //              (approve / dismiss).
 
+import Icon from "@/components/Icon";
 import { useCallback, useEffect, useRef, useState } from "react";
-import {
-  AudioLines, Check, ChevronLeft, Loader2, Pencil, RefreshCcw, Sparkles,
-  Trash2, Wand2, X,
-} from "lucide-react";
 import {
   approveKnowledge, buildVoiceProfile, deleteKnowledge, deleteVoiceProfile,
   getVoiceProfile, getVoiceProfileStatus, listKnowledge, previewVoiceProfile,
@@ -208,7 +205,7 @@ function BuilderView({
     <div className="space-y-4">
       {onBack && (
         <button onClick={onBack} className={BTN_SECONDARY}>
-          <ChevronLeft size={12} /> Back to profile
+          <Icon name="ChevronLeft" size={12} /> Back to profile
         </button>
       )}
       {profile.status === "FAILED" && profile.last_error && (
@@ -306,7 +303,7 @@ function BuilderView({
           "Pick at least one source."
         ) : previewLoading || !preview ? (
           <>
-            <Loader2 className="animate-spin" size={11} /> Counting emails in
+            <Icon name="Loader2" className="animate-spin" size={11} /> Counting emails in
             this range…
           </>
         ) : preview.total === 0 ? (
@@ -363,9 +360,9 @@ function BuilderView({
           className={BTN_PRIMARY}
         >
           {starting ? (
-            <Loader2 className="animate-spin" size={13} />
+            <Icon name="Loader2" className="animate-spin" size={13} />
           ) : (
-            <Wand2 size={13} />
+            <Icon name="Wand2" size={13} />
           )}
           {profile.status === "READY" ? "Rebuild profile" : "Build my profile"}
         </button>
@@ -429,12 +426,12 @@ function BuildingView({
     <div className="py-6 flex flex-col items-center gap-3 text-center">
       {job?.status === "error" ? (
         <>
-          <X size={20} className="text-destructive" />
+          <Icon name="X" size={20} className="text-destructive" />
           <p className="text-xs text-destructive max-w-sm">{job.error}</p>
         </>
       ) : (
         <>
-          <Loader2 className="animate-spin text-primary" size={22} />
+          <Icon name="Loader2" className="animate-spin text-primary" size={22} />
           <p className="text-xs text-foreground">
             {PHASE_LABELS[phase] || "Working…"}
           </p>
@@ -539,7 +536,7 @@ function OverviewView({
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex items-center gap-1.5 text-xs text-foreground font-medium">
-            <AudioLines size={13} className="text-primary" /> Learned from{" "}
+            <Icon name="AudioLines" size={13} className="text-primary" /> Learned from{" "}
             {meta}
           </div>
           {!profile.enabled && (
@@ -550,7 +547,7 @@ function OverviewView({
         </div>
         <div className="flex items-center gap-2 flex-shrink-0">
           <button onClick={onRebuild} className={BTN_SECONDARY} disabled={busy}>
-            <RefreshCcw size={12} /> Rebuild
+            <Icon name="RefreshCcw" size={12} /> Rebuild
           </button>
           <Toggle
             enabled={profile.enabled}
@@ -626,7 +623,7 @@ function OverviewView({
               }}
               className="flex items-center gap-1 text-[11px] text-primary hover:opacity-80"
             >
-              <Pencil size={11} /> Edit
+              <Icon name="Pencil" size={11} /> Edit
             </button>
           )}
         </div>
@@ -648,9 +645,9 @@ function OverviewView({
                 className={BTN_PRIMARY}
               >
                 {busy ? (
-                  <Loader2 className="animate-spin" size={13} />
+                  <Icon name="Loader2" className="animate-spin" size={13} />
                 ) : (
-                  <Check size={13} />
+                  <Icon name="Check" size={13} />
                 )}
                 Save
               </button>
@@ -690,7 +687,7 @@ function OverviewView({
           disabled={busy}
           className="flex items-center gap-1.5 text-[11px] text-muted-foreground hover:text-destructive transition-colors pt-2 disabled:opacity-50"
         >
-          <Trash2 size={12} /> Remove profile
+          <Icon name="Trash2" size={12} /> Remove profile
         </button>
       </div>
     </div>
@@ -725,7 +722,7 @@ function TryItSection({ accountId }: { accountId: string }) {
   return (
     <section className="border border-border rounded-lg px-3 py-2.5">
       <h4 className="flex items-center gap-1.5 text-xs font-semibold text-foreground mb-1">
-        <Sparkles size={12} className="text-primary" /> Try it
+        <Icon name="Sparkles" size={12} className="text-primary" /> Try it
       </h4>
       <p className="text-[11px] text-muted-foreground mb-2">
         Generate a sample email in this voice to judge the profile before it
@@ -746,9 +743,9 @@ function TryItSection({ accountId }: { accountId: string }) {
         </select>
         <button onClick={generate} disabled={busy} className={BTN_SECONDARY}>
           {busy ? (
-            <Loader2 className="animate-spin" size={12} />
+            <Icon name="Loader2" className="animate-spin" size={12} />
           ) : (
-            <Wand2 size={12} />
+            <Icon name="Wand2" size={12} />
           )}
           Generate
         </button>
@@ -845,7 +842,7 @@ function SuggestedKnowledge({
             </div>
             <div className="flex items-center gap-1.5 flex-shrink-0 pt-0.5">
               {busy === e.id ? (
-                <Loader2 className="animate-spin text-muted-foreground" size={13} />
+                <Icon name="Loader2" className="animate-spin text-muted-foreground" size={13} />
               ) : (
                 <>
                   <button
@@ -853,14 +850,14 @@ function SuggestedKnowledge({
                     title="Approve — add to the knowledge base"
                     className="text-emerald-500 hover:text-emerald-400"
                   >
-                    <Check size={14} />
+                    <Icon name="Check" size={14} />
                   </button>
                   <button
                     onClick={() => act(e, false)}
                     title="Dismiss"
                     className="text-muted-foreground hover:text-destructive"
                   >
-                    <X size={14} />
+                    <Icon name="X" size={14} />
                   </button>
                 </>
               )}

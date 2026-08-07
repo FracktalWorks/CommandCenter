@@ -9,9 +9,11 @@
     "lint": "eslint",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:e2e": "npm run build && playwright test"
+    "test:e2e": "npm run build && playwright test",
+    "build:icons": "node scripts/build-icon-packs.mjs"
   },
   "dependencies": {
+    "@iconify/react": "^6.0.2",
     "@monaco-editor/react": "^4.7.0",
     "@tiptap/extension-image": "^3.29.2",
     "@tiptap/extension-table": "^3.29.2",
@@ -45,6 +47,9 @@
     "zustand": "^5.0.14"
   },
   "devDependencies": {
+    "@iconify-json/fluent": "^1.2.54",
+    "@iconify-json/material-symbols": "^1.2.88",
+    "@iconify/utils": "^3.1.4",
     "@playwright/test": "^1.60.0",
     "@tailwindcss/postcss": "^4",
     "@tailwindcss/typography": "^0.5.19",

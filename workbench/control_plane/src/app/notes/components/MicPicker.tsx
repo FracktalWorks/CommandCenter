@@ -12,8 +12,8 @@
  * recording capture — that starts fresh from the selected deviceId.
  */
 
+import Icon from "@/components/Icon";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { AlertCircle, Check, ChevronDown, Mic, MicOff } from "lucide-react";
 import { listMicrophones, type MicDevice } from "../lib/recorder";
 
 export const MIC_STORAGE_KEY = "notes.micDeviceId";
@@ -154,12 +154,12 @@ export function MicPicker({ value, onChange, disabled }: MicPickerProps) {
           className="flex w-full items-center gap-2 rounded-xl border border-border bg-card px-3 py-2.5 text-left text-sm text-foreground hover:border-primary/40 tech-transition"
         >
           {ready ? (
-            <Mic className="w-4 h-4 shrink-0 text-primary" />
+            <Icon name="Mic" className="w-4 h-4 shrink-0 text-primary" />
           ) : (
-            <MicOff className="w-4 h-4 shrink-0 text-muted-foreground" />
+            <Icon name="MicOff" className="w-4 h-4 shrink-0 text-muted-foreground" />
           )}
           <span className="min-w-0 flex-1 truncate">{selectedLabel}</span>
-          <ChevronDown className="w-4 h-4 shrink-0 text-muted-foreground" />
+          <Icon name="ChevronDown" className="w-4 h-4 shrink-0 text-muted-foreground" />
         </button>
 
         {open && (
@@ -169,7 +169,7 @@ export function MicPicker({ value, onChange, disabled }: MicPickerProps) {
               className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-secondary tech-transition"
             >
               <span className="min-w-0 flex-1 truncate">Default microphone</span>
-              {value === null && <Check className="w-3.5 h-3.5 text-primary" />}
+              {value === null && <Icon name="Check" className="w-3.5 h-3.5 text-primary" />}
             </button>
             {devices
               .filter((d) => d.deviceId)
@@ -183,7 +183,7 @@ export function MicPicker({ value, onChange, disabled }: MicPickerProps) {
                     {d.label || `Microphone ${i + 1}`}
                   </span>
                   {value === d.deviceId && (
-                    <Check className="w-3.5 h-3.5 text-primary" />
+                    <Icon name="Check" className="w-3.5 h-3.5 text-primary" />
                   )}
                 </button>
               ))}
@@ -211,7 +211,7 @@ export function MicPicker({ value, onChange, disabled }: MicPickerProps) {
       <p className="mt-1.5 px-1 text-[11px] text-muted-foreground">
         {err ? (
           <span className="inline-flex items-center gap-1 text-destructive">
-            <AlertCircle className="w-3 h-3 shrink-0" />
+            <Icon name="AlertCircle" className="w-3 h-3 shrink-0" />
             {err}
           </span>
         ) : ready ? (

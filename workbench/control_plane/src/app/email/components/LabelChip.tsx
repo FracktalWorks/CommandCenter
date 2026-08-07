@@ -1,6 +1,6 @@
 "use client";
 
-import { Check, Tag } from "lucide-react";
+import Icon from "@/components/Icon";
 import {
   LABEL_PALETTE,
   chipColors,
@@ -63,7 +63,7 @@ export function LabelChip({
         interactive ? "cursor-pointer hover:opacity-90" : ""
       } ${className}`}
     >
-      {icon && <Tag size={11} />}
+      {icon && <Icon name="Tag" size={11} />}
       {name}
     </span>
   );
@@ -122,7 +122,7 @@ export function LabelColorGrid({
             }}
             className="w-5 h-5 rounded-full flex items-center justify-center hover:scale-110 transition-transform"
           >
-            {selected && <Check size={11} />}
+            {selected && <Icon name="Check" size={11} />}
           </button>
         );
       })}

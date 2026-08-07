@@ -1,5 +1,6 @@
 "use client";
 
+import Button from "@/components/ui/Button";
 import { useState } from "react";
 import {
   type TierInfo,
@@ -92,19 +93,12 @@ export default function TierCard({
           </div>
         </div>
         <div className="flex gap-2 shrink-0">
-          <button
-            onClick={handleTest}
-            disabled={testing || !tier.provider_configured}
-            className="rounded-lg px-3 py-1.5 text-xs border border-border text-muted-foreground hover:text-foreground hover:border-primary/30 disabled:opacity-40 tech-transition"
-          >
+          <Button variant="secondary" size="none" layout="" onClick={handleTest} disabled={testing || !tier.provider_configured} className="px-3 py-1.5 text-xs">
             {testing ? "Testing…" : "Test"}
-          </button>
-          <button
-            onClick={() => { setEditing((e) => !e); setTestResult(null); }}
-            className="rounded-lg px-3 py-1.5 text-xs border border-border text-muted-foreground hover:text-foreground hover:border-primary/30 tech-transition"
-          >
+          </Button>
+          <Button variant="secondary" size="none" layout="" onClick={() => { setEditing((e) => !e); setTestResult(null); }} className="px-3 py-1.5 text-xs">
             {editing ? "Cancel" : "Edit"}
-          </button>
+          </Button>
         </div>
       </div>
 
@@ -194,13 +188,9 @@ export default function TierCard({
             >
               Cancel
             </button>
-            <button
-              onClick={handleSave}
-              disabled={saving || !selectedModel}
-              className="rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90 disabled:opacity-40 tech-transition"
-            >
+            <Button size="none" layout="" onClick={handleSave} disabled={saving || !selectedModel} className="px-3 py-1.5 text-xs">
               {saving ? "Saving…" : "Save"}
-            </button>
+            </Button>
           </div>
         </div>
       )}

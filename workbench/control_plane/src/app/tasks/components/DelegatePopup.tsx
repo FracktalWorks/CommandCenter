@@ -1,7 +1,7 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { Check, Loader2, Search, UserPlus, X } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import Icon from "@/components/Icon";
 import { useTaskStore } from "../lib/taskStore";
 import type { GtdItem, Person } from "../lib/types";
 import { initials } from "../lib/utils";
@@ -47,6 +47,15 @@ function DelegateBody({
   const people = useTaskStore((s) => s.people);
   const accounts = useTaskStore((s) => s.accounts);
   const updateItem = useTaskStore((s) => s.updateItem);
+  const loadPeople = useTaskStore((s) => s.loadPeople);
+
+  // The roster used to be loaded by opening the sidebar's People view, which
+  // was removed when the directory moved to /people. Loading it HERE, where it
+  // is actually needed, is what stops delegation quietly offering nobody —
+  // a broken picker that looks like an empty company.
+  useEffect(() => {
+    if (people.length === 0) void loadPeople();
+  }, [people.length, loadPeople]);
 
   const isSynced = item.source === "SYNCED";
   const account = item.accountId
@@ -110,7 +119,7 @@ function DelegateBody({
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex shrink-0 items-center gap-2 border-b border-border px-4 py-3">
-          <UserPlus className="h-4 w-4 shrink-0 text-primary" />
+          <Icon name="UserPlus" className="h-4 w-4 shrink-0 text-primary" />
           <div className="min-w-0 flex-1">
             <h2 className="text-sm font-semibold text-foreground">
               Delegate this task
@@ -125,7 +134,7 @@ function DelegateBody({
             aria-label="Close"
             className="tech-transition rounded-md p-1 text-muted-foreground hover:bg-secondary hover:text-foreground"
           >
-            <X className="h-4 w-4" />
+            <Icon name="X" className="h-4 w-4" />
           </button>
         </div>
 
@@ -138,7 +147,7 @@ function DelegateBody({
           )}
           {eligible.length > 8 && (
             <div className="relative mb-2">
-              <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+              <Icon name="Search" className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
               <input
                 value={q}
                 onChange={(e) => setQ(e.target.value)}
@@ -174,7 +183,7 @@ function DelegateBody({
                       {initials(p.name)}
                     </span>
                     <span className="min-w-0 flex-1 truncate">{p.name}</span>
-                    {on && <Check className="h-3.5 w-3.5 shrink-0" />}
+                    {on && <Icon name="Check" className="h-3.5 w-3.5 shrink-0" />}
                   </button>
                 );
               })}
@@ -200,9 +209,9 @@ function DelegateBody({
               className="tech-transition inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-[12px] font-medium text-primary-foreground hover:opacity-90 disabled:opacity-40"
             >
               {busy ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                <Icon name="Loader2" className="h-3.5 w-3.5 animate-spin" />
               ) : (
-                <Check className="h-3.5 w-3.5" />
+                <Icon name="Check" className="h-3.5 w-3.5" />
               )}
               {selected.length === 0
                 ? "Unassign"

@@ -1,26 +1,8 @@
 "use client";
 
+import AppIcon, { themedIcon } from "@/components/Icon";
+import type { ThemedIcon } from "@/components/Icon";
 import { useEffect, useMemo, useRef, useState } from "react";
-import {
-  Clock,
-  Pencil,
-  Trash2,
-  Lightbulb,
-  FileText,
-  Sparkles,
-  Check,
-  CalendarClock,
-  Square,
-  CheckSquare,
-  StickyNote,
-  ListChecks,
-  FolderKanban,
-  UserPlus,
-  Zap,
-  Cloud,
-  type LucideIcon,
-  Mail,
-} from "lucide-react";
 import { useTaskStore } from "../lib/taskStore";
 import { proposeClarification, type ClarifyDisposition } from "../lib/clarify";
 import { GtdItem, GtdProject, Person } from "../lib/types";
@@ -33,15 +15,15 @@ import { ContextMenu, type CtxItem } from "./ContextMenu";
 // The assistant's at-a-glance read of a capture — shown on the card so you see
 // the *shape* of your inbox (what's yours, what to delegate, what's a project,
 // where it goes) before opening anything. It's a hint; Clarify still decides.
-const DISP_HINT: Record<ClarifyDisposition, { label: string; Icon: LucideIcon }> = {
-  NEXT: { label: "Next", Icon: ListChecks },
-  PROJECT: { label: "Project", Icon: FolderKanban },
-  WAITING: { label: "Delegate", Icon: UserPlus },
-  CALENDAR: { label: "Schedule", Icon: CalendarClock },
-  DO_NOW: { label: "Do now", Icon: Zap },
-  SOMEDAY: { label: "Someday", Icon: Lightbulb },
-  REFERENCE: { label: "Reference", Icon: FileText },
-  TRASH: { label: "Trash", Icon: Trash2 },
+const DISP_HINT: Record<ClarifyDisposition, { label: string; Icon: ThemedIcon }> = {
+  NEXT: { label: "Next", Icon: themedIcon("ListChecks") },
+  PROJECT: { label: "Project", Icon: themedIcon("FolderKanban") },
+  WAITING: { label: "Delegate", Icon: themedIcon("UserPlus") },
+  CALENDAR: { label: "Schedule", Icon: themedIcon("CalendarClock") },
+  DO_NOW: { label: "Do now", Icon: themedIcon("Zap") },
+  SOMEDAY: { label: "Someday", Icon: themedIcon("Lightbulb") },
+  REFERENCE: { label: "Reference", Icon: themedIcon("FileText") },
+  TRASH: { label: "Trash", Icon: themedIcon("Trash2") },
 };
 const shortText = (s: string, n = 22) => (s.length > n ? s.slice(0, n - 1) + "…" : s);
 
@@ -102,7 +84,7 @@ export function InboxCard({
     return (
       <div className="flex flex-col gap-2 rounded-xl border border-primary/40 bg-card px-4 py-3">
         <div className="flex items-center gap-2">
-          <Pencil className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+          <AppIcon name="Pencil" className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
           <input
             autoFocus
             value={draftTitle}
@@ -125,7 +107,7 @@ export function InboxCard({
             aria-label="Save"
             className="tech-transition rounded-md p-1 text-primary hover:bg-primary/10"
           >
-            <Check className="h-4 w-4" />
+            <AppIcon name="Check" className="h-4 w-4" />
           </button>
         </div>
         <textarea
@@ -143,33 +125,33 @@ export function InboxCard({
     {
       kind: "item",
       label: "Clarify…",
-      icon: Sparkles,
+      icon: themedIcon("Sparkles"),
       onSelect: () => openClarify(item.id),
     },
     {
       kind: "item",
       label: "Schedule on calendar",
-      icon: CalendarClock,
+      icon: themedIcon("CalendarClock"),
       onSelect: () => openSchedule(item.id),
     },
     { kind: "sep" },
     {
       kind: "item",
       label: "Move to Someday / Maybe",
-      icon: Lightbulb,
+      icon: themedIcon("Lightbulb"),
       onSelect: () => quickDispose(item.id, "SOMEDAY"),
     },
     {
       kind: "item",
       label: "Move to Reference",
-      icon: FileText,
+      icon: themedIcon("FileText"),
       onSelect: () => quickDispose(item.id, "REFERENCE"),
     },
     { kind: "sep" },
     {
       kind: "item",
       label: "Delete",
-      icon: Trash2,
+      icon: themedIcon("Trash2"),
       danger: true,
       onSelect: () => requestDelete([item.id]),
     },
@@ -220,9 +202,9 @@ export function InboxCard({
         ].join(" ")}
       >
         {selected ? (
-          <CheckSquare className="h-4 w-4" />
+          <AppIcon name="CheckSquare" className="h-4 w-4" />
         ) : (
-          <Square className="h-4 w-4" />
+          <AppIcon name="Square" className="h-4 w-4" />
         )}
       </button>
 
@@ -233,7 +215,7 @@ export function InboxCard({
         <HintRow hint={hint} />
         {item.notes && (
           <p className="mt-1 flex items-start gap-1 text-[12px] leading-snug text-muted-foreground">
-            <StickyNote className="mt-0.5 h-3 w-3 shrink-0" />
+            <AppIcon name="StickyNote" className="mt-0.5 h-3 w-3 shrink-0" />
             <span className="line-clamp-2">{item.notes}</span>
           </p>
         )}
@@ -244,7 +226,7 @@ export function InboxCard({
         )}
         {item.origin?.kind === "email" && (
           <p className="mt-1 flex items-center gap-1 text-[11px] text-muted-foreground">
-            <Mail className="h-3 w-3 shrink-0" />
+            <AppIcon name="Mail" className="h-3 w-3 shrink-0" />
             <span className="truncate">
               From email — {item.origin.fromName || item.origin.fromEmail}
               {item.origin.subject ? ` · “${item.origin.subject}”` : ""}
@@ -262,7 +244,7 @@ export function InboxCard({
         )}
         <div className="mt-1.5 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
           <span className="inline-flex items-center gap-1">
-            <Clock className="h-3 w-3" />
+            <AppIcon name="Clock" className="h-3 w-3" />
             captured {relativeTime(item.createdAt)}
           </span>
           <SourceBadge source={item.source} provider={item.provider} size="xs" />
@@ -276,7 +258,7 @@ export function InboxCard({
               title="Detected a date — snooze to it?"
               className="tech-transition inline-flex items-center gap-1 rounded-full border border-primary/30 bg-primary/5 px-1.5 py-0.5 text-[10px] text-primary hover:bg-primary/10"
             >
-              <CalendarClock className="h-3 w-3" />
+              <AppIcon name="CalendarClock" className="h-3 w-3" />
               {dateHint}?
             </button>
           )}
@@ -285,11 +267,11 @@ export function InboxCard({
 
       {/* Secondary quick-actions (desktop hover; on touch, tap card → Clarify) */}
       <div className="hidden shrink-0 items-center gap-0.5 opacity-0 tech-transition focus-within:opacity-100 group-hover:opacity-100 sm:flex">
-        <CardAction label="Edit" icon={Pencil} onClick={onEditStart} />
+        <CardAction label="Edit" icon={themedIcon("Pencil")} onClick={onEditStart} />
         <div className="relative">
           <CardAction
             label="Snooze"
-            icon={CalendarClock}
+            icon={themedIcon("CalendarClock")}
             onClick={() => setSnoozeOpen((v) => !v)}
           />
           {snoozeOpen && (
@@ -304,17 +286,17 @@ export function InboxCard({
         </div>
         <CardAction
           label="Someday"
-          icon={Lightbulb}
+          icon={themedIcon("Lightbulb")}
           onClick={() => quickDispose(item.id, "SOMEDAY")}
         />
         <CardAction
           label="Reference"
-          icon={FileText}
+          icon={themedIcon("FileText")}
           onClick={() => quickDispose(item.id, "REFERENCE")}
         />
         <CardAction
           label="Clarify"
-          icon={Sparkles}
+          icon={themedIcon("Sparkles")}
           primary
           onClick={() => openClarify(item.id)}
         />
@@ -332,7 +314,7 @@ export function InboxCard({
         }}
         className="tech-transition mt-0.5 shrink-0 rounded-md p-1.5 text-muted-foreground/70 hover:bg-destructive/10 hover:text-destructive"
       >
-        <Trash2 className="h-4 w-4" />
+        <AppIcon name="Trash2" className="h-4 w-4" />
       </button>
 
       {menu && (
@@ -379,12 +361,12 @@ function buildHint(
 function HintRow({
   hint,
 }: {
-  hint: { label: string; Icon: LucideIcon; detail: string; provider?: string };
+  hint: { label: string; Icon: ThemedIcon; detail: string; provider?: string };
 }) {
   return (
     <div className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[11px]">
       <span className="inline-flex items-center gap-1">
-        <Sparkles className="h-3 w-3 text-primary/60" />
+        <AppIcon name="Sparkles" className="h-3 w-3 text-primary/60" />
         <hint.Icon className="h-3 w-3 text-muted-foreground" />
         <span className="font-medium text-foreground/75">{hint.label}</span>
       </span>
@@ -393,7 +375,7 @@ function HintRow({
       )}
       {hint.provider && (
         <span className="inline-flex items-center gap-0.5 rounded-full bg-secondary px-1.5 py-px text-[10px] text-muted-foreground">
-          <Cloud className="h-2.5 w-2.5" />
+          <AppIcon name="Cloud" className="h-2.5 w-2.5" />
           {hint.provider}
         </span>
       )}
@@ -433,7 +415,7 @@ function SnoozeMenu({
             onClick={() => onPick(o.iso)}
             className="tech-transition flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] text-foreground hover:bg-secondary"
           >
-            <CalendarClock className="h-3.5 w-3.5 text-muted-foreground" />
+            <AppIcon name="CalendarClock" className="h-3.5 w-3.5 text-muted-foreground" />
             {o.label}
           </button>
         ))}
@@ -461,7 +443,7 @@ function CardAction({
   danger,
 }: {
   label: string;
-  icon: LucideIcon;
+  icon: ThemedIcon;
   onClick: () => void;
   primary?: boolean;
   danger?: boolean;

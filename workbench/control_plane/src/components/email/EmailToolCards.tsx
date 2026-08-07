@@ -22,13 +22,10 @@
  * current selection — so they work in the chat app too.
  */
 
+import Button from "@/components/ui/Button";
+import AppIcon from "@/components/Icon";
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import {
-  PenLine, Sparkles, CheckCircle2, Loader2, Send, Reply, Mail, MailOpen, Tag,
-  Archive, FolderInput, Trash2, X, RefreshCw, ExternalLink, Settings2, BookOpen,
-  Clock, Wrench, Search, ChevronDown, Star, Layers,
-} from "lucide-react";
 import type { ToolEvent } from "@/components/MarkdownMessage";
 import {
   saveDraftText, sendDraft, deleteRule, listRules, updateRule,
@@ -72,24 +69,24 @@ const GROUPS_TOOL = "present_email_groups";
  *  These used to render NO card, so their output only appeared in the thinking
  *  timeline ("does not show properly"). They render as a titled, scrollable
  *  full-text card (InfoResultCard) so the whole list is visible. */
-const INFO_META: Record<string, { icon: React.ElementType; label: string }> = {
-  list_accounts: { icon: Mail, label: "Accounts" },
-  get_unread_count: { icon: Mail, label: "Unread counts" },
-  generate_writing_style: { icon: PenLine, label: "Writing style" },
-  list_labels: { icon: Tag, label: "Labels" },
-  list_artifacts: { icon: BookOpen, label: "Files" },
-  get_sender_categories: { icon: Tag, label: "Sender categories" },
-  list_senders: { icon: Mail, label: "Top senders" },
-  get_rules_and_settings: { icon: Sparkles, label: "Rules & settings" },
-  list_rule_history: { icon: Clock, label: "Rule history" },
-  list_knowledge: { icon: BookOpen, label: "Knowledge base" },
-  list_cold_senders: { icon: Archive, label: "Cold senders" },
-  suggest_unsubscribes: { icon: Archive, label: "Unsubscribe candidates" },
-  get_account_overview: { icon: Mail, label: "Account overview" },
-  digest: { icon: Send, label: "Digest" },
-  get_digest: { icon: Send, label: "Digest" },
-  create_rules_from_prompt: { icon: Sparkles, label: "Rules created" },
-  test_rule_match: { icon: Wrench, label: "Rule match test" },
+const INFO_META: Record<string, { icon: string; label: string }> = {
+  list_accounts: { icon: "Mail", label: "Accounts" },
+  get_unread_count: { icon: "Mail", label: "Unread counts" },
+  generate_writing_style: { icon: "PenLine", label: "Writing style" },
+  list_labels: { icon: "Tag", label: "Labels" },
+  list_artifacts: { icon: "BookOpen", label: "Files" },
+  get_sender_categories: { icon: "Tag", label: "Sender categories" },
+  list_senders: { icon: "Mail", label: "Top senders" },
+  get_rules_and_settings: { icon: "Sparkles", label: "Rules & settings" },
+  list_rule_history: { icon: "Clock", label: "Rule history" },
+  list_knowledge: { icon: "BookOpen", label: "Knowledge base" },
+  list_cold_senders: { icon: "Archive", label: "Cold senders" },
+  suggest_unsubscribes: { icon: "Archive", label: "Unsubscribe candidates" },
+  get_account_overview: { icon: "Mail", label: "Account overview" },
+  digest: { icon: "Send", label: "Digest" },
+  get_digest: { icon: "Send", label: "Digest" },
+  create_rules_from_prompt: { icon: "Sparkles", label: "Rules created" },
+  test_rule_match: { icon: "Wrench", label: "Rule match test" },
 };
 const INFO_TOOLS = new Set(Object.keys(INFO_META));
 
@@ -98,16 +95,16 @@ const INFO_TOOLS = new Set(Object.keys(INFO_META));
  *  and rule classification pins from Fix (list_rule_patterns) — each with its own
  *  delete endpoint. */
 type PatternMeta = {
-  icon: React.ElementType;
+  icon: string;
   label: string;
   remove: (id: string) => Promise<void>;
 };
 const PATTERN_META: Record<string, PatternMeta> = {
   list_learned_patterns: {
-    icon: PenLine, label: "Learned writing preferences", remove: deleteLearnedPattern,
+    icon: "PenLine", label: "Learned writing preferences", remove: deleteLearnedPattern,
   },
   list_rule_patterns: {
-    icon: Sparkles, label: "Learned rule patterns", remove: deleteRulePattern,
+    icon: "Sparkles", label: "Learned rule patterns", remove: deleteRulePattern,
   },
 };
 // The consolidated list_patterns tool selects the store via its `kind` arg;
@@ -125,45 +122,45 @@ function patternMeta(e: ToolEvent): PatternMeta {
 }
 
 /** Friendly label + icon for the generic confirmation card (mutating tools). */
-const ACTION_META: Record<string, { icon: React.ElementType; label: string; danger?: boolean }> = {
-  manage_inbox: { icon: Archive, label: "Inbox updated" },
-  apply_labels: { icon: Tag, label: "Labels updated" },
-  move_to_folder: { icon: FolderInput, label: "Moved to folder" },
-  create_label: { icon: Tag, label: "Label ready" },
-  send_email: { icon: Send, label: "Email sent" },
-  send_reply: { icon: Reply, label: "Reply sent" },
-  send_draft: { icon: Send, label: "Draft sent" },
-  delete_rule: { icon: Trash2, label: "Rule deleted", danger: true },
-  reset_rules: { icon: Sparkles, label: "Rules reset", danger: true },
-  run_rules_now: { icon: Wrench, label: "Rules run" },
-  run_rules: { icon: Wrench, label: "Rules run" },
-  update_rule_state: { icon: Sparkles, label: "Rule updated" },
-  resolve_execution: { icon: CheckCircle2, label: "Execution resolved" },
-  learn_rule_pattern: { icon: Sparkles, label: "Pattern learned" },
-  install_default_rules: { icon: Sparkles, label: "Default rules installed" },
-  process_past_emails: { icon: Clock, label: "Processing past mail" },
-  approve_execution: { icon: CheckCircle2, label: "Approved" },
-  reject_execution: { icon: X, label: "Rejected" },
-  undo_execution: { icon: RefreshCw, label: "Undone" },
-  import_artifact: { icon: BookOpen, label: "Artifact imported" },
-  add_knowledge: { icon: BookOpen, label: "Knowledge added" },
-  update_knowledge: { icon: BookOpen, label: "Knowledge updated" },
-  save_knowledge: { icon: BookOpen, label: "Knowledge saved" },
-  delete_knowledge: { icon: Trash2, label: "Knowledge deleted", danger: true },
-  delete_learned_pattern: { icon: Trash2, label: "Pattern forgotten" },
-  delete_rule_pattern: { icon: Trash2, label: "Pattern forgotten" },
-  forget_pattern: { icon: Trash2, label: "Pattern forgotten" },
-  find_follow_ups: { icon: Clock, label: "Follow-ups scanned" },
-  mark_thread_done: { icon: CheckCircle2, label: "Thread updated" },
-  reclassify_reply_zero: { icon: RefreshCw, label: "Reply Zero reclassifying" },
-  unsubscribe_sender: { icon: Archive, label: "Unsubscribed", danger: true },
-  keep_newsletter: { icon: Mail, label: "Newsletter kept" },
-  set_cold_sender: { icon: Archive, label: "Cold sender updated" },
-  set_sender_status: { icon: Tag, label: "Sender updated" },
-  categorize_senders: { icon: Tag, label: "Categorizing senders" },
-  send_digest: { icon: Send, label: "Digest sent" },
-  sync_account: { icon: RefreshCw, label: "Syncing" },
-  resync_account: { icon: RefreshCw, label: "Re-syncing" },
+const ACTION_META: Record<string, { icon: string; label: string; danger?: boolean }> = {
+  manage_inbox: { icon: "Archive", label: "Inbox updated" },
+  apply_labels: { icon: "Tag", label: "Labels updated" },
+  move_to_folder: { icon: "FolderInput", label: "Moved to folder" },
+  create_label: { icon: "Tag", label: "Label ready" },
+  send_email: { icon: "Send", label: "Email sent" },
+  send_reply: { icon: "Reply", label: "Reply sent" },
+  send_draft: { icon: "Send", label: "Draft sent" },
+  delete_rule: { icon: "Trash2", label: "Rule deleted", danger: true },
+  reset_rules: { icon: "Sparkles", label: "Rules reset", danger: true },
+  run_rules_now: { icon: "Wrench", label: "Rules run" },
+  run_rules: { icon: "Wrench", label: "Rules run" },
+  update_rule_state: { icon: "Sparkles", label: "Rule updated" },
+  resolve_execution: { icon: "CheckCircle2", label: "Execution resolved" },
+  learn_rule_pattern: { icon: "Sparkles", label: "Pattern learned" },
+  install_default_rules: { icon: "Sparkles", label: "Default rules installed" },
+  process_past_emails: { icon: "Clock", label: "Processing past mail" },
+  approve_execution: { icon: "CheckCircle2", label: "Approved" },
+  reject_execution: { icon: "X", label: "Rejected" },
+  undo_execution: { icon: "RefreshCw", label: "Undone" },
+  import_artifact: { icon: "BookOpen", label: "Artifact imported" },
+  add_knowledge: { icon: "BookOpen", label: "Knowledge added" },
+  update_knowledge: { icon: "BookOpen", label: "Knowledge updated" },
+  save_knowledge: { icon: "BookOpen", label: "Knowledge saved" },
+  delete_knowledge: { icon: "Trash2", label: "Knowledge deleted", danger: true },
+  delete_learned_pattern: { icon: "Trash2", label: "Pattern forgotten" },
+  delete_rule_pattern: { icon: "Trash2", label: "Pattern forgotten" },
+  forget_pattern: { icon: "Trash2", label: "Pattern forgotten" },
+  find_follow_ups: { icon: "Clock", label: "Follow-ups scanned" },
+  mark_thread_done: { icon: "CheckCircle2", label: "Thread updated" },
+  reclassify_reply_zero: { icon: "RefreshCw", label: "Reply Zero reclassifying" },
+  unsubscribe_sender: { icon: "Archive", label: "Unsubscribed", danger: true },
+  keep_newsletter: { icon: "Mail", label: "Newsletter kept" },
+  set_cold_sender: { icon: "Archive", label: "Cold sender updated" },
+  set_sender_status: { icon: "Tag", label: "Sender updated" },
+  categorize_senders: { icon: "Tag", label: "Categorizing senders" },
+  send_digest: { icon: "Send", label: "Digest sent" },
+  sync_account: { icon: "RefreshCw", label: "Syncing" },
+  resync_account: { icon: "RefreshCw", label: "Re-syncing" },
 };
 
 /** True when this completed tool event has a rich card to render. read_email is
@@ -216,7 +213,7 @@ function ReadGroupCard({ events }: { events: ToolEvent[] }) {
   return (
     <ToolCardShell
       title={`Read ${n} message${n > 1 ? "s" : ""}`}
-      icon={<MailOpen size={12} />}
+      icon={<AppIcon name="MailOpen" size={12} />}
       defaultCollapsed
       onDismiss={() => events.forEach((e) => dismissToolCard(e.id))}
     >
@@ -245,7 +242,7 @@ function ThreadCard({ event, accountId }: { event: ToolEvent; accountId?: string
   return (
     <ToolCardShell
       title={title}
-      icon={<Mail size={12} />}
+      icon={<AppIcon name="Mail" size={12} />}
       defaultCollapsed
       onDismiss={() => dismissToolCard(event.id)}
     >
@@ -295,7 +292,7 @@ function ThreadBody({ event, accountId }: { event: ToolEvent; accountId?: string
   if (state === "loading") {
     return (
       <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground py-2">
-        <Loader2 size={11} className="animate-spin" /> Loading thread…
+        <AppIcon name="Loader2" size={11} className="animate-spin" /> Loading thread…
       </div>
     );
   }
@@ -539,7 +536,7 @@ function DraftResultCard({
   return (
     <div className="rounded-lg border border-primary/40 bg-primary/5 px-2.5 py-2">
       <div className="flex items-center gap-1.5 mb-1.5">
-        <PenLine size={12} className="text-primary" />
+        <AppIcon name="PenLine" size={12} className="text-primary" />
         <span className="text-[11px] font-medium text-foreground">Draft reply</span>
       </div>
       <textarea
@@ -552,11 +549,11 @@ function DraftResultCard({
       <div className="flex items-center gap-2 mt-1.5">
         {state === "sent" ? (
           <span className="flex items-center gap-1 text-[10px] text-emerald-500">
-            <Send size={11} /> Sent
+            <AppIcon name="Send" size={11} /> Sent
           </span>
         ) : state === "saved" ? (
           <span className="flex items-center gap-1 text-[10px] text-emerald-500">
-            <CheckCircle2 size={11} /> Saved to Drafts
+            <AppIcon name="CheckCircle2" size={11} /> Saved to Drafts
           </span>
         ) : (
           <>
@@ -565,17 +562,13 @@ function DraftResultCard({
               disabled={!canAct || state === "saving" || state === "sending"}
               className="flex items-center gap-1 text-[10px] px-2 py-1 rounded-md border border-border text-foreground hover:bg-secondary disabled:opacity-50"
             >
-              {state === "saving" ? <Loader2 size={11} className="animate-spin" /> : <PenLine size={11} />}
+              {state === "saving" ? <AppIcon name="Loader2" size={11} className="animate-spin" /> : <AppIcon name="PenLine" size={11} />}
               Save to Drafts
             </button>
-            <button
-              onClick={send}
-              disabled={!canAct || state === "saving" || state === "sending"}
-              className="flex items-center gap-1 text-[10px] px-2 py-1 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
-            >
-              {state === "sending" ? <Loader2 size={11} className="animate-spin" /> : <Send size={11} />}
+            <Button size="none" radius="keep" layout="flex items-center" onClick={send} disabled={!canAct || state === "saving" || state === "sending"} className="gap-1 text-[10px] px-2 py-1 rounded-md">
+              {state === "sending" ? <AppIcon name="Loader2" size={11} className="animate-spin" /> : <AppIcon name="Send" size={11} />}
               Send
-            </button>
+            </Button>
           </>
         )}
         {state === "error" && (
@@ -671,7 +664,7 @@ function RuleResultCard({
   return (
     <div className="rounded-lg border border-primary/40 bg-primary/5 px-2.5 py-2">
       <div className="flex items-center gap-2 pr-5">
-        <Sparkles size={13} className="text-primary flex-shrink-0" />
+        <AppIcon name="Sparkles" size={13} className="text-primary flex-shrink-0" />
         <div className="min-w-0 flex-1">
           <div className="text-[11px] font-medium text-foreground">
             {created ? "Created rule" : "Updated rule"}: {name}
@@ -697,7 +690,7 @@ function RuleResultCard({
             </button>
           </div>
         )}
-        {state === "busy" && <Loader2 size={12} className="animate-spin text-muted-foreground" />}
+        {state === "busy" && <AppIcon name="Loader2" size={12} className="animate-spin text-muted-foreground" />}
       </div>
 
       {/* When → Then summary (from the tool-call args). For update_rule these
@@ -787,13 +780,13 @@ function SettingsUpdatedCard({ event: e }: { event: ToolEvent }) {
   return (
     <div className="rounded-lg border border-primary/40 bg-primary/5 px-2.5 py-2">
       <div className="flex items-center gap-2 pr-5">
-        <Settings2 size={13} className="text-primary flex-shrink-0" />
+        <AppIcon name="Settings2" size={13} className="text-primary flex-shrink-0" />
         <span className="text-[11px] font-medium text-foreground flex-1">Settings updated</span>
         <button
           onClick={() => router.push("/email")}
           className="flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded border border-border text-muted-foreground hover:text-foreground hover:bg-secondary"
         >
-          <ExternalLink size={10} /> Open
+          <AppIcon name="ExternalLink" size={10} /> Open
         </button>
       </div>
       {changed.length > 0 && (
@@ -870,13 +863,13 @@ function parseEmailRows(result: string): ParsedRow[] {
   return rows;
 }
 
-const LIST_META: Record<string, { icon: React.ElementType; label: string }> = {
-  query_inbox: { icon: Mail, label: "Inbox results" },
-  find_priority: { icon: Clock, label: "Priority emails" },
-  get_important_emails: { icon: Clock, label: "Important to check" },
-  search_emails: { icon: Search, label: "Search results" },
-  find_urgent: { icon: Clock, label: "Urgent / needs attention" },
-  find_needs_reply: { icon: Reply, label: "Needs a reply" },
+const LIST_META: Record<string, { icon: string; label: string }> = {
+  query_inbox: { icon: "Mail", label: "Inbox results" },
+  find_priority: { icon: "Clock", label: "Priority emails" },
+  get_important_emails: { icon: "Clock", label: "Important to check" },
+  search_emails: { icon: "Search", label: "Search results" },
+  find_urgent: { icon: "Clock", label: "Urgent / needs attention" },
+  find_needs_reply: { icon: "Reply", label: "Needs a reply" },
 };
 
 /** Short per-tool chip shown on a row when several list tools are merged into
@@ -958,13 +951,13 @@ function EmailListCard({ events }: { events: ToolEvent[] }) {
   const distinctProv = new Set(rows.flatMap((r) => r.prov ?? []));
   const showProv = multi || distinctProv.size > 1;
   const meta = !multi
-    ? LIST_META[names[0]] ?? { icon: Mail, label: "Emails" }
+    ? LIST_META[names[0]] ?? { icon: "Mail", label: "Emails" }
     : names.some((n) =>
           n === "find_priority" || n === "get_important_emails" ||
           n === "find_needs_reply" || n === "find_urgent")
-      ? { icon: Clock, label: "High-priority emails" }
-      : { icon: Mail, label: "Emails" };
-  const Icon = meta.icon;
+      ? { icon: "Clock", label: "High-priority emails" }
+      : { icon: "Mail", label: "Emails" };
+  const iconName = meta.icon;
   const shown = expanded ? rows : rows.slice(0, 5);
 
   const set = (id: string, s: RowStatus) =>
@@ -1000,7 +993,7 @@ function EmailListCard({ events }: { events: ToolEvent[] }) {
     <div className="rounded-lg border border-sidebar-border bg-secondary/40 px-2.5 py-2">
       {/* pr-5 leaves room for the dismiss (X) overlay at the card's corner. */}
       <div className="flex items-center gap-1.5 mb-1.5 pr-5">
-        <Icon size={12} className="text-primary" />
+        <AppIcon name={iconName} size={12} className="text-primary" />
         <span className="text-[11px] font-medium text-foreground">{meta.label}</span>
         <span className="text-[10px] text-muted-foreground">({rows.length})</span>
         {actionable.length > 1 && (
@@ -1010,14 +1003,14 @@ function EmailListCard({ events }: { events: ToolEvent[] }) {
               title="Mark all as read"
               className="flex items-center gap-0.5 text-[9px] px-1.5 py-0.5 rounded border border-border text-muted-foreground hover:text-foreground hover:bg-secondary"
             >
-              <MailOpen size={10} /> Read all
+              <AppIcon name="MailOpen" size={10} /> Read all
             </button>
             <button
               onClick={() => actionable.forEach((r) => archive(r.id))}
               title="Archive all"
               className="flex items-center gap-0.5 text-[9px] px-1.5 py-0.5 rounded border border-border text-muted-foreground hover:text-foreground hover:bg-secondary"
             >
-              <Archive size={10} /> Archive all
+              <AppIcon name="Archive" size={10} /> Archive all
             </button>
           </div>
         )}
@@ -1124,7 +1117,7 @@ function EmailGroupsCard({ event: e }: { event: ToolEvent }) {
   return (
     <div className="rounded-lg border border-sidebar-border bg-secondary/40 px-2.5 py-2 min-w-0 overflow-hidden">
       <div className="flex items-center gap-1.5 mb-2 pr-5">
-        <Layers size={12} className="text-primary" />
+        <AppIcon name="Layers" size={12} className="text-primary" />
         <span className="text-[11px] font-medium text-foreground">
           Categorized emails
         </span>
@@ -1173,7 +1166,7 @@ function GroupSection({
           aria-expanded={open}
           className="flex items-center gap-1.5 flex-1 min-w-0 text-left"
         >
-          <ChevronDown
+          <AppIcon name="ChevronDown"
             size={11}
             className={`text-muted-foreground flex-shrink-0 transition-transform ${open ? "" : "-rotate-90"}`}
           />
@@ -1196,14 +1189,14 @@ function GroupSection({
               title="Mark all in this group as read"
               className="flex items-center gap-0.5 text-[9px] px-1.5 py-0.5 rounded border border-border text-muted-foreground hover:text-foreground hover:bg-secondary"
             >
-              <MailOpen size={10} /> Read all
+              <AppIcon name="MailOpen" size={10} /> Read all
             </button>
             <button
               onClick={() => actionable.forEach((r) => onArchive(r.id))}
               title="Archive all in this group"
               className="flex items-center gap-0.5 text-[9px] px-1.5 py-0.5 rounded border border-border text-muted-foreground hover:text-foreground hover:bg-secondary"
             >
-              <Archive size={10} /> Archive all
+              <AppIcon name="Archive" size={10} /> Archive all
             </button>
           </div>
         )}
@@ -1322,7 +1315,7 @@ function EmailRow({
           aria-expanded={open}
           className="flex items-center gap-1.5 flex-1 min-w-0 text-left px-1.5 py-1 rounded-md hover:bg-secondary/60"
         >
-          <ChevronDown
+          <AppIcon name="ChevronDown"
             size={11}
             className={`text-muted-foreground flex-shrink-0 transition-transform ${open ? "" : "-rotate-90"}`}
           />
@@ -1361,10 +1354,10 @@ function EmailRow({
         <div className="flex items-center flex-shrink-0 mr-0.5">
           {done ? (
             <span className="flex items-center gap-0.5 text-[9px] text-emerald-500 px-1">
-              <CheckCircle2 size={10} /> {archived ? "Archived" : "Read"}
+              <AppIcon name="CheckCircle2" size={10} /> {archived ? "Archived" : "Read"}
             </span>
           ) : status === "busy" ? (
-            <Loader2 size={12} className="animate-spin text-muted-foreground mx-1" />
+            <AppIcon name="Loader2" size={12} className="animate-spin text-muted-foreground mx-1" />
           ) : (
             <>
               <button
@@ -1377,35 +1370,20 @@ function EmailRow({
                 }`}
               >
                 {catBusy ? (
-                  <Loader2 size={11} className="animate-spin" />
+                  <AppIcon name="Loader2" size={11} className="animate-spin" />
                 ) : (
-                  <Tag size={11} />
+                  <AppIcon name="Tag" size={11} />
                 )}
               </button>
-              <button
-                onClick={markRead}
-                title="Mark as read"
-                aria-label="Mark as read"
-                className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-secondary"
-              >
-                <MailOpen size={11} />
-              </button>
-              <button
-                onClick={archive}
-                title="Archive"
-                aria-label="Archive"
-                className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-secondary"
-              >
-                <Archive size={11} />
-              </button>
-              <button
-                onClick={() => openEmail(row.id)}
-                title="Open in inbox"
-                aria-label="Open in inbox"
-                className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-secondary"
-              >
-                <ExternalLink size={11} />
-              </button>
+              <Button variant="ghost" size="icon-xs" radius="keep" layout="" onClick={markRead} title="Mark as read" aria-label="Mark as read" className="rounded">
+                <AppIcon name="MailOpen" size={11} />
+              </Button>
+              <Button variant="ghost" size="icon-xs" radius="keep" layout="" onClick={archive} title="Archive" aria-label="Archive" className="rounded">
+                <AppIcon name="Archive" size={11} />
+              </Button>
+              <Button variant="ghost" size="icon-xs" radius="keep" layout="" onClick={() => openEmail(row.id)} title="Open in inbox" aria-label="Open in inbox" className="rounded">
+                <AppIcon name="ExternalLink" size={11} />
+              </Button>
             </>
           )}
         </div>
@@ -1428,7 +1406,7 @@ function EmailRow({
         <div className="px-2 pb-2 pt-1.5 border-t border-border/50">
           {loading ? (
             <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground py-2">
-              <Loader2 size={11} className="animate-spin" /> Loading email…
+              <AppIcon name="Loader2" size={11} className="animate-spin" /> Loading email…
             </div>
           ) : error ? (
             <div className="text-[10px] text-muted-foreground py-1">
@@ -1471,7 +1449,7 @@ function EmailPreviewCard({ event: e }: { event: ToolEvent }) {
     return (
       <div className="rounded-lg border border-sidebar-border bg-secondary/40 px-2.5 py-2">
         <div className="flex items-center gap-2">
-          <Mail size={13} className="text-primary flex-shrink-0" />
+          <AppIcon name="Mail" size={13} className="text-primary flex-shrink-0" />
           <div className="min-w-0 flex-1">
             <div className="text-[11px] font-medium text-foreground truncate">{subject}</div>
             {from && <div className="text-[10px] text-muted-foreground truncate">{from}</div>}
@@ -1516,7 +1494,7 @@ function LabelUpdateCard({ event: e }: { event: ToolEvent }) {
       }`}
     >
       <div className="flex items-center gap-1.5">
-        <Tag size={12} className={failed ? "text-destructive" : "text-primary"} />
+        <AppIcon name="Tag" size={12} className={failed ? "text-destructive" : "text-primary"} />
         <span className="text-[11px] font-medium text-foreground">
           {failed ? "Couldn't update labels" : "Labels updated"}
           {count > 0 && (
@@ -1556,15 +1534,15 @@ function LabelUpdateCard({ event: e }: { event: ToolEvent }) {
 /** Per-action label/icon for manage_inbox (archive/trash/read/star/…). */
 const INBOX_ACTION_META: Record<
   string,
-  { icon: React.ElementType; verb: string; danger?: boolean }
+  { icon: string; verb: string; danger?: boolean }
 > = {
-  archive: { icon: Archive, verb: "Archived" },
-  trash: { icon: Trash2, verb: "Trashed", danger: true },
-  read: { icon: MailOpen, verb: "Marked read" },
-  unread: { icon: Mail, verb: "Marked unread" },
-  star: { icon: Star, verb: "Starred" },
-  unstar: { icon: Star, verb: "Unstarred" },
-  move: { icon: FolderInput, verb: "Moved" },
+  archive: { icon: "Archive", verb: "Archived" },
+  trash: { icon: "Trash2", verb: "Trashed", danger: true },
+  read: { icon: "MailOpen", verb: "Marked read" },
+  unread: { icon: "Mail", verb: "Marked unread" },
+  star: { icon: "Star", verb: "Starred" },
+  unstar: { icon: "Star", verb: "Unstarred" },
+  move: { icon: "FolderInput", verb: "Moved" },
 };
 
 /** manage_inbox result — names the action + email count ("Archived 3 emails")
@@ -1578,7 +1556,7 @@ function ManageInboxCard({ event: e }: { event: ToolEvent }) {
   // Unknown action or no count → fall back to the generic confirmation.
   if (!meta || count === 0) return <ActionResultCard event={e} />;
   const failed = e.status === "error";
-  const Icon = failed ? X : meta.icon;
+  const iconName = failed ? "X" : meta.icon;
 
   return (
     <div
@@ -1596,7 +1574,7 @@ function ManageInboxCard({ event: e }: { event: ToolEvent }) {
             failed ? "text-destructive" : meta.danger ? "text-amber-500" : "text-emerald-500"
           }
         >
-          <Icon size={13} />
+          <AppIcon name={iconName} size={13} />
         </span>
         <span className="text-[11px] font-medium text-foreground">
           {failed ? `Couldn't ${meta.verb.toLowerCase()}` : meta.verb}{" "}
@@ -1644,9 +1622,9 @@ function PatternListCard({
   meta,
 }: {
   event: ToolEvent;
-  meta: { icon: React.ElementType; label: string; remove: (id: string) => Promise<void> };
+  meta: { icon: string; label: string; remove: (id: string) => Promise<void> };
 }) {
-  const Icon = meta.icon;
+  const iconName = meta.icon;
   const [rows, setRows] = useState<PatternRow[]>(() => parsePatternRows(e.result || ""));
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState(false);
@@ -1669,7 +1647,7 @@ function PatternListCard({
     return (
       <ToolCardShell
         title={meta.label}
-        icon={<Icon size={12} />}
+        icon={<AppIcon name={iconName} size={12} />}
         onDismiss={() => dismissToolCard(e.id)}
       >
         <div className="text-[11px] text-muted-foreground whitespace-pre-wrap break-words">
@@ -1682,7 +1660,7 @@ function PatternListCard({
   return (
     <ToolCardShell
       title={`${meta.label} (${rows.length})`}
-      icon={<Icon size={12} />}
+      icon={<AppIcon name={iconName} size={12} />}
       onDismiss={() => dismissToolCard(e.id)}
     >
       <div className="space-y-1">
@@ -1710,9 +1688,9 @@ function PatternListCard({
               className="p-0.5 rounded text-muted-foreground hover:text-destructive hover:bg-destructive/10 flex-shrink-0 disabled:opacity-50"
             >
               {busy === r.id ? (
-                <Loader2 size={11} className="animate-spin" />
+                <AppIcon name="Loader2" size={11} className="animate-spin" />
               ) : (
-                <Trash2 size={11} />
+                <AppIcon name="Trash2" size={11} />
               )}
             </button>
           </div>
@@ -1852,7 +1830,7 @@ function RulesOverviewCard({
   return (
     <ToolCardShell
       title={`Rules & settings (${rules.length})`}
-      icon={<Sparkles size={12} />}
+      icon={<AppIcon name="Sparkles" size={12} />}
       onDismiss={() => dismissToolCard(e.id)}
     >
       <div className="space-y-1 max-h-80 overflow-y-auto overflow-x-hidden scrollbar-thin pr-0.5">
@@ -1874,7 +1852,7 @@ function RulesOverviewCard({
                 </span>
               )}
               {busy === r.id ? (
-                <Loader2
+                <AppIcon name="Loader2"
                   size={11}
                   className="animate-spin text-muted-foreground flex-shrink-0"
                 />
@@ -1904,7 +1882,7 @@ function RulesOverviewCard({
                     aria-label="Delete this rule"
                     className="p-0.5 rounded text-muted-foreground hover:text-destructive hover:bg-destructive/10 flex-shrink-0"
                   >
-                    <Trash2 size={11} />
+                    <AppIcon name="Trash2" size={11} />
                   </button>
                 </>
               )}
@@ -1954,7 +1932,7 @@ function LabelsCard({ event: e }: { event: ToolEvent }) {
   return (
     <ToolCardShell
       title={`Labels (${names.length})`}
-      icon={<Tag size={12} />}
+      icon={<AppIcon name="Tag" size={12} />}
       onDismiss={() => dismissToolCard(e.id)}
     >
       <div className="flex flex-wrap gap-1">
@@ -1974,27 +1952,27 @@ function LabelsCard({ event: e }: { event: ToolEvent }) {
  *  collapse + dismiss from ToolCardShell. Counts the bullet lines for the title.
  */
 /** Label for the consolidated list_senders tool, chosen by its `view` arg. */
-const SENDER_VIEW_META: Record<string, { icon: React.ElementType; label: string }> = {
-  top: { icon: Mail, label: "Top senders" },
-  categories: { icon: Tag, label: "Sender categories" },
-  unsubscribe: { icon: Archive, label: "Unsubscribe candidates" },
-  cold: { icon: Archive, label: "Cold senders" },
+const SENDER_VIEW_META: Record<string, { icon: string; label: string }> = {
+  top: { icon: "Mail", label: "Top senders" },
+  categories: { icon: "Tag", label: "Sender categories" },
+  unsubscribe: { icon: "Archive", label: "Unsubscribe candidates" },
+  cold: { icon: "Archive", label: "Cold senders" },
 };
 
 function InfoResultCard({ event: e }: { event: ToolEvent }) {
-  let meta = INFO_META[e.name] ?? { icon: Wrench, label: e.name.replace(/_/g, " ") };
+  let meta = INFO_META[e.name] ?? { icon: "Wrench", label: e.name.replace(/_/g, " ") };
   if (e.name === "list_senders") {
     const view = String((e.args as Record<string, unknown> | undefined)?.view ?? "top");
     meta = SENDER_VIEW_META[view] ?? SENDER_VIEW_META.top;
   }
-  const Icon = meta.icon;
+  const iconName = meta.icon;
   const text = (e.result || "").trim();
   const bullets = text.split("\n").filter((l) => l.trim().startsWith("•")).length;
   const title = bullets > 0 ? `${meta.label} (${bullets})` : meta.label;
   return (
     <ToolCardShell
       title={title}
-      icon={<Icon size={12} />}
+      icon={<AppIcon name={iconName} size={12} />}
       onDismiss={() => dismissToolCard(e.id)}
     >
       <div className="text-[11px] whitespace-pre-wrap break-words text-foreground/90 max-h-72 overflow-y-auto overflow-x-hidden scrollbar-thin">
@@ -2008,9 +1986,9 @@ function InfoResultCard({ event: e }: { event: ToolEvent }) {
 
 /** Confirmation card for any mutating tool — icon + label + result summary. */
 function ActionResultCard({ event: e }: { event: ToolEvent }) {
-  const meta = ACTION_META[e.name] ?? { icon: Wrench, label: e.name.replace(/_/g, " ") };
+  const meta = ACTION_META[e.name] ?? { icon: "Wrench", label: e.name.replace(/_/g, " ") };
   const failed = e.status === "error";
-  const Icon = failed ? X : meta.icon;
+  const iconName = failed ? "X" : meta.icon;
   const result = (e.result || "").trim();
   const detail = result.length > 160 ? result.slice(0, 160) + "…" : result;
 
@@ -2030,7 +2008,7 @@ function ActionResultCard({ event: e }: { event: ToolEvent }) {
             failed ? "text-destructive" : meta.danger ? "text-amber-500" : "text-emerald-500"
           }`}
         >
-          <Icon size={13} />
+          <AppIcon name={iconName} size={13} />
         </span>
         <div className="min-w-0 flex-1">
           <div className="text-[11px] font-medium text-foreground">{meta.label}</div>

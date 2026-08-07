@@ -1,7 +1,7 @@
 "use client";
 
+import Icon from "@/components/Icon";
 import { useEffect, useState } from "react";
-import { ListFilter } from "lucide-react";
 import { useEmailStore } from "../lib/emailStore";
 import { SearchFilter, addFilter, filterKey } from "../lib/searchFilters";
 import { chipColors } from "../lib/labelColors";
@@ -149,7 +149,7 @@ export function QuickFilters() {
 
   return (
     <div className="flex items-center gap-1.5 px-3 sm:px-4 py-1.5 border-b border-border overflow-x-auto scrollbar-hide flex-shrink-0 bg-card/40">
-      <ListFilter size={13} className="text-muted-foreground flex-shrink-0" />
+      <Icon name="ListFilter" size={13} className="text-muted-foreground flex-shrink-0" />
       {visible.map(({ label, facet, f }) => {
         const active = isActive(f);
         const c = f.kind === "tag" ? chipColors(f.value, labelColors) : null;

@@ -12,8 +12,8 @@
  * rather than something you have to remember.
  */
 
+import Icon from "@/components/Icon";
 import { useEffect, useState } from "react";
-import { Check, Circle, ListChecks } from "lucide-react";
 import { getAgendaProgress } from "../lib/api";
 import type { ActionItem, AgendaProgress, MeetingDetail } from "../lib/types";
 
@@ -127,7 +127,7 @@ export default function MeetingOutcomes({
       {progress && (
         <div className="rounded-xl border border-border bg-card p-3">
           <p className="mb-2 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-            <ListChecks className="h-3.5 w-3.5" /> Agenda — what you covered
+            <Icon name="ListChecks" className="h-3.5 w-3.5" /> Agenda — what you covered
             <span className="font-mono normal-case tracking-normal opacity-70">
               {progress.covered_count} of {progress.total}
             </span>
@@ -143,9 +143,9 @@ export default function MeetingOutcomes({
                 }`}
               >
                 {it.covered ? (
-                  <Check className="h-3 w-3" />
+                  <Icon name="Check" className="h-3 w-3" />
                 ) : (
-                  <Circle className="h-3 w-3" />
+                  <Icon name="Circle" className="h-3 w-3" />
                 )}
                 {it.title}
               </span>

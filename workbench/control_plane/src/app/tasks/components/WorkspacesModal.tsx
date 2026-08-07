@@ -1,17 +1,8 @@
 "use client";
 
+import Button from "@/components/ui/Button";
+import Icon from "@/components/Icon";
 import { useState } from "react";
-import {
-  X,
-  Cloud,
-  Plus,
-  RefreshCw,
-  Trash2,
-  KeyRound,
-  Building2,
-  Check,
-  Loader2,
-} from "lucide-react";
 import { useTaskStore } from "../lib/taskStore";
 import { apiConnectWorkspace, apiListWorkspaces } from "../lib/api";
 
@@ -88,18 +79,13 @@ function WorkspacesPanel() {
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center gap-2 border-b border-border px-4 py-3">
-          <Cloud className="h-4 w-4 text-primary" />
+          <Icon name="Cloud" className="h-4 w-4 text-primary" />
           <h2 className="text-sm font-semibold text-foreground">
             PM-tool workspaces
           </h2>
-          <button
-            type="button"
-            onClick={close}
-            aria-label="Close"
-            className="tech-transition ml-auto rounded-md p-1 text-muted-foreground hover:bg-secondary hover:text-foreground"
-          >
-            <X className="h-4 w-4" />
-          </button>
+          <Button variant="ghost" size="icon-xs" radius="keep" layout="" type="button" onClick={close} aria-label="Close" className="ml-auto rounded-md">
+            <Icon name="X" className="h-4 w-4" />
+          </Button>
         </div>
 
         <div className="flex flex-col gap-4 overflow-y-auto p-4">
@@ -127,7 +113,7 @@ function WorkspacesPanel() {
                     key={a.id}
                     className="flex items-center gap-2.5 rounded-lg border border-border px-3 py-2"
                   >
-                    <Building2 className="h-4 w-4 shrink-0 text-primary/80" />
+                    <Icon name="Building2" className="h-4 w-4 shrink-0 text-primary/80" />
                     <div className="min-w-0 flex-1">
                       <p className="truncate text-[13px] font-medium text-foreground">
                         {a.label}
@@ -145,34 +131,23 @@ function WorkspacesPanel() {
                         </p>
                       )}
                     </div>
-                    <button
-                      type="button"
-                      title="Pull this workspace's tasks into the GTD views"
-                      disabled={syncing}
-                      onClick={() => void syncNow(a.id)}
-                      className="tech-transition rounded-md p-1.5 text-muted-foreground hover:bg-secondary hover:text-foreground disabled:opacity-50"
-                    >
+                    <Button variant="ghost" size="icon-sm" radius="keep" layout="" type="button" title="Pull this workspace's tasks into the GTD views" disabled={syncing} onClick={() => void syncNow(a.id)} className="rounded-md">
                       {syncing ? (
-                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        <Icon name="Loader2" className="h-3.5 w-3.5 animate-spin" />
                       ) : (
-                        <Cloud className="h-3.5 w-3.5" />
+                        <Icon name="Cloud" className="h-3.5 w-3.5" />
                       )}
-                    </button>
-                    <button
-                      type="button"
-                      title="Re-fetch projects/members/stages"
-                      onClick={() => void refreshAccountSchema(a.id)}
-                      className="tech-transition rounded-md p-1.5 text-muted-foreground hover:bg-secondary hover:text-foreground"
-                    >
-                      <RefreshCw className="h-3.5 w-3.5" />
-                    </button>
+                    </Button>
+                    <Button variant="ghost" size="icon-sm" radius="keep" layout="" type="button" title="Re-fetch projects/members/stages" onClick={() => void refreshAccountSchema(a.id)} className="rounded-md">
+                      <Icon name="RefreshCw" className="h-3.5 w-3.5" />
+                    </Button>
                     <button
                       type="button"
                       title="Disconnect workspace"
                       onClick={() => void disconnectAccount(a.id)}
                       className="tech-transition rounded-md p-1.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
                     >
-                      <Trash2 className="h-3.5 w-3.5" />
+                      <Icon name="Trash2" className="h-3.5 w-3.5" />
                     </button>
                   </div>
                 ))}
@@ -187,7 +162,7 @@ function WorkspacesPanel() {
             </h3>
             <div className="flex items-center gap-2">
               <div className="tech-transition flex flex-1 items-center gap-2 rounded-lg border border-border bg-background/60 px-3 py-2 focus-within:border-primary/50">
-                <KeyRound className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                <Icon name="KeyRound" className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                 <input
                   value={token}
                   onChange={(e) => setToken(e.target.value)}
@@ -196,19 +171,14 @@ function WorkspacesPanel() {
                   className="flex-1 bg-transparent text-base text-foreground placeholder:text-muted-foreground focus:outline-none sm:text-sm"
                 />
               </div>
-              <button
-                type="button"
-                disabled={!token.trim() || busy === "find" || backend !== "live"}
-                onClick={() => void findWorkspaces()}
-                className="tech-transition inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:opacity-40"
-              >
+              <Button size="none" layout="inline-flex items-center" type="button" disabled={!token.trim() || busy === "find" || backend !== "live"} onClick={() => void findWorkspaces()} className="shrink-0 gap-1.5 px-3 py-2 text-sm">
                 {busy === "find" ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
+                  <Icon name="Loader2" className="h-4 w-4 animate-spin" />
                 ) : (
-                  <Plus className="h-4 w-4" />
+                  <Icon name="Plus" className="h-4 w-4" />
                 )}
                 Find workspaces
-              </button>
+              </Button>
             </div>
             <p className="mt-1 px-1 text-[10px] text-muted-foreground">
               ClickUp → Settings → Apps → API Token. The token is encrypted at
@@ -235,7 +205,7 @@ function WorkspacesPanel() {
                       key={w.id}
                       className="flex items-center gap-2.5 rounded-lg border border-border px-3 py-2"
                     >
-                      <Building2 className="h-4 w-4 shrink-0 text-muted-foreground" />
+                      <Icon name="Building2" className="h-4 w-4 shrink-0 text-muted-foreground" />
                       <div className="min-w-0 flex-1">
                         <p className="truncate text-[13px] text-foreground">{w.name}</p>
                         <p className="text-[11px] text-muted-foreground">
@@ -244,7 +214,7 @@ function WorkspacesPanel() {
                       </div>
                       {already ? (
                         <span className="inline-flex items-center gap-1 text-[11px] text-success">
-                          <Check className="h-3.5 w-3.5" /> connected
+                          <Icon name="Check" className="h-3.5 w-3.5" /> connected
                         </span>
                       ) : (
                         <button
@@ -254,9 +224,9 @@ function WorkspacesPanel() {
                           className="tech-transition inline-flex items-center gap-1 rounded-md bg-primary/10 px-2.5 py-1.5 text-xs font-medium text-primary hover:bg-primary/20 disabled:opacity-50"
                         >
                           {busy === w.id ? (
-                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            <Icon name="Loader2" className="h-3.5 w-3.5 animate-spin" />
                           ) : (
-                            <Plus className="h-3.5 w-3.5" />
+                            <Icon name="Plus" className="h-3.5 w-3.5" />
                           )}
                           Connect
                         </button>

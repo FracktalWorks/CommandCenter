@@ -19,21 +19,11 @@
  * see ai-company-brain/spec_chat_ux.md.
  */
 
+import AppIcon, { themedIcon } from "@/components/Icon";
+import type { ThemedIcon } from "@/components/Icon";
 import { useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import {
-  Brain,
-  BookOpen,
-  Search,
-  SquarePen,
-  Terminal,
-  GitBranch,
-  Wrench,
-  Check,
-  X,
-  type LucideIcon,
-} from "lucide-react";
 import type { ToolEvent } from "@/components/MarkdownMessage";
 
 interface ThinkingContainerProps {
@@ -56,14 +46,14 @@ type ActionKind = "read" | "edit" | "search" | "run" | "delegate" | "think" | "o
 type IconKey = "brain" | "book" | "search" | "edit" | "terminal" | "branch" | "wrench";
 
 /** Map icon keys to their Lucide line-art components. */
-const ICON_MAP: Record<IconKey, LucideIcon> = {
-  brain: Brain,
-  book: BookOpen,
-  search: Search,
-  edit: SquarePen,
-  terminal: Terminal,
-  branch: GitBranch,
-  wrench: Wrench,
+const ICON_MAP: Record<IconKey, ThemedIcon> = {
+  brain: themedIcon("Brain"),
+  book: themedIcon("BookOpen"),
+  search: themedIcon("Search"),
+  edit: themedIcon("SquarePen"),
+  terminal: themedIcon("Terminal"),
+  branch: themedIcon("GitBranch"),
+  wrench: themedIcon("Wrench"),
 };
 
 function classifyTool(name: string): {
@@ -125,7 +115,7 @@ function ProseTimelineEntry({
 }: {
   text: string;
   live: boolean;
-  icon: LucideIcon;
+  icon: ThemedIcon;
   iconClass: string;
 }) {
   return (
@@ -478,11 +468,11 @@ export default function ThinkingContainer({
       >
         <span className="shrink-0 flex items-center justify-center w-4">
           {isActive ? (
-            hasError ? <X className="text-red-400" size={14} strokeWidth={2} /> : <Brain className="text-sky-400" size={14} strokeWidth={1.5} />
+            hasError ? <AppIcon name="X" className="text-red-400" size={14} strokeWidth={2} /> : <AppIcon name="Brain" className="text-sky-400" size={14} strokeWidth={1.5} />
           ) : hasError ? (
-            <X className="text-red-400" size={14} strokeWidth={2} />
+            <AppIcon name="X" className="text-red-400" size={14} strokeWidth={2} />
           ) : (
-            <Check className="text-emerald-500" size={14} strokeWidth={2} />
+            <AppIcon name="Check" className="text-emerald-500" size={14} strokeWidth={2} />
           )}
         </span>
         <span className={`text-xs font-medium min-w-0 truncate ${isActive ? "chat-shimmer-text" : "text-muted-foreground"}`}>
@@ -540,7 +530,7 @@ export default function ThinkingContainer({
                       key={`r-${item.blockIndex}`}
                       text={item.text}
                       live={live}
-                      icon={Brain}
+                      icon={themedIcon("Brain")}
                       iconClass={live ? "text-purple-400" : "text-muted-foreground/50"}
                     />
                   );
@@ -560,7 +550,7 @@ export default function ThinkingContainer({
                       key={`n-${item.blockIndex}`}
                       text={item.text}
                       live={live}
-                      icon={BookOpen}
+                      icon={themedIcon("BookOpen")}
                       iconClass={live ? "text-sky-400" : "text-muted-foreground/50"}
                     />
                   );
@@ -680,7 +670,7 @@ export default function ThinkingContainer({
 
                               {/* Sub-agent header */}
                               <div className="flex items-center gap-1.5 text-[10px] mb-1">
-                                <GitBranch className="text-rose-400" size={12} strokeWidth={1.5} />
+                                <AppIcon name="GitBranch" className="text-rose-400" size={12} strokeWidth={1.5} />
                                 <span className="text-rose-400 font-medium">{event.subAgentName}</span>
                                 {event.subAgentActive && (
                                   <span className="text-[9px] text-rose-400 animate-pulse">● running</span>

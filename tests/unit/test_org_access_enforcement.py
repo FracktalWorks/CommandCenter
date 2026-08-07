@@ -155,6 +155,11 @@ GATED_ROUTERS: dict[str, set[str]] = {
     # a route that lost its gate would expose another department's work, not
     # just a nav pane.
     "gateway.routes.projects": set(),
+    # The People Center's directory. Registered here rather than left out,
+    # because this registry is hand-maintained: a router absent from it is not
+    # "passing", it is unchecked — and this one serves a person's skills,
+    # capacity and open work.
+    "gateway.routes.people": set(),
     "gateway.routes.chat": set(),
     "gateway.routes.actions": set(),
     "gateway.routes.integrations": set(),

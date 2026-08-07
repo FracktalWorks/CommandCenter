@@ -34,7 +34,6 @@ an access model and an outage:
 
 from __future__ import annotations
 
-import os
 from datetime import datetime, timezone
 from typing import Any
 
@@ -44,8 +43,13 @@ from acb_auth import (
     invalidate_access,
     permission_matches,
 )
-from acb_common import get_logger, get_settings
+from acb_common import get_logger
 from fastapi import APIRouter, Depends, HTTPException
+
+# The shared gateway engine (BO-10) — see the DB section below for why the
+# names are re-exported rather than imported at each call site.
+from gateway.db import get_db  # noqa: F401
+from gateway.db import get_session_factory as _get_session_factory  # noqa: F401
 from sqlalchemy import text
 
 _log = get_logger("gateway.admin")
@@ -61,39 +65,17 @@ DEFAULT_ORG_SLUG = "default"
 NON_ASSIGNABLE_ROLES = frozenset({"agent_service"})
 
 
-# ── DB (shared pooled async engine, same recipe as routes/apps/_common.py) ───
-
-_ENGINE = None
-_SESSION_FACTORY = None
-
-
-def _get_session_factory() -> Any:
-    global _ENGINE, _SESSION_FACTORY
-    if _SESSION_FACTORY is None:
-        from sqlalchemy.ext.asyncio import (  # noqa: PLC0415
-            async_sessionmaker,
-            create_async_engine,
-        )
-
-        from gateway.db import engine_connect_args
-        settings = get_settings()
-        db_url = os.environ.get("DATABASE_URL", settings.database_url)
-        if "postgresql+psycopg" in db_url:
-            db_url = db_url.replace("postgresql+psycopg", "postgresql+asyncpg")
-        elif db_url.startswith("postgresql://"):
-            db_url = db_url.replace("postgresql://", "postgresql+asyncpg://")
-        _ENGINE = create_async_engine(
-            db_url, echo=False, pool_pre_ping=True,
-            pool_size=5, max_overflow=10, pool_recycle=1800,
-            connect_args=engine_connect_args(),
-        )
-        _SESSION_FACTORY = async_sessionmaker(_ENGINE, expire_on_commit=False)
-    return _SESSION_FACTORY
-
-
-async def get_db() -> Any:
-    """Return a new async session from the shared, pooled engine."""
-    return _get_session_factory()()
+# ── DB (the one shared gateway engine — gateway/db.py, BO-10) ────────────────
+#
+# This package used to build its own engine here, with its own pool of 5+10.
+# It now has none: `get_db` and `_get_session_factory` at the top of this module
+# are re-exports of the shared seam, so every `from ._common import get_db` in
+# this package keeps working with a single pool behind it.
+#
+# The re-export is deliberate rather than pointing each caller at `gateway.db`.
+# Sibling modules import the name from here and the tests monkeypatch it *on the
+# sibling* (`monkeypatch.setattr(groups, "get_db", ...)`), so the name has to
+# stay resolvable through this module for both to keep working.
 
 
 # ── Auth gate ───────────────────────────────────────────────────────────────

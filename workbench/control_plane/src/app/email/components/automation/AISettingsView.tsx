@@ -1,10 +1,7 @@
 "use client";
 
+import AppIcon, { themedIcon } from "@/components/Icon";
 import { useEffect, useState, useCallback } from "react";
-import {
-  Loader2, Check, X, FlaskConical,
-  History as HistoryIcon, Settings2, Sparkles, AlertTriangle,
-} from "lucide-react";
 import { getProcessPastStatus } from "../../lib/api";
 import type { ProcessPastStatus } from "../../lib/api";
 import { TestTab } from "./ai-settings/TestTab";
@@ -20,10 +17,10 @@ interface AISettingsViewProps {
 type Tab = "rules" | "test" | "history" | "settings";
 
 const TABS: { key: Tab; label: string; icon: React.ElementType }[] = [
-  { key: "rules", label: "Rules", icon: Sparkles },
-  { key: "test", label: "Test", icon: FlaskConical },
-  { key: "history", label: "History", icon: HistoryIcon },
-  { key: "settings", label: "Advanced Settings", icon: Settings2 },
+  { key: "rules", label: "Rules", icon: themedIcon("Sparkles") },
+  { key: "test", label: "Test", icon: themedIcon("FlaskConical") },
+  { key: "history", label: "History", icon: themedIcon("History") },
+  { key: "settings", label: "Advanced Settings", icon: themedIcon("Settings2") },
 ];
 
 /**
@@ -115,11 +112,11 @@ function PastJobBanner({
       <div className="max-w-3xl mx-auto w-full px-3 sm:px-5 py-2">
         <div className="flex items-center gap-2">
           {running ? (
-            <Loader2 className="animate-spin text-primary flex-shrink-0" size={14} />
+            <AppIcon name="Loader2" className="animate-spin text-primary flex-shrink-0" size={14} />
           ) : job.status === "error" ? (
-            <AlertTriangle className="text-destructive flex-shrink-0" size={14} />
+            <AppIcon name="AlertTriangle" className="text-destructive flex-shrink-0" size={14} />
           ) : (
-            <Check className="text-emerald-500 flex-shrink-0" size={14} />
+            <AppIcon name="Check" className="text-emerald-500 flex-shrink-0" size={14} />
           )}
           <span className="text-xs text-foreground min-w-0 truncate">
             {running
@@ -142,7 +139,7 @@ function PastJobBanner({
               className="text-muted-foreground hover:text-foreground flex-shrink-0"
               title="Dismiss"
             >
-              <X size={13} />
+              <AppIcon name="X" size={13} />
             </button>
           )}
         </div>

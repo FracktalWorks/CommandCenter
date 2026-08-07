@@ -84,7 +84,41 @@ def _status_wire(row: Any) -> StatusModel:
     )
 
 
-def _validate_status(kind: str, values: dict[str, Any]) -> None:
+#: D-CRM-10 — a won-type lane forecasts 100 and a lost-type lane 0.
+#:
+#: Enforced here rather than trusted downstream, and as a **422 on the
+#: contradiction** rather than a silent rewrite: probability *informs* and
+#: ``type`` *decides*, so a stage typed won at 40% cannot close a deal but it
+#: can quietly halve the weighted pipeline every forecast surface reads. The
+#: owner who typed it is the one who should be told.
+CLAMPED_PROBABILITY: dict[str, int] = {"won": 100, "lost": 0}
+
+
+#: The two fields whose movement the clamp judges. A PATCH naming neither is
+#: not a forecast decision and must never be refused on forecast grounds.
+CLAMPED_FIELDS: frozenset[str] = frozenset({"type", "probability"})
+
+
+def _effective(
+    values: dict[str, Any], existing: Any, column: str, fallback: Any,
+) -> Any:
+    """The value a write will LEAVE on the row — payload, else row, else default.
+
+    Once the clamp has decided to fire, it has to read this rather than the
+    payload alone: a PATCH naming only ``type`` and a PATCH naming only
+    ``probability`` each contradict the rule on their own, and a check that saw
+    only what was sent would wave both through and leave the row lying.
+    """
+    if column in values:
+        return values[column]
+    if existing is not None:
+        return getattr(existing, column, fallback)
+    return fallback
+
+
+def _validate_status(
+    kind: str, values: dict[str, Any], existing: Any = None,
+) -> None:
     declared = values.get("type")
     if declared is not None and declared not in STATUS_TYPES:
         raise HTTPException(
@@ -99,6 +133,54 @@ def _validate_status(kind: str, values: dict[str, Any]) -> None:
         raise HTTPException(
             status_code=422,
             detail="Lead statuses have no probability — that column is deal-only.",
+        )
+    if kind != "deal":
+        return
+    # ⚠️ **The clamp judges a TRANSITION, not a resting state.** It fires only
+    # when the payload itself names `type` or `probability`; a PATCH that
+    # touches neither is not a forecast decision and cannot be refused on
+    # forecast grounds.
+    #
+    # Reading the stored row unconditionally was a shipped defect. The Zoho
+    # importer's `ensure_status` mints an unseen stage at `probability = 0`
+    # and guesses its type from the name, so every pull can create a won-type
+    # lane at 0% — a row that already contradicts D-CRM-10 the moment it
+    # exists. Judging the resting state made those lanes **un-renameable,
+    # un-recolourable and un-reorderable**: a position-only PATCH answered 422
+    # about a probability the caller never mentioned, which aborted the
+    # settings grid's reorder loop partway and left duplicate positions
+    # behind. The rule the owner needs is "you may not MOVE a stage into a
+    # contradiction", not "you may not touch a stage that is already in one" —
+    # and f2's grid is the surface for getting out of one.
+    if not (CLAMPED_FIELDS & values.keys()):
+        return
+
+    probability = _effective(values, existing, "probability", 0)
+    if probability is None:
+        # An explicit null on a NOT NULL DEFAULT column: `insert_row` /
+        # `update_row`'s own guard owns that message, and answering it here
+        # would give one mistake two different 422s.
+        return
+    probability = int(probability)
+    if not 0 <= probability <= 100:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"A stage probability is a percentage: {probability} is outside "
+                "0-100."
+            ),
+        )
+    status_type = str(_effective(values, existing, "type", "open") or "open")
+    pinned = CLAMPED_PROBABILITY.get(status_type)
+    if pinned is not None and probability != pinned:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"A '{status_type}' stage always forecasts {pinned}% — this one "
+                f"would be left at {probability}%. Set probability to {pinned}, "
+                "or give the stage a different type (D-CRM-10: probability "
+                "informs the forecast, type decides what closes)."
+            ),
         )
 
 
@@ -147,13 +229,19 @@ async def patch_status(
     kind: str, status_id: str, payload: StatusIn,
     user: UserContext = Depends(get_current_user),
 ) -> StatusModel:
-    """Rename, recolour, retype, or reorder a lane (reorder = PATCH position)."""
+    """Rename, recolour, retype, or reorder a lane (reorder = PATCH position).
+
+    The row is loaded BEFORE the payload is validated, because D-CRM-10's clamp
+    is about the state the write leaves behind: ``{"type": "won"}`` alone and
+    ``{"probability": 40}`` alone each contradict the rule only in combination
+    with what is already stored.
+    """
     table, _ = _kind(kind)
     values = payload.model_dump(exclude_unset=True)
-    _validate_status(kind, values)
     db = await _get_db()
     try:
         row = await require_row(db, table, status_id, "Status")
+        _validate_status(kind, values, existing=row)
         if not values:
             return _status_wire(row)
         row = await update_row(db, table, status_id, values, touch=False)

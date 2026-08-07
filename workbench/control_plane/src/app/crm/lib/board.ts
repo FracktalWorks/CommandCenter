@@ -6,7 +6,7 @@
 //
 // Spec: ai-company-brain/specs/crm_app.md §5 surface 1.
 
-import type { Deal, Pipeline, PipelineLane, Status } from "./types";
+import type { Deal, Pipeline, PipelineLane, Status, StatusType } from "./types";
 
 /** A lane as the board renders it — the wire lane plus its display totals. */
 export type BoardLane = PipelineLane & {
@@ -53,6 +53,15 @@ const TYPE_TONES: Record<string, string> = {
   lost: "bg-destructive",
 };
 
+/**
+ * The colour names a lane can be set to.
+ *
+ * Derived from TONES rather than typed out again: the settings grid must not
+ * offer a colour the board cannot draw, and a second hand-kept list is how it
+ * would end up doing exactly that.
+ */
+export const TONE_COLORS: readonly string[] = Object.keys(TONES);
+
 export function statusTone(status: Pick<Status, "color" | "type">): string {
   return (
     TONES[(status.color || "").toLowerCase()] ??
@@ -76,18 +85,70 @@ export function toBoardLanes(pipeline: Pipeline | null): BoardLane[] {
     .map((lane) => ({ ...lane, tone: statusTone(lane.status) }));
 }
 
-/** The board's own total, for the header. Sums the LANE counts, which cover
+// ── Weighted ₹ (WS-26f f3, spec §5.1) ─────────────────────────────────────
+//
+// Weighted pipeline = Σ(amount × probability/100) over deals in open/ongoing
+// stages. It appears wherever money already appears: under each lane's ₹
+// total, in the board header, and in WS-26g's reports.
+
+/**
+ * The stage types a deal forecasts from.
+ *
+ * `won` is CLOSED revenue and never pipeline; `lost` is nothing; and
+ * `on_hold` — the fifth type the spec's prose never mentions — is excluded
+ * too, because a deal nobody is working is not a forecast. Mirrors
+ * `routes/crm/core.py::WEIGHTED_TYPES`; WS-26g's report block owns the
+ * cross-language parity test that holds the two together.
+ */
+export const WEIGHTED_TYPES: readonly StatusType[] = ["open", "ongoing"];
+
+/**
+ * One deal's weighted ₹.
+ *
+ * A NULL probability inherits the stage's default (§5.1). The inheritance
+ * materializes when a deal ENTERS a stage, so a NULL survives only on rows
+ * that predate a move — which is every imported deal, i.e. most of the board
+ * today. Reading them as 0% would zero the forecast on exactly those rows.
+ */
+export function weightedDeal(
+  deal: Pick<Deal, "amount" | "probability">,
+  stage: Pick<Status, "probability">
+): number {
+  const amount = deal.amount ?? 0;
+  const probability = deal.probability ?? stage.probability ?? 0;
+  return (amount * probability) / 100;
+}
+
+/**
+ * Weighted ₹ over a set of deals in one stage — the record-sheet math, and the
+ * formula the fixtures pin.
+ *
+ * ⚠️ NOT what a lane header renders: `lane.rows` is one page of the lane, so
+ * this over rows would under-report the busy lane. The gateway sends
+ * `lane.weighted` for the whole lane and that is what is displayed.
+ */
+export function weightedRows(
+  rows: Pick<Deal, "amount" | "probability">[],
+  stage: Pick<Status, "type" | "probability">
+): number {
+  if (!WEIGHTED_TYPES.includes(stage.type)) return 0;
+  return rows.reduce((total, deal) => total + weightedDeal(deal, stage), 0);
+}
+
+/** The board's own totals, for the header. Sums the LANE figures, which cover
  *  the whole lane — not the rows returned, which are one page of it. */
 export function boardTotals(lanes: BoardLane[]): {
   count: number;
   amount: number;
+  weighted: number;
 } {
   return lanes.reduce(
     (acc, lane) => ({
       count: acc.count + lane.count,
       amount: acc.amount + (lane.amount || 0),
+      weighted: acc.weighted + (lane.weighted || 0),
     }),
-    { count: 0, amount: 0 }
+    { count: 0, amount: 0, weighted: 0 }
   );
 }
 
@@ -152,6 +213,12 @@ export function applyMove(lanes: BoardLane[], move: DealMove): BoardLane[] {
     .find((deal) => deal.id === move.dealId);
   if (!moving) return lanes;
   return lanes.map((lane) => {
+    // The weighted figure moves with the card too. Leaving it until the
+    // re-read would show a lane whose ₹ total dropped and whose forecast did
+    // not — two numbers side by side disagreeing about the same drag.
+    const contribution = WEIGHTED_TYPES.includes(lane.status.type)
+      ? weightedDeal(moving, lane.status)
+      : 0;
     if (lane.status.id === move.fromStatusId) {
       const rows = lane.rows.filter((deal) => deal.id !== move.dealId);
       return {
@@ -159,6 +226,7 @@ export function applyMove(lanes: BoardLane[], move: DealMove): BoardLane[] {
         rows,
         count: Math.max(0, lane.count - 1),
         amount: lane.amount - (moving.amount || 0),
+        weighted: Math.max(0, lane.weighted - contribution),
       };
     }
     if (lane.status.id === move.toStatusId) {
@@ -167,6 +235,7 @@ export function applyMove(lanes: BoardLane[], move: DealMove): BoardLane[] {
         rows: [{ ...moving, status_id: move.toStatusId }, ...lane.rows],
         count: lane.count + 1,
         amount: lane.amount + (moving.amount || 0),
+        weighted: lane.weighted + contribution,
       };
     }
     return lane;

@@ -42,12 +42,27 @@
 > `tests/unit/test_crm_email_timeline.py` (30 cases; two of them are the
 > mutation fence for the scoping rule). · **WS-26d write half: 🟡 SPEC.**
 > · **WS-26e: 🟡 SPEC, nothing built.**
-> · **WS-26f–h (pipeline truth + settings UI · forecast & funnel · stage discipline):
+> **26f** (branch `ws-26f-pipeline-truth`) — 🟢 **BUILT 2026-08-07, NOT RUN.** f1
+> `POST /crm/import/zoho/stages` (`routes/crm/stage_metadata.py`, floor
+> `admin:access:manage`, **dry-run by default**, `?apply=true` to write, >1 pipeline STOPS
+> before the DB is opened per D-CRM-11) + the two settings readers on the Zoho read client
+> (`list_deal_layouts` / `list_deal_pipelines`, with `ZohoScopeError` / `ZohoApiVersionError`
+> so no-scope, no-data and no-such-endpoint are three different reported outcomes); f2
+> `?tab=settings` — three grids over the EXISTING admin API plus D-CRM-10's clamp in
+> `admin.py::_validate_status` (won=100 / lost=0, 422 on the contradiction, read off the ROW
+> so a single-field PATCH cannot slip past it); f3 weighted ₹ per lane (a whole-lane SQL
+> aggregate, never derived from the returned page) + the board-header rollup; f4 the
+> `closed_at` proxy backfill, a **direct UPDATE that bypasses `mark_dirty_on_update`** so the
+> repair queues zero pushes. **No migration** — 144 already carried every column this needed.
+> ⚠️ **Running it against the production tenant — dry run or apply — is OWNER-GATE
+> (`work_plan.md` §6) and has NOT been done**; the expected first outcome is `no_scope`,
+> because the tenant's refresh token was never minted with `ZohoCRM.settings.*` and
+> re-minting it is the owner's act. f2's grids are the fallback that needs no token at all.
+> · **WS-26g–h (forecast & funnel · stage discipline):
 > 🟢 SPECCED 2026-08-07, dispatchable — §5.1 is the blueprint, trigger was the owner's
 > first live board session (lanes out of order, imported stages at 0% probability).
-> WS-26i (data management): 🟡 SPEC-THIN, audit-narrow before dispatch. Applying WS-26f's
-> stage repair against prod is OWNER-GATE (work_plan §6).
-> **DEMO CRITICAL PATH (owner-directed 2026-08-07, §9.0): dispatch D1 f (∥ D2 d-email) →
+> WS-26i (data management): 🟡 SPEC-THIN, audit-narrow before dispatch.
+> **DEMO CRITICAL PATH (owner-directed 2026-08-07, §9.0): ~~dispatch D1 f~~ (∥ D2 d-email) →
 > D3 g → D4 d-write → D5 d-autolead; h/i/e deferred past the demo. Full chain and all
 > gates intact — the order re-sequences, it does not thin.**
 > · **Owner:** vjvarada · **Board row:** WS-26
@@ -282,11 +297,12 @@ Modules and endpoints (all under `feature:crm` unless noted):
 |---|---|
 | `core.py` | router, engine import, models, `list_contract()` helper |
 | `records.py` | CRUD ×4: `GET/POST /crm/{leads,deals,contacts,organizations}`, `GET/PATCH/DELETE /crm/<entity>/{id}`. List contract: `q, sort, dir, page, page_size≤100`, per-entity filters (`status_id, owner, source`) → `{rows, total}`. Sort via **allowlist**, never interpolated (trycompai's `resolveOrderBy` rule). |
-| `pipeline.py` | `GET /crm/pipeline` (deals grouped by status: rows ordered per-lane, count + `SUM(amount)` per lane) · `POST /crm/leads/{id}/convert` (§3.7) · status transition inside `PATCH` writes dwell log + activity + `status_changed_at` + probability default |
+| `pipeline.py` | `GET /crm/pipeline` (deals grouped by status: rows ordered per-lane, count + `SUM(amount)` + — WS-26f f3 — `weighted` per lane, all three aggregated over the WHOLE lane rather than the returned page) · `POST /crm/leads/{id}/convert` (§3.7) · status transition inside `PATCH` writes dwell log + activity + `status_changed_at` + probability default |
 | `activities.py` | `GET /crm/<entity>/{id}/timeline` (merged: activities ∪ status changes ∪ — Phase D — linked email threads; a deal's timeline unions its `lead_id`'s history, labeled) · `POST /crm/<entity>/{id}/activities` · `PATCH/DELETE /crm/activities/{aid}` (complete task, edit note) |
 | `deal_contacts.py` *(WS-26c)* | `GET/POST /crm/deals/{id}/contacts` · `DELETE /crm/deals/{id}/contacts/{contact_id}`. §3.5's "at most one primary per deal, enforced in code" lives on `core.link_deal_contact`, which the convert path also goes through — promoting demotes the incumbent first, in the same transaction. A **new module** rather than more of `records.py`: the package's stated layout is one feature module per concern, and deal-contacts are a sub-resource with their own invariant (build-time decision C1). |
-| `admin.py` | `GET/POST/PATCH/DELETE /crm/statuses/{lead,deal}` + `/crm/lost-reasons` (reorder = PATCH `position`). Gated `feature:crm` (v1 decision D-CRM-3: the sales team manages its own pipeline; revisit when WS-24 admits colleague #1). `DELETE` on an in-use status → 409 (FK RESTRICT surfaces it). |
+| `admin.py` | `GET/POST/PATCH/DELETE /crm/statuses/{lead,deal}` + `/crm/lost-reasons` (reorder = PATCH `position`). Gated `feature:crm` (v1 decision D-CRM-3: the sales team manages its own pipeline; revisit when WS-24 admits colleague #1). `DELETE` on an in-use status → 409 (FK RESTRICT surfaces it). **WS-26f adds D-CRM-10's clamp to `_validate_status`**: probability outside 0-100 → 422, and a won-type lane that would not forecast 100 (or a lost-type one that would not forecast 0) → 422 naming the rule. It reads the state the write LEAVES — the row plus the payload — because `{"type": "won"}` alone and `{"probability": 40}` alone each contradict the rule only in combination with what is stored, so `patch_status` loads the row before validating. |
 | `import_zoho.py` | `POST /crm/import/zoho` — **gated `require_permission("admin:access:manage")`** (existing admin capability; minting nothing per `user_management_contract.md` §3). ⚠️ `integrations:use:zoho-crm` was the first choice and is **wrong**: `131_integration_memory_permissions.sql` grants `member` `integrations:use:*`, so under `permission_matches` every member would hold it — the code floor must be an admin capability; the §6 owner gate governs the *run* on top of it. §7.1. Also owns the Zoho→native **field mapping**, which `sync_zoho.py` imports rather than re-deriving. |
+| `stage_metadata.py` *(WS-26f)* | `POST /crm/import/zoho/stages` — the pipeline repair (§5.1 system 1), same `admin:access:manage` floor and the same reasoning: it rewrites the pipeline rather than a record. **Dry-run by default; `?apply=true` is the write and the registered owner gate (§6 (d)).** More than one pipeline STOPS the run before the database is opened (D-CRM-11). Also owns f4's `closed_at` proxy backfill, the one deal-row write in the package that deliberately **bypasses `core.update_row`** so it cannot dirty 500+ imported rows into the push queue. Reaches Zoho through `import_zoho._client()` — one seam, not two. |
 | `sync_zoho.py` | The two-way sync engine (§7.1's seven bullets) + `POST /crm/sync/zoho` (same `admin:access:manage` floor; runs one cycle **with or without** `CRM_ZOHO_SYNC`) + the gateway-lifespan loop, flag-gated. `execute_push` is the writer's only caller. |
 | `broker_handlers.py` | The Action-Broker gate every push crosses and the three `crm.zoho_*` handlers, registered from `main.py` exactly like `register_task_broker_handlers` (D-CRM-8). **Registers no routes** — deliberately not imported from `__init__.py`. |
 
@@ -886,7 +902,7 @@ unknown sender becomes a lead on its own.
 **Build order — strict, one reason each:**
 | # | Slice | Why here | Parallel? |
 |---|-------|----------|-----------|
-| D1 | **WS-26f** (incl. the new f4 backfill) | The board is the demo's first screen; today it is the broken part. | — |
+| D1 | **WS-26f** (incl. the new f4 backfill) — ✅ **BUILT 2026-08-07, not run** | The board is the demo's first screen; today it is the broken part. | — |
 | D2 | **WS-26d-email** | The "this is not a toy" moment. Disjoint files from D1 (`activities.py`/`Timeline.tsx` vs. importer/admin/settings). | ∥ with D1 |
 | D3 | **WS-26g** | The forecast number. **After D1** — f2 and the reports tab both extend the `page.tsx`/`urlState.ts` tab grammar, and two parallel PRs there is a needless conflict. | after D1 |
 | D4 | **WS-26d-write** | The AI-creates-a-lead demo beat. Lives in `apps/agents/agent-crm/` — collides with nothing above. | ∥ with any |
@@ -1431,10 +1447,74 @@ user-approved write"). That difference is the whole division of labour:
 **Flipping `CRM_AUTO_LEAD` = OWNER-GATE (§6)** — and per D-CRM-9 the ON-state queues each
 auto-created lead for push into the live Zoho tenant.
 
-### WS-26f — Pipeline truth + settings UI · 🟢 AGENT-SAFE to build · 🔴 OWNER-GATE to apply against prod
+### WS-26f — Pipeline truth + settings UI · ✅ **BUILT 2026-08-07** · 🔴 **OWNER-GATE to run against prod**
 *(§5.1 system 1. Trigger: the owner's first live look, 2026-08-07 — lanes out of order,
 imported stages at 0%. Three sub-slices, one branch; f2 and f3 are useful even if f1's
 metadata probe comes back empty-handed.)*
+
+> **As built** (branch `ws-26f-pipeline-truth`, no migration — 144 already had every
+> column): `routes/crm/stage_metadata.py` (f1 + f4, registered on `core.router`,
+> reaching Zoho through `import_zoho._client()` so one seam is bound in tests),
+> `ingestion/sources/zoho/client.py` += `list_deal_layouts` / `list_deal_pipelines`
+> + `ZohoScopeError` / `ZohoApiVersionError`, `admin.py`'s D-CRM-10 clamp,
+> `pipeline.py`'s per-lane `weighted` aggregate, and on the frontend
+> `?tab=settings` (`components/PipelineSettings.tsx`, `lib/settings.ts`) plus the
+> weighted ₹ surfaces. Tests: `tests/unit/test_crm_stage_metadata.py` (new, 40),
+> clamp cases in `test_crm_routes.py`, lane cases in `test_crm_pipeline.py`,
+> `lib/settings.test.ts` (new), `board.test.ts` + `urlState.test.ts` extended.
+>
+> **Three deliberate departures from the text below, each with its reason:**
+> 1. **A created won/lost lane lands at 100/0, not "probability 0"** (step 3). The
+>    same PR makes the admin API 422 a won-type lane that does not forecast 100
+>    (D-CRM-10), so creating one at 0 would mint a row f2's own grid refuses to
+>    save. "Probability 0" still holds for every stage the probe cannot type.
+> 2. **Both settings reads go to `/crm/v8`; every record reader stays on
+>    `/crm/v2`.** `settings/pipeline` does not exist on v2, and the layouts read
+>    is scoped to the same pipeline call, so both go through one helper
+>    (`client._settings_json`) against one constant,
+>    `client.SETTINGS_API_VERSION = "v8"` — the only v8 in the tree, named once
+>    so there is exactly one thing to change. The other **eight** reads are
+>    untouched on v2 — the six module readers, `list_deleted` and `list_users`.
+>    A tenant that refuses
+>    the version raises `ZohoApiVersionError` and the run **reports it and
+>    writes nothing**; it is never walked down the version list, because the
+>    endpoint that answers on an older version is a different endpoint with
+>    different fields. ⚠️ If the first real dry run comes back with a version
+>    refusal, the thing to change is that one constant — there is no v2 layouts
+>    call to go hunting for.
+> 3. **The response key is read tolerantly** (`pipeline` then `pipelines`; a
+>    pipeline's stages from `maps` then `stages`). Misreading it is
+>    indistinguishable from "this tenant configured nothing", and both write
+>    nothing — so the cost of getting it wrong is a silent no-op, which is the one
+>    outcome this endpoint exists to prevent.
+>
+> **Review repairs, 2026-08-07 (diff review, same branch):**
+> - **The D-CRM-10 clamp judges a TRANSITION, not a resting state.** It fires
+>   only when the payload names `type` or `probability`. Reading the stored row
+>   unconditionally made the importer's own output unmanageable: `ensure_status`
+>   mints an unseen Zoho stage at probability 0 and guesses its type from the
+>   name, so a pull creates won-type lanes at 0% — and a position-only PATCH on
+>   one answered 422 about a probability the caller never mentioned, aborting
+>   f2's reorder loop partway and leaving duplicate positions. The rule is "you
+>   may not MOVE a stage into a contradiction", not "you may not touch one".
+> - **`closed_at` is absent, not zeroed, when the backfill never ran.** The stop
+>   and the unavailable outcomes return before the database is opened, and a
+>   zeroed section there reported a measurement nobody took ("0 close dates
+>   missing", next to a banner saying nothing was read). `null` is the sentinel
+>   on both sides; the UI reads it through `settings.ts::backfillRan`.
+> - **The probability probe has a fourth outcome, `unavailable`.** A refused
+>   layout read (or a tenant with no Deals layout) used to leave the probe at its
+>   `no_data` default — a claim ABOUT a layout nobody had, pointing the owner at
+>   the settings grid when the thing to change was the API version constant.
+> - **A reorder issues every PATCH and reports the failures together**
+>   (`settings.ts::applyPatches`). Stopping at the first refusal left the written
+>   rows on their new numbers and the rest on their old ones.
+> - **Deleting a lost reason is confirmed** — `crm_deals.lost_reason_id` is
+>   `ON DELETE SET NULL`, so a misclick silently strips the attribution WS-26g's
+>   lost-reason breakdown reads, and nothing on screen changes to show it. The
+>   dialog names that consequence. ⚠️ **Count-before-delete is DEFERRED** (the
+>   admin API returns no usage count for a reason, unlike the 409 that guards a
+>   status still holding deals); the confirm gate is what shipped.
 
 **Root cause, verified in code.** `import_zoho.py::_ensure_status` appends an unseen
 Zoho stage past the last `position` with `probability = 0` — the right refusal at import
@@ -1510,8 +1590,17 @@ Zoho tenant on the next cycle.
    dirty-marking path). NULL-date rows counted in the report, not invented.
 5. Settings grids render from the live GETs; reorder issues renumbered PATCHes; the
    won=100/lost=0 clamp is tested on BOTH sides (client validation message, server 422).
-6. Weighted math: pure-function tests for NULL/0/100/mixed probability and the
-   open/ongoing-only filter; lane + header render it through the BFF against fixtures.
+6. Weighted math, **split across the two places it is computed** *(amended 2026-08-07
+   by the WS-26f audit's correction C4 — the original clause said "lane + header render
+   it through the BFF against fixtures", which a rows-derived lane total would have
+   satisfied while being wrong)*: the **lane** figure is a whole-lane SQL aggregate
+   surfaced as `weighted` on `PipelineLane` (`pipeline.py` and `lib/types.ts`), because
+   `get_pipeline` caps `rows` at `per_lane` and the frontend sends no cap — a
+   rows-derived lane total is explicitly not acceptable, and the lane number is bound by
+   tests against the SQL (including the `COALESCE` onto the stage default). The **pure
+   function** stays in `board.ts` for the header rollup over lanes and the record-sheet
+   math, bound by fixture tests for NULL/0/100/mixed probability and the
+   open/ongoing-only filter — `on_hold` excluded, with its own named assertion.
 7. Running `?apply=true` against prod is **OWNER-GATE** (work_plan §6) — everything
    before that line is agent-safe.
 

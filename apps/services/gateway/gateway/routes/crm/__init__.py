@@ -22,6 +22,12 @@ at startup exactly the way it calls the tasks app's.
 ``deal_contacts.py`` is WS-26c's API addendum — the read/write surface for
 ``crm_deal_contacts``, which 26a created and only the convert path ever wrote
 to.
+
+``stage_metadata.py`` is WS-26f — ``POST /crm/import/zoho/stages``, the
+pipeline repair that reads the tenant's real lane order out of Zoho's settings
+API. It is a sibling of ``import_zoho`` rather than part of it because it
+imports records nowhere: it rewrites native config, and its one deal-row write
+(the ``closed_at`` proxy) deliberately bypasses ``core.update_row``.
 """
 
 from gateway.routes.crm import activities as _activities  # noqa: F401
@@ -30,6 +36,7 @@ from gateway.routes.crm import deal_contacts as _deal_contacts  # noqa: F401
 from gateway.routes.crm import import_zoho as _import_zoho  # noqa: F401
 from gateway.routes.crm import pipeline as _pipeline  # noqa: F401
 from gateway.routes.crm import records as _records  # noqa: F401
+from gateway.routes.crm import stage_metadata as _stage_metadata  # noqa: F401
 from gateway.routes.crm import sync_zoho as _sync_zoho  # noqa: F401
 from gateway.routes.crm.core import router
 

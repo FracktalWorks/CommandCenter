@@ -27,7 +27,72 @@ export type Status = {
   probability?: number | null;
 };
 
+/** The two status vocabularies, and the URL segment each lives at. */
+export type StatusKind = "deal" | "lead";
+
 export type LostReason = { id: string; label: string; position: number };
+
+// ── The WS-26f f1 stage-metadata report ───────────────────────────────────
+//
+// Mirrors routes/crm/stage_metadata.py's Pydantic models. It is a REPORT, not
+// a resource: the settings tab renders it verbatim so an owner can read what
+// the apply would do (or did) before approving `?apply=true`, which is an
+// owner gate.
+
+export type StageChange = {
+  name: string;
+  action: "matched" | "created";
+  changed: boolean;
+  position_before?: number | null;
+  position_after: number;
+  type_before?: string | null;
+  type_after: string;
+  probability_before?: number | null;
+  probability_after?: number | null;
+};
+
+export type OrphanLane = { name: string; position: number; deals: number };
+
+export type ProbabilityProbe = {
+  /**
+   * "read" · "no_scope" (re-mint the token) · "no_data" (the layout WAS read
+   * and carries none — set them by hand) · "unavailable" (we never got far
+   * enough to look; points at the API version, not at the settings grid).
+   */
+  outcome: "read" | "no_scope" | "no_data" | "unavailable";
+  scope?: string | null;
+  detail?: string | null;
+  values: number;
+};
+
+export type ClosedAtBackfill = {
+  eligible: number;
+  stamped: number;
+  missing_close_date: number;
+};
+
+export type StageMetadataReport = {
+  outcome: "dry_run" | "applied" | "stopped" | "unavailable";
+  applied: boolean;
+  layout_id?: string | null;
+  layout_name?: string | null;
+  pipelines: string[];
+  stop_reason?: string | null;
+  /** The exact OAuth scope an owner would have to add. */
+  missing_scope?: string | null;
+  probability: ProbabilityProbe;
+  stages: StageChange[];
+  orphans: OrphanLane[];
+  /**
+   * ⚠️ **null means the backfill never ran**, not "it ran and found nothing" —
+   * the stop and the unavailable outcomes return before the database is
+   * opened. Read it through `settings.ts::backfillRan`, never directly.
+   */
+  closed_at: ClosedAtBackfill | null;
+  changed: number;
+  notes: string[];
+  errors: string[];
+};
 
 type Provenance = {
   source?: string;
@@ -120,6 +185,15 @@ export type PipelineLane = {
   rows: Deal[];
   count: number;
   amount: number;
+  /**
+   * Σ(amount × probability/100) over the WHOLE lane, computed by the gateway
+   * (WS-26f f3). Required rather than optional on purpose: `rows` is one page
+   * of the lane, so a client that recomputed this would under-report exactly
+   * the busy lane somebody is looking at — and an optional field would let
+   * that mistake render as a blank instead of failing to compile.
+   * Zero on lanes whose type is not open/ongoing (D-CRM-10).
+   */
+  weighted: number;
 };
 
 export type Pipeline = { lanes: PipelineLane[] };

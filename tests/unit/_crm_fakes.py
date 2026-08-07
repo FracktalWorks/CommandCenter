@@ -57,6 +57,15 @@ _OFFSET_RE = re.compile(r"\bOFFSET\s+:(\w+)", re.I)
 _INSERT_COLS_RE = re.compile(r"INSERT\s+INTO\s+\w+\s*\(([^)]*)\)", re.I)
 _SET_RE = re.compile(r"\bSET\b(.*?)\bWHERE\b", re.I | re.S)
 _MAX_RE = re.compile(r"SELECT\s+max\((\w+)\)", re.I)
+#: ``SUM(amount * COALESCE(probability, :stage_probability) / 100.0)`` — the
+#: WS-26f weighted-₹ aggregate. Read as an EXPRESSION (which column is summed,
+#: which column falls back to which parameter, what it is divided by) rather
+#: than reproduced in Python: a mirror that hard-coded ``amount * probability``
+#: would keep agreeing after the route stopped inheriting the stage default.
+_WEIGHTED_SUM_RE = re.compile(
+    r"SUM\(\s*(\w+)\s*\*\s*COALESCE\(\s*(\w+)\s*,\s*:(\w+)\s*\)\s*/\s*([\d.]+)\s*\)",
+    re.I,
+)
 #: The bound parameter inside a SET value — ``:meta`` or ``CAST(:meta AS jsonb)``.
 _BOUND_RE = re.compile(r":(\w+)")
 
@@ -523,6 +532,13 @@ class FakeCrmDB:
                     # in link_deal_contact silently inert here, and a fake
                     # that ignores a write agrees with the bug.
                     row[column] = _SQL_LITERALS[value.lower()]
+                elif value in row:
+                    # `SET closed_at = expected_close_date` — WS-26f f4 copies
+                    # one column onto another rather than binding a value per
+                    # row. Before this arm the fake silently ignored it, which
+                    # is the shape of "the backfill wrote nothing and every
+                    # test agreed".
+                    row[column] = row[value]
         return _Result([SimpleNamespace(**r) for r in matched])
 
     def _delete(self, statement: str, table: str, args: dict) -> _Result:
@@ -542,7 +558,10 @@ class FakeCrmDB:
 
         if "COUNT(*) AS COUNT" in upper:
             total = sum(float(r.get("amount") or 0) for r in matched)
-            return _Result([SimpleNamespace(count=len(matched), amount=total)])
+            return _Result([SimpleNamespace(
+                count=len(matched), amount=total,
+                weighted=_weighted(statement, matched, args),
+            )])
         if upper.startswith("SELECT COUNT(*)"):
             return _Result([], scalar=len(matched))
         aggregate = _MAX_RE.search(statement)
@@ -807,6 +826,32 @@ class FakeCrmDB:
         elif re.search(r"\bLIMIT\s+1\b", statement, re.I):
             rows = rows[:1]
         return rows
+
+
+def _weighted(statement: str, rows: list[dict], args: dict) -> float:
+    """Sum of amount * COALESCE(probability, stage default) / 100 over the lane.
+
+    Computed from the statement's own expression (:data:`_WEIGHTED_SUM_RE`), so
+    dropping the ``COALESCE`` onto the stage default — the one thing that makes
+    a pre-move NULL probability behave — changes the answer here too. Returns
+    0.0 when the aggregate is absent, which is what a lane query that never
+    asked for it should read as.
+    """
+    match = _WEIGHTED_SUM_RE.search(statement)
+    if match is None:
+        return 0.0
+    amount_column, probability_column, parameter, divisor = match.groups()
+    fallback = args.get(parameter)
+    total = 0.0
+    for row in rows:
+        amount = row.get(amount_column)
+        probability = row.get(probability_column)
+        if probability is None:
+            probability = fallback
+        if amount is None or probability is None:
+            continue  # SQL: NULL * anything is NULL, and SUM skips it
+        total += float(amount) * float(probability) / float(divisor)
+    return total
 
 
 def _compare(left: Any, operator: str, right: Any) -> bool:

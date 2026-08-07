@@ -72,6 +72,15 @@ export default function StatusPill({
                     className={`w-1.5 h-1.5 rounded-full ${statusTone(option)}`}
                   />
                   <span className="flex-1 truncate">{option.name}</span>
+                  {/* The stage's default probability beside its name: moving a
+                      deal here is what makes it inherit that number, and the
+                      forecast changes the moment it does (§5.1). */}
+                  {option.probability !== null &&
+                  option.probability !== undefined ? (
+                    <span className="text-[10px] tabular-nums opacity-60">
+                      {option.probability}%
+                    </span>
+                  ) : null}
                   {option.type === "won" || option.type === "lost" ? (
                     <span className="text-[10px] uppercase opacity-60">
                       {option.type}

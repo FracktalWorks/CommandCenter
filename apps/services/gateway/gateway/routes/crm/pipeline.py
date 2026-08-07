@@ -28,6 +28,7 @@ from gateway.routes.crm.core import (
     LEADS,
     MAX_PAGE_SIZE,
     ORGANIZATIONS,
+    WEIGHTED_TYPES,
     DealModel,
     Entity,
     StatusModel,
@@ -179,11 +180,29 @@ def _dwell_seconds(since: Any, changed_at: Any) -> int | None:
 
 # ── The board ───────────────────────────────────────────────────────────────
 
+#: The weighted-₹ aggregate, over the WHOLE lane like its two neighbours.
+#:
+#: It cannot be derived from ``rows``: those are capped at ``per_lane`` (50 by
+#: default, and the browser asks for no cap at all), so a rows-derived figure
+#: would silently under-report exactly the busy lane somebody is looking at.
+#: ``COALESCE(probability, :stage_probability)`` is §5.1's inheritance rule read
+#: at query time — the deal's own probability is what forecast math reads
+#: (D-CRM-10), and a NULL only survives on rows that predate a move.
+WEIGHTED_SQL = (
+    "COALESCE(SUM(amount * COALESCE(probability, :stage_probability) / 100.0), 0) "
+    "AS weighted"
+)
+
+
 class PipelineLane(BaseModel):
     status: StatusModel
     rows: list[dict]
     count: int
     amount: float
+    #: Sum of amount * probability/100 over this lane — 0 on a lane whose type is
+    #: not in ``WEIGHTED_TYPES``, because won revenue is closed and a lost or
+    #: on-hold deal forecasts nothing (D-CRM-10).
+    weighted: float = 0.0
 
 
 class PipelineResponse(BaseModel):
@@ -199,10 +218,10 @@ async def get_pipeline(
     """Deals grouped by status — the kanban read.
 
     Lanes are ``crm_deal_statuses`` ordered by ``position``, so an empty lane
-    still renders (a kanban that hides its empty columns is a list). Count and
-    ₹ total are aggregated over the WHOLE lane, not over the page of rows
-    returned, or the header would lie about a lane with more than ``per_lane``
-    deals in it.
+    still renders (a kanban that hides its empty columns is a list). Count, ₹
+    total and ₹ weighted are aggregated over the WHOLE lane, not over the page
+    of rows returned, or the header would lie about a lane with more than
+    ``per_lane`` deals in it.
     """
     db = await _get_db()
     try:
@@ -217,11 +236,17 @@ async def get_pipeline(
 
         out: list[PipelineLane] = []
         for lane in lanes:
-            scope = {**params, "status_id": str(lane.id)}
+            scope = {
+                **params,
+                "status_id": str(lane.id),
+                # The lane's own default is the inheritance fallback, bound
+                # rather than interpolated like every other caller value here.
+                "stage_probability": int(getattr(lane, "probability", 0) or 0),
+            }
             agg = (await db.execute(
                 text(
-                    "SELECT count(*) AS count, COALESCE(SUM(amount), 0) AS amount "
-                    f"FROM crm_deals WHERE {where}"
+                    "SELECT count(*) AS count, COALESCE(SUM(amount), 0) AS amount, "
+                    f"{WEIGHTED_SQL} FROM crm_deals WHERE {where}"
                 ),
                 scope,
             )).fetchone()
@@ -245,6 +270,14 @@ async def get_pipeline(
                 rows=[row_to_dict(r, DealModel) for r in rows],
                 count=int(getattr(agg, "count", 0) or 0),
                 amount=float(getattr(agg, "amount", 0) or 0),
+                # The open/ongoing restriction is applied per LANE rather than
+                # inside the SUM: a lane IS one status, so the filter is a
+                # property of the lane and expressing it in the predicate would
+                # be a WHERE clause that is either always true or always false.
+                weighted=(
+                    float(getattr(agg, "weighted", 0) or 0)
+                    if getattr(lane, "type", "open") in WEIGHTED_TYPES else 0.0
+                ),
             ))
         return PipelineResponse(lanes=out)
     finally:

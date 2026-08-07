@@ -20,9 +20,12 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import FilterPills from "@/components/FilterPills";
 import Tabs from "@/components/Tabs";
+import { useAccess } from "@/components/AccessProvider";
+import { hasCapability } from "@/lib/access";
 import ConvertModal from "./components/ConvertModal";
 import KanbanBoard from "./components/KanbanBoard";
 import LostReasonModal from "./components/LostReasonModal";
+import PipelineSettings from "./components/PipelineSettings";
 import QuickCreateModal from "./components/QuickCreateModal";
 import RecordList from "./components/RecordList";
 import RecordSheet from "./components/RecordSheet";
@@ -34,6 +37,7 @@ import type { EntitySlug, Lead, Status } from "./lib/types";
 import {
   applySort,
   closeRecord,
+  isEntity,
   openRecord,
   parseView,
   selectTab,
@@ -48,6 +52,7 @@ const TABS = [
   { id: "leads", label: "Leads" },
   { id: "contacts", label: "Contacts" },
   { id: "organizations", label: "Organizations" },
+  { id: "settings", label: "Pipeline settings", icon: "Settings" },
 ];
 
 /** Which URL parameter opens a record of each collection. */
@@ -67,6 +72,7 @@ function CrmPageInner() {
   );
 
   const store = useCrmStore();
+  const { access } = useAccess();
   const [creating, setCreating] = useState<EntitySlug | null>(null);
   const [converting, setConverting] = useState<Lead | null>(null);
   const [pendingLoss, setPendingLoss] = useState<{
@@ -88,7 +94,10 @@ function CrmPageInner() {
 
   useEffect(() => {
     if (view.tab === "board") store.loadBoard(view);
-    else store.loadList(view.tab, view);
+    // ⚠️ `settings` is a tab and NOT a collection: `loadList("settings", …)`
+    // would request `/crm/settings` and empty the screen with a 404. The
+    // vocabulary it edits is loaded once, above.
+    else if (isEntity(view.tab)) store.loadList(view.tab, view);
     // ⚠️ Every field `listQuery` reads has to be in this list, `sort`/`dir`
     // included: a filter the effect does not watch is a control that changes
     // its own appearance and issues no request.
@@ -108,7 +117,16 @@ function CrmPageInner() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view.record?.entity, view.record?.id]);
 
-  const listEntity: EntitySlug | null = view.tab === "board" ? null : view.tab;
+  const listEntity: EntitySlug | null = isEntity(view.tab) ? view.tab : null;
+
+  /** What the Refresh button re-reads — one branch per kind of tab. */
+  function reload(): void {
+    if (view.tab === "board") void store.loadBoard(view);
+    // The settings tab's collection IS the vocabulary the whole app renders
+    // from, so its re-read is the same call the page makes on mount.
+    else if (view.tab === "settings") void store.loadVocabulary();
+    else if (listEntity) void store.loadList(listEntity, view);
+  }
   const statusesFor = (entity: EntitySlug | null): Status[] =>
     entity === "deals"
       ? store.dealStatuses
@@ -155,29 +173,34 @@ function CrmPageInner() {
           <h1 className="text-base font-bold text-foreground sm:text-lg">CRM</h1>
           <p className="mt-0.5 text-xs text-muted-foreground">
             {view.tab === "board"
-              ? `${totals.count} open deals · ${compactMoney(totals.amount)} in the pipeline`
-              : "Pipeline, leads and customers"}
+              ? // Weighted sits next to the raw total rather than replacing it:
+                // "₹4.2Cr in the pipeline" is what is on the table and
+                // "₹1.6Cr weighted" is what the forecast believes, and a header
+                // that showed only one of them would be answering a different
+                // question from the one being asked.
+                `${totals.count} open deals · ${compactMoney(totals.amount)} in the pipeline · ${compactMoney(totals.weighted)} weighted`
+              : view.tab === "settings"
+                ? "Stages, statuses and lost reasons — the pipeline is data, not a deploy"
+                : "Pipeline, leads and customers"}
           </p>
         </div>
         <div className="flex items-center gap-2">
           <button
-            onClick={() =>
-              view.tab === "board" ? store.loadBoard(view) : store.loadList(view.tab, view)
-            }
+            onClick={reload}
             className="rounded-lg border border-border p-2 text-muted-foreground hover:bg-secondary tech-transition"
             aria-label="Refresh"
           >
             <Icon name="RefreshCw" className={`w-4 h-4 ${store.loading ? "animate-spin" : ""}`} />
           </button>
-          <button
-            onClick={() =>
-              setCreating(view.tab === "board" ? "deals" : (view.tab as EntitySlug))
-            }
-            className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 tech-transition sm:px-4"
-          >
-            <Icon name="Plus" className="w-4 h-4" />
-            New
-          </button>
+          {view.tab !== "settings" && (
+            <button
+              onClick={() => setCreating(listEntity ?? "deals")}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 tech-transition sm:px-4"
+            >
+              <Icon name="Plus" className="w-4 h-4" />
+              New
+            </button>
+          )}
         </div>
       </header>
 
@@ -219,17 +242,40 @@ function CrmPageInner() {
           onOpen={(id) => go(openRecord(view, "deal", id))}
           onCreate={() => setCreating("deals")}
         />
-      ) : (
-        <RecordList
-          entity={view.tab}
-          rows={store.rows}
-          total={store.total}
-          loading={store.loading}
-          sort={view.sort}
-          direction={view.dir}
-          onSort={(key) => go(applySort(view, key))}
-          onOpen={(id) => go(openRecord(view, PARAM_FOR[view.tab as EntitySlug], id))}
+      ) : view.tab === "settings" ? (
+        <PipelineSettings
+          dealStatuses={store.dealStatuses}
+          leadStatuses={store.leadStatuses}
+          lostReasons={store.lostReasons}
+          saving={store.saving}
+          // Hiding the pull is the courtesy half; the route is floored on the
+          // same capability server-side and refuses regardless.
+          canPullStages={hasCapability(access, "admin:access:manage")}
+          onSaveStatus={store.saveStatus}
+          onRemoveStatus={store.removeStatus}
+          onReorderStatuses={store.reorderStatuses}
+          onSaveLostReason={store.saveLostReason}
+          onRemoveLostReason={store.removeLostReason}
+          onReorderLostReasons={store.reorderLostReasons}
+          onPullStages={store.pullZohoStages}
         />
+      ) : (
+        // `listEntity` is non-null here by construction — the two branches
+        // above are the only tabs that are not a collection — but it is read
+        // through the guard rather than cast, because the cast is what made
+        // `?tab=settings` render a list of nothing on the way in.
+        listEntity && (
+          <RecordList
+            entity={listEntity}
+            rows={store.rows}
+            total={store.total}
+            loading={store.loading}
+            sort={view.sort}
+            direction={view.dir}
+            onSort={(key) => go(applySort(view, key))}
+            onOpen={(id) => go(openRecord(view, PARAM_FOR[listEntity], id))}
+          />
+        )
       )}
 
       {view.record && (

@@ -502,11 +502,14 @@ _AGENT_REGISTRY: list[dict] = [
     {
         "name": "crm-assistant",
         "description": (
-            "CRM Assistant — answers questions about the native CRM: finds "
-            "leads, deals, contacts and organizations, reads the deal pipeline "
-            "by stage with its counts and ₹ totals, opens a record in full, "
-            "and reads its history of notes, calls, meetings and stage "
-            "changes. Read-only; it cannot modify CRM records."
+            "CRM Assistant — works the native CRM: finds leads, deals, "
+            "contacts and organizations, reads the deal pipeline by stage with "
+            "its counts and ₹ totals, opens a record in full, and reads its "
+            "history of notes, calls, meetings and stage changes. It can also "
+            "create a lead, move a deal to another stage, log a note, call, "
+            "meeting or task, and convert a lead into a deal — each write asks "
+            "the acting user to approve it first and does nothing if nobody is "
+            "there to ask. It cannot delete a CRM record."
         ),
         "tags": ["crm", "sales", "pipeline", "leads", "deals", "apps"],
         "status": "live",

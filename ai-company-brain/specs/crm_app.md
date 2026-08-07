@@ -40,7 +40,14 @@
 > caller-scoped email→CRM timeline join, the address index (migration 154,
 > applied), `TimelineEntry.kind = "email_thread"` on both sides, and
 > `tests/unit/test_crm_email_timeline.py` (30 cases; two of them are the
-> mutation fence for the scoping rule). · **WS-26d write half: 🟡 SPEC.**
+> mutation fence for the scoping rule).
+> · **WS-26d-write: 🟢 BUILT 2026-08-08 (branch `ws-26d-write`, no migration)** —
+> the four confirmation-gated write tools in `apps/agents/agent-crm/agents.py`
+> (`create_lead`, `update_deal_status`, `log_activity`, `convert_lead`),
+> `_ALLOWED_METHODS` widened to `{GET, POST, PATCH}` (never DELETE/PUT), the
+> path fence extended past f-strings to `.format`/`%`/`+`, and
+> `tests/unit/test_crm_agent_write.py` (67 cases) + `test_crm_agent.py` grown from
+> 87 to 143. **Built, not deployed.**
 > · **WS-26e: 🟡 SPEC, nothing built.**
 > **26f** — 🟢 **MERGED + DEPLOYED 2026-08-07 (PR #391), NOT RUN against the tenant.** f1
 > `POST /crm/import/zoho/stages` (`routes/crm/stage_metadata.py`, floor
@@ -942,7 +949,7 @@ unknown sender becomes a lead on its own.
 | D1 | **WS-26f** (incl. the new f4 backfill) — ✅ **BUILT 2026-08-07, not run** | The board is the demo's first screen; today it is the broken part. | — |
 | D2 | **WS-26d-email** | The "this is not a toy" moment. Disjoint files from D1 (`activities.py`/`Timeline.tsx` vs. importer/admin/settings). | ∥ with D1 |
 | D3 | **WS-26g** — ✅ **BUILT 2026-08-07** (branch `ws-26g-reports`, no migration) | The forecast number. **After D1** — f2 and the reports tab both extend the `page.tsx`/`urlState.ts` tab grammar, and two parallel PRs there is a needless conflict. | after D1 |
-| D4 | **WS-26d-write** | The AI-creates-a-lead demo beat. Lives in `apps/agents/agent-crm/` — collides with nothing above. | ∥ with any |
+| D4 | **WS-26d-write** ✅ **BUILT 2026-08-08** | The AI-creates-a-lead demo beat. Lives in `apps/agents/agent-crm/` — collides with nothing above. No migration. | ∥ with any |
 | D5 | **WS-26d-autolead** | Build whenever; the **flip is OWNER-GATE** and pushes real leads into Zoho (D-CRM-9) — demo it only if the owner wants that story told live. | ∥ with any |
 
 **Deferred until after the demo, deliberately — not demoted:** WS-26h (discipline),
@@ -1434,8 +1441,60 @@ paragraph exists to prevent.
 
 **Tests:** `tests/unit/test_crm_auto_lead.py` (B7).
 
-### WS-26d-write — the CRM write tools · 🟢 AGENT-SAFE
+### WS-26d-write — the CRM write tools · ✅ **BUILT 2026-08-08**
 *(Closes B5. `create_lead`, `update_deal_status`, `log_activity`, `convert_lead`.)*
+
+> **As built** (branch `ws-26d-write`, **no migration** — every route these
+> tools call already existed): the four tools in
+> `apps/agents/agent-crm/agents.py`, each awaiting `request_confirmation` before
+> it constructs a mutating request and none passing
+> `non_interactive_default`; `_ALLOWED_METHODS` widened from `{"GET"}` to
+> `{"GET", "POST", "PATCH"}` with the check kept inside `_request`; `_post` and
+> `_patch` added and `_delete`/`_put` deliberately still absent. Tests:
+> `tests/unit/test_crm_agent_write.py` (new, 67 cases),
+> `tests/unit/test_crm_agent.py` (87 → 143, generalised from the read half's
+> hand-typed tool lists to an `_INVOCATIONS` table fenced against `_TOOLS`), and
+> `tests/unit/_crm_agent_fakes.py` (new — the loader, the recording fake client
+> and the confirmation stubs both files share). Six mutants run red and were
+> reverted. R4 sweep: seven read-only claims corrected (module docstring,
+> `_request`'s refusal, `config.json`, `pyproject.toml`, `_AGENT_REGISTRY`,
+> `apps/AGENTS.md`, `instructions.md`).
+>
+> **Four decisions the ticket below did not record, each with its reason:**
+> 1. **Reads may precede the confirmation; writes may not.** Done-when 1 says
+>    "zero HTTP calls when confirmation is denied", but two tools cannot honestly
+>    describe what they are about to do without reading first:
+>    `update_deal_status` resolves the stage NAME to an id, and `convert_lead`
+>    has to know whether this lead is already converted. A card reading "move
+>    deal 8f3c-… to <a stage nobody checked exists>" is a signature bought under
+>    a misdescription. So the asserted invariant is **no mutation before
+>    consent** — `test_everything_read_before_the_confirmation_is_a_read` pins
+>    that every pre-card call is a GET — while `create_lead` and `log_activity`,
+>    which owe nothing to a pre-read, are still held to literally zero calls.
+>    (The cited shape at `test_email_tool_consolidation.py:272-280` is this same
+>    rule: `digest` GETs before it POSTs, and the test asserts the POST did not
+>    happen, not that nothing did.)
+> 2. **The stage is resolved by name inside the tool** (supervisor ruling), via
+>    `GET /crm/statuses/deal` — no new read tool, no UUID on the LLM surface, and
+>    an unknown name comes back as the list of real lane names rather than a
+>    relayed 422.
+> 3. **A lost-type target requires a `lost_reason`**, resolved the same way
+>    against `GET /crm/lost-reasons` (supervisor ruling). This pre-empts the 422
+>    `_resolve_status`/`apply_status_transition` raise on the "close this as
+>    lost" demo beat. The tool **never creates** a stage or a reason — pinned by
+>    `test_the_vocabulary_is_only_ever_read`, which watches the refusing paths
+>    too, since those are where minting the missing row would be tempting.
+> 4. **`create_lead` takes no `owner_email` argument at all.** `create_record`
+>    already defaults it to the acting user server-side, so surfacing it would
+>    add an LLM-filled identity field whose only power is to attribute a lead to
+>    somebody who never asked for it. Normalize-on-write in
+>    `routes/crm/records.py` was ruled OUT of scope.
+>
+> **`_annotate_risk(open_world=...)` is False, deliberately.** The vocabulary
+> means "the tool reaches outside CommandCenter", and these tools speak only to
+> the gateway; the Zoho hop is `sync_zoho`'s, on its own broker gate. D-CRM-9 is
+> still true — the row is born `zoho_dirty` — and it is said on the confirmation
+> card instead, where the person deciding can weigh it.
 
 **The mechanism is `request_confirmation` (`acb_skills/ask_tools.py:345-348`), awaited at
 the top of the tool, before the HTTP call.** It is a plain async function — not a

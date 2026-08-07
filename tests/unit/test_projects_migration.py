@@ -255,3 +255,73 @@ def test_the_feature_row_is_registered_and_not_a_default(bare: str) -> None:
     # is_default false — same posture as the CRM: the slug reaches `*`-holders
     # and `admin` until an admin grants it.
     assert re.search(r",\s*false\s*\)", values, re.I)
+
+
+# ── The activity vocabulary, and the mirror that went stale ─────────────────
+#
+# `core.ACTIVITY_TYPES` is a hand-maintained copy of `pm_activities`'s CHECK,
+# and `record_activity` refuses anything outside it BEFORE the insert. When the
+# two disagree the route does not degrade — it 422s and rolls back the whole
+# write.
+#
+# It happened: migration 150 added `attachment` to the CHECK, the tuple was not
+# updated, and every file upload to a project task failed with "Unknown
+# activity type 'attachment'". All 25 attachment tests passed throughout,
+# because they monkeypatch `record_activity` and so never reached the
+# vocabulary it guards. These two tests are the fence that was missing — they
+# read the migrations rather than restating them, so the next value added to
+# either side fails here instead of in production.
+
+def _activity_check_values() -> set[str]:
+    """The vocabulary as the DATABASE will enforce it.
+
+    Assembled from every migration that constrains `pm_activities.type`, taking
+    the LAST one in file order — 146 creates the CHECK and later migrations
+    replace it wholesale, so the newest definition is the one that survives a
+    full replay.
+    """
+    latest: str | None = None
+    for path in sorted(MIGRATIONS.glob("*.sql"), key=lambda p: p.name):
+        if path.name == "schema.generated.sql":
+            continue
+        text = "\n".join(
+            re.sub(r"--.*$", "", line)
+            for line in path.read_text(encoding="utf-8").splitlines()
+        )
+        for match in re.finditer(
+            r"CHECK\s*\(\s*type\s+IN\s*\((.*?)\)\s*\)", text, re.I | re.S,
+        ):
+            latest = match.group(1)
+    assert latest is not None, "no migration constrains pm_activities.type"
+    return set(re.findall(r"'([a-z_]+)'", latest))
+
+
+def test_the_activity_vocabulary_mirror_is_exact() -> None:
+    from gateway.routes.projects.core import ACTIVITY_TYPES
+
+    assert set(ACTIVITY_TYPES) == _activity_check_values()
+
+
+def test_every_activity_type_the_routes_write_is_in_the_vocabulary() -> None:
+    """The other direction, and the one that actually broke.
+
+    A route naming a type the tuple lacks is a 422 on a successful user action.
+    Found by reading the call sites, so a new `record_activity(...)` anywhere
+    in the package is covered without anyone remembering to list it here.
+    """
+    from gateway.routes.projects.core import ACTIVITY_TYPES
+
+    package = Path(__file__).resolve().parents[2] / (
+        "apps/services/gateway/gateway/routes/projects"
+    )
+    used: set[str] = set()
+    for path in sorted(package.glob("*.py")):
+        used |= set(re.findall(
+            r"activity_type\s*=\s*[\"']([a-z_]+)[\"']",
+            path.read_text(encoding="utf-8"),
+        ))
+    assert used, "no activity_type= call sites found — did the package move?"
+    assert used <= set(ACTIVITY_TYPES), (
+        f"routes write types the vocabulary refuses: "
+        f"{sorted(used - set(ACTIVITY_TYPES))}"
+    )

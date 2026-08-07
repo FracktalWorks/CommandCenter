@@ -93,7 +93,20 @@ done
 docker ps --filter "label=com.docker.compose.project=acb" --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
 
 echo "==> Applying database migrations (02+ — init only mounts 00/01)"
-APP_DIR="$APP_DIR" bash scripts/apply_migrations.sh
+# `< /dev/null` is LOAD-BEARING, not tidiness.
+#
+# This whole file is delivered as `ssh 'bash -s' < vps_apply.sh`, so the script
+# IS stdin. `apply_migrations.sh` calls `docker exec -i`, which attaches and
+# DRAINS stdin — swallowing every line of this script that has not been read
+# yet. Bash then reaches EOF and exits 0, so the deploy reports success having
+# silently skipped the gateway restart and the workbench rebuild below.
+#
+# It bit on 2026-08-07 and it bit invisibly: six consecutive deploys went green
+# while the box kept serving an old bundle, because `verify()` health-checks the
+# STILL-RUNNING previous deployment and cannot tell it apart from a new one.
+# The trigger was a new ledger query (`-c "SELECT filename ..."`) — before it,
+# every psql call piped its own input and stdin was never touched.
+APP_DIR="$APP_DIR" bash scripts/apply_migrations.sh < /dev/null
 
 echo "==> Syncing Python deps"
 if ! command -v uv >/dev/null; then

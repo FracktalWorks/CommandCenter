@@ -12,6 +12,7 @@
  * `lib/tree.filterByCenter`'s own test says so).
  */
 import Icon from "@/components/Icon";
+import Button from "@/components/ui/Button";
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 
@@ -22,6 +23,7 @@ import {
   type TaskRow,
   projectsApi,
 } from "./lib/api";
+import { ImportClickUp } from "./components/ImportClickUp";
 import { MyWork } from "./components/MyWork";
 import { NotificationBell } from "./components/NotificationBell";
 import { ProjectTree } from "./components/ProjectTree";
@@ -63,6 +65,7 @@ function ProjectsWorkspace() {
   const [newName, setNewName] = useState("");
   const [newTask, setNewTask] = useState("");
   const [treeKey, setTreeKey] = useState(0);
+  const [importing, setImporting] = useState(false);
 
   // The tree, plus every root's grants — the grants are what the Center filter
   // reads, and fetching them per root keeps `filterByCenter` a pure function
@@ -319,6 +322,7 @@ function ProjectsWorkspace() {
         </button>
         <ProjectTree
           roots={visibleRoots}
+          onImport={() => setImporting(true)}
           selectedId={mine ? null : selected?.id ?? null}
           onSelect={(project) => {
             setMine(false);
@@ -349,6 +353,17 @@ function ProjectsWorkspace() {
             ) : null}
           </div>
           <div className="flex shrink-0 items-center gap-1">
+            {/* Offered in the header too, not only from the empty state: the
+                import is idempotent and re-running it is how a workspace stays
+                current until WS-27g retires ClickUp. */}
+            <Button
+              variant="ghost"
+              size="sm"
+              icon="Download"
+              onClick={() => setImporting(true)}
+            >
+              ClickUp
+            </Button>
             <NotificationBell onOpenTask={openTaskById} />
           </div>
           <div className={`flex shrink-0 gap-1 ${mine ? "hidden" : ""}`}>
@@ -429,6 +444,15 @@ function ProjectsWorkspace() {
               current.map((t) => (t.id === fresh.id ? { ...t, ...fresh } : t))
             );
           }}
+        />
+      ) : null}
+
+      {importing ? (
+        <ImportClickUp
+          onClose={() => setImporting(false)}
+          // Re-reads the tree, so the departments appear behind the dialog
+          // rather than after a manual refresh.
+          onImported={() => setTreeKey((k) => k + 1)}
         />
       ) : null}
     </div>

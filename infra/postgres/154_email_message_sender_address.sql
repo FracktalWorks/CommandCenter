@@ -1,5 +1,5 @@
 -- ============================================================================
--- 152_email_message_sender_address.sql — index the sender address expression
+-- 154_email_message_sender_address.sql — index the sender address expression
 -- ============================================================================
 -- WS-26d-email (specs/crm_app.md §9): the CRM timeline joins email threads to a
 -- record by the sender's address —

@@ -430,12 +430,51 @@ async def get_record(entity: str, record_id: str) -> str:
     return "\n".join(lines)
 
 
+#: ``email_thread_status.status`` → the words a human uses for it. A mirror of
+#: ``workbench/control_plane/src/app/crm/lib/timeline.ts::threadStatusLabel``,
+#: including its rule for a value neither side recognises: show it verbatim
+#: rather than drop it. The email app owns this vocabulary and may grow it.
+_THREAD_STATUS_LABELS: dict[str, str] = {
+    "NEEDS_REPLY": "Needs reply",
+    "AWAITING": "Awaiting reply",
+    "FYI": "FYI",
+    "DONE": "Done",
+}
+
+
+def _email_line(thread: dict[str, Any]) -> str:
+    """One ``email_thread`` entry as prose.
+
+    Surfaces the same fields the ``/crm`` UI's `EmailEntry` chose — sender,
+    subject, snippet, status — because the two are answering the same question
+    in different words, and an answer that drops half the row is worse than no
+    answer: it looks like the record HAS blank mail on it.
+    """
+    name, address = thread.get("from_name"), thread.get("from_email")
+    both = f"{name} <{address}>" if name and address else ""
+    who = both or name or address or "unknown sender"
+    raw_status = str(thread.get("status") or "").strip()
+    status = _THREAD_STATUS_LABELS.get(raw_status.upper(), raw_status)
+    snippet = (thread.get("snippet") or "").strip().replace("\n", " ")
+    return (
+        f"email from {who}: {thread.get('subject') or '(no subject)'}"
+        + (f" — {snippet[:160]}" if snippet else "")
+        + (f" [{status}]" if status else "")
+    )
+
+
 @_annotate_risk(read_only=True, idempotent=True)
 async def get_timeline(entity: str, record_id: str, limit: int = 20) -> str:
     """What has happened to a CRM record, newest first: logged notes, calls,
-    meetings and tasks, plus every status change with how long it sat in the
-    previous stage. A deal also inherits the timeline of the lead it came from,
-    labelled as such. Use this to answer "what's the story with this deal?"."""
+    meetings and tasks, every status change with how long it sat in the
+    previous stage, and email threads with this record's people. A deal also
+    inherits the timeline of the lead it came from, labelled as such. Use this
+    to answer "what's the story with this deal?".
+
+    ⚠️ The email entries are the ASKING PERSON's own mail — the CRM is shared
+    but a mailbox is not, so somebody else looking at the same record may see
+    different threads and somebody with no mailbox connected sees none. Never
+    report "there has been no email" as a fact about the record."""
     slug = _entity_slug(entity)
     record = _record_uuid(record_id)
     capped = max(1, min(int(limit or 20), 100))
@@ -459,6 +498,19 @@ async def get_timeline(entity: str, record_id: str, limit: int = 20) -> str:
                 f"{change.get('from_status') or '—'} → "
                 f"{change.get('to_status') or '?'}"
                 f"{held} (by {change.get('changed_by') or 'unknown'})"
+            )
+            continue
+        if entry.get("kind") == "email_thread":
+            # A third branch, not a fall-through. The dispatch used to be
+            # binary — "not a status change" meant "an activity" — so an email
+            # entry rendered as `email_thread: (no subject)` with the sender,
+            # subject, snippet and status all dropped. Since `_timeline` merges
+            # every source and THEN truncates, a mail-heavy deal answered
+            # "what's the story with this deal?" with twenty blank rows and no
+            # history at all.
+            out.append(
+                f"• {when}{inherited} — "
+                f"{_email_line(entry.get('email_thread') or {})}"
             )
             continue
         act = entry.get("activity") or {}

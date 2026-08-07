@@ -1219,7 +1219,12 @@ way. What landed: `activities._email_account_scope` / `_record_addresses` /
 `_email_entries`, `_timeline(entity, record_id, limit, user)` with all four
 routes passing the caller, `email_thread` on both `TimelineEntry` types, the
 third branch in `Timeline.tsx` behind the pure `crm/lib/timeline.ts`, the
-`(account_id, LOWER(from_address->>'email'))` index on `email_messages`, and
+matching third branch in `agent-crm`'s `get_timeline` (the agent is the **third**
+consumer of this shape and had the same binary dispatch — it rendered every
+email entry as `email_thread: (no subject)`, and because `_timeline` merges then
+truncates, a mail-heavy deal answered "what's the story with this deal?" with
+twenty blank rows), the `(account_id, LOWER(from_address->>'email'))` index on
+`email_messages`, and
 `tests/unit/test_crm_email_timeline.py` + the `_crm_fakes.py` readers it needs.
 Two of those tests are a MUTATION FENCE: deleting the `_email_account_scope(…)`
 call from the query must turn both red — verified, and re-verified green after

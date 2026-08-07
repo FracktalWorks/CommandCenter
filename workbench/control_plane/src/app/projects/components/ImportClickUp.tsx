@@ -59,7 +59,10 @@ export function ImportClickUp({
   const [plan, setPlan] = useState<ImportPlan | null>(null);
   const [mapping, setMapping] = useState<Record<string, string>>({});
   const [summary, setSummary] = useState<ImportSummary | null>(null);
-  const [busy, setBusy] = useState<null | "plan" | "dry" | "import">(null);
+  const [busy, setBusy] = useState<
+    null | "plan" | "dry" | "import" | "mirror"
+  >(null);
+  const [department, setDepartment] = useState("Company");
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState(false);
 
@@ -121,6 +124,40 @@ export function ImportClickUp({
     [accountId, mapping, onImported],
   );
 
+  /**
+   * The fast path: everything the Tasks app already mirrors, under one
+   * department. No ClickUp call and no mapping decision — the department split
+   * is a later, reversible move, and being forced to decide it before seeing
+   * the data is backwards.
+   */
+  const fromTasks = useCallback(
+    async (dryRun: boolean) => {
+      setBusy("mirror");
+      setError(null);
+      try {
+        const result = await importApi.fromTasks(department, dryRun);
+        setSummary({
+          dry_run: result.dry_run,
+          projects: result.projects,
+          tasks: result.tasks,
+          statuses_created: result.lanes_created,
+          grants_applied: [],
+          unmapped_spaces: [],
+          parity: [],
+        });
+        if (!dryRun) {
+          setDone(true);
+          onImported();
+        }
+      } catch (err) {
+        setError((err as Error).message);
+      } finally {
+        setBusy(null);
+      }
+    },
+    [department, onImported],
+  );
+
   const counts = plan ? totals(plan) : null;
   const notice = plan ? unmappedNotice(mapping) : null;
 
@@ -138,11 +175,10 @@ export function ImportClickUp({
         <header className="flex items-center justify-between border-b border-border px-4 py-3">
           <div>
             <h2 className="text-sm font-semibold text-foreground">
-              Import from ClickUp
+              Bring your work in
             </h2>
             <p className="text-xs text-muted-foreground">
-              Preview reads your workspace and writes nothing. Only the last
-              step writes.
+              Every Preview writes nothing. Only the buttons that say so write.
             </p>
           </div>
           <Button
@@ -155,6 +191,63 @@ export function ImportClickUp({
         </header>
 
         <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-3">
+          {/* ── The fast path, offered FIRST ──────────────────────────────
+              Everything the Tasks app already mirrors, under one department.
+              It is first because it is what somebody with an empty board
+              actually wants: no token, no tenant read, no mapping decision.
+              Splitting into real departments later is a `/move` per subtree,
+              because each child remembers its ClickUp Space. */}
+          <section className="rounded-md border border-border p-3">
+            <h3 className="text-xs font-medium text-foreground">
+              Everything already synced, under one department
+            </h3>
+            <p className="mt-0.5 text-[11px] text-muted-foreground">
+              Uses the ClickUp data the Tasks app has already pulled down — no
+              ClickUp call, no mapping to decide. Split it into real departments
+              whenever you like; each project remembers which Space it came
+              from, so that is a move rather than a re-import.
+            </p>
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <label className="flex items-center gap-1 text-[11px] text-muted-foreground">
+                Department
+                <input
+                  value={department}
+                  aria-label="Department name"
+                  onChange={(e) => setDepartment(e.target.value)}
+                  className={FIELD}
+                />
+              </label>
+              <Button
+                variant="secondary"
+                size="sm"
+                loading={busy === "mirror"}
+                disabled={busy !== null || !department.trim()}
+                onClick={() => fromTasks(true)}
+              >
+                Preview — writes nothing
+              </Button>
+              <Button
+                size="sm"
+                icon="Download"
+                loading={busy === "mirror"}
+                disabled={busy !== null || !department.trim()}
+                onClick={() => fromTasks(false)}
+              >
+                Bring it all in
+              </Button>
+            </div>
+          </section>
+
+          <details className="rounded-md border border-border p-3">
+            <summary className="cursor-pointer text-xs font-medium text-foreground">
+              Or import from ClickUp directly, mapping Spaces to Centers
+            </summary>
+            <p className="mt-1 text-[11px] text-muted-foreground">
+              Reads the live tenant. Slower, needs a working token, and asks you
+              to decide who can see each Space — the right shape for the real
+              migration.
+            </p>
+            <div className="mt-2 space-y-3">
           {/* ── Step 1: which workspace ───────────────────────────────── */}
           {accounts === null ? (
             <p className="text-xs text-muted-foreground">Looking for a connected ClickUp account…</p>
@@ -287,6 +380,9 @@ export function ImportClickUp({
               ) : null}
             </>
           ) : null}
+
+            </div>
+          </details>
 
           {/* ── What a run did, or would do ────────────────────────────── */}
           {summary ? (

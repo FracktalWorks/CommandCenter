@@ -340,6 +340,25 @@ export const importApi = {
       body: JSON.stringify({ account_id: accountId, use_llm: useLlm }),
     }),
 
+  /**
+   * The fast path: project the ClickUp mirror the Tasks app ALREADY holds into
+   * one department. No ClickUp call, no token, no mapping decision — it reads
+   * `gtd_projects`/`gtd_items` locally, so it works when the connector is
+   * stale and is quick enough to run in front of an audience.
+   */
+  fromTasks: (department: string, dryRun: boolean) =>
+    call<{
+      dry_run: boolean;
+      department: string;
+      projects: { created: number; already_present: number };
+      tasks: { created: number; already_present: number };
+      lanes_created: number;
+      tasks_without_a_list: number;
+    }>("import/from-tasks", {
+      method: "POST",
+      body: JSON.stringify({ department, dry_run: dryRun }),
+    }),
+
   run: (
     accountId: string,
     mappings: Array<{ space_id: string; center: string | null }>,

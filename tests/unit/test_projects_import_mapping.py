@@ -568,10 +568,16 @@ async def test_a_dry_run_writes_nothing_and_says_so(
 
 # ── Gating ──────────────────────────────────────────────────────────────────
 
-def test_both_endpoints_require_the_admin_floor() -> None:
+def test_every_import_endpoint_requires_the_admin_floor() -> None:
     """`admin:access:manage`, NOT `integrations:use:clickup` — migration 131
     grants `member` `integrations:use:*`, so the integration slug gates nothing.
-    That was the WS-26b finding and it applies here unchanged."""
+    That was the WS-26b finding and it applies here unchanged.
+
+    The expected SET is exhaustive on purpose: a third import route (the
+    Tasks-app mirror path, 2026-08-07) had to be added here deliberately, which
+    is the point. An import that writes projects and tasks for the whole org is
+    an administrative act however local its source, and a new one must not
+    inherit a pass by being absent from this list."""
     from gateway.routes.projects import router
 
     guarded = {
@@ -583,7 +589,9 @@ def test_both_endpoints_require_the_admin_floor() -> None:
     }
 
     assert set(guarded) == {
-        "/projects/import/clickup", "/projects/import/clickup/plan",
+        "/projects/import/clickup",
+        "/projects/import/clickup/plan",
+        "/projects/import/from-tasks",
     }
     for path, names in guarded.items():
         assert any("require_permission" in n for n in names), (
@@ -599,6 +607,7 @@ def test_the_import_endpoints_are_mounted() -> None:
     paths = {route.path for route in router.routes}
     assert "/projects/import/clickup" in paths
     assert "/projects/import/clickup/plan" in paths
+    assert "/projects/import/from-tasks" in paths
 
 
 async def test_a_non_clickup_account_is_refused(

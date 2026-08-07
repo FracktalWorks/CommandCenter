@@ -1097,3 +1097,55 @@ matched reads as a failure of the import rather than a success of the last one.
 ⚠️ The owner gate is unchanged and is now exactly one click: **building** this
 was agent-safe, **pressing Import** is the owner's act, and no agent has run
 either endpoint against production.
+
+### 11.7 The Tasks-app mirror path (built 2026-08-07)
+
+Owner-directed: *"just show up all the data that is there in the Tasks app
+inside the Projects app"* — one department now, real departments later.
+
+`POST /projects/import/from-tasks` + `routes/projects/import_tasks.py`. 43
+hermetic cases, 7 mutants red.
+
+**Why a second importer rather than a flag on the first.** `import_clickup.py`
+talks to the live tenant: it needs a working token, spends LLM budget proposing
+a Center per Space, and asks the owner to confirm a mapping *before* anything is
+written. That is the right shape for the migration and the wrong shape for "show
+me my work today" — being made to decide who may see what before you have seen
+the data is backwards. This one reads `gtd_projects` and `gtd_items`, the
+ClickUp mirror the Tasks app already holds, so there is no API call, no token,
+no rate limit and no model spend, and it works when the connector is stale.
+
+**One department, and the split stays cheap.** Everything lands under a single
+root the caller names. Each child carries its ClickUp list id in `clickup_id`
+and its **Space** id in `clickup_snapshot`, so breaking it into real departments
+later is a `/move` per subtree rather than a re-import.
+
+**The root IS org-granted, and that is narrower than it sounds.** §11.6's
+importer deliberately does not org-grant unmapped Spaces, because bulk-granting
+a whole tenant is a large implicit decision. Here the caller named one
+department and asked for their work inside it — the same act as
+`tree.create_node`, which org-grants for exactly the reason a solo org must not
+be locked out of the thing it just made.
+
+**Four properties the tests pin, each a way this could quietly do harm:**
+
+1. **Nothing outside `pm_*` is written.** The Tasks app's rows are the mirror
+   and must survive untouched, or an import would damage the personal task
+   manager it read from.
+2. **Only `source <> 'LOCAL'` rows are read.** A personal capture is the
+   member's own; publishing it to a shared board is a disclosure nobody asked
+   for.
+3. **The provider's own status names are kept**, mapped to our categories.
+   Renaming somebody's "Backlog" to "To do" makes the board stop matching the
+   tool it came from on day one.
+4. **A task whose list did not come across is counted, not dropped.** "412
+   imported" while 30 were silently skipped is a number that gets trusted and
+   should not be.
+
+**A gap mutation testing found, worth recording.** Deleting `dry_run` from the
+write guards left every test green: on a *first* dry run `_root_department`
+returns `None`, so `root_id is None` blocks the write and the `dry_run` check
+beside it never has to do anything. On a **second** dry run the department
+already exists and its id comes back regardless — and the projects resolve too —
+leaving `dry_run` as the only thing between a preview and a write. That is the
+realistic case (preview → import → preview again), and it now has its own test.

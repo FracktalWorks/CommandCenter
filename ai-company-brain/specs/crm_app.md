@@ -40,7 +40,10 @@
 > 🟢 SPECCED 2026-08-07, dispatchable — §5.1 is the blueprint, trigger was the owner's
 > first live board session (lanes out of order, imported stages at 0% probability).
 > WS-26i (data management): 🟡 SPEC-THIN, audit-narrow before dispatch. Applying WS-26f's
-> stage repair against prod is OWNER-GATE (work_plan §6).**
+> stage repair against prod is OWNER-GATE (work_plan §6).
+> **DEMO CRITICAL PATH (owner-directed 2026-08-07, §9.0): dispatch D1 f (∥ D2 d-email) →
+> D3 g → D4 d-write → D5 d-autolead; h/i/e deferred past the demo. Full chain and all
+> gates intact — the order re-sequences, it does not thin.**
 > · **Owner:** vjvarada · **Board row:** WS-26
 >
 > ⚠️ **`.env.example` cannot carry `CRM_ZOHO_SYNC`** — plan-guard blocks agent writes to it, so
@@ -381,7 +384,9 @@ plan of record for the pipeline as a *system*; §9's WS-26f–i are its tickets.
   *decides*: a mis-set 100% stage can lie to a forecast but cannot close a deal. Zoho's
   `forecast_type` maps onto `type`; do not grow a parallel enum (D-CRM-10).
 
-**The four systems, in build order:**
+**The four systems** *(the operative dispatch order is §9.0's demo critical path,
+owner-directed 2026-08-07 — it interleaves these with the WS-26d slices and defers
+3 and 4 past the demo)*:
 
 1. **Pipeline truth + settings (WS-26f).** Repair the live stage set from Zoho's own
    pipeline metadata (`settings/pipeline` carries the tenant's real `sequence_number` and
@@ -841,6 +846,52 @@ whose comments claimed to be the only one.
 ---
 
 ## 9. Tickets — WS-26a…i (every item AGENT-SAFE unless labeled)
+
+### 9.0 Demo critical path — the dispatch order *(owner-directed 2026-08-07)*
+
+The owner's directive: **demo-ready as soon as possible, without compromising the
+plumbing.** Operationally that means the queue below is a strict priority order for
+dispatch — it re-*sequences* the open tickets, it does not thin them. Every slice still
+runs the full chain (spec-auditor → implementer → verifier → diff-reviewer → PR), every
+done-when stands, and every §6 owner gate stays a gate.
+
+**The demo narrative the order serves** (what a viewer sees, in the order they see it):
+a board that looks *right* (real stages, right order, weighted ₹) → a record that looks
+*alive* (open a deal: the actual email thread history) → a number the boss cares about
+(weighted pipeline, leaderboard) → the AI story (ask the assistant — already live; have
+it create a lead behind a confirmation card) → optionally, the closer: an email from an
+unknown sender becomes a lead on its own.
+
+**Build order — strict, one reason each:**
+| # | Slice | Why here | Parallel? |
+|---|-------|----------|-----------|
+| D1 | **WS-26f** (incl. the new f4 backfill) | The board is the demo's first screen; today it is the broken part. | — |
+| D2 | **WS-26d-email** | The "this is not a toy" moment. Disjoint files from D1 (`activities.py`/`Timeline.tsx` vs. importer/admin/settings). | ∥ with D1 |
+| D3 | **WS-26g** | The forecast number. **After D1** — f2 and the reports tab both extend the `page.tsx`/`urlState.ts` tab grammar, and two parallel PRs there is a needless conflict. | after D1 |
+| D4 | **WS-26d-write** | The AI-creates-a-lead demo beat. Lives in `apps/agents/agent-crm/` — collides with nothing above. | ∥ with any |
+| D5 | **WS-26d-autolead** | Build whenever; the **flip is OWNER-GATE** and pushes real leads into Zoho (D-CRM-9) — demo it only if the owner wants that story told live. | ∥ with any |
+
+**Deferred until after the demo, deliberately — not demoted:** WS-26h (discipline),
+WS-26i (data management), WS-26e (cutover). No demo viewer sees them; they lose nothing
+by waiting, and h explicitly depends on f2's grids anyway.
+
+**Honesty notes for the demo itself** (narrate these, don't paper over them):
+- `crm_status_changes` only records **native** transitions, so funnel/dwell start
+  sparse and fill as the team actually works the pipeline. That is the feature working,
+  not a gap.
+- Imported won/lost deals carry **no real close timestamp** — f4 backfills `closed_at`
+  from Zoho's `Closing_Date` as a labeled proxy so win/loss and won-₹ render non-empty;
+  native closes stamp true times from then on.
+
+**The owner's pre-demo runbook** (every act here is §6-gated or an owner act by nature):
+1. Merge D1's PR when it lands → approve the f1 `?apply=true` repair (dry-run report
+   first), or hand-set the stages in the f2 settings tab if the metadata probe reports
+   no-scope.
+2. Merge D2–D4 as they land (deploy applies their migrations automatically).
+3. Grant `feature:crm` to everyone who will sit in the demo — or demo from the owner's
+   login and say so.
+4. Optional: flip `CRM_AUTO_LEAD` (understanding each auto-lead queues for the live
+   Zoho tenant per D-CRM-9).
 
 ### WS-26a — Schema + feature registration + core API · ✅ **BUILT 2026-08-05**
 *(Audited GO-NARROWED 2026-08-05; blockers A/B folded in below. Landed as
@@ -1396,14 +1447,27 @@ on entry, so NULL survives only on rows that predate a move; handle it anyway).
 Record sheet: probability becomes an editable field with its stage's default shown when
 inherited; the status-pill dropdown shows each stage's default beside its name.
 
+**f4 — the `closed_at` proxy backfill *(added 2026-08-07 for the demo path, §9.0)*.**
+The importer never stamps `closed_at` (only native transitions do), so every imported
+won/lost deal is invisible to win/loss, cycle-time and won-₹ math. Same apply, separate
+report section: deals sitting in a won/lost-type stage with `closed_at IS NULL` adopt
+their `expected_close_date` (Zoho's `Closing_Date`) as a **labeled proxy** — it is the
+only date the tenant gave us; rows where it is also NULL stay NULL and are counted in
+the report rather than invented. ⚠️ **The backfill must be a direct UPDATE that bypasses
+the dirty-marking write path**: `closed_at` is native-only bookkeeping, and routing 500+
+rows through `mark_dirty_on_update` would queue that many no-op pushes into the live
+Zoho tenant on the next cycle.
+
 **Done-when:**
 1. Dry-run returns the full report and writes nothing — test pins zero writes, including
    the >1-pipeline stop.
 2. Apply is idempotent — second run reports zero changes.
 3. No-scope vs no-data are distinguishable in the response, each with a named test; the
    no-scope response names the missing scope string.
-4. Post-apply, no row in `crm_deals` changed and nothing is `zoho_dirty` that wasn't —
-   pinned by test (the §5.1 safety property).
+4. Post-apply, the ONLY deal-row change is f4's `closed_at` on won/lost-stage rows with
+   a non-NULL `expected_close_date`, and **nothing is `zoho_dirty` that wasn't before**
+   — pinned by test (the §5.1 safety property, and the proof f4 bypassed the
+   dirty-marking path). NULL-date rows counted in the report, not invented.
 5. Settings grids render from the live GETs; reorder issues renumbered PATCHes; the
    won=100/lost=0 clamp is tested on BOTH sides (client validation message, server 422).
 6. Weighted math: pure-function tests for NULL/0/100/mixed probability and the

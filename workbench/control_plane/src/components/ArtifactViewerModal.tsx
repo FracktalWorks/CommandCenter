@@ -13,14 +13,15 @@
  *   other               → hex-dump excerpt + download button
  */
 
+import Button from "@/components/ui/Button";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeRaw from "rehype-raw";
 import SandboxedHtml from "@/components/SandboxedHtml";
 import SandboxedReact from "@/components/SandboxedReact";
-import { buildIconMap, iconsUsedIn } from "@/lib/iconSvg";
-import { useTheme } from "next-themes";
+import { iconsUsedIn } from "@/lib/iconSvg";
+import { useShikiTheme } from "@/lib/theme/surfaces";
 import { classifyArtifact, extOf, isRenderable } from "@/lib/artifactKind";
 import type { FileEntry } from "./ArtifactSidebar";
 
@@ -92,6 +93,9 @@ function formatBytes(bytes: number): string {
 
 function CodeBlock({ code, lang }: { code: string; lang: string }) {
   const [html, setHtml] = useState<string | null>(null);
+  // Follows the active THEME, not just the colour mode: Fluent highlights with
+  // VS Code's own dark-plus, Material with material-theme, and so on.
+  const shikiTheme = useShikiTheme();
 
   useEffect(() => {
     let cancelled = false;
@@ -100,7 +104,7 @@ function CodeBlock({ code, lang }: { code: string; lang: string }) {
         const { codeToHtml } = await import("shiki");
         const result = await codeToHtml(code, {
           lang,
-          theme: "github-dark",
+          theme: shikiTheme,
         });
         if (!cancelled) setHtml(result);
       } catch {
@@ -109,7 +113,7 @@ function CodeBlock({ code, lang }: { code: string; lang: string }) {
       }
     })();
     return () => { cancelled = true; };
-  }, [code, lang]);
+  }, [code, lang, shikiTheme]);
 
   if (html) {
     return (
@@ -282,10 +286,8 @@ export default function ArtifactViewerModal({ sessionId, entry, onClose, onDelet
   // Same reason as DocumentPane: a full-page artifact has no props.icons, so
   // resolve the icons its own source references or ccIcon() returns nothing.
   const source = state.status === "rendered" ? state.content : "";
-  const icons = useMemo(() => buildIconMap(iconsUsedIn(source)), [source]);
-  const draftIcons = useMemo(() => buildIconMap(iconsUsedIn(editContent)), [editContent]);
-  const { resolvedTheme } = useTheme();
-  const theme: "light" | "dark" = resolvedTheme === "light" ? "light" : "dark";
+  const icons = useMemo(() => iconsUsedIn(source), [source]);
+  const draftIcons = useMemo(() => iconsUsedIn(editContent), [editContent]);
 
   // Build the file URL and load content
   useEffect(() => {
@@ -538,13 +540,9 @@ export default function ArtifactViewerModal({ sessionId, entry, onClose, onDelet
                 )}
               </>
             )}
-            <button
-              onClick={onClose}
-              className="rounded p-1 text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors text-lg leading-none"
-              title="Close"
-            >
+            <Button variant="ghost" size="none" radius="keep" layout="" onClick={onClose} title="Close" className="rounded p-1 text-lg leading-none">
               ×
-            </button>
+            </Button>
           </div>
         </div>
 
@@ -590,9 +588,9 @@ export default function ArtifactViewerModal({ sessionId, entry, onClose, onDelet
                     {renderable ? (
                       editContent.trim() ? (
                         state.status === "rendered" && state.kind === "react" ? (
-                          <SandboxedReact code={editContent} theme={theme} icons={draftIcons} />
+                          <SandboxedReact code={editContent} iconNames={draftIcons} />
                         ) : (
-                          <SandboxedHtml html={editContent} theme={theme} icons={draftIcons} />
+                          <SandboxedHtml html={editContent} iconNames={draftIcons} />
                         )
                       ) : (
                         <p className="text-muted-foreground text-sm italic">
@@ -664,9 +662,9 @@ export default function ArtifactViewerModal({ sessionId, entry, onClose, onDelet
             // should use the whole sheet, which matters most on a phone.
             <div className="-mx-6 -my-6 h-full min-h-[60vh]">
               {state.kind === "html" ? (
-                <SandboxedHtml html={state.content} theme={theme} icons={icons} chromeless />
+                <SandboxedHtml html={state.content} iconNames={icons} chromeless />
               ) : (
-                <SandboxedReact code={state.content} theme={theme} icons={icons} chromeless />
+                <SandboxedReact code={state.content} iconNames={icons} chromeless />
               )}
             </div>
           )}

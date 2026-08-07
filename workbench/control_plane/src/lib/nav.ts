@@ -235,6 +235,15 @@ export const NAV_SECTIONS: NavSection[] = [
         note: "People · teams · roles · per-user access",
         adminOnly: true,
       },
+      {
+        // Ungated on purpose: choosing your own theme is a personal
+        // preference, not an admin capability. The org-wide default on the
+        // same page is authorized at the gateway.
+        href: "/settings/appearance",
+        label: "Appearance",
+        icon: "Palette",
+        note: "Themes · colour mode · density · accent",
+      },
     ],
   },
 ];

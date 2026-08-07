@@ -10,37 +10,9 @@
  *   Plugins — Claude-style self-describing plugins
  */
 
+import Button from "@/components/ui/Button";
+import Icon, { themedIcon } from "@/components/Icon";
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import {
-  AlertCircle,
-  ArrowRight,
-  BarChart2,
-  Box,
-  Check,
-  CheckSquare,
-  ChevronDown,
-  ChevronRight,
-  CreditCard,
-  ExternalLink,
-  Globe,
-  HardDrive,
-  Loader2,
-  Lock,
-  Mail,
-  MessageSquare,
-  Plus,
-  Puzzle,
-  RefreshCw,
-  RotateCcw,
-  Search,
-  Server,
-  Settings2,
-  Sparkles,
-  Target,
-  Users,
-  X,
-  Zap,
-} from "lucide-react";
 import type { IntegrationStatus } from "@/app/api/integrations/status/route";
 import type { SkillFamily, SkillsCatalog } from "@/app/api/integrations/skills/route";
 import type { AgentEntry } from "@/app/api/agent/list/route";
@@ -55,11 +27,11 @@ import type { TabDef } from "@/components/Tabs";
 type TabId = "apis" | "email" | "mcps" | "plugins" | "skills";
 
 const TABS: TabDef[] = [
-  { id: "apis",    label: "APIs",    icon: Zap,      note: "REST API credentials & discovery" },
-  { id: "email",   label: "Email",   icon: Mail,     note: "Email account connections" },
-  { id: "mcps",    label: "MCPs",    icon: Server,   note: "Model Context Protocol servers" },
-  { id: "plugins", label: "Plugins", icon: Puzzle,   note: "Claude-style tool plugins" },
-  { id: "skills",  label: "Skills",  icon: Sparkles, note: "Agent skill families & token costs" },
+  { id: "apis",    label: "APIs",    icon: "Zap",      note: "REST API credentials & discovery" },
+  { id: "email",   label: "Email",   icon: "Mail",     note: "Email account connections" },
+  { id: "mcps",    label: "MCPs",    icon: "Server",   note: "Model Context Protocol servers" },
+  { id: "plugins", label: "Plugins", icon: "Puzzle",   note: "Claude-style tool plugins" },
+  { id: "skills",  label: "Skills",  icon: "Sparkles", note: "Agent skill families & token costs" },
 ];
 
 // ===========================================================================
@@ -149,17 +121,17 @@ const DISCOVER_SUGGESTIONS = [
   "Stripe", "Twilio", "Airtable", "Linear",
 ];
 
-const CATEGORY_FALLBACK: Record<string, { Icon: React.ElementType; color: string }> = {
-  core:          { Icon: Settings2,     color: "text-violet-400" },
-  crm:           { Icon: Users,         color: "text-blue-400" },
-  email:         { Icon: Mail,          color: "text-amber-400" },
-  prospecting:   { Icon: Target,        color: "text-emerald-400" },
-  productivity:  { Icon: CheckSquare,   color: "text-cyan-400" },
-  search:        { Icon: Globe,         color: "text-orange-400" },
-  analytics:     { Icon: BarChart2,     color: "text-rose-400" },
-  payments:      { Icon: CreditCard,    color: "text-indigo-400" },
-  communication: { Icon: MessageSquare, color: "text-teal-400" },
-  storage:       { Icon: HardDrive,     color: "text-sky-400" },
+const CATEGORY_FALLBACK: Record<string, { icon: string; color: string }> = {
+  core:          { icon: "Settings2",     color: "text-violet-400" },
+  crm:           { icon: "Users",         color: "text-blue-400" },
+  email:         { icon: "Mail",          color: "text-amber-400" },
+  prospecting:   { icon: "Target",        color: "text-emerald-400" },
+  productivity:  { icon: "CheckSquare",   color: "text-cyan-400" },
+  search:        { icon: "Globe",         color: "text-orange-400" },
+  analytics:     { icon: "BarChart2",     color: "text-rose-400" },
+  payments:      { icon: "CreditCard",    color: "text-indigo-400" },
+  communication: { icon: "MessageSquare", color: "text-teal-400" },
+  storage:       { icon: "HardDrive",     color: "text-sky-400" },
 };
 
 function logoUrls(domain: string): string[] {
@@ -196,9 +168,9 @@ function ServiceLogo({
     );
   }
   const fb = CATEGORY_FALLBACK[category];
-  const FbIcon = fb?.Icon ?? Puzzle;
+  const fbName = fb?.icon ?? "Puzzle";
   const fbColor = fb?.color ?? "text-muted-foreground";
-  return <FbIcon size={px} className={`${fbColor} shrink-0`} />;
+  return <Icon name={fbName} size={px} className={`${fbColor} shrink-0`} />;
 }
 
 function ApiTile({ api, selected, onClick }: { api: ApiEntry; selected: boolean; onClick: () => void }) {
@@ -260,7 +232,7 @@ function CredentialForm({ api, onSaved }: {
         <div key={v.key}>
           <label className="flex items-center gap-1 text-xs text-muted-foreground mb-1">
             {v.label}
-            {v.sensitive && <Lock className="w-2.5 h-2.5 opacity-50" />}
+            {v.sensitive && <Icon name="Lock" className="w-2.5 h-2.5 opacity-50" />}
           </label>
           <input type={v.sensitive ? "password" : "text"} autoComplete="off" spellCheck={false}
             value={values[v.key] ?? ""}
@@ -272,11 +244,10 @@ function CredentialForm({ api, onSaved }: {
         </div>
       ))}
       {err && <p className="text-xs text-destructive bg-destructive/10 rounded-lg px-3 py-2">{err}</p>}
-      <button onClick={() => void save()} disabled={saving}
-        className="w-full py-2.5 rounded-lg bg-primary hover:opacity-90 disabled:opacity-40 text-sm font-medium text-primary-foreground transition-colors flex items-center justify-center gap-2">
-        {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : done ? <Check className="w-3.5 h-3.5" /> : null}
+      <Button size="none" layout="flex items-center justify-center" onClick={() => void save()} disabled={saving} className="w-full py-2.5 text-sm gap-2">
+        {saving ? <Icon name="Loader2" className="w-3.5 h-3.5 animate-spin" /> : done ? <Icon name="Check" className="w-3.5 h-3.5" /> : null}
         {saving ? "Saving…" : done ? "Saved!" : "Save credentials"}
-      </button>
+      </Button>
     </div>
   );
 }
@@ -406,7 +377,7 @@ function ClickUpConnector({ onChange }: { onChange?: () => void }) {
         </div>
         {loading ? (
           <div className="flex items-center gap-2 text-xs text-muted-foreground py-2">
-            <Loader2 className="w-3.5 h-3.5 animate-spin" /> Loading…
+            <Icon name="Loader2" className="w-3.5 h-3.5 animate-spin" /> Loading…
           </div>
         ) : accounts.length === 0 ? (
           <p className="text-xs text-muted-foreground">
@@ -421,7 +392,7 @@ function ClickUpConnector({ onChange }: { onChange?: () => void }) {
                 key={a.id}
                 className="flex items-center gap-2.5 rounded-lg border border-border px-3 py-2"
               >
-                <Box className="w-4 h-4 shrink-0 text-primary/80" />
+                <Icon name="Box" className="w-4 h-4 shrink-0 text-primary/80" />
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-[13px] font-medium text-foreground">
                     {a.label}
@@ -443,9 +414,9 @@ function ClickUpConnector({ onChange }: { onChange?: () => void }) {
                   className="p-1.5 rounded-md text-muted-foreground hover:bg-red-500/10 hover:text-red-400 transition-colors disabled:opacity-50"
                 >
                   {busy === a.id ? (
-                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    <Icon name="Loader2" className="w-3.5 h-3.5 animate-spin" />
                   ) : (
-                    <X className="w-3.5 h-3.5" />
+                    <Icon name="X" className="w-3.5 h-3.5" />
                   )}
                 </button>
               </div>
@@ -461,7 +432,7 @@ function ClickUpConnector({ onChange }: { onChange?: () => void }) {
         </div>
         <div className="flex items-center gap-2">
           <div className="flex flex-1 items-center gap-2 rounded-lg border border-border bg-secondary px-3 py-2 focus-within:border-primary">
-            <Lock className="w-3 h-3 shrink-0 text-muted-foreground" />
+            <Icon name="Lock" className="w-3 h-3 shrink-0 text-muted-foreground" />
             <input
               value={token}
               onChange={(e) => setToken(e.target.value)}
@@ -471,19 +442,14 @@ function ClickUpConnector({ onChange }: { onChange?: () => void }) {
               className="flex-1 bg-transparent text-sm text-foreground placeholder-muted-foreground focus:outline-none"
             />
           </div>
-          <button
-            type="button"
-            disabled={!token.trim() || busy === "find"}
-            onClick={() => void findWorkspaces()}
-            className="shrink-0 inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:opacity-40 transition-colors"
-          >
+          <Button size="none" layout="inline-flex items-center" type="button" disabled={!token.trim() || busy === "find"} onClick={() => void findWorkspaces()} className="shrink-0 gap-1.5 px-3 py-2 text-sm">
             {busy === "find" ? (
-              <Loader2 className="w-4 h-4 animate-spin" />
+              <Icon name="Loader2" className="w-4 h-4 animate-spin" />
             ) : (
-              <Plus className="w-4 h-4" />
+              <Icon name="Plus" className="w-4 h-4" />
             )}
             Find
-          </button>
+          </Button>
         </div>
         <p className="mt-1 text-[10px] text-muted-foreground">
           ClickUp → Settings → Apps → API Token. Stored per-workspace, encrypted
@@ -510,7 +476,7 @@ function ClickUpConnector({ onChange }: { onChange?: () => void }) {
                   key={w.id}
                   className="flex items-center gap-2.5 rounded-lg border border-border px-3 py-2"
                 >
-                  <Box className="w-4 h-4 shrink-0 text-muted-foreground" />
+                  <Icon name="Box" className="w-4 h-4 shrink-0 text-muted-foreground" />
                   <div className="min-w-0 flex-1">
                     <div className="truncate text-[13px] text-foreground">{w.name}</div>
                     <div className="text-[11px] text-muted-foreground">
@@ -519,7 +485,7 @@ function ClickUpConnector({ onChange }: { onChange?: () => void }) {
                   </div>
                   {already ? (
                     <span className="inline-flex items-center gap-1 text-[11px] text-success">
-                      <Check className="w-3.5 h-3.5" /> connected
+                      <Icon name="Check" className="w-3.5 h-3.5" /> connected
                     </span>
                   ) : (
                     <button
@@ -529,9 +495,9 @@ function ClickUpConnector({ onChange }: { onChange?: () => void }) {
                       className="inline-flex items-center gap-1 rounded-md bg-primary/10 px-2.5 py-1.5 text-xs font-medium text-primary hover:bg-primary/20 disabled:opacity-50 transition-colors"
                     >
                       {busy === w.id ? (
-                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        <Icon name="Loader2" className="w-3.5 h-3.5 animate-spin" />
                       ) : (
-                        <Plus className="w-3.5 h-3.5" />
+                        <Icon name="Plus" className="w-3.5 h-3.5" />
                       )}
                       Connect
                     </button>
@@ -615,7 +581,7 @@ function WhatsAppConnector({ onChange }: { onChange?: () => void }) {
         </div>
         {loading ? (
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
-            <Loader2 className="w-3.5 h-3.5 animate-spin" /> Loading…
+            <Icon name="Loader2" className="w-3.5 h-3.5 animate-spin" /> Loading…
           </div>
         ) : accounts.length === 0 ? (
           <div className="rounded-lg border border-border p-3 text-xs text-muted-foreground">
@@ -651,7 +617,7 @@ function WhatsAppConnector({ onChange }: { onChange?: () => void }) {
                   className="shrink-0 rounded-md border border-border px-2 py-1 text-[11px] text-muted-foreground hover:text-red-500 disabled:opacity-40"
                 >
                   {busy === a.id ? (
-                    <Loader2 className="w-3 h-3 animate-spin" />
+                    <Icon name="Loader2" className="w-3 h-3 animate-spin" />
                   ) : (
                     "Disconnect"
                   )}
@@ -667,7 +633,7 @@ function WhatsAppConnector({ onChange }: { onChange?: () => void }) {
         href="/whatsapp/connect"
         className="flex items-center justify-center gap-1.5 rounded-lg bg-primary py-2 text-xs font-medium text-primary-foreground hover:opacity-90"
       >
-        <Plus className="w-3.5 h-3.5" /> Connect a number
+        <Icon name="Plus" className="w-3.5 h-3.5" /> Connect a number
       </a>
       <p className="text-[10.5px] text-muted-foreground/70">
         Connecting opens the guided flow in the WhatsApp app — link a personal
@@ -717,15 +683,15 @@ function ApiSidePanel({ api, agents, onClose, onRefresh }: {
               </span>
               {api.storage === "encrypted-db" && (
                 <span className="text-[9px] flex items-center gap-0.5 text-violet-400 bg-violet-500/10 border border-violet-500/20 px-1.5 py-0.5 rounded-full">
-                  <Lock className="w-2 h-2" /> Encrypted
+                  <Icon name="Lock" className="w-2 h-2" /> Encrypted
                 </span>
               )}
             </div>
           </div>
         </div>
-        <button onClick={onClose} className="text-muted-foreground hover:text-foreground p-1 rounded transition-colors mt-0.5">
-          <X className="w-4 h-4" />
-        </button>
+        <Button variant="text" size="icon-xs" radius="keep" layout="" onClick={onClose} className="rounded mt-0.5">
+          <Icon name="X" className="w-4 h-4" />
+        </Button>
       </div>
 
       <div className="flex-1 overflow-y-auto p-5 space-y-5">
@@ -747,13 +713,13 @@ function ApiSidePanel({ api, agents, onClose, onRefresh }: {
             {api.setup_url && (
               <a href={api.setup_url} target="_blank" rel="noopener noreferrer"
                 className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border border-primary/30 text-primary hover:bg-primary/5 transition-colors">
-                Get credentials <ExternalLink className="w-3 h-3" />
+                Get credentials <Icon name="ExternalLink" className="w-3 h-3" />
               </a>
             )}
             {api.docs_url && (
               <a href={api.docs_url} target="_blank" rel="noopener noreferrer"
                 className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border border-border text-muted-foreground hover:bg-secondary transition-colors">
-                Docs <ExternalLink className="w-3 h-3" />
+                Docs <Icon name="ExternalLink" className="w-3 h-3" />
               </a>
             )}
           </div>
@@ -774,7 +740,7 @@ function ApiSidePanel({ api, agents, onClose, onRefresh }: {
             {api.instructions && (
               <details>
                 <summary className="text-xs text-muted-foreground cursor-pointer hover:text-foreground list-none flex items-center gap-1">
-                  <ChevronRight className="w-3 h-3 shrink-0" /> Setup instructions
+                  <Icon name="ChevronRight" className="w-3 h-3 shrink-0" /> Setup instructions
                 </summary>
                 <pre className="mt-2 text-xs text-muted-foreground bg-secondary/60 rounded-lg p-3 whitespace-pre-wrap leading-relaxed">{api.instructions}</pre>
               </details>
@@ -782,17 +748,16 @@ function ApiSidePanel({ api, agents, onClose, onRefresh }: {
             <div className="flex gap-2">
               <button onClick={() => void runTest()} disabled={testing || !api.configured}
                 className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg border border-border text-xs text-muted-foreground hover:bg-secondary disabled:opacity-40 transition-colors">
-                {testing ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
+                {testing ? <Icon name="Loader2" className="w-3 h-3 animate-spin" /> : <Icon name="RefreshCw" className="w-3 h-3" />}
                 {testing ? "Testing…" : "Test"}
               </button>
-              <button onClick={() => setMode("edit")}
-                className="flex-1 py-2 rounded-lg bg-primary hover:opacity-90 text-xs font-medium text-primary-foreground transition-colors">
+              <Button size="none" layout="" onClick={() => setMode("edit")} className="flex-1 py-2 text-xs">
                 {api.configured ? "Update" : "Configure"}
-              </button>
+              </Button>
             </div>
             {testResult && (
               <div className={`text-xs rounded-lg px-3 py-2 flex items-start gap-2 ${testResult.ok ? "text-success bg-success/10 border border-success/20" : "text-destructive bg-destructive/10 border border-destructive/20"}`}>
-                {testResult.ok ? <Check className="w-3.5 h-3.5 mt-0.5 shrink-0" /> : <AlertCircle className="w-3.5 h-3.5 mt-0.5 shrink-0" />}
+                {testResult.ok ? <Icon name="Check" className="w-3.5 h-3.5 mt-0.5 shrink-0" /> : <Icon name="AlertCircle" className="w-3.5 h-3.5 mt-0.5 shrink-0" />}
                 {testResult.detail}
               </div>
             )}
@@ -802,7 +767,7 @@ function ApiSidePanel({ api, agents, onClose, onRefresh }: {
             {api.instructions && (
               <details>
                 <summary className="text-xs text-muted-foreground cursor-pointer hover:text-foreground list-none flex items-center gap-1">
-                  <ChevronDown className="w-3 h-3" /> Setup instructions
+                  <Icon name="ChevronDown" className="w-3 h-3" /> Setup instructions
                 </summary>
                 <pre className="mt-2 text-xs text-muted-foreground bg-secondary/60 rounded-lg p-3 whitespace-pre-wrap leading-relaxed">{api.instructions}</pre>
               </details>
@@ -908,7 +873,7 @@ function DiscoverModal({ onClose, onSaved }: { onClose: () => void; onSaved: () 
       <div className="w-full max-w-xl bg-card border-t sm:border border-border rounded-t-2xl sm:rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[92vh] sm:max-h-[90vh]">
         <div className="flex items-center justify-between px-5 py-4 border-b border-border shrink-0">
           <div className="flex items-center gap-2">
-            <Sparkles className="w-4 h-4 text-primary" />
+            <Icon name="Sparkles" className="w-4 h-4 text-primary" />
             <span className="font-semibold text-foreground text-sm">
               {step === "search" && "Add API — AI Discovery"}
               {step === "select" && `${results.length} API${results.length !== 1 ? "s" : ""} found — select to add`}
@@ -917,7 +882,7 @@ function DiscoverModal({ onClose, onSaved }: { onClose: () => void; onSaved: () 
               )}
             </span>
           </div>
-          <button onClick={onClose} className="text-muted-foreground hover:text-foreground transition-colors"><X className="w-4 h-4" /></button>
+          <button onClick={onClose} className="text-muted-foreground hover:text-foreground transition-colors"><Icon name="X" className="w-4 h-4" /></button>
         </div>
 
         <div className="flex-1 overflow-y-auto p-5 space-y-4">
@@ -930,7 +895,7 @@ function DiscoverModal({ onClose, onSaved }: { onClose: () => void; onSaved: () 
               </p>
               <div className="flex gap-2">
                 <div className="relative flex-1">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
+                  <Icon name="Search" className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
                   <input ref={inputRef} type="text" value={q}
                     onChange={(e) => setQ(e.target.value)}
                     onKeyDown={(e) => e.key === "Enter" && void discover()}
@@ -938,11 +903,10 @@ function DiscoverModal({ onClose, onSaved }: { onClose: () => void; onSaved: () 
                     className="w-full pl-9 pr-3 py-2.5 rounded-lg bg-secondary border border-border text-sm text-foreground placeholder-muted-foreground focus:outline-none focus:border-primary transition-colors"
                   />
                 </div>
-                <button onClick={() => void discover()} disabled={!q.trim() || discovering}
-                  className="px-4 py-2 rounded-lg bg-primary hover:opacity-90 disabled:opacity-40 text-sm font-medium text-primary-foreground flex items-center gap-2 shrink-0 transition-colors">
-                  {discovering ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
+                <Button size="none" layout="flex items-center" onClick={() => void discover()} disabled={!q.trim() || discovering} className="px-4 py-2 text-sm gap-2 shrink-0">
+                  {discovering ? <Icon name="Loader2" className="w-4 h-4 animate-spin" /> : <Icon name="Sparkles" className="w-4 h-4" />}
                   {discovering ? "Searching…" : "Discover"}
-                </button>
+                </Button>
               </div>
               <div>
                 <div className="text-[10px] text-muted uppercase tracking-wider mb-2">Try these</div>
@@ -974,7 +938,7 @@ function DiscoverModal({ onClose, onSaved }: { onClose: () => void; onSaved: () 
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-1.5 flex-wrap">
                             <span className="font-medium text-sm text-foreground">{r.label}</span>
-                            {isSel && <Check className="w-3 h-3 text-primary shrink-0" />}
+                            {isSel && <Icon name="Check" className="w-3 h-3 text-primary shrink-0" />}
                           </div>
                           <div className="text-[10px] text-muted-foreground capitalize mb-1">{r.category}</div>
                           <p className="text-xs text-muted-foreground line-clamp-2 leading-relaxed">{r.description}</p>
@@ -995,11 +959,10 @@ function DiscoverModal({ onClose, onSaved }: { onClose: () => void; onSaved: () 
                   className="px-4 py-2 rounded-lg border border-border text-sm text-muted-foreground hover:bg-secondary transition-colors">
                   ← Back
                 </button>
-                <button onClick={() => void saveDefinitions()} disabled={selected.size === 0 || savingDefs}
-                  className="flex-1 py-2 rounded-lg bg-primary hover:opacity-90 disabled:opacity-40 text-sm font-medium text-primary-foreground flex items-center justify-center gap-2 transition-colors">
-                  {savingDefs ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ArrowRight className="w-3.5 h-3.5" />}
+                <Button size="none" layout="flex items-center justify-center" onClick={() => void saveDefinitions()} disabled={selected.size === 0 || savingDefs} className="flex-1 py-2 text-sm gap-2">
+                  {savingDefs ? <Icon name="Loader2" className="w-3.5 h-3.5 animate-spin" /> : <Icon name="ArrowRight" className="w-3.5 h-3.5" />}
                   {savingDefs ? "Adding…" : `Add ${selected.size} API${selected.size !== 1 ? "s" : ""}`}
-                </button>
+                </Button>
               </div>
             </>
           )}
@@ -1030,7 +993,7 @@ function DiscoverModal({ onClose, onSaved }: { onClose: () => void; onSaved: () 
               {current.instructions && (
                 <details>
                   <summary className="text-xs text-muted-foreground cursor-pointer hover:text-foreground list-none flex items-center gap-1">
-                    <ChevronRight className="w-3 h-3" /> Setup instructions
+                    <Icon name="ChevronRight" className="w-3 h-3" /> Setup instructions
                   </summary>
                   <pre className="mt-2 text-xs text-muted-foreground bg-secondary/60 rounded-lg p-3 whitespace-pre-wrap leading-relaxed">{current.instructions}</pre>
                 </details>
@@ -1040,13 +1003,13 @@ function DiscoverModal({ onClose, onSaved }: { onClose: () => void; onSaved: () 
                   {current.setup_url && (
                     <a href={current.setup_url} target="_blank" rel="noopener noreferrer"
                       className="flex items-center gap-1 text-xs text-primary hover:opacity-80 transition-colors">
-                      Get credentials <ExternalLink className="w-3 h-3" />
+                      Get credentials <Icon name="ExternalLink" className="w-3 h-3" />
                     </a>
                   )}
                   {current.docs_url && (
                     <a href={current.docs_url} target="_blank" rel="noopener noreferrer"
                       className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors">
-                      API docs <ExternalLink className="w-3 h-3" />
+                      API docs <Icon name="ExternalLink" className="w-3 h-3" />
                     </a>
                   )}
                 </div>
@@ -1054,7 +1017,7 @@ function DiscoverModal({ onClose, onSaved }: { onClose: () => void; onSaved: () 
               {current.env_vars.map((v) => (
                 <div key={v.key}>
                   <label className="flex items-center gap-1 text-xs text-muted-foreground mb-1">
-                    {v.label} {v.sensitive && <Lock className="w-2.5 h-2.5 opacity-50" />}
+                    {v.label} {v.sensitive && <Icon name="Lock" className="w-2.5 h-2.5 opacity-50" />}
                   </label>
                   <input type={v.sensitive ? "password" : "text"} autoComplete="off"
                     value={creds[v.key] ?? ""}
@@ -1069,17 +1032,16 @@ function DiscoverModal({ onClose, onSaved }: { onClose: () => void; onSaved: () 
                   className="px-4 py-2 rounded-lg border border-border text-sm text-muted-foreground hover:bg-secondary transition-colors">
                   {configIdx < configQueue.length - 1 ? "Skip →" : "Finish"}
                 </button>
-                <button onClick={() => void advanceOrFinish(false)} disabled={savingCreds}
-                  className="flex-1 py-2 rounded-lg bg-primary hover:opacity-90 disabled:opacity-40 text-sm font-medium text-primary-foreground transition-colors">
+                <Button size="none" layout="" onClick={() => void advanceOrFinish(false)} disabled={savingCreds} className="flex-1 py-2 text-sm">
                   {savingCreds ? "Saving…" : configIdx < configQueue.length - 1 ? "Save & next →" : "Save & finish"}
-                </button>
+                </Button>
               </div>
             </>
           )}
 
           {err && (
             <p className="text-xs text-destructive bg-destructive/10 rounded-lg px-3 py-2 flex items-start gap-2">
-              <AlertCircle className="w-3.5 h-3.5 mt-0.5 shrink-0" /> {err}
+              <Icon name="AlertCircle" className="w-3.5 h-3.5 mt-0.5 shrink-0" /> {err}
             </p>
           )}
         </div>
@@ -1169,12 +1131,11 @@ function ApisTab() {
         <div className="flex items-center gap-2 ml-auto">
           <button onClick={() => void fetchAll()} title="Refresh"
             className="p-1.5 rounded-lg border border-border text-muted-foreground hover:bg-secondary transition-colors">
-            <RefreshCw className="w-3.5 h-3.5" />
+            <Icon name="RefreshCw" className="w-3.5 h-3.5" />
           </button>
-          <button onClick={() => setShowDiscover(true)}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary hover:opacity-90 text-xs font-medium text-primary-foreground transition-colors">
-            <Plus className="w-3.5 h-3.5" /><span className="hidden sm:inline">Add API</span>
-          </button>
+          <Button layout="flex items-center" onClick={() => setShowDiscover(true)}>
+            <Icon name="Plus" className="w-3.5 h-3.5" /><span className="hidden sm:inline">Add API</span>
+          </Button>
         </div>
       </div>
 
@@ -1190,7 +1151,7 @@ function ApisTab() {
           ))}
         </div>
         <div className="relative ml-auto shrink-0">
-          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground pointer-events-none" />
+          <Icon name="Search" className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground pointer-events-none" />
           <input type="text" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search…"
             className="pl-8 pr-3 py-1.5 rounded-lg bg-secondary border border-border text-xs text-foreground placeholder-muted-foreground focus:outline-none focus:border-primary transition-colors w-28 sm:w-36"
           />
@@ -1202,13 +1163,13 @@ function ApisTab() {
         <div className={`flex-1 p-4 overflow-y-auto ${selectedApi ? "sm:min-w-0" : ""}`}>
           {loading ? (
             <div className="flex items-center justify-center h-48 gap-3 text-muted-foreground text-sm">
-              <Loader2 className="w-4 h-4 animate-spin" /> Loading API connections…
+              <Icon name="Loader2" className="w-4 h-4 animate-spin" /> Loading API connections…
             </div>
           ) : filtered.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-48 gap-3 text-muted-foreground text-sm">
               <p>No APIs found{search ? ` for "${search}"` : ""}.</p>
               <button onClick={() => setShowDiscover(true)} className="flex items-center gap-1.5 text-xs text-primary hover:opacity-80">
-                <Plus className="w-3.5 h-3.5" /> Add a new API
+                <Icon name="Plus" className="w-3.5 h-3.5" /> Add a new API
               </button>
             </div>
           ) : (
@@ -1218,7 +1179,7 @@ function ApisTab() {
               ))}
               <button onClick={() => setShowDiscover(true)}
                 className="p-4 rounded-xl border-2 border-dashed border-border text-muted-foreground hover:border-primary/40 hover:text-primary hover:bg-primary/5 transition-all flex flex-col items-center justify-center gap-2 min-h-[120px]">
-                <Plus className="w-5 h-5" /><span className="text-xs">Add API</span>
+                <Icon name="Plus" className="w-5 h-5" /><span className="text-xs">Add API</span>
               </button>
             </div>
           )}
@@ -1235,7 +1196,7 @@ function ApisTab() {
                     <span className="text-sm font-semibold">{selectedApi.label ?? selectedApi.service}</span>
                   </div>
                   <button onClick={() => setSelected(null)} className="p-1 rounded-md hover:bg-secondary text-muted-foreground">
-                    <X size={16} />
+                    <Icon name="X" size={16} />
                   </button>
                 </div>
                 <div className="flex-1 min-h-0 overflow-y-auto">
@@ -1385,12 +1346,11 @@ function EmailTab() {
         <div className="flex items-center gap-2 ml-auto">
           <button onClick={() => void fetchAccounts()} title="Refresh"
             className="p-1.5 rounded-lg border border-border text-muted-foreground hover:bg-secondary transition-colors">
-            <RefreshCw className="w-3.5 h-3.5" />
+            <Icon name="RefreshCw" className="w-3.5 h-3.5" />
           </button>
-          <button onClick={() => setShowAdd(true)}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary hover:opacity-90 text-xs font-medium text-primary-foreground transition-colors">
-            <Plus className="w-3.5 h-3.5" /><span className="hidden sm:inline">Add Account</span>
-          </button>
+          <Button layout="flex items-center" onClick={() => setShowAdd(true)}>
+            <Icon name="Plus" className="w-3.5 h-3.5" /><span className="hidden sm:inline">Add Account</span>
+          </Button>
         </div>
       </div>
 
@@ -1398,7 +1358,7 @@ function EmailTab() {
       {(!oauthStatus.gmail || !oauthStatus.microsoft) && (
         <div className="mx-4 mt-3 p-3 rounded-xl bg-amber-500/8 border border-amber-500/20">
           <div className="flex items-start gap-2.5">
-            <AlertCircle className="w-4 h-4 text-amber-400 mt-0.5 shrink-0" />
+            <Icon name="AlertCircle" className="w-4 h-4 text-amber-400 mt-0.5 shrink-0" />
             <div className="flex-1 min-w-0">
               <p className="text-xs font-medium text-amber-300 mb-1">
                 OAuth sign-in not fully configured
@@ -1414,7 +1374,7 @@ function EmailTab() {
                     className="inline-flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-full bg-red-500/10 text-red-400 border border-red-500/20 hover:bg-red-500/20 transition-colors">
                     <span className="w-1.5 h-1.5 rounded-full bg-red-400" />
                     Gmail OAuth — not set up
-                    <ExternalLink className="w-2.5 h-2.5" />
+                    <Icon name="ExternalLink" className="w-2.5 h-2.5" />
                   </a>
                 )}
                 {!oauthStatus.microsoft && (
@@ -1422,7 +1382,7 @@ function EmailTab() {
                     className="inline-flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-full bg-blue-500/10 text-blue-400 border border-blue-500/20 hover:bg-blue-500/20 transition-colors">
                     <span className="w-1.5 h-1.5 rounded-full bg-blue-400" />
                     Microsoft OAuth — not set up
-                    <ExternalLink className="w-2.5 h-2.5" />
+                    <Icon name="ExternalLink" className="w-2.5 h-2.5" />
                   </a>
                 )}
               </div>
@@ -1439,22 +1399,21 @@ function EmailTab() {
       <div className="flex-1 overflow-y-auto p-4">
         {loading ? (
           <div className="flex items-center justify-center h-48 gap-3 text-muted-foreground text-sm">
-            <Loader2 className="w-4 h-4 animate-spin" /> Loading email accounts…
+            <Icon name="Loader2" className="w-4 h-4 animate-spin" /> Loading email accounts…
           </div>
         ) : error ? (
           <div className="flex flex-col items-center justify-center h-48 gap-3 text-muted-foreground text-sm">
-            <AlertCircle className="w-5 h-5 text-red-400" />
+            <Icon name="AlertCircle" className="w-5 h-5 text-red-400" />
             <p>{error}</p>
             <button onClick={() => void fetchAccounts()} className="text-xs text-primary hover:opacity-80">Retry</button>
           </div>
         ) : accounts.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-48 gap-3 text-muted-foreground text-sm">
-            <Mail className="w-8 h-8 opacity-30" />
+            <Icon name="Mail" className="w-8 h-8 opacity-30" />
             <p>No email accounts connected.</p>
-            <button onClick={() => setShowAdd(true)}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary hover:opacity-90 text-xs font-medium text-primary-foreground transition-colors">
-              <Plus className="w-3.5 h-3.5" /> Connect your first account
-            </button>
+            <Button layout="flex items-center" onClick={() => setShowAdd(true)}>
+              <Icon name="Plus" className="w-3.5 h-3.5" /> Connect your first account
+            </Button>
           </div>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
@@ -1476,18 +1435,16 @@ function EmailTab() {
                   </div>
                   <div className="flex items-center gap-1">
                     {(account.provider === "gmail" || account.provider === "microsoft") && (
-                      <button onClick={() => handleReconnect(account.provider)} title="Reconnect (re-authorize)"
-                        className="p-1 rounded-md hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors">
-                        <RotateCcw className="w-3.5 h-3.5" />
-                      </button>
+                      <Button variant="ghost" size="icon-xs" radius="keep" layout="" onClick={() => handleReconnect(account.provider)} title="Reconnect (re-authorize)" className="rounded-md">
+                        <Icon name="RotateCcw" className="w-3.5 h-3.5" />
+                      </Button>
                     )}
-                    <button onClick={() => handleSync(account.id)} title="Sync now"
-                      className="p-1 rounded-md hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors">
-                      <RefreshCw className="w-3.5 h-3.5" />
-                    </button>
+                    <Button variant="ghost" size="icon-xs" radius="keep" layout="" onClick={() => handleSync(account.id)} title="Sync now" className="rounded-md">
+                      <Icon name="RefreshCw" className="w-3.5 h-3.5" />
+                    </Button>
                     <button onClick={() => handleDelete(account.id)} title="Remove"
                       className="p-1 rounded-md hover:bg-red-500/10 text-muted-foreground hover:text-red-400 transition-colors">
-                      <X className="w-3.5 h-3.5" />
+                      <Icon name="X" className="w-3.5 h-3.5" />
                     </button>
                   </div>
                 </div>
@@ -1512,7 +1469,7 @@ function EmailTab() {
                 {account.syncStatus === "error" && (
                   <div className="mt-2 p-2 rounded-lg bg-red-500/8 border border-red-500/20">
                     <div className="flex items-start gap-1.5">
-                      <AlertCircle className="w-3 h-3 text-red-400 mt-0.5 shrink-0" />
+                      <Icon name="AlertCircle" className="w-3 h-3 text-red-400 mt-0.5 shrink-0" />
                       <div className="flex-1 min-w-0">
                         <p className="text-[10px] text-red-300 leading-snug break-words">
                           {account.syncError || "Sync failed — the connection may have expired."}
@@ -1520,7 +1477,7 @@ function EmailTab() {
                         {(account.provider === "gmail" || account.provider === "microsoft") && (
                           <button onClick={() => handleReconnect(account.provider)}
                             className="mt-1 inline-flex items-center gap-1 text-[10px] font-medium text-primary hover:opacity-80">
-                            <RotateCcw className="w-2.5 h-2.5" /> Reconnect account
+                            <Icon name="RotateCcw" className="w-2.5 h-2.5" /> Reconnect account
                           </button>
                         )}
                       </div>
@@ -1536,7 +1493,7 @@ function EmailTab() {
             ))}
             <button onClick={() => setShowAdd(true)}
               className="p-4 rounded-xl border-2 border-dashed border-border text-muted-foreground hover:border-primary/40 hover:text-primary hover:bg-primary/5 transition-all flex flex-col items-center justify-center gap-2 min-h-[140px]">
-              <Plus className="w-5 h-5" /><span className="text-xs">Add Account</span>
+              <Icon name="Plus" className="w-5 h-5" /><span className="text-xs">Add Account</span>
             </button>
           </div>
         )}
@@ -1558,7 +1515,7 @@ function EmailTab() {
       {/* Link to full email client */}
       <div className="px-4 py-2 border-t border-border shrink-0 flex items-center gap-2">
         <a href="/email" className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors">
-          <ExternalLink className="w-3 h-3" /> Open Email Client
+          <Icon name="ExternalLink" className="w-3 h-3" /> Open Email Client
         </a>
       </div>
     </div>
@@ -1579,7 +1536,7 @@ function AddEmailModal({
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-base font-semibold text-foreground">Add Email Account</h3>
           <button onClick={onClose} className="p-1 rounded-md hover:bg-secondary text-muted-foreground transition-colors">
-            <X size={16} />
+            <Icon name="X" size={16} />
           </button>
         </div>
         <div className="space-y-2">
@@ -1687,7 +1644,7 @@ function AddIMAPModal({
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-base font-semibold text-foreground">IMAP / SMTP Setup</h3>
           <button onClick={onClose} className="p-1 rounded-md hover:bg-secondary text-muted-foreground transition-colors">
-            <X size={16} />
+            <Icon name="X" size={16} />
           </button>
         </div>
         <div className="space-y-3">
@@ -1747,11 +1704,10 @@ function AddIMAPModal({
 
           {error && <p className="text-xs text-destructive bg-destructive/10 rounded-lg px-3 py-2">{error}</p>}
 
-          <button onClick={handleSave} disabled={saving}
-            className="w-full py-2.5 rounded-lg bg-primary hover:opacity-90 disabled:opacity-40 text-sm font-medium text-primary-foreground transition-colors flex items-center justify-center gap-2">
-            {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : null}
+          <Button size="none" layout="flex items-center justify-center" onClick={handleSave} disabled={saving} className="w-full py-2.5 text-sm gap-2">
+            {saving ? <Icon name="Loader2" className="w-3.5 h-3.5 animate-spin" /> : null}
             {saving ? "Connecting…" : "Connect Account"}
-          </button>
+          </Button>
         </div>
         <p className="mt-4 text-[10px] text-muted-foreground text-center">
           Credentials are encrypted at rest with AES-256-GCM
@@ -1826,7 +1782,7 @@ function McpsTab() {
       {/* Hero */}
       <div className="flex items-start gap-4 p-5 rounded-2xl border border-border bg-card">
         <div className="w-10 h-10 rounded-xl bg-primary/10 border border-primary/20 flex items-center justify-center shrink-0">
-          <Server className="w-5 h-5 text-primary" />
+          <Icon name="Server" className="w-5 h-5 text-primary" />
         </div>
         <div className="flex-1 min-w-0">
           <div className="flex items-center justify-between gap-3">
@@ -1836,10 +1792,9 @@ function McpsTab() {
                 {loading ? "Loading…" : `${connectedCount} server${connectedCount !== 1 ? "s" : ""} registered`}
               </p>
             </div>
-            <button onClick={() => setShowAdd(true)}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary hover:opacity-90 text-xs font-medium text-primary-foreground shrink-0 transition-colors">
-              <Plus className="w-3.5 h-3.5" /> Add MCP Server
-            </button>
+            <Button layout="flex items-center" onClick={() => setShowAdd(true)} className="shrink-0">
+              <Icon name="Plus" className="w-3.5 h-3.5" /> Add MCP Server
+            </Button>
           </div>
           <p className="text-sm text-muted-foreground mt-2 leading-relaxed max-w-xl">
             MCP is an open standard (by Anthropic) that lets agents connect to external tools. Register any MCP
@@ -1887,7 +1842,7 @@ function McpsTab() {
                     </button>
                     <button onClick={() => handleDelete(s.name)}
                       className="px-2 py-1 rounded text-[10px] border border-border text-muted-foreground hover:bg-destructive/10 hover:text-destructive transition-colors">
-                      <X className="w-3 h-3" />
+                      <Icon name="X" className="w-3 h-3" />
                     </button>
                   </div>
                 </div>
@@ -1898,16 +1853,15 @@ function McpsTab() {
       ) : !loading ? (
         <div className="flex flex-col items-center justify-center gap-3 py-10 text-center">
           <div className="w-12 h-12 rounded-2xl bg-secondary border border-border flex items-center justify-center">
-            <Server className="w-6 h-6 text-muted-foreground" />
+            <Icon name="Server" className="w-6 h-6 text-muted-foreground" />
           </div>
           <div>
             <div className="text-sm font-medium text-foreground">No MCP servers registered</div>
             <div className="text-xs text-muted-foreground mt-0.5">Add your first MCP server to give agents new capabilities.</div>
           </div>
-          <button onClick={() => setShowAdd(true)}
-            className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-primary hover:opacity-90 text-xs font-medium text-primary-foreground transition-colors">
-            <Plus className="w-3.5 h-3.5" /> Add MCP Server
-          </button>
+          <Button size="none" layout="flex items-center" onClick={() => setShowAdd(true)} className="gap-1.5 px-4 py-2 text-xs">
+            <Icon name="Plus" className="w-3.5 h-3.5" /> Add MCP Server
+          </Button>
         </div>
       ) : null}
 
@@ -1980,7 +1934,7 @@ function AddMcpModal({ onClose, onAdded }: { onClose: () => void; onAdded: () =>
       <div className="w-full max-w-md bg-card border-t sm:border border-border rounded-t-2xl sm:rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[92vh]">
         <div className="flex items-center justify-between px-5 py-4 border-b border-border shrink-0">
           <div className="font-semibold text-sm">Add MCP Server</div>
-          <button onClick={onClose} className="text-muted-foreground hover:text-foreground"><X className="w-4 h-4" /></button>
+          <button onClick={onClose} className="text-muted-foreground hover:text-foreground"><Icon name="X" className="w-4 h-4" /></button>
         </div>
         <div className="flex-1 overflow-y-auto p-5 space-y-4">
           <div className="grid grid-cols-2 gap-3">
@@ -2045,10 +1999,9 @@ function AddMcpModal({ onClose, onAdded }: { onClose: () => void; onAdded: () =>
           {err && <p className="text-xs text-destructive bg-destructive/10 rounded-lg px-3 py-2">{err}</p>}
           <div className="flex gap-2 pt-1">
             <button onClick={onClose} className="flex-1 py-2 rounded-lg border border-border text-sm text-muted-foreground hover:bg-secondary transition-colors">Cancel</button>
-            <button onClick={save} disabled={!form.name.trim() || saving}
-              className="flex-1 py-2 rounded-lg bg-primary hover:opacity-90 disabled:opacity-40 text-sm font-medium text-primary-foreground transition-colors">
+            <Button size="none" layout="" onClick={save} disabled={!form.name.trim() || saving} className="flex-1 py-2 text-sm">
               {saving ? "Saving…" : "Add Server"}
-            </button>
+            </Button>
           </div>
         </div>
       </div>
@@ -2061,12 +2014,12 @@ function AddMcpModal({ onClose, onAdded }: { onClose: () => void; onAdded: () =>
 // ===========================================================================
 
 const PLUGIN_EXAMPLES = [
-  { name: "Web Browsing",      icon: Globe,    desc: "Agents can open URLs, read pages, and extract structured data from the live web." },
-  { name: "Code Interpreter",  icon: Box,      desc: "Run sandboxed Python/JS and return computed results, charts, or transformed data." },
-  { name: "Document Analysis", icon: HardDrive, desc: "Upload PDFs, spreadsheets, or images and let agents extract and reason over content." },
-  { name: "Email Actions",     icon: Mail,     desc: "Draft, send, and thread emails directly from agent workflows without extra API setup." },
-  { name: "Calendar & Booking",icon: CheckSquare, desc: "Check availability, schedule meetings, and create calendar events autonomously." },
-  { name: "Community Plugins", icon: Users,    desc: "Install third-party plugins published by the CommandCenter community or build your own." },
+  { name: "Web Browsing",      icon: themedIcon("Globe"),    desc: "Agents can open URLs, read pages, and extract structured data from the live web." },
+  { name: "Code Interpreter",  icon: themedIcon("Box"),      desc: "Run sandboxed Python/JS and return computed results, charts, or transformed data." },
+  { name: "Document Analysis", icon: themedIcon("HardDrive"), desc: "Upload PDFs, spreadsheets, or images and let agents extract and reason over content." },
+  { name: "Email Actions",     icon: themedIcon("Mail"),     desc: "Draft, send, and thread emails directly from agent workflows without extra API setup." },
+  { name: "Calendar & Booking",icon: themedIcon("CheckSquare"), desc: "Check availability, schedule meetings, and create calendar events autonomously." },
+  { name: "Community Plugins", icon: themedIcon("Users"),    desc: "Install third-party plugins published by the CommandCenter community or build your own." },
 ];
 
 function PluginsTab() {
@@ -2100,7 +2053,7 @@ function PluginsTab() {
       {/* Hero */}
       <div className="flex items-start gap-4 p-5 rounded-2xl border border-border bg-card">
         <div className="w-10 h-10 rounded-xl bg-primary/10 border border-primary/20 flex items-center justify-center shrink-0">
-          <Puzzle className="w-5 h-5 text-primary" />
+          <Icon name="Puzzle" className="w-5 h-5 text-primary" />
         </div>
         <div className="flex-1 min-w-0">
           <div className="flex items-center justify-between gap-3">
@@ -2110,10 +2063,9 @@ function PluginsTab() {
                 {loading ? "Loading…" : `${plugins.length} plugin${plugins.length !== 1 ? "s" : ""} installed`}
               </p>
             </div>
-            <button onClick={() => setShowInstall(true)}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary hover:opacity-90 text-xs font-medium text-primary-foreground shrink-0 transition-colors">
-              <Plus className="w-3.5 h-3.5" /> Install Plugin
-            </button>
+            <Button layout="flex items-center" onClick={() => setShowInstall(true)} className="shrink-0">
+              <Icon name="Plus" className="w-3.5 h-3.5" /> Install Plugin
+            </Button>
           </div>
           <p className="text-sm text-muted-foreground mt-2 leading-relaxed max-w-xl">
             Plugins are self-describing tool packages — each one ships a manifest, an OpenAPI spec, and auth config.
@@ -2151,7 +2103,7 @@ function PluginsTab() {
                   </div>
                   <button onClick={() => handleDelete(p.id)}
                     className="px-2 py-1 rounded text-[10px] border border-border text-muted-foreground hover:bg-destructive/10 hover:text-destructive transition-colors shrink-0">
-                    <X className="w-3 h-3" />
+                    <Icon name="X" className="w-3 h-3" />
                   </button>
                 </div>
               </div>
@@ -2161,16 +2113,15 @@ function PluginsTab() {
       ) : !loading ? (
         <div className="flex flex-col items-center justify-center gap-3 py-10 text-center">
           <div className="w-12 h-12 rounded-2xl bg-secondary border border-border flex items-center justify-center">
-            <Puzzle className="w-6 h-6 text-muted-foreground" />
+            <Icon name="Puzzle" className="w-6 h-6 text-muted-foreground" />
           </div>
           <div>
             <div className="text-sm font-medium text-foreground">No plugins installed</div>
             <div className="text-xs text-muted-foreground mt-0.5">Install a plugin from a manifest URL to give agents new SaaS capabilities.</div>
           </div>
-          <button onClick={() => setShowInstall(true)}
-            className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-primary hover:opacity-90 text-xs font-medium text-primary-foreground transition-colors">
-            <Plus className="w-3.5 h-3.5" /> Install Plugin
-          </button>
+          <Button size="none" layout="flex items-center" onClick={() => setShowInstall(true)} className="gap-1.5 px-4 py-2 text-xs">
+            <Icon name="Plus" className="w-3.5 h-3.5" /> Install Plugin
+          </Button>
         </div>
       ) : null}
 
@@ -2252,20 +2203,20 @@ function InstallPluginModal({ onClose, onInstalled }: { onClose: () => void; onI
       <div className="w-full max-w-md bg-card border-t sm:border border-border rounded-t-2xl sm:rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[92vh]">
         <div className="flex items-center justify-between px-5 py-4 border-b border-border shrink-0">
           <div className="font-semibold text-sm">Install Plugin</div>
-          <button onClick={onClose} className="text-muted-foreground hover:text-foreground"><X className="w-4 h-4" /></button>
+          <button onClick={onClose} className="text-muted-foreground hover:text-foreground"><Icon name="X" className="w-4 h-4" /></button>
         </div>
         <div className="flex-1 overflow-y-auto p-5 space-y-4">
           {result ? (
             <div className="p-4 rounded-xl border border-success/20 bg-success/5 space-y-2">
               <div className="flex items-center gap-2">
-                <Check className="w-4 h-4 text-success" />
+                <Icon name="Check" className="w-4 h-4 text-success" />
                 <span className="text-sm font-medium text-foreground">Installed: {result.label}</span>
               </div>
               <div className="text-xs text-muted-foreground">
                 Plugin <span className="font-mono">{result.name}</span> registered with {result.tools_count} tool{result.tools_count !== 1 ? "s" : ""}.
                 {result.auth_type !== "none" && <> Auth type: {result.auth_type}.</>}
               </div>
-              <button onClick={onClose} className="w-full py-2 rounded-lg bg-primary hover:opacity-90 text-sm font-medium text-primary-foreground transition-colors">Done</button>
+              <Button size="none" layout="" onClick={onClose} className="w-full py-2 text-sm">Done</Button>
             </div>
           ) : (
             <>
@@ -2278,14 +2229,13 @@ function InstallPluginModal({ onClose, onInstalled }: { onClose: () => void; onI
                   placeholder="https://my-plugin.example.com/.well-known/ai-plugin.json"
                   className="w-full px-3 py-2 rounded-lg bg-secondary border border-border text-sm text-foreground placeholder-muted-foreground focus:outline-none focus:border-primary font-mono" />
               </div>
-              {err && <p className="text-xs text-destructive bg-destructive/10 rounded-lg px-3 py-2 flex items-start gap-2"><AlertCircle className="w-3.5 h-3.5 mt-0.5 shrink-0" /> {err}</p>}
+              {err && <p className="text-xs text-destructive bg-destructive/10 rounded-lg px-3 py-2 flex items-start gap-2"><Icon name="AlertCircle" className="w-3.5 h-3.5 mt-0.5 shrink-0" /> {err}</p>}
               <div className="flex gap-2 pt-1">
                 <button onClick={onClose} className="flex-1 py-2 rounded-lg border border-border text-sm text-muted-foreground hover:bg-secondary transition-colors">Cancel</button>
-                <button onClick={install} disabled={!manifestUrl.trim() || installing}
-                  className="flex-1 py-2 rounded-lg bg-primary hover:opacity-90 disabled:opacity-40 text-sm font-medium text-primary-foreground flex items-center justify-center gap-2 transition-colors">
-                  {installing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />}
+                <Button size="none" layout="flex items-center justify-center" onClick={install} disabled={!manifestUrl.trim() || installing} className="flex-1 py-2 text-sm gap-2">
+                  {installing ? <Icon name="Loader2" className="w-3.5 h-3.5 animate-spin" /> : <Icon name="Plus" className="w-3.5 h-3.5" />}
                   {installing ? "Installing…" : "Install"}
-                </button>
+                </Button>
               </div>
             </>
           )}
@@ -2309,7 +2259,7 @@ function fmtTokens(t: number): string {
 
 function SkillFamilyCard({ family }: { family: SkillFamily }) {
   const [open, setOpen] = useState(false);
-  const Chevron = open ? ChevronDown : ChevronRight;
+  const chevron = open ? "ChevronDown" : "ChevronRight";
   return (
     <div className="p-4 rounded-xl border border-border bg-card hover:bg-secondary/10 transition-colors">
       <button
@@ -2323,7 +2273,7 @@ function SkillFamilyCard({ family }: { family: SkillFamily }) {
               <span className="text-sm font-semibold text-foreground">{family.label}</span>
               {family.core && (
                 <span className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded border bg-violet-500/15 text-violet-400 border-violet-500/25">
-                  <Lock className="w-2.5 h-2.5" /> Core · always on
+                  <Icon name="Lock" className="w-2.5 h-2.5" /> Core · always on
                 </span>
               )}
               {!family.core && !family.scope_governed && (
@@ -2345,7 +2295,7 @@ function SkillFamilyCard({ family }: { family: SkillFamily }) {
                 ? "per-grant"
                 : `${family.tool_count} tool${family.tool_count !== 1 ? "s" : ""} · ${fmtTokens(family.token_cost)}`}
             </span>
-            <Chevron className="w-3.5 h-3.5 text-muted" />
+            <Icon name={chevron} className="w-3.5 h-3.5 text-muted" />
           </div>
         </div>
       </button>
@@ -2403,7 +2353,7 @@ function SkillsTab() {
       {/* Hero */}
       <div className="flex items-start gap-4 p-5 rounded-2xl border border-border bg-card">
         <div className="w-10 h-10 rounded-xl bg-primary/10 border border-primary/20 flex items-center justify-center shrink-0">
-          <Sparkles className="w-5 h-5 text-primary" />
+          <Icon name="Sparkles" className="w-5 h-5 text-primary" />
         </div>
         <div className="flex-1 min-w-0">
           <div className="flex items-center justify-between gap-3">
@@ -2419,7 +2369,7 @@ function SkillsTab() {
             </div>
             <button onClick={() => void fetchCatalog()} disabled={loading}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border hover:bg-secondary text-xs font-medium text-muted-foreground shrink-0 disabled:opacity-40 transition-colors">
-              <RefreshCw className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} /> Refresh
+              <Icon name="RefreshCw" className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} /> Refresh
             </button>
           </div>
           <p className="text-sm text-muted-foreground mt-2 leading-relaxed max-w-xl">
@@ -2433,7 +2383,7 @@ function SkillsTab() {
 
       {error && (
         <div className="flex items-center gap-2 p-3 rounded-xl border border-destructive/30 bg-destructive/10 text-xs text-destructive">
-          <AlertCircle className="w-4 h-4 shrink-0" /> {error}
+          <Icon name="AlertCircle" className="w-4 h-4 shrink-0" /> {error}
         </div>
       )}
 
@@ -2477,7 +2427,7 @@ function SkillsTab() {
                     {families.map((f) => (
                       <td key={f.slug} className="text-center px-3 py-2.5">
                         {a.families.includes(f.slug)
-                          ? <Check className="w-3.5 h-3.5 text-success inline" />
+                          ? <Icon name="Check" className="w-3.5 h-3.5 text-success inline" />
                           : (a.disabled_families ?? []).includes(f.slug)
                           ? <span className="text-[10px] px-1.5 py-0.5 rounded bg-warning/10 text-warning" title="Explicitly disabled by an admin (skill toggle)">off</span>
                           : <span className="text-muted">—</span>}
@@ -2494,7 +2444,7 @@ function SkillsTab() {
       {!loading && !error && families.length === 0 && (
         <div className="flex flex-col items-center justify-center gap-3 py-10 text-center">
           <div className="w-12 h-12 rounded-2xl bg-secondary border border-border flex items-center justify-center">
-            <Sparkles className="w-6 h-6 text-muted-foreground" />
+            <Icon name="Sparkles" className="w-6 h-6 text-muted-foreground" />
           </div>
           <div>
             <div className="text-sm font-medium text-foreground">No skills catalog available</div>

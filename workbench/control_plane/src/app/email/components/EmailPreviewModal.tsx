@@ -1,7 +1,7 @@
 "use client";
 
+import Icon from "@/components/Icon";
 import { useEffect, useState } from "react";
-import { Loader2, Paperclip, X } from "lucide-react";
 import { Email } from "../lib/types";
 import { getEmail } from "../lib/api";
 import { fullDateLabel } from "../lib/utils";
@@ -87,13 +87,13 @@ export function EmailPreviewModal({
             className="text-muted-foreground hover:text-foreground flex-shrink-0"
             title="Close (Esc)"
           >
-            <X size={16} />
+            <Icon name="X" size={16} />
           </button>
         </div>
         <div className="overflow-y-auto px-4 py-3 flex-1">
           {loading && !e ? (
             <div className="flex items-center gap-2 text-xs text-muted-foreground py-6">
-              <Loader2 className="animate-spin" size={14} /> Loading…
+              <Icon name="Loader2" className="animate-spin" size={14} /> Loading…
             </div>
           ) : err ? (
             <div className="text-xs text-destructive">{err}</div>
@@ -111,7 +111,7 @@ export function EmailPreviewModal({
                   key={a.id}
                   className="inline-flex items-center gap-1 text-[10px] px-2 py-1 rounded-md border border-border text-muted-foreground"
                 >
-                  <Paperclip size={10} /> {a.filename}
+                  <Icon name="Paperclip" size={10} /> {a.filename}
                 </span>
               ))}
             </div>

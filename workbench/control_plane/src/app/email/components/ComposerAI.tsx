@@ -1,7 +1,7 @@
 "use client";
 
+import Icon from "@/components/Icon";
 import { useState } from "react";
-import { Sparkles, MoreHorizontal } from "lucide-react";
 
 /**
  * The quoted trailing email shown in a COMPOSE box — collapsed behind an
@@ -31,7 +31,7 @@ export function ComposerQuote({
             : "border-border bg-secondary text-muted-foreground hover:bg-secondary/70 hover:text-foreground"
         }`}
       >
-        <MoreHorizontal size={14} />
+        <Icon name="MoreHorizontal" size={14} />
       </button>
       {open && (
         <div className="mt-1 border-l-2 border-border pl-3">
@@ -66,7 +66,7 @@ export function AiButton({
           : "text-muted-foreground hover:text-foreground hover:bg-secondary"
       }`}
     >
-      <Sparkles size={13} />
+      <Icon name="Sparkles" size={13} />
     </button>
   );
 }

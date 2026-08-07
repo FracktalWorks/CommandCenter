@@ -1,7 +1,8 @@
 "use client";
 
+import Button from "@/components/ui/Button";
+import Icon from "@/components/Icon";
 import { useState, useEffect, useRef } from "react";
-import { X, Loader2, Paperclip } from "lucide-react";
 import { useEmailStore } from "../lib/emailStore";
 import {
   fileToSendAttachment,
@@ -259,12 +260,9 @@ export function ComposePanel({
         {/* Header */}
         <div className="shrink-0 flex items-center justify-between px-4 py-3 border-b border-border bg-secondary/50">
           <span className="text-sm font-medium text-foreground">New Message</span>
-          <button
-            onClick={onClose}
-            className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
-          >
-            <X size={16} />
-          </button>
+          <Button variant="ghost" size="icon-xs" radius="keep" layout="" onClick={onClose} className="rounded">
+            <Icon name="X" size={16} />
+          </Button>
         </div>
 
         {/* Fields — the scrolling region when the window hits its max height */}
@@ -330,14 +328,14 @@ export function ComposePanel({
                   key={`f-${i}`}
                   className="inline-flex items-center gap-1 text-[10px] px-2 py-1 rounded-md border border-border bg-secondary text-muted-foreground"
                 >
-                  <Paperclip size={10} />
+                  <Icon name="Paperclip" size={10} />
                   <span className="truncate max-w-[160px]" title={a.filename}>{a.filename}</span>
                   <button
                     onClick={() => setAttachments((prev) => prev.filter((_, j) => j !== i))}
                     className="hover:text-foreground"
                     title="Remove attachment"
                   >
-                    <X size={10} />
+                    <Icon name="X" size={10} />
                   </button>
                 </span>
               ))}
@@ -347,14 +345,14 @@ export function ComposePanel({
                   className="inline-flex items-center gap-1 text-[10px] px-2 py-1 rounded-md border border-primary/40 bg-primary/5 text-primary"
                   title={a.path}
                 >
-                  <Paperclip size={10} />
+                  <Icon name="Paperclip" size={10} />
                   <span className="truncate max-w-[160px]">{a.name || a.path}</span>
                   <button
                     onClick={() => setArtifacts((prev) => prev.filter((_, j) => j !== i))}
                     className="hover:text-foreground"
                     title="Remove attachment"
                   >
-                    <X size={10} />
+                    <Icon name="X" size={10} />
                   </button>
                 </span>
               ))}
@@ -402,7 +400,7 @@ export function ComposePanel({
               className="px-2 py-1.5 text-xs rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors cursor-pointer flex items-center"
               title="Attach files"
             >
-              <Paperclip size={14} />
+              <Icon name="Paperclip" size={14} />
               <input
                 type="file"
                 multiple
@@ -415,25 +413,17 @@ export function ComposePanel({
               onPick={(ref) => setArtifacts((prev) =>
                 prev.some((a) => a.path === ref.path) ? prev : [...prev, ref])}
             />
-            <button
-              onClick={() => {
+            <Button variant="ghost" size="none" radius="keep" layout="" onClick={() => {
                 // Discard removes the auto-saved draft (closing via X keeps it).
                 if (draftIdRef.current) void deleteEmail(draftIdRef.current);
                 onClose();
-              }}
-              disabled={sending}
-              className="px-3 py-1.5 text-xs rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors disabled:opacity-50"
-            >
+              }} disabled={sending} className="px-3 py-1.5 text-xs rounded-md">
               Discard
-            </button>
-            <button
-              onClick={handleSend}
-              disabled={sending || !to.trim()}
-              className="px-4 py-1.5 text-xs rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors font-medium disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5"
-            >
-              {sending && <Loader2 size={12} className="animate-spin" />}
+            </Button>
+            <Button size="none" radius="keep" layout="flex items-center" onClick={handleSend} disabled={sending || !to.trim()} className="px-4 py-1.5 text-xs rounded-md gap-1.5">
+              {sending && <Icon name="Loader2" size={12} className="animate-spin" />}
               {sending ? "Sending…" : "Send"}
-            </button>
+            </Button>
           </div>
         </div>
       </div>

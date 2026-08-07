@@ -8,7 +8,7 @@
  * same PATCH the kanban drag does (lib/board.ts::moveRequest).
  */
 
-import { ChevronDown } from "lucide-react";
+import Icon from "@/components/Icon";
 import { useState } from "react";
 import { statusTone } from "../lib/board";
 import type { Status } from "../lib/types";
@@ -47,7 +47,7 @@ export default function StatusPill({
       >
         <span className={`w-1.5 h-1.5 rounded-full ${tone}`} />
         {label}
-        <ChevronDown className="w-3 h-3 opacity-60" />
+        <Icon name="ChevronDown" className="w-3 h-3 opacity-60" />
       </button>
       {open && (
         <>

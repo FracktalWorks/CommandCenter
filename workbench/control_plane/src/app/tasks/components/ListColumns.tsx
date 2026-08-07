@@ -1,6 +1,6 @@
 "use client";
 
-import { AlertTriangle, Clock, Paperclip, ListTree, Zap } from "lucide-react";
+import Icon from "@/components/Icon";
 import { GtdItem } from "../lib/types";
 import { useTaskStore } from "../lib/taskStore";
 import { durationLabel, isOverdue, relativeTime } from "../lib/utils";
@@ -158,7 +158,7 @@ function CellBody({
     case "estimate":
       return item.timeEstimateMins ? (
         <span className="inline-flex items-center gap-1 text-[10px] text-muted-foreground">
-          <Zap className="h-3 w-3" />
+          <Icon name="Zap" className="h-3 w-3" />
           {durationLabel(item.timeEstimateMins)}
         </span>
       ) : null;
@@ -173,9 +173,9 @@ function CellBody({
           ].join(" ")}
         >
           {isOverdue(item) ? (
-            <AlertTriangle className="h-3 w-3" />
+            <Icon name="AlertTriangle" className="h-3 w-3" />
           ) : (
-            <Clock className="h-3 w-3" />
+            <Icon name="Clock" className="h-3 w-3" />
           )}
           {relativeTime(item.dueAt)}
         </span>
@@ -183,14 +183,14 @@ function CellBody({
     case "attachments":
       return item.attachments?.length ? (
         <span className="inline-flex items-center gap-0.5 text-[10px] text-muted-foreground">
-          <Paperclip className="h-3 w-3" />
+          <Icon name="Paperclip" className="h-3 w-3" />
           {item.attachments.length}
         </span>
       ) : null;
     case "subtasks":
       return item.subtaskCount ? (
         <span className="inline-flex items-center gap-0.5 text-[10px] text-muted-foreground">
-          <ListTree className="h-3 w-3" />
+          <Icon name="ListTree" className="h-3 w-3" />
           {item.subtaskCount}
         </span>
       ) : null;

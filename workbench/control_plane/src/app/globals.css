@@ -6,11 +6,52 @@
    Primary: professional blue  hsl(198 89% 50%)
    Accent:  warm orange       hsl(27 96% 61%)
    Surface: deep blue-gray    hsl(220 13% 8%)
-   
+
    Light theme is applied via .light class (next-themes class strategy).
+
+   THEMING ENGINE — read this before editing the blocks below.
+
+   These `:root` / `.light` blocks are the FALLBACK layer. The live values come
+   from the theme manifests in src/lib/theme/themes.ts, emitted by
+   <ThemeStyles> as `html[data-theme="…"]` scopes whose specificity (0,1,1)
+   deliberately outranks everything here (0,1,0). What is written below is what
+   you see only before the boot script runs, or with JavaScript disabled.
+
+   Consequences:
+     • These values MUST stay identical to the `rapidtool` manifest.
+       src/lib/theme/themes.test.ts parses this file and fails the build if
+       they drift.
+     • To change how the app looks, edit the manifest — not this file.
+     • To add a theme, add a manifest entry. Nothing here needs to change.
    ──────────────────────────────────────────────────────────────────────── */
 
 :root {
+  /* Structural tokens — shape, typography and effects. Themes override these
+     wholesale; the values here are RapidTool's. */
+  --border-width: 1px;
+  --font-app: var(--font-geist-sans);
+  --font-app-mono: var(--font-geist-mono);
+  --font-display: var(--font-geist-sans);
+  --heading-tracking: 0em;
+  --heading-weight: 700;
+  --label-weight: 500;
+  --glass-blur: 16px;
+  --glass-opacity: 0.65;
+  --glass-opacity-strong: 0.92;
+  --glow-strength: 1;
+  --elevation: 0 4px 16px hsl(0 0% 0% / 0.25);
+  --motion-duration: 0.2s;
+  --motion-easing: cubic-bezier(0.25, 0.46, 0.45, 0.94);
+  /* Control personality — consumed by the primitives in components/ui/. */
+  --button-radius: var(--radius);
+  --control-filled-border: 0px;
+  --control-state-layer: 0;
+  --control-focus-ring: 2px;
+  --control-label-tracking: 0em;
+  --control-label-transform: none;
+  /* Root font-size multiplier driven by the user's density preference. */
+  --ui-scale: 1;
+
   --background: hsl(220 13% 8%);
   --foreground: hsl(210 40% 98%);
 
@@ -135,19 +176,46 @@
   --color-sidebar-primary: var(--sidebar-primary);
   --color-sidebar-accent: var(--sidebar-accent);
   --color-sidebar-border: var(--sidebar-border);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --font-sans: var(--font-app);
+  --font-mono: var(--font-app-mono);
+  /* The whole radius scale is derived from --radius so a theme controls the
+     app's roundness with one value. At RapidTool's 0.75rem these resolve to
+     exactly Tailwind's own defaults (8/10/12/12/16/24px), so the shipped look
+     is unchanged; Fluent's 0.25rem squares everything off and Material's 1rem
+     rounds it. max() keeps a small --radius from producing negative values. */
+  --radius-sm: max(0px, calc(var(--radius) - 4px));
+  --radius-md: max(0px, calc(var(--radius) - 2px));
   --radius-lg: var(--radius);
-  --radius-md: calc(var(--radius) - 2px);
-  --radius-sm: calc(var(--radius) - 4px);
+  --radius-xl: var(--radius);
+  --radius-2xl: calc(var(--radius) + 4px);
+  --radius-3xl: calc(var(--radius) + 12px);
+}
+
+/* Density: scales the root font size, and with it every rem-based size
+   Tailwind emits (text, spacing, radii). Mobile inputs are pinned in px so
+   iOS keyboard zoom stays prevented regardless of this setting. */
+html {
+  font-size: calc(100% * var(--ui-scale, 1));
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: var(--font-geist-sans), system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-family: var(--font-app), system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+/* Headings follow the theme's display face and tracking. Weight stays with the
+   Tailwind utility on each element — a `font-bold` class outranks a bare
+   element selector, so --heading-weight is for primitives to consume, not
+   something this rule can impose. */
+h1,
+h2,
+h3,
+h4 {
+  font-family: var(--font-display), var(--font-app), system-ui, sans-serif;
+  letter-spacing: var(--heading-tracking);
 }
 
 /* Prevent accidental horizontal scrolling of the whole app on small screens. */
@@ -156,45 +224,106 @@ body {
   overflow-x: hidden;
 }
 
-/* ── Tech glass / glow effects ────────────────────────────────────────── */
+/* ── Tech glass / glow effects ──────────────────────────────────────────
+   Fully token-driven, so each theme decides how surfaces behave: RapidTool
+   blurs and glows, Fluent renders acrylic without glow, Material switches both
+   off and expresses depth with --elevation instead.
+
+   These used to hardcode dark-theme colours plus a `.light` re-tint. Deriving
+   them from --popover / --card / --border removes that special case: any
+   theme's light mode now gets readable glass automatically. */
 .tech-glass {
-  background: hsl(220 13% 12% / 0.65);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-  border: 1px solid hsl(220 13% 18%);
+  background: color-mix(in srgb, var(--popover) calc(var(--glass-opacity) * 100%), transparent);
+  backdrop-filter: blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  border: var(--border-width) solid var(--border);
 }
 
+/* Modals, drawers and popovers — the same material at a higher opacity, since
+   they sit over live content and must stay readable. */
 .tech-glass-subtle {
-  background: hsl(220 13% 10% / 0.92);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-  border: 1px solid hsl(220 13% 16% / 0.8);
+  background: color-mix(in srgb, var(--card) calc(var(--glass-opacity-strong) * 100%), transparent);
+  backdrop-filter: blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  border: var(--border-width) solid color-mix(in srgb, var(--border) 80%, transparent);
 }
 
-/* Light theme — the glass surfaces are dark-only by default, which leaves
-   panels/modals (e.g. the agent session picker) as a dark card with dark
-   light-mode text = unreadable. Re-tint them to the light surface so the
-   theme's foreground tokens land on a light background. */
-.light .tech-glass {
-  background: hsl(0 0% 100% / 0.72);
-  border-color: hsl(214.3 31.8% 91.4%);
-}
-
-.light .tech-glass-subtle {
-  background: hsl(0 0% 100% / 0.95);
-  border-color: hsl(214.3 31.8% 88%);
-}
-
+/* --glow-strength scales the effect; a theme setting it to 0 makes the colour
+   fully transparent, which switches glowing off without a separate rule. */
 .tech-glow {
-  box-shadow: 0 0 24px hsl(198 89% 50% / 0.08);
+  box-shadow: 0 0 24px
+    color-mix(in srgb, var(--primary) calc(var(--glow-strength) * 8%), transparent);
 }
 
 .tech-glow:hover {
-  box-shadow: 0 0 32px hsl(198 89% 50% / 0.15);
+  box-shadow: 0 0 32px
+    color-mix(in srgb, var(--primary) calc(var(--glow-strength) * 15%), transparent);
 }
 
 .tech-transition {
-  transition: all 0.2s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+  transition: all var(--motion-duration) var(--motion-easing);
+}
+
+/* Elevation — themes that render flat surfaces (Material) use shadow rather
+   than blur to separate layers. */
+.tech-elevated {
+  box-shadow: var(--elevation);
+}
+
+/* ── Control primitives ─────────────────────────────────────────────────
+   The shared <Button>/<Input>/<Badge> in components/ui/ build on these. They
+   exist as CSS rather than Tailwind classes because two of them cannot be
+   expressed as utilities at all: a state-layer overlay needs a pseudo-element,
+   and text-transform/letter-spacing have to come from a custom property so a
+   theme can change them without touching a call site. */
+.cc-control {
+  position: relative;
+  isolation: isolate;
+  font-weight: var(--label-weight);
+  letter-spacing: var(--control-label-tracking);
+  text-transform: var(--control-label-transform);
+  transition: all var(--motion-duration) var(--motion-easing);
+}
+
+/* Keyboard focus only — a mouse click should not draw a ring. */
+.cc-control:focus-visible {
+  outline: var(--control-focus-ring) solid var(--ring);
+  outline-offset: 2px;
+}
+
+/* Material-style state layer: an overlay of the control's own text colour, so
+   it works on any variant without knowing that variant's background. Themes
+   leaving --control-state-layer at 0 render nothing and fall back to the
+   opacity shift the variant classes apply. */
+.cc-control::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: currentColor;
+  opacity: 0;
+  pointer-events: none;
+  z-index: -1;
+  transition: opacity var(--motion-duration) var(--motion-easing);
+}
+
+.cc-control:hover:not(:disabled)::after {
+  opacity: var(--control-state-layer);
+}
+
+.cc-control:active:not(:disabled)::after {
+  opacity: calc(var(--control-state-layer) * 1.5);
+}
+
+/* Buttons carry their own radius so Material can render pills while cards and
+   inputs keep the theme's ordinary radius. */
+.cc-button {
+  border-radius: var(--button-radius);
+}
+
+/* Fluent strokes even its solid buttons; themes at 0px get no border. */
+.cc-button-filled {
+  border: var(--control-filled-border) solid color-mix(in srgb, currentColor 25%, transparent);
 }
 
 /* ── iOS safe-area padding utilities ─────────────────────────────────────
@@ -275,7 +404,7 @@ body {
   content: "";
   position: absolute;
   inset: 0;
-  background: hsl(198 89% 50% / 0.14);
+  background: color-mix(in srgb, var(--primary) 14%, transparent);
   pointer-events: none;
 }
 .sig-rich .ProseMirror .column-resize-handle {
@@ -307,9 +436,9 @@ body {
 .chat-shimmer-text {
   background: linear-gradient(
     90deg,
-    hsl(215 20% 50%) 0%,
-    hsl(210 40% 90%) 45%,
-    hsl(215 20% 50%) 90%
+    var(--muted-foreground) 0%,
+    var(--foreground) 45%,
+    var(--muted-foreground) 90%
   );
   background-size: 200% 100%;
   -webkit-background-clip: text;
@@ -379,7 +508,7 @@ body {
 
 .scrollbar-thin {
   scrollbar-width: thin;
-  scrollbar-color: hsl(0 0% 50% / 0.35) transparent;
+  scrollbar-color: color-mix(in srgb, var(--muted-foreground) 45%, transparent) transparent;
 }
 
 .scrollbar-thin::-webkit-scrollbar {
@@ -391,12 +520,12 @@ body {
 }
 
 .scrollbar-thin::-webkit-scrollbar-thumb {
-  background-color: hsl(0 0% 50% / 0.35);
+  background-color: color-mix(in srgb, var(--muted-foreground) 45%, transparent);
   border-radius: 10rem;
 }
 
 .scrollbar-thin::-webkit-scrollbar-thumb:hover {
-  background-color: hsl(0 0% 50% / 0.55);
+  background-color: color-mix(in srgb, var(--muted-foreground) 65%, transparent);
 }
 
 .scrollbar-hide {
@@ -421,6 +550,12 @@ body {
 
   .animate-spin {
     animation-duration: 1.6s;
+  }
+
+  /* Themes set their own motion feel; honouring the OS preference has to
+     override whichever one is active. */
+  :root {
+    --motion-duration: 0.01ms;
   }
 
   *,

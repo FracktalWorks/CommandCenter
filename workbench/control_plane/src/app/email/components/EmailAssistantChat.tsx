@@ -18,9 +18,9 @@
  *   3. Bridge the Assistant "Fix" flow (pendingChatPrompt → composer).
  */
 
+import Icon from "@/components/Icon";
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { useSession } from "next-auth/react";
-import { Sparkles, Plus, MessagesSquare, Trash2, X, ArrowLeft } from "lucide-react";
 import AgentChat from "@/components/AgentChat";
 import {
   getSessions, createSession, upsertSession, deleteSession,
@@ -252,11 +252,11 @@ export function EmailAssistantChat({
               aria-label="Back to inbox"
               className="p-1 -ml-1 rounded text-muted-foreground hover:text-sidebar-foreground hover:bg-sidebar-accent transition-colors"
             >
-              <ArrowLeft size={14} />
+              <Icon name="ArrowLeft" size={14} />
             </button>
           )}
           <div className="w-5 h-5 rounded-full bg-primary/20 text-primary flex items-center justify-center">
-            <Sparkles size={11} />
+            <Icon name="Sparkles" size={11} />
           </div>
           <span className="text-xs font-semibold text-sidebar-foreground">
             AI Assistant
@@ -272,14 +272,14 @@ export function EmailAssistantChat({
                 : "text-muted-foreground hover:text-sidebar-foreground hover:bg-sidebar-accent"
             }`}
           >
-            <MessagesSquare size={14} />
+            <Icon name="MessagesSquare" size={14} />
           </button>
           <button
             onClick={newSession}
             title="New chat"
             className="p-1 rounded text-muted-foreground hover:text-sidebar-foreground hover:bg-sidebar-accent transition-colors"
           >
-            <Plus size={15} />
+            <Icon name="Plus" size={15} />
           </button>
         </div>
       </div>
@@ -295,7 +295,7 @@ export function EmailAssistantChat({
               onClick={() => setShowSessions(false)}
               className="text-muted-foreground hover:text-foreground"
             >
-              <X size={12} />
+              <Icon name="X" size={12} />
             </button>
           </div>
           {emailSessions.length === 0 ? (
@@ -337,7 +337,7 @@ export function EmailAssistantChat({
                   title="Delete conversation"
                   className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive flex-shrink-0"
                 >
-                  <Trash2 size={12} />
+                  <Icon name="Trash2" size={12} />
                 </button>
               </div>
             ))

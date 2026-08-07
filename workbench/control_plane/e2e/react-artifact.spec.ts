@@ -20,6 +20,8 @@
 import { expect, test } from "@playwright/test";
 
 import { compileArtifact } from "../src/lib/compileArtifact";
+import { appTokenCss } from "../src/lib/theme/app-tokens";
+import { resolveTheme } from "../src/lib/theme/themes";
 
 /** An agent-authored artifact using the API surface agents are told to use. */
 const SOURCE = `
@@ -41,7 +43,9 @@ export default function Dashboard() {
   );
 }`;
 
-/** Mirrors SandboxedHtml's frame: same CSP, content first, bridge LAST. */
+/** Mirrors the sandbox frame: same CSP, content first, bridge LAST. The token
+ *  block is imported rather than copied — a stale copy would keep passing while
+ *  the real one drifted, which is the exact failure this line guards. */
 const CSP = [
   "default-src 'none'", "style-src 'unsafe-inline'",
   "script-src 'unsafe-inline' 'unsafe-eval'", "img-src data:", "font-src data:",
@@ -61,7 +65,8 @@ function buildHost(js: string): string {
   const srcDoc =
     `<!doctype html><html data-theme="dark"><head><meta charset="utf-8">` +
     `<meta http-equiv="Content-Security-Policy" content="${CSP}">` +
-    `<style>:root{--cc-primary:hsl(198 89% 50%)}.cc-eyebrow{color:var(--cc-primary)}</style>` +
+    `<style>:root{\n${appTokenCss(resolveTheme("rapidtool"), "dark")}\n}` +
+    `.cc-eyebrow{color:var(--cc-primary)}</style>` +
     `</head><body>${mount}${BRIDGE}</body></html>`;
   return (
     `<!doctype html><html><body><iframe id="f" sandbox="allow-scripts" ` +
@@ -91,7 +96,10 @@ test("a React artifact renders, stays interactive, and reaches the agent", async
   await frame.locator("#slider").fill("5");
   await expect(frame.locator("#val")).toHaveText("10");
 
-  // 4. cc-* tokens reach the artifact. hsl(198 89% 50%) == rgb(14,173,241).
+  // 4. cc-* tokens reach the artifact — using the REAL token block rather than
+  //    a hand-written `--cc-primary`, so this also proves the values the sandbox
+  //    actually injects survive the CSP. RapidTool dark primary is
+  //    hsl(198 89% 50%) == rgb(14,173,241).
   await expect(frame.locator(".cc-eyebrow")).toHaveCSS("color", "rgb(14, 173, 241)");
 
   await frame.locator("#send").click();

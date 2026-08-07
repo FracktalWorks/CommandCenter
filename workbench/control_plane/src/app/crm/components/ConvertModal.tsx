@@ -13,7 +13,7 @@
  * modal reads as a confirmation rather than as a second opinion.
  */
 
-import { X } from "lucide-react";
+import Icon from "@/components/Icon";
 import { useState } from "react";
 import {
   canConvert,
@@ -83,7 +83,7 @@ export default function ConvertModal({
             onClick={onClose}
             className="rounded-lg border border-border p-2 text-muted-foreground hover:bg-secondary tech-transition"
           >
-            <X className="w-4 h-4" />
+            <Icon name="X" className="w-4 h-4" />
           </button>
         </header>
 

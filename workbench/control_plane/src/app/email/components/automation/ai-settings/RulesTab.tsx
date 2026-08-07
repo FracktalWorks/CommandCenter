@@ -4,13 +4,9 @@
 // actions), the action-config sub-editors, and the Rules-tab dialogs (Add rule,
 // Process past emails, artifact picker). Extracted from AISettingsView.tsx.
 
+import Button from "@/components/ui/Button";
+import Icon from "@/components/Icon";
 import { useCallback, useEffect, useRef, useState } from "react";
-import {
-  Check, ChevronDown, ChevronRight, Cloud, Copy, FolderOpen, FolderPlus,
-  History as HistoryIcon, Inbox, Loader2, MoreHorizontal, MoreVertical,
-  Paperclip, Pencil, Play, Plus, Shield, Sparkles, Tag, Trash2, Upload, Wand2,
-  X, Zap,
-} from "lucide-react";
 import {
   createEmailFolder, createRule, deleteRule, deleteRulePattern, generateRules,
   getRulePolicies, installPresetRules, listEmailArtifacts, listRulePatterns,
@@ -440,7 +436,7 @@ export function RulesTab({
               disabled={installing}
               className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-border text-xs text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors disabled:opacity-50 whitespace-nowrap"
             >
-              {installing ? <Loader2 className="animate-spin" size={13} /> : <Sparkles size={13} />}
+              {installing ? <Icon name="Loader2" className="animate-spin" size={13} /> : <Icon name="Sparkles" size={13} />}
               Add defaults
             </button>
           )}
@@ -449,15 +445,12 @@ export function RulesTab({
               onClick={() => setShowPast(true)}
               className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-border text-xs text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors whitespace-nowrap"
             >
-              <HistoryIcon size={13} /> Past emails
+              <Icon name="History" size={13} /> Past emails
             </button>
           )}
-          <button
-            onClick={() => setShowAdd(true)}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90 transition-colors whitespace-nowrap"
-          >
-            <Plus size={13} /> Add rule
-          </button>
+          <Button layout="flex items-center" onClick={() => setShowAdd(true)} className="whitespace-nowrap">
+            <Icon name="Plus" size={13} /> Add rule
+          </Button>
         </div>
       </div>
       {showAdd && accountId && (
@@ -491,24 +484,20 @@ export function RulesTab({
       <div className="flex-1 overflow-y-auto px-5 py-3 space-y-2">
         {rules.length === 0 && (
           <div className="flex flex-col items-center text-center py-10 gap-3">
-            <Sparkles size={22} className="text-primary/60" />
+            <Icon name="Sparkles" size={22} className="text-primary/60" />
             <div className="text-sm text-muted-foreground max-w-xs">
               No rules yet. Install the recommended set (Needs Reply, FYI,
               Newsletter, Marketing, Calendar, Receipt, Notification, Cold Email)
               or create your own.
             </div>
-            <button
-              onClick={installDefaults}
-              disabled={installing}
-              className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90 transition-colors disabled:opacity-50"
-            >
+            <Button size="none" layout="flex items-center" onClick={installDefaults} disabled={installing} className="gap-1.5 px-3 py-2 text-xs">
               {installing ? (
-                <Loader2 className="animate-spin" size={13} />
+                <Icon name="Loader2" className="animate-spin" size={13} />
               ) : (
-                <Sparkles size={13} />
+                <Icon name="Sparkles" size={13} />
               )}
               Install default rules
-            </button>
+            </Button>
           </div>
         )}
         {rules.map((rule) => (
@@ -565,7 +554,7 @@ export function RulesTab({
                           : "text-muted-foreground hover:text-foreground"
                       }`}
                     >
-                      <Zap size={11} />
+                      <Icon name="Zap" size={11} />
                       {rp.length === 1
                         ? "1 learned pattern"
                         : `${rp.length} learned patterns`}
@@ -604,7 +593,7 @@ export function RulesTab({
                 title="More"
                 onClick={() => setMenuFor(menuFor === rule.id ? null : rule.id ?? null)}
               >
-                <MoreVertical size={14} />
+                <Icon name="MoreVertical" size={14} />
               </IconAction>
               {menuFor === rule.id && (
                 <>
@@ -615,7 +604,7 @@ export function RulesTab({
                   />
                   <div className="absolute right-0 top-7 z-50 w-44 rounded-lg border border-border bg-card shadow-lg py-1 text-xs">
                     <RuleMenuItem
-                      icon={<Pencil size={13} />}
+                      icon={<Icon name="Pencil" size={13} />}
                       label="Edit"
                       onClick={() => {
                         setMenuFor(null);
@@ -623,17 +612,17 @@ export function RulesTab({
                       }}
                     />
                     <RuleMenuItem
-                      icon={<Wand2 size={13} />}
+                      icon={<Icon name="Wand2" size={13} />}
                       label="Edit with AI"
                       onClick={() => editWithAI(rule)}
                     />
                     <RuleMenuItem
-                      icon={<Copy size={13} />}
+                      icon={<Icon name="Copy" size={13} />}
                       label="Duplicate"
                       onClick={() => duplicate(rule)}
                     />
                     <RuleMenuItem
-                      icon={<HistoryIcon size={13} />}
+                      icon={<Icon name="History" size={13} />}
                       label="See history"
                       onClick={() => {
                         setMenuFor(null);
@@ -642,7 +631,7 @@ export function RulesTab({
                     />
                     <div className="my-1 h-px bg-border" />
                     <RuleMenuItem
-                      icon={<Trash2 size={13} />}
+                      icon={<Icon name="Trash2" size={13} />}
                       label="Delete"
                       destructive
                       onClick={() => {
@@ -676,7 +665,7 @@ export function RulesTab({
               </p>
             </div>
             <div className="flex items-center gap-2.5 bg-card border border-border rounded-xl px-4 py-2.5">
-              <Shield
+              <Icon name="Shield"
                 size={14}
                 className={
                   policies.cold_email_blocker === "OFF"
@@ -702,7 +691,7 @@ export function RulesTab({
             </div>
             {Object.values(policies.dispositions).some((n) => n > 0) && (
               <div className="flex items-center gap-2.5 bg-card border border-border rounded-xl px-4 py-2.5">
-                <Inbox size={14} className="text-muted-foreground" />
+                <Icon name="Inbox" size={14} className="text-muted-foreground" />
                 <div className="flex-1 min-w-0 text-xs">
                   <span className="font-medium text-foreground">
                     Sender dispositions
@@ -731,7 +720,7 @@ export function RulesTab({
               policies.provider_rules.length > 0 && (
                 <details className="bg-card border border-border rounded-xl px-4 py-2.5">
                   <summary className="cursor-pointer select-none text-xs flex items-center gap-2.5 text-foreground hover:text-primary transition-colors">
-                    <Cloud size={14} className="text-muted-foreground" />
+                    <Icon name="Cloud" size={14} className="text-muted-foreground" />
                     <span className="font-medium">
                       {policies.provider_rules.length === 1
                         ? "1 inbox rule at your mail provider"
@@ -895,13 +884,9 @@ function RuleEditor({
           >
             Cancel
           </button>
-          <button
-            onClick={() => onSave(draft)}
-            disabled={!valid}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90 transition-colors disabled:opacity-50"
-          >
-            <Check size={13} /> {rule.id ? "Save" : "Create"}
-          </button>
+          <Button layout="flex items-center" onClick={() => onSave(draft)} disabled={!valid}>
+            <Icon name="Check" size={13} /> {rule.id ? "Save" : "Create"}
+          </Button>
         </>
       }
     >
@@ -925,7 +910,7 @@ function RuleEditor({
       <div className="bg-card border border-border rounded-xl p-3.5 space-y-3">
         <div className="flex items-center justify-between">
           <span className="flex items-center gap-2 text-sm font-semibold text-foreground">
-            <Inbox size={16} className="text-blue-500" />
+            <Icon name="Inbox" size={16} className="text-blue-500" />
             When I get an email
           </span>
           {shown.length > 1 && (
@@ -987,7 +972,7 @@ function RuleEditor({
                   title="Remove condition"
                   className="p-1.5 text-muted-foreground hover:text-destructive flex-shrink-0 mt-0.5"
                 >
-                  <X size={13} />
+                  <Icon name="X" size={13} />
                 </button>
               )}
             </div>
@@ -999,7 +984,7 @@ function RuleEditor({
             onClick={addCondition}
             className="flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg border border-dashed border-border text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
           >
-            <Plus size={13} /> Add Condition
+            <Icon name="Plus" size={13} /> Add Condition
           </button>
         )}
       </div>
@@ -1007,7 +992,7 @@ function RuleEditor({
       {/* Then — actions */}
       <div className="bg-card border border-border rounded-xl p-3.5 space-y-3">
         <span className="flex items-center gap-2 text-sm font-semibold text-foreground">
-          <Zap size={16} className="text-emerald-500" />
+          <Icon name="Zap" size={16} className="text-emerald-500" />
           Then
         </span>
         <div className="space-y-2.5">
@@ -1047,7 +1032,7 @@ function RuleEditor({
           onClick={() => set({ actions: [...draft.actions, { type: "LABEL" }] })}
           className="flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg border border-dashed border-border text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
         >
-          <Plus size={13} /> Add Action
+          <Icon name="Plus" size={13} /> Add Action
         </button>
       </div>
 
@@ -1057,7 +1042,7 @@ function RuleEditor({
           onClick={() => setAdvancedOpen((o) => !o)}
           className="w-full flex items-center gap-1.5 px-3.5 py-2.5 text-sm font-medium text-foreground hover:bg-secondary/40 transition-colors"
         >
-          <ChevronRight
+          <Icon name="ChevronRight"
             size={14}
             className={`transition-transform ${advancedOpen ? "rotate-90" : ""}`}
           />
@@ -1158,7 +1143,7 @@ function MoveFolderField({
           disabled={creating || !accountId}
           className="flex items-center gap-1.5 text-[11px] px-2 py-1 rounded-md border border-dashed border-border text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors disabled:opacity-50"
         >
-          {creating ? <Loader2 size={12} className="animate-spin" /> : <FolderPlus size={12} />}
+          {creating ? <Icon name="Loader2" size={12} className="animate-spin" /> : <Icon name="FolderPlus" size={12} />}
           Create folder “{typed}”
         </button>
       )}
@@ -1204,20 +1189,20 @@ function ActionConfig({
   if (action.type === "LABEL") {
     menuItems.push(
       action.label_ai
-        ? { icon: <Tag size={13} />, label: "Use a fixed label", onClick: () => set({ label_ai: false }) }
-        : { icon: <Sparkles size={13} />, label: "Use an AI prompt", onClick: () => set({ label_ai: true }) },
+        ? { icon: <Icon name="Tag" size={13} />, label: "Use a fixed label", onClick: () => set({ label_ai: false }) }
+        : { icon: <Icon name="Sparkles" size={13} />, label: "Use an AI prompt", onClick: () => set({ label_ai: true }) },
     );
   }
   if (isDraftReply) {
     menuItems.push(
       manual
-        ? { icon: <Sparkles size={13} />, label: "Use AI draft", onClick: () => set({ content_manual: false }) }
-        : { icon: <Pencil size={13} />, label: "Set content manually", onClick: () => set({ content_manual: true }) },
+        ? { icon: <Icon name="Sparkles" size={13} />, label: "Use AI draft", onClick: () => set({ content_manual: false }) }
+        : { icon: <Icon name="Pencil" size={13} />, label: "Set content manually", onClick: () => set({ content_manual: true }) },
     );
   }
   if (draftLike) {
     menuItems.push({
-      icon: <Paperclip size={13} />,
+      icon: <Icon name="Paperclip" size={13} />,
       label: showAttach ? "Hide attachments" : "Configure attachments",
       onClick: () => setShowAttach((v) => !v),
     });
@@ -1225,8 +1210,8 @@ function ActionConfig({
   if (delayable) {
     menuItems.push(
       action.delay_minutes != null
-        ? { icon: <X size={13} />, label: "Remove delay", onClick: () => set({ delay_minutes: null }) }
-        : { icon: <ChevronDown size={13} />, label: "Add delay", onClick: () => set({ delay_minutes: 60 }) },
+        ? { icon: <Icon name="X" size={13} />, label: "Remove delay", onClick: () => set({ delay_minutes: null }) }
+        : { icon: <Icon name="ChevronDown" size={13} />, label: "Add delay", onClick: () => set({ delay_minutes: 60 }) },
     );
   }
 
@@ -1244,13 +1229,9 @@ function ActionConfig({
         <div className="flex items-center gap-0.5 flex-shrink-0">
           {menuItems.length > 0 && (
             <div className="relative">
-              <button
-                onClick={() => setMenuOpen((o) => !o)}
-                title="More options"
-                className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-secondary"
-              >
-                <MoreHorizontal size={14} />
-              </button>
+              <Button variant="ghost" size="icon-xs" radius="keep" layout="" onClick={() => setMenuOpen((o) => !o)} title="More options" className="rounded">
+                <Icon name="MoreHorizontal" size={14} />
+              </Button>
               {menuOpen && (
                 <>
                   <div className="fixed inset-0 z-10" onClick={() => setMenuOpen(false)} />
@@ -1278,7 +1259,7 @@ function ActionConfig({
             title="Delete action"
             className="p-1 rounded text-muted-foreground hover:text-destructive"
           >
-            <Trash2 size={14} />
+            <Icon name="Trash2" size={14} />
           </button>
         </div>
       </div>
@@ -1662,7 +1643,7 @@ function ProcessPastEmailsDialog({
           disabled={busy || tooWide || !start}
           className="ml-auto flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-medium hover:bg-emerald-700 transition-colors disabled:opacity-50"
         >
-          {busy ? <Loader2 className="animate-spin" size={13} /> : <Play size={13} />}
+          {busy ? <Icon name="Loader2" className="animate-spin" size={13} /> : <Icon name="Play" size={13} />}
           {estimate && estimate.will_process > 0
             ? `Process ${estimate.will_process.toLocaleString()} email${
                 estimate.will_process === 1 ? "" : "s"
@@ -1887,7 +1868,7 @@ function ActionAttachments({
               key={i}
               className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-md border border-border bg-secondary/40 text-foreground"
             >
-              <Paperclip size={9} className="text-muted-foreground" />
+              <Icon name="Paperclip" size={9} className="text-muted-foreground" />
               {att.name || att.path || "attachment"}
               {att.ai_selected && (
                 <span className="text-primary" title="AI-selected source">✨</span>
@@ -1896,7 +1877,7 @@ function ActionAttachments({
                 onClick={() => onChange(attachments.filter((_, j) => j !== i))}
                 className="text-muted-foreground hover:text-destructive"
               >
-                <X size={9} />
+                <Icon name="X" size={9} />
               </button>
             </span>
           ))}
@@ -1924,11 +1905,11 @@ function ActionAttachments({
       >
         {uploading ? (
           <>
-            <Loader2 size={13} className="animate-spin" /> Uploading…
+            <Icon name="Loader2" size={13} className="animate-spin" /> Uploading…
           </>
         ) : (
           <>
-            <Upload size={13} /> Drag &amp; drop files, or click to upload
+            <Icon name="Upload" size={13} /> Drag &amp; drop files, or click to upload
           </>
         )}
       </div>
@@ -1948,21 +1929,18 @@ function ActionAttachments({
           onClick={() => setShowPicker(true)}
           className="flex items-center gap-1 text-[11px] text-primary hover:opacity-80"
         >
-          <FolderOpen size={12} /> Choose from artifacts
+          <Icon name="FolderOpen" size={12} /> Choose from artifacts
         </button>
         {attachments.some((a) => !a.ai_selected) && (
-          <button
-            onClick={() =>
+          <Button variant="text" size="none" layout="" onClick={() =>
               onChange(
                 attachments.map((a) => ({ ...a, ai_selected: !a.ai_selected })),
               )
-            }
-            className="text-[10px] text-muted-foreground hover:text-foreground"
-          >
+            } className="text-[10px]">
             {attachments.every((a) => a.ai_selected)
               ? "Always attach these"
               : "Let the assistant choose which to attach"}
-          </button>
+          </Button>
         )}
       </div>
       {err && (
@@ -2021,7 +1999,7 @@ function ArtifactPickerDialog({
       <div className="max-h-72 overflow-y-auto space-y-1">
         {artifacts === null ? (
           <div className="flex items-center gap-2 text-xs text-muted-foreground py-3">
-            <Loader2 size={14} className="animate-spin" /> Loading…
+            <Icon name="Loader2" size={14} className="animate-spin" /> Loading…
           </div>
         ) : visible.length === 0 ? (
           <div className="text-xs text-muted-foreground py-3">
@@ -2037,7 +2015,7 @@ function ArtifactPickerDialog({
                 disabled={picked}
                 className="w-full flex items-center gap-2 px-2.5 py-2 rounded-lg border border-border text-left hover:border-primary/40 hover:bg-secondary/40 transition-colors disabled:opacity-50"
               >
-                <Paperclip size={12} className="text-muted-foreground flex-shrink-0" />
+                <Icon name="Paperclip" size={12} className="text-muted-foreground flex-shrink-0" />
                 <span className="flex-1 min-w-0">
                   <span className="block text-xs text-foreground truncate">
                     {a.name}
@@ -2046,7 +2024,7 @@ function ArtifactPickerDialog({
                     {a.category} · {(a.size / 1024).toFixed(0)} KB
                   </span>
                 </span>
-                {picked && <Check size={12} className="text-emerald-500" />}
+                {picked && <Icon name="Check" size={12} className="text-emerald-500" />}
               </button>
             );
           })
@@ -2202,14 +2180,10 @@ function AddRuleDialog({
           >
             Add rule manually
           </button>
-          <button
-            onClick={create}
-            disabled={busy || !text.trim()}
-            className="ml-auto flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90 transition-colors disabled:opacity-50"
-          >
-            {busy ? <Loader2 className="animate-spin" size={13} /> : <Wand2 size={13} />}
+          <Button layout="flex items-center" onClick={create} disabled={busy || !text.trim()} className="ml-auto">
+            {busy ? <Icon name="Loader2" className="animate-spin" size={13} /> : <Icon name="Wand2" size={13} />}
             Create rules
-          </button>
+          </Button>
         </>
       }
     >
@@ -2236,7 +2210,7 @@ function AddRuleDialog({
           onClick={() => setShowExamples((v) => !v)}
           className="flex items-center gap-1.5 text-[11px] font-medium text-primary hover:opacity-80"
         >
-          <Sparkles size={12} />
+          <Icon name="Sparkles" size={12} />
           {showExamples ? "Hide examples" : "Choose from examples"}
         </button>
         {showExamples && (
@@ -2273,7 +2247,7 @@ function AddRuleDialog({
                       <ActionIcon type={at} size={12} />
                     </span>
                     <span className="flex-1">{ex}</span>
-                    <Plus size={11} className="text-muted-foreground/50 mt-0.5 flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity" />
+                    <Icon name="Plus" size={11} className="text-muted-foreground/50 mt-0.5 flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity" />
                   </button>
                 );
               })}

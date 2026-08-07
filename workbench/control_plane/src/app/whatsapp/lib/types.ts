@@ -2,14 +2,8 @@
 // apps/services/gateway/gateway/routes/whatsapp/core.py). Kept in sync by hand —
 // a small, stable surface for the read-only W0 app.
 
-import {
-  Clock,
-  MessageSquare,
-  Moon,
-  Sparkles,
-  Users,
-  type LucideIcon,
-} from "lucide-react";
+import { themedIcon } from "@/components/Icon";
+import type { ThemedIcon } from "@/components/Icon";
 
 export type WaAccount = {
   id: string;
@@ -287,10 +281,10 @@ export type WaChatContext = {
 // The triage streams shown in the nav — the single organizing spine.
 // Triage streams. Icons are the native lucide set (rendered as components), not
 // emoji, so they inherit the app's colour + sizing like every other icon.
-export const STREAMS: { key: string; label: string; icon: LucideIcon }[] = [
-  { key: "needs_reply", label: "Needs reply", icon: Sparkles },
-  { key: "waiting", label: "Waiting on them", icon: Clock },
-  { key: "groups", label: "Groups", icon: Users },
-  { key: "all", label: "All chats", icon: MessageSquare },
-  { key: "snoozed", label: "Snoozed", icon: Moon },
+export const STREAMS: { key: string; label: string; icon: ThemedIcon }[] = [
+  { key: "needs_reply", label: "Needs reply", icon: themedIcon("Sparkles") },
+  { key: "waiting", label: "Waiting on them", icon: themedIcon("Clock") },
+  { key: "groups", label: "Groups", icon: themedIcon("Users") },
+  { key: "all", label: "All chats", icon: themedIcon("MessageSquare") },
+  { key: "snoozed", label: "Snoozed", icon: themedIcon("Moon") },
 ];

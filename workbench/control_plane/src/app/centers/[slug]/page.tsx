@@ -14,7 +14,7 @@
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { centerBySlug } from "@/lib/centers";
-import { resolveIcon } from "@/lib/icons";
+import ThemedIcon from "@/components/Icon";
 
 export default function CenterPage() {
   const params = useParams<{ slug: string }>();
@@ -32,7 +32,6 @@ export default function CenterPage() {
     );
   }
 
-  const CenterIcon = resolveIcon(center.icon);
   const live = center.apps.filter((a) => a.status === "live");
   const planned = center.apps.filter((a) => a.status === "planned");
 
@@ -41,7 +40,7 @@ export default function CenterPage() {
       {/* Header */}
       <div className="flex items-start gap-4">
         <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
-          <CenterIcon size={24} />
+          <ThemedIcon name={center.icon} size={24} />
         </span>
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
@@ -62,7 +61,6 @@ export default function CenterPage() {
           </div>
           <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {live.map((app) => {
-              const Icon = resolveIcon(app.icon);
               return (
                 <Link
                   key={app.label}
@@ -70,7 +68,7 @@ export default function CenterPage() {
                   className="rounded-xl border border-border bg-card/50 p-4 hover:border-primary/40 hover:bg-card tech-transition"
                 >
                   <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10 text-primary">
-                    <Icon size={18} />
+                    <ThemedIcon name={app.icon} size={18} />
                   </span>
                   <div className="mt-3 text-sm font-semibold">{app.label}</div>
                   <p className="mt-1 text-[11px] leading-snug text-muted-foreground">{app.note}</p>
@@ -92,7 +90,6 @@ export default function CenterPage() {
           </div>
           <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {planned.map((app) => {
-              const Icon = resolveIcon(app.icon);
               return (
                 <div
                   key={app.label}
@@ -100,7 +97,7 @@ export default function CenterPage() {
                 >
                   <div className="flex items-start justify-between gap-2">
                     <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-secondary text-muted-foreground">
-                      <Icon size={18} />
+                      <ThemedIcon name={app.icon} size={18} />
                     </span>
                     <span className="rounded-full bg-secondary px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
                       Planned

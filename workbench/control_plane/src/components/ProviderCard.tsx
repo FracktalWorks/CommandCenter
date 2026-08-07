@@ -1,5 +1,6 @@
 "use client";
 
+import Button from "@/components/ui/Button";
 import { useState } from "react";
 import {
   type ProviderInfo,
@@ -347,13 +348,9 @@ export default function ProviderCard({
           </div>
           {keyError && <p className="text-xs text-destructive">{keyError}</p>}
           <div className="flex gap-2">
-            <button
-              onClick={handleSave}
-              disabled={saving || !keyVal.trim()}
-              className="rounded-lg bg-primary px-3 py-1 text-xs font-medium text-primary-foreground hover:opacity-90 disabled:opacity-40 tech-transition"
-            >
+            <Button size="none" layout="" onClick={handleSave} disabled={saving || !keyVal.trim()} className="px-3 py-1 text-xs">
               {saving ? "Saving & restarting LiteLLM…" : "Save & apply"}
-            </button>
+            </Button>
             <button
               onClick={() => { setEditing(false); setKeyVal(""); setKeyError(null); }}
               disabled={saving}

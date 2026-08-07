@@ -5,8 +5,8 @@
 // (no sends) before enabling any of it. Each row shows the decided action and
 // why; the summary tallies actions by kind.
 
+import Icon from "@/components/Icon";
 import { useEffect, useState } from "react";
-import { Loader2, SlidersHorizontal } from "lucide-react";
 import { fetchAccounts, fetchRulesPreview, pickDefaultAccount } from "../../lib/api";
 import type { WaRulePreview, WaRulePreviewItem } from "../../lib/types";
 
@@ -42,7 +42,7 @@ export default function RulesPreviewPage() {
   if (loading) {
     return (
       <div className="flex h-full items-center justify-center text-muted-foreground">
-        <Loader2 className="h-5 w-5 animate-spin" />
+        <Icon name="Loader2" className="h-5 w-5 animate-spin" />
       </div>
     );
   }
@@ -55,7 +55,7 @@ export default function RulesPreviewPage() {
   return (
     <div className="mx-auto h-full max-w-3xl overflow-y-auto p-4 text-foreground md:p-6">
       <div className="mb-5 flex items-center gap-2">
-        <SlidersHorizontal className="h-4 w-4 text-primary" />
+        <Icon name="SlidersHorizontal" className="h-4 w-4 text-primary" />
         <h1 className="text-[15px] font-semibold">Rules preview</h1>
         <span className="text-[11px] text-muted-foreground">
           what automation would do — nothing is sent

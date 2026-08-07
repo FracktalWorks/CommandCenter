@@ -7,7 +7,8 @@
  * (§3.8) — the timeline shows a status change, an assignment, an agent run and
  * a comment in the same stream, which is the point of the shared spine.
  */
-import { X } from "lucide-react";
+import Icon from "@/components/Icon";
+import Button from "@/components/ui/Button";
 import { useEffect, useState } from "react";
 
 import {
@@ -124,7 +125,7 @@ export function TaskPanel({ task, statuses, onClose, onChanged }: Props) {
           aria-label="Close task"
           className="rounded p-1 text-muted-foreground hover:bg-muted"
         >
-          <X className="h-4 w-4" />
+          <Icon name="X" className="h-4 w-4" />
         </button>
       </header>
 
@@ -187,14 +188,17 @@ export function TaskPanel({ task, statuses, onClose, onChanged }: Props) {
           rows={2}
           className="w-full rounded-md border border-border bg-background px-2 py-1.5 text-sm text-foreground"
         />
-        <button
+        <Button
           type="button"
+          variant="primary"
+          size="sm"
           onClick={addComment}
-          disabled={busy || !comment.trim()}
-          className="mt-2 w-full rounded-md bg-primary px-3 py-1.5 text-sm text-primary-foreground disabled:opacity-50"
+          loading={busy}
+          disabled={!comment.trim()}
+          className="mt-2 w-full"
         >
           Comment
-        </button>
+        </Button>
       </div>
     </aside>
   );

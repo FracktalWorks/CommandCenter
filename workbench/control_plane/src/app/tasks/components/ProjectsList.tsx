@@ -1,17 +1,8 @@
 "use client";
 
+import Button from "@/components/ui/Button";
+import AppIcon, { themedIcon, type ThemedIcon } from "@/components/Icon";
 import { useMemo, useState } from "react";
-import {
-  FolderKanban,
-  AlertTriangle,
-  ChevronRight,
-  HardDrive,
-  Cloud,
-  Folder,
-  Boxes,
-  Plus,
-  Loader2,
-} from "lucide-react";
 import { useTaskStore } from "../lib/taskStore";
 import { GtdProject } from "../lib/types";
 import type { LocalFolder, LocalSpace } from "../lib/api";
@@ -43,7 +34,7 @@ export function ProjectsList() {
     <div className="flex h-full flex-col">
       <header className="border-b border-border bg-card px-4 py-3">
         <div className="flex items-center gap-2">
-          <FolderKanban className="h-4 w-4 text-primary" />
+          <AppIcon name="FolderKanban" className="h-4 w-4 text-primary" />
           <h1 className="text-base font-bold text-foreground">Projects</h1>
           <span className="ml-auto text-xs text-muted-foreground">
             {activeProjects.length} active
@@ -75,7 +66,7 @@ export function ProjectsList() {
 
           {!hasLocal && syncedAccounts.length === 0 && (
             <div className="flex flex-col items-center justify-center gap-2 py-16 text-center">
-              <FolderKanban className="h-8 w-8 text-muted-foreground/40" />
+              <AppIcon name="FolderKanban" className="h-8 w-8 text-muted-foreground/40" />
               <p className="text-sm text-muted-foreground">
                 No projects yet. Connect a workspace or create a local space.
               </p>
@@ -95,7 +86,7 @@ function SectionHeader({
   tone,
   count,
 }: {
-  icon: typeof HardDrive;
+  icon: ThemedIcon;
   label: string;
   tone: "local" | "synced";
   count?: number;
@@ -143,7 +134,7 @@ function AccountSection({
     <section className="rounded-xl border border-primary/20 bg-primary/[0.02]">
       <div className="border-b border-border/60 px-3 py-2">
         <SectionHeader
-          icon={Cloud}
+          icon={themedIcon("Cloud")}
           label={account.label || account.provider}
           tone="synced"
           count={spaceCount}
@@ -159,7 +150,7 @@ function AccountSection({
             <TreeNode
               key={space.id}
               label={space.name}
-              icon={Boxes}
+              icon={themedIcon("Boxes")}
               depth={0}
               defaultOpen={account.hierarchy.length === 1}
             >
@@ -176,7 +167,7 @@ function AccountSection({
                 <TreeNode
                   key={folder.id}
                   label={folder.name}
-                  icon={Folder}
+                  icon={themedIcon("Folder")}
                   depth={1}
                 >
                   {folder.lists.map((l) => (
@@ -246,7 +237,7 @@ function LocalSection({
     <section className="rounded-xl border border-border bg-card">
       <div className="flex items-center justify-between border-b border-border/60 px-3 py-2">
         <SectionHeader
-          icon={HardDrive}
+          icon={themedIcon("HardDrive")}
           label="Local"
           tone="local"
           count={spaces.length}
@@ -259,7 +250,7 @@ function LocalSection({
       <div className="p-1.5">
         {loading ? (
           <div className="flex items-center gap-2 px-3 py-3 text-[11px] text-muted-foreground">
-            <Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading…
+            <AppIcon name="Loader2" className="h-3.5 w-3.5 animate-spin" /> Loading…
           </div>
         ) : spaces.length === 0 && ungrouped.length === 0 ? (
           <p className="px-3 py-2 text-[11px] text-muted-foreground/70">
@@ -273,7 +264,7 @@ function LocalSection({
                 <TreeNode
                   key={space.id}
                   label={space.name}
-                  icon={Boxes}
+                  icon={themedIcon("Boxes")}
                   depth={0}
                   trailing={
                     <AddInline
@@ -289,7 +280,7 @@ function LocalSection({
                     <TreeNode
                       key={folder.id}
                       label={folder.name}
-                      icon={Folder}
+                      icon={themedIcon("Folder")}
                       depth={1}
                     >
                       {projectsIn(space.id, folder.id).map((p) => (
@@ -311,7 +302,7 @@ function LocalSection({
             })}
 
             {ungrouped.length > 0 && (
-              <TreeNode label="Ungrouped" icon={Folder} depth={0} defaultOpen>
+              <TreeNode label="Ungrouped" icon={themedIcon("Folder")} depth={0} defaultOpen>
                 {ungrouped.map((p) => (
                   <ProjectNode key={p.id} project={p} depth={1} />
                 ))}
@@ -343,7 +334,7 @@ function TreeNode({
   trailing,
 }: {
   label: string;
-  icon: typeof Folder;
+  icon: ThemedIcon;
   depth: number;
   children: React.ReactNode;
   defaultOpen?: boolean;
@@ -361,7 +352,7 @@ function TreeNode({
           onClick={() => setOpen((o) => !o)}
           className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
         >
-          <ChevronRight
+          <AppIcon name="ChevronRight"
             className={[
               "h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform",
               open ? "rotate-90" : "",
@@ -433,7 +424,7 @@ function ProjectNode({
             : "hover:bg-secondary/50",
       ].join(" ")}
     >
-      <FolderKanban
+      <AppIcon name="FolderKanban"
         className={[
           "h-3.5 w-3.5 shrink-0",
           notMirrored
@@ -460,7 +451,7 @@ function ProjectNode({
           className="inline-flex shrink-0 items-center text-warning"
           title="No next action"
         >
-          <AlertTriangle className="h-3 w-3" />
+          <AppIcon name="AlertTriangle" className="h-3 w-3" />
         </span>
       )}
       {openTasks > 0 && (
@@ -502,13 +493,9 @@ function AddInline({
   };
   if (!editing) {
     return (
-      <button
-        type="button"
-        onClick={() => setEditing(true)}
-        className="tech-transition inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground hover:bg-secondary hover:text-foreground"
-      >
-        <Plus className="h-3 w-3" /> {label}
-      </button>
+      <Button variant="ghost" size="none" radius="keep" layout="inline-flex items-center" type="button" onClick={() => setEditing(true)} className="gap-0.5 rounded px-1.5 py-0.5 text-[10px]">
+        <AppIcon name="Plus" className="h-3 w-3" /> {label}
+      </Button>
     );
   }
   return (
@@ -548,7 +535,7 @@ function AddProjectRow({
       className="flex items-center gap-1.5 py-1 pr-1.5"
       style={{ paddingLeft: depth * INDENT + 22 }}
     >
-      <Plus className="h-3 w-3 shrink-0 text-muted-foreground/60" />
+      <AppIcon name="Plus" className="h-3 w-3 shrink-0 text-muted-foreground/60" />
       <input
         value={name}
         onChange={(e) => setName(e.target.value)}
@@ -559,13 +546,9 @@ function AddProjectRow({
         className="min-w-0 flex-1 bg-transparent text-[12px] text-foreground placeholder:text-muted-foreground/60 focus:outline-none"
       />
       {name.trim() && (
-        <button
-          type="button"
-          onClick={commit}
-          className="shrink-0 rounded bg-primary px-1.5 py-0.5 text-[10px] font-medium text-primary-foreground hover:opacity-90"
-        >
+        <Button size="none" radius="keep" layout="" type="button" onClick={commit} className="shrink-0 rounded px-1.5 py-0.5 text-[10px]">
           Add
-        </button>
+        </Button>
       )}
     </div>
   );

@@ -1,7 +1,7 @@
 "use client";
 
+import AppIcon, { themedIcon, type ThemedIcon } from "@/components/Icon";
 import { useMemo, useState } from "react";
-import { Battery, BatteryLow, BatteryMedium, Clock, Tag, Zap } from "lucide-react";
 import { useTaskStore, itemsForView } from "../lib/taskStore";
 import { Energy } from "../lib/types";
 import { priorityRank, type PriorityCell } from "../lib/priority";
@@ -19,10 +19,10 @@ import { TaskCard } from "./TaskCard";
 
 const ENERGY_ORDER: Record<Energy, number> = { low: 0, medium: 1, high: 2 };
 
-const ENERGY_OPTS: { value: Energy; label: string; icon: typeof Battery }[] = [
-  { value: "low", label: "Low / fried", icon: BatteryLow },
-  { value: "medium", label: "Medium", icon: BatteryMedium },
-  { value: "high", label: "Sharp / high", icon: Battery },
+const ENERGY_OPTS: { value: Energy; label: string; icon: ThemedIcon }[] = [
+  { value: "low", label: "Low / fried", icon: themedIcon("BatteryLow") },
+  { value: "medium", label: "Medium", icon: themedIcon("BatteryMedium") },
+  { value: "high", label: "Sharp / high", icon: themedIcon("Battery") },
 ];
 
 const TIME_OPTS: { value: number; label: string }[] = [
@@ -87,7 +87,7 @@ export function EngageView() {
     <div className="flex h-full flex-col">
       <header className="border-b border-border bg-card px-4 py-3">
         <div className="flex items-center gap-2">
-          <Zap className="h-4 w-4 text-primary" />
+          <AppIcon name="Zap" className="h-4 w-4 text-primary" />
           <h1 className="text-base font-bold text-foreground">Engage · Now</h1>
           <span className="ml-auto text-xs text-muted-foreground">
             {matched.length} pickable
@@ -129,7 +129,7 @@ export function EngageView() {
         {/* Secondary narrowers — time + context */}
         <div className="mt-2 flex flex-wrap items-center gap-3">
           <label className="inline-flex items-center gap-1.5 text-[11px] text-muted-foreground">
-            <Clock className="h-3.5 w-3.5" />
+            <AppIcon name="Clock" className="h-3.5 w-3.5" />
             <select
               value={maxMins}
               onChange={(e) => setMaxMins(Number(e.target.value))}
@@ -144,7 +144,7 @@ export function EngageView() {
           </label>
           {contexts.length > 0 && (
             <label className="inline-flex items-center gap-1.5 text-[11px] text-muted-foreground">
-              <Tag className="h-3.5 w-3.5" />
+              <AppIcon name="Tag" className="h-3.5 w-3.5" />
               <select
                 value={context}
                 onChange={(e) => setContext(e.target.value)}
@@ -164,7 +164,7 @@ export function EngageView() {
 
       {matched.length === 0 ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-2 p-8 text-center">
-          <Zap className="h-6 w-6 text-muted-foreground/50" />
+          <AppIcon name="Zap" className="h-6 w-6 text-muted-foreground/50" />
           <p className="text-sm text-foreground">Nothing matches right now</p>
           <p className="max-w-xs text-xs text-muted-foreground">
             Try a higher energy level or a longer time window — or enjoy the

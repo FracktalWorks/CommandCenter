@@ -1,14 +1,7 @@
 "use client";
 
+import AppIcon, { themedIcon, type ThemedIcon } from "@/components/Icon";
 import { useMemo, useSyncExternalStore } from "react";
-import {
-  FolderKanban,
-  LayoutList,
-  Columns3,
-  AlertTriangle,
-  CheckCircle2,
-  ExternalLink,
-} from "lucide-react";
 import { useTaskStore } from "../lib/taskStore";
 import { GtdProject } from "../lib/types";
 import { applyFilters, applySort } from "../lib/ordering";
@@ -86,19 +79,19 @@ export function ProjectTasksView({ project }: { project: GtdProject }) {
       {/* Project header */}
       <header className="border-b border-border bg-card px-5 py-3">
         <div className="mb-1 flex items-center gap-2">
-          <FolderKanban className="h-4 w-4 text-primary" />
+          <AppIcon name="FolderKanban" className="h-4 w-4 text-primary" />
           <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
             Project
           </span>
           <SourceBadge source={project.source} provider={project.provider} />
           {project.hasNextAction || openCount > 0 ? (
             <span className="inline-flex items-center gap-1 text-[11px] text-success">
-              <CheckCircle2 className="h-3 w-3" />
+              <AppIcon name="CheckCircle2" className="h-3 w-3" />
               {openCount} next action{openCount === 1 ? "" : "s"}
             </span>
           ) : (
             <span className="inline-flex items-center gap-1 text-[11px] font-medium text-warning">
-              <AlertTriangle className="h-3 w-3" />
+              <AppIcon name="AlertTriangle" className="h-3 w-3" />
               No next action
             </span>
           )}
@@ -106,13 +99,13 @@ export function ProjectTasksView({ project }: { project: GtdProject }) {
             <ModeButton
               active={mode === "list"}
               onClick={() => setModePersist("list")}
-              icon={LayoutList}
+              icon={themedIcon("LayoutList")}
               label="List"
             />
             <ModeButton
               active={mode === "board"}
               onClick={() => setModePersist("board")}
-              icon={Columns3}
+              icon={themedIcon("Columns3")}
               label="Board"
             />
           </span>
@@ -125,7 +118,7 @@ export function ProjectTasksView({ project }: { project: GtdProject }) {
         )}
         {isSynced && !providerStages && (
           <p className="mt-1 inline-flex items-center gap-1 text-[11px] text-muted-foreground">
-            <ExternalLink className="h-3 w-3" />
+            <AppIcon name="ExternalLink" className="h-3 w-3" />
             Sync the workspace to load this project&apos;s ClickUp stages.
           </p>
         )}
@@ -135,7 +128,7 @@ export function ProjectTasksView({ project }: { project: GtdProject }) {
 
       {visible.length === 0 ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-2 p-8 text-center">
-          <CheckCircle2 className="h-8 w-8 text-success/60" />
+          <AppIcon name="CheckCircle2" className="h-8 w-8 text-success/60" />
           <p className="text-sm text-muted-foreground">
             {projectTasks.length === 0
               ? "No tasks in this project yet."
@@ -161,7 +154,7 @@ function ModeButton({
 }: {
   active: boolean;
   onClick: () => void;
-  icon: typeof LayoutList;
+  icon: ThemedIcon;
   label: string;
 }) {
   return (

@@ -8,10 +8,11 @@
  * or dismiss the banner and configure later in the Integrations page.
  */
 
+import Button from "@/components/ui/Button";
+import Icon from "@/components/Icon";
 import { useState, useRef, useEffect, useCallback, useMemo, useSyncExternalStore } from "react";
 import React from "react";
 import Link from "next/link";
-import { ArrowUp, Square, ListOrdered, CornerDownRight, ChevronDown, CheckCircle, LoaderCircle, Mail } from "lucide-react";
 import { useAgentChat } from "@/hooks/useAgentChat";
 import type { ArtifactEntry, ChatMessage } from "@/hooks/useAgentChat";
 import type { IntegrationStatus } from "@/app/api/integrations/status/route";
@@ -1533,12 +1534,9 @@ export default function AgentChat({
           </a>
         )}
         {isRoom && (
-          <button
-            onClick={() => setRailOpen((v) => !v)}
-            className="ml-auto shrink-0 rounded-md px-1.5 py-0.5 text-[11px] text-muted-foreground hover:bg-secondary hover:text-foreground tech-transition lg:hidden"
-          >
+          <Button variant="ghost" size="none" radius="keep" layout="" onClick={() => setRailOpen((v) => !v)} className="ml-auto shrink-0 rounded-md px-1.5 py-0.5 text-[11px] lg:hidden">
             {railOpen ? "Hide room" : "Room"}
-          </button>
+          </Button>
         )}
       </div>
       )}
@@ -1698,7 +1696,7 @@ export default function AgentChat({
                     <div key={`mbx-${msg.id}-${k}`} className="flex items-center gap-2 my-3">
                       <div className="flex-1 h-px bg-primary/25" />
                       <span className="flex items-center gap-1 text-[10px] text-primary/80 font-medium shrink-0">
-                        <Mail size={10} /> Now working on {mk.label}
+                        <Icon name="Mail" size={10} /> Now working on {mk.label}
                       </span>
                       <div className="flex-1 h-px bg-primary/25" />
                     </div>
@@ -1763,7 +1761,7 @@ export default function AgentChat({
             ThinkingContainer is expanded or collapsed. */}
         {isRunActive && (
           <div className="max-w-3xl mx-auto mb-2 flex items-center gap-2 text-[11px] text-muted-foreground chat-fade-in">
-            <LoaderCircle className="text-sky-400 animate-spin shrink-0" size={12} strokeWidth={1.5} />
+            <Icon name="LoaderCircle" className="text-sky-400 animate-spin shrink-0" size={12} strokeWidth={1.5} />
             <span className="italic truncate">
               {liveToolName ? `Running ${liveToolName}…` : `${liveWorkingMsg}…`}
             </span>
@@ -1828,7 +1826,7 @@ export default function AgentChat({
                   <button type="button" onClick={handleStop}
                     className="h-9 w-9 rounded-xl bg-destructive/10 border border-destructive/30 text-destructive flex items-center justify-center hover:bg-destructive/20 tech-transition"
                     aria-label="Stop generation" title="Stop generation">
-                    <Square size={15} strokeWidth={2.5} fill="currentColor" />
+                    <Icon name="Square" size={15} strokeWidth={2.5} fill="currentColor" />
                   </button>
                   {/* Send/Queue/Steer — unified pill: button + dropdown toggle merged */}
                   {input.trim() && (
@@ -1847,9 +1845,9 @@ export default function AgentChat({
                           }`}
                           aria-label={SEND_MODE_LABELS[sendMode]}
                           title={`${SEND_MODE_LABELS[sendMode]} — Ctrl+Enter`}>
-                          {sendMode === "steer" ? <CornerDownRight size={14} strokeWidth={2} /> :
-                           sendMode === "queue" ? <ListOrdered size={14} strokeWidth={2} /> :
-                           <ArrowUp size={14} strokeWidth={2.5} />}
+                          {sendMode === "steer" ? <Icon name="CornerDownRight" size={14} strokeWidth={2} /> :
+                           sendMode === "queue" ? <Icon name="ListOrdered" size={14} strokeWidth={2} /> :
+                           <Icon name="ArrowUp" size={14} strokeWidth={2.5} />}
                           <span className="hidden sm:inline text-[11px]">{SEND_MODE_LABELS[sendMode]}</span>
                         </button>
                         {/* Dropdown toggle — divider + chevron */}
@@ -1861,7 +1859,7 @@ export default function AgentChat({
                             "bg-primary border-primary-foreground/20"
                           }`}
                           aria-label="Change send mode" title="Change how messages are sent">
-                          <ChevronDown size={14} strokeWidth={2.5} className="text-white/80" />
+                          <Icon name="ChevronDown" size={14} strokeWidth={2.5} className="text-white/80" />
                         </button>
                       </div>
                       {/* Dropdown menu */}
@@ -1880,13 +1878,13 @@ export default function AgentChat({
                                     m === "queue" ? "bg-sky-500/15 text-sky-400" :
                                     "bg-primary/15 text-primary"
                                   }`}>
-                                    {m === "steer" ? <CornerDownRight size={13} strokeWidth={2} /> :
-                                     m === "queue" ? <ListOrdered size={13} strokeWidth={2} /> :
-                                     <ArrowUp size={13} strokeWidth={2.5} />}
+                                    {m === "steer" ? <Icon name="CornerDownRight" size={13} strokeWidth={2} /> :
+                                     m === "queue" ? <Icon name="ListOrdered" size={13} strokeWidth={2} /> :
+                                     <Icon name="ArrowUp" size={13} strokeWidth={2.5} />}
                                   </span>
                                   {m === "steer" ? "Steer" : m === "queue" ? "Queue" : "Send"}
                                 </span>
-                                {m === sendMode && <CheckCircle size={13} className="text-emerald-400 shrink-0" />}
+                                {m === sendMode && <Icon name="CheckCircle" size={13} className="text-emerald-400 shrink-0" />}
                               </div>
                               <div className="text-muted-foreground mt-0.5 text-[10px] ml-8">
                                 {SEND_MODE_DESCRIPTIONS[m]}
@@ -1902,7 +1900,7 @@ export default function AgentChat({
                 <button type="submit" disabled={!input.trim()}
                   className="shrink-0 self-end h-9 w-9 rounded-xl bg-primary text-primary-foreground flex items-center justify-center disabled:opacity-25 disabled:cursor-not-allowed hover:opacity-90 tech-transition"
                   aria-label="Send" title="Send message">
-                  <ArrowUp size={16} strokeWidth={2.5} />
+                  <Icon name="ArrowUp" size={16} strokeWidth={2.5} />
                 </button>
               )}
             </div>
@@ -1965,7 +1963,7 @@ export default function AgentChat({
                       aria-expanded={showMailboxMenu}
                       className="flex items-center gap-1 px-2 py-1 rounded-md hover:bg-secondary hover:text-foreground tech-transition truncate max-w-[120px] sm:max-w-[170px]"
                     >
-                      <Mail size={11} className="shrink-0 text-muted-foreground/70" />
+                      <Icon name="Mail" size={11} className="shrink-0 text-muted-foreground/70" />
                       <span className="truncate">
                         {activeMailbox?.label ?? "Pick mailbox"}
                       </span>
@@ -2056,13 +2054,10 @@ export default function AgentChat({
 
               {/* Thinking mode — compact dropdown (saves space, easier tap on mobile) */}
               <div className="relative">
-                <button type="button"
-                  onClick={() => setShowThinkMenu((v) => !v)}
-                  className="flex items-center gap-1 px-2 py-1 rounded-md hover:bg-secondary hover:text-foreground tech-transition text-muted-foreground"
-                  title={THINK_MODES.find((t) => t.mode === thinkMode)?.title}>
+                <Button variant="ghost" size="none" radius="keep" layout="flex items-center" type="button" onClick={() => setShowThinkMenu((v) => !v)} title={THINK_MODES.find((t) => t.mode === thinkMode)?.title} className="gap-1 px-2 py-1 rounded-md">
                   <span>{THINK_MODES.find((t) => t.mode === thinkMode)?.label ?? "Auto"}</span>
                   <span className="text-muted-foreground/50 text-[9px]">▾</span>
-                </button>
+                </Button>
                 {showThinkMenu && (
                   <div className="absolute bottom-full left-0 mb-1.5 w-44 rounded-lg border border-border bg-popover shadow-xl z-50 py-1 tech-glass-subtle"
                     onMouseLeave={() => setShowThinkMenu(false)}>

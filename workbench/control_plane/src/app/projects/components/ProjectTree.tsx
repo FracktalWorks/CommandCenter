@@ -7,7 +7,7 @@
  * one recursive list rather than three panes — the indentation IS the
  * hierarchy.
  */
-import { ChevronDown, ChevronRight, FolderKanban } from "lucide-react";
+import Icon from "@/components/Icon";
 import { useState } from "react";
 
 import type { ProjectRow } from "../lib/api";
@@ -51,9 +51,9 @@ function Node({
             className="shrink-0 rounded p-0.5 hover:bg-background/60"
           >
             {open ? (
-              <ChevronDown className="h-3.5 w-3.5" />
+              <Icon name="ChevronDown" className="h-3.5 w-3.5" />
             ) : (
-              <ChevronRight className="h-3.5 w-3.5" />
+              <Icon name="ChevronRight" className="h-3.5 w-3.5" />
             )}
           </button>
         ) : (
@@ -64,7 +64,7 @@ function Node({
           onClick={() => onSelect(node)}
           className="flex min-w-0 flex-1 items-center gap-2 text-left"
         >
-          <FolderKanban className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+          <Icon name="FolderKanban" className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
           <span className="truncate">{node.name}</span>
           {node.clickup_id ? (
             <span

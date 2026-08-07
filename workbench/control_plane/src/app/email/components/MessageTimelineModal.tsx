@@ -6,10 +6,8 @@
 // each rule run that classified, labelled, drafted, moved, or failed on it.
 // Reuses the same audit rows (email_executed_rules), scoped to this one message.
 
+import AppIcon, { themedIcon, type ThemedIcon } from "@/components/Icon";
 import { useEffect, useState } from "react";
-import {
-  AlertTriangle, CheckCircle2, Inbox, Loader2, MinusCircle, X,
-} from "lucide-react";
 import type { MessageTimeline, MessageTimelineEvent } from "../lib/types";
 import { getMessageTimeline } from "../lib/api";
 import { fullDateLabel } from "../lib/utils";
@@ -78,14 +76,14 @@ export function MessageTimelineModal({
             className="text-muted-foreground hover:text-foreground flex-shrink-0"
             title="Close (Esc)"
           >
-            <X size={16} />
+            <AppIcon name="X" size={16} />
           </button>
         </div>
 
         <div className="overflow-y-auto px-4 py-4 flex-1">
           {loading ? (
             <div className="flex items-center gap-2 text-xs text-muted-foreground py-6">
-              <Loader2 className="animate-spin" size={14} /> Loading…
+              <AppIcon name="Loader2" className="animate-spin" size={14} /> Loading…
             </div>
           ) : err ? (
             <div className="text-xs text-destructive">{err}</div>
@@ -166,15 +164,15 @@ function TimelineRow({
 }
 
 function rowIcon(ev: MessageTimelineEvent): {
-  icon: typeof Inbox;
+  icon: ThemedIcon;
   tint: string;
 } {
-  if (ev.kind === "received") return { icon: Inbox, tint: "text-primary" };
+  if (ev.kind === "received") return { icon: themedIcon("Inbox"), tint: "text-primary" };
   if (ev.kind === "skipped")
-    return { icon: MinusCircle, tint: "text-muted-foreground" };
+    return { icon: themedIcon("MinusCircle"), tint: "text-muted-foreground" };
   if (ev.status === "FAILED" || (ev.action_errors?.length ?? 0) > 0)
-    return { icon: AlertTriangle, tint: "text-destructive" };
-  return { icon: CheckCircle2, tint: "text-emerald-500" };
+    return { icon: themedIcon("AlertTriangle"), tint: "text-destructive" };
+  return { icon: themedIcon("CheckCircle2"), tint: "text-emerald-500" };
 }
 
 function rowTitle(ev: MessageTimelineEvent): string {

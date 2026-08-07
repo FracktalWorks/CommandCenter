@@ -1,0 +1,178 @@
+/**
+ * Contrast gate — every theme, every mode.
+ *
+ * Themes are colours picked by eye, and the failure they invite is a pair that
+ * reads fine to the author and not at all to someone on a dimmer screen. This
+ * runs the arithmetic so a new theme cannot ship unreadable.
+ *
+ * The RapidTool exceptions
+ * ------------------------
+ * Seven pairs in the default theme are below AA. They are the app's ORIGINAL
+ * colours, preserved token-for-token when the theming engine was built, and
+ * fixing them means changing how the shipped product looks — a design decision
+ * for whoever owns the brand, not a side effect of adding a test.
+ *
+ * So they are recorded below with their measured ratios and treated as a
+ * ratchet: each may not get worse, and `every recorded shortfall is still a
+ * shortfall` fails once one is fixed, which forces the entry to be deleted
+ * rather than quietly outliving the problem. New themes get no such latitude.
+ */
+
+import { describe, expect, it } from "vitest";
+
+import { AA_LARGE_TEXT, AA_NORMAL_TEXT, contrast, parseColor } from "./contrast";
+import { THEMES } from "./themes";
+import type { ColorTokens } from "./types";
+
+type Pair = {
+  fg: keyof ColorTokens;
+  bg: keyof ColorTokens;
+  min: number;
+};
+
+/**
+ * Token pairs that actually carry text or convey state.
+ *
+ * `min` is AA for body text (4.5) where the pair renders words, and the
+ * large-text/UI threshold (3.0) where it renders a status dot, an icon or a
+ * chart mark against a surface.
+ */
+const PAIRS: Pair[] = [
+  { fg: "foreground", bg: "background", min: AA_NORMAL_TEXT },
+  { fg: "cardForeground", bg: "card", min: AA_NORMAL_TEXT },
+  { fg: "popoverForeground", bg: "popover", min: AA_NORMAL_TEXT },
+  { fg: "mutedForeground", bg: "background", min: AA_NORMAL_TEXT },
+  { fg: "mutedForeground", bg: "card", min: AA_NORMAL_TEXT },
+  { fg: "primaryForeground", bg: "primary", min: AA_NORMAL_TEXT },
+  { fg: "secondaryForeground", bg: "secondary", min: AA_NORMAL_TEXT },
+  { fg: "accentForeground", bg: "accent", min: AA_NORMAL_TEXT },
+  { fg: "destructiveForeground", bg: "destructive", min: AA_NORMAL_TEXT },
+  { fg: "successForeground", bg: "success", min: AA_NORMAL_TEXT },
+  { fg: "warningForeground", bg: "warning", min: AA_NORMAL_TEXT },
+  // Status colours used as text/dots directly on a surface.
+  { fg: "primary", bg: "background", min: AA_LARGE_TEXT },
+  { fg: "primary", bg: "card", min: AA_LARGE_TEXT },
+  { fg: "destructive", bg: "card", min: AA_LARGE_TEXT },
+  { fg: "success", bg: "card", min: AA_LARGE_TEXT },
+  { fg: "warning", bg: "card", min: AA_LARGE_TEXT },
+];
+
+const key = (themeId: string, mode: string, p: Pair) => `${themeId}/${mode}/${p.fg}-on-${p.bg}`;
+
+/**
+ * Pre-existing shortfalls in the original design, with the ratio measured when
+ * the gate was added. Values may improve; they may not regress.
+ *
+ * Every entry here is a real readability problem for someone. Removing one
+ * means picking a new colour — see the module comment.
+ */
+const KNOWN_SHORTFALLS: Record<string, number> = {
+  "rapidtool/dark/destructiveForeground-on-destructive": 3.63,
+  "rapidtool/light/accentForeground-on-accent": 2.16,
+  "rapidtool/light/destructiveForeground-on-destructive": 3.59,
+  "rapidtool/light/successForeground-on-success": 1.9,
+  "rapidtool/light/warningForeground-on-warning": 1.5,
+  "rapidtool/light/success-on-card": 1.99,
+  "rapidtool/light/warning-on-card": 1.57,
+};
+
+/** Float noise guard — ratios are compared to two decimal places. */
+const EPSILON = 0.01;
+
+type Measured = { id: string; ratio: number; min: number };
+
+const measurements: Measured[] = [];
+for (const theme of THEMES) {
+  for (const mode of ["dark", "light"] as const) {
+    for (const pair of PAIRS) {
+      const fg = theme.colors[mode][pair.fg];
+      const bg = theme.colors[mode][pair.bg];
+      if (!fg || !bg) continue;
+      const ratio = contrast(fg, bg);
+      if (ratio === null) continue;
+      measurements.push({ id: key(theme.id, mode, pair), ratio, min: pair.min });
+    }
+  }
+}
+
+describe("contrast maths", () => {
+  it("computes the reference ratios correctly", () => {
+    // Black on white is the WCAG maximum; a colour against itself is 1.
+    expect(contrast("#000000", "#ffffff")).toBeCloseTo(21, 1);
+    expect(contrast("#ffffff", "#ffffff")).toBeCloseTo(1, 5);
+    // hsl and hex forms of the same colour must agree.
+    expect(contrast("hsl(0 0% 0%)", "#ffffff")).toBeCloseTo(21, 1);
+  });
+
+  it("returns null rather than a wrong number for colours it cannot parse", () => {
+    // A silent 0 or 21 here would turn an unchecked colour into a pass.
+    expect(parseColor("var(--primary)")).toBeNull();
+    expect(contrast("color-mix(in srgb, red, blue)", "#fff")).toBeNull();
+  });
+
+  it("parses every colour form the manifests use", () => {
+    for (const theme of THEMES) {
+      for (const mode of ["dark", "light"] as const) {
+        for (const [token, value] of Object.entries(theme.colors[mode])) {
+          if (!value) continue;
+          expect(parseColor(value as string), `${theme.id}/${mode}/${token}`).not.toBeNull();
+        }
+      }
+    }
+  });
+});
+
+describe("theme contrast", () => {
+  it("checks a meaningful number of pairs", () => {
+    // Guards against a refactor that silently stops measuring anything.
+    expect(measurements.length).toBeGreaterThan(100);
+  });
+
+  it.each(measurements.map((m) => [m.id, m] as const))(
+    "%s meets WCAG AA",
+    (_id, m) => {
+      const allowance = KNOWN_SHORTFALLS[m.id];
+      if (allowance !== undefined) {
+        // Ratchet: a recorded shortfall may improve, never regress.
+        expect(
+          m.ratio,
+          `${m.id} regressed below its recorded ${allowance}:1`,
+        ).toBeGreaterThanOrEqual(allowance - EPSILON);
+        return;
+      }
+      expect(
+        m.ratio,
+        `${m.id} is ${m.ratio.toFixed(2)}:1, below the required ${m.min}:1`,
+      ).toBeGreaterThanOrEqual(m.min);
+    },
+  );
+
+  it("every recorded shortfall is still a shortfall", () => {
+    // Keeps the exception list honest: fix a colour and this fails until the
+    // entry is deleted, so the list can never grant latitude nobody needs.
+    const byId = new Map(measurements.map((m) => [m.id, m]));
+    const nowPassing = Object.keys(KNOWN_SHORTFALLS).filter((id) => {
+      const m = byId.get(id);
+      return m && m.ratio >= m.min;
+    });
+    expect(
+      nowPassing,
+      "these now pass — delete them from KNOWN_SHORTFALLS",
+    ).toEqual([]);
+  });
+
+  it("every recorded shortfall names a pair that is still measured", () => {
+    // A renamed token would otherwise leave a dead entry excusing nothing.
+    const ids = new Set(measurements.map((m) => m.id));
+    const stale = Object.keys(KNOWN_SHORTFALLS).filter((id) => !ids.has(id));
+    expect(stale, "these no longer correspond to a measured pair").toEqual([]);
+  });
+
+  it("confines the exception list to the original theme", () => {
+    // Themes added after the gate went in have no excuse for shipping below AA.
+    const offenders = Object.keys(KNOWN_SHORTFALLS).filter(
+      (id) => !id.startsWith("rapidtool/"),
+    );
+    expect(offenders, "new themes must meet AA outright").toEqual([]);
+  });
+});

@@ -9,8 +9,9 @@
  * modules land in the org library with auto-created provenance.
  */
 
+import Button from "@/components/ui/Button";
+import Icon from "@/components/Icon";
 import { useEffect, useRef, useState } from "react";
-import { Boxes, Loader2, Sparkles, Undo2 } from "lucide-react";
 import { askCopilot } from "../lib/api";
 import type { CopilotResponse, WorkflowGraph } from "../lib/types";
 
@@ -105,7 +106,7 @@ export default function CopilotPanel({
         {turns.length === 0 && (
           <div className="text-[10.5px] text-muted-foreground space-y-2 px-1 pt-1">
             <p className="flex items-center gap-1.5 text-foreground font-medium">
-              <Sparkles className="w-3.5 h-3.5 text-primary" />
+              <Icon name="Sparkles" className="w-3.5 h-3.5 text-primary" />
               Build by describing it
             </p>
             <p>
@@ -137,7 +138,7 @@ export default function CopilotPanel({
                     key={m.id}
                     className="flex items-center gap-1.5 text-[9.5px] rounded-md border border-sky-500/30 bg-sky-500/10 text-sky-500 px-2 py-1"
                   >
-                    <Boxes className="w-3 h-3" />
+                    <Icon name="Boxes" className="w-3 h-3" />
                     created module <code className="font-semibold">{m.name}</code>
                     — validated &amp; saved
                   </div>
@@ -150,7 +151,7 @@ export default function CopilotPanel({
                         onClick={onUndo}
                         className="inline-flex items-center gap-1 text-muted-foreground hover:text-foreground underline"
                       >
-                        <Undo2 className="w-3 h-3" /> undo
+                        <Icon name="Undo2" className="w-3 h-3" /> undo
                       </button>
                     )}
                     <span>· review, then Save</span>
@@ -168,7 +169,7 @@ export default function CopilotPanel({
         ))}
         {busy && (
           <div className="flex items-center gap-2 text-[10px] text-muted-foreground px-1">
-            <Loader2 className="w-3 h-3 animate-spin" />
+            <Icon name="Loader2" className="w-3 h-3 animate-spin" />
             Searching the catalog and drafting the graph…
           </div>
         )}
@@ -189,14 +190,9 @@ export default function CopilotPanel({
             placeholder="Describe a change…"
             className="flex-1 resize-none rounded-lg border border-input bg-background px-2.5 py-1.5 text-[11px] text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
           />
-          <button
-            onClick={() => send()}
-            disabled={busy || !prompt.trim()}
-            className="self-end rounded-lg bg-primary p-2 text-primary-foreground hover:opacity-90 tech-transition disabled:opacity-50"
-            title="Send"
-          >
-            <Sparkles className="w-3.5 h-3.5" />
-          </button>
+          <Button size="icon" layout="" onClick={() => send()} disabled={busy || !prompt.trim()} title="Send" className="self-end">
+            <Icon name="Sparkles" className="w-3.5 h-3.5" />
+          </Button>
         </div>
       </div>
     </div>

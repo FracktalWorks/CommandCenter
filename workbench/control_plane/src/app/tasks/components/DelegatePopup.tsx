@@ -1,7 +1,8 @@
 "use client";
 
+import Button from "@/components/ui/Button";
+import Icon from "@/components/Icon";
 import { useMemo, useState } from "react";
-import { Check, Loader2, Search, UserPlus, X } from "lucide-react";
 import { useTaskStore } from "../lib/taskStore";
 import type { GtdItem, Person } from "../lib/types";
 import { initials } from "../lib/utils";
@@ -110,7 +111,7 @@ function DelegateBody({
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex shrink-0 items-center gap-2 border-b border-border px-4 py-3">
-          <UserPlus className="h-4 w-4 shrink-0 text-primary" />
+          <Icon name="UserPlus" className="h-4 w-4 shrink-0 text-primary" />
           <div className="min-w-0 flex-1">
             <h2 className="text-sm font-semibold text-foreground">
               Delegate this task
@@ -119,14 +120,9 @@ function DelegateBody({
               {item.title}
             </p>
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="Close"
-            className="tech-transition rounded-md p-1 text-muted-foreground hover:bg-secondary hover:text-foreground"
-          >
-            <X className="h-4 w-4" />
-          </button>
+          <Button variant="ghost" size="icon-xs" radius="keep" layout="" type="button" onClick={onClose} aria-label="Close" className="rounded-md">
+            <Icon name="X" className="h-4 w-4" />
+          </Button>
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
@@ -138,7 +134,7 @@ function DelegateBody({
           )}
           {eligible.length > 8 && (
             <div className="relative mb-2">
-              <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+              <Icon name="Search" className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
               <input
                 value={q}
                 onChange={(e) => setQ(e.target.value)}
@@ -174,7 +170,7 @@ function DelegateBody({
                       {initials(p.name)}
                     </span>
                     <span className="min-w-0 flex-1 truncate">{p.name}</span>
-                    {on && <Check className="h-3.5 w-3.5 shrink-0" />}
+                    {on && <Icon name="Check" className="h-3.5 w-3.5 shrink-0" />}
                   </button>
                 );
               })}
@@ -186,28 +182,19 @@ function DelegateBody({
             applies through the promote dialog instead, so no footer there. */}
         {isSynced && (
           <div className="flex shrink-0 items-center justify-end gap-2 border-t border-border px-4 py-3">
-            <button
-              type="button"
-              onClick={onClose}
-              className="tech-transition rounded-md px-3 py-1.5 text-[12px] font-medium text-muted-foreground hover:bg-secondary hover:text-foreground"
-            >
+            <Button variant="ghost" size="none" radius="keep" layout="" type="button" onClick={onClose} className="rounded-md px-3 py-1.5 text-[12px]">
               Cancel
-            </button>
-            <button
-              type="button"
-              disabled={busy}
-              onClick={apply}
-              className="tech-transition inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-[12px] font-medium text-primary-foreground hover:opacity-90 disabled:opacity-40"
-            >
+            </Button>
+            <Button size="none" radius="keep" layout="inline-flex items-center" type="button" disabled={busy} onClick={apply} className="gap-1.5 rounded-md px-3 py-1.5 text-[12px]">
               {busy ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                <Icon name="Loader2" className="h-3.5 w-3.5 animate-spin" />
               ) : (
-                <Check className="h-3.5 w-3.5" />
+                <Icon name="Check" className="h-3.5 w-3.5" />
               )}
               {selected.length === 0
                 ? "Unassign"
                 : `Delegate to ${selected.length}`}
-            </button>
+            </Button>
           </div>
         )}
       </div>

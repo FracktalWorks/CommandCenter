@@ -1,7 +1,8 @@
 "use client";
 
+import Button from "@/components/ui/Button";
+import Icon from "@/components/Icon";
 import { useState } from "react";
-import { ChevronDown, Download, Eye, FileText } from "lucide-react";
 import { Attachment } from "../lib/types";
 import { getAttachmentDownloadUrl } from "../lib/api";
 import { formatBytes } from "../lib/utils";
@@ -89,12 +90,12 @@ export function AttachmentList({
                       className="w-14 h-14 object-cover bg-background block"
                     />
                     <span className="absolute inset-0 hidden group-hover:flex items-center justify-center bg-black/40">
-                      <Eye size={14} className="text-white" />
+                      <Icon name="Eye" size={14} className="text-white" />
                     </span>
                   </>
                 ) : (
                   <span className="w-14 h-14 bg-background flex items-center justify-center group-hover:bg-secondary/60 transition-colors">
-                    <FileText size={18} className="text-muted-foreground group-hover:text-foreground" />
+                    <Icon name="FileText" size={18} className="text-muted-foreground group-hover:text-foreground" />
                   </span>
                 )}
               </button>
@@ -125,23 +126,20 @@ export function AttachmentList({
                 title={`Download ${att.filename}`}
                 className="px-2 self-stretch flex items-center text-muted-foreground hover:text-foreground hover:bg-secondary/60 transition-colors flex-shrink-0"
               >
-                <Download size={13} />
+                <Icon name="Download" size={13} />
               </a>
             </div>
           );
         })}
       </div>
       {overflow > 0 && (
-        <button
-          onClick={() => setExpanded((e) => !e)}
-          className="mt-2 inline-flex items-center gap-1 text-[11px] font-medium text-muted-foreground hover:text-foreground transition-colors"
-        >
-          <ChevronDown
+        <Button variant="text" size="none" layout="inline-flex items-center" onClick={() => setExpanded((e) => !e)} className="mt-2 gap-1 text-[11px]">
+          <Icon name="ChevronDown"
             size={12}
             className={`transition-transform ${expanded ? "rotate-180" : ""}`}
           />
           {expanded ? "Show fewer" : `Show all ${total} attachments`}
-        </button>
+        </Button>
       )}
 
       {/* Pop-up viewer — images, PDFs and documents all render here. Read-only:

@@ -1,7 +1,8 @@
 "use client";
 
+import Button from "@/components/ui/Button";
+import Icon from "@/components/Icon";
 import { useState } from "react";
-import { X, ChevronDown } from "lucide-react";
 
 /**
  * Shared chrome for an AG-UI tool card: a header row with a collapse toggle, an
@@ -29,26 +30,18 @@ export function ToolCardShell({
   return (
     <div className="rounded-lg border border-border bg-card/40 overflow-hidden">
       <div className="flex items-center gap-1.5 px-2.5 py-1.5">
-        <button
-          onClick={() => setCollapsed((c) => !c)}
-          className="flex items-center gap-1.5 flex-1 min-w-0 text-left text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
-        >
-          <ChevronDown
+        <Button variant="text" size="none" layout="flex items-center" onClick={() => setCollapsed((c) => !c)} className="gap-1.5 flex-1 min-w-0 text-left text-xs">
+          <Icon name="ChevronDown"
             size={12}
             className={`flex-shrink-0 transition-transform ${collapsed ? "-rotate-90" : ""}`}
           />
           {icon}
           <span className="truncate">{title}</span>
-        </button>
+        </Button>
         {onDismiss && (
-          <button
-            onClick={onDismiss}
-            title="Dismiss"
-            aria-label="Dismiss"
-            className="p-0.5 rounded text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors flex-shrink-0"
-          >
-            <X size={12} />
-          </button>
+          <Button variant="ghost" size="none" radius="keep" layout="" onClick={onDismiss} title="Dismiss" aria-label="Dismiss" className="p-0.5 rounded flex-shrink-0">
+            <Icon name="X" size={12} />
+          </Button>
         )}
       </div>
       {!collapsed && <div className="px-2.5 pb-2.5">{children}</div>}
@@ -77,7 +70,7 @@ export function DismissableCard({
         aria-label="Dismiss"
         className="absolute top-1.5 right-1.5 z-10 p-0.5 rounded text-muted-foreground bg-card/80 opacity-60 hover:opacity-100 hover:text-foreground hover:bg-secondary transition-opacity"
       >
-        <X size={12} />
+        <Icon name="X" size={12} />
       </button>
       {children}
     </div>

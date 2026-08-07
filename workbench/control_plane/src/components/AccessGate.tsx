@@ -12,8 +12,8 @@
  * sentence.
  */
 
+import Icon from "@/components/Icon";
 import { usePathname } from "next/navigation";
-import { ShieldOff } from "lucide-react";
 import Link from "next/link";
 import { useAccess } from "@/components/AccessProvider";
 import { canSeePath } from "@/lib/access";
@@ -37,7 +37,7 @@ export default function AccessGate({ children }: { children: React.ReactNode }) 
     <div className="flex h-full items-center justify-center p-8">
       <div className="max-w-md rounded-xl border border-border bg-card p-8 text-center">
         <div className="mx-auto mb-4 flex h-11 w-11 items-center justify-center rounded-full bg-muted">
-          <ShieldOff size={20} className="text-muted-foreground" />
+          <Icon name="ShieldOff" size={20} className="text-muted-foreground" />
         </div>
         <h1 className="text-base font-semibold text-foreground">
           {suspended ? "Your account is not active" : "You don't have access to this"}

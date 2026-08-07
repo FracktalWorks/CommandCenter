@@ -13,24 +13,9 @@
  * See ai-company-brain/specs/whatsapp_calls_note_taker.md.
  */
 
+import Button from "@/components/ui/Button";
+import Icon from "@/components/Icon";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-  AlertTriangle,
-  CheckCircle2,
-  Headphones,
-  Loader2,
-  Mic,
-  MicOff,
-  Phone,
-  PhoneIncoming,
-  PhoneOff,
-  ClipboardCheck,
-  ClipboardList,
-  Stethoscope,
-  Users,
-  Volume2,
-  XCircle,
-} from "lucide-react";
 import {
   callAction,
   fetchAccounts,
@@ -396,7 +381,7 @@ export default function WhatsAppCallsPage() {
   if (accounts === null) {
     return (
       <div className="grid place-items-center p-12 text-muted-foreground">
-        <Loader2 className="h-5 w-5 animate-spin" />
+        <Icon name="Loader2" className="h-5 w-5 animate-spin" />
       </div>
     );
   }
@@ -424,7 +409,7 @@ export default function WhatsAppCallsPage() {
     <div className="mx-auto max-w-3xl p-4 sm:p-6">
       <header className="mb-4">
         <h1 className="flex items-center gap-2 text-lg font-bold text-foreground">
-          <Phone className="h-4 w-4 text-primary" />
+          <Icon name="Phone" className="h-4 w-4 text-primary" />
           WhatsApp calls
         </h1>
         <p className="mt-0.5 text-xs text-muted-foreground">
@@ -438,7 +423,7 @@ export default function WhatsAppCallsPage() {
       {/* The ToS posture is the first thing on the page, not a footnote: an
           automated client placing calls is the fastest way to lose a number. */}
       <div className="mb-3 flex items-start gap-2 rounded-xl bg-secondary px-3 py-2.5 text-[11px] leading-relaxed text-muted-foreground">
-        <Headphones className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+        <Icon name="Headphones" className="mt-0.5 h-3.5 w-3.5 shrink-0" />
         <span>
           Your mic and speakers join automatically when you place a call, so you
           hear it ringing straight away. <b className="text-foreground">Use
@@ -449,7 +434,7 @@ export default function WhatsAppCallsPage() {
       </div>
 
       <div className="mb-4 flex items-start gap-2 rounded-xl bg-warning/10 px-3 py-2.5 text-[11px] leading-relaxed text-warning">
-        <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+        <Icon name="AlertTriangle" className="mt-0.5 h-3.5 w-3.5 shrink-0" />
         <span>
           Calling from an unofficial client is outside WhatsApp&apos;s Terms of
           Service and the number can be banned. Use a number you&apos;re willing
@@ -494,9 +479,9 @@ export default function WhatsAppCallsPage() {
               }`}
             >
               {m === "direct" ? (
-                <Phone className="h-3 w-3" />
+                <Icon name="Phone" className="h-3 w-3" />
               ) : (
-                <Users className="h-3 w-3" />
+                <Icon name="Users" className="h-3 w-3" />
               )}
               {m === "direct" ? "1:1" : "Group"}
             </button>
@@ -517,18 +502,14 @@ export default function WhatsAppCallsPage() {
             }
             className="flex-1 rounded-lg border border-border bg-background px-3 py-2 font-mono text-xs text-foreground placeholder:text-muted-foreground/70 focus:outline-none focus:ring-1 focus:ring-ring"
           />
-          <button
-            onClick={() => void dial()}
-            disabled={busy || !target.trim() || !bridgeUp}
-            className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-xs font-medium text-primary-foreground hover:opacity-90 tech-transition disabled:opacity-50"
-          >
+          <Button size="none" onClick={() => void dial()} disabled={busy || !target.trim() || !bridgeUp} className="gap-1.5 px-4 py-2 text-xs">
             {busy ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              <Icon name="Loader2" className="h-3.5 w-3.5 animate-spin" />
             ) : (
-              <Phone className="h-3.5 w-3.5" />
+              <Icon name="Phone" className="h-3.5 w-3.5" />
             )}
             {busy ? "Calling…" : "Call"}
-          </button>
+          </Button>
         </div>
 
         {mode === "group" && (
@@ -553,7 +534,7 @@ export default function WhatsAppCallsPage() {
               onClick={() => void runDiagnostics()}
               className="mt-1.5 inline-flex items-center gap-1 rounded-md bg-destructive/15 px-2 py-1 font-medium hover:bg-destructive/25 tech-transition"
             >
-              <Stethoscope className="h-3 w-3" />
+              <Icon name="Stethoscope" className="h-3 w-3" />
               Check what&apos;s wrong
             </button>
           </div>
@@ -566,18 +547,15 @@ export default function WhatsAppCallsPage() {
         <div className="mt-3 rounded-2xl border border-border bg-card p-4">
           <div className="mb-2 flex items-center justify-between">
             <h2 className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
-              <Stethoscope className="h-3.5 w-3.5" />
+              <Icon name="Stethoscope" className="h-3.5 w-3.5" />
               Calling readiness
             </h2>
-            <button
-              onClick={() => void runDiagnostics()}
-              className="text-[10px] text-muted-foreground hover:text-foreground"
-            >
+            <Button variant="text" size="none" layout="" onClick={() => void runDiagnostics()} className="text-[10px]">
               Re-check
-            </button>
+            </Button>
           </div>
           {diag === null ? (
-            <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+            <Icon name="Loader2" className="h-4 w-4 animate-spin text-muted-foreground" />
           ) : (
             <>
               <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-[11px]">
@@ -592,9 +570,9 @@ export default function WhatsAppCallsPage() {
                 ).map(([label, ok]) => (
                   <div key={label} className="flex items-center gap-1.5">
                     {ok ? (
-                      <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-success" />
+                      <Icon name="CheckCircle2" className="h-3.5 w-3.5 shrink-0 text-success" />
                     ) : (
-                      <XCircle className="h-3.5 w-3.5 shrink-0 text-destructive" />
+                      <Icon name="XCircle" className="h-3.5 w-3.5 shrink-0 text-destructive" />
                     )}
                     <dt className="text-muted-foreground">{label}</dt>
                   </div>
@@ -646,11 +624,11 @@ export default function WhatsAppCallsPage() {
               >
                 <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-primary/15 text-primary">
                   {c.direction === "incoming" ? (
-                    <PhoneIncoming className="h-4 w-4" />
+                    <Icon name="PhoneIncoming" className="h-4 w-4" />
                   ) : c.kind === "group" ? (
-                    <Users className="h-4 w-4" />
+                    <Icon name="Users" className="h-4 w-4" />
                   ) : (
-                    <Phone className="h-4 w-4" />
+                    <Icon name="Phone" className="h-4 w-4" />
                   )}
                 </span>
                 <div className="min-w-0 flex-1">
@@ -668,7 +646,7 @@ export default function WhatsAppCallsPage() {
                     )}
                     {c.recording && (
                       <span className="inline-flex items-center gap-1">
-                        <Mic className="h-3 w-3" />
+                        <Icon name="Mic" className="h-3 w-3" />
                         {c.audio_seconds
                           ? `${c.audio_seconds.toFixed(0)}s captured`
                           : "recording"}
@@ -713,9 +691,9 @@ export default function WhatsAppCallsPage() {
                         }`}
                       >
                         {muted ? (
-                          <MicOff className="h-3.5 w-3.5" />
+                          <Icon name="MicOff" className="h-3.5 w-3.5" />
                         ) : (
-                          <Mic className="h-3.5 w-3.5" />
+                          <Icon name="Mic" className="h-3.5 w-3.5" />
                         )}
                       </button>
                       <button
@@ -723,7 +701,7 @@ export default function WhatsAppCallsPage() {
                         title="Leave the call's audio (the call stays up)"
                         className="rounded-lg border border-border px-2.5 py-1.5 text-xs text-muted-foreground hover:text-foreground tech-transition"
                       >
-                        <Headphones className="h-3.5 w-3.5" />
+                        <Icon name="Headphones" className="h-3.5 w-3.5" />
                       </button>
                     </div>
                   ) : (
@@ -733,9 +711,9 @@ export default function WhatsAppCallsPage() {
                       className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-success px-3 py-1.5 text-xs font-medium text-white hover:opacity-90 tech-transition disabled:opacity-50"
                     >
                       {audioState === "requesting-mic" || audioState === "connecting" ? (
-                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        <Icon name="Loader2" className="h-3.5 w-3.5 animate-spin" />
                       ) : (
-                        <Volume2 className="h-3.5 w-3.5" />
+                        <Icon name="Volume2" className="h-3.5 w-3.5" />
                       )}
                       {audioState === "requesting-mic"
                         ? "Mic…"
@@ -753,11 +731,11 @@ export default function WhatsAppCallsPage() {
                   className="shrink-0 rounded-lg border border-border px-2.5 py-1.5 text-xs text-muted-foreground hover:text-foreground tech-transition disabled:opacity-50"
                 >
                   {reportBusy ? (
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    <Icon name="Loader2" className="h-3.5 w-3.5 animate-spin" />
                   ) : copied ? (
-                    <ClipboardCheck className="h-3.5 w-3.5 text-success" />
+                    <Icon name="ClipboardCheck" className="h-3.5 w-3.5 text-success" />
                   ) : (
-                    <ClipboardList className="h-3.5 w-3.5" />
+                    <Icon name="ClipboardList" className="h-3.5 w-3.5" />
                   )}
                 </button>
 
@@ -781,7 +759,7 @@ export default function WhatsAppCallsPage() {
                     onClick={() => void act("hangup", c)}
                     className="inline-flex items-center gap-1.5 rounded-lg bg-destructive px-3 py-1.5 text-xs font-medium text-white hover:opacity-90 tech-transition"
                   >
-                    <PhoneOff className="h-3.5 w-3.5" />
+                    <Icon name="PhoneOff" className="h-3.5 w-3.5" />
                     Hang up
                   </button>
                 )}
@@ -798,22 +776,16 @@ export default function WhatsAppCallsPage() {
         <section className="mt-4 rounded-2xl border border-border bg-card p-4">
           <div className="mb-2 flex items-center justify-between gap-2">
             <h2 className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
-              <ClipboardList className="h-3.5 w-3.5" />
+              <Icon name="ClipboardList" className="h-3.5 w-3.5" />
               Debug report {copied && <span className="text-success">· copied</span>}
             </h2>
             <div className="flex gap-2">
-              <button
-                onClick={() => void navigator.clipboard.writeText(report)}
-                className="text-[10px] text-muted-foreground hover:text-foreground"
-              >
+              <Button variant="text" size="none" layout="" onClick={() => void navigator.clipboard.writeText(report)} className="text-[10px]">
                 Copy again
-              </button>
-              <button
-                onClick={() => setReport(null)}
-                className="text-[10px] text-muted-foreground hover:text-foreground"
-              >
+              </Button>
+              <Button variant="text" size="none" layout="" onClick={() => setReport(null)} className="text-[10px]">
                 Dismiss
-              </button>
+              </Button>
             </div>
           </div>
           <textarea
@@ -842,7 +814,7 @@ export default function WhatsAppCallsPage() {
               <div key={c.call_id} className="p-3">
                 <div className="flex items-center gap-3">
                   <span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-secondary text-muted-foreground">
-                    <PhoneOff className="h-3.5 w-3.5" />
+                    <Icon name="PhoneOff" className="h-3.5 w-3.5" />
                   </span>
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-xs text-foreground">

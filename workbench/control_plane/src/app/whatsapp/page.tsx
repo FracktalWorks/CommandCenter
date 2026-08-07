@@ -8,26 +8,10 @@
 // buttons — capability arrives in later phases as streams / settings / drawers,
 // never as more always-on chrome on the queue.
 
+import Button from "@/components/ui/Button";
+import AppIcon from "@/components/Icon";
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import {
-  ArrowLeft,
-  Check,
-  ChevronDown,
-  ChevronsUpDown,
-  Clock,
-  Loader2,
-  MessageCircle,
-  Mic,
-  PanelRight,
-  Phone,
-  Plus,
-  Search,
-  Send,
-  Sparkles,
-  X,
-  Zap,
-} from "lucide-react";
 import { useViewMode } from "@/components/ViewModeProvider";
 import { useMobileDrawer } from "@/components/AppShell";
 import {
@@ -297,7 +281,7 @@ export default function WhatsAppPage() {
   if (loading) {
     return (
       <div className="flex h-full items-center justify-center text-muted-foreground">
-        <Loader2 className="h-5 w-5 animate-spin" />
+        <AppIcon name="Loader2" className="h-5 w-5 animate-spin" />
       </div>
     );
   }
@@ -343,7 +327,7 @@ export default function WhatsAppPage() {
           <span className="text-[11px] text-muted-foreground">
             {chats.length}
           </span>
-          <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground/60" />
+          <AppIcon name="ChevronDown" className="h-4 w-4 shrink-0 text-muted-foreground/60" />
           <span className="ml-auto flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground">
             <span className="truncate">
               {activeAccount.display_name || activeAccount.phone_number}
@@ -475,7 +459,7 @@ export default function WhatsAppPage() {
             {chats.length}
           </span>
           <div className="ml-auto flex items-center gap-1 text-muted-foreground/60">
-            <Search className="h-3.5 w-3.5" />
+            <AppIcon name="Search" className="h-3.5 w-3.5" />
           </div>
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto">
@@ -558,7 +542,7 @@ function AccountSwitcher({
                 </div>
               </div>
               {a.id === active.id && (
-                <Check className="h-3.5 w-3.5 shrink-0 text-success" />
+                <AppIcon name="Check" className="h-3.5 w-3.5 shrink-0 text-success" />
               )}
             </button>
           ))}
@@ -566,7 +550,7 @@ function AccountSwitcher({
             href="/whatsapp/connect"
             className="flex items-center gap-2 border-t border-border px-2.5 py-2 text-[11px] font-semibold text-primary hover:bg-muted/50"
           >
-            <Plus className="h-3.5 w-3.5" /> Connect another number
+            <AppIcon name="Plus" className="h-3.5 w-3.5" /> Connect another number
           </Link>
         </div>
       )}
@@ -589,7 +573,7 @@ function AccountSwitcher({
             {accounts.length > 1 ? ` · ${accounts.length} numbers` : ""}
           </div>
         </div>
-        <ChevronsUpDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground/60" />
+        <AppIcon name="ChevronsUpDown" className="h-3.5 w-3.5 shrink-0 text-muted-foreground/60" />
       </button>
     </div>
   );
@@ -717,7 +701,7 @@ function TriageDrawer({
                 </div>
               </div>
               {a.id === activeAccountId && (
-                <Check className="h-4 w-4 shrink-0 text-success" />
+                <AppIcon name="Check" className="h-4 w-4 shrink-0 text-success" />
               )}
             </button>
           ))}
@@ -921,7 +905,7 @@ function Conversation({
               aria-label="Back to list"
               className="-ml-1 shrink-0 rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
             >
-              <ArrowLeft className="h-4 w-4" />
+              <AppIcon name="ArrowLeft" className="h-4 w-4" />
             </button>
           )}
           <ChatAvatar
@@ -954,7 +938,7 @@ function Conversation({
               title={`Call ${chat.name || chat.wa_chat_id}`}
               className="flex items-center gap-1 rounded-md border border-border px-2 py-1 text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground"
             >
-              <Phone className="h-3.5 w-3.5 shrink-0" />
+              <AppIcon name="Phone" className="h-3.5 w-3.5 shrink-0" />
               <span className="hidden sm:inline">Call</span>
             </Link>
             {isSnoozed ? (
@@ -963,7 +947,7 @@ function Conversation({
                 className="flex items-center gap-1 rounded-md border border-border bg-muted px-2 py-1 text-[11px] text-muted-foreground"
                 title={`Snoozed until ${snoozeLabel(chat.snoozed_until)}`}
               >
-                <Clock className="h-3.5 w-3.5 shrink-0" />
+                <AppIcon name="Clock" className="h-3.5 w-3.5 shrink-0" />
                 <span className="hidden sm:inline">
                   Snoozed · {snoozeLabel(chat.snoozed_until)} — wake
                 </span>
@@ -977,7 +961,7 @@ function Conversation({
                     showSnooze ? "bg-muted text-foreground" : "text-muted-foreground"
                   }`}
                 >
-                  <Clock className="h-3.5 w-3.5 shrink-0" />
+                  <AppIcon name="Clock" className="h-3.5 w-3.5 shrink-0" />
                   <span className="hidden sm:inline">Snooze</span>
                 </button>
                 {showSnooze && (
@@ -1004,7 +988,7 @@ function Conversation({
                 showDetails ? "bg-muted text-foreground" : "text-muted-foreground"
               }`}
             >
-              <PanelRight className="h-3.5 w-3.5 shrink-0" />
+              <AppIcon name="PanelRight" className="h-3.5 w-3.5 shrink-0" />
               <span className="hidden sm:inline">Details</span>
             </button>
           </div>
@@ -1038,9 +1022,9 @@ function Conversation({
                   className="inline-flex items-center gap-1.5 rounded-full bg-primary/10 px-2.5 py-1 text-[11px] font-semibold text-primary disabled:opacity-50"
                 >
                   {drafting ? (
-                    <Loader2 className="h-3 w-3 animate-spin" />
+                    <AppIcon name="Loader2" className="h-3 w-3 animate-spin" />
                   ) : (
-                    <Sparkles className="h-3 w-3" />
+                    <AppIcon name="Sparkles" className="h-3 w-3" />
                   )}
                   Suggest reply
                 </button>
@@ -1053,7 +1037,7 @@ function Conversation({
                         : "bg-muted/50 text-muted-foreground"
                     }`}
                   >
-                    <Zap className="h-3 w-3" /> Saved
+                    <AppIcon name="Zap" className="h-3 w-3" /> Saved
                   </button>
                   {showSaved && (
                     <div className="absolute bottom-8 left-0 z-10 max-h-56 w-72 overflow-y-auto rounded-lg border border-border bg-background shadow-lg">
@@ -1106,18 +1090,14 @@ function Conversation({
                   placeholder="Type a reply…  (⌘↵ to send)"
                   className="min-h-[40px] flex-1 resize-none rounded-lg border border-border bg-background px-3 py-2 text-[12px] outline-none focus:border-primary"
                 />
-                <button
-                  onClick={doSendText}
-                  disabled={!text.trim() || sending}
-                  className="flex h-9 items-center gap-1.5 rounded-lg bg-primary px-3 text-[12px] font-semibold text-primary-foreground hover:opacity-90 disabled:opacity-50"
-                >
+                <Button size="none" layout="flex items-center" onClick={doSendText} disabled={!text.trim() || sending} className="h-9 gap-1.5 px-3 text-[12px] font-semibold">
                   {sending ? (
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    <AppIcon name="Loader2" className="h-3.5 w-3.5 animate-spin" />
                   ) : (
-                    <Send className="h-3.5 w-3.5" />
+                    <AppIcon name="Send" className="h-3.5 w-3.5" />
                   )}
                   Send
-                </button>
+                </Button>
               </div>
             </div>
           ) : (
@@ -1166,7 +1146,7 @@ function Conversation({
                 aria-label="Close details"
                 className="rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
               >
-                <X className="h-4 w-4" />
+                <AppIcon name="X" className="h-4 w-4" />
               </button>
             </div>
             <div className="min-h-0 flex-1 overflow-y-auto">
@@ -1312,9 +1292,9 @@ function WaitingOnRow({
         className="mt-1 inline-flex items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-semibold text-primary disabled:opacity-50"
       >
         {busy ? (
-          <Loader2 className="h-2.5 w-2.5 animate-spin" />
+          <AppIcon name="Loader2" className="h-2.5 w-2.5 animate-spin" />
         ) : (
-          <Sparkles className="h-2.5 w-2.5" />
+          <AppIcon name="Sparkles" className="h-2.5 w-2.5" />
         )}
         Nudge
       </button>
@@ -1369,7 +1349,7 @@ function Bubble({
         {isVoice ? (
           <div>
             <span className="flex items-center gap-1 text-muted-foreground">
-              <Mic className="h-3 w-3" /> voice note
+              <AppIcon name="Mic" className="h-3 w-3" /> voice note
             </span>
             {msg.transcript_text ? (
               <div className="mt-1 italic text-foreground/90">
@@ -1383,9 +1363,9 @@ function Bubble({
                   className="mt-1 inline-flex items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-semibold text-primary disabled:opacity-50"
                 >
                   {transcribing ? (
-                    <Loader2 className="h-2.5 w-2.5 animate-spin" />
+                    <AppIcon name="Loader2" className="h-2.5 w-2.5 animate-spin" />
                   ) : (
-                    <Sparkles className="h-2.5 w-2.5" />
+                    <AppIcon name="Sparkles" className="h-2.5 w-2.5" />
                   )}
                   Transcribe
                 </button>
@@ -1412,7 +1392,7 @@ function Bubble({
           disabled={busy}
           className="mt-0.5 flex items-center gap-1 text-[10px] text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 disabled:opacity-50"
         >
-          <Plus className="h-3 w-3" />
+          <AppIcon name="Plus" className="h-3 w-3" />
           {captured ? "captured" : "task"}
         </button>
       )}
@@ -1425,7 +1405,7 @@ function ConnectEmptyState() {
     <div className="flex h-full items-center justify-center bg-background p-8">
       <div className="max-w-md text-center">
         <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-primary/15 text-primary">
-          <MessageCircle className="h-7 w-7" />
+          <AppIcon name="MessageCircle" className="h-7 w-7" />
         </div>
         <h1 className="text-lg font-semibold">Connect WhatsApp Business</h1>
         <p className="mx-auto mt-2 max-w-sm text-[13px] text-muted-foreground">
@@ -1437,7 +1417,7 @@ function ConnectEmptyState() {
           href="/whatsapp/connect"
           className="mt-5 inline-flex items-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-[13px] font-semibold text-primary-foreground hover:opacity-90"
         >
-          <MessageCircle className="h-4 w-4" /> Connect a number
+          <AppIcon name="MessageCircle" className="h-4 w-4" /> Connect a number
         </Link>
         <p className="mt-3 text-[11px] text-muted-foreground/70">
           Official Cloud API · business numbers only · ~15 minutes.

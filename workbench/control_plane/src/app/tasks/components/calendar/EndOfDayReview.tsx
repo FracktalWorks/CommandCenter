@@ -1,13 +1,8 @@
 "use client";
 
+import Button from "@/components/ui/Button";
+import Icon from "@/components/Icon";
 import { useEffect, useState } from "react";
-import {
-  X,
-  Check,
-  ClipboardCheck,
-  Star,
-  Moon,
-} from "lucide-react";
 import {
   apiEstimateStats,
   apiSetDayState,
@@ -150,7 +145,7 @@ export function EndOfDayReview({
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center gap-2 border-b border-border px-4 py-3">
-          <ClipboardCheck className="h-4 w-4 shrink-0 text-primary" />
+          <Icon name="ClipboardCheck" className="h-4 w-4 shrink-0 text-primary" />
           <div className="min-w-0 flex-1">
             <h2 className="truncate text-sm font-semibold text-foreground">
               Day review
@@ -159,14 +154,9 @@ export function EndOfDayReview({
               {dateLabel}
             </p>
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="Close"
-            className="rounded-md p-1 text-muted-foreground hover:bg-secondary hover:text-foreground"
-          >
-            <X className="h-4 w-4" />
-          </button>
+          <Button variant="ghost" size="icon-xs" radius="keep" layout="" type="button" onClick={onClose} aria-label="Close" className="rounded-md">
+            <Icon name="X" className="h-4 w-4" />
+          </Button>
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
@@ -206,7 +196,7 @@ export function EndOfDayReview({
                   : "border-border bg-background/60 text-muted-foreground",
               ].join(" ")}
             >
-              <Star
+              <Icon name="Star"
                 className={[
                   "h-4 w-4 shrink-0",
                   oneThingDone
@@ -289,7 +279,7 @@ export function EndOfDayReview({
                     onClick={() => onOpen(b.item.id)}
                     className="tech-transition flex items-center gap-2 rounded-md border border-border bg-background/60 p-2 text-left hover:border-primary/40"
                   >
-                    <Check className="h-3.5 w-3.5 shrink-0 text-success" />
+                    <Icon name="Check" className="h-3.5 w-3.5 shrink-0 text-success" />
                     <span className="min-w-0 flex-1 truncate text-[12.5px] text-foreground line-through decoration-muted-foreground/40">
                       {b.item.title}
                     </span>
@@ -381,22 +371,13 @@ export function EndOfDayReview({
         )}
 
         <div className="flex items-center justify-end gap-2 border-t border-border px-4 py-3">
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-md px-3 py-2 text-[12px] font-medium text-muted-foreground hover:text-foreground"
-          >
+          <Button variant="text" size="none" radius="keep" layout="" type="button" onClick={onClose} className="rounded-md px-3 py-2 text-[12px]">
             Not yet
-          </button>
-          <button
-            type="button"
-            onClick={closeDay}
-            title="Save tomorrow's seeds and end the work day — permission to stop"
-            className="tech-transition inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-2 text-[12px] font-medium text-primary-foreground hover:opacity-90"
-          >
-            <Moon className="h-3.5 w-3.5" />
+          </Button>
+          <Button size="none" radius="keep" layout="inline-flex items-center" type="button" onClick={closeDay} title="Save tomorrow's seeds and end the work day — permission to stop" className="gap-1.5 rounded-md px-3 py-2 text-[12px]">
+            <Icon name="Moon" className="h-3.5 w-3.5" />
             Close the day
-          </button>
+          </Button>
         </div>
       </div>
     </div>

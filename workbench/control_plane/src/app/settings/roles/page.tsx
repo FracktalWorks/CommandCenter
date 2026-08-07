@@ -12,9 +12,10 @@
  * role system is one role per employee.
  */
 
+import Button from "@/components/ui/Button";
+import Icon from "@/components/Icon";
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { ArrowLeft, Loader2, Lock, Plus, Trash2, X } from "lucide-react";
 import { useAccess } from "@/components/AccessProvider";
 import type { Feature, Role } from "../members/types";
 
@@ -92,7 +93,7 @@ export default function RolesPage() {
             className="rounded-lg border border-border p-2 text-muted-foreground tech-transition hover:bg-secondary"
             aria-label="Back to members"
           >
-            <ArrowLeft size={15} />
+            <Icon name="ArrowLeft" size={15} />
           </Link>
           <div>
             <h1 className="text-base font-bold text-foreground sm:text-lg">Roles</h1>
@@ -101,20 +102,17 @@ export default function RolesPage() {
             </p>
           </div>
         </div>
-        <button
-          onClick={() => setCreating(true)}
-          className="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground tech-transition hover:opacity-90 sm:px-4"
-        >
-          <Plus size={15} />
+        <Button size="lg" layout="flex items-center" onClick={() => setCreating(true)}>
+          <Icon name="Plus" size={15} />
           New role
-        </button>
+        </Button>
       </div>
 
       {error && (
         <div className="mx-4 mt-3 flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive sm:mx-6">
           <span className="flex-1">{error}</span>
           <button onClick={() => setError("")} aria-label="Dismiss">
-            <X size={13} />
+            <Icon name="X" size={13} />
           </button>
         </div>
       )}
@@ -128,7 +126,7 @@ export default function RolesPage() {
 
         {loading ? (
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
-            <Loader2 size={14} className="animate-spin" /> Loading roles…
+            <Icon name="Loader2" size={14} className="animate-spin" /> Loading roles…
           </div>
         ) : (
           <div className="flex flex-col gap-2">
@@ -145,7 +143,7 @@ export default function RolesPage() {
                       </code>
                       {r.is_system && (
                         <span className="flex items-center gap-1 text-[10px] text-muted-foreground">
-                          <Lock size={10} /> system
+                          <Icon name="Lock" size={10} /> system
                         </span>
                       )}
                     </div>
@@ -156,13 +154,9 @@ export default function RolesPage() {
                       {r.member_count} member{r.member_count === 1 ? "" : "s"}
                     </span>
                     {!r.is_system && (
-                      <button
-                        onClick={() => void remove(r.slug)}
-                        className="rounded-lg bg-destructive/10 p-2 text-destructive tech-transition hover:bg-destructive/20"
-                        title="Delete role"
-                      >
-                        <Trash2 size={14} />
-                      </button>
+                      <Button variant="destructive" size="icon" layout="" onClick={() => void remove(r.slug)} title="Delete role">
+                        <Icon name="Trash2" size={14} />
+                      </Button>
                     )}
                   </div>
                 </div>
@@ -292,7 +286,7 @@ function CreateRoleDialog({
             className="rounded-lg p-1 text-muted-foreground hover:bg-secondary"
             aria-label="Close"
           >
-            <X size={15} />
+            <Icon name="X" size={15} />
           </button>
         </div>
 
@@ -365,14 +359,10 @@ function CreateRoleDialog({
             >
               Cancel
             </button>
-            <button
-              onClick={() => void submit()}
-              disabled={busy || !name.trim() || selected.size === 0}
-              className="flex items-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground tech-transition hover:opacity-90 disabled:opacity-50"
-            >
-              {busy && <Loader2 size={14} className="animate-spin" />}
+            <Button size="none" layout="flex items-center" onClick={() => void submit()} disabled={busy || !name.trim() || selected.size === 0} className="gap-1.5 px-4 py-2 text-sm">
+              {busy && <Icon name="Loader2" size={14} className="animate-spin" />}
               Create role
-            </button>
+            </Button>
           </div>
         </div>
       </div>

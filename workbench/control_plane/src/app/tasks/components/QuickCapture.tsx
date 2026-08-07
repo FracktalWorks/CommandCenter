@@ -1,7 +1,8 @@
 "use client";
 
+import Button from "@/components/ui/Button";
+import AppIcon, { themedIcon, type ThemedIcon } from "@/components/Icon";
 import { useEffect, useRef, useState } from "react";
-import { Plus, X, ListPlus, Wind, Check, Sparkles, ArrowLeft, ArrowRight, Trash2, Loader2, CopyX, CornerDownLeft, Bell, CalendarClock } from "lucide-react";
 import { useTaskStore } from "../lib/taskStore";
 import { apiAtomize } from "../lib/api";
 import { snoozeOptions, detectDateHint, matchWhere } from "../lib/utils";
@@ -218,30 +219,25 @@ function QuickCapturePanel() {
         {/* header: mode toggle + close */}
         <div className="flex items-center gap-2 border-b border-border px-3 py-2">
           <div className="flex rounded-lg bg-secondary p-0.5 text-xs">
-            <ModeTab active={mode === "single"} onClick={() => switchMode("single")} icon={Plus}>
+            <ModeTab active={mode === "single"} onClick={() => switchMode("single")} icon={themedIcon("Plus")}>
               Quick
             </ModeTab>
-            <ModeTab active={mode === "sweep"} onClick={() => switchMode("sweep")} icon={Wind}>
+            <ModeTab active={mode === "sweep"} onClick={() => switchMode("sweep")} icon={themedIcon("Wind")}>
               Mind sweep
             </ModeTab>
           </div>
           <span className="ml-auto text-[11px] text-muted-foreground">
             Capture only — clarify later
           </span>
-          <button
-            type="button"
-            onClick={close}
-            aria-label="Close"
-            className="tech-transition rounded-md p-1 text-muted-foreground hover:bg-secondary hover:text-foreground"
-          >
-            <X className="h-4 w-4" />
-          </button>
+          <Button variant="ghost" size="icon-xs" radius="keep" layout="" type="button" onClick={close} aria-label="Close" className="rounded-md">
+            <AppIcon name="X" className="h-4 w-4" />
+          </Button>
         </div>
 
         {mode === "single" ? (
           <div className="p-4">
             <div className="tech-transition flex items-center gap-3 rounded-xl border border-border bg-background/60 px-4 py-3 focus-within:border-primary/50">
-              <Plus className="h-5 w-5 shrink-0 text-muted-foreground" />
+              <AppIcon name="Plus" className="h-5 w-5 shrink-0 text-muted-foreground" />
               <input
                 ref={inputRef}
                 value={value}
@@ -271,11 +267,11 @@ function QuickCapturePanel() {
               >
                 {verifying ? (
                   <>
-                    Checking… <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    Checking… <AppIcon name="Loader2" className="h-3.5 w-3.5 animate-spin" />
                   </>
                 ) : (
                   <>
-                    Add <CornerDownLeft className="h-3.5 w-3.5" />
+                    Add <AppIcon name="CornerDownLeft" className="h-3.5 w-3.5" />
                   </>
                 )}
               </button>
@@ -292,7 +288,7 @@ function QuickCapturePanel() {
               <span>Enter to add · keep going · Esc to close</span>
               {added > 0 && (
                 <span className="inline-flex items-center gap-1 text-success">
-                  <Check className="h-3 w-3" />
+                  <AppIcon name="Check" className="h-3 w-3" />
                   {added} captured
                 </span>
               )}
@@ -345,7 +341,7 @@ function QuickCapturePanel() {
                 ].join(" ")}
               >
                 Review {lineCount || ""} item{lineCount === 1 ? "" : "s"}
-                <ArrowRight className="h-4 w-4" />
+                <AppIcon name="ArrowRight" className="h-4 w-4" />
               </button>
             </div>
           </div>
@@ -353,9 +349,9 @@ function QuickCapturePanel() {
           <div className="p-4">
             <div className="mb-2.5 flex items-start gap-1.5 rounded-lg border border-primary/20 bg-primary/5 px-2.5 py-2 text-[11px] text-muted-foreground">
               {atomizing ? (
-                <Loader2 className="mt-0.5 h-3.5 w-3.5 shrink-0 animate-spin text-primary" />
+                <AppIcon name="Loader2" className="mt-0.5 h-3.5 w-3.5 shrink-0 animate-spin text-primary" />
               ) : (
-                <Sparkles className="mt-0.5 h-3.5 w-3.5 shrink-0 text-primary" />
+                <AppIcon name="Sparkles" className="mt-0.5 h-3.5 w-3.5 shrink-0 text-primary" />
               )}
               <span>
                 {atomizing
@@ -384,7 +380,7 @@ function QuickCapturePanel() {
                           : "border-border text-transparent"
                       }`}
                     >
-                      <Check className="h-3 w-3" />
+                      <AppIcon name="Check" className="h-3 w-3" />
                     </button>
                     <input
                       value={item.title}
@@ -405,12 +401,12 @@ function QuickCapturePanel() {
                       aria-label="Remove item"
                       className="tech-transition rounded-md p-1 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
                     >
-                      <Trash2 className="h-3.5 w-3.5" />
+                      <AppIcon name="Trash2" className="h-3.5 w-3.5" />
                     </button>
                   </div>
                   {item.verdict !== "new" && (
                     <div className="ml-6 flex items-center gap-1 text-[10px]">
-                      <CopyX className={`h-3 w-3 ${item.verdict === "duplicate" ? "text-warning" : "text-muted-foreground"}`} />
+                      <AppIcon name="CopyX" className={`h-3 w-3 ${item.verdict === "duplicate" ? "text-warning" : "text-muted-foreground"}`} />
                       <span className={item.verdict === "duplicate" ? "text-warning" : "text-muted-foreground"}>
                         {item.verdict === "duplicate"
                           ? `Already ${matchWhere(item.matchDisposition, item.matchSource)}: "${item.matchTitle}" — skipped (tap the box to add anyway)`
@@ -429,7 +425,7 @@ function QuickCapturePanel() {
               }}
               className="tech-transition mt-2 inline-flex items-center gap-1 text-[11px] text-primary hover:underline"
             >
-              <Plus className="h-3 w-3" /> Add another
+              <AppIcon name="Plus" className="h-3 w-3" /> Add another
             </button>
             <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
               <div className="flex items-center gap-2">
@@ -438,7 +434,7 @@ function QuickCapturePanel() {
                   onClick={() => setPhase("write")}
                   className="tech-transition inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-sm text-muted-foreground hover:text-foreground"
                 >
-                  <ArrowLeft className="h-4 w-4" /> Back
+                  <AppIcon name="ArrowLeft" className="h-4 w-4" /> Back
                 </button>
                 {splitFromSingle && (
                   <button
@@ -462,7 +458,7 @@ function QuickCapturePanel() {
                     : "cursor-not-allowed bg-secondary text-muted-foreground",
                 ].join(" ")}
               >
-                <ListPlus className="h-4 w-4" />
+                <AppIcon name="ListPlus" className="h-4 w-4" />
                 Add {reviewCount} to inbox
               </button>
             </div>
@@ -481,7 +477,7 @@ function ModeTab({
 }: {
   active: boolean;
   onClick: () => void;
-  icon: typeof Plus;
+  icon: ThemedIcon;
   children: React.ReactNode;
 }) {
   return (
@@ -529,12 +525,12 @@ function CaptureWhen({
     return (
       <div className="mt-2 flex items-center gap-2 px-1">
         <span className="inline-flex items-center gap-1.5 rounded-full border border-primary/40 bg-primary/10 px-2.5 py-1 text-[11px] font-medium text-primary">
-          {kind === "remind" ? <Bell className="h-3 w-3" /> : <CalendarClock className="h-3 w-3" />}
+          {kind === "remind" ? <AppIcon name="Bell" className="h-3 w-3" /> : <AppIcon name="CalendarClock" className="h-3 w-3" />}
           {kind === "remind" ? "Remind" : "Due"} {dateLabel}
         </span>
-        <button type="button" onClick={() => setOpen(true)} className="text-[11px] text-muted-foreground hover:text-foreground">
+        <Button variant="text" size="none" layout="" type="button" onClick={() => setOpen(true)} className="text-[11px]">
           Change
-        </button>
+        </Button>
         <button type="button" onClick={onClear} className="text-[11px] text-muted-foreground hover:text-destructive">
           Clear
         </button>
@@ -550,7 +546,7 @@ function CaptureWhen({
           onClick={() => setOpen(true)}
           className="tech-transition inline-flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-[11px] font-medium text-muted-foreground hover:border-primary/40 hover:text-foreground"
         >
-          <Bell className="h-3 w-3" /> Remind me / due date
+          <AppIcon name="Bell" className="h-3 w-3" /> Remind me / due date
         </button>
         {hint && (
           <button
@@ -559,7 +555,7 @@ function CaptureWhen({
             className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-[10.5px] font-medium text-primary"
             title="Set a date for this capture"
           >
-            <Sparkles className="h-3 w-3" /> “{hint}” — set a date?
+            <AppIcon name="Sparkles" className="h-3 w-3" /> “{hint}” — set a date?
           </button>
         )}
       </div>
@@ -581,17 +577,13 @@ function CaptureWhen({
                 : "border-border text-muted-foreground hover:bg-secondary",
             ].join(" ")}
           >
-            {k === "remind" ? <Bell className="h-3 w-3" /> : <CalendarClock className="h-3 w-3" />}
+            {k === "remind" ? <AppIcon name="Bell" className="h-3 w-3" /> : <AppIcon name="CalendarClock" className="h-3 w-3" />}
             {k === "remind" ? "Remind me" : "Due date"}
           </button>
         ))}
-        <button
-          type="button"
-          onClick={() => setOpen(false)}
-          className="ml-auto text-[11px] font-medium text-muted-foreground hover:text-foreground"
-        >
+        <Button variant="text" size="none" layout="" type="button" onClick={() => setOpen(false)} className="ml-auto text-[11px]">
           Done
-        </button>
+        </Button>
       </div>
       <div className="flex flex-wrap items-center gap-1.5">
         {opts.map((o) => (

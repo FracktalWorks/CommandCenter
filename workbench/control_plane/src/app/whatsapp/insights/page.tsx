@@ -4,8 +4,8 @@
 // over the classified store: reply speed, who's waited longest, inbound load by
 // intent, and the busiest chats. Calm and honest — no vanity unread counts.
 
+import Icon from "@/components/Icon";
 import { useCallback, useEffect, useState } from "react";
-import { Activity, Clock, Loader2 } from "lucide-react";
 import { fetchAccounts, fetchPulse, pickDefaultAccount } from "../lib/api";
 import type { WaPulse } from "../lib/types";
 
@@ -66,7 +66,7 @@ export default function InsightsPage() {
   if (loading) {
     return (
       <div className="flex h-full items-center justify-center text-muted-foreground">
-        <Loader2 className="h-5 w-5 animate-spin" />
+        <Icon name="Loader2" className="h-5 w-5 animate-spin" />
       </div>
     );
   }
@@ -76,7 +76,7 @@ export default function InsightsPage() {
   return (
     <div className="mx-auto h-full max-w-3xl overflow-y-auto p-4 text-foreground md:p-6">
       <div className="mb-5 flex items-center gap-3">
-        <Activity className="h-4 w-4 text-primary" />
+        <Icon name="Activity" className="h-4 w-4 text-primary" />
         <h1 className="text-[15px] font-semibold">Pulse</h1>
         <div className="ml-auto flex items-center gap-1 rounded-lg border border-border p-0.5 text-[11px]">
           {[7, 30].map((d) => (
@@ -115,7 +115,7 @@ export default function InsightsPage() {
           <ul className="divide-y divide-border">
             {pulse.waiting_longest.map((w) => (
               <li key={w.chat_id} className="flex items-center gap-3 px-3 py-2.5">
-                <Clock className="h-3.5 w-3.5 shrink-0 text-amber-500" />
+                <Icon name="Clock" className="h-3.5 w-3.5 shrink-0 text-amber-500" />
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-[12.5px] font-semibold">
                     {w.name}

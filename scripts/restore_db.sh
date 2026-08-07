@@ -61,8 +61,12 @@ fi
 # exec -i` and a bare local command differ in more than a prefix, and a string
 # that is sometimes empty splits badly under `set -u`.
 PG_MODE="${PG_MODE:-docker}"
-pg()  { if [ "$PG_MODE" = "local" ]; then "$@"; else pg "$@"; fi; }
-pgi() { if [ "$PG_MODE" = "local" ]; then "$@"; else pgi "$@"; fi; }
+# ⚠️ Same seam, same rule as backup_db.sh: the docker branch must invoke
+# `docker exec`, never the function's own name (that recursion segfaulted every
+# deploy's pre-migration gate, 2026-08-07). Covered by the executing guard in
+# tests/unit/test_backup_deploy_wiring.py.
+pg()  { if [ "$PG_MODE" = "local" ]; then "$@"; else docker exec "$PG_CONTAINER" "$@"; fi; }
+pgi() { if [ "$PG_MODE" = "local" ]; then "$@"; else docker exec -i "$PG_CONTAINER" "$@"; fi; }
 
 require_postgres() {
   if [ "$PG_MODE" = "local" ]; then

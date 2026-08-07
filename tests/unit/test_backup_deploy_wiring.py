@@ -71,6 +71,45 @@ def test_the_backup_units_exist_and_the_timer_has_a_schedule() -> None:
     assert "WantedBy=timers.target" in timer, "unenableable timer: no [Install]"
 
 
+def test_the_pg_seam_actually_reaches_docker_in_docker_mode() -> None:
+    """EXECUTES the seam, does not read it. #380's first version of pg()/pgi()
+    called the function's own name in the docker branch — infinite recursion, a
+    bash segfault at the pre-migration gate, and every deploy after the merge
+    silently stopped applying migrations while verify() blessed the old healthy
+    services. CI never saw it because the rehearsal only runs PG_MODE=local.
+
+    This runs the REAL function definitions from both scripts in docker mode
+    against a stubbed `docker`, timeout-bound so a recursion fails fast instead
+    of hanging the suite."""
+    import subprocess
+
+    for script in ("scripts/backup_db.sh", "scripts/restore_db.sh"):
+        defs = "\n".join(
+            ln
+            for ln in (_ROOT / script).read_text(encoding="utf-8").splitlines()
+            if ln.startswith(("pg()", "pgi()"))
+        )
+        assert defs, f"{script} lost its pg()/pgi() seam"
+        prog = (
+            "set -u\n"
+            'docker() { printf "STUB %s\\n" "$*"; }\n'
+            "PG_MODE=docker\nPG_CONTAINER=testc\n"
+            f"{defs}\n"
+            "pg echo one && pgi echo two\n"
+        )
+        # stdin as BYTES, not `-c` argv and not text mode: Windows argv quoting
+        # mangles the embedded quotes on their way into MSYS bash, and text
+        # mode rewrites \n to \r\n, which bash reads as `set -u\r`.
+        run = subprocess.run(
+            ["bash"], input=prog.encode(), capture_output=True, timeout=10
+        )
+        out = run.stdout.decode(errors="replace")
+        err = run.stderr.decode(errors="replace")[:300]
+        assert run.returncode == 0, f"{script}: seam crashed: {err}"
+        assert "STUB exec testc echo one" in out, f"{script}: pg missed docker exec"
+        assert "STUB exec -i testc echo two" in out, f"{script}: pgi missed -i"
+
+
 def test_the_manual_runbook_and_the_live_path_carry_the_same_loop() -> None:
     """deploy/hostinger/deploy.sh is the hand-run runbook and keeps its copy of
     the loop; this asserts BOTH copies stay functionally present so an edit

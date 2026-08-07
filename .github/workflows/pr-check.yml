@@ -147,6 +147,73 @@ jobs:
           PGPASSWORD: rehearsal
         run: bash scripts/rehearse_restore.sh
 
+  # BO-6. The ladder is 152 hand-written, hand-idempotent SQL files replayed
+  # against production on every deploy, and until now nothing exercised it
+  # anywhere else — a migration that only fails on a FRESH database (the state
+  # a rebuilt stack or a restore lands in) was undetectable until someone hit
+  # it. This replays the whole ladder from empty, then twice more, and asserts
+  # the ledger makes the repeats no-ops.
+  #
+  # The second and third runs are the real assertion. "Idempotent" was a claim
+  # about 152 files nobody had checked together; now it is a build step.
+  migrations:
+    name: "Migration ladder replay"
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_PASSWORD: ladder
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PGHOST: localhost
+      PGPORT: "5432"
+      PGUSER: postgres
+      PGPASSWORD: ladder
+      PG_MODE: local
+      PG_USER: postgres
+      PG_DB: ladder
+      SKIP_PRE_MIGRATION_BACKUP: "1"
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install the postgresql-16 client
+        run: |
+          sudo sh -c 'echo "deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
+          curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo gpg --dearmor -o /usr/share/keyrings/pgdg.gpg
+          sudo sed -i 's|deb http|deb [signed-by=/usr/share/keyrings/pgdg.gpg] http|' /etc/apt/sources.list.d/pgdg.list
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-client-16
+
+      - name: Seed the init schema (what initdb does on a fresh volume)
+        run: |
+          createdb ladder
+          psql -q -d ladder -f infra/postgres/01_schema.sql
+
+      - name: Replay the ladder, then prove the repeats are no-ops
+        env:
+          APP_DIR: ${{ github.workspace }}
+          MIGRATIONS_DIR: ${{ github.workspace }}/infra/postgres
+        run: |
+          set -euo pipefail
+          bash scripts/apply_migrations.sh | tail -2
+          echo "--- second run ---"
+          out="$(bash scripts/apply_migrations.sh)"
+          echo "$out" | tail -2
+          # The ledger's whole purpose: a steady-state deploy applies nothing.
+          echo "$out" | grep -q "(0 applied," || {
+            echo "::error::the second replay applied migrations — the ledger is not working" >&2
+            exit 1
+          }
+          n="$(psql -tA -d ladder -c 'SELECT count(*) FROM schema_migrations')"
+          echo "ledger rows: $n"
+          [ "$n" -gt 100 ] || { echo "::error::ledger only recorded $n migrations" >&2; exit 1; }
+
   # The workbench had NO CI at all: a type error or a broken pure helper only
   # surfaced when the VPS rebuilt after merge. Typecheck + vitest are seconds,
   # and they're where the frontend-side invariants live (e.g. genUiText's

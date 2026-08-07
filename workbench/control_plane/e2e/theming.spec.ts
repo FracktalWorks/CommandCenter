@@ -1,5 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 
+import { resolveTheme as resolveThemeForTest } from "../src/lib/theme/themes";
+
 /**
  * The theming engine, end to end.
  *
@@ -198,6 +200,38 @@ test.describe("user preferences", () => {
     await page.evaluate(() => localStorage.setItem("cc-accent", "rgb(255, 0, 0)"));
     await page.goto("/");
     expect(await readVar(page, "--primary")).toBe("rgb(255, 0, 0)");
+  });
+
+  test("an accent override brings ink that is legible ON it", async ({ page }) => {
+    // Reported 2026-08-07: on Graphite dark the sidebar logo mark rendered a
+    // near-black glyph on the red accent badge. The accent replaced `--primary`
+    // but not `--primary-foreground`, so the ink stayed the one Graphite chose
+    // for its OWN primary — which is near-white, hence near-black ink. Every
+    // primary-filled surface had it, not just the logo.
+    await page.goto("/");
+    await page.evaluate(() => {
+      localStorage.setItem("cc-theme", "graphite");
+      localStorage.setItem("theme", "dark");
+      localStorage.setItem("cc-accent", "hsl(347 77% 50%)");
+      localStorage.setItem("cc-accent-ink", "#ffffff");
+    });
+    await page.goto("/");
+    expect(await readVar(page, "--primary")).toBe("hsl(347 77% 50%)");
+    expect(await readVar(page, "--primary-foreground")).toBe("#ffffff");
+    // The glyph on the primary-filled logo badge, in a real browser.
+    const glyph = await page
+      .locator("svg.lucide-command")
+      .first()
+      .evaluate((el) => getComputedStyle(el).color);
+    expect(glyph).toBe("rgb(255, 255, 255)");
+  });
+
+  test("clearing the accent restores the theme's own pairing", async ({ page }) => {
+    // The ink must not outlive the accent that justified it.
+    await loadWithTheme(page, "graphite", "dark");
+    expect(await readVar(page, "--primary-foreground")).toBe(
+      resolveThemeForTest("graphite").colors.dark.primaryForeground,
+    );
   });
 
   test("a malformed stored accent is ignored rather than applied", async ({ page }) => {

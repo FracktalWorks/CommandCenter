@@ -173,9 +173,41 @@ was stale — corrected 2026-08-02 to match §BO‑20) were anonymous‑reachabl
 
 ## C. Data layer
 
-### BO‑6 — Migration framework + auto‑apply *(P1)* ◑
-- **Done this pass:** **✅ F5** resolves the duplicate #50; **✅ M7** writes `agent_run.started_at` at true run start.
-- **Missing:** 60+ raw numbered SQL files, no ledger/down‑migrations, not auto‑applied on `docker compose up` (H12).
+### BO‑6 — Migration framework + auto‑apply *(P1)* ◑ — **ledger done 2026‑08‑07**
+- **Update 2026‑08‑07 — the ledger exists, and the ladder is now exercised.**
+  `schema_migrations` (migration 152) records filename + sha256 + timing, and
+  `apply_migrations.sh` skips what is already recorded. A steady‑state deploy
+  applies **0 files instead of 152**. That is not only speed:
+  `ALTER TABLE … IF NOT EXISTS` still takes ACCESS EXCLUSIVE when it changes
+  nothing, and a queued ALTER behind a stale reader is exactly what froze the
+  app on 2026‑08‑06 — asking for 150 locks we do not need was the exposure.
+  - A file whose checksum changed after it was applied is **re‑applied and
+    reported loudly**, not refused: every file here is idempotent and the
+    repo's workflow assumes an edit re‑runs, so a hard failure the day the
+    ledger arrived would have broken deploys for a legitimate fix. It is still
+    a real bug class — a box that has not deployed since the edit is running
+    the original — so it is named in the output.
+  - `MIGRATION_REPLAY_ALL=1` restores the pre‑ledger behaviour for recovery.
+  - **Verified on a real Postgres 16:** fresh replay applies 150 and creates
+    139 tables; the second and third runs apply 0. Change detection and the
+    replay switch both exercised.
+  - **Now guarded by CI** (`pr-check.yml` → "Migration ladder replay"): the
+    ladder is replayed from empty on every PR and the repeat must be a no‑op.
+    "152 files are idempotent" was a claim about work nobody had checked
+    together; it is a build step now. This also catches a migration that only
+    fails on a FRESH database — the state a rebuilt stack or a restore lands
+    in, and previously undetectable until someone hit it.
+  - **Found while testing:** with `shopt -s nullglob`, a pattern matching
+    nothing is *removed*, so `ls "$DIR"/[0-9][0-9]*_*.sql` collapsed to a bare
+    `ls` — listing the CURRENT directory and feeding psql whatever it found
+    (first symptom: a syntax error in `AGENTS.md`). A mis‑set `APP_DIR` would
+    have done that in production. Now fails with the directory it looked in.
+- **Still missing:** Alembic itself — autogenerate, down‑migrations, and
+  auto‑apply on `docker compose up` (H12). The ledger is the piece Alembic
+  needs anyway (`alembic_version` is the same idea) and the piece that paid
+  for itself immediately, which is why BO‑6 was taken in this order.
+- **Done earlier:** **✅ F5** resolves the duplicate #50; **✅ M7** writes `agent_run.started_at` at true run start.
+- **Was missing:** 60+ raw numbered SQL files, no ledger/down‑migrations, not auto‑applied on `docker compose up` (H12).
 - **Why needed:** At 60+ files with hand‑idempotency and no ledger, a migration incident is a matter of time; a fresh stack silently lacks most tables.
 - **Dependencies:** Alembic; a one‑time baseline of the current schema (`schema.generated.sql` exists as a start).
 - **Approach:** Adopt Alembic (autogenerate baselined against `schema.generated.sql`), run it in `lifespan`/entrypoint, keep the raw files as historical. Add a CI check for unique numeric prefixes until then.

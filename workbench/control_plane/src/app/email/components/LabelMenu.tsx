@@ -1,7 +1,7 @@
 "use client";
 
+import Icon from "@/components/Icon";
 import { useState } from "react";
-import { Check, Plus } from "lucide-react";
 import { Email } from "../lib/types";
 import { useEmailStore } from "../lib/emailStore";
 import { presetForLabel, presetHex, deterministicPreset } from "../lib/labelColors";
@@ -82,7 +82,7 @@ export function LabelMenu({
                           : "border-muted-foreground/40"
                       }`}
                     >
-                      {on && <Check size={11} />}
+                      {on && <Icon name="Check" size={11} />}
                     </span>
                     <span className="truncate">{name}</span>
                   </button>
@@ -135,7 +135,7 @@ export function LabelMenu({
             title="Create label"
             className="text-primary hover:opacity-80 disabled:opacity-40"
           >
-            <Plus size={13} />
+            <Icon name="Plus" size={13} />
           </button>
         </div>
         {pickNew && (

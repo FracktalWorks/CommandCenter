@@ -1,18 +1,7 @@
 "use client";
 
+import Icon, { themedIcon } from "@/components/Icon";
 import { useRef, useState } from "react";
-import {
-  X,
-  CalendarPlus,
-  Trash2,
-  Check,
-  CalendarClock,
-  Lock,
-  Unlock,
-  Play,
-  Star,
-  ExternalLink,
-} from "lucide-react";
 import {
   type EnergyWindow,
   type DayTemplate,
@@ -589,7 +578,7 @@ export function TimeGrid({
                             : "border-muted-foreground/50 text-transparent hover:border-success hover:text-success/70",
                         ].join(" ")}
                       >
-                        <Check className="h-2.5 w-2.5" strokeWidth={3} />
+                        <Icon name="Check" className="h-2.5 w-2.5" strokeWidth={3} />
                       </button>
                       <button
                         type="button"
@@ -661,7 +650,7 @@ export function TimeGrid({
                             : "text-muted-foreground opacity-0 hover:bg-black/10 hover:text-primary group-hover:opacity-100",
                         ].join(" ")}
                       >
-                        <Play className="h-3 w-3" fill="currentColor" />
+                        <Icon name="Play" className="h-3 w-3" fill="currentColor" />
                       </button>
                     )}
                     {/* ★ commit / uncommit the One Thing (today only). */}
@@ -687,7 +676,7 @@ export function TimeGrid({
                             : "text-muted-foreground opacity-0 hover:bg-black/10 hover:text-amber-400 group-hover:opacity-100",
                         ].join(" ")}
                       >
-                        <Star
+                        <Icon name="Star"
                           className="h-3 w-3"
                           fill={isOneThing ? "currentColor" : "none"}
                         />
@@ -716,9 +705,9 @@ export function TimeGrid({
                       ].join(" ")}
                     >
                       {isFixed ? (
-                        <Lock className="h-3 w-3" />
+                        <Icon name="Lock" className="h-3 w-3" />
                       ) : (
-                        <Unlock className="h-3 w-3" />
+                        <Icon name="Unlock" className="h-3 w-3" />
                       )}
                     </button>
                     <button
@@ -731,7 +720,7 @@ export function TimeGrid({
                       }}
                       className="tech-transition absolute right-0.5 top-0.5 rounded p-0.5 text-muted-foreground opacity-0 hover:bg-black/10 hover:text-destructive group-hover:opacity-100"
                     >
-                      <X className="h-3 w-3" />
+                      <Icon name="X" className="h-3 w-3" />
                     </button>
                     {/* drag the bottom edge to change duration */}
                     <div
@@ -761,7 +750,7 @@ export function TimeGrid({
             {
               kind: "item",
               label: "Open task",
-              icon: ExternalLink,
+              icon: themedIcon("ExternalLink"),
               onSelect: () => onOpen(it.id),
             },
             ...(!isDone
@@ -769,7 +758,7 @@ export function TimeGrid({
                   {
                     kind: "item",
                     label: "Focus on this",
-                    icon: Play,
+                    icon: themedIcon("Play"),
                     onSelect: () => onFocusMode(it),
                   } as CtxItem,
                 ]
@@ -777,7 +766,7 @@ export function TimeGrid({
             {
               kind: "item",
               label: isDone ? "Mark not done" : "Mark done",
-              icon: Check,
+              icon: themedIcon("Check"),
               onSelect: () => onComplete(it),
             },
             { kind: "sep" },
@@ -786,7 +775,7 @@ export function TimeGrid({
                   {
                     kind: "item",
                     label: isOT ? "Unset One Thing" : "Make it the One Thing",
-                    icon: Star,
+                    icon: themedIcon("Star"),
                     checked: isOT,
                     onSelect: () => onToggleOneThing(it.id),
                   } as CtxItem,
@@ -799,7 +788,7 @@ export function TimeGrid({
                     label: isFixed
                       ? "Make flexible (auto-moves)"
                       : "Pin as fixed (won't move)",
-                    icon: isFixed ? Unlock : Lock,
+                    icon: isFixed ? themedIcon("Unlock") : themedIcon("Lock"),
                     checked: isFixed,
                     onSelect: () => onSetFlexible(it, isFixed),
                   } as CtxItem,
@@ -811,7 +800,7 @@ export function TimeGrid({
                   {
                     kind: "item",
                     label: "Move to next free slot",
-                    icon: CalendarPlus,
+                    icon: themedIcon("CalendarPlus"),
                     onSelect: () => onMoveToFree(it),
                   } as CtxItem,
                 ]
@@ -819,19 +808,19 @@ export function TimeGrid({
             {
               kind: "item",
               label: "Reschedule…",
-              icon: CalendarClock,
+              icon: themedIcon("CalendarClock"),
               onSelect: () => onReschedulePopup(it.id),
             },
             {
               kind: "item",
               label: "Remove from calendar",
-              icon: X,
+              icon: themedIcon("X"),
               onSelect: () => onUnschedule(it),
             },
             {
               kind: "item",
               label: "Delete task…",
-              icon: Trash2,
+              icon: themedIcon("Trash2"),
               danger: true,
               onSelect: () => onDelete(it.id),
             },

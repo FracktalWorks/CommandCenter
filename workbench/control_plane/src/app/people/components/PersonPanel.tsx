@@ -6,7 +6,7 @@
  * Identity, skills, capacity, work. The panels are deliberately in that order:
  * who they are, what they can do, how loaded they are, what they are holding.
  */
-import { X } from "lucide-react";
+import Icon from "@/components/Icon";
 import { useEffect, useState } from "react";
 
 import { type PersonDetail, type WorkRow, peopleApi } from "../lib/api";
@@ -86,7 +86,7 @@ export function PersonPanel({ personId, onClose }: Props) {
           aria-label="Close person"
           className="rounded p-1 text-muted-foreground hover:bg-muted"
         >
-          <X className="h-4 w-4" />
+          <Icon name="X" className="h-4 w-4" />
         </button>
       </header>
 

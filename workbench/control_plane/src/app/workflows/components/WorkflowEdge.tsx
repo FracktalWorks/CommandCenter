@@ -13,13 +13,13 @@
  *     and rewired, so makers never hand-drag two edges to add a step.
  */
 
+import Icon from "@/components/Icon";
 import {
   BaseEdge,
   EdgeLabelRenderer,
   getSmoothStepPath,
   type EdgeProps,
 } from "@xyflow/react";
-import { Plus } from "lucide-react";
 
 export type WorkflowEdgeData = {
   branch?: "true" | "false" | null;
@@ -92,7 +92,7 @@ export default function WorkflowEdge({
                   : "border-border text-muted-foreground opacity-50 hover:opacity-100 hover:border-primary hover:text-primary"
               }`}
             >
-              <Plus className="w-2.5 h-2.5" />
+              <Icon name="Plus" className="w-2.5 h-2.5" />
             </button>
           )}
         </div>

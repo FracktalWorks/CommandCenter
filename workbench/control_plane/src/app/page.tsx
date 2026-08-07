@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { NAV_SECTIONS } from "@/lib/nav";
-import { resolveIcon } from "@/lib/icons";
+import ThemedIcon from "@/components/Icon";
 
 // The landing page mirrors the sidebar: every pane comes from NAV_SECTIONS,
 // so adding an app or a Center there surfaces it here too. Primary sections
@@ -26,7 +26,6 @@ export default function Home() {
           </div>
           <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
             {section.items.map((p) => {
-              const Icon = resolveIcon(p.icon);
               return (
                 <Link
                   key={p.href}
@@ -34,7 +33,7 @@ export default function Home() {
                   className="rounded-xl border border-border bg-card/50 p-4 hover:border-primary/40 hover:bg-card tech-transition"
                 >
                   <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10 text-primary">
-                    <Icon size={18} />
+                    <ThemedIcon name={p.icon} size={18} />
                   </span>
                   <div className="mt-3 text-sm font-semibold">{p.label}</div>
                   <p className="mt-1 text-[11px] leading-snug text-muted-foreground">{p.note}</p>
@@ -53,7 +52,6 @@ export default function Home() {
           </div>
           <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
             {section.items.map((p) => {
-              const Icon = resolveIcon(p.icon);
               return (
                 <Link
                   key={p.href}
@@ -61,7 +59,7 @@ export default function Home() {
                   className="flex items-center gap-3 rounded-xl border border-border bg-card/30 px-4 py-3 hover:border-primary/40 hover:bg-card tech-transition"
                 >
                   <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-secondary text-muted-foreground">
-                    <Icon size={16} />
+                    <ThemedIcon name={p.icon} size={16} />
                   </span>
                   <div className="min-w-0">
                     <div className="text-sm font-medium">{p.label}</div>

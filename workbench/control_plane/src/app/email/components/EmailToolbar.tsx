@@ -1,11 +1,8 @@
 "use client";
 
+import Button from "@/components/ui/Button";
+import AppIcon, { themedIcon } from "@/components/Icon";
 import { useState } from "react";
-import {
-  Pencil, Reply, ReplyAll, Forward, Archive, Trash2, FolderInput,
-  Flag, Star, MailOpen, Mail, Tag, Printer, MoreHorizontal, X,
-  ListChecks,
-} from "lucide-react";
 import { useEmailStore, isRealFolder } from "../lib/emailStore";
 import { LabelMenu } from "./LabelMenu";
 
@@ -45,12 +42,12 @@ export function EmailToolbar() {
           {selectedIds.size} selected
         </span>
         <div className="flex-1" />
-        <TBtn icon={MailOpen} label="Mark read" onClick={() => bulkUpdateSelected({ isRead: true })} />
-        <TBtn icon={Mail} label="Mark unread" onClick={() => bulkUpdateSelected({ isRead: false })} />
-        <TBtn icon={Flag} label="Flag" onClick={() => bulkUpdateSelected({ isFlagged: true })} />
-        <TBtn icon={Archive} label="Archive" onClick={() => bulkUpdateSelected({ folder: "archive" })} />
-        <TBtn icon={Trash2} label="Delete" onClick={() => bulkDeleteSelected()} />
-        <TBtn icon={X} label="Clear selection" onClick={() => clearEmailSelection()} />
+        <TBtn icon={themedIcon("MailOpen")} label="Mark read" onClick={() => bulkUpdateSelected({ isRead: true })} />
+        <TBtn icon={themedIcon("Mail")} label="Mark unread" onClick={() => bulkUpdateSelected({ isRead: false })} />
+        <TBtn icon={themedIcon("Flag")} label="Flag" onClick={() => bulkUpdateSelected({ isFlagged: true })} />
+        <TBtn icon={themedIcon("Archive")} label="Archive" onClick={() => bulkUpdateSelected({ folder: "archive" })} />
+        <TBtn icon={themedIcon("Trash2")} label="Delete" onClick={() => bulkDeleteSelected()} />
+        <TBtn icon={themedIcon("X")} label="Clear selection" onClick={() => clearEmailSelection()} />
       </div>
     );
   }
@@ -58,35 +55,31 @@ export function EmailToolbar() {
   return (
     <div className="flex items-center gap-1 px-3 py-2.5 border-b border-border flex-shrink-0 bg-card overflow-x-auto scrollbar-hide">
       {/* Compose — always available */}
-      <button
-        title="New Email"
-        onClick={() => openCompose()}
-        className="flex items-center gap-1.5 px-3 py-2 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors flex-shrink-0"
-      >
-        <Pencil size={15} />
+      <Button size="none" radius="keep" layout="flex items-center" title="New Email" onClick={() => openCompose()} className="gap-1.5 px-3 py-2 rounded-md flex-shrink-0">
+        <AppIcon name="Pencil" size={15} />
         <span className="text-xs font-medium">New</span>
-      </button>
+      </Button>
 
       {selectedEmail ? (
         <>
           <Divider />
-          <TBtn icon={ReplyAll} label="Reply All" onClick={() => setViewerCommand("reply-all")} />
-          <TBtn icon={Reply} label="Reply" onClick={() => setViewerCommand("reply")} />
-          <TBtn icon={Forward} label="Forward" onClick={() => setViewerCommand("forward")} />
+          <TBtn icon={themedIcon("ReplyAll")} label="Reply All" onClick={() => setViewerCommand("reply-all")} />
+          <TBtn icon={themedIcon("Reply")} label="Reply" onClick={() => setViewerCommand("reply")} />
+          <TBtn icon={themedIcon("Forward")} label="Forward" onClick={() => setViewerCommand("forward")} />
 
           <TBtn
-            icon={ListChecks}
+            icon={themedIcon("ListChecks")}
             label="Add to Tasks"
             onClick={() => captureEmailToTasks(selectedEmail.id)}
           />
 
           <Divider />
 
-          <TBtn icon={Archive} label="Archive" onClick={() => updateEmail(selectedEmail.id, { folder: "archive" })} />
-          <TBtn icon={Trash2} label="Delete" onClick={() => deleteEmail(selectedEmail.id)} />
+          <TBtn icon={themedIcon("Archive")} label="Archive" onClick={() => updateEmail(selectedEmail.id, { folder: "archive" })} />
+          <TBtn icon={themedIcon("Trash2")} label="Delete" onClick={() => deleteEmail(selectedEmail.id)} />
           {/* Move to folder */}
           <div className="relative flex-shrink-0">
-            <TBtn icon={FolderInput} label="Move to folder" active={showMove} onClick={() => setShowMove((v) => !v)} />
+            <TBtn icon={themedIcon("FolderInput")} label="Move to folder" active={showMove} onClick={() => setShowMove((v) => !v)} />
             {showMove && (
               <>
                 <div className="fixed inset-0 z-10" onClick={() => setShowMove(false)} />
@@ -114,26 +107,26 @@ export function EmailToolbar() {
           <Divider />
 
           <TBtn
-            icon={Flag}
+            icon={themedIcon("Flag")}
             label={selectedEmail.isFlagged ? "Unflag" : "Flag"}
             active={selectedEmail.isFlagged}
             onClick={() => updateEmail(selectedEmail.id, { isFlagged: !selectedEmail.isFlagged })}
           />
           <TBtn
-            icon={Star}
+            icon={themedIcon("Star")}
             label={selectedEmail.isStarred ? "Unstar" : "Star"}
             active={selectedEmail.isStarred}
             onClick={() => updateEmail(selectedEmail.id, { isStarred: !selectedEmail.isStarred })}
           />
           <TBtn
-            icon={MailOpen}
+            icon={themedIcon("MailOpen")}
             label={selectedEmail.isRead ? "Mark as Unread" : "Mark as Read"}
             active={!selectedEmail.isRead}
             onClick={() => updateEmail(selectedEmail.id, { isRead: !selectedEmail.isRead })}
           />
           {/* Label */}
           <div className="relative flex-shrink-0">
-            <TBtn icon={Tag} label="Label" active={showLabel} onClick={() => setShowLabel((v) => !v)} />
+            <TBtn icon={themedIcon("Tag")} label="Label" active={showLabel} onClick={() => setShowLabel((v) => !v)} />
             {showLabel && (
               <>
                 <div className="fixed inset-0 z-10" onClick={() => setShowLabel(false)} />
@@ -146,10 +139,10 @@ export function EmailToolbar() {
 
           <Divider />
 
-          <TBtn icon={Printer} label="Print" onClick={() => window.print()} />
+          <TBtn icon={themedIcon("Printer")} label="Print" onClick={() => window.print()} />
           {/* More */}
           <div className="relative flex-shrink-0">
-            <TBtn icon={MoreHorizontal} label="More options" active={showMore} onClick={() => setShowMore((v) => !v)} />
+            <TBtn icon={themedIcon("MoreHorizontal")} label="More options" active={showMore} onClick={() => setShowMore((v) => !v)} />
             {showMore && (
               <>
                 <div className="fixed inset-0 z-10" onClick={() => setShowMore(false)} />

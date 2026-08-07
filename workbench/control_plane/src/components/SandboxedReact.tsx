@@ -38,9 +38,9 @@ interface SandboxedReactProps {
   height?: number;
   /** Interactions bubble up as follow-up messages, as with every other tier. */
   onAction?: (action: string) => void;
-  theme?: "light" | "dark";
-  /** Lucide name → inline SVG, pre-resolved by the parent (no network). */
-  icons?: Record<string, string>;
+  /** Lucide icon NAMES the code references; the frame resolves them with the
+   *  active theme's pack. */
+  iconNames?: unknown;
   /** Fill-height, no chrome — for full-page artifacts in the side panel. */
   chromeless?: boolean;
 }
@@ -104,8 +104,7 @@ export default function SandboxedReact({
   code,
   height,
   onAction,
-  theme = "dark",
-  icons,
+  iconNames,
   chromeless = false,
 }: SandboxedReactProps): React.ReactElement {
   const initial = (source: string): State => {
@@ -176,8 +175,7 @@ export default function SandboxedReact({
       html={mountMarkup(state.js)}
       height={height}
       onAction={onAction}
-      theme={theme}
-      icons={icons}
+      iconNames={iconNames}
       chromeless={chromeless}
     />
   );

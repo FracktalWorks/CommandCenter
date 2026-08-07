@@ -10,7 +10,7 @@
  * request is built once in ../lib/filters.ts.
  */
 
-import { ArrowDown, ArrowUp } from "lucide-react";
+import Icon from "@/components/Icon";
 import { SORTS } from "../lib/filters";
 import { money, shortDate, shortEmail } from "../lib/format";
 import type { EntitySlug } from "../lib/types";
@@ -177,9 +177,9 @@ export default function RecordList({
                       {column.label}
                       {sort === column.sort &&
                         (direction === "asc" ? (
-                          <ArrowUp className="w-3 h-3" />
+                          <Icon name="ArrowUp" className="w-3 h-3" />
                         ) : (
-                          <ArrowDown className="w-3 h-3" />
+                          <Icon name="ArrowDown" className="w-3 h-3" />
                         ))}
                     </button>
                   ) : (

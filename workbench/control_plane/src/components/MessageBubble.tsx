@@ -1,5 +1,6 @@
 "use client";
 
+import Icon from "@/components/Icon";
 import { useState, useRef, useEffect, useMemo } from "react";
 import React from "react";
 import type { ChatMessage } from "@/hooks/useAgentChat";
@@ -18,7 +19,6 @@ import { useDismissedToolCards, dismissToolCard } from "@/lib/dismissedTools";
 import { openDoc, openGenUI } from "@/lib/sidePanelStore";
 import { AgentAvatar, useAgentAvatars } from "@/components/AgentAvatar";
 import { capabilityLabel, type RoomParticipant } from "@/lib/rooms";
-import { AppWindow, Bot, EyeOff } from "lucide-react";
 
 /** The only part of a room participant a message bubble needs: a face. */
 export type BubbleParticipant = Pick<
@@ -79,7 +79,7 @@ function AgentLabel({ agentName }: { agentName: string }) {
         libraryId={avatars[agentName]}
         size={18}
         title={agentName}
-        fallback={<Bot size={13} className="text-muted-foreground shrink-0" />}
+        fallback={<Icon name="Bot" size={13} className="text-muted-foreground shrink-0" />}
       />
       <span className="text-[11px] font-medium text-muted-foreground">
         {agentName}
@@ -230,7 +230,7 @@ function MessageBubble({
     return (
       <div className="rounded-xl border border-border bg-secondary/40 px-3.5 py-2.5">
         <div className="flex items-start gap-2">
-          <EyeOff size={14} className="mt-0.5 shrink-0 text-muted-foreground" />
+          <Icon name="EyeOff" size={14} className="mt-0.5 shrink-0 text-muted-foreground" />
           <div className="min-w-0 space-y-1">
             <p className="text-[12px] leading-relaxed text-muted-foreground">
               {message.content}
@@ -500,7 +500,7 @@ function MessageBubble({
                   })}
                   className="flex items-center gap-2 rounded-lg border border-border/60 bg-card/50 px-3 py-2 text-xs text-foreground hover:bg-secondary/60 transition-colors"
                 >
-                  <AppWindow size={13} className="text-primary" />
+                  <Icon name="AppWindow" size={13} className="text-primary" />
                   <span className="font-medium">{title}</span>
                   <span className="text-muted-foreground">
                     — open in side panel

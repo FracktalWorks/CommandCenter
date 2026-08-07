@@ -116,14 +116,53 @@ single line of CSS. Reach for these instead of hand-rolling equivalent styles;
 it's both the fastest path (no CSS to write or debug) and the only way the app
 is guaranteed to look native, not "close enough."
 
-**Never redeclare these** (no `:root { --primary: ... }`, no `.cc-card { ... }`
-override) — use them as-is, the same rule `load_design_system`'s full reference
-states for reports.
+### The one rule that matters: never write a colour
 
-- **Tokens** (use directly in your own CSS, never redefine): `--cc-bg`,
-  `--cc-card`, `--cc-fg`, `--cc-muted`, `--cc-border`, `--cc-secondary`,
-  `--cc-primary`, `--cc-primary-fg`, `--cc-accent`, `--cc-success`,
-  `--cc-warning`, `--cc-danger`, `--cc-radius`, `--cc-ease`.
+**CommandCenter is themed, and the theme is an org-wide setting somebody can
+change at any time.** RapidTool, Fluent, Material and Graphite differ in palette
+*and* in personality — corner radius, button shape, icon set, whether labels are
+uppercase, how a control reacts to hover. Settings → Appearance switches all of
+it, for everyone, in one click.
+
+Every `--cc-*` value below is resolved from **whatever theme is active when your
+app is opened**, and updates live if it changes while the app is running. So an
+app styled with tokens follows the company's design system for the rest of its
+life, with no edit. An app with `background: #0ea5e9` in it is stuck looking like
+2026's theme forever, on a surface where everything around it has moved on — and
+because it *renders fine*, nobody will notice until it looks broken.
+
+That is the whole deal: **use the tokens and you get theming for free; write one
+hex value and that part of your app leaves the design system permanently.**
+
+**Never redeclare a token** (no `:root { --cc-primary: ... }`, no
+`.cc-card { ... }` override) — a redeclaration is a hardcoded colour with extra
+steps, and it wins over the theme.
+
+- **Colour** — `--cc-bg` (page), `--cc-card` (panel), `--cc-fg` (text),
+  `--cc-muted` (secondary text), `--cc-border`, `--cc-secondary` (quiet fills),
+  `--cc-primary` + `--cc-primary-fg` (the interactive colour and the ink that
+  goes ON it), `--cc-accent`, and the four states `--cc-success`,
+  `--cc-warning`, `--cc-danger` each with an ink pair `--cc-success-fg`,
+  `--cc-warning-fg`, `--cc-danger-fg`.
+  **Always use the `-fg` partner for text on a coloured fill.** White is not
+  safe: some themes ship a pale warning colour, and white-on-pale is invisible.
+- **Type** — `--cc-font` (UI stack), `--cc-mono` (figures, code, anything that
+  should line up in columns), `--cc-heading-weight`, `--cc-heading-tracking`.
+  *Caveat worth knowing:* the frame can only pass **named and system** families,
+  so you get Segoe UI on Fluent and Roboto on Material, but not a self-hosted
+  webfont — the sandbox blocks font loading by design. Shape, spacing and colour
+  cross intact; that one thing does not.
+- **Shape & motion** — `--cc-radius`, `--cc-border-width`, `--cc-shadow`,
+  `--cc-duration`, `--cc-ease`. Use `--cc-ease` and `--cc-duration` for
+  transitions rather than inventing curves; it is how the app feels the same as
+  the shell around it.
+- **Control personality** — `--cc-button-radius` (Material makes buttons full
+  pills, Fluent nearly square), `--cc-control-filled-border`,
+  `--cc-control-state-layer`, `--cc-control-focus-ring`,
+  `--cc-control-label-tracking`, `--cc-control-label-transform`.
+  You mostly won't touch these: `.cc-btn` and the native controls already apply
+  them. They are here for when you build a control the kit doesn't have, so it
+  can behave like the ones it does.
 - **Buttons & panels** — `<button class="cc-btn cc-primary">Save</button>` /
   `<button class="cc-btn">Cancel</button>`, `<div class="cc-card">…</div>`.
   Native `input`/`select`/`textarea`/`input[type=range]` are already styled

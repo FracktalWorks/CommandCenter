@@ -1,7 +1,8 @@
 "use client";
 
+import AppIcon from "@/components/Icon";
+import type { ThemedIcon } from "@/components/Icon";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { Check, type LucideIcon } from "lucide-react";
 
 // A lightweight right-click menu. The tasks app has no menu primitive, so this
 // follows the established click-away popover pattern (a full-screen catcher +
@@ -14,7 +15,7 @@ export type CtxItem =
   | {
       kind: "item";
       label: string;
-      icon?: LucideIcon;
+      icon?: ThemedIcon;
       onSelect: () => void;
       danger?: boolean;
       checked?: boolean;
@@ -106,7 +107,7 @@ export function ContextMenu({
               {Icon && <Icon className="h-3.5 w-3.5 shrink-0" />}
               <span className="min-w-0 flex-1 truncate">{it.label}</span>
               {it.checked && (
-                <Check className="h-3.5 w-3.5 shrink-0 text-primary" />
+                <AppIcon name="Check" className="h-3.5 w-3.5 shrink-0 text-primary" />
               )}
             </button>
           );

@@ -11,25 +11,9 @@
  *   artifactUpdates  — new FileEntry objects pushed in from SSE (ST-AV-06); merged into tree
  */
 
+import Button from "@/components/ui/Button";
+import Icon from "@/components/Icon";
 import { useCallback, useEffect, useRef, useState } from "react";
-import {
-  ChevronLeft,
-  ChevronRight,
-  ChevronDown,
-  ChevronRight as FolderArrow,
-  File,
-  FileCode,
-  FileText,
-  FileImage,
-  FileSpreadsheet,
-  RefreshCw,
-  Download,
-  Trash2,
-  PanelLeft,
-  History,
-  ArrowUpToLine,
-  FolderOpen,
-} from "lucide-react";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -125,16 +109,16 @@ function fileIcon(entry: FileEntry) {
   const ext = entry.name.split(".").pop()?.toLowerCase() ?? "";
   const mime = entry.mime_type;
   if (["png", "jpg", "jpeg", "gif", "webp", "svg", "ico"].includes(ext) || mime.startsWith("image/"))
-    return <FileImage size={13} className="shrink-0 text-purple-400" />;
+    return <Icon name="FileImage" size={13} className="shrink-0 text-purple-400" />;
   if (["py", "ts", "tsx", "js", "jsx", "sh", "yaml", "yml", "toml", "json", "sql", "rs", "go", "java", "c", "cpp"].includes(ext))
-    return <FileCode size={13} className="shrink-0 text-blue-400" />;
+    return <Icon name="FileCode" size={13} className="shrink-0 text-blue-400" />;
   if (["md", "txt", "log", "rst", "csv"].includes(ext) || mime.startsWith("text/"))
-    return <FileText size={13} className="shrink-0 text-green-400" />;
+    return <Icon name="FileText" size={13} className="shrink-0 text-green-400" />;
   if (["pdf"].includes(ext) || mime === "application/pdf")
-    return <FileText size={13} className="shrink-0 text-red-400" />;
+    return <Icon name="FileText" size={13} className="shrink-0 text-red-400" />;
   if (["xlsx", "xls", "csv"].includes(ext))
-    return <FileSpreadsheet size={13} className="shrink-0 text-emerald-400" />;
-  return <File size={13} className="shrink-0 text-muted-foreground" />;
+    return <Icon name="FileSpreadsheet" size={13} className="shrink-0 text-emerald-400" />;
+  return <Icon name="File" size={13} className="shrink-0 text-muted-foreground" />;
 }
 
 // ─── TreeNodeRow ─────────────────────────────────────────────────────────────
@@ -177,7 +161,7 @@ function TreeNodeRow({
           onClick={() => setExpanded((e) => !e)}
         >
 
-          {expanded ? <ChevronDown size={11} className="shrink-0" /> : <FolderArrow size={11} className="shrink-0" />}
+          {expanded ? <Icon name="ChevronDown" size={11} className="shrink-0" /> : <Icon name="ChevronRight" size={11} className="shrink-0" />}
           <span className="truncate font-medium text-foreground">{node.name || "/"}</span>
         </button>
         {expanded && children.map((child) => (
@@ -266,7 +250,7 @@ function TreeNodeRow({
           className="shrink-0 text-muted-foreground hover:text-blue-400 transition-all p-0.5"
           title={`Download ${entry.name}`}
         >
-          <Download size={12} />
+          <Icon name="Download" size={12} />
         </a>
         {deletable && (
           <button
@@ -274,7 +258,7 @@ function TreeNodeRow({
             className="shrink-0 text-muted-foreground hover:text-red-400 transition-all p-0.5"
             title={`Delete ${entry.name}`}
           >
-            <Trash2 size={12} />
+            <Icon name="Trash2" size={12} />
           </button>
         )}
       </div>
@@ -302,7 +286,7 @@ function TreeNodeRow({
                   setMenu(null);
                 }}
               >
-                <PanelLeft size={13} className="shrink-0 text-muted-foreground" />
+                <Icon name="PanelLeft" size={13} className="shrink-0 text-muted-foreground" />
                 Open in side panel
               </button>
             )}
@@ -316,7 +300,7 @@ function TreeNodeRow({
                 }}
                 title="Move to Agent Data — permanent, prompt-shaping storage"
               >
-                <ArrowUpToLine size={13} className="shrink-0 text-muted-foreground" />
+                <Icon name="ArrowUpToLine" size={13} className="shrink-0 text-muted-foreground" />
                 {promoting ? "Promoting…" : "Promote to Agent Data"}
               </button>
             )}
@@ -327,7 +311,7 @@ function TreeNodeRow({
                 setMenu(null);
               }}
             >
-              <History size={13} className="shrink-0 text-muted-foreground" />
+              <Icon name="History" size={13} className="shrink-0 text-muted-foreground" />
               Version history
             </button>
             <a
@@ -336,7 +320,7 @@ function TreeNodeRow({
               className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-popover-foreground hover:bg-secondary transition-colors"
               onClick={() => setMenu(null)}
             >
-              <Download size={13} className="shrink-0 text-muted-foreground" />
+              <Icon name="Download" size={13} className="shrink-0 text-muted-foreground" />
               Download
             </a>
           </div>
@@ -353,7 +337,7 @@ function TreeNodeRow({
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center gap-2 border-b border-border px-4 py-3">
-              <History size={14} className="text-muted-foreground" />
+              <Icon name="History" size={14} className="text-muted-foreground" />
               <span className="text-sm font-semibold text-foreground truncate">
                 {entry.name}
               </span>
@@ -511,21 +495,13 @@ export default function ArtifactSidebar({
             )}
           </div>
           <div className="flex items-center gap-1">
-            <button
-              onClick={fetchTree}
-              className="rounded p-1 text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
-              title="Refresh file tree"
-            >
-              <RefreshCw size={12} className={loading ? "animate-spin" : ""} />
-            </button>
-            <button
-              onClick={onToggle}
-              className="rounded p-1 text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
-              title="Collapse file browser"
-            >
+            <Button variant="ghost" size="icon-xs" radius="keep" layout="" onClick={fetchTree} title="Refresh file tree" className="rounded">
+              <Icon name="RefreshCw" size={12} className={loading ? "animate-spin" : ""} />
+            </Button>
+            <Button variant="ghost" size="icon-xs" radius="keep" layout="" onClick={onToggle} title="Collapse file browser" className="rounded">
               {/* Chevron points toward the edge the panel collapses into. */}
-              {side === "right" ? <ChevronRight size={14} /> : <ChevronLeft size={14} />}
-            </button>
+              {side === "right" ? <Icon name="ChevronRight" size={14} /> : <Icon name="ChevronLeft" size={14} />}
+            </Button>
           </div>
         </div>
       )}
@@ -535,7 +511,7 @@ export default function ArtifactSidebar({
         <div className="flex flex-col flex-1 overflow-y-auto p-1.5 min-h-0">
           {loading && (
             <div className="flex items-center gap-1.5 px-2 py-3 text-xs text-muted-foreground">
-              <RefreshCw size={11} className="animate-spin" />
+              <Icon name="RefreshCw" size={11} className="animate-spin" />
               Loading…
             </div>
           )}
@@ -577,7 +553,7 @@ export default function ArtifactSidebar({
           className="flex w-full flex-1 cursor-pointer flex-col items-center py-2.5 text-muted-foreground hover:bg-secondary/40 hover:text-foreground transition-colors"
           title="Open file browser"
         >
-          <FolderOpen size={15} />
+          <Icon name="FolderOpen" size={15} />
           {files.length > 0 && (
             <span className="mt-1 rounded-full bg-secondary px-1 text-[10px]">
               {files.length}

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { PanelLeft, Plus, Sparkles } from "lucide-react";
+import Icon from "@/components/Icon";
 import { useViewMode } from "@/components/ViewModeProvider";
 import { useMobileDrawer } from "@/components/AppShell";
 import { useTaskStore } from "./lib/taskStore";
@@ -146,7 +146,7 @@ export default function TasksPage() {
           active={leftOpen}
           onClick={() => setLeftOpen((v) => !v)}
           label="Toggle lists"
-          icon={PanelLeft}
+          icon="PanelLeft"
         />
         <span className="text-xs font-medium text-muted-foreground">
           Task Manager
@@ -156,7 +156,7 @@ export default function TasksPage() {
           onClick={() => openQuickCapture("single")}
           className="tech-transition ml-2 inline-flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs text-muted-foreground hover:border-primary/40 hover:text-foreground"
         >
-          <Plus className="h-3.5 w-3.5" />
+          <Icon name="Plus" className="h-3.5 w-3.5" />
           Capture
           <kbd className="rounded border border-border px-1 text-[9px]">C</kbd>
         </button>
@@ -172,7 +172,7 @@ export default function TasksPage() {
               : "border-border text-muted-foreground hover:border-primary/40 hover:text-foreground",
           ].join(" ")}
         >
-          <Sparkles className="h-3.5 w-3.5" />
+          <Icon name="Sparkles" className="h-3.5 w-3.5" />
           Assistant
         </button>
       </div>
@@ -242,13 +242,14 @@ function PanelToggle({
   active,
   onClick,
   label,
-  icon: Icon,
+  icon,
   className = "",
 }: {
   active: boolean;
   onClick: () => void;
   label: string;
-  icon: typeof PanelLeft;
+  /** Lucide icon NAME. */
+  icon: string;
   className?: string;
 }) {
   return (
@@ -265,7 +266,7 @@ function PanelToggle({
         className,
       ].join(" ")}
     >
-      <Icon className="h-4 w-4" />
+      <Icon name={icon} className="h-4 w-4" />
     </button>
   );
 }

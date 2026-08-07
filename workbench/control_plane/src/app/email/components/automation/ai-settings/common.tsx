@@ -5,7 +5,7 @@
 // AISettingsView.tsx so a Spinner / Empty / Field / result-pill looks identical
 // everywhere and there is a single place to change them.
 
-import { AlertTriangle, Eye, Loader2, Pencil, PenLine } from "lucide-react";
+import Icon from "@/components/Icon";
 import type { RuleAction, RuleConditions } from "../../../lib/types";
 import { HoverPopover } from "../ui";
 import {
@@ -70,7 +70,7 @@ export function IconAction({
 export function Spinner({ label }: { label: string }) {
   return (
     <div className="flex items-center justify-center h-full text-muted-foreground gap-2 text-sm">
-      <Loader2 className="animate-spin" size={16} /> {label}
+      <Icon name="Loader2" className="animate-spin" size={16} /> {label}
     </div>
   );
 }
@@ -134,7 +134,7 @@ export function RuleResultPill({
         : matched
           ? ruleName || "Matched"
           : "No match found"}
-      <Eye size={11} className="opacity-70" />
+      <Icon name="Eye" size={11} className="opacity-70" />
     </span>
   );
   const specs = actionSpecs ?? [];
@@ -193,7 +193,7 @@ export function RuleResultPill({
         {draft && (
           <div>
             <div className="text-[9px] uppercase tracking-wide text-muted-foreground/70 mb-1 flex items-center gap-1">
-              <PenLine size={10} /> Drafted reply
+              <Icon name="PenLine" size={10} /> Drafted reply
             </div>
             <div className="text-[10px] text-foreground/90 bg-secondary/40 rounded-md px-2 py-1.5 max-h-40 overflow-y-auto whitespace-pre-wrap break-words">
               {draft}
@@ -211,7 +211,7 @@ export function RuleResultPill({
         {errs.length > 0 && (
           <div className="text-[10px] text-destructive bg-destructive/10 rounded-md px-2 py-1.5">
             <div className="font-medium mb-0.5 flex items-center gap-1">
-              <AlertTriangle size={10} /> Action issues
+              <Icon name="AlertTriangle" size={10} /> Action issues
             </div>
             {errs.map((e, i) => (
               <div key={i} className="text-destructive/90">
@@ -228,7 +228,7 @@ export function RuleResultPill({
             }}
             className="flex items-center gap-1 text-[11px] text-primary hover:opacity-80 pt-0.5"
           >
-            <Pencil size={11} /> View matching rule
+            <Icon name="Pencil" size={11} /> View matching rule
           </button>
         )}
       </div>

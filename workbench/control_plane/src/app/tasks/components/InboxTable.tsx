@@ -1,6 +1,6 @@
 "use client";
 
-import { Mail, Paperclip, ArrowRight, Trash2, Lightbulb } from "lucide-react";
+import Icon from "@/components/Icon";
 import { GtdItem } from "../lib/types";
 import { useTaskStore } from "../lib/taskStore";
 import { proposeClarification, sortShapeSummary, type SortBucket } from "../lib/clarify";
@@ -99,7 +99,7 @@ export function InboxTable({
                         className="inline-flex shrink-0 items-center gap-0.5 text-[10px] text-muted-foreground"
                         title={item.attachments.map((a) => a.name).join(", ")}
                       >
-                        <Paperclip className="h-3 w-3" />
+                        <Icon name="Paperclip" className="h-3 w-3" />
                         {item.attachments.length}
                       </span>
                     )}
@@ -142,7 +142,7 @@ export function InboxTable({
                       className="inline-flex max-w-full items-center gap-1"
                       title={item.origin.subject}
                     >
-                      <Mail className="h-3 w-3 shrink-0" />
+                      <Icon name="Mail" className="h-3 w-3 shrink-0" />
                       <span className="truncate">
                         {item.origin.fromName || item.origin.fromEmail}
                       </span>
@@ -168,7 +168,7 @@ export function InboxTable({
                       }}
                       className="tech-transition rounded p-1 text-muted-foreground opacity-0 hover:bg-secondary hover:text-foreground group-hover:opacity-100"
                     >
-                      <Lightbulb className="h-3.5 w-3.5" />
+                      <Icon name="Lightbulb" className="h-3.5 w-3.5" />
                     </button>
                     <button
                       type="button"
@@ -179,7 +179,7 @@ export function InboxTable({
                       }}
                       className="tech-transition rounded p-1 text-primary opacity-0 hover:bg-primary/10 group-hover:opacity-100"
                     >
-                      <ArrowRight className="h-3.5 w-3.5" />
+                      <Icon name="ArrowRight" className="h-3.5 w-3.5" />
                     </button>
                     {/* Trash always visible — never hover-gated. */}
                     <button
@@ -192,7 +192,7 @@ export function InboxTable({
                       }}
                       className="tech-transition rounded p-1 text-muted-foreground/70 hover:bg-destructive/10 hover:text-destructive"
                     >
-                      <Trash2 className="h-3.5 w-3.5" />
+                      <Icon name="Trash2" className="h-3.5 w-3.5" />
                     </button>
                   </span>
                 </td>

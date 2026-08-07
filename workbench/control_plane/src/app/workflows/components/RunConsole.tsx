@@ -8,31 +8,22 @@
  * are painted onto the canvas via onPaintRun.
  */
 
+import Button from "@/components/ui/Button";
+import Icon from "@/components/Icon";
 import { useEffect, useRef, useState } from "react";
-import {
-  CheckCircle2,
-  ChevronDown,
-  ChevronUp,
-  Circle,
-  History,
-  Loader2,
-  PauseCircle,
-  X,
-  XCircle,
-} from "lucide-react";
 import { getRun, listRuns } from "../lib/api";
 import type { NodeResult, RunDetail, RunEvent, RunSummary } from "../lib/types";
 
 const STATUS_ICON = (status?: string) => {
   if (status === "running")
-    return <Loader2 className="w-3.5 h-3.5 text-primary animate-spin" />;
+    return <Icon name="Loader2" className="w-3.5 h-3.5 text-primary animate-spin" />;
   if (status === "ok" || status === "succeeded")
-    return <CheckCircle2 className="w-3.5 h-3.5 text-success" />;
+    return <Icon name="CheckCircle2" className="w-3.5 h-3.5 text-success" />;
   if (status === "error" || status === "failed")
-    return <XCircle className="w-3.5 h-3.5 text-destructive" />;
+    return <Icon name="XCircle" className="w-3.5 h-3.5 text-destructive" />;
   if (status === "waiting" || status === "paused")
-    return <PauseCircle className="w-3.5 h-3.5 text-warning" />;
-  return <Circle className="w-3 h-3 text-muted-foreground" />;
+    return <Icon name="PauseCircle" className="w-3.5 h-3.5 text-warning" />;
+  return <Icon name="Circle" className="w-3 h-3 text-muted-foreground" />;
 };
 
 /** A recorded run's node_results, replayed in console-event shape. */
@@ -153,46 +144,39 @@ export default function RunConsole({
               : "text-muted-foreground hover:text-foreground"
           }`}
         >
-          <History className="w-3 h-3" />
+          <Icon name="History" className="w-3 h-3" />
           History
         </button>
         {running && (
           <span className="flex items-center gap-1.5 text-[10px] text-primary ml-2">
-            <Loader2 className="w-3 h-3 animate-spin" />
+            <Icon name="Loader2" className="w-3 h-3 animate-spin" />
             running
           </span>
         )}
-        <button
-          onClick={onToggle}
-          className="ml-auto p-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary tech-transition"
-          title={collapsed ? "Expand console" : "Collapse console"}
-        >
+        <Button variant="ghost" size="icon-xs" radius="keep" layout="" onClick={onToggle} title={collapsed ? "Expand console" : "Collapse console"} className="ml-auto rounded-md">
           {collapsed ? (
-            <ChevronUp className="w-4 h-4" />
+            <Icon name="ChevronUp" className="w-4 h-4" />
           ) : (
-            <ChevronDown className="w-4 h-4" />
+            <Icon name="ChevronDown" className="w-4 h-4" />
           )}
-        </button>
+        </Button>
       </div>
 
       {!collapsed && tab === "console" && (
         <div className="flex-1 overflow-y-auto scrollbar-thin px-3 pb-2 font-mono text-[11px] space-y-1">
           {inspected && (
             <div className="flex items-center gap-2 sticky top-0 bg-card/95 py-1 border-b border-border/50 font-sans">
-              <History className="w-3 h-3 text-muted-foreground" />
+              <Icon name="History" className="w-3 h-3 text-muted-foreground" />
               <span className="text-muted-foreground">
                 Recorded run · v{inspected.version} · {inspected.trigger_kind}
                 {inspected.started_at
                   ? ` · ${new Date(inspected.started_at).toLocaleString()}`
                   : ""}
               </span>
-              <button
-                onClick={clearInspection}
-                className="ml-auto flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary tech-transition"
-              >
-                <X className="w-3 h-3" />
+              <Button variant="ghost" size="none" radius="keep" layout="flex items-center" onClick={clearInspection} className="ml-auto gap-1 text-[10px] px-1.5 py-0.5 rounded-md">
+                <Icon name="X" className="w-3 h-3" />
                 back to live
-              </button>
+              </Button>
             </div>
           )}
           {shownEvents.length === 0 && (
@@ -243,7 +227,7 @@ export default function RunConsole({
         <div className="flex-1 overflow-y-auto scrollbar-thin px-3 pb-2">
           {historyLoading && (
             <div className="flex justify-center py-4">
-              <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
+              <Icon name="Loader2" className="w-4 h-4 animate-spin text-muted-foreground" />
             </div>
           )}
           {!historyLoading && history.length === 0 && (
@@ -259,7 +243,7 @@ export default function RunConsole({
                 className="w-full flex items-center gap-2 py-1 text-[11px] border-b border-border/50 last:border-0 text-left hover:bg-secondary/50 tech-transition disabled:opacity-60 rounded-sm px-1 -mx-1"
               >
                 {inspectLoading === run.id ? (
-                  <Loader2 className="w-3.5 h-3.5 animate-spin text-muted-foreground" />
+                  <Icon name="Loader2" className="w-3.5 h-3.5 animate-spin text-muted-foreground" />
                 ) : (
                   STATUS_ICON(run.status)
                 )}

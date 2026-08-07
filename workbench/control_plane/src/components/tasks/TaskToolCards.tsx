@@ -22,13 +22,10 @@
  * `full_id: <uuid>` (lists) or `(id: <uuid>)` (schedules) for exactly this.
  */
 
+import Button from "@/components/ui/Button";
+import AppIcon from "@/components/Icon";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import {
-  CalendarClock, CalendarDays, CheckCircle2, ClipboardList, ExternalLink,
-  FolderKanban, Inbox, ListChecks, ListTree, Loader2, Milestone, PenLine,
-  RefreshCw, Send, Sparkles, Star, Timer, Trash2, Users, Wrench, X, Zap,
-} from "lucide-react";
 import type { ToolEvent } from "@/components/MarkdownMessage";
 import { apiPatchItem, apiAgentPlanToday } from "@/app/tasks/lib/api";
 import { useTaskStore } from "@/app/tasks/lib/taskStore";
@@ -49,48 +46,48 @@ const PLAN_META: Record<string, { label: string; kind: "plan-today" | "replan-to
 };
 
 /** Read-only tools that return a titled text blob. */
-const INFO_META: Record<string, { icon: React.ElementType; label: string }> = {
-  gtd_inbox_insights: { icon: Inbox, label: "Inbox health" },
-  gtd_day_digest: { icon: CalendarDays, label: "Day summary" },
-  gtd_estimate_stats: { icon: Timer, label: "Estimate accuracy" },
-  gtd_accounts: { icon: Milestone, label: "Connected workspaces" },
-  gtd_people: { icon: Users, label: "People" },
-  gtd_list_projects: { icon: FolderKanban, label: "Projects" },
-  gtd_subtasks: { icon: ListTree, label: "Subtasks" },
-  gtd_detail: { icon: ClipboardList, label: "Task detail" },
-  gtd_clarify: { icon: Sparkles, label: "Clarify proposal" },
+const INFO_META: Record<string, { icon: string; label: string }> = {
+  gtd_inbox_insights: { icon: "Inbox", label: "Inbox health" },
+  gtd_day_digest: { icon: "CalendarDays", label: "Day summary" },
+  gtd_estimate_stats: { icon: "Timer", label: "Estimate accuracy" },
+  gtd_accounts: { icon: "Milestone", label: "Connected workspaces" },
+  gtd_people: { icon: "Users", label: "People" },
+  gtd_list_projects: { icon: "FolderKanban", label: "Projects" },
+  gtd_subtasks: { icon: "ListTree", label: "Subtasks" },
+  gtd_detail: { icon: "ClipboardList", label: "Task detail" },
+  gtd_clarify: { icon: "Sparkles", label: "Clarify proposal" },
 };
 const INFO_TOOLS = new Set(Object.keys(INFO_META));
 
 /** Friendly label + icon for the generic confirmation card (mutating tools). */
-const ACTION_META: Record<string, { icon: React.ElementType; label: string; danger?: boolean }> = {
-  gtd_capture: { icon: Inbox, label: "Captured to inbox" },
-  gtd_capture_many: { icon: Inbox, label: "Captured to inbox" },
-  gtd_organize: { icon: ListChecks, label: "Organized" },
-  gtd_update: { icon: PenLine, label: "Task updated" },
-  gtd_complete: { icon: CheckCircle2, label: "Task completed" },
-  gtd_move: { icon: Milestone, label: "Task moved" },
-  gtd_set_stage: { icon: Milestone, label: "Stage changed" },
-  gtd_delegate: { icon: Send, label: "Delegated" },
-  gtd_add_subtasks: { icon: ListTree, label: "Subtasks added" },
-  gtd_archive: { icon: Trash2, label: "Archived", danger: true },
-  gtd_schedule: { icon: CalendarClock, label: "Scheduled" },
-  gtd_unschedule: { icon: CalendarClock, label: "Unscheduled" },
-  gtd_set_one_thing: { icon: Star, label: "One Thing set" },
-  gtd_sync: { icon: RefreshCw, label: "Workspaces synced" },
-  gtd_plan_project: { icon: FolderKanban, label: "Project plan" },
+const ACTION_META: Record<string, { icon: string; label: string; danger?: boolean }> = {
+  gtd_capture: { icon: "Inbox", label: "Captured to inbox" },
+  gtd_capture_many: { icon: "Inbox", label: "Captured to inbox" },
+  gtd_organize: { icon: "ListChecks", label: "Organized" },
+  gtd_update: { icon: "PenLine", label: "Task updated" },
+  gtd_complete: { icon: "CheckCircle2", label: "Task completed" },
+  gtd_move: { icon: "Milestone", label: "Task moved" },
+  gtd_set_stage: { icon: "Milestone", label: "Stage changed" },
+  gtd_delegate: { icon: "Send", label: "Delegated" },
+  gtd_add_subtasks: { icon: "ListTree", label: "Subtasks added" },
+  gtd_archive: { icon: "Trash2", label: "Archived", danger: true },
+  gtd_schedule: { icon: "CalendarClock", label: "Scheduled" },
+  gtd_unschedule: { icon: "CalendarClock", label: "Unscheduled" },
+  gtd_set_one_thing: { icon: "Star", label: "One Thing set" },
+  gtd_sync: { icon: "RefreshCw", label: "Workspaces synced" },
+  gtd_plan_project: { icon: "FolderKanban", label: "Project plan" },
 };
 
 /** Context-sensitive relabels driven by the call's args. */
-function actionMeta(e: ToolEvent): { icon: React.ElementType; label: string; danger?: boolean } {
+function actionMeta(e: ToolEvent): { icon: string; label: string; danger?: boolean } {
   const args = (e.args ?? {}) as Record<string, unknown>;
   if (e.name === "gtd_complete" && args.undo)
-    return { icon: RefreshCw, label: "Task reopened" };
+    return { icon: "RefreshCw", label: "Task reopened" };
   if (e.name === "gtd_archive" && args.restore)
-    return { icon: RefreshCw, label: "Task restored" };
+    return { icon: "RefreshCw", label: "Task restored" };
   if (e.name === "gtd_set_one_thing" && !String(args.item_id ?? "").trim())
-    return { icon: Star, label: "One Thing cleared" };
-  return ACTION_META[e.name] ?? { icon: Wrench, label: e.name.replace(/_/g, " ") };
+    return { icon: "Star", label: "One Thing cleared" };
+  return ACTION_META[e.name] ?? { icon: "Wrench", label: e.name.replace(/_/g, " ") };
 }
 
 function hasTaskCard(e: ToolEvent): boolean {
@@ -209,28 +206,18 @@ function TaskRowView({ row }: { row: TaskRow }) {
       <div className="flex items-center flex-shrink-0 mr-0.5">
         {done ? (
           <span className="flex items-center gap-0.5 text-[9px] text-emerald-500 px-1">
-            <CheckCircle2 size={10} /> Done
+            <AppIcon name="CheckCircle2" size={10} /> Done
           </span>
         ) : state === "busy" ? (
-          <Loader2 size={12} className="animate-spin text-muted-foreground mx-1" />
+          <AppIcon name="Loader2" size={12} className="animate-spin text-muted-foreground mx-1" />
         ) : (
           <>
-            <button
-              onClick={complete}
-              title="Mark done"
-              aria-label="Mark done"
-              className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-secondary"
-            >
-              <CheckCircle2 size={11} />
-            </button>
-            <button
-              onClick={() => openTask(row.id)}
-              title="Open in Tasks"
-              aria-label="Open in Tasks"
-              className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-secondary"
-            >
-              <ExternalLink size={11} />
-            </button>
+            <Button variant="ghost" size="icon-xs" radius="keep" layout="" onClick={complete} title="Mark done" aria-label="Mark done" className="rounded">
+              <AppIcon name="CheckCircle2" size={11} />
+            </Button>
+            <Button variant="ghost" size="icon-xs" radius="keep" layout="" onClick={() => openTask(row.id)} title="Open in Tasks" aria-label="Open in Tasks" className="rounded">
+              <AppIcon name="ExternalLink" size={11} />
+            </Button>
           </>
         )}
       </div>
@@ -253,7 +240,7 @@ function TaskListCard({ event: e }: { event: ToolEvent }) {
     return (
       <ToolCardShell
         title={title}
-        icon={<ListChecks size={12} />}
+        icon={<AppIcon name="ListChecks" size={12} />}
         onDismiss={() => dismissToolCard(e.id)}
       >
         <div className="text-[11px] text-muted-foreground whitespace-pre-wrap">
@@ -265,7 +252,7 @@ function TaskListCard({ event: e }: { event: ToolEvent }) {
   return (
     <ToolCardShell
       title={title}
-      icon={e.name === SCHEDULE_TOOL ? <CalendarClock size={12} /> : <ListChecks size={12} />}
+      icon={e.name === SCHEDULE_TOOL ? <AppIcon name="CalendarClock" size={12} /> : <AppIcon name="ListChecks" size={12} />}
       onDismiss={() => dismissToolCard(e.id)}
     >
       <div className="space-y-0.5 max-h-80 overflow-y-auto overflow-x-hidden scrollbar-thin">
@@ -312,7 +299,7 @@ function PlanResultCard({ event: e }: { event: ToolEvent }) {
   return (
     <ToolCardShell
       title={`${meta.label} ${applied ? "· applied" : "· proposed"}`}
-      icon={<CalendarDays size={12} />}
+      icon={<AppIcon name="CalendarDays" size={12} />}
       onDismiss={() => dismissToolCard(e.id)}
     >
       <div className="text-[11px] whitespace-pre-wrap break-words text-foreground/90 max-h-72 overflow-y-auto overflow-x-hidden scrollbar-thin">
@@ -322,11 +309,11 @@ function PlanResultCard({ event: e }: { event: ToolEvent }) {
         <div className="mt-2 flex items-center gap-2">
           {state === "applied" ? (
             <span className="flex items-center gap-1 text-[10px] text-emerald-500">
-              <CheckCircle2 size={11} /> Applied — calendar updated
+              <AppIcon name="CheckCircle2" size={11} /> Applied — calendar updated
             </span>
           ) : state === "failed" ? (
             <span className="flex items-center gap-1 text-[10px] text-destructive">
-              <X size={11} /> Couldn&apos;t apply — try again
+              <AppIcon name="X" size={11} /> Couldn&apos;t apply — try again
             </span>
           ) : null}
           {state !== "applied" && (
@@ -336,9 +323,9 @@ function PlanResultCard({ event: e }: { event: ToolEvent }) {
               className="inline-flex items-center gap-1 rounded-md border border-primary/50 bg-primary/10 px-2 py-1 text-[10px] font-medium text-primary hover:bg-primary/20 disabled:opacity-60"
             >
               {state === "busy" ? (
-                <Loader2 size={10} className="animate-spin" />
+                <AppIcon name="Loader2" size={10} className="animate-spin" />
               ) : (
-                <Zap size={10} />
+                <AppIcon name="Zap" size={10} />
               )}
               Apply plan
             </button>
@@ -353,7 +340,7 @@ function PlanResultCard({ event: e }: { event: ToolEvent }) {
 
 function InfoResultCard({ event: e }: { event: ToolEvent }) {
   const meta = INFO_META[e.name];
-  const Icon = meta.icon;
+  const iconName = meta.icon;
   const text = (e.result || "").trim();
   const openTask = useOpenTask();
   const args = (e.args ?? {}) as Record<string, unknown>;
@@ -361,7 +348,7 @@ function InfoResultCard({ event: e }: { event: ToolEvent }) {
   return (
     <ToolCardShell
       title={meta.label}
-      icon={<Icon size={12} />}
+      icon={<AppIcon name={iconName} size={12} />}
       onDismiss={() => dismissToolCard(e.id)}
     >
       <div className="text-[11px] whitespace-pre-wrap break-words text-foreground/90 max-h-72 overflow-y-auto overflow-x-hidden scrollbar-thin">
@@ -372,7 +359,7 @@ function InfoResultCard({ event: e }: { event: ToolEvent }) {
           onClick={() => openTask(itemId)}
           className="mt-1.5 inline-flex items-center gap-1 text-[10px] text-primary hover:underline"
         >
-          <ExternalLink size={10} /> Open in Tasks
+          <AppIcon name="ExternalLink" size={10} /> Open in Tasks
         </button>
       )}
     </ToolCardShell>
@@ -386,7 +373,7 @@ function InfoResultCard({ event: e }: { event: ToolEvent }) {
 function ActionResultCard({ event: e }: { event: ToolEvent }) {
   const meta = actionMeta(e);
   const failed = e.status === "error";
-  const Icon = failed ? X : meta.icon;
+  const iconName = failed ? "X" : meta.icon;
   const result = (e.result || "").trim();
   // Every _fmt_item line ends with `full_id: <uuid>`; capture results print
   // `(id: <uuid>)` instead — either is the jump target, args as last resort.
@@ -421,7 +408,7 @@ function ActionResultCard({ event: e }: { event: ToolEvent }) {
             failed ? "text-destructive" : meta.danger ? "text-amber-500" : "text-emerald-500"
           }`}
         >
-          <Icon size={13} />
+          <AppIcon name={iconName} size={13} />
         </span>
         <div className="min-w-0 flex-1">
           <div className="text-[11px] font-medium text-foreground">{meta.label}</div>
@@ -435,7 +422,7 @@ function ActionResultCard({ event: e }: { event: ToolEvent }) {
               onClick={() => openTask(itemId)}
               className="mt-1 inline-flex items-center gap-1 text-[10px] text-primary hover:underline"
             >
-              <ExternalLink size={10} /> Open in Tasks
+              <AppIcon name="ExternalLink" size={10} /> Open in Tasks
             </button>
           )}
         </div>

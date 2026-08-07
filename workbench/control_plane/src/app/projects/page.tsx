@@ -11,7 +11,7 @@
  * hand-edited slug shows nothing the caller could not already reach (R9, and
  * `lib/tree.filterByCenter`'s own test says so).
  */
-import { Plus } from "lucide-react";
+import Icon from "@/components/Icon";
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 
@@ -244,7 +244,7 @@ function ProjectsWorkspace() {
             }}
             className="shrink-0 rounded p-1 text-muted-foreground hover:bg-muted"
           >
-            <Plus className="h-4 w-4" />
+            <Icon name="Plus" className="h-4 w-4" />
           </button>
         </div>
 

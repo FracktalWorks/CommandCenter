@@ -1,7 +1,8 @@
 "use client";
 
+import Button from "@/components/ui/Button";
+import AppIcon from "@/components/Icon";
 import { useRef, useState } from "react";
-import { Paperclip, Link2, X, Loader2, Image as ImageIcon, FileText } from "lucide-react";
 import { apiUploadAttachment } from "../lib/api";
 import type { TaskAttachment } from "../lib/types";
 
@@ -13,10 +14,10 @@ export function AttachmentChip({
   att: TaskAttachment;
   onRemove?: () => void;
 }) {
-  const Icon = att.kind === "image" ? ImageIcon : att.kind === "link" ? Link2 : FileText;
+  const iconName = att.kind === "image" ? "Image" : att.kind === "link" ? "Link2" : "FileText";
   return (
     <span className="inline-flex max-w-[220px] items-center gap-1 rounded-full border border-border bg-background/60 px-2 py-0.5 text-[11px] text-muted-foreground">
-      <Icon className="h-3 w-3 shrink-0" />
+      <AppIcon name={iconName} className="h-3 w-3 shrink-0" />
       <a
         href={att.url}
         target="_blank"
@@ -36,7 +37,7 @@ export function AttachmentChip({
           }}
           className="tech-transition shrink-0 text-muted-foreground hover:text-destructive"
         >
-          <X className="h-3 w-3" />
+          <AppIcon name="X" className="h-3 w-3" />
         </button>
       )}
     </span>
@@ -131,30 +132,19 @@ export function AttachmentComposer({
           className="hidden"
           onChange={(e) => void addFiles(e.target.files)}
         />
-        <button
-          type="button"
-          disabled={uploading}
-          onClick={() => fileRef.current?.click()}
-          title="Attach a photo or file"
-          className="tech-transition inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-[11px] text-muted-foreground hover:bg-secondary hover:text-foreground disabled:opacity-50"
-        >
+        <Button variant="ghost" size="none" radius="keep" layout="inline-flex items-center" type="button" disabled={uploading} onClick={() => fileRef.current?.click()} title="Attach a photo or file" className="gap-1 rounded-md px-1.5 py-1 text-[11px]">
           {uploading ? (
-            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            <AppIcon name="Loader2" className="h-3.5 w-3.5 animate-spin" />
           ) : (
-            <Paperclip className="h-3.5 w-3.5" />
+            <AppIcon name="Paperclip" className="h-3.5 w-3.5" />
           )}
           {!compact && (uploading ? "Uploading…" : "Attach")}
-        </button>
+        </Button>
         {!linkOpen ? (
-          <button
-            type="button"
-            onClick={() => setLinkOpen(true)}
-            title="Add a link"
-            className="tech-transition inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-[11px] text-muted-foreground hover:bg-secondary hover:text-foreground"
-          >
-            <Link2 className="h-3.5 w-3.5" />
+          <Button variant="ghost" size="none" radius="keep" layout="inline-flex items-center" type="button" onClick={() => setLinkOpen(true)} title="Add a link" className="gap-1 rounded-md px-1.5 py-1 text-[11px]">
+            <AppIcon name="Link2" className="h-3.5 w-3.5" />
             {!compact && "Link"}
-          </button>
+          </Button>
         ) : (
           <span className="flex flex-1 items-center gap-1">
             <input

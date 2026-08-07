@@ -1,7 +1,8 @@
 "use client";
 
+import Button from "@/components/ui/Button";
+import Icon from "@/components/Icon";
 import { useEffect } from "react";
-import { X, SkipForward } from "lucide-react";
 import { useTaskStore } from "../lib/taskStore";
 import { useVisualViewport } from "../lib/useVisualViewport";
 import { ClarifyPanel } from "./ClarifyPanel";
@@ -104,24 +105,14 @@ export function ClarifyModal() {
             </span>
             <div className="flex items-center gap-1">
               {inboxLeft > 1 && (
-                <button
-                  type="button"
-                  onClick={skip}
-                  title="Leave it in the inbox to decide later"
-                  className="tech-transition inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium text-muted-foreground hover:bg-secondary hover:text-foreground"
-                >
-                  <SkipForward className="h-3.5 w-3.5" />
+                <Button variant="ghost" size="none" radius="keep" layout="inline-flex items-center" type="button" onClick={skip} title="Leave it in the inbox to decide later" className="gap-1 rounded-md px-2 py-1 text-[11px]">
+                  <Icon name="SkipForward" className="h-3.5 w-3.5" />
                   Skip
-                </button>
+                </Button>
               )}
-              <button
-                type="button"
-                onClick={close}
-                aria-label="Close"
-                className="tech-transition rounded-md p-1 text-muted-foreground hover:bg-secondary hover:text-foreground"
-              >
-                <X className="h-4 w-4" />
-              </button>
+              <Button variant="ghost" size="icon-xs" radius="keep" layout="" type="button" onClick={close} aria-label="Close" className="rounded-md">
+                <Icon name="X" className="h-4 w-4" />
+              </Button>
             </div>
           </div>
           <div className="h-0.5 w-full bg-secondary" aria-hidden>

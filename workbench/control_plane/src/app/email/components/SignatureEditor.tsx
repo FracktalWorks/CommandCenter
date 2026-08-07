@@ -1,12 +1,8 @@
 "use client";
 
+import Icon from "@/components/Icon";
 import { useCallback, useEffect, useRef } from "react";
 import DOMPurify from "dompurify";
-import {
-  AlignCenter, AlignLeft, AlignRight, Bold, Code2, Eye, Image as ImageIcon,
-  Italic, Link2, Link2Off, List, ListOrdered, Minus, Redo2, RemoveFormatting,
-  Strikethrough, Table as TableIcon, Underline as UnderlineIcon, Undo2, Upload,
-} from "lucide-react";
 import {
   EditorContent, ReactNodeViewRenderer, NodeViewWrapper, useEditor,
   useEditorState, type Editor, type NodeViewProps,
@@ -287,23 +283,23 @@ export function SignatureEditor({
       {/* Toolbar */}
       <div className="flex flex-wrap items-center gap-0.5 px-2 py-1.5 border-b border-border bg-secondary/40">
         <TBtn title="Undo" disabled={!s?.canUndo} onClick={() => chain().undo().run()}>
-          <Undo2 size={14} />
+          <Icon name="Undo2" size={14} />
         </TBtn>
         <TBtn title="Redo" disabled={!s?.canRedo} onClick={() => chain().redo().run()}>
-          <Redo2 size={14} />
+          <Icon name="Redo2" size={14} />
         </TBtn>
         <Divider />
         <TBtn title="Bold" active={s?.bold} onClick={() => chain().toggleBold().run()}>
-          <Bold size={14} />
+          <Icon name="Bold" size={14} />
         </TBtn>
         <TBtn title="Italic" active={s?.italic} onClick={() => chain().toggleItalic().run()}>
-          <Italic size={14} />
+          <Icon name="Italic" size={14} />
         </TBtn>
         <TBtn title="Underline" active={s?.underline} onClick={() => chain().toggleUnderline().run()}>
-          <UnderlineIcon size={14} />
+          <Icon name="Underline" size={14} />
         </TBtn>
         <TBtn title="Strikethrough" active={s?.strike} onClick={() => chain().toggleStrike().run()}>
-          <Strikethrough size={14} />
+          <Icon name="Strikethrough" size={14} />
         </TBtn>
         <Divider />
         {/* Font size + colour ride on <span style> — email-client-safe. */}
@@ -342,35 +338,35 @@ export function SignatureEditor({
         </label>
         <Divider />
         <TBtn title="Align left" active={s?.alignLeft} onClick={() => chain().setTextAlign("left").run()}>
-          <AlignLeft size={14} />
+          <Icon name="AlignLeft" size={14} />
         </TBtn>
         <TBtn title="Align centre" active={s?.alignCenter} onClick={() => chain().setTextAlign("center").run()}>
-          <AlignCenter size={14} />
+          <Icon name="AlignCenter" size={14} />
         </TBtn>
         <TBtn title="Align right" active={s?.alignRight} onClick={() => chain().setTextAlign("right").run()}>
-          <AlignRight size={14} />
+          <Icon name="AlignRight" size={14} />
         </TBtn>
         <Divider />
         <TBtn title="Bulleted list" active={s?.bullet} onClick={() => chain().toggleBulletList().run()}>
-          <List size={14} />
+          <Icon name="List" size={14} />
         </TBtn>
         <TBtn title="Numbered list" active={s?.ordered} onClick={() => chain().toggleOrderedList().run()}>
-          <ListOrdered size={14} />
+          <Icon name="ListOrdered" size={14} />
         </TBtn>
         <Divider />
         <TBtn title={s?.link ? "Edit link" : "Link selected text"} active={s?.link} onClick={addLink}>
-          <Link2 size={14} />
+          <Icon name="Link2" size={14} />
         </TBtn>
         {s?.link && (
           <TBtn title="Remove link" onClick={() => chain().extendMarkRange("link").unsetLink().run()}>
-            <Link2Off size={14} />
+            <Icon name="Link2Off" size={14} />
           </TBtn>
         )}
         <TBtn title="Insert image by URL" onClick={addImageByUrl}>
-          <ImageIcon size={14} />
+          <Icon name="Image" size={14} />
         </TBtn>
         <TBtn title="Upload an image (embedded)" onClick={() => fileRef.current?.click()}>
-          <Upload size={14} />
+          <Icon name="Upload" size={14} />
         </TBtn>
         <input
           ref={fileRef}
@@ -385,13 +381,13 @@ export function SignatureEditor({
           onClick={() =>
             chain().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()}
         >
-          <TableIcon size={14} />
+          <Icon name="Table" size={14} />
         </TBtn>
         <TBtn title="Horizontal rule" onClick={() => chain().setHorizontalRule().run()}>
-          <Minus size={14} />
+          <Icon name="Minus" size={14} />
         </TBtn>
         <TBtn title="Clear formatting" onClick={() => chain().unsetAllMarks().unsetTextAlign().run()}>
-          <RemoveFormatting size={14} />
+          <Icon name="RemoveFormatting" size={14} />
         </TBtn>
       </div>
 
@@ -450,8 +446,8 @@ export function SignatureEditor({
         }}
       >
         <summary className="flex cursor-pointer items-center gap-1 px-2 py-1 text-[11px] text-muted-foreground hover:text-foreground select-none">
-          <Code2 size={12} /> Edit HTML source
-          <Eye size={12} className="ml-auto opacity-60" />
+          <Icon name="Code2" size={12} /> Edit HTML source
+          <Icon name="Eye" size={12} className="ml-auto opacity-60" />
         </summary>
         <textarea
           value={value}

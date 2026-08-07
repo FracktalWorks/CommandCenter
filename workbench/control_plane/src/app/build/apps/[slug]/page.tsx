@@ -8,24 +8,12 @@
  * user/storage/ai calls with the VIEWER's session (docs/app-workshop §4.4).
  */
 
+import Button from "@/components/ui/Button";
+import AppIcon, { themedIcon } from "@/components/Icon";
+import type { ThemedIcon } from "@/components/Icon";
 import { use, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useSession } from "next-auth/react";
-import { useTheme } from "next-themes";
-import {
-  AlertTriangle,
-  Database,
-  GitFork,
-  Hammer,
-  HelpCircle,
-  Info,
-  Loader2,
-  Plug,
-  Sparkles,
-  User,
-  Wrench,
-  type LucideIcon,
-} from "lucide-react";
 import SandboxedHtml from "@/components/SandboxedHtml";
 import {
   buildAppSrcDoc,
@@ -34,7 +22,6 @@ import {
   type CcToolConfirmDecision,
   type CcToolConfirmRequest,
 } from "../lib/ccBridge";
-import { buildIconMap } from "@/lib/iconSvg";
 import type { AppMeta, AppUsage, AppVersion } from "../lib/types";
 
 /** A pending `cc.tools.call()` confirm, waiting on the viewer's decision. */
@@ -134,12 +121,12 @@ function describeScope(scope: string): string {
 }
 
 /** Icon per scope category — `HelpCircle` for anything unrecognized. */
-function scopeIcon(scope: string): LucideIcon {
-  if (scope === "identity:read") return User;
-  if (scope === "storage:app") return Database;
-  if (scope.startsWith("ai:")) return Sparkles;
-  if (scope.startsWith("tool:")) return Plug;
-  return HelpCircle;
+function scopeIcon(scope: string): ThemedIcon {
+  if (scope === "identity:read") return themedIcon("User");
+  if (scope === "storage:app") return themedIcon("Database");
+  if (scope.startsWith("ai:")) return themedIcon("Sparkles");
+  if (scope.startsWith("tool:")) return themedIcon("Plug");
+  return themedIcon("HelpCircle");
 }
 
 export default function AppRunPage({
@@ -151,8 +138,6 @@ export default function AppRunPage({
   const router = useRouter();
   const { data: session } = useSession();
   const viewerEmail = session?.user?.email ?? "dev@fracktal.in";
-  const { resolvedTheme } = useTheme();
-  const theme: "light" | "dark" = resolvedTheme === "light" ? "light" : "dark";
 
   const [app, setApp] = useState<AppMeta | null>(null);
   const [bundle, setBundle] = useState<string | null>(null);
@@ -404,7 +389,7 @@ export default function AppRunPage({
   // Same icon pre-resolution as the Workshop's preview — the published run
   // page goes through the exact same sandboxed frame.
   const runIcons = useMemo(
-    () => (srcDoc ? buildIconMap(extractCcIconNames(srcDoc)) : {}),
+    () => (srcDoc ? extractCcIconNames(srcDoc) : []),
     [srcDoc]
   );
 
@@ -413,7 +398,7 @@ export default function AppRunPage({
   if (loading) {
     return (
       <div className="flex flex-col items-center justify-center h-full gap-3">
-        <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
+        <AppIcon name="Loader2" className="w-5 h-5 animate-spin text-muted-foreground" />
         <p className="text-sm text-muted-foreground">Loading app…</p>
       </div>
     );
@@ -423,12 +408,9 @@ export default function AppRunPage({
     return (
       <div className="flex flex-col items-center justify-center h-full gap-3">
         <p className="text-sm text-destructive">{error ?? "App not found."}</p>
-        <button
-          onClick={() => router.push("/build/apps")}
-          className="rounded-lg border border-border px-3 sm:px-4 py-2 text-sm text-muted-foreground hover:text-foreground hover:border-primary/30 tech-transition"
-        >
+        <Button variant="secondary" size="none" layout="" onClick={() => router.push("/build/apps")} className="px-3 sm:px-4 py-2 text-sm">
           Back to Custom Apps
-        </button>
+        </Button>
       </div>
     );
   }
@@ -463,28 +445,19 @@ export default function AppRunPage({
         <span className="hidden sm:flex items-center gap-1.5 text-[11px] text-muted-foreground border border-border rounded-full px-2.5 py-1 shrink-0">
           runs as {viewerEmail}
         </span>
-        <button
-          onClick={forkApp}
-          disabled={forking}
-          title="Duplicate this app as your own editable copy"
-          className="rounded-lg border border-border px-2 sm:px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground hover:border-primary/30 tech-transition flex items-center gap-1.5 shrink-0 disabled:opacity-50"
-        >
+        <Button variant="secondary" size="none" layout="flex items-center" onClick={forkApp} disabled={forking} title="Duplicate this app as your own editable copy" className="px-2 sm:px-3 py-1.5 text-xs gap-1.5 shrink-0">
           {forking ? (
-            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            <AppIcon name="Loader2" className="w-3.5 h-3.5 animate-spin" />
           ) : (
-            <GitFork className="w-3.5 h-3.5" />
+            <AppIcon name="GitFork" className="w-3.5 h-3.5" />
           )}
           <span className="hidden sm:inline">Fork</span>
-        </button>
+        </Button>
         {canEdit && (
-          <button
-            onClick={() => router.push(`/build/apps/${slug}/edit`)}
-            title="Open in Workshop"
-            className="rounded-lg border border-border px-2 sm:px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground hover:border-primary/30 tech-transition flex items-center gap-1.5 shrink-0"
-          >
-            <Wrench className="w-3.5 h-3.5" />
+          <Button variant="secondary" size="none" layout="flex items-center" onClick={() => router.push(`/build/apps/${slug}/edit`)} title="Open in Workshop" className="px-2 sm:px-3 py-1.5 text-xs gap-1.5 shrink-0">
+            <AppIcon name="Wrench" className="w-3.5 h-3.5" />
             <span className="hidden sm:inline">Open in Workshop</span>
-          </button>
+          </Button>
         )}
         <div className="relative shrink-0" ref={infoRef}>
           <button
@@ -496,7 +469,7 @@ export default function AppRunPage({
                 : "text-muted-foreground hover:bg-secondary"
             }`}
           >
-            <Info className="w-4 h-4" />
+            <AppIcon name="Info" className="w-4 h-4" />
           </button>
 
           {/* Info popover */}
@@ -521,7 +494,7 @@ export default function AppRunPage({
                   Versions
                 </span>
                 {versions === null ? (
-                  <Loader2 className="w-3.5 h-3.5 animate-spin text-muted-foreground" />
+                  <AppIcon name="Loader2" className="w-3.5 h-3.5 animate-spin text-muted-foreground" />
                 ) : versions.length === 0 ? (
                   <span className="text-muted-foreground">
                     No published versions.
@@ -546,12 +519,9 @@ export default function AppRunPage({
                               live
                             </span>
                           ) : canEdit && confirmVersion !== v.version ? (
-                            <button
-                              onClick={() => setConfirmVersion(v.version)}
-                              className="text-[10px] rounded-md border border-border px-2 py-0.5 text-muted-foreground hover:text-foreground hover:border-primary/30 tech-transition shrink-0"
-                            >
+                            <Button variant="secondary" size="none" radius="keep" layout="" onClick={() => setConfirmVersion(v.version)} className="text-[10px] rounded-md px-2 py-0.5 shrink-0">
                               Make live
-                            </button>
+                            </Button>
                           ) : null}
                         </div>
                         {canEdit && !isCurrent && confirmVersion === v.version && (
@@ -559,16 +529,12 @@ export default function AppRunPage({
                             <span className="text-[10px] text-muted-foreground flex-1">
                               Make v{v.version} live?
                             </span>
-                            <button
-                              onClick={() => makeLive(v.version)}
-                              disabled={rollbackBusy}
-                              className="text-[10px] rounded-md bg-primary px-2 py-1 font-medium text-primary-foreground hover:opacity-90 tech-transition disabled:opacity-50 flex items-center gap-1"
-                            >
+                            <Button size="none" radius="keep" layout="flex items-center" onClick={() => makeLive(v.version)} disabled={rollbackBusy} className="text-[10px] rounded-md px-2 py-1 gap-1">
                               {rollbackBusy && (
-                                <Loader2 className="w-3 h-3 animate-spin" />
+                                <AppIcon name="Loader2" className="w-3 h-3 animate-spin" />
                               )}
                               Confirm
-                            </button>
+                            </Button>
                             <button
                               onClick={() => setConfirmVersion(null)}
                               className="text-[10px] rounded-md border border-border px-2 py-1 text-muted-foreground hover:text-foreground tech-transition"
@@ -589,7 +555,7 @@ export default function AppRunPage({
 
       {forkError && (
         <div className="flex items-center gap-2 px-4 py-2 border-b border-border bg-destructive/5 text-xs text-destructive shrink-0">
-          <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+          <AppIcon name="AlertTriangle" className="w-3.5 h-3.5 shrink-0" />
           {forkError}
           <button
             onClick={() => setForkError(null)}
@@ -603,11 +569,11 @@ export default function AppRunPage({
       {/* ── The app, in the sandboxed frame ─────────────────────────── */}
       <div className="flex-1 min-h-0 flex flex-col">
         {srcDoc ? (
-          <SandboxedHtml chromeless html={srcDoc} theme={theme} icons={runIcons} />
+          <SandboxedHtml chromeless html={srcDoc} iconNames={runIcons} />
         ) : (
           <div className="flex flex-col items-center justify-center flex-1 gap-3 text-center px-6">
             <div className="w-11 h-11 rounded-xl bg-primary/10 flex items-center justify-center">
-              <Hammer className="w-5 h-5 text-primary" />
+              <AppIcon name="Hammer" className="w-5 h-5 text-primary" />
             </div>
             <p className="text-sm font-medium text-foreground">
               Not published yet
@@ -617,12 +583,9 @@ export default function AppRunPage({
               Workshop first.
             </p>
             {canEdit && (
-              <button
-                onClick={() => router.push(`/build/apps/${slug}/edit`)}
-                className="rounded-lg bg-primary px-3 sm:px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 tech-transition"
-              >
+              <Button size="none" layout="" onClick={() => router.push(`/build/apps/${slug}/edit`)} className="px-3 sm:px-4 py-2 text-sm">
                 Open Workshop
-              </button>
+              </Button>
             )}
           </div>
         )}
@@ -676,20 +639,13 @@ export default function AppRunPage({
             )}
 
             <div className="flex justify-end gap-2">
-              <button
-                onClick={() => router.push("/build/apps")}
-                className="rounded-lg border border-border px-3 sm:px-4 py-2 text-sm text-muted-foreground hover:text-foreground hover:border-primary/30 tech-transition"
-              >
+              <Button variant="secondary" size="none" layout="" onClick={() => router.push("/build/apps")} className="px-3 sm:px-4 py-2 text-sm">
                 Not now
-              </button>
-              <button
-                onClick={allowConsent}
-                disabled={consentBusy}
-                className="rounded-lg bg-primary px-3 sm:px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 tech-transition flex items-center gap-1.5 disabled:opacity-50"
-              >
-                {consentBusy && <Loader2 className="w-4 h-4 animate-spin" />}
+              </Button>
+              <Button size="lg" layout="flex items-center" onClick={allowConsent} disabled={consentBusy}>
+                {consentBusy && <AppIcon name="Loader2" className="w-4 h-4 animate-spin" />}
                 Allow
-              </button>
+              </Button>
             </div>
           </div>
         </div>
@@ -700,7 +656,7 @@ export default function AppRunPage({
       {pendingConfirm && (
         <div className="fixed bottom-5 right-5 z-40 w-[360px] rounded-2xl border border-border bg-popover shadow-lg p-3.5 flex flex-col gap-2.5">
           <div className="flex items-start gap-2.5">
-            <AlertTriangle className="w-4 h-4 text-warning shrink-0 mt-0.5" />
+            <AppIcon name="AlertTriangle" className="w-4 h-4 text-warning shrink-0 mt-0.5" />
             <div className="min-w-0">
               <p className="text-[12.5px] font-semibold text-foreground leading-snug">
                 <span className="font-bold">{app.name}</span> wants to use{" "}
@@ -726,30 +682,24 @@ export default function AppRunPage({
               />
               Always allow for this app
             </label>
-            <button
-              onClick={() => {
+            <Button variant="secondary" size="none" layout="" onClick={() => {
                 pendingConfirm.resolve({
                   approved: false,
                   remember: rememberTool,
                 });
                 setPendingConfirm(null);
-              }}
-              className="rounded-lg border border-border px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground hover:border-primary/30 tech-transition"
-            >
+              }} className="px-3 py-1.5 text-xs">
               Deny
-            </button>
-            <button
-              onClick={() => {
+            </Button>
+            <Button size="none" layout="" onClick={() => {
                 pendingConfirm.resolve({
                   approved: true,
                   remember: rememberTool,
                 });
                 setPendingConfirm(null);
-              }}
-              className="rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90 tech-transition"
-            >
+              }} className="px-3 py-1.5 text-xs">
               Approve
-            </button>
+            </Button>
           </div>
         </div>
       )}

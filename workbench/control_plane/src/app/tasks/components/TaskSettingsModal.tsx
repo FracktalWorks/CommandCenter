@@ -1,10 +1,8 @@
 "use client";
 
+import Button from "@/components/ui/Button";
+import Icon from "@/components/Icon";
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
-import {
-  X, Settings2, Sparkles, Inbox, RefreshCw,
-  Columns3, ChevronUp, ChevronDown, Plus, Loader2, AlertTriangle,
-} from "lucide-react";
 import { useTaskStore } from "../lib/taskStore";
 import { fetchStatusCatalog, type TaskSettings, type StatusCatalog } from "../lib/api";
 import { formatStatus } from "../lib/utils";
@@ -120,18 +118,13 @@ function SettingsPanel() {
       >
         {/* header */}
         <div className="flex items-center gap-2 border-b border-border px-4 py-3">
-          <Settings2 className="h-4 w-4 text-primary" />
+          <Icon name="Settings2" className="h-4 w-4 text-primary" />
           <h2 className="text-sm font-semibold text-foreground">
             Task Manager settings
           </h2>
-          <button
-            type="button"
-            onClick={close}
-            aria-label="Close"
-            className="tech-transition ml-auto rounded-md p-1.5 text-muted-foreground hover:bg-secondary hover:text-foreground"
-          >
-            <X className="h-4 w-4" />
-          </button>
+          <Button variant="ghost" size="icon-sm" radius="keep" layout="" type="button" onClick={close} aria-label="Close" className="ml-auto rounded-md">
+            <Icon name="X" className="h-4 w-4" />
+          </Button>
         </div>
 
         <div className="flex flex-col gap-5 overflow-y-auto p-4">
@@ -145,7 +138,7 @@ function SettingsPanel() {
           {/* ── AI models ── */}
           <section>
             <h3 className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-              <Sparkles className="h-3.5 w-3.5" /> AI models
+              <Icon name="Sparkles" className="h-3.5 w-3.5" /> AI models
             </h3>
             <div className="flex flex-col gap-2">
               {MODEL_FIELDS.map((cfg) => (
@@ -217,7 +210,7 @@ function SettingsPanel() {
           {/* ── Clarify ── */}
           <section>
             <h3 className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-              <Sparkles className="h-3.5 w-3.5" /> Clarify
+              <Icon name="Sparkles" className="h-3.5 w-3.5" /> Clarify
             </h3>
             <Toggle
               title="AI-powered clarify"
@@ -230,7 +223,7 @@ function SettingsPanel() {
           {/* ── Capture ── */}
           <section>
             <h3 className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-              <Inbox className="h-3.5 w-3.5" /> Capture
+              <Icon name="Inbox" className="h-3.5 w-3.5" /> Capture
             </h3>
             <Toggle
               title="Duplicate check on quick capture"
@@ -243,7 +236,7 @@ function SettingsPanel() {
           {/* ── Sync ── */}
           <section>
             <h3 className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-              <RefreshCw className="h-3.5 w-3.5" /> Sync
+              <Icon name="RefreshCw" className="h-3.5 w-3.5" /> Sync
             </h3>
             <div className="flex flex-col gap-2">
               <Toggle
@@ -274,7 +267,7 @@ function SettingsPanel() {
           {/* ── Next Actions list columns ── */}
           <section>
             <h3 className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-              <Columns3 className="h-3.5 w-3.5" /> Next Actions columns
+              <Icon name="Columns3" className="h-3.5 w-3.5" /> Next Actions columns
             </h3>
             <p className="mb-2 px-1 text-[11px] text-muted-foreground">
               In the list view (desktop), Next Actions shows these as aligned
@@ -287,7 +280,7 @@ function SettingsPanel() {
           {/* ── Board (Kanban stages for Next Actions) ── */}
           <section>
             <h3 className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-              <Columns3 className="h-3.5 w-3.5" /> Kanban stages
+              <Icon name="Columns3" className="h-3.5 w-3.5" /> Kanban stages
             </h3>
             <p className="mb-2 px-1 text-[11px] text-muted-foreground">
               One global set of stages for <span className="font-medium">all</span>{" "}
@@ -305,7 +298,7 @@ function SettingsPanel() {
           {/* ── ClickUp status → stage mapping ── */}
           <section>
             <h3 className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-              <Columns3 className="h-3.5 w-3.5" /> ClickUp status mapping
+              <Icon name="Columns3" className="h-3.5 w-3.5" /> ClickUp status mapping
             </h3>
             <p className="mb-2 px-1 text-[11px] text-muted-foreground">
               Next Actions shows your{" "}
@@ -371,7 +364,7 @@ function StageEditor({
                 onClick={() => move(idx, -1)}
                 className="tech-transition text-muted-foreground/60 hover:text-foreground disabled:opacity-30"
               >
-                <ChevronUp className="h-3 w-3" />
+                <Icon name="ChevronUp" className="h-3 w-3" />
               </button>
               <button
                 type="button"
@@ -380,7 +373,7 @@ function StageEditor({
                 onClick={() => move(idx, 1)}
                 className="tech-transition text-muted-foreground/60 hover:text-foreground disabled:opacity-30"
               >
-                <ChevronDown className="h-3 w-3" />
+                <Icon name="ChevronDown" className="h-3 w-3" />
               </button>
             </div>
             <input
@@ -404,13 +397,13 @@ function StageEditor({
               onClick={() => remove(idx)}
               className="tech-transition shrink-0 rounded p-1 text-muted-foreground/60 hover:bg-destructive/10 hover:text-destructive disabled:opacity-30"
             >
-              <X className="h-3.5 w-3.5" />
+              <Icon name="X" className="h-3.5 w-3.5" />
             </button>
           </div>
         );
       })}
       <div className="flex items-center gap-1.5 rounded-lg border border-dashed border-border px-2 py-1.5">
-        <Plus className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+        <Icon name="Plus" className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
         <input
           value={adding}
           onChange={(e) => setAdding(e.target.value)}
@@ -421,13 +414,9 @@ function StageEditor({
           className="min-w-0 flex-1 bg-transparent px-0.5 py-1 text-[13px] text-foreground placeholder:text-muted-foreground focus:outline-none"
         />
         {adding.trim() && (
-          <button
-            type="button"
-            onClick={add}
-            className="tech-transition shrink-0 rounded-md bg-primary px-2 py-1 text-[11px] font-medium text-primary-foreground hover:opacity-90"
-          >
+          <Button size="none" radius="keep" layout="" type="button" onClick={add} className="shrink-0 rounded-md px-2 py-1 text-[11px]">
             Add
-          </button>
+          </Button>
         )}
       </div>
     </div>
@@ -485,7 +474,7 @@ function StatusMappingEditor({
   if (loading) {
     return (
       <div className="flex items-center gap-2 px-1 py-2 text-[11px] text-muted-foreground">
-        <Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading ClickUp statuses…
+        <Icon name="Loader2" className="h-3.5 w-3.5 animate-spin" /> Loading ClickUp statuses…
       </div>
     );
   }
@@ -509,7 +498,7 @@ function StatusMappingEditor({
     <div className="flex flex-col gap-1.5">
       {unmappedCount > 0 && (
         <p className="mb-0.5 inline-flex items-center gap-1 px-1 text-[11px] text-warning">
-          <AlertTriangle className="h-3 w-3 shrink-0" />
+          <Icon name="AlertTriangle" className="h-3 w-3 shrink-0" />
           {unmappedCount} status{unmappedCount === 1 ? "" : "es"} auto-guessed —
           confirm or adjust.
         </p>

@@ -9,20 +9,11 @@
  * notes, and we hand off to the meeting detail view.
  */
 
+import Button from "@/components/ui/Button";
+import Icon from "@/components/Icon";
 import { use, useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import {
-  AlertTriangle,
-  ArrowLeft,
-  Loader2,
-  Mic,
-  Pause,
-  Play,
-  Radio,
-  Smartphone,
-  Square,
-} from "lucide-react";
 import {
   LEVEL_BARS,
   isActive,
@@ -173,7 +164,7 @@ export default function SessionPage({
           aria-label="Back"
           title={isLive ? "Recording keeps running — it'll follow you" : "Back"}
         >
-          <ArrowLeft className="w-4 h-4" />
+          <Icon name="ArrowLeft" className="w-4 h-4" />
         </button>
         <div>
           <h1 className="text-base sm:text-lg font-bold text-foreground">
@@ -197,7 +188,7 @@ export default function SessionPage({
         {otherActive && (
           <div className="flex flex-col items-center gap-4 text-center max-w-md">
             <div className="w-16 h-16 rounded-full bg-warning/10 flex items-center justify-center">
-              <Mic className="w-7 h-7 text-warning" />
+              <Icon name="Mic" className="w-7 h-7 text-warning" />
             </div>
             <p className="text-sm text-foreground font-semibold">
               Another recording is in progress
@@ -205,19 +196,16 @@ export default function SessionPage({
             <p className="text-xs text-muted-foreground">
               Finish or stop it before starting a new one.
             </p>
-            <button
-              onClick={() => router.push(`/notes/session/${meetingId}`)}
-              className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 tech-transition"
-            >
+            <Button size="none" layout="" onClick={() => router.push(`/notes/session/${meetingId}`)} className="px-4 py-2 text-sm">
               Go to the active recording
-            </button>
+            </Button>
           </div>
         )}
 
         {!otherActive && !active && (
           <div className="flex flex-col items-center gap-6 text-center max-w-md">
             <div className="w-20 h-20 rounded-full bg-primary/10 flex items-center justify-center">
-              <Mic className="w-9 h-9 text-primary" />
+              <Icon name="Mic" className="w-9 h-9 text-primary" />
             </div>
             <div>
               <p className="text-sm text-foreground font-semibold">
@@ -269,7 +257,7 @@ export default function SessionPage({
                 the app can still suspend capture — say so plainly. */}
             {wasBackgrounded ? (
               <div className="flex items-start gap-2 rounded-lg bg-warning/10 px-3 py-2 text-xs text-warning max-w-md">
-                <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                <Icon name="AlertTriangle" className="w-3.5 h-3.5 shrink-0 mt-0.5" />
                 <span className="text-left">
                   You switched away from the app. On phones, recording can pause
                   in the background — there may be a gap in the transcript. Keep
@@ -278,7 +266,7 @@ export default function SessionPage({
               </div>
             ) : (
               <p className="flex items-center gap-1.5 text-[11px] text-muted-foreground max-w-md text-center px-4">
-                <Smartphone className="w-3 h-3 shrink-0" />
+                <Icon name="Smartphone" className="w-3 h-3 shrink-0" />
                 On mobile, keep this app open and the screen on — recording
                 pauses if you switch apps or lock the phone.
               </p>
@@ -328,7 +316,7 @@ export default function SessionPage({
                   href={`/notes/live/${id}`}
                   className="mt-2 inline-flex items-center gap-1.5 text-xs text-primary hover:underline"
                 >
-                  <Radio className="h-3.5 w-3.5" />
+                  <Icon name="Radio" className="h-3.5 w-3.5" />
                   Open the live console
                 </Link>
               </div>
@@ -348,9 +336,9 @@ export default function SessionPage({
                 aria-label={phase === "recording" ? "Pause" : "Resume"}
               >
                 {phase === "recording" ? (
-                  <Pause className="w-6 h-6" />
+                  <Icon name="Pause" className="w-6 h-6" />
                 ) : (
-                  <Play className="w-6 h-6" />
+                  <Icon name="Play" className="w-6 h-6" />
                 )}
               </button>
               <button
@@ -358,7 +346,7 @@ export default function SessionPage({
                 className="p-5 rounded-full bg-destructive/15 text-destructive hover:bg-destructive/25 tech-transition"
                 aria-label="Stop and transcribe"
               >
-                <Square className="w-7 h-7 fill-current" />
+                <Icon name="Square" className="w-7 h-7 fill-current" />
               </button>
               <button
                 onClick={discard}
@@ -381,7 +369,7 @@ export default function SessionPage({
 
         {finalizing && (
           <div className="flex flex-col items-center gap-3 text-muted-foreground">
-            <Loader2 className="w-8 h-8 animate-spin text-primary" />
+            <Icon name="Loader2" className="w-8 h-8 animate-spin text-primary" />
             <p className="text-sm">
               Uploading the last audio and starting transcription…
             </p>

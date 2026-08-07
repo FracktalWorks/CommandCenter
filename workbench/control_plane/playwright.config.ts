@@ -17,7 +17,17 @@ export default defineConfig({
   projects: [
     {
       name: "chromium",
-      use: { ...devices["Desktop Chrome"] },
+      use: {
+        ...devices["Desktop Chrome"],
+        // Escape hatch for environments where the browser build @playwright/test
+        // pins is not the one installed — a container image that ships Chromium
+        // at a fixed path, for instance. Unset it and Playwright resolves its
+        // own bundled browser exactly as before, so this changes nothing by
+        // default; it only removes the need to patch this file by hand.
+        ...(process.env.PLAYWRIGHT_EXECUTABLE_PATH
+          ? { launchOptions: { executablePath: process.env.PLAYWRIGHT_EXECUTABLE_PATH } }
+          : {}),
+      },
     },
   ],
   webServer: {

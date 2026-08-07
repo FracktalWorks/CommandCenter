@@ -1,5 +1,7 @@
 "use client";
 
+import Button from "@/components/ui/Button";
+import AppIcon, { themedIcon, type ThemedIcon } from "@/components/Icon";
 import {
   useEffect,
   useMemo,
@@ -7,34 +9,6 @@ import {
   useSyncExternalStore,
   KeyboardEvent,
 } from "react";
-import {
-  Inbox,
-  Plus,
-  CornerDownLeft,
-  Sparkles,
-  CheckCircle2,
-  ArrowRight,
-  Wind,
-  Undo2,
-  AlertCircle,
-  Search,
-  ArrowDownUp,
-  SearchX,
-  Lightbulb,
-  FileText,
-  Trash2,
-  CalendarClock,
-  X,
-  Check,
-  Pencil,
-  RotateCcw,
-  Keyboard,
-  LayoutGrid,
-  LayoutList,
-  Loader2,
-  HardDrive,
-  Cloud,
-} from "lucide-react";
 import FilterPills from "@/components/FilterPills";
 import { useTaskStore } from "../lib/taskStore";
 import { Disposition, GtdItem } from "../lib/types";
@@ -317,7 +291,7 @@ export function InboxView() {
     <div className="flex h-full flex-col bg-background">
       {/* Mobile heading — the hero is hidden on mobile, so orient the user. */}
       <div className="flex shrink-0 items-center gap-2 border-b border-border px-4 py-2.5 sm:hidden">
-        <Inbox className="h-4 w-4 shrink-0 text-primary" />
+        <AppIcon name="Inbox" className="h-4 w-4 shrink-0 text-primary" />
         <h1 className="text-sm font-bold text-foreground">Inbox</h1>
         <span className="text-[11px] text-muted-foreground">Getting Things Done</span>
       </div>
@@ -330,11 +304,11 @@ export function InboxView() {
       <div className="hidden shrink-0 border-b border-border bg-card sm:block">
         <div className="flex items-center gap-2.5 px-4 py-2.5">
           <div className="flex shrink-0 items-center gap-2">
-            <Inbox className="h-4 w-4 text-primary" />
+            <AppIcon name="Inbox" className="h-4 w-4 text-primary" />
             <h1 className="text-base font-bold text-foreground">Inbox</h1>
           </div>
           <div className="tech-transition flex min-w-0 flex-1 items-center gap-2 rounded-lg border border-border bg-background px-3 py-1.5 focus-within:border-primary/50">
-            <Plus className="h-4 w-4 shrink-0 text-muted-foreground" />
+            <AppIcon name="Plus" className="h-4 w-4 shrink-0 text-muted-foreground" />
             <input
               value={value}
               onChange={(e) => setValue(e.target.value)}
@@ -344,13 +318,9 @@ export function InboxView() {
               className="min-w-0 flex-1 bg-transparent text-sm text-foreground placeholder:text-muted-foreground focus:outline-none"
             />
             {value.trim() ? (
-              <button
-                type="button"
-                onClick={submit}
-                className="tech-transition inline-flex shrink-0 items-center gap-1 rounded-md bg-primary px-2 py-1 text-xs font-medium text-primary-foreground hover:opacity-90"
-              >
-                Add <CornerDownLeft className="h-3 w-3" />
-              </button>
+              <Button size="none" radius="keep" layout="inline-flex items-center" type="button" onClick={submit} className="shrink-0 gap-1 rounded-md px-2 py-1 text-xs">
+                Add <AppIcon name="CornerDownLeft" className="h-3 w-3" />
+              </Button>
             ) : (
               <kbd className="shrink-0 rounded border border-border px-1.5 py-0.5 text-[10px] text-muted-foreground">
                 ↵
@@ -368,7 +338,7 @@ export function InboxView() {
             title="Mind sweep — dump everything on your mind"
             className="tech-transition inline-flex shrink-0 items-center gap-1.5 rounded-md border border-border px-2 py-1.5 text-xs text-muted-foreground hover:border-primary/40 hover:text-foreground"
           >
-            <Wind className="h-3.5 w-3.5" />
+            <AppIcon name="Wind" className="h-3.5 w-3.5" />
             <span className="hidden lg:inline">Mind sweep</span>
           </button>
           <button
@@ -378,7 +348,7 @@ export function InboxView() {
             aria-pressed={showShortcuts}
             className="tech-transition inline-flex shrink-0 items-center rounded-md border border-border p-1.5 text-muted-foreground hover:border-primary/40 hover:text-foreground"
           >
-            <Keyboard className="h-3.5 w-3.5" />
+            <AppIcon name="Keyboard" className="h-3.5 w-3.5" />
           </button>
         </div>
         {showShortcuts && (
@@ -410,7 +380,7 @@ export function InboxView() {
               onClick={undoLastCapture}
               className="tech-transition inline-flex items-center gap-1 text-[11px] font-medium text-primary hover:underline"
             >
-              <Undo2 className="h-3.5 w-3.5" />
+              <AppIcon name="Undo2" className="h-3.5 w-3.5" />
               Undo
             </button>
           </div>
@@ -447,23 +417,17 @@ export function InboxView() {
                   }}
                   className="min-w-0 flex-1 rounded-md border border-border bg-background/70 px-2 py-1 text-[11px] text-foreground focus:border-primary/50 focus:outline-none sm:w-64"
                 />
-                <button
-                  type="button"
-                  aria-label="Save name"
-                  disabled={!dupRenameValue.trim()}
-                  onClick={() => { resolveDupNotice("rename", dupRenameValue); setDupRenaming(false); }}
-                  className="tech-transition inline-flex items-center gap-1 rounded-md bg-primary px-2 py-1 text-[11px] font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
-                >
-                  <Check className="h-3.5 w-3.5" />
+                <Button size="none" radius="keep" layout="inline-flex items-center" type="button" aria-label="Save name" disabled={!dupRenameValue.trim()} onClick={() => { resolveDupNotice("rename", dupRenameValue); setDupRenaming(false); }} className="gap-1 rounded-md px-2 py-1 text-[11px]">
+                  <AppIcon name="Check" className="h-3.5 w-3.5" />
                   Save
-                </button>
+                </Button>
                 <button
                   type="button"
                   aria-label="Cancel rename"
                   onClick={() => setDupRenaming(false)}
                   className="tech-transition text-muted-foreground hover:text-foreground"
                 >
-                  <X className="h-3.5 w-3.5" />
+                  <AppIcon name="X" className="h-3.5 w-3.5" />
                 </button>
               </span>
             ) : (
@@ -494,21 +458,17 @@ export function InboxView() {
                     </button>
                   </>
                 )}
-                <button
-                  type="button"
-                  onClick={() => { setDupRenameValue(dupNotice.title); setDupRenaming(true); }}
-                  className="tech-transition inline-flex items-center gap-1 text-[11px] font-medium text-muted-foreground hover:text-foreground"
-                >
-                  <Pencil className="h-3 w-3" />
+                <Button variant="text" size="none" layout="inline-flex items-center" type="button" onClick={() => { setDupRenameValue(dupNotice.title); setDupRenaming(true); }} className="gap-1 text-[11px]">
+                  <AppIcon name="Pencil" className="h-3 w-3" />
                   Rename existing
-                </button>
+                </Button>
                 <button
                   type="button"
                   aria-label="Dismiss"
                   onClick={() => resolveDupNotice("dismiss")}
                   className="tech-transition text-muted-foreground hover:text-foreground"
                 >
-                  <X className="h-3.5 w-3.5" />
+                  <AppIcon name="X" className="h-3.5 w-3.5" />
                 </button>
               </span>
             )}
@@ -527,23 +487,18 @@ export function InboxView() {
                 {selectedIds.size} selected
               </span>
               <div className="ml-auto flex items-center gap-1">
-                <BulkBtn icon={Lightbulb} onClick={() => bulk("SOMEDAY")}>
+                <BulkBtn icon={themedIcon("Lightbulb")} onClick={() => bulk("SOMEDAY")}>
                   Someday
                 </BulkBtn>
-                <BulkBtn icon={FileText} onClick={() => bulk("REFERENCE")}>
+                <BulkBtn icon={themedIcon("FileText")} onClick={() => bulk("REFERENCE")}>
                   Reference
                 </BulkBtn>
-                <BulkBtn icon={Trash2} danger onClick={bulkDelete}>
+                <BulkBtn icon={themedIcon("Trash2")} danger onClick={bulkDelete}>
                   Delete
                 </BulkBtn>
-                <button
-                  type="button"
-                  onClick={clearSelection}
-                  className="tech-transition rounded-md p-1 text-muted-foreground hover:text-foreground"
-                  aria-label="Clear selection"
-                >
-                  <X className="h-4 w-4" />
-                </button>
+                <Button variant="text" size="icon-xs" radius="keep" layout="" type="button" onClick={clearSelection} aria-label="Clear selection" className="rounded-md">
+                  <AppIcon name="X" className="h-4 w-4" />
+                </Button>
               </div>
             </div>
           ) : (
@@ -557,22 +512,22 @@ export function InboxView() {
                   title="Filtered by source — change it in the sidebar"
                 >
                   {sourceFilter === "local" ? (
-                    <HardDrive className="h-3 w-3" />
+                    <AppIcon name="HardDrive" className="h-3 w-3" />
                   ) : (
-                    <Cloud className="h-3 w-3" />
+                    <AppIcon name="Cloud" className="h-3 w-3" />
                   )}
                   {sourceFilter === "local" ? "Mine" : "ClickUp"}
                 </span>
               )}
               {processed > 0 && (
                 <span className="hidden items-center gap-1 whitespace-nowrap text-[11px] text-success sm:inline-flex">
-                  <CheckCircle2 className="h-3 w-3" />
+                  <AppIcon name="CheckCircle2" className="h-3 w-3" />
                   {processed} processed
                 </span>
               )}
               {isAging && oldest && !showTickler && (
                 <span className="inline-flex items-center gap-1 whitespace-nowrap rounded-full bg-warning/10 px-2 py-0.5 text-[10px] font-medium text-warning">
-                  <AlertCircle className="h-3 w-3" />
+                  <AppIcon name="AlertCircle" className="h-3 w-3" />
                   oldest {relativeTime(oldest.createdAt)}
                 </span>
               )}
@@ -590,7 +545,7 @@ export function InboxView() {
                 {!showTickler && (
                   <>
                     <div className="tech-transition flex min-w-0 max-w-sm flex-1 items-center gap-2 rounded-lg border border-border bg-card px-2.5 py-1.5 focus-within:border-primary/50">
-                      <Search className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                      <AppIcon name="Search" className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                       <input
                         value={search}
                         onChange={(e) => setSearch(e.target.value)}
@@ -607,7 +562,7 @@ export function InboxView() {
                       className="tech-transition inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg border border-border px-2 py-1.5 text-xs text-muted-foreground hover:text-foreground"
                       title="Toggle sort order"
                     >
-                      <ArrowDownUp className="h-3.5 w-3.5" />
+                      <AppIcon name="ArrowDownUp" className="h-3.5 w-3.5" />
                       <span className="hidden lg:inline">
                         {sortOrder === "newest" ? "Newest" : "Oldest"}
                       </span>
@@ -621,9 +576,9 @@ export function InboxView() {
                       className="tech-transition inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-lg border border-border px-2 py-1.5 text-xs text-muted-foreground hover:text-foreground"
                     >
                       {density === "cards" ? (
-                        <LayoutList className="h-3.5 w-3.5" />
+                        <AppIcon name="LayoutList" className="h-3.5 w-3.5" />
                       ) : (
-                        <LayoutGrid className="h-3.5 w-3.5" />
+                        <AppIcon name="LayoutGrid" className="h-3.5 w-3.5" />
                       )}
                       <span className="hidden lg:inline">
                         {density === "cards" ? "List" : "Cards"}
@@ -642,7 +597,7 @@ export function InboxView() {
                         : "text-muted-foreground hover:bg-secondary hover:text-foreground",
                     ].join(" ")}
                   >
-                    <CalendarClock className="h-3.5 w-3.5" />
+                    <AppIcon name="CalendarClock" className="h-3.5 w-3.5" />
                     <span className="hidden sm:inline">Tickler&nbsp;</span>
                     {tickler.length}
                   </button>
@@ -655,9 +610,9 @@ export function InboxView() {
                     title="Process the oldest item first (GTD FIFO)"
                     className="tech-transition inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md bg-primary/10 px-2.5 py-1.5 text-xs font-medium text-primary hover:bg-primary/20 disabled:opacity-40"
                   >
-                    <Sparkles className="h-3.5 w-3.5" />
+                    <AppIcon name="Sparkles" className="h-3.5 w-3.5" />
                     Clarify next
-                    <ArrowRight className="h-3.5 w-3.5" />
+                    <AppIcon name="ArrowRight" className="h-3.5 w-3.5" />
                   </button>
                 )}
               </div>
@@ -671,14 +626,14 @@ export function InboxView() {
         <div className="w-full px-4 py-4 sm:py-3">
           {loading ? (
             <div className="flex flex-col items-center justify-center gap-2 py-16 text-center">
-              <Loader2 className="h-6 w-6 animate-spin text-muted-foreground/60" />
+              <AppIcon name="Loader2" className="h-6 w-6 animate-spin text-muted-foreground/60" />
               <p className="text-xs text-muted-foreground">Loading your inbox…</p>
             </div>
           ) : showTickler ? (
             <TicklerList items={tickler} onUndefer={undeferItem} />
           ) : activeInbox.length === 0 ? (
             <div className="flex flex-col items-center justify-center gap-2 py-16 text-center">
-              <CheckCircle2 className="h-9 w-9 text-success/70" />
+              <AppIcon name="CheckCircle2" className="h-9 w-9 text-success/70" />
               <p className="text-sm font-medium text-foreground">
                 Inbox zero. Mind like water.
               </p>
@@ -690,7 +645,7 @@ export function InboxView() {
             </div>
           ) : visible.length === 0 ? (
             <div className="flex flex-col items-center justify-center gap-2 py-16 text-center">
-              <SearchX className="h-8 w-8 text-muted-foreground/50" />
+              <AppIcon name="SearchX" className="h-8 w-8 text-muted-foreground/50" />
               <p className="text-sm text-muted-foreground">
                 No captures match this filter.
               </p>
@@ -764,7 +719,7 @@ function TicklerList({
             key={item.id}
             className="flex items-center gap-3 rounded-xl border border-border bg-card px-4 py-3"
           >
-            <CalendarClock className="h-4 w-4 shrink-0 text-primary/70" />
+            <AppIcon name="CalendarClock" className="h-4 w-4 shrink-0 text-primary/70" />
             <div className="min-w-0 flex-1">
               <p className="truncate text-sm text-foreground">{item.title}</p>
               <p className="text-[11px] text-muted-foreground">
@@ -776,7 +731,7 @@ function TicklerList({
               onClick={() => onUndefer(item.id)}
               className="tech-transition inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-[11px] text-muted-foreground hover:text-foreground"
             >
-              <RotateCcw className="h-3 w-3" />
+              <AppIcon name="RotateCcw" className="h-3 w-3" />
               Un-snooze
             </button>
           </div>
@@ -792,7 +747,7 @@ function BulkBtn({
   danger,
   children,
 }: {
-  icon: typeof Lightbulb;
+  icon: ThemedIcon;
   onClick: () => void;
   danger?: boolean;
   children: React.ReactNode;

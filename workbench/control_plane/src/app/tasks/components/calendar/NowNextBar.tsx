@@ -1,9 +1,7 @@
 "use client";
 
-import {
-  Check,
-  Play,
-} from "lucide-react";
+import Button from "@/components/ui/Button";
+import Icon from "@/components/Icon";
 import { GtdItem } from "../../lib/types";
 import {
   startOfDay,
@@ -113,7 +111,7 @@ export function NowNextBar({
               title="Mark done"
               className="tech-transition flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-muted-foreground/50 text-transparent hover:border-success hover:bg-success/10 hover:text-success"
             >
-              <Check className="h-3 w-3" strokeWidth={3} />
+              <Icon name="Check" className="h-3 w-3" strokeWidth={3} />
             </button>
             <button
               type="button"
@@ -129,7 +127,7 @@ export function NowNextBar({
               }
               className="tech-transition flex h-5 shrink-0 items-center gap-1 rounded-full border border-primary/50 px-2 text-[10px] font-semibold text-primary hover:bg-primary/10"
             >
-              <Play className="h-2.5 w-2.5" fill="currentColor" />
+              <Icon name="Play" className="h-2.5 w-2.5" fill="currentColor" />
               Focus
             </button>
             <button
@@ -157,17 +155,12 @@ export function NowNextBar({
             </button>
           </>
         ) : (
-          <button
-            type="button"
-            onClick={onFillGap}
-            title="See what fits in this gap — 2-minute pile first"
-            className="min-w-0 flex-1 truncate text-left text-[12px] text-muted-foreground hover:text-foreground"
-          >
+          <Button variant="text" size="none" layout="" type="button" onClick={onFillGap} title="See what fits in this gap — 2-minute pile first" className="min-w-0 flex-1 truncate text-left text-[12px]">
             Open right now —{" "}
             <span className="font-medium text-primary">
               fill the gap with quick wins?
             </span>
-          </button>
+          </Button>
         )}
       </div>
 

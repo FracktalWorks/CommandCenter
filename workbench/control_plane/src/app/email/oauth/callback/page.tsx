@@ -1,8 +1,8 @@
 "use client";
 
+import Icon from "@/components/Icon";
 import { useEffect, useState, Suspense } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
-import { CheckCircle2, XCircle, ArrowRight, Mail, Settings } from "lucide-react";
 
 /**
  * Normalise the post-auth redirect target to a safe internal path.
@@ -74,7 +74,7 @@ function CallbackContent() {
             /* Success */
             <div className="flex flex-col items-center text-center gap-4">
               <div className="w-14 h-14 rounded-full bg-emerald-500/15 flex items-center justify-center">
-                <CheckCircle2 className="w-8 h-8 text-emerald-400" />
+                <Icon name="CheckCircle2" className="w-8 h-8 text-emerald-400" />
               </div>
               <div>
                 <h2 className="text-lg font-semibold text-foreground">Account Connected</h2>
@@ -95,13 +95,13 @@ function CallbackContent() {
                   href="/email"
                   className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors"
                 >
-                  <Mail size={14} /> Open Email
+                  <Icon name="Mail" size={14} /> Open Email
                 </a>
                 <a
                   href="/integrations"
                   className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg border border-border text-sm text-foreground hover:bg-secondary transition-colors"
                 >
-                  <Settings size={14} /> Integrations
+                  <Icon name="Settings" size={14} /> Integrations
                 </a>
               </div>
             </div>
@@ -111,7 +111,7 @@ function CallbackContent() {
             /* Error */
             <div className="flex flex-col items-center text-center gap-4">
               <div className="w-14 h-14 rounded-full bg-destructive/15 flex items-center justify-center">
-                <XCircle className="w-8 h-8 text-destructive" />
+                <Icon name="XCircle" className="w-8 h-8 text-destructive" />
               </div>
               <div>
                 <h2 className="text-lg font-semibold text-foreground">Connection Failed</h2>
@@ -122,13 +122,13 @@ function CallbackContent() {
                   href="/integrations"
                   className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors"
                 >
-                  <ArrowRight size={14} /> Try Again
+                  <Icon name="ArrowRight" size={14} /> Try Again
                 </a>
                 <a
                   href="/email"
                   className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg border border-border text-sm text-foreground hover:bg-secondary transition-colors"
                 >
-                  <Mail size={14} /> Email Client
+                  <Icon name="Mail" size={14} /> Email Client
                 </a>
               </div>
             </div>

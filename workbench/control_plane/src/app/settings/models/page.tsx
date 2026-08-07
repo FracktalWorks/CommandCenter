@@ -10,6 +10,7 @@
  *   3. Tiers — compact rows, expand to edit model assignment
  */
 
+import Button from "@/components/ui/Button";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { LLMConfig, ProviderInfo, ModelInfo, TierInfo } from "@/lib/model-types";
 import { PROVIDER_GUIDES, PROVIDER_COLOURS, PROVIDER_ICONS } from "@/lib/model-types";
@@ -318,11 +319,7 @@ export default function ModelsPage() {
           </div>
           <div className="flex items-center gap-1.5 shrink-0">
             {!isStt && (
-              <button
-                onClick={(e) => { e.stopPropagation(); handleTestTier(tier.tier_name); }}
-                disabled={isTesting || !tier.provider_configured}
-                className="rounded-lg border border-border px-2.5 py-1 text-[11px] text-muted-foreground hover:text-foreground hover:border-primary/30 disabled:opacity-40 tech-transition"
-              >{isTesting ? "…" : "Test"}</button>
+              <Button variant="secondary" size="none" layout="" onClick={(e) => { e.stopPropagation(); handleTestTier(tier.tier_name); }} disabled={isTesting || !tier.provider_configured} className="px-2.5 py-1 text-[11px]">{isTesting ? "…" : "Test"}</Button>
             )}
             <svg className={`w-4 h-4 text-muted-foreground/40 tech-transition ${isEditing ? "rotate-90" : ""}`} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
               <path d="M6 3l5 5-5 5" />
@@ -401,11 +398,7 @@ export default function ModelsPage() {
 
             {/* Actions */}
             <div className="flex items-center gap-2 pt-1">
-              <button
-                onClick={() => handleSaveTier(tier.tier_name, editModel, (editProvider === "ollama" || editProvider === "vllm") ? editApiBase || undefined : undefined)}
-                disabled={savingTier || !editModel}
-                className="rounded-lg bg-primary px-4 py-2 text-xs font-medium text-primary-foreground hover:opacity-90 disabled:opacity-40 tech-transition"
-              >{savingTier ? "Saving…" : "Save"}</button>
+              <Button size="none" layout="" onClick={() => handleSaveTier(tier.tier_name, editModel, (editProvider === "ollama" || editProvider === "vllm") ? editApiBase || undefined : undefined)} disabled={savingTier || !editModel} className="px-4 py-2 text-xs">{savingTier ? "Saving…" : "Save"}</Button>
               <button onClick={() => { setEditingTier(null); setTestResult(null); setTestedTier(null); }}
                 className="rounded-lg border border-border px-4 py-2 text-xs text-muted-foreground hover:text-foreground tech-transition"
               >Cancel</button>
@@ -539,14 +532,12 @@ export default function ModelsPage() {
                         Synced {new Date(lastSynced).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
                       </span>
                     )}
-                    <button onClick={handleRefreshModels} disabled={refreshing || configuredProviderIds.length === 0}
-                      className="flex items-center gap-1 rounded-lg border border-border px-2.5 py-1 text-[11px] text-muted-foreground hover:text-foreground hover:border-primary/30 disabled:opacity-40 tech-transition"
-                      title="Fetch latest models from all configured providers">
+                    <Button variant="secondary" size="none" layout="flex items-center" onClick={handleRefreshModels} disabled={refreshing || configuredProviderIds.length === 0} title="Fetch latest models from all configured providers" className="gap-1 px-2.5 py-1 text-[11px]">
                       <svg className={`w-3 h-3 ${refreshing ? "animate-spin" : ""}`} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
                         <path d="M14 8A6 6 0 1 1 8 2" /><path d="M14 2v4h-4" />
                       </svg>
                       {refreshing ? "Syncing…" : "Refresh"}
-                    </button>
+                    </Button>
                   </div>
                 </div>
                 <div className="px-4 pb-2">
@@ -762,9 +753,9 @@ function ProviderDetail({ provider, guide, copilotScopeOk, onKeySet, onKeyDiscar
               </span>
             )
           )}
-          <button onClick={onClose} className="p-1 rounded-md hover:bg-secondary text-muted-foreground hover:text-foreground tech-transition">
+          <Button variant="ghost" size="icon-xs" radius="keep" layout="" onClick={onClose} className="rounded-md">
             <svg className="w-4 h-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M4 4l8 8M12 4l-8 8" /></svg>
-          </button>
+          </Button>
         </div>
       </div>
       <div className="flex-1 overflow-y-auto p-4 space-y-3">
@@ -810,8 +801,7 @@ function ProviderDetail({ provider, guide, copilotScopeOk, onKeySet, onKeyDiscar
               <button onClick={() => setShow((s) => !s)} className="absolute right-2 top-1/2 -translate-y-1/2 text-[10px] text-muted-foreground hover:text-foreground">{show ? "hide" : "show"}</button>
             </div>
             {err && <p className="text-[10px] text-destructive">{err}</p>}
-            <button onClick={handleSave} disabled={saving || !keyVal.trim()}
-              className="w-full rounded-lg bg-primary px-3 py-2 text-xs font-medium text-primary-foreground hover:opacity-90 disabled:opacity-40 tech-transition">{saving ? "Saving & restarting LiteLLM…" : "Save & apply key"}</button>
+            <Button size="none" layout="" onClick={handleSave} disabled={saving || !keyVal.trim()} className="w-full px-3 py-2 text-xs">{saving ? "Saving & restarting LiteLLM…" : "Save & apply key"}</Button>
             {saving && <p className="text-[9px] text-muted-foreground text-center">Writing key and restarting (~25s)…</p>}
             {provider.id === "github" && (
               <div className="rounded-lg border border-primary/20 bg-primary/5 p-3 space-y-2">
@@ -880,9 +870,9 @@ function ModelDetailPanel({ model, enabled, busy, onToggle, onClose }: {
             <span className="font-mono text-[10px] text-muted-foreground truncate">{model.id}</span>
           </div>
         </div>
-        <button onClick={onClose} className="p-1 rounded-md hover:bg-secondary text-muted-foreground hover:text-foreground tech-transition shrink-0 ml-2">
+        <Button variant="ghost" size="icon-xs" radius="keep" layout="" onClick={onClose} className="rounded-md shrink-0 ml-2">
           <svg className="w-4 h-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M4 4l8 8M12 4l-8 8" /></svg>
-        </button>
+        </Button>
       </div>
 
       {/* Body */}

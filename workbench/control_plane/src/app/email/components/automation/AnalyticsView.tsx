@@ -14,11 +14,8 @@
  * Every list here ends in a button.
  */
 
+import AppIcon, { themedIcon } from "@/components/Icon";
 import { useEffect, useMemo, useState } from "react";
-import {
-  ArrowDownRight, ArrowUpRight, BarChart3, Clock, Inbox, Loader2, MailMinus,
-  Sparkles, TriangleAlert, Users, Minus, ArrowRight, CheckCheck, RotateCcw,
-} from "lucide-react";
 import { getAnalyticsOverview, retryFailedRuleActions } from "../../lib/api";
 import { AnalyticsOverview, AutomationFeature, NoisySender } from "../../lib/types";
 
@@ -107,7 +104,7 @@ export function AnalyticsView({ accountId, onNavigate }: AnalyticsViewProps) {
   if (error) {
     return (
       <div className="h-full flex flex-col items-center justify-center gap-3 px-6 text-center">
-        <TriangleAlert size={20} className="text-destructive" />
+        <AppIcon name="TriangleAlert" size={20} className="text-destructive" />
         <p className="text-sm text-foreground">{error}</p>
         <button
           onClick={() => setRefresh((n) => n + 1)}
@@ -189,7 +186,7 @@ function KeepingUp({ data }: { data: AnalyticsOverview }) {
   return (
     <section>
       <SectionHead
-        icon={Clock}
+        icon={themedIcon("Clock")}
         title="Keeping up"
         note="Measured per conversation, not per message — five emails in one thread are one thing to answer."
       />
@@ -303,12 +300,12 @@ function Delta({
   if (now === prev) {
     return (
       <span className="flex items-center gap-0.5 text-[11px] text-muted-foreground">
-        <Minus size={11} /> flat
+        <AppIcon name="Minus" size={11} /> flat
       </span>
     );
   }
   const up = now > prev;
-  const Icon = up ? ArrowUpRight : ArrowDownRight;
+  const arrow = up ? "ArrowUpRight" : "ArrowDownRight";
   const color =
     better === "neutral"
       ? "var(--muted-foreground)"
@@ -326,7 +323,7 @@ function Delta({
       style={{ color }}
       title={`${up ? "Up" : "Down"} from ${prev.toLocaleString()} in the previous period`}
     >
-      <Icon size={11} />
+      <AppIcon name={arrow} size={11} />
       {shown}
     </span>
   );
@@ -345,7 +342,7 @@ function Backlog({
   return (
     <section>
       <SectionHead
-        icon={Users}
+        icon={themedIcon("Users")}
         title="Open threads right now"
         note="Not affected by the range above — a conversation left hanging in March is the whole point."
       />
@@ -361,7 +358,7 @@ function Backlog({
       <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px]">
         {blind ? (
           <>
-            <TriangleAlert size={11} className="text-accent flex-shrink-0" />
+            <AppIcon name="TriangleAlert" size={11} className="text-accent flex-shrink-0" />
             <span className="text-foreground/80">
               {`Reply Zero has read ${coverage.classified.toLocaleString()} of ${coverage.total.toLocaleString()} conversations (${Math.round(coverage.rate * 100)}%).`}
             </span>
@@ -371,7 +368,7 @@ function Backlog({
           </>
         ) : (
           <>
-            <CheckCheck size={11} className="text-success flex-shrink-0" />
+            <AppIcon name="CheckCheck" size={11} className="text-success flex-shrink-0" />
             <span className="text-muted-foreground">
               {`Reply Zero has classified all ${coverage.total.toLocaleString()} conversations, so these counts are complete.`}
             </span>
@@ -494,7 +491,7 @@ function Volume({ data, days }: { data: AnalyticsOverview; days: number }) {
 
   return (
     <section>
-      <SectionHead icon={BarChart3} title="Mail in and out" />
+      <SectionHead icon={themedIcon("BarChart3")} title="Mail in and out" />
       {bars.length === 0 ? (
         <Empty>No mail arrived in this period.</Empty>
       ) : (
@@ -573,7 +570,7 @@ function NeverReplied({
   return (
     <section>
       <SectionHead
-        icon={MailMinus}
+        icon={themedIcon("MailMinus")}
         title="You have never replied to these"
         note="Ranked by unread, not volume — the loudest sender is usually a colleague, and that is not a problem you can fix."
         action={
@@ -582,7 +579,7 @@ function NeverReplied({
               onClick={() => onNavigate("unsubscribe")}
               className="flex items-center gap-1 text-xs text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded"
             >
-              Clean these up <ArrowRight size={12} />
+              Clean these up <AppIcon name="ArrowRight" size={12} />
             </button>
           ) : null
         }
@@ -655,7 +652,7 @@ function Arrivals({ data }: { data: AnalyticsOverview }) {
 
   return (
     <section>
-      <SectionHead icon={Inbox} title="What arrived" />
+      <SectionHead icon={themedIcon("Inbox")} title="What arrived" />
       {cats.length === 0 ? (
         <Empty>No mail arrived in this period.</Empty>
       ) : (
@@ -723,7 +720,7 @@ function Assistant({
   return (
     <section className="pb-4">
       <SectionHead
-        icon={Sparkles}
+        icon={themedIcon("Sparkles")}
         title="The assistant"
         note="Not just how much it did — whether it is doing it correctly."
         action={
@@ -732,7 +729,7 @@ function Assistant({
               onClick={() => onNavigate("ai-settings")}
               className="flex items-center gap-1 text-xs text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded"
             >
-              AI Settings <ArrowRight size={12} />
+              AI Settings <AppIcon name="ArrowRight" size={12} />
             </button>
           ) : null
         }
@@ -888,7 +885,7 @@ function RetryFailed({ accountId }: { accountId: string }) {
         title="Re-applies the label and folder move only — never drafts, sends or forwards"
         className="flex items-center gap-1 text-[10px] text-primary hover:underline disabled:opacity-60 disabled:cursor-default focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded"
       >
-        {busy ? <Loader2 className="animate-spin" size={10} /> : <RotateCcw size={10} />}
+        {busy ? <AppIcon name="Loader2" className="animate-spin" size={10} /> : <AppIcon name="RotateCcw" size={10} />}
         {busy ? "Re-applying…" : "Re-apply them (no drafts or sends)"}
       </button>
       {result && (
@@ -949,7 +946,7 @@ function Skeleton() {
       </div>
       <div className="h-[190px] rounded-xl border border-border bg-card animate-pulse" />
       <div className="flex items-center justify-center gap-2 text-[11px] text-muted-foreground">
-        <Loader2 className="animate-spin" size={12} />
+        <AppIcon name="Loader2" className="animate-spin" size={12} />
         Crunching your mailbox…
       </div>
     </div>

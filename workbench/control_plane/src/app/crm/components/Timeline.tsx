@@ -15,26 +15,19 @@
  * editable history is not a record of anything.
  */
 
-import {
-  ArrowRight,
-  CheckCircle2,
-  Circle,
-  ListTodo,
-  MessageSquare,
-  Phone,
-  Users,
-} from "lucide-react";
+import Icon from "@/components/Icon";
+import Button from "@/components/ui/Button";
 import { useState } from "react";
 import { dateTime, dwellLabel } from "../lib/format";
 import type { TimelineEntry } from "../lib/types";
 
 type Composable = "note" | "call" | "meeting" | "task";
 
-const COMPOSERS: { id: Composable; label: string; icon: typeof MessageSquare }[] = [
-  { id: "note", label: "Note", icon: MessageSquare },
-  { id: "task", label: "Task", icon: ListTodo },
-  { id: "call", label: "Call", icon: Phone },
-  { id: "meeting", label: "Meeting", icon: Users },
+const COMPOSERS: { id: Composable; label: string; icon: string }[] = [
+  { id: "note", label: "Note", icon: "MessageSquare" },
+  { id: "task", label: "Task", icon: "ListTodo" },
+  { id: "call", label: "Call", icon: "Phone" },
+  { id: "meeting", label: "Meeting", icon: "Users" },
 ];
 
 export default function Timeline({
@@ -76,7 +69,7 @@ export default function Timeline({
     <div className="flex h-full flex-col">
       <div className="shrink-0 border-b border-border p-3">
         <div className="mb-2 flex items-center gap-1">
-          {COMPOSERS.map(({ id, label, icon: Icon }) => (
+          {COMPOSERS.map(({ id, label, icon }) => (
             <button
               key={id}
               onClick={() => setKind(id)}
@@ -86,7 +79,7 @@ export default function Timeline({
                   : "text-muted-foreground hover:bg-secondary hover:text-foreground"
               }`}
             >
-              <Icon className="w-3 h-3" />
+              <Icon name={icon} className="w-3 h-3" />
               {label}
             </button>
           ))}
@@ -109,13 +102,16 @@ export default function Timeline({
               className="rounded-lg border border-border bg-background px-2 py-1 text-xs text-foreground"
             />
           )}
-          <button
+          <Button
+            variant="primary"
+            size="sm"
             onClick={submit}
-            disabled={saving || !draft.trim()}
-            className="ml-auto rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90 disabled:opacity-40 tech-transition"
+            loading={saving}
+            disabled={!draft.trim()}
+            className="ml-auto"
           >
             Log
-          </button>
+          </Button>
         </div>
       </div>
 
@@ -160,7 +156,7 @@ function StatusEntry({ entry }: { entry: TimelineEntry }) {
   const dwell = dwellLabel(change.dwell_seconds);
   return (
     <div className="flex items-start gap-2">
-      <ArrowRight className="mt-0.5 w-3.5 h-3.5 shrink-0 text-muted-foreground" />
+      <Icon name="ArrowRight" className="mt-0.5 w-3.5 h-3.5 shrink-0 text-muted-foreground" />
       <div className="min-w-0 flex-1">
         <p className="text-xs text-foreground">
           {change.from_status ?? "—"} <span className="opacity-50">→</span>{" "}
@@ -183,14 +179,14 @@ function StatusEntry({ entry }: { entry: TimelineEntry }) {
   );
 }
 
-const ACTIVITY_ICONS = {
-  note: MessageSquare,
-  call: Phone,
-  meeting: Users,
-  task: ListTodo,
-  status_change: ArrowRight,
-  system: Circle,
-} as const;
+const ACTIVITY_ICONS: Record<string, string> = {
+  note: "MessageSquare",
+  call: "Phone",
+  meeting: "Users",
+  task: "ListTodo",
+  status_change: "ArrowRight",
+  system: "Circle",
+};
 
 function ActivityEntry({
   entry,
@@ -200,7 +196,7 @@ function ActivityEntry({
   onToggleTask: (activityId: string, completed: boolean) => void;
 }) {
   const activity = entry.activity!;
-  const Icon = ACTIVITY_ICONS[activity.type] ?? Circle;
+  const iconName = ACTIVITY_ICONS[activity.type] ?? "Circle";
   const isTask = activity.type === "task";
   const done = Boolean(activity.completed_at);
 
@@ -213,13 +209,13 @@ function ActivityEntry({
           aria-label={done ? "Reopen task" : "Complete task"}
         >
           {done ? (
-            <CheckCircle2 className="w-3.5 h-3.5 text-success" />
+            <Icon name="CheckCircle2" className="w-3.5 h-3.5 text-success" />
           ) : (
-            <Circle className="w-3.5 h-3.5" />
+            <Icon name="Circle" className="w-3.5 h-3.5" />
           )}
         </button>
       ) : (
-        <Icon className="mt-0.5 w-3.5 h-3.5 shrink-0 text-muted-foreground" />
+        <Icon name={iconName} className="mt-0.5 w-3.5 h-3.5 shrink-0 text-muted-foreground" />
       )}
       <div className="min-w-0 flex-1">
         {activity.subject && (

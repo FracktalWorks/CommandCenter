@@ -1,7 +1,8 @@
 "use client";
 
+import Button from "@/components/ui/Button";
+import Icon from "@/components/Icon";
 import { useTheme } from "next-themes";
-import { Sun, Moon } from "lucide-react";
 import { useEffect, useState } from "react";
 
 /**
@@ -28,14 +29,9 @@ export default function ThemeToggle() {
   const isDark = theme === "dark";
 
   return (
-    <button
-      onClick={() => setTheme(isDark ? "light" : "dark")}
-      className="rounded-lg p-1.5 text-muted-foreground hover:bg-secondary hover:text-foreground tech-transition"
-      aria-label={isDark ? "Switch to light theme" : "Switch to dark theme"}
-      title={isDark ? "Light mode" : "Dark mode"}
-    >
-      {isDark ? <Sun size={15} /> : <Moon size={15} />}
-    </button>
+    <Button variant="ghost" size="icon-sm" layout="" onClick={() => setTheme(isDark ? "light" : "dark")} aria-label={isDark ? "Switch to light theme" : "Switch to dark theme"} title={isDark ? "Light mode" : "Dark mode"}>
+      {isDark ? <Icon name="Sun" size={15} /> : <Icon name="Moon" size={15} />}
+    </Button>
   );
 }
 
@@ -57,15 +53,12 @@ export function ThemeToggleMenuItem({ onClick }: { onClick?: () => void }) {
   const isDark = theme === "dark";
 
   return (
-    <button
-      onClick={() => {
+    <Button variant="ghost" size="none" layout="flex items-center" onClick={() => {
         setTheme(isDark ? "light" : "dark");
         onClick?.();
-      }}
-      className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm text-muted-foreground hover:bg-secondary hover:text-foreground tech-transition"
-    >
-      {isDark ? <Sun size={16} className="shrink-0" /> : <Moon size={16} className="shrink-0" />}
+      }} className="w-full gap-3 px-3 py-2.5 text-sm">
+      {isDark ? <Icon name="Sun" size={16} className="shrink-0" /> : <Icon name="Moon" size={16} className="shrink-0" />}
       {isDark ? "Light mode" : "Dark mode"}
-    </button>
+    </Button>
   );
 }

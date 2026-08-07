@@ -1,12 +1,7 @@
 "use client";
 
+import AppIcon, { themedIcon } from "@/components/Icon";
 import { useState } from "react";
-import {
-  Inbox, Send, FileText, Trash2, Star, Archive, Tag,
-  Plus, ChevronDown, ChevronRight, Check,
-  ShieldAlert, Folder, Mails, MailMinus, Sparkles,
-  BarChart3, Zap, LayoutDashboard, MessageSquare, Clock,
-} from "lucide-react";
 import { EmailAccount, EmailFolder, AutomationFeature } from "../lib/types";
 
 interface AccountSidebarProps {
@@ -36,11 +31,11 @@ const AUTOMATION_ITEMS: {
   label: string;
   icon: React.ElementType;
 }[] = [
-  { key: "chat", label: "Chat", icon: MessageSquare },
-  { key: "digest", label: "Dashboard", icon: LayoutDashboard },
-  { key: "unsubscribe", label: "Email Cleaner", icon: MailMinus },
-  { key: "ai-settings", label: "AI Settings", icon: Sparkles },
-  { key: "analytics", label: "Analytics", icon: BarChart3 },
+  { key: "chat", label: "Chat", icon: themedIcon("MessageSquare") },
+  { key: "digest", label: "Dashboard", icon: themedIcon("LayoutDashboard") },
+  { key: "unsubscribe", label: "Email Cleaner", icon: themedIcon("MailMinus") },
+  { key: "ai-settings", label: "AI Settings", icon: themedIcon("Sparkles") },
+  { key: "analytics", label: "Analytics", icon: themedIcon("BarChart3") },
 ];
 
 export function AccountSidebar({
@@ -73,7 +68,7 @@ export function AccountSidebar({
           title="Add email account"
           onClick={onAddAccount}
         >
-          <Plus size={14} />
+          <AppIcon name="Plus" size={14} />
         </button>
       </div>
 
@@ -83,7 +78,7 @@ export function AccountSidebar({
           onClick={() => setAccountsExpanded((v) => !v)}
           className="flex items-center gap-1.5 w-full px-2 py-1 text-xs text-muted-foreground hover:text-sidebar-foreground transition-colors"
         >
-          {accountsExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+          {accountsExpanded ? <AppIcon name="ChevronDown" size={12} /> : <AppIcon name="ChevronRight" size={12} />}
           <span>Email Accounts</span>
         </button>
 
@@ -116,7 +111,7 @@ export function AccountSidebar({
                     <div className="flex items-center gap-1">
                       <span className="text-xs font-medium truncate">{account.label}</span>
                       {account.isDefault && (
-                        <Star
+                        <AppIcon name="Star"
                           size={10}
                           className="text-amber-400 fill-amber-400 flex-shrink-0"
                           aria-label="Default mailbox"
@@ -138,11 +133,11 @@ export function AccountSidebar({
                     title="Set as default mailbox"
                     className="p-1 rounded opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-amber-400 transition-opacity flex-shrink-0"
                   >
-                    <Star size={11} />
+                    <AppIcon name="Star" size={11} />
                   </button>
                 )}
                 {selectedAccountId === account.id && (
-                  <Check size={11} className="text-primary flex-shrink-0" />
+                  <AppIcon name="Check" size={11} className="text-primary flex-shrink-0" />
                 )}
                 {account.unreadCount > 0 && selectedAccountId !== account.id && (
                   <span className="bg-primary text-primary-foreground text-[9px] rounded-full px-1.5 py-0.5 flex-shrink-0">
@@ -163,7 +158,7 @@ export function AccountSidebar({
       {showAutomation && (
         <div className="flex-shrink-0 px-2 py-2.5">
           <div className="flex items-center gap-1.5 px-2 py-1 text-[10px] tracking-widest uppercase text-muted-foreground font-semibold">
-            <Zap size={11} className="text-primary" />
+            <AppIcon name="Zap" size={11} className="text-primary" />
             <span>Email Automation</span>
           </div>
           <div className="mt-1 space-y-0.5">
@@ -229,18 +224,18 @@ export function AccountSidebar({
 // Helper to map folder key to Lucide icon component.
 function getFolderIcon(key: string, type?: "system" | "user"): React.ElementType {
   const map: Record<string, React.ElementType> = {
-    all: Mails,
-    inbox: Inbox,
-    starred: Star,
-    snoozed: Clock,
-    sent: Send,
-    drafts: FileText,
-    archive: Archive,
-    junk: ShieldAlert,
-    labels: Tag,
-    trash: Trash2,
+    all: themedIcon("Mails"),
+    inbox: themedIcon("Inbox"),
+    starred: themedIcon("Star"),
+    snoozed: themedIcon("Clock"),
+    sent: themedIcon("Send"),
+    drafts: themedIcon("FileText"),
+    archive: themedIcon("Archive"),
+    junk: themedIcon("ShieldAlert"),
+    labels: themedIcon("Tag"),
+    trash: themedIcon("Trash2"),
   };
   if (map[key]) return map[key];
   // User-created provider folders/labels get a generic folder icon.
-  return type === "user" ? Folder : Inbox;
+  return type === "user" ? themedIcon("Folder") : themedIcon("Inbox");
 }

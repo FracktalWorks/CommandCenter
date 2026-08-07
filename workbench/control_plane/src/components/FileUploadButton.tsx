@@ -17,8 +17,8 @@
  * briefly.  On error it flashes red.
  */
 
+import Icon from "@/components/Icon";
 import { useRef, useState, useCallback } from "react";
-import { Paperclip, Loader2, CheckCircle, AlertCircle } from "lucide-react";
 import type { FileEntry } from "@/components/ArtifactSidebar";
 
 type UploadState =
@@ -119,13 +119,13 @@ export default function FileUploadButton({
           }`}
         >
           {state.phase === "uploading" ? (
-            <Loader2 size={18} className="animate-spin" />
+            <Icon name="Loader2" size={18} className="animate-spin" />
           ) : state.phase === "success" ? (
-            <CheckCircle size={18} />
+            <Icon name="CheckCircle" size={18} />
           ) : state.phase === "error" ? (
-            <AlertCircle size={18} />
+            <Icon name="AlertCircle" size={18} />
           ) : (
-            <Paperclip size={18} />
+            <Icon name="Paperclip" size={18} />
           )}
         </button>
       </>
@@ -168,23 +168,23 @@ export default function FileUploadButton({
 
       {state.phase === "uploading" ? (
         <div className="flex items-center justify-center gap-2 py-3 px-4 text-sm text-amber-400">
-          <Loader2 size={16} className="animate-spin" />
+          <Icon name="Loader2" size={16} className="animate-spin" />
           Uploading {state.count} file{state.count > 1 ? "s" : ""}…
         </div>
       ) : state.phase === "success" ? (
         <div className="flex items-center justify-center gap-2 py-3 px-4 text-sm text-emerald-400">
-          <CheckCircle size={16} />
+          <Icon name="CheckCircle" size={16} />
           Uploaded {state.files.length} file{state.files.length > 1 ? "s" : ""}
         </div>
       ) : state.phase === "error" ? (
         <div className="flex items-center justify-center gap-2 py-3 px-4 text-sm text-red-400">
-          <AlertCircle size={16} />
+          <Icon name="AlertCircle" size={16} />
           {state.message}
         </div>
       ) : (
         children ?? (
           <div className="flex items-center justify-center gap-2 py-3 px-4 text-sm text-muted-foreground">
-            <Paperclip size={16} />
+            <Icon name="Paperclip" size={16} />
             Drop files here or click to upload
           </div>
         )

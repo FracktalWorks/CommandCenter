@@ -15,7 +15,7 @@
  * pure and unit-tested. This file is composition and effects.
  */
 
-import { Kanban, Plus, RefreshCw, X } from "lucide-react";
+import Icon from "@/components/Icon";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import FilterPills from "@/components/FilterPills";
@@ -43,7 +43,7 @@ import {
 } from "./lib/urlState";
 
 const TABS = [
-  { id: "board", label: "Pipeline", icon: Kanban },
+  { id: "board", label: "Pipeline", icon: "Kanban" },
   { id: "deals", label: "Deals" },
   { id: "leads", label: "Leads" },
   { id: "contacts", label: "Contacts" },
@@ -167,7 +167,7 @@ function CrmPageInner() {
             className="rounded-lg border border-border p-2 text-muted-foreground hover:bg-secondary tech-transition"
             aria-label="Refresh"
           >
-            <RefreshCw className={`w-4 h-4 ${store.loading ? "animate-spin" : ""}`} />
+            <Icon name="RefreshCw" className={`w-4 h-4 ${store.loading ? "animate-spin" : ""}`} />
           </button>
           <button
             onClick={() =>
@@ -175,7 +175,7 @@ function CrmPageInner() {
             }
             className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 tech-transition sm:px-4"
           >
-            <Plus className="w-4 h-4" />
+            <Icon name="Plus" className="w-4 h-4" />
             New
           </button>
         </div>
@@ -206,7 +206,7 @@ function CrmPageInner() {
             className="text-destructive/70 hover:text-destructive"
             aria-label="Dismiss"
           >
-            <X className="w-3.5 h-3.5" />
+            <Icon name="X" className="w-3.5 h-3.5" />
           </button>
         </div>
       )}

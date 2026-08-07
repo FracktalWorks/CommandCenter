@@ -386,6 +386,18 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     except Exception:
         pass
 
+    # Flush audit writes that are still on worker threads. `acb_audit.record`
+    # is non-blocking on the event loop (BO-10), which means an event recorded
+    # moments before shutdown is in flight rather than committed; exiting here
+    # would cancel it. Last, and after every loop above, so writes those loops
+    # made on their way out are included. Bounded internally — a wedged audit
+    # DB cannot hold the shutdown open.
+    try:
+        from acb_audit import drain as drain_audit
+        await drain_audit()
+    except Exception:
+        pass
+
     _log.info("gateway.shutdown")
 
 

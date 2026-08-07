@@ -7,7 +7,7 @@
  * (§3.8) — the timeline shows a status change, an assignment, an agent run and
  * a comment in the same stream, which is the point of the shared spine.
  */
-import { Bot, Image as ImageIcon, Paperclip, X } from "lucide-react";
+import Icon from "@/components/Icon";
 import { useEffect, useState } from "react";
 
 import {
@@ -248,7 +248,7 @@ export function TaskPanel({
           aria-label="Close task"
           className="rounded p-1 text-muted-foreground hover:bg-muted"
         >
-          <X className="h-4 w-4" />
+          <Icon name="X" className="h-4 w-4" />
         </button>
       </header>
 
@@ -285,7 +285,7 @@ export function TaskPanel({
                 >
                   {/* Agents and people are one vocabulary (D-PM-4), so the
                       difference is an icon, never a separate field. */}
-                  {kind === "agent" ? <Bot className="h-3 w-3" /> : null}
+                  {kind === "agent" ? <Icon name="Bot" className="h-3 w-3" /> : null}
                   {assigneeLabel(who)}
                   <button
                     type="button"
@@ -294,7 +294,7 @@ export function TaskPanel({
                     onClick={() => void saveAssignees(withoutAssignee(assignees, who))}
                     className="text-muted-foreground hover:text-foreground"
                   >
-                    <X className="h-3 w-3" />
+                    <Icon name="X" className="h-3 w-3" />
                   </button>
                 </span>
               );
@@ -330,9 +330,9 @@ export function TaskPanel({
             {files.map((f) => (
               <div key={f.attachment_id} className="flex items-center gap-2 text-xs">
                 {f.kind === "image" ? (
-                  <ImageIcon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                  <Icon name="Image" className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                 ) : (
-                  <Paperclip className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                  <Icon name="Paperclip" className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                 )}
                 <a
                   href={f.url}
@@ -353,7 +353,7 @@ export function TaskPanel({
                   onClick={() => void detach(f.attachment_id)}
                   className="shrink-0 text-muted-foreground hover:text-foreground"
                 >
-                  <X className="h-3 w-3" />
+                  <Icon name="X" className="h-3 w-3" />
                 </button>
               </div>
             ))}

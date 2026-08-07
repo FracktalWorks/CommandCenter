@@ -12,7 +12,7 @@
  * unassigned. Offering a picker here would make the common case a decision.
  */
 
-import { X } from "lucide-react";
+import Icon from "@/components/Icon";
 import { useState } from "react";
 import type { EntitySlug } from "../lib/types";
 
@@ -116,7 +116,7 @@ export default function QuickCreateModal({
             onClick={onClose}
             className="rounded-lg border border-border p-2 text-muted-foreground hover:bg-secondary tech-transition"
           >
-            <X className="w-4 h-4" />
+            <Icon name="X" className="w-4 h-4" />
           </button>
         </header>
 

@@ -5,8 +5,9 @@
 // classification pattern (and re-runs the email); for "New rule" it hands the
 // correction to the AI chat. Extracted from AISettingsView.tsx.
 
+import Button from "@/components/ui/Button";
+import Icon from "@/components/Icon";
 import { useEffect, useState } from "react";
-import { Check, Loader2, MessageCircle } from "lucide-react";
 import { listRules, runRuleOnMessage, submitRuleFeedback } from "../../../lib/api";
 import type { AutomationRule, RunMessageResult } from "../../../lib/types";
 import { useEmailStore } from "../../../lib/emailStore";
@@ -214,12 +215,9 @@ export function FixDialog({
       onClose={onClose}
       footer={
         done ? (
-          <button
-            onClick={onClose}
-            className="ml-auto px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90 transition-colors"
-          >
+          <Button size="none" layout="" onClick={onClose} className="ml-auto px-3 py-1.5 text-xs">
             Done
-          </button>
+          </Button>
         ) : expected ? (
           <>
             <button
@@ -229,20 +227,16 @@ export function FixDialog({
             >
               Back
             </button>
-            <button
-              onClick={submit}
-              disabled={busy}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90 transition-colors disabled:opacity-50"
-            >
+            <Button layout="flex items-center" onClick={submit} disabled={busy}>
               {busy ? (
-                <Loader2 className="animate-spin" size={13} />
+                <Icon name="Loader2" className="animate-spin" size={13} />
               ) : willChat ? (
-                <MessageCircle size={13} />
+                <Icon name="MessageCircle" size={13} />
               ) : (
-                <Check size={13} />
+                <Icon name="Check" size={13} />
               )}
               {willChat ? "Send to assistant" : "Apply correction"}
-            </button>
+            </Button>
           </>
         ) : undefined
       }
@@ -423,7 +417,7 @@ export function FixButton({
         title="Tell the assistant this was wrong"
         className="flex items-center gap-1 px-1.5 py-1 rounded-md text-[11px] text-muted-foreground border border-border hover:text-foreground hover:bg-secondary transition-colors"
       >
-        <MessageCircle size={12} /> Fix
+        <Icon name="MessageCircle" size={12} /> Fix
       </button>
       {open && (
         <FixDialog

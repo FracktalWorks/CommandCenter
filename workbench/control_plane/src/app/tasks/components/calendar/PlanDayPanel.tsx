@@ -1,16 +1,8 @@
 "use client";
 
+import Button from "@/components/ui/Button";
+import Icon from "@/components/Icon";
 import { useState } from "react";
-import {
-  X,
-  Loader2,
-  Check,
-  AlertTriangle,
-  Wand2,
-  CalendarClock,
-  Sparkles,
-  Settings2,
-} from "lucide-react";
 import {
   apiPlanDay,
   apiReplan,
@@ -225,9 +217,9 @@ export function PlanDayPanel({
         </div>
         <div className="flex shrink-0 items-center gap-2 border-b border-border px-4 py-3">
           {isReplan ? (
-            <CalendarClock className="h-4 w-4 shrink-0 text-primary" />
+            <Icon name="CalendarClock" className="h-4 w-4 shrink-0 text-primary" />
           ) : (
-            <Wand2 className="h-4 w-4 shrink-0 text-primary" />
+            <Icon name="Wand2" className="h-4 w-4 shrink-0 text-primary" />
           )}
           <div className="min-w-0 flex-1">
             <h2 className="truncate text-sm font-semibold text-foreground">
@@ -239,14 +231,9 @@ export function PlanDayPanel({
                 : dateLabel}
             </p>
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="Close"
-            className="rounded-md p-1 text-muted-foreground hover:bg-secondary hover:text-foreground"
-          >
-            <X className="h-4 w-4" />
-          </button>
+          <Button variant="ghost" size="icon-xs" radius="keep" layout="" type="button" onClick={onClose} aria-label="Close" className="rounded-md">
+            <Icon name="X" className="h-4 w-4" />
+          </Button>
         </div>
 
         {/* Plan-through horizon — how far into the day (or night) to schedule.
@@ -255,7 +242,7 @@ export function PlanDayPanel({
             midnight, so late-night sessions plan 24/7). Re-plans on change. */}
         <div className="flex shrink-0 flex-col gap-2 border-b border-border px-4 py-2">
           <div className="flex items-center gap-2">
-            <CalendarClock className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+            <Icon name="CalendarClock" className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
             <label
               htmlFor="plan-horizon"
               className="shrink-0 text-[11px] font-medium text-foreground"
@@ -335,17 +322,13 @@ export function PlanDayPanel({
               </span>
             </label>
             {onOpenSettings && (
-              <button
-                type="button"
-                onClick={() => {
+              <Button variant="text" size="none" layout="inline-flex items-center" type="button" onClick={() => {
                   onClose();
                   onOpenSettings();
-                }}
-                className="inline-flex items-center gap-1 text-[10px] font-medium text-muted-foreground hover:text-foreground"
-              >
-                <Settings2 className="h-3 w-3" />
+                }} className="gap-1 text-[10px]">
+                <Icon name="Settings2" className="h-3 w-3" />
                 Standing prompt
-              </button>
+              </Button>
             )}
           </div>
           <div className="flex items-center gap-2">
@@ -359,19 +342,14 @@ export function PlanDayPanel({
               placeholder="e.g. “low energy”, “calls only”, “deep work”, “work for 2 more hours”, “until 2am”"
               className="min-w-0 flex-1 rounded-md border border-border bg-background/60 px-3 py-2 text-base text-foreground focus:border-primary/50 focus:outline-none sm:text-sm"
             />
-            <button
-              type="button"
-              onClick={() => void run(note)}
-              disabled={loading}
-              className="tech-transition inline-flex shrink-0 items-center gap-1.5 rounded-md bg-primary px-3 py-2 text-[12px] font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
-            >
+            <Button size="none" radius="keep" layout="inline-flex items-center" type="button" onClick={() => void run(note)} disabled={loading} className="shrink-0 gap-1.5 rounded-md px-3 py-2 text-[12px]">
               {loading ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                <Icon name="Loader2" className="h-3.5 w-3.5 animate-spin" />
               ) : (
-                <Wand2 className="h-3.5 w-3.5" />
+                <Icon name="Wand2" className="h-3.5 w-3.5" />
               )}
               {plan ? "Redo" : isReplan ? "Fit" : "Plan"}
-            </button>
+            </Button>
           </div>
           <p className="mt-1 text-[10px] text-muted-foreground">
             {isReplan
@@ -383,11 +361,11 @@ export function PlanDayPanel({
         <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
           {error ? (
             <p className="flex items-center gap-1.5 text-[12px] text-destructive">
-              <AlertTriangle className="h-4 w-4 shrink-0" /> {error}
+              <Icon name="AlertTriangle" className="h-4 w-4 shrink-0" /> {error}
             </p>
           ) : loading && !plan ? (
             <p className="flex items-center gap-1.5 py-6 text-[12px] text-muted-foreground">
-              <Loader2 className="h-4 w-4 animate-spin" /> Planning your day…
+              <Icon name="Loader2" className="h-4 w-4 animate-spin" /> Planning your day…
             </p>
           ) : plan ? (
             <>
@@ -397,7 +375,7 @@ export function PlanDayPanel({
               {plan.blocks.length > 0 &&
                 (fellBack ? (
                   <p className="mb-2 flex items-start gap-1.5 rounded-md border border-warning/40 bg-warning/10 px-2.5 py-2 text-[11px] text-warning">
-                    <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0" />
+                    <Icon name="AlertTriangle" className="mt-px h-3.5 w-3.5 shrink-0" />
                     <span>
                       AI ranking was unavailable, so this used priority order —
                       your note and standing prompt weren&apos;t applied. Times
@@ -411,7 +389,7 @@ export function PlanDayPanel({
                   </p>
                 ) : (
                   <p className="mb-2 inline-flex items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary">
-                    <Sparkles className="h-3 w-3" /> AI-ranked for your prompt
+                    <Icon name="Sparkles" className="h-3 w-3" /> AI-ranked for your prompt
                   </p>
                 ))}
               {plan.notes && (
@@ -495,9 +473,9 @@ export function PlanDayPanel({
             // per-run note is never skipped by an auto-run.
             <div className="flex flex-col items-center gap-2 py-8 text-center">
               {isReplan ? (
-                <CalendarClock className="h-6 w-6 text-muted-foreground/60" />
+                <Icon name="CalendarClock" className="h-6 w-6 text-muted-foreground/60" />
               ) : (
-                <Wand2 className="h-6 w-6 text-muted-foreground/60" />
+                <Icon name="Wand2" className="h-6 w-6 text-muted-foreground/60" />
               )}
               <p className="text-[12.5px] font-medium text-foreground">
                 {isReplan
@@ -520,25 +498,16 @@ export function PlanDayPanel({
           className="flex shrink-0 items-center justify-end gap-2 border-t border-border px-4 py-3"
           style={{ paddingBottom: "max(0.75rem, env(safe-area-inset-bottom))" }}
         >
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-md px-3 py-2 text-[12px] font-medium text-muted-foreground hover:text-foreground"
-          >
+          <Button variant="text" size="none" radius="keep" layout="" type="button" onClick={onClose} className="rounded-md px-3 py-2 text-[12px]">
             Cancel
-          </button>
-          <button
-            type="button"
-            onClick={apply}
-            disabled={!plan || (plan.blocks.length === 0 && plan.evicted.length === 0)}
-            className="tech-transition inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-2 text-[12px] font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
-          >
-            <Check className="h-3.5 w-3.5" />
+          </Button>
+          <Button size="none" radius="keep" layout="inline-flex items-center" type="button" onClick={apply} disabled={!plan || (plan.blocks.length === 0 && plan.evicted.length === 0)} className="gap-1.5 rounded-md px-3 py-2 text-[12px]">
+            <Icon name="Check" className="h-3.5 w-3.5" />
             Apply
             {plan?.blocks.length
               ? ` ${plan.blocks.length} block${plan.blocks.length === 1 ? "" : "s"}`
               : " plan"}
-          </button>
+          </Button>
         </div>
       </div>
     </div>

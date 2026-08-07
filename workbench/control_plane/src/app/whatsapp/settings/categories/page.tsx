@@ -5,8 +5,8 @@
 // each category answers notify / auto-reply / drafts / escalation. Only the
 // meaningful cell should draw the eye; defaults stay quiet.
 
+import Icon from "@/components/Icon";
 import { useCallback, useEffect, useState } from "react";
-import { Loader2, Tags } from "lucide-react";
 import {
   bootstrapCategories,
   fetchAccounts,
@@ -70,7 +70,7 @@ export default function CategoriesSettingsPage() {
   if (loading) {
     return (
       <div className="flex h-full items-center justify-center text-muted-foreground">
-        <Loader2 className="h-5 w-5 animate-spin" />
+        <Icon name="Loader2" className="h-5 w-5 animate-spin" />
       </div>
     );
   }
@@ -78,7 +78,7 @@ export default function CategoriesSettingsPage() {
   return (
     <div className="mx-auto h-full max-w-3xl overflow-y-auto p-4 text-foreground md:p-6">
       <div className="mb-5 flex items-center gap-2">
-        <Tags className="h-4 w-4 text-primary" />
+        <Icon name="Tags" className="h-4 w-4 text-primary" />
         <h1 className="text-[15px] font-semibold">Categories</h1>
         <span className="text-[11px] text-muted-foreground">
           labels, upgraded to policy
@@ -104,7 +104,7 @@ export default function CategoriesSettingsPage() {
             className="mt-3 inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-[12px] font-semibold text-primary-foreground disabled:opacity-50"
           >
             {saving === "bootstrap" && (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              <Icon name="Loader2" className="h-3.5 w-3.5 animate-spin" />
             )}
             Seed default categories
           </button>

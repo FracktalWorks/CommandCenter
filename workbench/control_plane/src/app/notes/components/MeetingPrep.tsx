@@ -17,20 +17,10 @@
  * after it.
  */
 
+import Button from "@/components/ui/Button";
+import Icon from "@/components/Icon";
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import {
-  BookOpen,
-  Check,
-  ListChecks,
-  Loader2,
-  Mic,
-  Sparkles,
-  Upload,
-  Users,
-  Video,
-  X,
-} from "lucide-react";
 import {
   chatAgenda,
   getAgenda,
@@ -222,7 +212,7 @@ export default function MeetingPrep({ meeting, onChanged, onSendBot }: Props) {
   if (loading) {
     return (
       <div className="flex justify-center py-16">
-        <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+        <Icon name="Loader2" className="h-5 w-5 animate-spin text-muted-foreground" />
       </div>
     );
   }
@@ -264,7 +254,7 @@ export default function MeetingPrep({ meeting, onChanged, onSendBot }: Props) {
         <div className="space-y-4">
           <section className="rounded-xl border border-border bg-card p-3">
             <p className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-              <ListChecks className="h-3.5 w-3.5" /> Agenda
+              <Icon name="ListChecks" className="h-3.5 w-3.5" /> Agenda
               {agenda.length > 0 && (
                 <span className="font-mono text-[10px] normal-case tracking-normal opacity-70">
                   {agenda.length} item{agenda.length === 1 ? "" : "s"}
@@ -319,7 +309,7 @@ export default function MeetingPrep({ meeting, onChanged, onSendBot }: Props) {
                 className="rounded-lg border border-border px-3 py-1.5 text-sm font-medium hover:bg-secondary disabled:opacity-50"
               >
                 {planning ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
+                  <Icon name="Loader2" className="h-4 w-4 animate-spin" />
                 ) : agenda.length ? (
                   "Refine"
                 ) : (
@@ -331,7 +321,7 @@ export default function MeetingPrep({ meeting, onChanged, onSendBot }: Props) {
 
           <section className="rounded-xl border border-border bg-card p-3">
             <p className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-              <BookOpen className="h-3.5 w-3.5" /> Briefing
+              <Icon name="BookOpen" className="h-3.5 w-3.5" /> Briefing
             </p>
             <textarea
               value={brief}
@@ -394,7 +384,7 @@ export default function MeetingPrep({ meeting, onChanged, onSendBot }: Props) {
 
           <section className="rounded-xl border border-border bg-card p-3">
             <p className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-              <Users className="h-3.5 w-3.5" /> Attendees
+              <Icon name="Users" className="h-3.5 w-3.5" /> Attendees
             </p>
             <div className="mb-2 flex flex-wrap gap-1.5">
               {attendees.map((a: Attendee, i: number) => (
@@ -409,7 +399,7 @@ export default function MeetingPrep({ meeting, onChanged, onSendBot }: Props) {
                     className="text-muted-foreground hover:text-destructive"
                     aria-label={`Remove ${a.name || a.email}`}
                   >
-                    <X className="h-3 w-3" />
+                    <Icon name="X" className="h-3 w-3" />
                   </button>
                 </span>
               ))}
@@ -491,7 +481,7 @@ export default function MeetingPrep({ meeting, onChanged, onSendBot }: Props) {
           </section>
 
           <section className="flex items-center gap-3 rounded-xl border border-border bg-card p-3">
-            <Sparkles className="h-4 w-4 shrink-0 text-primary" />
+            <Icon name="Sparkles" className="h-4 w-4 shrink-0 text-primary" />
             <div className="min-w-0 flex-1">
               <p className="text-sm font-medium">Meeting copilot</p>
               <p className="text-[11px] text-muted-foreground">
@@ -528,23 +518,20 @@ export default function MeetingPrep({ meeting, onChanged, onSendBot }: Props) {
         <span className="mr-1 text-xs text-muted-foreground">
           Start when you&apos;re ready —
         </span>
-        <button
-          onClick={() => router.push(`/notes/session/${id}`)}
-          className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:opacity-90"
-        >
-          <Mic className="h-4 w-4" /> Record here
-        </button>
+        <Button size="none" layout="inline-flex items-center" onClick={() => router.push(`/notes/session/${id}`)} className="gap-1.5 px-3 py-2 text-sm">
+          <Icon name="Mic" className="h-4 w-4" /> Record here
+        </Button>
         <button
           onClick={onSendBot}
           className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-sm hover:bg-secondary"
         >
-          <Video className="h-4 w-4" /> Send notetaker to a call
+          <Icon name="Video" className="h-4 w-4" /> Send notetaker to a call
         </button>
         <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-sm hover:bg-secondary">
           {uploading ? (
-            <Loader2 className="h-4 w-4 animate-spin" />
+            <Icon name="Loader2" className="h-4 w-4 animate-spin" />
           ) : (
-            <Upload className="h-4 w-4" />
+            <Icon name="Upload" className="h-4 w-4" />
           )}
           {uploading ? "Uploading…" : "Upload a recording"}
           <input
@@ -561,7 +548,7 @@ export default function MeetingPrep({ meeting, onChanged, onSendBot }: Props) {
         </label>
         {filled > 0 && (
           <span className="ml-auto inline-flex items-center gap-1 text-[11px] text-success">
-            <Check className="h-3.5 w-3.5" /> Prepared
+            <Icon name="Check" className="h-3.5 w-3.5" /> Prepared
           </span>
         )}
       </div>

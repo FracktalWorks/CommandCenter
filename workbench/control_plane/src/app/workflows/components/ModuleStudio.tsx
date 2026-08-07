@@ -8,18 +8,12 @@
  * modules become "Module" nodes in every workflow's palette.
  */
 
+import Button from "@/components/ui/Button";
+import Icon from "@/components/Icon";
 import { useCallback, useEffect, useRef, useState } from "react";
 import Editor from "@monaco-editor/react";
 import { useTheme } from "next-themes";
-import {
-  Boxes,
-  Check,
-  Loader2,
-  Play,
-  Save,
-  Sparkles,
-  Trash2,
-} from "lucide-react";
+import { useMonacoTheme } from "@/lib/theme/surfaces";
 import {
   createModule,
   deleteModule,
@@ -41,6 +35,7 @@ const STATUS_BADGE: Record<string, string> = {
 
 export default function ModuleStudio() {
   const { resolvedTheme } = useTheme();
+  const monacoTheme = useMonacoTheme();
   const [modules, setModules] = useState<ModuleSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -242,18 +237,15 @@ export default function ModuleStudio() {
       {/* Library list */}
       <div className="w-56 sm:w-64 border-r border-border shrink-0 flex flex-col">
         <div className="p-3 border-b border-border">
-          <button
-            onClick={startFresh}
-            className="w-full rounded-lg bg-primary px-3 py-2 text-xs font-medium text-primary-foreground hover:opacity-90 tech-transition flex items-center justify-center gap-1.5"
-          >
-            <Sparkles className="w-3.5 h-3.5" />
+          <Button size="none" layout="flex items-center justify-center" onClick={startFresh} className="w-full px-3 py-2 text-xs gap-1.5">
+            <Icon name="Sparkles" className="w-3.5 h-3.5" />
             New module
-          </button>
+          </Button>
         </div>
         <div className="flex-1 overflow-y-auto scrollbar-thin p-2 space-y-1">
           {loading && (
             <div className="flex justify-center py-6">
-              <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
+              <Icon name="Loader2" className="w-4 h-4 animate-spin text-muted-foreground" />
             </div>
           )}
           {!loading && modules.length === 0 && (
@@ -272,7 +264,7 @@ export default function ModuleStudio() {
               }`}
             >
               <div className="flex items-center gap-1.5">
-                <Boxes className="w-3.5 h-3.5 text-sky-500 shrink-0" />
+                <Icon name="Boxes" className="w-3.5 h-3.5 text-sky-500 shrink-0" />
                 <span className="text-xs font-medium text-foreground truncate">
                   {m.name}
                 </span>
@@ -319,7 +311,7 @@ export default function ModuleStudio() {
             ))}
             {generating && (
               <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                <Icon name="Loader2" className="w-3.5 h-3.5 animate-spin" />
                 Generating…
               </div>
             )}
@@ -340,14 +332,9 @@ export default function ModuleStudio() {
                 placeholder={code ? "Refine the module…" : "Describe the task…"}
                 className="flex-1 resize-none rounded-lg border border-input bg-background px-3 py-2 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
               />
-              <button
-                onClick={onGenerate}
-                disabled={generating || !prompt.trim()}
-                className="self-end rounded-lg bg-primary p-2 text-primary-foreground hover:opacity-90 tech-transition disabled:opacity-50"
-                title="Generate"
-              >
-                <Sparkles className="w-4 h-4" />
-              </button>
+              <Button size="icon" layout="" onClick={onGenerate} disabled={generating || !prompt.trim()} title="Generate" className="self-end">
+                <Icon name="Sparkles" className="w-4 h-4" />
+              </Button>
             </div>
           </div>
         </div>
@@ -373,24 +360,20 @@ export default function ModuleStudio() {
                 className="rounded-lg border border-border px-2.5 py-1.5 text-xs text-foreground hover:bg-secondary tech-transition flex items-center gap-1 disabled:opacity-50"
               >
                 {testing ? (
-                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  <Icon name="Loader2" className="w-3.5 h-3.5 animate-spin" />
                 ) : (
-                  <Play className="w-3.5 h-3.5" />
+                  <Icon name="Play" className="w-3.5 h-3.5" />
                 )}
                 Test
               </button>
-              <button
-                onClick={onSave}
-                disabled={!code || !name.trim() || saving}
-                className="rounded-lg bg-primary px-2.5 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90 tech-transition flex items-center gap-1 disabled:opacity-50"
-              >
+              <Button size="none" layout="flex items-center" onClick={onSave} disabled={!code || !name.trim() || saving} className="px-2.5 py-1.5 text-xs gap-1">
                 {saving ? (
-                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  <Icon name="Loader2" className="w-3.5 h-3.5 animate-spin" />
                 ) : (
-                  <Save className="w-3.5 h-3.5" />
+                  <Icon name="Save" className="w-3.5 h-3.5" />
                 )}
                 Save
-              </button>
+              </Button>
               {selectedId && (
                 <>
                   <button
@@ -402,7 +385,7 @@ export default function ModuleStudio() {
                         : "Mark ready for workflows"
                     }
                   >
-                    <Check className="w-3.5 h-3.5" />
+                    <Icon name="Check" className="w-3.5 h-3.5" />
                     {status === "ready" ? "Unready" : "Mark ready"}
                   </button>
                   <button
@@ -410,7 +393,7 @@ export default function ModuleStudio() {
                     className="rounded-lg border border-border p-1.5 text-muted-foreground hover:text-destructive hover:bg-secondary tech-transition"
                     title="Delete module"
                   >
-                    <Trash2 className="w-3.5 h-3.5" />
+                    <Icon name="Trash2" className="w-3.5 h-3.5" />
                   </button>
                 </>
               )}
@@ -425,7 +408,7 @@ export default function ModuleStudio() {
             <Editor
               height="100%"
               language="python"
-              theme={resolvedTheme === "light" ? "light" : "vs-dark"}
+              theme={monacoTheme}
               value={code}
               onChange={(v) => setCode(v ?? "")}
               options={{

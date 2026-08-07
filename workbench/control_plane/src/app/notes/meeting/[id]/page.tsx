@@ -6,29 +6,10 @@
  * generated notes + draft action items on top of slice 0's transcript view.
  */
 
+import Button from "@/components/ui/Button";
+import Icon, { themedIcon } from "@/components/Icon";
 import { use, useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import {
-  AlertTriangle,
-  ArrowLeft,
-  Check,
-  CheckSquare,
-  Clock,
-  ExternalLink,
-  FileText,
-  Loader2,
-  Mail,
-  Pencil,
-  Play,
-  Plus,
-  RefreshCw,
-  Radio,
-  Sparkles,
-  Trash2,
-  Users,
-  Video,
-  X,
-} from "lucide-react";
 import Link from "next/link";
 import MarkdownMessage from "@/components/MarkdownMessage";
 import AskPanel from "../../components/AskPanel";
@@ -457,7 +438,7 @@ export default function MeetingPage({
             className="shrink-0 p-2 rounded-lg border border-border text-muted-foreground hover:bg-secondary tech-transition"
             aria-label="Back to notes"
           >
-            <ArrowLeft className="w-4 h-4" />
+            <Icon name="ArrowLeft" className="w-4 h-4" />
           </button>
           <div className="min-w-0">
             <h1 className="text-base sm:text-lg font-bold text-foreground truncate">
@@ -474,56 +455,38 @@ export default function MeetingPage({
         </div>
         <div className="flex items-center gap-2 shrink-0">
           {notesMd && (
-            <button
-              onClick={() => setShowEmail(true)}
-              className="shrink-0 rounded-lg border border-border px-2.5 sm:px-3 py-2 text-sm text-muted-foreground hover:text-foreground hover:border-primary/30 tech-transition"
-              aria-label="Draft a follow-up email"
-              title="Draft a follow-up email"
-            >
+            <Button variant="secondary" size="none" layout="" onClick={() => setShowEmail(true)} aria-label="Draft a follow-up email" title="Draft a follow-up email" className="shrink-0 px-2.5 sm:px-3 py-2 text-sm">
               <span className="flex items-center gap-1.5">
-                <Mail className="w-4 h-4" />
+                <Icon name="Mail" className="w-4 h-4" />
                 <span className="hidden sm:inline">Follow-up</span>
               </span>
-            </button>
+            </Button>
           )}
           {meeting && meeting.segments.length > 0 && (
-            <button
-              onClick={onSummarize}
-              disabled={summarizing || busy}
-              className="shrink-0 rounded-lg border border-border px-2.5 sm:px-3 py-2 text-sm text-muted-foreground hover:text-foreground hover:border-primary/30 tech-transition disabled:opacity-60"
-              aria-label={notesMd ? "Regenerate notes" : "Generate notes"}
-              title={notesMd ? "Regenerate notes" : "Generate notes"}
-            >
+            <Button variant="secondary" size="none" layout="" onClick={onSummarize} disabled={summarizing || busy} aria-label={notesMd ? "Regenerate notes" : "Generate notes"} title={notesMd ? "Regenerate notes" : "Generate notes"} className="shrink-0 px-2.5 sm:px-3 py-2 text-sm">
               <span className="flex items-center gap-1.5">
                 {summarizing ? (
-                  <Loader2 className="w-4 h-4 animate-spin" />
+                  <Icon name="Loader2" className="w-4 h-4 animate-spin" />
                 ) : notesMd ? (
-                  <RefreshCw className="w-4 h-4" />
+                  <Icon name="RefreshCw" className="w-4 h-4" />
                 ) : (
-                  <Sparkles className="w-4 h-4" />
+                  <Icon name="Sparkles" className="w-4 h-4" />
                 )}
                 <span className="hidden sm:inline">
                   {notesMd ? "Regenerate" : "Generate notes"}
                 </span>
               </span>
-            </button>
+            </Button>
           )}
-          <button
-            onClick={async () => {
+          <Button variant="secondary" size="none" layout="" onClick={async () => {
               setRefreshing(true);
               await refresh();
               setRefreshing(false);
-            }}
-            disabled={refreshing}
-            className="rounded-lg border border-border p-2 text-sm text-muted-foreground hover:text-foreground hover:border-primary/30 tech-transition disabled:opacity-60"
-            aria-label="Refresh"
-            title="Refresh"
-          >
-            <RefreshCw className={`w-4 h-4 ${refreshing ? "animate-spin" : ""}`} />
-          </button>
+            }} disabled={refreshing} aria-label="Refresh" title="Refresh" className="p-2 text-sm">
+            <Icon name="RefreshCw" className={`w-4 h-4 ${refreshing ? "animate-spin" : ""}`} />
+          </Button>
           {meeting && (
-            <button
-              onClick={async () => {
+            <Button variant="destructive" size="none" layout="" onClick={async () => {
                 if (!confirm("Delete this meeting, its audio and transcript?"))
                   return;
                 setDeleting(true);
@@ -536,18 +499,13 @@ export default function MeetingPage({
                   );
                   setDeleting(false);
                 }
-              }}
-              disabled={deleting}
-              className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive hover:bg-destructive/20 tech-transition disabled:opacity-60"
-              aria-label="Delete this meeting"
-              title="Delete this meeting"
-            >
+              }} disabled={deleting} aria-label="Delete this meeting" title="Delete this meeting" className="px-3 py-2 text-sm">
               {deleting ? (
-                <Loader2 className="w-4 h-4 animate-spin" />
+                <Icon name="Loader2" className="w-4 h-4 animate-spin" />
               ) : (
-                <Trash2 className="w-4 h-4" />
+                <Icon name="Trash2" className="w-4 h-4" />
               )}
-            </button>
+            </Button>
           )}
         </div>
       </div>
@@ -562,7 +520,7 @@ export default function MeetingPage({
 
           {toast && (
             <div className="rounded-lg bg-success/10 px-3 py-2 text-sm text-success flex items-center gap-2">
-              <Check className="w-4 h-4" />
+              <Icon name="Check" className="w-4 h-4" />
               {toast}
             </div>
           )}
@@ -601,13 +559,13 @@ export default function MeetingPage({
               )}
               {meeting.duration_s != null && (
                 <span className={chipCls}>
-                  <Clock className="w-3 h-3" />
+                  <Icon name="Clock" className="w-3 h-3" />
                   {formatClock(meeting.duration_s)}
                 </span>
               )}
               {speakerLabels.length > 0 && (
                 <span className={chipCls}>
-                  <Users className="w-3 h-3" />
+                  <Icon name="Users" className="w-3 h-3" />
                   {speakerLabels.length} speaker
                   {speakerLabels.length > 1 ? "s" : ""}
                 </span>
@@ -644,7 +602,7 @@ export default function MeetingPage({
                     className="text-muted-foreground hover:text-destructive"
                     aria-label="Remove attendee"
                   >
-                    <X className="w-3 h-3" />
+                    <Icon name="X" className="w-3 h-3" />
                   </button>
                 </span>
               ))}
@@ -662,13 +620,9 @@ export default function MeetingPage({
                   placeholder="email@…"
                   className="w-32 rounded-md border border-border bg-background px-2 py-1 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
                 />
-                <button
-                  onClick={addAttendee}
-                  className="p-1 rounded-md border border-border text-muted-foreground hover:text-foreground hover:border-primary/30 tech-transition"
-                  aria-label="Add attendee"
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                </button>
+                <Button variant="secondary" size="icon-xs" radius="keep" layout="" onClick={addAttendee} aria-label="Add attendee" className="rounded-md">
+                  <Icon name="Plus" className="w-3.5 h-3.5" />
+                </Button>
               </span>
             </div>
           )}
@@ -685,7 +639,7 @@ export default function MeetingPage({
               }`}
             >
               <div className="flex items-center gap-3">
-                <Video
+                <Icon name="Video"
                   className={`w-5 h-5 shrink-0 ${
                     botFailed ? "text-destructive" : "text-primary"
                   }`}
@@ -711,14 +665,14 @@ export default function MeetingPage({
                     href={`/notes/live/${id}`}
                     className="shrink-0 inline-flex items-center gap-1.5 rounded-lg border border-primary/30 px-2.5 py-1.5 text-xs text-primary hover:bg-primary/10 tech-transition"
                   >
-                    <Radio className="w-3.5 h-3.5" />
+                    <Icon name="Radio" className="w-3.5 h-3.5" />
                     Live console
                   </Link>
                 )}
               </div>
               {botFailed && bot.error && (
                 <p className="mt-2 flex items-start gap-1.5 rounded-lg bg-destructive/10 px-2.5 py-1.5 text-xs leading-relaxed text-destructive">
-                  <AlertTriangle className="mt-0.5 w-3.5 h-3.5 shrink-0" />
+                  <Icon name="AlertTriangle" className="mt-0.5 w-3.5 h-3.5 shrink-0" />
                   <span>{bot.error}</span>
                 </p>
               )}
@@ -773,7 +727,7 @@ export default function MeetingPage({
 
           {busy && (
             <div className="rounded-xl border border-border bg-card p-4 flex items-center gap-3">
-              <Loader2 className="w-4 h-4 animate-spin text-warning" />
+              <Icon name="Loader2" className="w-4 h-4 animate-spin text-warning" />
               <div className="min-w-0">
                 <p className="text-sm font-semibold text-foreground">
                   {progress?.runs.find((r) => r.status === "running")?.kind ===
@@ -866,7 +820,7 @@ export default function MeetingPage({
               {showDiarizeHint && (
                 <div className="mb-3 rounded-xl border border-amber-500/30 bg-amber-500/5 p-3">
                   <div className="flex items-start gap-2.5">
-                    <Users className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
+                    <Icon name="Users" className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
                     <div className="min-w-0 space-y-2">
                       <p className="text-xs text-foreground">
                         <span className="font-semibold">
@@ -888,9 +842,9 @@ export default function MeetingPage({
                         className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-2.5 py-1 text-xs font-medium text-foreground hover:bg-muted tech-transition disabled:opacity-60"
                       >
                         {retranscribing ? (
-                          <Loader2 className="w-3 h-3 animate-spin" />
+                          <Icon name="Loader2" className="w-3 h-3 animate-spin" />
                         ) : (
-                          <RefreshCw className="w-3 h-3" />
+                          <Icon name="RefreshCw" className="w-3 h-3" />
                         )}
                         Re-transcribe
                       </button>
@@ -913,9 +867,9 @@ export default function MeetingPage({
                       title="Detect who's who from lines like “Hi, I'm Priya”"
                     >
                       {identifying ? (
-                        <Loader2 className="w-3 h-3 animate-spin" />
+                        <Icon name="Loader2" className="w-3 h-3 animate-spin" />
                       ) : (
-                        <Sparkles className="w-3 h-3" />
+                        <Icon name="Sparkles" className="w-3 h-3" />
                       )}
                       {identifying ? "Detecting…" : "Auto-detect names"}
                     </button>
@@ -934,7 +888,7 @@ export default function MeetingPage({
                         className="shrink-0 flex items-center gap-1 text-[10px] font-mono text-muted-foreground hover:text-primary tech-transition mt-0.5"
                         title="Play from here"
                       >
-                        <Play className="w-3 h-3" />
+                        <Icon name="Play" className="w-3 h-3" />
                         {formatClock(seg.start_s)}
                       </button>
                       <div className="min-w-0">
@@ -954,7 +908,7 @@ export default function MeetingPage({
                             >
                               {displayName(seg.speaker_label)}
                             </span>
-                            <Pencil className="w-2.5 h-2.5 text-muted-foreground opacity-0 group-hover:opacity-100 tech-transition" />
+                            <Icon name="Pencil" className="w-2.5 h-2.5 text-muted-foreground opacity-0 group-hover:opacity-100 tech-transition" />
                           </button>
                         ) : seg.channel ? (
                           <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
@@ -1027,7 +981,7 @@ export default function MeetingPage({
                   </div>
                 ) : (
                   <div className="rounded-xl border border-border bg-card p-6 text-center">
-                    <Sparkles className="w-6 h-6 mx-auto text-muted-foreground mb-2" />
+                    <Icon name="Sparkles" className="w-6 h-6 mx-auto text-muted-foreground mb-2" />
                     <p className="text-xs text-muted-foreground">
                       {busy
                         ? "Notes will appear once the transcript is ready."
@@ -1061,7 +1015,7 @@ export default function MeetingPage({
                                 title="Jump to this moment in the transcript"
                                 className="inline-flex items-center gap-0.5 rounded-md border border-border bg-muted/40 px-1.5 py-0.5 text-[10px] font-mono text-muted-foreground hover:text-primary hover:border-primary/30 tech-transition"
                               >
-                                <Play className="w-2.5 h-2.5" />
+                                <Icon name="Play" className="w-2.5 h-2.5" />
                                 {formatClock(seg.start_s)}
                               </button>
                             );
@@ -1081,20 +1035,15 @@ export default function MeetingPage({
                 <div>
                   <div className="flex items-center justify-between mb-2">
                     <h2 className="text-sm font-semibold text-foreground flex items-center gap-1.5">
-                      <CheckSquare className="w-4 h-4" />
+                      <Icon name="CheckSquare" className="w-4 h-4" />
                       Action items
                     </h2>
                     {actions.some(
                       (a) => a.status === "draft" && a.confidence >= 0.8
                     ) && (
-                      <button
-                        onClick={onApproveAll}
-                        disabled={actioning !== null}
-                        title="Tasks are created, emails sent (or drafted when the recipient is unclear), documents drafted"
-                        className="text-[11px] rounded-md border border-border px-2 py-1 text-muted-foreground hover:text-foreground hover:border-primary/30 tech-transition disabled:opacity-60"
-                      >
+                      <Button variant="secondary" size="none" radius="keep" layout="" onClick={onApproveAll} disabled={actioning !== null} title="Tasks are created, emails sent (or drafted when the recipient is unclear), documents drafted" className="text-[11px] rounded-md px-2 py-1">
                         Dispatch all ≥80%
-                      </button>
+                      </Button>
                     )}
                   </div>
                   <div className="space-y-2">
@@ -1102,10 +1051,10 @@ export default function MeetingPage({
                       const rowBusy = actioning === a.id || actioning === "all";
                       const KindIcon =
                         a.kind === "email"
-                          ? Mail
+                          ? themedIcon("Mail")
                           : a.kind === "document"
-                            ? FileText
-                            : CheckSquare;
+                            ? themedIcon("FileText")
+                            : themedIcon("CheckSquare");
                       const kindLabel =
                         a.kind === "email"
                           ? "Email"
@@ -1144,7 +1093,7 @@ export default function MeetingPage({
                           )}
                           {a.dispatch_error && a.status !== "created" && (
                             <p className="mt-1.5 flex items-start gap-1 rounded-md bg-destructive/10 px-2 py-1 text-[11px] text-destructive">
-                              <AlertTriangle className="mt-0.5 w-3 h-3 shrink-0" />
+                              <Icon name="AlertTriangle" className="mt-0.5 w-3 h-3 shrink-0" />
                               {a.dispatch_error}
                             </p>
                           )}
@@ -1180,7 +1129,7 @@ export default function MeetingPage({
                                     title="Jump to this moment in the transcript"
                                     className="inline-flex items-center gap-0.5 rounded-md border border-border bg-muted/40 px-1.5 py-0.5 text-[10px] font-mono text-muted-foreground hover:text-primary hover:border-primary/30 tech-transition"
                                   >
-                                    <Play className="w-2.5 h-2.5" />
+                                    <Icon name="Play" className="w-2.5 h-2.5" />
                                     {seg ? formatClock(seg.start_s) : "source"}
                                   </button>
                                 );
@@ -1196,9 +1145,9 @@ export default function MeetingPage({
                                   className="flex-1 flex items-center justify-center gap-1 rounded-md bg-primary/10 text-primary px-2 py-1 text-xs hover:bg-primary/20 tech-transition disabled:opacity-60"
                                 >
                                   {rowBusy ? (
-                                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                    <Icon name="Loader2" className="w-3.5 h-3.5 animate-spin" />
                                   ) : (
-                                    <Check className="w-3.5 h-3.5" />
+                                    <Icon name="Check" className="w-3.5 h-3.5" />
                                   )}
                                   {a.kind === "email"
                                     ? "Approve → Send email"
@@ -1213,14 +1162,14 @@ export default function MeetingPage({
                                   title="Reject"
                                   className="flex items-center justify-center gap-1 rounded-md border border-border px-2 py-1 text-xs text-muted-foreground hover:text-destructive hover:border-destructive/30 tech-transition disabled:opacity-60"
                                 >
-                                  <X className="w-3.5 h-3.5" />
+                                  <Icon name="X" className="w-3.5 h-3.5" />
                                 </button>
                               </>
                             )}
                             {a.status === "created" &&
                               (a.kind === "email" ? (
                                 <span className="flex items-center gap-1 text-xs text-success">
-                                  <Mail className="w-3.5 h-3.5" />
+                                  <Icon name="Mail" className="w-3.5 h-3.5" />
                                   {a.dispatch_ref?.startsWith("sent:")
                                     ? "Email sent"
                                     : "Drafted in your mailbox"}
@@ -1230,9 +1179,9 @@ export default function MeetingPage({
                                   href="/artifacts"
                                   className="flex items-center gap-1 text-xs text-success hover:underline"
                                 >
-                                  <FileText className="w-3.5 h-3.5" /> Draft in
+                                  <Icon name="FileText" className="w-3.5 h-3.5" /> Draft in
                                   Artifacts
-                                  <ExternalLink className="w-3 h-3" />
+                                  <Icon name="ExternalLink" className="w-3 h-3" />
                                 </Link>
                               ) : (
                                 <Link
@@ -1243,8 +1192,8 @@ export default function MeetingPage({
                                   }
                                   className="flex items-center gap-1 text-xs text-success hover:underline"
                                 >
-                                  <Check className="w-3.5 h-3.5" /> In Tasks
-                                  <ExternalLink className="w-3 h-3" />
+                                  <Icon name="Check" className="w-3.5 h-3.5" /> In Tasks
+                                  <Icon name="ExternalLink" className="w-3 h-3" />
                                 </Link>
                               ))}
                             {a.status === "rejected" && (
@@ -1358,18 +1307,14 @@ export default function MeetingPage({
               </div>
             )}
             <div className="flex items-center gap-2 mt-4">
-              <button
-                onClick={() => void saveSpeaker()}
-                disabled={savingSpeaker}
-                className="flex items-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-xs font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50 tech-transition"
-              >
+              <Button size="none" layout="flex items-center" onClick={() => void saveSpeaker()} disabled={savingSpeaker} className="gap-1.5 px-4 py-2 text-xs">
                 {savingSpeaker ? (
-                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  <Icon name="Loader2" className="w-3.5 h-3.5 animate-spin" />
                 ) : (
-                  <Check className="w-3.5 h-3.5" />
+                  <Icon name="Check" className="w-3.5 h-3.5" />
                 )}
                 Save
-              </button>
+              </Button>
               {speakerNames[editingSpeaker] && (
                 <button
                   onClick={() => {

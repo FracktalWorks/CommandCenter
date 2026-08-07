@@ -58,10 +58,36 @@ if [ -f "$ENV_FILE" ]; then
   PG_USER="${PG_USER:-acb}"
 fi
 
-if ! docker ps --format '{{.Names}}' | grep -qx "$PG_CONTAINER"; then
-  echo "ERROR: Postgres container '$PG_CONTAINER' is not running." >&2
-  exit 1
-fi
+# ── How we reach Postgres ────────────────────────────────────────────────────
+#
+# On the VPS the cluster lives in a container, so every command goes through
+# `docker exec`. That coupling is also why this script had never been run
+# anywhere else — and therefore why, per this ticket's own rule, it was not yet
+# a backup. `PG_MODE=local` runs the identical logic against a Postgres reached
+# through libpq (PGHOST/PGPORT/PGUSER), which is what makes the restore
+# rehearsal in scripts/rehearse_restore.sh possible on any machine.
+#
+# The seam is two functions rather than a variable prefix on purpose: `docker
+# exec -i` and a bare local command differ in more than a prefix, and a string
+# that is sometimes empty splits badly under `set -u`.
+PG_MODE="${PG_MODE:-docker}"
+pg()  { if [ "$PG_MODE" = "local" ]; then "$@"; else pg "$@"; fi; }
+pgi() { if [ "$PG_MODE" = "local" ]; then "$@"; else pgi "$@"; fi; }
+
+require_postgres() {
+  if [ "$PG_MODE" = "local" ]; then
+    command -v psql >/dev/null || { echo "ERROR: PG_MODE=local but psql is not on PATH." >&2; exit 1; }
+    psql -U "$PG_USER" -d postgres -tAc 'select 1' >/dev/null 2>&1 || {
+      echo "ERROR: PG_MODE=local but no Postgres answers as '$PG_USER' (check PGHOST/PGPORT/PGPASSWORD)." >&2
+      exit 1
+    }
+  elif ! docker ps --format '{{.Names}}' | grep -qx "$PG_CONTAINER"; then
+    echo "ERROR: Postgres container '$PG_CONTAINER' is not running." >&2
+    exit 1
+  fi
+}
+
+require_postgres
 
 STAMP="$(date -u '+%Y-%m-%dT%H%M%SZ')"
 DEST="$BACKUP_DIR/$STAMP"
@@ -75,13 +101,13 @@ say "Backing up cluster '$PG_CONTAINER' as '$PG_USER' -> $DEST"
 # every GRANT in it fails. Dump globals separately so a bare-metal rebuild is
 # actually possible rather than only theoretically possible.
 say "Globals (roles, grants)"
-docker exec "$PG_CONTAINER" pg_dumpall -U "$PG_USER" --globals-only > "$DEST/globals.sql"
+pg pg_dumpall -U "$PG_USER" --globals-only > "$DEST/globals.sql"
 
 # --- Every non-template database --------------------------------------------
 # Enumerated rather than hardcoded: `litellm_proxy` holds API keys and spend
 # records and would have been silently missed by an acb-only backup, and any
 # database added later is picked up without editing this script.
-DBS="$(docker exec "$PG_CONTAINER" psql -U "$PG_USER" -d postgres -tAc \
+DBS="$(pg psql -U "$PG_USER" -d postgres -tAc \
   "select datname from pg_database where datistemplate = false and datname <> 'postgres' order by datname")"
 
 for db in $DBS; do
@@ -90,12 +116,12 @@ for db in $DBS; do
   # can pull a single table out of it. A plain .sql dump can only be replayed
   # whole, which is useless for the "recover one table" case that motivates
   # this script.
-  docker exec "$PG_CONTAINER" pg_dump -U "$PG_USER" -d "$db" -Fc > "$DEST/$db.dump"
+  pg pg_dump -U "$PG_USER" -d "$db" -Fc > "$DEST/$db.dump"
   # Cheap integrity check on EVERY run: pg_restore --list parses the archive's
   # table of contents, so a truncated or half-written dump fails here rather
   # than at 3am during an incident. This is the difference between having a
   # backup and believing you have one.
-  if ! docker exec -i "$PG_CONTAINER" pg_restore --list > /dev/null < "$DEST/$db.dump" 2>/dev/null; then
+  if ! pgi pg_restore --list > /dev/null < "$DEST/$db.dump" 2>/dev/null; then
     echo "CORRUPT"
     warn "pg_restore could not read $db.dump — treating this backup as FAILED"
     exit 1
@@ -112,7 +138,7 @@ say "Manifest"
   echo "taken_utc:        $STAMP"
   echo "host:             $(hostname)"
   echo "pg_container:     $PG_CONTAINER"
-  echo "pg_version:       $(docker exec "$PG_CONTAINER" psql -U "$PG_USER" -d postgres -tAc 'show server_version' | tr -d ' ')"
+  echo "pg_version:       $(pg psql -U "$PG_USER" -d postgres -tAc 'show server_version' | tr -d ' ')"
   echo "app_commit:       $(git -C "$APP_DIR" -c safe.directory="$APP_DIR" rev-parse --short HEAD 2>/dev/null || echo unknown)"
   echo "migration_files:  $(ls "$APP_DIR"/infra/postgres/[0-9][0-9]*_*.sql 2>/dev/null | wc -l)"
   echo "databases:        $(echo "$DBS" | tr '\n' ' ')"
@@ -126,12 +152,12 @@ say "Manifest"
   # worse than no anchor: it occupies the slot where the check should be.
   # So an unresolvable name is now reported as MISSING, loudly.
   for t in app_user email_messages gtd_items meeting agent_run; do
-    if ! docker exec "$PG_CONTAINER" psql -U "$PG_USER" -d acb -tAc \
+    if ! pg psql -U "$PG_USER" -d acb -tAc \
          "select to_regclass('public.$t')" 2>/dev/null | grep -q .; then
       printf "%-20s %s\n" "$t:" "MISSING — anchor names a table that does not exist"
       continue
     fi
-    n="$(docker exec "$PG_CONTAINER" psql -U "$PG_USER" -d acb -tAc \
+    n="$(pg psql -U "$PG_USER" -d acb -tAc \
          "select count(*) from $t" 2>/dev/null || echo "QUERY FAILED")"
     printf "%-20s %s\n" "$t:" "$n"
   done
@@ -147,10 +173,10 @@ cat "$DEST/MANIFEST.txt" | sed 's/^/    /'
 if [ "$VERIFY_RESTORE" = "1" ]; then
   say "Deep verify — restoring acb.dump into a scratch database"
   SCRATCH="acb_verify_$(date -u +%s)"
-  docker exec "$PG_CONTAINER" createdb -U "$PG_USER" "$SCRATCH"
+  pg createdb -U "$PG_USER" "$SCRATCH"
   # Trap so a failure part-way through cannot leave a stray multi-hundred-MB
   # database behind on a box with finite disk.
-  trap 'docker exec "$PG_CONTAINER" dropdb -U "$PG_USER" --if-exists "$SCRATCH" >/dev/null 2>&1 || true' EXIT
+  trap 'pg dropdb -U "$PG_USER" --if-exists "$SCRATCH" >/dev/null 2>&1 || true' EXIT
   # The log goes in $DEST, NOT /tmp. Two reasons, one of which already bit us:
   # `fs.protected_regular=2` (Ubuntu default) forbids opening an existing file
   # in a sticky world-writable dir owned by another user — and that applies to
@@ -159,11 +185,11 @@ if [ "$VERIFY_RESTORE" = "1" ]; then
   # failed at the verify step. Keeping it beside the dump also means the
   # evidence for a backup travels with that backup instead of being overwritten
   # by the next run.
-  if docker exec -i "$PG_CONTAINER" pg_restore -U "$PG_USER" -d "$SCRATCH" --no-owner --no-acl \
+  if pgi pg_restore -U "$PG_USER" -d "$SCRATCH" --no-owner --no-acl \
        < "$DEST/acb.dump" > "$DEST/verify_restore.log" 2>&1; then
-    live="$(docker exec "$PG_CONTAINER" psql -U "$PG_USER" -d acb -tAc \
+    live="$(pg psql -U "$PG_USER" -d acb -tAc \
             "select count(*) from information_schema.tables where table_schema='public'")"
-    rest="$(docker exec "$PG_CONTAINER" psql -U "$PG_USER" -d "$SCRATCH" -tAc \
+    rest="$(pg psql -U "$PG_USER" -d "$SCRATCH" -tAc \
             "select count(*) from information_schema.tables where table_schema='public'")"
     echo "    public tables: live=$live restored=$rest"
     if [ "$live" != "$rest" ]; then
@@ -176,7 +202,7 @@ if [ "$VERIFY_RESTORE" = "1" ]; then
     tail -20 /tmp/verify_restore.log >&2
     exit 1
   fi
-  docker exec "$PG_CONTAINER" dropdb -U "$PG_USER" --if-exists "$SCRATCH" >/dev/null 2>&1 || true
+  pg dropdb -U "$PG_USER" --if-exists "$SCRATCH" >/dev/null 2>&1 || true
   trap - EXIT
 fi
 

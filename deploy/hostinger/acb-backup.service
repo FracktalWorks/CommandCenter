@@ -1,0 +1,28 @@
+[Unit]
+# BO-23 — nightly application-level Postgres backup.
+# See scripts/backup_db.sh for why the Hostinger VM image is not sufficient.
+Description=CommandCenter database backup (pg_dump + integrity check)
+# The dump talks to the acb-postgres container, so Docker must be up first.
+# Without this the unit races the Docker daemon on boot and exits 1 on
+# "container is not running" — a failure that looks like a broken backup
+# rather than a mis-ordered unit.
+After=docker.service network-online.target
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+# Root: needs `docker exec` and write access to /opt/acb/backups.
+User=root
+# Invoked through bash on purpose — a checkout that loses the executable bit
+# (Windows contributors, archive exports) would otherwise fail with a bare
+# "Permission denied" and backups would silently never run. Same reasoning as
+# acb-health-watchdog.service.
+#
+# `--verify-restore` is the whole point of the unit rather than a bare dump:
+# it restores the fresh dump into a scratch database and counts rows, so a
+# backup that cannot be restored fails LOUDLY every night instead of being
+# discovered during an incident. That is this ticket's own rule — a backup
+# nobody has restored is not a backup.
+ExecStart=/bin/bash /opt/acb/app/scripts/backup_db.sh --verify-restore
+TimeoutStartSec=1800

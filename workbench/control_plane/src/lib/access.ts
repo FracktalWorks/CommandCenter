@@ -23,6 +23,14 @@ export type Access = {
   legacy_role: string;
   /** Feature slugs this member may reach, e.g. ["chat", "email"]. */
   features: string[];
+  /**
+   * Feature slugs this member may NOT reach, each with the permission it
+   * needs. The half that makes a hidden pane explainable: without it, "you
+   * lack the grant", "the slug was never registered" and "the gateway is
+   * down" all render as the same nothing, and the only way to tell them apart
+   * is to ask somebody with database access.
+   */
+  features_denied: Array<{ slug: string; permission: string }>;
   /** Agent names this member may run. */
   agents: string[];
   /** Raw granted patterns (admin screens display these verbatim). */
@@ -47,6 +55,7 @@ export const NO_ACCESS: Access = {
   roles: [],
   legacy_role: "employee",
   features: [],
+  features_denied: [],
   agents: [],
   permissions: [],
   capabilities: [],
@@ -117,7 +126,16 @@ export function featureForPath(pathname: string): string | null {
  * than an over-permissive 200 on a page that renders "no access"), and the
  * personal settings a member needs to manage their own account.
  */
-const ALWAYS_ALLOWED = ["/", "/signin", "/settings", "/settings/profile"];
+const ALWAYS_ALLOWED = [
+  "/",
+  "/signin",
+  "/settings",
+  "/settings/profile",
+  // "Your access" — the page that explains why a pane is missing. It has to be
+  // reachable by exactly the person who cannot reach things, so gating it on a
+  // feature would make it useless in the only situation it exists for.
+  "/access",
+];
 
 export function isAlwaysAllowed(pathname: string): boolean {
   return ALWAYS_ALLOWED.includes(pathname);
@@ -170,6 +188,7 @@ export async function fetchAccess(signal?: AbortSignal): Promise<Access> {
       ...NO_ACCESS,
       ...raw,
       features: raw.features ?? [],
+      features_denied: raw.features_denied ?? [],
       agents: raw.agents ?? [],
       permissions: raw.permissions ?? [],
       capabilities: raw.capabilities ?? [],

@@ -12,6 +12,7 @@
  * `lib/tree.filterByCenter`'s own test says so).
  */
 import Icon from "@/components/Icon";
+import Button from "@/components/ui/Button";
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 
@@ -22,7 +23,9 @@ import {
   type TaskRow,
   projectsApi,
 } from "./lib/api";
+import { ImportClickUp } from "./components/ImportClickUp";
 import { MyWork } from "./components/MyWork";
+import { NotificationBell } from "./components/NotificationBell";
 import { ProjectTree } from "./components/ProjectTree";
 import { TaskBoard } from "./components/TaskBoard";
 import { TaskList } from "./components/TaskList";
@@ -62,6 +65,7 @@ function ProjectsWorkspace() {
   const [newName, setNewName] = useState("");
   const [newTask, setNewTask] = useState("");
   const [treeKey, setTreeKey] = useState(0);
+  const [importing, setImporting] = useState(false);
 
   // The tree, plus every root's grants — the grants are what the Center filter
   // reads, and fetching them per root keeps `filterByCenter` a pure function
@@ -152,6 +156,45 @@ function ProjectsWorkspace() {
     },
     [selected, statuses]
   );
+
+  /**
+   * Open one task by id — what a notification, and the People Center's "Open
+   * work" list, both link to.
+   *
+   * Those links have been generating `/projects?task=<id>` since WS-28b and
+   * landing on an unchanged board, because nothing here read the parameter.
+   */
+  const openTaskById = useCallback(
+    async (taskId: string) => {
+      try {
+        await openWithStatuses(await projectsApi.task(taskId));
+      } catch (err) {
+        setError(String((err as Error).message));
+      }
+    },
+    [openWithStatuses]
+  );
+
+  const deepLink = searchParams.get("task");
+  useEffect(() => {
+    // Keyed on the id alone, deliberately: `openTaskById` closes over the
+    // selected project, so depending on it would reopen the task every time
+    // the board reloaded — including right after somebody closed the panel.
+    if (!deepLink) return;
+    let live = true;
+    (async () => {
+      try {
+        const task = await projectsApi.task(deepLink);
+        if (live) await openWithStatuses(task);
+      } catch (err) {
+        if (live) setError(String((err as Error).message));
+      }
+    })();
+    return () => {
+      live = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [deepLink]);
 
   async function submitProject(event: React.FormEvent) {
     event.preventDefault();
@@ -279,6 +322,7 @@ function ProjectsWorkspace() {
         </button>
         <ProjectTree
           roots={visibleRoots}
+          onImport={() => setImporting(true)}
           selectedId={mine ? null : selected?.id ?? null}
           onSelect={(project) => {
             setMine(false);
@@ -307,6 +351,20 @@ function ProjectsWorkspace() {
                 {selected.description}
               </p>
             ) : null}
+          </div>
+          <div className="flex shrink-0 items-center gap-1">
+            {/* Offered in the header too, not only from the empty state: the
+                import is idempotent and re-running it is how a workspace stays
+                current until WS-27g retires ClickUp. */}
+            <Button
+              variant="ghost"
+              size="sm"
+              icon="Download"
+              onClick={() => setImporting(true)}
+            >
+              ClickUp
+            </Button>
+            <NotificationBell onOpenTask={openTaskById} />
           </div>
           <div className={`flex shrink-0 gap-1 ${mine ? "hidden" : ""}`}>
             {(["board", "list"] as ViewMode[]).map((m) => (
@@ -386,6 +444,15 @@ function ProjectsWorkspace() {
               current.map((t) => (t.id === fresh.id ? { ...t, ...fresh } : t))
             );
           }}
+        />
+      ) : null}
+
+      {importing ? (
+        <ImportClickUp
+          onClose={() => setImporting(false)}
+          // Re-reads the tree, so the departments appear behind the dialog
+          // rather than after a manual refresh.
+          onImported={() => setTreeKey((k) => k + 1)}
         />
       ) : null}
     </div>

@@ -55,6 +55,7 @@ from gateway.routes.projects.core import (
     update_row,
     validate_choice,
 )
+from gateway.routes.projects.notifications import notify
 from pydantic import BaseModel
 from sqlalchemy import text
 
@@ -503,6 +504,20 @@ async def set_assignees(
                 task_id=task_id,
                 meta={"added": sorted(added), "removed": sorted(removed)},
             )
+        # WS-27j — the notification is written INSIDE this transaction, not
+        # emitted on the bus afterwards. `emit` is best-effort by construction
+        # so a broken workflow can never fail a task edit; that is right for
+        # agent dispatch, where a missed run is recoverable, and wrong here.
+        # An assignment that committed while its notification did not is
+        # exactly the silent assignment §11.2 filed.
+        #
+        # Only `added`: a re-assert of somebody already on the task must not
+        # ping them again, the same reason the event carries added rather than
+        # the whole set.
+        notified = await notify(
+            db, recipients=sorted(added), kind="assigned",
+            task_id=task_id, actor_id=actor(user),
+        )
         await db.commit()
     finally:
         await db.close()
@@ -511,7 +526,15 @@ async def set_assignees(
         await emit("pm.task.assigned", {
             "task_id": task_id, "assignees": sorted(added),
         })
-    return {"task_id": task_id, "assignees": sorted(wanted)}
+    return {
+        "task_id": task_id,
+        "assignees": sorted(wanted),
+        # Named rather than swallowed: assigning somebody outside the project's
+        # grant closure is a real thing to do by accident, and it leaves them
+        # holding work they cannot open. Saying so is what lets the assigner
+        # fix it.
+        "not_notified": notified["skipped"],
+    }
 
 
 # ── Links ───────────────────────────────────────────────────────────────────

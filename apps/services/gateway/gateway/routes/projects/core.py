@@ -72,10 +72,20 @@ STATUS_CATEGORIES: tuple[str, ...] = (
 #: still due" read forever.
 CLOSING_CATEGORIES: frozenset[str] = frozenset({"done", "cancelled"})
 
-#: `pm_activities.type`, mirrored from the same migration.
+#: `pm_activities.type` — mirrored from the migrations, and the mirror is
+#: CHECKED (`test_projects_activity_vocabulary`).
+#:
+#: It went out of step once and the consequence was total: migration 150 added
+#: `attachment` to the database's CHECK, this tuple was not updated, and
+#: ``record_activity`` refuses an unknown type BEFORE the insert — so every
+#: file upload to a project task answered 422 "Unknown activity type
+#: 'attachment'" and rolled back. The 25 attachment tests all passed, because
+#: they monkeypatch ``record_activity`` and so never exercised the vocabulary
+#: it guards. A tuple that mirrors a migration by hand needs a test that reads
+#: the migration; anything else is a comment claiming to be an invariant.
 ACTIVITY_TYPES: tuple[str, ...] = (
     "comment", "status_change", "field_change", "link", "assignment",
-    "agent_run", "sync", "system",
+    "agent_run", "sync", "system", "attachment", "mention",
 )
 
 #: `pm_projects.source` / `pm_tasks.source`. Tasks carry two extra origins.
@@ -445,6 +455,71 @@ async def resolve_visibility(db: Any, user: UserContext) -> Visibility:
         unrestricted=False,
         email=email,
         groups=tuple(r.subject for r in rows if getattr(r, "subject", None)),
+    )
+
+
+#: One member's effective permissions, assembled the way `/auth/me` assembles
+#: them: role grants plus per-user overrides carrying their effect.
+_EFFECTIVE_PERMISSIONS_SQL = """
+SELECT rp.permission AS permission, 'allow' AS effect, TRUE AS from_role
+  FROM app_user au
+  JOIN user_role ur           ON ur.user_id = au.id
+  JOIN org_role_permission rp ON rp.role_id = ur.role_id
+ WHERE lower(au.email) = :email AND au.status = 'active'
+UNION ALL
+SELECT o.permission AS permission, o.effect AS effect, FALSE AS from_role
+  FROM app_user au
+  JOIN user_permission_override o ON o.user_id = au.id
+ WHERE lower(au.email) = :email AND au.status = 'active'
+"""
+
+
+async def resolve_visibility_for(db: Any, email: str) -> Visibility:
+    """What SOMEBODY ELSE may see — the same answer, for a person who is not
+    the caller.
+
+    Needed because notifications are addressed to third parties (WS-27j): before
+    telling someone they were mentioned on a task, we have to know they can open
+    it, since the notification carries the task's title.
+
+    ``resolve_visibility`` cannot serve this: it reads ``UserContext``, and the
+    recipient of a mention has no request in flight. So the recipient's grants
+    are read from the tables ``/auth/me`` reads, and then handed to the REAL
+    ``build_access`` — the matcher stays one implementation, which is what keeps
+    a wildcard like ``*`` or ``data:*`` resolving the same way here as it does
+    on the request path. Re-deriving that in SQL is how two answers to "may they
+    see this" start disagreeing.
+
+    A person with no ``app_user`` row is not unrestricted and is in no groups:
+    a directory-only colleague (§2's two-store split) can be assigned work and
+    can be mentioned, and simply has nothing to open it with.
+    """
+    from acb_auth import build_access
+
+    clean = (email or "").strip().lower()
+    if not clean:
+        return Visibility(unrestricted=False, email="", groups=())
+    rows = (await db.execute(
+        text(_EFFECTIVE_PERMISSIONS_SQL), {"email": clean},
+    )).fetchall()
+    access = build_access(
+        [r.permission for r in rows if getattr(r, "from_role", False)],
+        [(r.permission, r.effect) for r in rows
+         if not getattr(r, "from_role", False)],
+    )
+    # `.has()` is EffectiveAccess's own decision method — the one `UserContext.
+    # has_permission` delegates to. Same allow/deny precedence, same wildcard
+    # matching, one implementation.
+    if access.has(ORG_READ):
+        return Visibility(unrestricted=True, email="", groups=())
+    group_rows = (await db.execute(
+        text(_MY_GROUPS_SQL), {"email": clean},
+    )).fetchall()
+    return Visibility(
+        unrestricted=False,
+        email=clean,
+        groups=tuple(r.subject for r in group_rows
+                     if getattr(r, "subject", None)),
     )
 
 

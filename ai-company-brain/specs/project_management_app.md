@@ -938,7 +938,7 @@ interesting it is to build.
 | # | Gap | Why it blocks | Ticket |
 |---|---|---|---|
 | 1 | ~~**Attachments**~~ | — | **WS-27i ✅ BUILT 2026-08-06** |
-| 2 | **Notifications + @mentions** — nothing notifies anybody | Assignment is silent. A tool nobody hears from is a tool nobody opens, and the whole assignment→agent chain assumes somebody noticed | **WS-27j** |
+| 2 | ~~**Notifications + @mentions**~~ | — | **WS-27j ✅ BUILT 2026-08-07** |
 | 3 | **Filters, grouping and saved views** — `pm_views` exists; the UI has a board/list toggle and nothing else | "My open bugs in Ops, grouped by assignee" is a daily question with no answer. The **table is already there**, so this is a UI ticket, not a schema one | **WS-27k** |
 | 4 | **Custom fields** — no definitions table, no values | ClickUp's signature feature. Paca's shape (`custom_field_definitions` + a JSONB column keyed by `field_key`) is proven and portable | **WS-27l** |
 | 5 | **Tags** — refused Paca's bare JSONB array (research row 13) and nothing replaced it | The refusal was right and left a hole. A tag registry with rename/merge is the version worth having | **WS-27m** |
@@ -1005,3 +1005,95 @@ reaches it), so a mutant removing `_safe_name` entirely survived. What that func
 protects is the **stored name**, which is echoed into the descriptor, rendered in the UI, and
 handed to `FileResponse(filename=…)` — i.e. into a `Content-Disposition` header, where
 separators, quotes and newlines matter. Both properties are now asserted separately.
+
+### 11.5 WS-27j — notifications and @mentions (built 2026-08-07)
+
+Migration `152_projects_notifications.sql`, `routes/projects/notifications.py`, the bell in
+the Projects header, the mention picker in the comment box. 39 hermetic + 27 vitest cases,
+10 mutants red.
+
+**Three rules decide who hears, and each one is the whole reason for a rule.**
+
+1. **Never the actor.** A bell that pings you about your own click is a bell people mute,
+   and a muted bell notifies nobody about anything.
+2. **Never an agent.** Agents are handed work by the WS-27f dispatch sink, which starts a
+   run. A row addressed to `agent:<name>` would sit unread forever and inflate a badge
+   nobody could clear. Enforced in Python **and** by a CHECK, because a row that reached the
+   table another way would still be wrong.
+3. **Never somebody who cannot open it.** This is the security property. A notification
+   carries the task's title, so delivering one outside the project's grant closure leaks
+   that title and lands the recipient on a 404. The comment still posts; the response names
+   who was skipped, and the UI says so — silently dropping a mention would leave the author
+   believing a colleague was pulled in.
+
+**Rule 3 needed new machinery, and the machinery is the point.** `resolve_visibility` reads
+a `UserContext`; the recipient of a mention has no request in flight. `resolve_visibility_for`
+answers for a third party by reading the same tables `/auth/me` reads and handing them to the
+**real** `build_access`, so a wildcard grant (`*`, `data:*`) and an allow/deny override
+resolve identically on both paths. Re-deriving that precedence in SQL is how two answers to
+"may they see this" start disagreeing.
+
+**Written inside the transaction, not emitted on the bus.** `core.emit` swallows failures by
+construction so a broken workflow can never fail a task edit — right for agent dispatch,
+where a missed run is recoverable, and wrong here. An assignment that committed while its
+notification did not is exactly the silent assignment this ticket closes.
+
+**A mention is an ADDRESS, not a name.** Migration 148 dropped `UNIQUE(name)` on the argument
+that two real people share one, so `@Priya` has no answer and guessing would ping the wrong
+person about work that is not theirs. The picker inserts `@priya@fracktal.in` so nobody types
+it; the browser's pattern is deliberately the same one the gateway parses, because a composer
+that highlighted names the server ignores would promise notifications nobody receives.
+
+**Audience is derived, not subscribed.** A comment reaches the task's assignees and its
+author. A `pm_task_watchers` table is the fuller answer and is not this ticket — and this is
+the set one would be seeded from, so nothing here has to be undone when it arrives.
+
+**Two bugs found on the way in, both shipping at the time:**
+
+- **Every project-task file upload was answering 422.** `core.ACTIVITY_TYPES` mirrors
+  `pm_activities`'s CHECK by hand, and `record_activity` refuses an unknown type *before* the
+  insert. Migration 150 added `attachment` to the database; the tuple was never updated. All
+  25 attachment tests passed throughout, because they monkeypatch `record_activity` — the
+  seam under test was mocked out. Fixed, with two tests that read the migrations rather than
+  restating them: one asserting set equality with the CHECK, one grepping every
+  `activity_type=` call site in the package.
+- **`/projects?task=<id>` did nothing.** The People Center's "Open work" list has linked
+  there since WS-28b and landed on an unchanged board, because the page never read the
+  parameter. The bell needed the same entry point, so it is now wired.
+
+### 11.6 WS-27b's missing UI — the import was unreachable (built 2026-08-07)
+
+`routes/projects/import_clickup.py` shipped with WS-27b and **no way to call it
+from the product**. The empty state read *"No projects yet. Create one, or
+import a ClickUp workspace"* — naming an action that had no control anywhere in
+the app. So a new install stayed empty, and the fastest route to real data was
+a curl command.
+
+`components/ImportClickUp.tsx` + `lib/importPlan.ts` close that. 18 vitest
+cases, 3 mutants red.
+
+**Three steps, and only the last one writes.** Preview (`/import/clickup/plan`)
+reads the live tenant and lists every Space with its folders, lists, tasks and
+people, plus the proposed Center and the evidence for it. Dry run
+(`/import/clickup {dry_run:true}`) exercises the whole path — including the
+Space→Folder→List flattening — and reports what it *would* create. Import is
+the same call with the flag off, on a button that says "writes".
+
+**The mapping is still the owner's act (D-PM-10), and the UI is built so it
+stays one.** The suggestion is pre-filled and shown beside its confidence *in
+words* — "a guess — check it" rather than `0.45`, because a bare number invites
+acceptance without looking. A **confirmed** mapping always beats a fresh
+suggestion, so re-running never silently re-maps a Space somebody already ruled
+on; that is the mutant most worth having red.
+
+**Unmapped Spaces are a notice, not a blocker**, matching the importer's own
+behaviour: they import in full and stay reachable, and refusing them would make
+the mapping a precondition of seeing the data you need to decide the mapping.
+
+**`already_present` is reported, never hidden.** The upsert is idempotent and
+re-running is the normal case; "0 created" with no mention of the 400 rows it
+matched reads as a failure of the import rather than a success of the last one.
+
+⚠️ The owner gate is unchanged and is now exactly one click: **building** this
+was agent-safe, **pressing Import** is the owner's act, and no agent has run
+either endpoint against production.

@@ -18,7 +18,11 @@ from typing import Any
 from acb_auth import require_feature_router
 from acb_common import get_logger
 from fastapi import APIRouter
-from gateway.routes.tasks.core import can_read_hr_fields  # noqa: F401 — re-export
+from gateway.routes.tasks.core import (  # noqa: F401 — re-exports
+    PEOPLE_STATUSES,
+    can_manage_people,
+    can_read_hr_fields,
+)
 from sqlalchemy import text
 
 _log = get_logger("gateway.people")
@@ -36,10 +40,11 @@ async def _get_db() -> Any:
     return await get_session()
 
 
-#: Statuses the directory understands, mirrored from migration 148's CHECK.
-#: Listed so a bad filter value is an empty result rather than an error, and so
-#: the UI can render the pill set without a second round trip.
-STATUSES: tuple[str, ...] = ("active", "contractor", "alumni", "invited")
+#: Statuses the directory understands — the SAME tuple the write routes
+#: validate against, not a copy of it. Listed so a bad filter value is an empty
+#: result rather than an error, and so the UI can render the pill set (and the
+#: editor's status select) without a second round trip.
+STATUSES: tuple[str, ...] = PEOPLE_STATUSES
 
 
 async def has_login(db: Any, email: str | None) -> bool:

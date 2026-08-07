@@ -72,6 +72,25 @@ def can_read_hr_fields(user: Any) -> bool:
     return bool(check and check(PEOPLE_HR_READ_PERMISSION))
 
 
+def can_manage_people(user: Any) -> bool:
+    """May this caller WRITE a person record?
+
+    The same permission ``require_people_write()`` enforces, asked as a
+    question instead of as a gate — because a *read* route has to be able to
+    answer it. The People Center renders its edit controls **absent** rather
+    than disabled (spec §3.2), and it cannot do that by discovering a 403 after
+    the click; it has to know before it draws. Both read the one constant, so
+    the answer the UI shows and the answer the write route enforces cannot
+    drift.
+
+    Fails closed for anything that is not a resolved ``UserContext``, the same
+    way ``can_read_hr_fields`` does — a UI that cannot tell must show no
+    control, never an optimistic one.
+    """
+    check = getattr(user, "has_permission", None)
+    return bool(check and check(PEOPLE_WRITE_PERMISSION))
+
+
 def require_people_write() -> Any:
     """The write gate for the people directory — ONE definition, bound by
     every write route (``POST``/``PATCH``/``resume`` in ``people.py`` and
@@ -81,6 +100,19 @@ def require_people_write() -> Any:
     enforced for the *route* rather than for a call site somebody remembers.
     """
     return require_permission(PEOPLE_WRITE_PERMISSION)
+
+
+#: The statuses a `gtd_people` row may carry — mirrored from migration 148's
+#: `gtd_people_status_check`.
+#:
+#: Defined HERE, next to the write gate, and re-exported by
+#: ``routes/people/core.py`` as ``STATUSES``, for the reason that file already
+#: gives about ``can_read_hr_fields``: a second copy is a second answer waiting
+#: to drift. It nearly did — migration 148 replaced 49's `'active' | 'inactive'
+#: | …` vocabulary, and the write routes below never learned, so a status the
+#: editor offered would have been refused by the database at 3am rather than by
+#: the route at request time.
+PEOPLE_STATUSES: tuple[str, ...] = ("active", "contractor", "alumni", "invited")
 
 
 # ── Models (snake_case — the frontend maps to camelCase) ─────────────────────

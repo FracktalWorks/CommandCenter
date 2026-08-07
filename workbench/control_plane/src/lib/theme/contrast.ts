@@ -80,3 +80,32 @@ export function contrast(fg: string, bg: string): number | null {
   if (!a || !b) return null;
   return contrastRatio(a, b);
 }
+
+
+/**
+ * The ink that stays legible on an arbitrary accent colour.
+ *
+ * A member's accent override replaces `--primary` (and `--ring`,
+ * `--sidebar-primary`) but the token that pairs with it — `--primary-foreground`,
+ * the ink drawn ON that fill — kept whatever value the theme chose for its OWN
+ * primary. On Graphite dark that is near-black, because Graphite's primary is
+ * near-white; override the accent with a mid-tone red and every primary-filled
+ * surface renders black-on-red. The sidebar logo mark is the visible one, but
+ * it is every primary button, every active pill, every badge.
+ *
+ * Black or white rather than a computed tint: those are the two ink colours
+ * with the widest possible contrast range, one of them always clears AA against
+ * any fill, and a member picking a brand colour is not also picking an ink.
+ */
+export function accentInk(accent: string): string {
+  const rgb = parseColor(accent);
+  // Unparseable (a named colour, an exotic space): keep the theme's own pairing
+  // rather than guessing — that is the status quo, and it is right more often
+  // than a coin flip.
+  if (!rgb) return "";
+  // 0.5 rather than a contrast comparison: for pure black vs pure white the
+  // crossover IS relative luminance 0.1791, but rounding differences there are
+  // invisible while the extra maths is not free in the pre-paint script this
+  // duplicates. WCAG agrees with the simple form everywhere it matters.
+  return luminance(rgb) > 0.1791 ? "#000000" : "#ffffff";
+}

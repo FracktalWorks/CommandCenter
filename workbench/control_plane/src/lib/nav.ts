@@ -96,6 +96,18 @@ export const NAV_SECTIONS: NavSection[] = [
         note: "Facts · episodic · knowledge graph",
         feature: "memory",
       },
+      // Deliberately UNGATED — the only item in the sidebar that is. This is
+      // the page that explains why a pane is missing, so gating it would hide
+      // it from exactly the person who needs it, and "I don't have access to
+      // this" would stay an unanswerable sentence. In Personal Center rather
+      // than Admin because it is a fact about YOU, and because a plain member
+      // must be able to reach it without an Admin heading appearing for them.
+      {
+        href: "/access",
+        label: "Your access",
+        icon: "ShieldCheck",
+        note: "What you can reach, and why anything else is hidden",
+      },
       {
         href: "/artifacts",
         label: "Artifacts",

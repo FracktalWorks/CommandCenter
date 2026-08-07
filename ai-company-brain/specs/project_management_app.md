@@ -1060,3 +1060,40 @@ the set one would be seeded from, so nothing here has to be undone when it arriv
 - **`/projects?task=<id>` did nothing.** The People Center's "Open work" list has linked
   there since WS-28b and landed on an unchanged board, because the page never read the
   parameter. The bell needed the same entry point, so it is now wired.
+
+### 11.6 WS-27b's missing UI — the import was unreachable (built 2026-08-07)
+
+`routes/projects/import_clickup.py` shipped with WS-27b and **no way to call it
+from the product**. The empty state read *"No projects yet. Create one, or
+import a ClickUp workspace"* — naming an action that had no control anywhere in
+the app. So a new install stayed empty, and the fastest route to real data was
+a curl command.
+
+`components/ImportClickUp.tsx` + `lib/importPlan.ts` close that. 18 vitest
+cases, 3 mutants red.
+
+**Three steps, and only the last one writes.** Preview (`/import/clickup/plan`)
+reads the live tenant and lists every Space with its folders, lists, tasks and
+people, plus the proposed Center and the evidence for it. Dry run
+(`/import/clickup {dry_run:true}`) exercises the whole path — including the
+Space→Folder→List flattening — and reports what it *would* create. Import is
+the same call with the flag off, on a button that says "writes".
+
+**The mapping is still the owner's act (D-PM-10), and the UI is built so it
+stays one.** The suggestion is pre-filled and shown beside its confidence *in
+words* — "a guess — check it" rather than `0.45`, because a bare number invites
+acceptance without looking. A **confirmed** mapping always beats a fresh
+suggestion, so re-running never silently re-maps a Space somebody already ruled
+on; that is the mutant most worth having red.
+
+**Unmapped Spaces are a notice, not a blocker**, matching the importer's own
+behaviour: they import in full and stay reachable, and refusing them would make
+the mapping a precondition of seeing the data you need to decide the mapping.
+
+**`already_present` is reported, never hidden.** The upsert is idempotent and
+re-running is the normal case; "0 created" with no mention of the 400 rows it
+matched reads as a failure of the import rather than a success of the last one.
+
+⚠️ The owner gate is unchanged and is now exactly one click: **building** this
+was agent-safe, **pressing Import** is the owner's act, and no agent has run
+either endpoint against production.

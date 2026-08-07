@@ -307,3 +307,50 @@ export const notificationsApi = {
       body: JSON.stringify({ all: true }),
     }),
 };
+
+export interface TaskAccountRow {
+  id: string;
+  provider: string;
+  workspace_id: string;
+  label?: string;
+}
+
+/**
+ * The ClickUp import (WS-27b's endpoints, finally reachable).
+ *
+ * `plan` and a `dry_run` import both write NOTHING — they are what answers
+ * "what is actually in ClickUp" before anything touches this database. Only
+ * `run({dry_run:false})` writes, and the UI never calls it without an explicit
+ * click on a button that says so.
+ *
+ * Accounts come from the tasks API because that is where the ClickUp
+ * connection already lives; a second place to connect ClickUp would be a
+ * second thing to retire at WS-27g.
+ */
+export const importApi = {
+  accounts: async (): Promise<TaskAccountRow[]> => {
+    const res = await fetch("/api/tasks/accounts");
+    if (!res.ok) throw new ProjectsApiError("Couldn't list accounts", res.status);
+    return (await res.json()) as TaskAccountRow[];
+  },
+
+  plan: (accountId: string, useLlm: boolean) =>
+    call<unknown>("import/clickup/plan", {
+      method: "POST",
+      body: JSON.stringify({ account_id: accountId, use_llm: useLlm }),
+    }),
+
+  run: (
+    accountId: string,
+    mappings: Array<{ space_id: string; center: string | null }>,
+    dryRun: boolean
+  ) =>
+    call<unknown>("import/clickup", {
+      method: "POST",
+      body: JSON.stringify({
+        account_id: accountId,
+        mappings,
+        dry_run: dryRun,
+      }),
+    }),
+};

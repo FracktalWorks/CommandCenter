@@ -44,6 +44,13 @@ describe("parseView", () => {
     expect(parseView("?tab=leads").tab).toBe("leads");
   });
 
+  it("admits the settings tab, which is neither board nor a collection", () => {
+    // WS-26f f2. The old `isEntity(tab) ? tab : "board"` SWALLOWED it: a
+    // `?tab=settings` link landed on the kanban, which is indistinguishable
+    // from the page ignoring the click.
+    expect(parseView("?tab=settings").tab).toBe("settings");
+  });
+
   it("reads the list filters", () => {
     const view = parseView("?tab=leads&q=bosch&status=s1&converted=1&owner=vj@x.in");
     expect(view).toMatchObject({
@@ -132,6 +139,25 @@ describe("selectTab", () => {
   it("is a no-op for the tab already showing", () => {
     const view = { ...DEFAULT_VIEW, tab: "leads" as const, statusId: "s1" };
     expect(selectTab(view, "leads")).toBe(view);
+  });
+
+  it("reaches the settings tab and comes back", () => {
+    const list = {
+      ...DEFAULT_VIEW,
+      tab: "deals" as const,
+      statusId: "s1",
+      record: { param: "deal" as const, entity: "deals" as const, id: "d1" },
+    };
+    const settings = selectTab(list, "settings");
+    expect(settings).toMatchObject({
+      tab: "settings",
+      statusId: null,
+      record: null,
+    });
+    // …and it is a shareable URL like every other view here.
+    expect(viewHref(settings)).toBe("/crm?tab=settings");
+    expect(parseView(serializeView(settings))).toEqual(settings);
+    expect(selectTab(settings, "board").tab).toBe("board");
   });
 
   it("clears the sort, because the keys are a per-entity allowlist", () => {

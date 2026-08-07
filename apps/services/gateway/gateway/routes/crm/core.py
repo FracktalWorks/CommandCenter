@@ -63,6 +63,14 @@ STATUS_TYPES: tuple[str, ...] = ("open", "ongoing", "on_hold", "won", "lost")
 #: Status types that close a record (§3.6: entering one stamps `closed_at`).
 CLOSING_TYPES: tuple[str, ...] = ("won", "lost")
 
+#: Status types whose deals are IN the pipeline, and therefore the only ones
+#: weighted ₹ is summed over (D-CRM-10 / §5.1). `won` is *closed* revenue and
+#: never pipeline; `lost` is nothing; and `on_hold` — the fifth type §5.1's
+#: prose never mentions — is deliberately excluded too: a deal nobody is
+#: working is not a forecast, and counting it at its stage's prior is how a
+#: pipeline number stays high while the quarter empties.
+WEIGHTED_TYPES: tuple[str, ...] = ("open", "ongoing")
+
 #: `crm_activities.type`, mirrored from the same migration.
 ACTIVITY_TYPES: tuple[str, ...] = (
     "note", "call", "meeting", "task", "status_change", "system",

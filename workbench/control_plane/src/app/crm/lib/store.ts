@@ -17,7 +17,8 @@ import * as api from "./api";
 import { CrmError } from "./api";
 import { applyMove, toBoardLanes, type BoardLane, type DealMove } from "./board";
 import { listQuery } from "./filters";
-import type { CrmView } from "./urlState";
+import type { PositionPatch } from "./settings";
+import { isEntity, type CrmView } from "./urlState";
 import type {
   Contact,
   Deal,
@@ -26,7 +27,9 @@ import type {
   Lead,
   LostReason,
   Organization,
+  StageMetadataReport,
   Status,
+  StatusKind,
   TimelineEntry,
 } from "./types";
 
@@ -94,6 +97,31 @@ type CrmState = {
   ) => Promise<string | null>;
   setPrimaryContact: (dealId: string, contactId: string) => Promise<void>;
   detachContact: (dealId: string, contactId: string) => Promise<void>;
+
+  // ── Pipeline settings (WS-26f f2) ───────────────────────────────────────
+  //
+  // The settings tab's collection IS the vocabulary, so `loadVocabulary()` is
+  // its re-read — and the store's one rule applies here identically: every
+  // write re-reads on EVERY response, refusals included. A lane that stays on
+  // screen after a 409 ("this status still holds 4 deals") reads as deleted.
+  saveStatus: (
+    kind: StatusKind,
+    statusId: string | null,
+    body: Record<string, unknown>
+  ) => Promise<boolean>;
+  removeStatus: (kind: StatusKind, statusId: string) => Promise<boolean>;
+  reorderStatuses: (
+    kind: StatusKind,
+    patches: PositionPatch[]
+  ) => Promise<void>;
+  saveLostReason: (
+    reasonId: string | null,
+    body: Record<string, unknown>
+  ) => Promise<boolean>;
+  removeLostReason: (reasonId: string) => Promise<boolean>;
+  reorderLostReasons: (patches: PositionPatch[]) => Promise<void>;
+  /** `apply` is the owner gate — see api.importZohoStages. */
+  pullZohoStages: (apply: boolean) => Promise<StageMetadataReport | null>;
 };
 
 function message(err: unknown): string {
@@ -124,7 +152,10 @@ export const useCrmStore = create<CrmState>((set, get) => ({
     const view = get().lastView;
     if (!view) return;
     if (view.tab === "board") await get().loadBoard(view);
-    else await get().loadList(view.tab, view);
+    // `settings` is a tab with no collection behind it — its own writes
+    // re-read the vocabulary directly. Falling through to `loadList` would
+    // request `/crm/settings`.
+    else if (isEntity(view.tab)) await get().loadList(view.tab, view);
   },
 
   async loadVocabulary() {
@@ -321,6 +352,115 @@ export const useCrmStore = create<CrmState>((set, get) => ({
       set({ saving: false });
       const people = await api.listDealContacts(dealId).catch(() => null);
       if (people) set({ dealContacts: people.rows });
+    }
+  },
+
+  // ── Pipeline settings ───────────────────────────────────────────────────
+
+  async saveStatus(kind, statusId, body) {
+    set({ saving: true, error: null });
+    try {
+      if (statusId) await api.patchStatus(kind, statusId, body);
+      else await api.createStatus(kind, body);
+      return true;
+    } catch (err) {
+      set({ error: message(err) });
+      return false;
+    } finally {
+      set({ saving: false });
+      await get().loadVocabulary();
+    }
+  },
+
+  async removeStatus(kind, statusId) {
+    set({ saving: true, error: null });
+    try {
+      await api.deleteStatus(kind, statusId);
+      return true;
+    } catch (err) {
+      // The 409 here is the useful one — "this status still holds 4 deals" —
+      // and it is only useful if the lane is still on screen to read it next
+      // to, which is what the re-read below guarantees.
+      set({ error: message(err) });
+      return false;
+    } finally {
+      set({ saving: false });
+      await get().loadVocabulary();
+    }
+  },
+
+  async reorderStatuses(kind, patches) {
+    set({ saving: true, error: null });
+    try {
+      // Serial, not Promise.all: these are N writes to the same table and a
+      // partial failure must leave a readable order rather than a race.
+      for (const patch of patches) {
+        await api.patchStatus(kind, patch.id, { position: patch.position });
+      }
+    } catch (err) {
+      set({ error: message(err) });
+    } finally {
+      set({ saving: false });
+      await get().loadVocabulary();
+    }
+  },
+
+  async saveLostReason(reasonId, body) {
+    set({ saving: true, error: null });
+    try {
+      if (reasonId) await api.patchLostReason(reasonId, body);
+      else await api.createLostReason(body as { label: string });
+      return true;
+    } catch (err) {
+      set({ error: message(err) });
+      return false;
+    } finally {
+      set({ saving: false });
+      await get().loadVocabulary();
+    }
+  },
+
+  async removeLostReason(reasonId) {
+    set({ saving: true, error: null });
+    try {
+      await api.deleteLostReason(reasonId);
+      return true;
+    } catch (err) {
+      set({ error: message(err) });
+      return false;
+    } finally {
+      set({ saving: false });
+      await get().loadVocabulary();
+    }
+  },
+
+  async reorderLostReasons(patches) {
+    set({ saving: true, error: null });
+    try {
+      for (const patch of patches) {
+        await api.patchLostReason(patch.id, { position: patch.position });
+      }
+    } catch (err) {
+      set({ error: message(err) });
+    } finally {
+      set({ saving: false });
+      await get().loadVocabulary();
+    }
+  },
+
+  async pullZohoStages(apply) {
+    set({ saving: true, error: null });
+    try {
+      const report = await api.importZohoStages(apply);
+      return report;
+    } catch (err) {
+      set({ error: message(err) });
+      return null;
+    } finally {
+      set({ saving: false });
+      // An applied repair rewrites the lanes the rest of the app renders from;
+      // a dry run changes nothing and re-reading it costs three GETs.
+      if (apply) await get().loadVocabulary();
     }
   },
 }));

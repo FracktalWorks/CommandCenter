@@ -240,10 +240,132 @@ async def list_users() -> list[dict[str, Any]]:
         return r.json().get("users", [])  # type: ignore[no-any-return]
 
 
+# ── Pipeline metadata (WS-26f f1) ───────────────────────────────────────────
+#
+# The tenant's REAL lane order and forecast semantics live in the settings API,
+# not on the records. Both reads below are GETs like every sibling above — this
+# module still reads and never writes.
+
+#: The settings reads are a deliberate divergence from the ``v2`` path every
+#: record reader here uses: ``settings/pipeline`` does not exist on v2. The
+#: version is named ONCE, so a tenant that refuses it produces one reported
+#: outcome (:class:`ZohoApiVersionError`) rather than a silent retry ladder
+#: down the version list.
+SETTINGS_API_VERSION = "v8"
+
+#: The OAuth scopes these two reads need. The tenant's refresh token was minted
+#: without them (``crm_app.md`` §7.1), so "no scope" is the EXPECTED first
+#: outcome — and re-minting the token is the owner's act, which is why the
+#: caller has to be able to print the exact string an owner must add.
+LAYOUTS_SCOPE = "ZohoCRM.settings.layouts.READ"
+PIPELINE_SCOPE = "ZohoCRM.settings.pipeline.READ"
+
+#: Zoho's own error codes. A scope refusal and a version refusal arrive as the
+#: same 401/404 shape as any other failure, and telling them apart is the whole
+#: of done-when 3 — "the token cannot see this" and "this tenant has no such
+#: endpoint" are different sentences to an owner.
+_SCOPE_ERROR_CODES = frozenset({"OAUTH_SCOPE_MISMATCH"})
+_VERSION_ERROR_CODES = frozenset({"INVALID_URL_PATTERN", "INVALID_MODULE"})
+
+
+class ZohoScopeError(RuntimeError):
+    """The refresh token was not minted with the scope this read needs."""
+
+    def __init__(self, scope: str, detail: str = "") -> None:
+        super().__init__(f"Zoho refused the read: the token lacks {scope}")
+        self.scope = scope
+        self.detail = detail
+
+
+class ZohoApiVersionError(RuntimeError):
+    """The tenant does not serve this endpoint on the version we ask for."""
+
+    def __init__(self, version: str, path: str, detail: str = "") -> None:
+        super().__init__(f"Zoho refused /crm/{version}/{path}")
+        self.version = version
+        self.path = path
+        self.detail = detail
+
+
+def _error_body(response: httpx.Response) -> dict[str, Any]:
+    """Zoho's JSON error envelope, or an empty one for a non-JSON body."""
+    try:
+        body = response.json()
+    except ValueError:
+        return {}
+    return body if isinstance(body, dict) else {}
+
+
+async def _settings_json(
+    path: str, params: dict[str, Any], *, scope: str,
+) -> dict[str, Any]:
+    """One settings GET, with the two refusals it can produce named."""
+    s = get_settings()
+    async with httpx.AsyncClient(timeout=30.0) as http:
+        r = await http.get(
+            f"{s.zoho_api_domain}/crm/{SETTINGS_API_VERSION}/{path}",
+            headers=await _headers(),
+            params=params,
+        )
+    if r.status_code in (204, 304):
+        return {}
+    body = _error_body(r)
+    code = str(body.get("code") or "")
+    message = str(body.get("message") or "")[:200]
+    if code in _SCOPE_ERROR_CODES or (
+        r.status_code in (401, 403) and "scope" in message.lower()
+    ):
+        raise ZohoScopeError(scope, message)
+    if code in _VERSION_ERROR_CODES or r.status_code == 404:
+        raise ZohoApiVersionError(SETTINGS_API_VERSION, path, message)
+    r.raise_for_status()
+    return body
+
+
+async def list_deal_layouts() -> list[dict[str, Any]]:
+    """The Deals module's layouts — ``GET settings/layouts?module=Deals``.
+
+    Two things come out of one read: the ``layout_id`` the pipeline call needs,
+    and the Stage field's ``pick_list_values``, which is where a per-stage
+    ``probability`` lives when the tenant exposes one at all.
+    """
+    body = await _settings_json(
+        "settings/layouts", {"module": "Deals"}, scope=LAYOUTS_SCOPE,
+    )
+    layouts = body.get("layouts")
+    return list(layouts) if isinstance(layouts, list) else []
+
+
+async def list_deal_pipelines(layout_id: str) -> list[dict[str, Any]]:
+    """The pipelines configured on one Deals layout, with their stages.
+
+    ⚠️ The response key is read tolerantly (``pipeline`` is what the API
+    documents, ``pipelines`` is what some versions return) because getting it
+    wrong reads as "this tenant has no pipelines" — indistinguishable from the
+    honest empty answer, and the caller writes nothing on either. Tolerance
+    here is not a retry ladder: it is one response, parsed twice.
+    """
+    body = await _settings_json(
+        "settings/pipeline", {"layout_id": layout_id}, scope=PIPELINE_SCOPE,
+    )
+    for key in ("pipeline", "pipelines"):
+        found = body.get(key)
+        if isinstance(found, list):
+            return list(found)
+    return []
+
+
 __all__ = [
+    "LAYOUTS_SCOPE",
+    "PIPELINE_SCOPE",
+    "SETTINGS_API_VERSION",
+    "ZohoApiVersionError",
+    "ZohoScopeError",
     "get_access_token",
     "list_accounts",
     "list_contacts",
+    "list_deal_layouts",
+    "list_deal_pipelines",
     "list_deals",
     "list_deleted",
     "list_leads",

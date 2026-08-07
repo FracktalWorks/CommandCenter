@@ -25,9 +25,20 @@ export const SHEET_ENTITY: Record<SheetParam, EntitySlug> = {
 
 export type OpenRecord = { param: SheetParam; entity: EntitySlug; id: string };
 
+/**
+ * The two tabs that are not a collection.
+ *
+ * `settings` is the pipeline manager (WS-26f f2) and is deliberately part of
+ * the SAME grammar rather than a route of its own: it is one more thing this
+ * page can be showing, and giving it a route would mean the record sheet
+ * (which is URL state) could not stay open across it.
+ */
+export const NON_ENTITY_TABS = ["board", "settings"] as const;
+export type NonEntityTab = (typeof NON_ENTITY_TABS)[number];
+
 export type CrmView = {
   /** Which list is behind the sheet. `board` is the landing tab. */
-  tab: "board" | EntitySlug;
+  tab: NonEntityTab | EntitySlug;
   /** The record the sheet is showing, or null when it is closed. */
   record: OpenRecord | null;
   /** Free-text search on the list. */
@@ -63,8 +74,23 @@ export const DEFAULT_VIEW: CrmView = {
   dir: "desc",
 };
 
-function isEntity(value: string | null): value is EntitySlug {
+export function isEntity(value: string | null): value is EntitySlug {
   return !!value && (ENTITIES as readonly string[]).includes(value);
+}
+
+/**
+ * Is this a tab at all?
+ *
+ * Written as its own predicate rather than folded into `parseView`'s ternary
+ * because `settings` is the first tab that is neither the board nor a
+ * collection — and the old `isEntity(tab) ? tab : "board"` SWALLOWED it,
+ * silently landing a `?tab=settings` deep link on the kanban.
+ */
+export function isTab(value: string | null): value is CrmView["tab"] {
+  return (
+    isEntity(value) ||
+    (!!value && (NON_ENTITY_TABS as readonly string[]).includes(value))
+  );
 }
 
 /**
@@ -80,7 +106,7 @@ export function parseView(search: string | URLSearchParams): CrmView {
     typeof search === "string" ? new URLSearchParams(search) : search;
   const tab = params.get("tab");
   return {
-    tab: isEntity(tab) ? tab : "board",
+    tab: isTab(tab) ? tab : "board",
     record: parseRecord(params),
     q: params.get("q") ?? "",
     statusId: params.get("status") || null,

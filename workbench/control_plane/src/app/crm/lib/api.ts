@@ -23,7 +23,9 @@ import type {
   LostReason,
   Organization,
   Pipeline,
+  StageMetadataReport,
   Status,
+  StatusKind,
   TimelineEntry,
 } from "./types";
 
@@ -141,6 +143,84 @@ export function listStatuses(kind: "lead" | "deal"): Promise<Status[]> {
 
 export function listLostReasons(): Promise<LostReason[]> {
   return call<LostReason[]>("/lost-reasons");
+}
+
+// ── Pipeline settings (WS-26f f2) ─────────────────────────────────────────
+//
+// The settings grids drive the EXISTING admin API — `POST/PATCH/DELETE
+// /crm/statuses/{kind}` and the lost-reason trio — with no addendum. A
+// drag-reorder is N per-row PATCHes of `position` (lib/settings.ts::reorder
+// decides which rows moved), because a bulk-reorder endpoint would be a
+// second way to write the same column.
+
+export function createStatus(
+  kind: StatusKind,
+  body: Record<string, unknown>
+): Promise<Status> {
+  return call<Status>(`/statuses/${kind}`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export function patchStatus(
+  kind: StatusKind,
+  statusId: string,
+  body: Record<string, unknown>
+): Promise<Status> {
+  return call<Status>(`/statuses/${kind}/${statusId}`, {
+    method: "PATCH",
+    body: JSON.stringify(body),
+  });
+}
+
+export function deleteStatus(
+  kind: StatusKind,
+  statusId: string
+): Promise<{ deleted: string; kind: string }> {
+  return call(`/statuses/${kind}/${statusId}`, { method: "DELETE" });
+}
+
+export function createLostReason(body: {
+  label: string;
+  position?: number;
+}): Promise<LostReason> {
+  return call<LostReason>("/lost-reasons", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export function patchLostReason(
+  reasonId: string,
+  body: Record<string, unknown>
+): Promise<LostReason> {
+  return call<LostReason>(`/lost-reasons/${reasonId}`, {
+    method: "PATCH",
+    body: JSON.stringify(body),
+  });
+}
+
+export function deleteLostReason(
+  reasonId: string
+): Promise<{ deleted: string }> {
+  return call(`/lost-reasons/${reasonId}`, { method: "DELETE" });
+}
+
+/**
+ * The WS-26f f1 pull — dry run unless `apply` is true.
+ *
+ * ⚠️ `?apply=true` is the registered owner gate (work_plan.md §6): it rewrites
+ * the live pipeline. The button that reaches it therefore asks first, and the
+ * dry-run report is what it asks WITH.
+ */
+export function importZohoStages(
+  apply = false
+): Promise<StageMetadataReport> {
+  return call<StageMetadataReport>(
+    `/import/zoho/stages${apply ? "?apply=true" : ""}`,
+    { method: "POST" }
+  );
 }
 
 // ── Timeline ──────────────────────────────────────────────────────────────

@@ -23,8 +23,16 @@ type Field = {
   key: string;
   label: string;
   kind?: "text" | "number" | "date";
-  /** How it reads when it is not being edited. */
-  show?: (row: Row) => string;
+  /**
+   * How it reads when it is not being edited.
+   *
+   * Takes the record's own STATUS as well as the row, because one field —
+   * `probability` — means something different depending on it: a NULL is not
+   * "no forecast", it is "this deal has not stated one and inherits its
+   * stage's" (§5.1). Rendering that as "—" hides the number the whole
+   * weighted pipeline is computed from.
+   */
+  show?: (row: Row, status: Status | null) => string;
 };
 
 const FIELDS: Record<EntitySlug, Field[]> = {
@@ -35,6 +43,19 @@ const FIELDS: Record<EntitySlug, Field[]> = {
       label: "Amount",
       kind: "number",
       show: (r) => money(r.amount as number | null, (r.currency as string) || "INR"),
+    },
+    {
+      key: "probability",
+      label: "Probability",
+      kind: "number",
+      show: (r, status) => {
+        const stated = r.probability as number | null | undefined;
+        if (stated !== null && stated !== undefined) return `${stated}%`;
+        const inherited = status?.probability;
+        return inherited === null || inherited === undefined
+          ? "—"
+          : `${inherited}% (from ${status?.name ?? "the stage"})`;
+      },
     },
     {
       key: "expected_close_date",
@@ -192,6 +213,7 @@ export default function FieldsPanel({
             key={field.key}
             field={field}
             row={record}
+            status={status}
             saving={saving}
             onPatch={onPatch}
           />
@@ -204,11 +226,13 @@ export default function FieldsPanel({
 function EditableField({
   field,
   row,
+  status,
   saving,
   onPatch,
 }: {
   field: Field;
   row: Row;
+  status: Status | null;
   saving: boolean;
   onPatch: (body: Record<string, unknown>) => void;
 }) {
@@ -280,7 +304,7 @@ function EditableField({
             className="w-full break-words text-left text-xs text-foreground hover:text-primary tech-transition"
           >
             {field.show
-              ? field.show(row)
+              ? field.show(row, status)
               : raw === null || raw === undefined || raw === ""
                 ? "—"
                 : String(raw)}

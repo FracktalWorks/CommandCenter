@@ -466,6 +466,134 @@ async def test_the_board_can_be_scoped_to_one_owner_case_insensitively(
     assert proposal.count == 1
 
 
+# ── WS-26f f3 · weighted ₹ per lane (done-when 6, the SQL half) ────────────
+#
+# The lane number binds the SQL and `board.ts`'s pure function binds the same
+# formula for the header rollup (C4). It cannot be derived from `rows`: those
+# are capped at `per_lane` and the browser sends no cap at all, so a
+# rows-derived total would under-report exactly the busy lane on screen.
+
+async def test_a_lane_weights_by_the_deals_own_probability(
+    db: FakeCrmDB,
+) -> None:
+    """D-CRM-10: forecast math reads the DEAL, never the stage. A rep who knows
+    the champion just left marks a Proposal-stage deal at 20 without moving
+    it, and the forecast has to believe them."""
+    stages = _deal_pipeline(db)
+    _seed_deal(db, stages["Proposal"], amount=100_000.0, probability=20)
+    _seed_deal(db, stages["Proposal"], amount=200_000.0, probability=75)
+
+    board = await crm_pipeline.get_pipeline(owner=None, per_lane=50, user=USER)
+    proposal = next(x for x in board.lanes if x.status.name == "Proposal")
+
+    assert proposal.amount == 300_000.0
+    assert proposal.weighted == 20_000.0 + 150_000.0
+
+
+async def test_a_null_probability_inherits_the_stage_default(
+    db: FakeCrmDB,
+) -> None:
+    """The inheritance materializes on entry, so a NULL survives only on rows
+    that predate a move — the imported ones, which is most of the board today.
+    Reading them as 0% would zero the forecast on exactly those rows."""
+    stages = _deal_pipeline(db)
+    _seed_deal(db, stages["Proposal"], amount=100_000.0, probability=None)
+
+    board = await crm_pipeline.get_pipeline(owner=None, per_lane=50, user=USER)
+    proposal = next(x for x in board.lanes if x.status.name == "Proposal")
+
+    assert proposal.status.probability == 50
+    assert proposal.weighted == 50_000.0
+
+
+async def test_a_zero_probability_is_a_measurement_not_a_missing_value(
+    db: FakeCrmDB,
+) -> None:
+    stages = _deal_pipeline(db)
+    _seed_deal(db, stages["Proposal"], amount=100_000.0, probability=0)
+
+    board = await crm_pipeline.get_pipeline(owner=None, per_lane=50, user=USER)
+    proposal = next(x for x in board.lanes if x.status.name == "Proposal")
+
+    assert proposal.weighted == 0.0
+    assert proposal.amount == 100_000.0
+
+
+@pytest.mark.parametrize("lane", ["Closed Won", "Closed Lost"])
+async def test_a_terminal_lane_forecasts_nothing(
+    db: FakeCrmDB, lane: str,
+) -> None:
+    """Won revenue is CLOSED, not pipeline, and a lost deal forecasts nothing.
+    Both lanes still carry their ₹ total — WS-26g's win/loss block reads it."""
+    stages = _deal_pipeline(db)
+    _seed_deal(db, stages[lane], amount=500_000.0, probability=100)
+
+    board = await crm_pipeline.get_pipeline(owner=None, per_lane=50, user=USER)
+    terminal = next(x for x in board.lanes if x.status.name == lane)
+
+    assert terminal.amount == 500_000.0
+    assert terminal.weighted == 0.0
+
+
+async def test_an_on_hold_lane_is_excluded_from_the_weighted_total(
+    db: FakeCrmDB,
+) -> None:
+    """``on_hold`` is a fifth status type §5.1's prose never mentions, and it
+    is deliberately NOT weighted: a deal nobody is working is not a forecast,
+    and counting it at its stage's prior is how a pipeline number stays high
+    while the quarter empties."""
+    parked = db.seed(
+        "crm_deal_statuses", name="Parked", type="on_hold", position=40,
+        probability=40, is_default=False,
+    )
+    _seed_deal(db, parked, amount=1_000_000.0, probability=40)
+
+    board = await crm_pipeline.get_pipeline(owner=None, per_lane=50, user=USER)
+    lane = next(x for x in board.lanes if x.status.name == "Parked")
+
+    assert lane.amount == 1_000_000.0
+    assert lane.weighted == 0.0
+    assert set(crm_core.WEIGHTED_TYPES) == {"open", "ongoing"}
+
+
+async def test_the_weighted_total_covers_the_whole_lane_not_the_page(
+    db: FakeCrmDB,
+) -> None:
+    """The reason it is SQL and not `rows.reduce(...)`: the browser asks for no
+    per-lane cap, and the gateway's default is 50."""
+    stages = _deal_pipeline(db)
+    for _ in range(4):
+        _seed_deal(db, stages["Proposal"], amount=100_000.0, probability=50)
+
+    board = await crm_pipeline.get_pipeline(owner=None, per_lane=2, user=USER)
+    proposal = next(x for x in board.lanes if x.status.name == "Proposal")
+
+    assert len(proposal.rows) == 2
+    assert proposal.weighted == 200_000.0
+
+
+async def test_the_weighted_aggregate_binds_the_stage_default(
+    db: FakeCrmDB,
+) -> None:
+    """Structural: the fallback is the lane's OWN probability, bound like every
+    other caller value in this package rather than interpolated — and dropping
+    the COALESCE is what would silently read every pre-move NULL as 0%."""
+    stages = _deal_pipeline(db)
+    _seed_deal(db, stages["Proposal"], amount=100_000.0)
+
+    await crm_pipeline.get_pipeline(owner=None, per_lane=50, user=USER)
+    aggregates = db.statements_touching("AS weighted")
+
+    assert aggregates, "the lane aggregate lost its weighted total"
+    assert "COALESCE(probability, :stage_probability)" in aggregates[0]
+    proposal_call = next(
+        params for statement, params in db.calls
+        if "AS weighted" in statement
+        and params.get("status_id") == str(stages["Proposal"].id)
+    )
+    assert proposal_call["stage_probability"] == 50
+
+
 # ── WS-26c · kanban cards carry the account name (done-when 2) ─────────────
 
 async def test_a_board_card_carries_its_organization_name(

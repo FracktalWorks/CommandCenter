@@ -96,6 +96,15 @@ export default function KanbanBoard({
                     returned would lie about the busy lane somebody is
                     actually looking at. */}
                 <span>{compactMoney(lane.amount).replace("₹", "")}</span>
+                {/* Weighted ₹ under the raw total (§5.1). Rendered only where
+                    it means something — a won lane's revenue is closed and a
+                    lost lane forecasts nothing, so the gateway sends 0 and
+                    printing "0 weighted" there would read as a bug. */}
+                {lane.weighted > 0 && (
+                  <span className="opacity-70" title="Weighted by probability">
+                    · {compactMoney(lane.weighted).replace("₹", "")} wtd
+                  </span>
+                )}
                 {lane.rows.length < lane.count && (
                   <span className="ml-auto opacity-70">
                     showing {lane.rows.length}

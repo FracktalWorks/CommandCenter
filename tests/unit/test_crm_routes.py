@@ -698,6 +698,168 @@ async def test_an_unknown_status_type_is_422(db: FakeCrmDB) -> None:
     assert exc.value.status_code == 422
 
 
+# ── WS-26f f2 · the D-CRM-10 probability clamp (done-when 5, server side) ───
+#
+# The rule: won-type lanes forecast 100 and lost-type lanes 0, refused as a
+# 422 rather than silently rewritten. Probability *informs* the forecast and
+# `type` *decides* what closes, so a stage typed won at 40% cannot close a deal
+# — it can only halve the weighted pipeline every money surface reads.
+
+@pytest.mark.parametrize("probability", [-1, 101, 1000])
+async def test_a_probability_outside_zero_to_a_hundred_is_422(
+    db: FakeCrmDB, probability: int,
+) -> None:
+    with pytest.raises(HTTPException) as exc:
+        await crm_admin.create_status(
+            "deal",
+            crm_admin.StatusIn(name="Pilot", type="open", probability=probability),
+            USER,
+        )
+    assert exc.value.status_code == 422
+    assert "0-100" in str(exc.value.detail)
+    assert db.rows("crm_deal_statuses") == []
+
+
+@pytest.mark.parametrize(
+    ("status_type", "probability"), [("won", 40), ("lost", 25), ("won", 0)],
+)
+async def test_a_terminal_stage_with_the_wrong_probability_is_422_on_create(
+    db: FakeCrmDB, status_type: str, probability: int,
+) -> None:
+    with pytest.raises(HTTPException) as exc:
+        await crm_admin.create_status(
+            "deal",
+            crm_admin.StatusIn(
+                name="Delivered", type=status_type, probability=probability,
+            ),
+            USER,
+        )
+    assert exc.value.status_code == 422
+    assert "D-CRM-10" in str(exc.value.detail)
+    assert db.rows("crm_deal_statuses") == []
+
+
+async def test_a_won_stage_created_without_a_probability_is_refused_too(
+    db: FakeCrmDB,
+) -> None:
+    """The column is NOT NULL DEFAULT 0, so omitting it does not mean "leave
+    it alone" — it means "land this won stage at 0%". The clamp reads the value
+    the write will LEAVE, not the one the caller happened to mention."""
+    with pytest.raises(HTTPException) as exc:
+        await crm_admin.create_status(
+            "deal", crm_admin.StatusIn(name="Delivered", type="won"), USER,
+        )
+    assert exc.value.status_code == 422
+    assert "100" in str(exc.value.detail)
+
+
+async def test_the_terminal_probabilities_are_still_settable(
+    db: FakeCrmDB,
+) -> None:
+    """The other half — the clamp is a rule, not a ban on terminal stages."""
+    won = await crm_admin.create_status(
+        "deal",
+        crm_admin.StatusIn(name="Delivered", type="won", probability=100),
+        USER,
+    )
+    lost = await crm_admin.create_status(
+        "deal", crm_admin.StatusIn(name="Dropped", type="lost", probability=0), USER,
+    )
+    assert (won.type, won.probability) == ("won", 100)
+    assert (lost.type, lost.probability) == ("lost", 0)
+
+
+async def test_retyping_a_stage_to_won_without_moving_its_probability_is_422(
+    db: FakeCrmDB,
+) -> None:
+    """A PATCH naming only ``type`` contradicts the rule in combination with
+    what is already stored — which is why the row is loaded BEFORE the payload
+    is validated. Reading only the payload would wave this through."""
+    seeded = db.seed(
+        "crm_deal_statuses", name="Proposal", position=30, type="ongoing",
+        probability=50,
+    )
+    with pytest.raises(HTTPException) as exc:
+        await crm_admin.patch_status(
+            "deal", str(seeded.id), crm_admin.StatusIn(type="won"), USER,
+        )
+    assert exc.value.status_code == 422
+    assert db.rows("crm_deal_statuses")[0]["type"] == "ongoing"
+
+
+async def test_retyping_a_stage_that_already_forecasts_a_hundred_is_allowed(
+    db: FakeCrmDB,
+) -> None:
+    """The positive half of the same rule, and the case that proves the check
+    reads the ROW: a stage already at 100 becoming won is not a contradiction,
+    and refusing it would mean the clamp were really "any PATCH naming type"."""
+    seeded = db.seed(
+        "crm_deal_statuses", name="Order Delivered", position=70, type="ongoing",
+        probability=100,
+    )
+    patched = await crm_admin.patch_status(
+        "deal", str(seeded.id), crm_admin.StatusIn(type="won"), USER,
+    )
+    assert (patched.type, patched.probability) == ("won", 100)
+
+
+async def test_lowering_a_won_stages_probability_is_422(db: FakeCrmDB) -> None:
+    """The mirror image: a PATCH naming only ``probability`` on a stage that is
+    already won."""
+    seeded = db.seed(
+        "crm_deal_statuses", name="Closed Won", position=50, type="won",
+        probability=100,
+    )
+    with pytest.raises(HTTPException) as exc:
+        await crm_admin.patch_status(
+            "deal", str(seeded.id), crm_admin.StatusIn(probability=80), USER,
+        )
+    assert exc.value.status_code == 422
+    assert db.rows("crm_deal_statuses")[0]["probability"] == 100
+
+
+async def test_type_and_probability_may_move_together(db: FakeCrmDB) -> None:
+    """Explicit beats silent rewrite: the way through the clamp is to state
+    both, which is exactly what the settings grid sends."""
+    seeded = db.seed(
+        "crm_deal_statuses", name="Order Received", position=70, type="open",
+        probability=0,
+    )
+    patched = await crm_admin.patch_status(
+        "deal", str(seeded.id),
+        crm_admin.StatusIn(type="won", probability=100), USER,
+    )
+    assert (patched.type, patched.probability) == ("won", 100)
+
+
+async def test_reordering_a_terminal_lane_does_not_trip_the_clamp(
+    db: FakeCrmDB,
+) -> None:
+    """The reorder grid PATCHes ``position`` alone, on every lane including the
+    won one. A clamp that read a missing probability as 0 would make the
+    pipeline un-reorderable — the exact surface f2 exists to provide."""
+    seeded = db.seed(
+        "crm_deal_statuses", name="Closed Won", position=50, type="won",
+        probability=100,
+    )
+    patched = await crm_admin.patch_status(
+        "deal", str(seeded.id), crm_admin.StatusIn(position=90), USER,
+    )
+    assert patched.position == 90
+
+
+async def test_a_lead_status_never_reaches_the_probability_clamp(
+    db: FakeCrmDB,
+) -> None:
+    """``crm_lead_statuses`` has no probability column, so a won lead status is
+    not a contradiction — it is a lane with no forecast at all."""
+    created = await crm_admin.create_status(
+        "lead", crm_admin.StatusIn(name="Qualified", type="won"), USER,
+    )
+    assert created.type == "won"
+    assert created.probability is None
+
+
 # ── Wiring ──────────────────────────────────────────────────────────────────
 
 def test_the_router_is_gated_on_feature_crm() -> None:

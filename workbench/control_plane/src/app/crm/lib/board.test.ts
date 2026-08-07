@@ -7,6 +7,9 @@ import {
   planMove,
   statusTone,
   toBoardLanes,
+  weightedDeal,
+  weightedRows,
+  WEIGHTED_TYPES,
   type BoardLane,
 } from "./board";
 import type { Deal, Pipeline, Status } from "./types";
@@ -44,6 +47,8 @@ const QUALIFICATION = status({
   name: "Qualification",
   position: 10,
   color: "blue",
+  // 144's seed priors: a deal that has stated nothing inherits these.
+  probability: 10,
 });
 const PROPOSAL = status({
   id: "s2",
@@ -51,6 +56,7 @@ const PROPOSAL = status({
   position: 30,
   type: "ongoing",
   color: "amber",
+  probability: 50,
 });
 const LOST = status({
   id: "s3",
@@ -71,20 +77,27 @@ const PIPELINE: Pipeline = {
           id: "d1",
           name: "Bosch printer",
           amount: 250000,
+          probability: 50,
           status_id: "s2",
           organization_name: "Bosch India",
         }),
       ],
       count: 4,
       amount: 900000,
+      // Whole-lane, from the gateway — deliberately NOT derivable from `rows`,
+      // which is one page of the four deals the lane holds.
+      weighted: 450000,
     },
     {
       status: QUALIFICATION,
-      rows: [deal({ id: "d2", amount: 100000, status_id: "s1" })],
+      rows: [
+        deal({ id: "d2", amount: 100000, probability: 10, status_id: "s1" }),
+      ],
       count: 1,
       amount: 100000,
+      weighted: 10000,
     },
-    { status: LOST, rows: [], count: 0, amount: 0 },
+    { status: LOST, rows: [], count: 0, amount: 0, weighted: 0 },
   ],
 };
 
@@ -136,6 +149,109 @@ describe("boardTotals", () => {
     const totals = boardTotals(toBoardLanes(PIPELINE));
     expect(totals.count).toBe(5);
     expect(totals.amount).toBe(1000000);
+  });
+
+  it("rolls the weighted figures up the same way", () => {
+    // WS-26f f3: the header's weighted number is the sum of the LANE weighted
+    // figures the gateway computed, not a recomputation over the cards — the
+    // Proposal lane holds four deals and returned one.
+    const totals = boardTotals(toBoardLanes(PIPELINE));
+    expect(totals.weighted).toBe(460000);
+  });
+});
+
+// ── WS-26f f3 · the weighted formula (done-when 6) ────────────────────────
+
+describe("weightedDeal", () => {
+  it("uses the deal's own probability", () => {
+    // D-CRM-10: forecast math reads the DEAL, never the stage. A rep who
+    // knows the champion just left marks a Proposal deal at 20 without moving
+    // it, and the forecast has to believe them.
+    expect(weightedDeal({ amount: 200000, probability: 20 }, PROPOSAL)).toBe(
+      40000
+    );
+  });
+
+  it("inherits the stage default for a NULL probability", () => {
+    // The inheritance materializes when a deal ENTERS a stage, so a NULL
+    // survives only on rows that predate a move — i.e. every imported deal,
+    // which is most of the board today.
+    expect(weightedDeal({ amount: 200000, probability: null }, PROPOSAL)).toBe(
+      100000
+    );
+    expect(
+      weightedDeal({ amount: 200000, probability: undefined }, PROPOSAL)
+    ).toBe(100000);
+  });
+
+  it("treats a stated 0 as a measurement, not as a missing value", () => {
+    expect(weightedDeal({ amount: 200000, probability: 0 }, PROPOSAL)).toBe(0);
+  });
+
+  it("carries a 100 through unchanged", () => {
+    expect(weightedDeal({ amount: 200000, probability: 100 }, PROPOSAL)).toBe(
+      200000
+    );
+  });
+
+  it("forecasts nothing for a deal with no amount", () => {
+    expect(weightedDeal({ amount: null, probability: 80 }, PROPOSAL)).toBe(0);
+  });
+
+  it("falls back to zero when neither the deal nor the stage says", () => {
+    expect(
+      weightedDeal({ amount: 200000, probability: null }, { probability: null })
+    ).toBe(0);
+  });
+});
+
+describe("weightedRows", () => {
+  const ON_HOLD = status({
+    id: "s4",
+    name: "Parked",
+    position: 40,
+    type: "on_hold",
+    probability: 40,
+  });
+  const WON = status({
+    id: "s5",
+    name: "Closed Won",
+    position: 50,
+    type: "won",
+    probability: 100,
+  });
+  const rows = [
+    deal({ id: "a", amount: 100000, probability: 25 }),
+    deal({ id: "b", amount: 200000, probability: null }),
+    deal({ id: "c", amount: 50000, probability: 0 }),
+  ];
+
+  it("sums a mixed lane", () => {
+    // 25000 + (200000 × 50% inherited) + 0
+    expect(weightedRows(rows, PROPOSAL)).toBe(125000);
+  });
+
+  it("counts only open and ongoing stages", () => {
+    expect(WEIGHTED_TYPES).toEqual(["open", "ongoing"]);
+    expect(weightedRows(rows, QUALIFICATION)).toBeGreaterThan(0);
+  });
+
+  it("forecasts nothing from a won lane — that is closed revenue", () => {
+    expect(weightedRows(rows, WON)).toBe(0);
+  });
+
+  it("forecasts nothing from a lost lane", () => {
+    expect(weightedRows(rows, LOST)).toBe(0);
+  });
+
+  it("excludes on_hold, the fifth type the spec's prose never mentions", () => {
+    // A deal nobody is working is not a forecast. Counting it at its stage's
+    // prior is how a pipeline number stays high while the quarter empties.
+    expect(weightedRows(rows, ON_HOLD)).toBe(0);
+  });
+
+  it("is zero for an empty lane rather than NaN", () => {
+    expect(weightedRows([], PROPOSAL)).toBe(0);
   });
 });
 
@@ -190,6 +306,30 @@ describe("applyMove", () => {
     expect(to.amount).toBe(350000);
   });
 
+  it("re-tallies the weighted figures with them", () => {
+    // Leaving weighted until the server re-read would show a lane whose ₹
+    // total dropped and whose forecast did not — two numbers side by side
+    // disagreeing about the same drag. d1 is ₹250,000 at 50%.
+    const next = applyMove(lanes, move);
+    const from = next.find((l) => l.status.id === "s2")!;
+    const to = next.find((l) => l.status.id === "s1")!;
+
+    expect(from.weighted).toBe(450000 - 125000);
+    expect(to.weighted).toBe(10000 + 125000);
+  });
+
+  it("never lets a re-tally take a lane's forecast negative", () => {
+    const next = applyMove(
+      [
+        { ...lanes[0], weighted: 0 },
+        { ...lanes[1] },
+        { ...lanes[2] },
+      ],
+      { dealId: "d2", fromStatusId: "s1", toStatusId: "s2" }
+    );
+    expect(next[0].weighted).toBe(0);
+  });
+
   it("re-stamps the moved card's status so it does not re-render in limbo", () => {
     const next = applyMove(lanes, move);
     expect(next.find((l) => l.status.id === "s1")!.rows[0].status_id).toBe("s1");
@@ -208,12 +348,20 @@ describe("applyMove", () => {
 
   it("never counts a lane below zero", () => {
     const empty: BoardLane[] = [
-      { status: QUALIFICATION, rows: [], count: 0, amount: 0, tone: "bg-primary" },
+      {
+        status: QUALIFICATION,
+        rows: [],
+        count: 0,
+        amount: 0,
+        weighted: 0,
+        tone: "bg-primary",
+      },
       {
         status: PROPOSAL,
         rows: [deal({ id: "d9", status_id: "s2" })],
         count: 0,
         amount: 0,
+        weighted: 0,
         tone: "bg-warning",
       },
     ];

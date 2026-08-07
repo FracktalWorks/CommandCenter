@@ -96,8 +96,8 @@
 > 🟢 SPECCED 2026-08-07, dispatchable — §5.1 is the blueprint, trigger was the owner's
 > first live board session (lanes out of order, imported stages at 0% probability).
 > WS-26i (data management): 🟡 SPEC-THIN, audit-narrow before dispatch.
-> **DEMO CRITICAL PATH (owner-directed 2026-08-07, §9.0): ~~dispatch D1 f~~ (∥ D2 d-email) →
-> ~~D3 g~~ → D4 d-write → D5 d-autolead; h/i/e deferred past the demo. Full chain and all
+> **DEMO CRITICAL PATH (owner-directed 2026-08-07, §9.0): ~~dispatch D1 f~~ (∥ ~~D2 d-email~~) →
+> ~~D3 g~~ → ~~D4 d-write~~ → D5 d-autolead; h/i/e deferred past the demo. Full chain and all
 > gates intact — the order re-sequences, it does not thin.**
 > · **Owner:** vjvarada · **Board row:** WS-26
 >
@@ -1421,14 +1421,57 @@ classification, which is tempting. It is wrong here for two reasons: a classifie
 `continue`s **without stamping** the watermark (`:1678-1685`), so a hook placed there
 double-fires on retry; and it only ever sees INBOX mail with `rules_processed_at IS NULL`,
 so historical backfills (`rules_held_back_at`, `84_email_rules_held_back.sql:22-27`) never
-reach it. Seam A is the durable one.
+reach it. Seam A is the durable one — **but read the next paragraph before trusting it,
+because for THIS feature "reaches history" flips from virtue to catastrophe.**
+
+**The candidate set and the backfill discriminator (2026-08-08 audit blocker G1 —
+the load-bearing paragraph).** `process_new_mail` is ALSO reached by deep resyncs:
+`resync_account` runs a ≈1-year all-folder backfill and then fires the hook, a
+first-ever sync of a newly-connected mailbox is deep by the same heuristic, and neither
+path stamps `rules_held_back_at` (its only writer is `_backfill_and_clean_job`, which
+does not go through this hook). A candidate query of "everything classified" would
+therefore mint a lead per unknown external sender in a year of mail the moment a second
+mailbox connects — each born `zoho_dirty`, each pushed to the live tenant within one
+600s cycle, with no confirmation card anywhere on a scheduler hook and no delete tool.
+The step therefore keeps a **per-account two-timestamp cursor** in a new table
+(migration at the next free number at build time, R1):
+- `activated_at` — set ONCE, to the clock time of the step's first ON-state run for
+  that account, never advanced. **The backfill discriminator is
+  `received_at > activated_at`**: mail received before auto-lead was first active on
+  the account is history and mints nothing, no matter when a resync classifies it.
+- `processed_watermark` — the incremental cursor: candidates are classified inbox mail
+  (`rules_processed_at IS NOT NULL`, `rules_held_back_at IS NULL`) with
+  `rules_processed_at > processed_watermark`, advanced only after the batch commits.
+Both predicates apply together. Per-cycle candidate cap (a named constant, ~200) with
+the overflow COUNTED in the log line — silent truncation reads as "covered everything".
+Residual race accepted and recorded: two concurrent `process_new_mail` invocations for
+one account can read the same watermark and double-mint; the cost is one visible,
+hand-deletable duplicate lead, and the alternative (a unique index minted on a column
+where 1,516 imported rows may already carry duplicates) is a deploy-blocking constraint
+of exactly the shape migration 148 had to defuse. Do not "fix" the race with that index.
 
 **"Unknown sender" is not a new idea — mirror `_maybe_block_cold`**
 (`routes/email/automation/senders.py:1242-1273`), which already answers it in two steps:
 a memo table, then "have we ever emailed them" (`to_addresses @> :tojson` over Sent). The
 CRM version adds a third step — no `crm_contacts`/`crm_leads` row with that
-`lower(email)` — and reuses the same idempotency shape (`INSERT … ON CONFLICT DO NOTHING`)
-so a re-run cannot duplicate a lead.
+`lower(email)`. **Dedup mechanism (audit blocker G3): the previously prescribed
+`INSERT … ON CONFLICT DO NOTHING` cannot fire — `crm_leads` has no unique constraint on
+email (`idx_crm_leads_email` is a plain index; only `zoho_id` is UNIQUE).** The real
+shape is the SELECT guard above plus **in-batch de-duplication** (one sender emailing
+twice in a single batch mints one lead), and the cross-invocation race is accepted per
+the cursor paragraph.
+
+**The first activity is metadata, never content (audit blocker G2).** The originating
+message is logged with **`type='system'`** — deliberately outside the Zoho push
+predicate (`sync_zoho.py` pushes `type IN ('note','task')` only), so the activity never
+leaves the native CRM; a test pins the exclusion rather than leaving it to the
+predicate's current spelling. Its `subject` is the mail's subject line; its `meta`
+carries sender display name, sender address, received timestamp, message id and thread
+id; **`body` stays empty — no mail body, no snippet, ever.** The lead row itself is
+org-visible to `feature:crm` holders (D-CRM-3) and pushes to Zoho (D-CRM-9); sender +
+subject is the proportionate disclosure for a cold inbound inquiry, the body is not —
+the same line D-CRM-12 draws for the agent's rendering, applied to what a machine
+writes.
 
 **Never create a lead for a colleague.** `is_own_mail` / `sender_scope`
 (`routes/email/automation/identity.py:64-101`) is the single answer to "is this person a
@@ -1443,15 +1486,24 @@ paragraph exists to prevent.
 2. **OFF-state is byte-identical**: with the flag off, `process_new_mail` makes no CRM
    call and issues no CRM query — pinned by a test that fails if the call is merely
    short-circuited *inside* the CRM step rather than skipped before it.
-3. ON-state, per inbound message from an unknown external sender: exactly one
-   `crm_leads` row, `source='email'`, owner = the account's user, `lead_name` derived from
-   the sender's display name (strip padding **before** deriving — the "Asha Asha" trap,
-   §8 B-series), and the originating message logged as the lead's first activity.
-4. Re-running the same sync creates **no** second lead (idempotency test).
+3. ON-state, per candidate message (the cursor paragraph's two predicates) from an
+   unknown external sender: exactly one `crm_leads` row, `source='email'`, owner = the
+   account's user, `lead_name` via `core.compute_lead_name` from the STRIPPED display
+   name (the "Asha Asha" trap, §8 B-series), created through `records.py`'s write path
+   (never raw SQL — `_resolve_status`, the owner default, `validate_source` and
+   `mark_dirty_on_insert` all live there), and the originating message logged as the
+   lead's first activity per the metadata-never-content paragraph.
+4. Re-running the same sync creates **no** second lead (idempotency test), and one
+   sender emailing twice in a single batch mints one lead (in-batch dedup test).
 5. A colleague sender, a self-sender and an already-known contact each create nothing —
-   three separate named cases.
-6. Per D-CRM-9 each created lead is born `zoho_dirty` and queues for Zoho; the test asserts
-   that rather than leaving it implied.
+   three separate named cases. `is_own_mail`'s `"external"` fallback is necessary-not-
+   sufficient: the internal-domain list (`cleanup.py:298`) is the second gate.
+6. Per D-CRM-9 each created lead is born `zoho_dirty` and queues for Zoho; the test
+   asserts that rather than leaving it implied. The first activity's `type='system'`
+   exclusion from the push predicate is asserted in the same file.
+7. **A deep resync / first sync of a newly-connected mailbox mints NOTHING**: the hook
+   run against an account whose messages all predate `activated_at` creates zero leads —
+   the test seeds a year-old classified backlog and runs the ON-state hook against it.
 
 **Tests:** `tests/unit/test_crm_auto_lead.py` (B7).
 

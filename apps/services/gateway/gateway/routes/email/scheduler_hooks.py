@@ -56,7 +56,8 @@ async def auto_run_rules_for_account(account_id: str) -> None:
 
 async def process_new_mail(account_id: str) -> None:
     """The shared new-mail pipeline (H1): auto-run rules → sweep the leftovers →
-    categorize senders → classify threads (Reply Zero) → auto-archive.
+    categorize senders → classify threads (Reply Zero) → auto-archive → CRM
+    auto-lead.
 
     Order matters. The rules run first and are the only thing that *classifies*.
     The sweep then projects that (plus learned patterns) onto inbox mail the
@@ -65,6 +66,13 @@ async def process_new_mail(account_id: str) -> None:
     so without this step a real backlog stays permanently uncategorized and
     invisible to the Email Cleaner. Sender rollup runs after both so it sees the
     complete label set.
+
+    The CRM auto-lead step (WS-26d-autolead) runs LAST, and after auto-archive
+    on purpose: it considers what is still in the INBOX once the account's own
+    automation has finished with it, so mail the user's rules said "I do not
+    need to see this" about never becomes a lead. It is also the only step here
+    that belongs to another app — it lives in ``routes/crm/auto_lead.py``,
+    because what it does is write a CRM record.
 
     Each step is isolated so one failure never skips the rest (same guarantee the
     scheduler loop gave when these were separate steps). Registered as the
@@ -109,6 +117,24 @@ async def process_new_mail(account_id: str) -> None:
         await _maybe_auto_archive(account_id)
     except Exception as exc:  # noqa: BLE001
         _log.warning("sync.auto_archive_failed", account_id=account_id,
+                     error=str(exc)[:200])
+    try:
+        # WS-26d-autolead. ⚠️ The flag is checked HERE, before the step is
+        # entered — never inside it. With CRM_AUTO_LEAD off no CRM code runs
+        # and no CRM query is issued on the mail path at all; a gate that
+        # lived inside `create_leads_from_new_mail` would open a database
+        # session on every sync cycle of every mailbox to discover it had
+        # nothing to do. `auto_lead_enabled` is the flag's ONE definition and
+        # is imported rather than restated for the same reason.
+        from gateway.routes.crm.auto_lead import (
+            auto_lead_enabled,
+            create_leads_from_new_mail,
+        )
+
+        if auto_lead_enabled():
+            await create_leads_from_new_mail(account_id)
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("sync.auto_lead_failed", account_id=account_id,
                      error=str(exc)[:200])
 
 

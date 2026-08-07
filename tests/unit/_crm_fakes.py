@@ -32,6 +32,7 @@ fake cannot read must never silently mean "the whole table".
 
 from __future__ import annotations
 
+import json
 import re
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -154,6 +155,16 @@ _JSONB_LOWER_CMP = re.compile(
     r"LOWER\((?:(\w+)\.)?(\w+)->>'(\w+)'\)\s*(?:=\s*:(\w+)|IN\s*\(([^)]*)\))",
     re.I,
 )
+#: ``to_addresses @> :recipient`` — jsonb CONTAINMENT. The "have we ever
+#: emailed them" probe `senders._maybe_block_cold` answers with, and the one
+#: WS-26d-autolead's `_is_unknown_sender` mirrors. **No other reader here sees
+#: `@>`**: `_PLAIN_EQ` needs an `=` and `_NUM_CMP` needs a bare `>`, so without
+#: this the clause is invisible and the fake answers "yes, we have emailed
+#: them" for every message in the Sent folder regardless of who it went to —
+#: which turns the already-known-contact case into a test of nothing. Same
+#: reason `_IN_LITERALS` exists: a fake that cannot see a predicate agrees with
+#: the bug that deletes it.
+_JSONB_CONTAINS = re.compile(r"(?:(\w+)\.)?(\w+)\s*@>\s*:(\w+)", re.I)
 #: ``LEFT JOIN email_thread_status ts ON ts.account_id = em.account_id AND
 #: ts.thread_id = em.thread_id`` — a COMPOSITE key. `_LEFT_JOIN` above demands
 #: literally ``ON <alias>.id = base.<fk>`` and matches nothing here.
@@ -747,6 +758,13 @@ class FakeCrmDB:
                 row for row in rows
                 if str((row.get(column) or {}).get(key) or "").lower() in wanted
             ]
+        for _alias, column, param in _JSONB_CONTAINS.findall(where):
+            seen = True
+            rows = [
+                row for row in rows
+                if _jsonb_contains(row.get(column), args.get(param))
+            ]
+        where = _JSONB_CONTAINS.sub("", where)
         return _JSONB_LOWER_CMP.sub("", where), rows, seen
 
     def _matching(
@@ -873,6 +891,37 @@ def _weighted(statement: str, rows: list[dict], args: dict) -> float:
             continue  # SQL: NULL * anything is NULL, and SUM skips it
         total += float(amount) * float(probability) / float(divisor)
     return total
+
+
+def _jsonb_contains(haystack: Any, needle: Any) -> bool:
+    """Postgres ``@>`` for the shapes this repo binds to it.
+
+    An array contains another array when EVERY element of the right side is
+    contained by SOME element of the left; an object contains another object
+    when every key/value pair of the right side is present on the left.
+
+    ⚠️ Comparison is EXACT, because ``@>`` is: ``'[{"email":"A@x.com"}]'`` does
+    not contain ``'[{"email":"a@x.com"}]'``. Case-folding here would make the
+    fake kinder than the database and hide a real miss in the "have we ever
+    emailed them" probe, whose parameter is lowercased while the stored
+    recipient is whatever the provider sent.
+    """
+    if isinstance(needle, str):
+        try:
+            needle = json.loads(needle)
+        except ValueError:  # a plain string value, not a JSON document
+            return haystack == needle
+    if isinstance(needle, list):
+        candidates = haystack if isinstance(haystack, list) else []
+        return all(
+            any(_jsonb_contains(item, want) for item in candidates)
+            for want in needle
+        )
+    if isinstance(needle, dict):
+        return isinstance(haystack, dict) and all(
+            haystack.get(key) == value for key, value in needle.items()
+        )
+    return haystack == needle
 
 
 def _normalized(value: str, wrap: str) -> str:

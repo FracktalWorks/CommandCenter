@@ -50,6 +50,18 @@
 > `tests/unit/test_crm_agent_write.py` (76 cases) + `test_crm_agent.py` grown from
 > 87 to 143. **LIVE: a confirmed agent write is born `zoho_dirty` and reaches the
 > live tenant within one 600s sync cycle (D-CRM-9).**
+> · **WS-26d-autolead: 🟢 BUILT 2026-08-08 (branch `ws-26d-autolead`) — NOT
+> FLIPPED, NOT DEPLOYED.** `CRM_AUTO_LEAD` exists in
+> `acb_common/settings.py` and ships **False**; the CRM step is
+> `routes/crm/auto_lead.py`, called from `process_new_mail` from **inside
+> `if auto_lead_enabled():`** so the OFF state enters nothing; the new
+> `crm_auto_lead_cursors` table (migration **157**) carries the
+> `activated_at` / `processed_watermark` pair the deep-resync discriminator
+> needs. **Nothing has been flipped and nothing has been deployed** — the
+> flip stays OWNER-GATE (`work_plan.md` §6 (b)), and while the flag is off
+> this changes no runtime behaviour at all. Tests:
+> `tests/unit/test_crm_auto_lead.py` (52 cases); seven mutants run red and
+> reverted.
 > · **WS-26e: 🟡 SPEC, nothing built.**
 > **26f** — 🟢 **MERGED + DEPLOYED 2026-08-07 (PR #391), NOT RUN against the tenant.** f1
 > `POST /crm/import/zoho/stages` (`routes/crm/stage_metadata.py`, floor
@@ -957,7 +969,7 @@ unknown sender becomes a lead on its own.
 | D2 | **WS-26d-email** | The "this is not a toy" moment. Disjoint files from D1 (`activities.py`/`Timeline.tsx` vs. importer/admin/settings). | ∥ with D1 |
 | D3 | **WS-26g** — ✅ **BUILT 2026-08-07** (branch `ws-26g-reports`, no migration) | The forecast number. **After D1** — f2 and the reports tab both extend the `page.tsx`/`urlState.ts` tab grammar, and two parallel PRs there is a needless conflict. | after D1 |
 | D4 | **WS-26d-write** ✅ **BUILT 2026-08-08** | The AI-creates-a-lead demo beat. Lives in `apps/agents/agent-crm/` — collides with nothing above. No migration. | ∥ with any |
-| D5 | **WS-26d-autolead** | Build whenever; the **flip is OWNER-GATE** and pushes real leads into Zoho (D-CRM-9) — demo it only if the owner wants that story told live. | ∥ with any |
+| D5 | **WS-26d-autolead** — ✅ **BUILT 2026-08-08, flag OFF, NOT flipped, NOT deployed** (migration 157) | Built whenever; the **flip is OWNER-GATE** and pushes real leads into Zoho (D-CRM-9) — demo it only if the owner wants that story told live. | ∥ with any |
 
 **Deferred until after the demo, deliberately — not demoted:** WS-26h (discipline),
 WS-26i (data management), WS-26e (cutover). No demo viewer sees them; they lose nothing
@@ -1404,8 +1416,80 @@ in a later slice.
 **Tests:** `tests/unit/test_crm_email_timeline.py` (B7), reusing `tests/unit/_crm_fakes.py`.
 Frontend: extend the existing CRM vitest for the third `kind`.
 
-### WS-26d-autolead — `CRM_AUTO_LEAD` · 🟡 AGENT-SAFE to build · 🔴 OWNER-GATE to flip
+### WS-26d-autolead — `CRM_AUTO_LEAD` · ✅ **BUILT 2026-08-08** · 🔴 **OWNER-GATE to flip — NOT FLIPPED, NOT DEPLOYED**
 *(Closes B4.)*
+
+> **As built** (branch `ws-26d-autolead`, migration **157**
+> `157_crm_auto_lead_cursor.sql` — the number taken from the directory at
+> build time per R1, and `test_crm_auto_lead.py` finds the file by CONTENT,
+> so a renumber in review breaks nothing). **The flag is `False` everywhere and nothing has been
+> deployed**: with `CRM_AUTO_LEAD` off this branch changes no runtime
+> behaviour, which is the whole point of done-when 2.
+>
+> * `crm_auto_lead: bool = False` in `packages/acb_common/acb_common/settings.py`,
+>   beside `crm_zoho_sync` (its precedent shape). **`.env.example` deliberately
+>   untouched** — plan-guard territory; the flag is documented here and in
+>   `settings.py` only, and a test pins its absence from that file.
+> * `apps/services/gateway/gateway/routes/crm/auto_lead.py` — the whole step.
+>   **It lives in `routes/crm` and not in the email package** because what it
+>   does is write a CRM record; it registers no routes and, like
+>   `broker_handlers.py`, is deliberately absent from
+>   `routes/crm/__init__.py`. It **imports** the automation package's PUBLIC
+>   identity primitives (`sender_scope` / `resolve_org_domains` /
+>   `normalize_domain`) rather than copying them — D-CRM-4 declined to import
+>   another package's *private* helper, and a third copy of "is this person a
+>   colleague?" is the drift that rule exists to prevent.
+> * The call site in `routes/email/scheduler_hooks.py::process_new_mail` is
+>   `if auto_lead_enabled(): await create_leads_from_new_mail(account_id)`
+>   inside the sibling `try/except` shape, logging `sync.auto_lead_failed`.
+>   **It runs LAST, after auto-archive**, so the step considers what is still
+>   in the INBOX once the account's own automation has finished — mail the
+>   user's own rules archived never becomes a lead.
+> * `tests/unit/test_crm_auto_lead.py` — **52 cases**, each done-when named in
+>   a test. `tests/unit/_crm_fakes.py` gained ONE reader (`@>` jsonb
+>   containment) because without it the "have we ever emailed them" probe was
+>   invisible to the fake, which answered "yes" for every Sent message and
+>   would have made the already-known-contact case a test of nothing.
+> * **Seven mutants run red and were reverted**: the flag check, the
+>   `received_at > activated_at` predicate, the watermark advance, the
+>   internal-domain second gate, `type='system'`, the service write path, and
+>   the in-batch dedup.
+>
+> **Five decisions the ticket did not record, each with its reason:**
+> 1. **`activated_at` and `processed_watermark` are stamped to the SAME
+>    instant on activation**, so the activating cycle mints nothing. That is
+>    the deep-resync case stated positively: on the day the flag flips, every
+>    mailbox's entire history predates activation.
+> 2. **The two colleague gates answer different questions, and gate 1 is asked
+>    WITHOUT the configured extra domains.** `sender_scope`'s own extra-domain
+>    arm only `lstrip('@')`s its input while `resolve_org_domains` runs
+>    `normalize_domain` — the exact divergence `runner.py:1635-1641` documents.
+>    Routing the configured list through gate 2 alone means there is ONE
+>    normalisation of it here rather than two that can disagree; it is also
+>    what makes gate 2 load-bearing rather than a restatement of gate 1, and a
+>    named test (a colleague on an org domain somebody typed as an address)
+>    goes red when it is deleted.
+> 3. **The watermark advances over messages that minted nothing, and over
+>    messages that raised.** This is a best-effort enrichment step, not a
+>    queue: a poison message holding the cursor would re-fail on every cycle
+>    for the life of the mailbox. Errors are COUNTED in the log line instead,
+>    and each candidate is wrapped in `core.savepoint` so one statement error
+>    cannot abort the batch's transaction (the WS-26b lesson).
+> 4. **The lead and its first activity are two transactions.**
+>    `create_record` opens and commits its own session — it is the same
+>    function `POST /crm/leads` calls — so a failure between the two leaves a
+>    lead with an empty timeline, logged and counted. The alternative was a
+>    second, divergent write path for the record itself, which is what
+>    done-when 3 forbids.
+> 5. **An account whose `user_id` is blank is skipped before the cursor is
+>    even activated.** `actor()` would attribute the lead to `"anonymous"`,
+>    and a lead that is nobody's follow-up and that the `owner` filter cannot
+>    match is worse than no lead.
+>
+> **What an owner still has to do, in order:** merge → deploy (migration 157
+> applies automatically) → flip `CRM_AUTO_LEAD` (§6 (b)). The first ON-state
+> run on each mailbox activates the cursor and mints nothing; leads start
+> appearing from mail that arrives after that moment.
 
 **The hook is `process_new_mail(account_id)` — `routes/email/scheduler_hooks.py:57`.**
 It is the shared new-mail pipeline (rules → sweep → categorize senders → classify threads

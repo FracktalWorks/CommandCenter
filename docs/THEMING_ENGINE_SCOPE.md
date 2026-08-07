@@ -94,7 +94,7 @@ already use our tokens.
 
 **Preferences** resolve member override → org default → built-in. Personal
 choices are per-browser. The **org default persists in Postgres** —
-`org_settings` (migration `147_org_settings.sql`), served by the gateway at
+`org_settings` (migration `151_org_settings.sql`), served by the gateway at
 `GET/PUT /settings/appearance` — and is cached locally so it survives first
 paint. Reading is open to any member (every client needs it on load); writing
 requires `admin:settings:manage`, since it changes everyone's UI. Admins can

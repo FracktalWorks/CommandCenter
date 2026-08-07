@@ -41,6 +41,8 @@ async function forward(
       method,
       headers: {
         ...(await gatewayHeaders()),
+        // Set for the JSON path; the multipart branch below overwrites it
+        // with the caller's own boundary-carrying type.
         ...(method === "GET" || method === "DELETE"
           ? {}
           : { "Content-Type": "application/json" }),
@@ -48,8 +50,20 @@ async function forward(
       signal: AbortSignal.timeout(30_000),
     };
     if (method !== "GET" && method !== "DELETE") {
-      const body = await req.json().catch(() => ({}));
-      init.body = JSON.stringify(body);
+      // A multipart upload (WS-27i attachments) must reach the gateway
+      // BYTE-FOR-BYTE. Re-parsing it as JSON is not merely lossy — `req.json()`
+      // rejects, the catch below hands back `{}`, and the request arrives with
+      // no file at all while still answering 201. The workflows app documents
+      // the same trap for HMAC-signed webhook bodies (`workflows_app.md`
+      // §3.3b); this is that trap on the upload path.
+      const contentType = req.headers.get("content-type") ?? "";
+      if (contentType.includes("application/json") || contentType === "") {
+        const body = await req.json().catch(() => ({}));
+        init.body = JSON.stringify(body);
+      } else {
+        init.body = await req.arrayBuffer();
+        (init.headers as Record<string, string>)["Content-Type"] = contentType;
+      }
     }
     // A pooled keep-alive socket can be closed by the gateway just as we reuse
     // it, failing the fetch spuriously (undici vs uvicorn's short keep-alive).

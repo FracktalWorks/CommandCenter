@@ -8,7 +8,6 @@ import { isUntagged } from "../lib/priority";
 import { ViewKey } from "../lib/types";
 import { isWaitingOverdue } from "../lib/waiting";
 import { applyFilters, applySort, type GroupBy } from "../lib/ordering";
-import { ProjectsList } from "./ProjectsList";
 import { TaskCard } from "./TaskCard";
 import { TaskBoard } from "./TaskBoard";
 import { TaskListGrouped } from "./TaskListGrouped";
@@ -113,10 +112,6 @@ export function ItemList() {
     const nowMs = Date.now();
     return visible.filter((i) => isWaitingOverdue(i, nowMs)).length;
   }, [view, visible]);
-
-  if (view === "projects") {
-    return <ProjectsList />;
-  }
 
   const meta = VIEW_META[view] ?? VIEW_META.inbox;
   const Icon = meta.icon;

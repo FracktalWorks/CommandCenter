@@ -25,7 +25,6 @@ import {
 import { SourceBadge } from "./SourceBadge";
 import { AttachmentChips } from "./AttachmentComposer";
 import { ClarifyPanel } from "./ClarifyPanel";
-import { ProjectTasksView } from "./ProjectTasksView";
 import { AiTaskActions } from "./AiTaskActions";
 import { DelegateDialog } from "./DelegateDialog";
 import { WeightToggles, PriorityBadge, SuggestionBadge } from "./PriorityControls";
@@ -64,8 +63,6 @@ export function ItemDetail() {
   const backend = useTaskStore((s) => s.backend);
   const pushItem = useTaskStore((s) => s.pushItem);
   const selectedItemId = useTaskStore((s) => s.selectedItemId);
-  const view = useTaskStore((s) => s.selectedView);
-  const selectedProjectId = useTaskStore((s) => s.selectedProjectId);
 
   const item = selectedItemId
     ? items.find((i) => i.id === selectedItemId)
@@ -81,35 +78,15 @@ export function ItemDetail() {
     return <TaskDetail key={item.id} item={item} backend={backend} pushItem={pushItem} />;
   }
 
-  return <ItemDetailEmpty view={view} selectedProjectId={selectedProjectId} />;
+  return <ItemDetailEmpty />;
 }
 
-function ItemDetailEmpty({
-  view,
-  selectedProjectId,
-}: {
-  view: string;
-  selectedProjectId: string | null;
-}) {
-  const projects = useTaskStore((s) => s.projects);
-
-  // Project selected (projects view) → its tasks as a list/board (the same UI
-  // as Next Actions), stages from the project's home (ClickUp statuses for a
-  // synced project, global stages for a local one).
-  if (view === "projects" && selectedProjectId) {
-    const project = projects.find((p) => p.id === selectedProjectId);
-    if (project) {
-      return <ProjectTasksView project={project} />;
-    }
-  }
-
+function ItemDetailEmpty() {
   return (
     <div className="flex h-full flex-col items-center justify-center gap-2 p-8 text-center">
       <AppIcon name="FolderKanban" className="h-8 w-8 text-muted-foreground/40" />
       <p className="text-sm text-muted-foreground">
-        {view === "projects"
-          ? "Select a project to see its tasks."
-          : "Select an item to see its details."}
+        Select an item to see its details.
       </p>
     </div>
   );

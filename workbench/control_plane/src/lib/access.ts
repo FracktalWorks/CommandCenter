@@ -81,6 +81,7 @@ const HREF_FEATURES: ReadonlyArray<[string, string]> = [
   // grant model in the API is the real boundary and this is the courtesy half
   // (specs/project_management_app.md §5).
   ["/projects", "projects"],
+  ["/people", "people"],
   ["/dashboard", "dashboard"],
   ["/observability", "observability"],
   ["/artifacts", "artifacts"],

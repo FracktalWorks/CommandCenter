@@ -16,6 +16,8 @@ interface Props {
   roots: ProjectRow[];
   selectedId: string | null;
   onSelect: (project: ProjectRow) => void;
+  /** Start creating a subproject under this node. Omitted = read-only tree. */
+  onAddChild?: (parent: ProjectRow) => void;
 }
 
 function Node({
@@ -23,11 +25,13 @@ function Node({
   depth,
   selectedId,
   onSelect,
+  onAddChild,
 }: {
   node: ProjectRow;
   depth: number;
   selectedId: string | null;
   onSelect: (project: ProjectRow) => void;
+  onAddChild?: (parent: ProjectRow) => void;
 }) {
   const [open, setOpen] = useState(depth < 1);
   const children = node.children ?? [];
@@ -75,6 +79,20 @@ function Node({
             </span>
           ) : null}
         </button>
+        {onAddChild ? (
+          // A subproject is created HERE rather than from a dialog that asks
+          // "which parent?" — the answer is already on screen, and asking for
+          // it again is how a tree with fifty nodes gets mis-parented rows.
+          <button
+            type="button"
+            aria-label={`New subproject under ${node.name}`}
+            title="New subproject"
+            onClick={() => onAddChild(node)}
+            className="shrink-0 rounded p-0.5 text-muted-foreground hover:bg-background/60"
+          >
+            <Icon name="Plus" className="h-3.5 w-3.5" />
+          </button>
+        ) : null}
       </div>
       {open && children.length > 0 ? (
         <ul>
@@ -85,6 +103,7 @@ function Node({
               depth={depth + 1}
               selectedId={selectedId}
               onSelect={onSelect}
+              onAddChild={onAddChild}
             />
           ))}
         </ul>
@@ -93,7 +112,7 @@ function Node({
   );
 }
 
-export function ProjectTree({ roots, selectedId, onSelect }: Props) {
+export function ProjectTree({ roots, selectedId, onSelect, onAddChild }: Props) {
   if (roots.length === 0) {
     return (
       <p className="px-2 py-6 text-sm text-muted-foreground">
@@ -110,6 +129,7 @@ export function ProjectTree({ roots, selectedId, onSelect }: Props) {
           depth={0}
           selectedId={selectedId}
           onSelect={onSelect}
+          onAddChild={onAddChild}
         />
       ))}
     </ul>

@@ -1,8 +1,7 @@
 "use client";
 
-import Button from "@/components/ui/Button";
+import { useEffect, useMemo, useState } from "react";
 import Icon from "@/components/Icon";
-import { useMemo, useState } from "react";
 import { useTaskStore } from "../lib/taskStore";
 import type { GtdItem, Person } from "../lib/types";
 import { initials } from "../lib/utils";
@@ -48,6 +47,15 @@ function DelegateBody({
   const people = useTaskStore((s) => s.people);
   const accounts = useTaskStore((s) => s.accounts);
   const updateItem = useTaskStore((s) => s.updateItem);
+  const loadPeople = useTaskStore((s) => s.loadPeople);
+
+  // The roster used to be loaded by opening the sidebar's People view, which
+  // was removed when the directory moved to /people. Loading it HERE, where it
+  // is actually needed, is what stops delegation quietly offering nobody —
+  // a broken picker that looks like an empty company.
+  useEffect(() => {
+    if (people.length === 0) void loadPeople();
+  }, [people.length, loadPeople]);
 
   const isSynced = item.source === "SYNCED";
   const account = item.accountId
@@ -120,9 +128,14 @@ function DelegateBody({
               {item.title}
             </p>
           </div>
-          <Button variant="ghost" size="icon-xs" radius="keep" layout="" type="button" onClick={onClose} aria-label="Close" className="rounded-md">
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+            className="tech-transition rounded-md p-1 text-muted-foreground hover:bg-secondary hover:text-foreground"
+          >
             <Icon name="X" className="h-4 w-4" />
-          </Button>
+          </button>
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
@@ -182,10 +195,19 @@ function DelegateBody({
             applies through the promote dialog instead, so no footer there. */}
         {isSynced && (
           <div className="flex shrink-0 items-center justify-end gap-2 border-t border-border px-4 py-3">
-            <Button variant="ghost" size="none" radius="keep" layout="" type="button" onClick={onClose} className="rounded-md px-3 py-1.5 text-[12px]">
+            <button
+              type="button"
+              onClick={onClose}
+              className="tech-transition rounded-md px-3 py-1.5 text-[12px] font-medium text-muted-foreground hover:bg-secondary hover:text-foreground"
+            >
               Cancel
-            </Button>
-            <Button size="none" radius="keep" layout="inline-flex items-center" type="button" disabled={busy} onClick={apply} className="gap-1.5 rounded-md px-3 py-1.5 text-[12px]">
+            </button>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={apply}
+              className="tech-transition inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-[12px] font-medium text-primary-foreground hover:opacity-90 disabled:opacity-40"
+            >
               {busy ? (
                 <Icon name="Loader2" className="h-3.5 w-3.5 animate-spin" />
               ) : (
@@ -194,7 +216,7 @@ function DelegateBody({
               {selected.length === 0
                 ? "Unassign"
                 : `Delegate to ${selected.length}`}
-            </Button>
+            </button>
           </div>
         )}
       </div>

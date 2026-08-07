@@ -36,6 +36,8 @@ NODE_TIMEOUTS: dict[str, float] = {
     "wait": WAIT_INLINE_MAX_SECONDS + 10.0,
     "output": 5.0,
     "trigger": 5.0,
+    # An internal DB write — nothing here crosses the network.
+    "pm_task": 30.0,
 }
 DEFAULT_NODE_TIMEOUT = 60.0
 
@@ -57,6 +59,18 @@ class NodeServices:
     run_agent: Callable[[str, str, str | None], Awaitable[str]]
     run_tool: Callable[[str, dict[str, Any], str], Awaitable[dict[str, Any]]]
     get_module_code: Callable[[str], Awaitable[str | None]]
+    #: ``update_task(task_id, fields)`` → what changed. Injected like every
+    #: other seam, so the engine never imports the Projects app and a test can
+    #: drive a task node with no database at all.
+    #:
+    #: Deliberately takes NO actor: the engine says *what* to change, the
+    #: wiring decides *who* is changing it — and for an automation that is
+    #: always the workflow itself, never whoever tripped the trigger. Passing
+    #: an actor the implementation would have to ignore is how the two answers
+    #: start disagreeing.
+    update_task: Callable[
+        [str, dict[str, Any]], Awaitable[dict[str, Any]]
+    ] | None = None
     actor: str = "workflow"
     #: Extra context merged into agent messages' metadata (reserved).
     context: dict[str, Any] = field(default_factory=dict)
@@ -171,14 +185,7 @@ async def execute_node(
         return {"result": result, "branch": "true" if result else "false"}
 
     if ntype == "set":
-        assignments = (
-            config.get("assignments") if isinstance(config.get("assignments"), dict) else {}
-        )
-        resolved = {str(k): resolve_value(v, state) for k, v in assignments.items()}
-        vars_bucket = state.setdefault("vars", {})
-        if isinstance(vars_bucket, dict):
-            vars_bucket.update(resolved)
-        return resolved
+        return _execute_set(config, state)
 
     if ntype == "approval":
         # The runner pauses unresolved approvals before this handler runs;
@@ -196,8 +203,60 @@ async def execute_node(
             await asyncio.sleep(seconds)
         return {"waited_seconds": seconds}
 
+    if ntype == "pm_task":
+        return await _execute_pm_task(config, state, services)
+
     if ntype == "output":
         value = resolve_value(config.get("value"), state)
         return {"value": value}
 
     raise NodeExecutionError(f"unknown node type '{ntype}'")
+
+
+def _execute_set(config: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
+    """Assign values into the run's `vars` bucket.
+
+    Extracted unchanged when the task node landed: `execute_node` sat exactly
+    at the complexity ceiling, so one more branch had to be paid for rather
+    than the ceiling raised. Behaviour is identical — the golden trajectory
+    eval covers it.
+    """
+    assignments = (
+        config.get("assignments") if isinstance(config.get("assignments"), dict) else {}
+    )
+    resolved = {str(k): resolve_value(v, state) for k, v in assignments.items()}
+    vars_bucket = state.setdefault("vars", {})
+    if isinstance(vars_bucket, dict):
+        vars_bucket.update(resolved)
+    return resolved
+
+
+async def _execute_pm_task(
+    config: dict[str, Any],
+    state: dict[str, Any],
+    services: NodeServices,
+) -> dict[str, Any]:
+    """The Projects task node (WS-27f / §13 U1).
+
+    A separate function rather than a fifth branch inline: `execute_node` is
+    already at the complexity ceiling, and this node's run-time checks are the
+    interesting part rather than boilerplate worth burying.
+    """
+    if services.update_task is None:
+        raise NodeExecutionError("the Projects app is not available")
+    task_id = str(resolve_value(config.get("task_id"), state) or "").strip()
+    if not task_id:
+        raise NodeExecutionError("task node needs a task id")
+    if "{{" in task_id:
+        # `templating.resolve_value` keeps an unresolvable ref AS-IS at run time
+        # BY DESIGN — design-time validation is where refs are flagged — and
+        # `{{trigger.missing}}` passes that gate because its ROOT is legal.
+        # Left alone the literal reaches the database as a would-be uuid and
+        # comes back "Task not found", sending the maker to look for a task
+        # rather than at their reference.
+        raise NodeExecutionError(f"task id did not resolve: '{task_id}'")
+    raw_fields = config.get("fields") if isinstance(config.get("fields"), dict) else {}
+    fields = resolve_value(raw_fields, state)
+    if not isinstance(fields, dict) or not fields:
+        raise NodeExecutionError("task node needs at least one field to set")
+    return await services.update_task(task_id, fields)

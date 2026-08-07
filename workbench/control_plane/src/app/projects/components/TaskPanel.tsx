@@ -8,21 +8,35 @@
  * a comment in the same stream, which is the point of the shared spine.
  */
 import Icon from "@/components/Icon";
-import Button from "@/components/ui/Button";
 import { useEffect, useState } from "react";
 
 import {
   type ActivityRow,
+  type AttachmentRow,
   type StatusRow,
   type TaskRow,
+  attachmentsApi,
   projectsApi,
 } from "../lib/api";
+import {
+  assigneeLabel,
+  classify,
+  parseAssignees,
+  withAssignee,
+  withoutAssignee,
+} from "../lib/assignees";
 
 interface Props {
   task: TaskRow;
   statuses: StatusRow[];
   onClose: () => void;
   onChanged: (task: TaskRow) => void;
+  /**
+   * Fired when this panel adds a row the surrounding list does not know about.
+   * `onChanged` merges one task; a new subtask is a task the board has never
+   * seen, so it needs a real reload rather than a merge.
+   */
+  onTaskAdded?: () => void;
 }
 
 function describe(activity: ActivityRow): string {
@@ -48,16 +62,28 @@ function describe(activity: ActivityRow): string {
       return `Agent run ${String(meta.agent ?? "")}`.trim();
     case "sync":
       return activity.body ?? "Synced";
+    case "attachment":
+      return activity.body ?? "Attachment changed";
     default:
       return activity.body ?? activity.type;
   }
 }
 
-export function TaskPanel({ task, statuses, onClose, onChanged }: Props) {
+export function TaskPanel({
+  task,
+  statuses,
+  onClose,
+  onChanged,
+  onTaskAdded,
+}: Props) {
   const [timeline, setTimeline] = useState<ActivityRow[]>([]);
   const [comment, setComment] = useState("");
+  const [assignee, setAssignee] = useState("");
+  const [subtask, setSubtask] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [files, setFiles] = useState<AttachmentRow[]>([]);
+  const assignees = task.assignees ?? [];
 
   useEffect(() => {
     let live = true;
@@ -67,10 +93,56 @@ export function TaskPanel({ task, statuses, onClose, onChanged }: Props) {
         if (live) setTimeline(res.rows);
       })
       .catch((err) => live && setError(String(err.message ?? err)));
+    attachmentsApi
+      .list(task.id)
+      .then((res) => {
+        if (live) setFiles(res.rows);
+      })
+      // Attachments failing must not blank the panel: the timeline and the
+      // status control are the reason somebody opened it.
+      .catch(() => undefined);
     return () => {
       live = false;
     };
   }, [task.id]);
+
+  async function uploadFiles(picked: FileList | null) {
+    if (!picked || picked.length === 0) return;
+    setBusy(true);
+    setError(null);
+    try {
+      // Sequential, not Promise.all: each upload writes a timeline row, and a
+      // burst of parallel writes would interleave them into an order that does
+      // not match what the person did.
+      for (const file of Array.from(picked)) {
+        await attachmentsApi.upload(task.id, file);
+      }
+      const [fresh, tl] = await Promise.all([
+        attachmentsApi.list(task.id),
+        projectsApi.timeline(task.id),
+      ]);
+      setFiles(fresh.rows);
+      setTimeline(tl.rows);
+    } catch (err) {
+      setError(String((err as Error).message));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function detach(attachmentId: string) {
+    setBusy(true);
+    setError(null);
+    try {
+      await attachmentsApi.detach(task.id, attachmentId);
+      const fresh = await attachmentsApi.list(task.id);
+      setFiles(fresh.rows);
+    } catch (err) {
+      setError(String((err as Error).message));
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function reload() {
     const [fresh, tl] = await Promise.all([
@@ -87,6 +159,57 @@ export function TaskPanel({ task, statuses, onClose, onChanged }: Props) {
     try {
       await projectsApi.patchTask(task.id, { status_id: statusId });
       await reload();
+    } catch (err) {
+      setError(String((err as Error).message));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function saveAssignees(next: string[]) {
+    setBusy(true);
+    setError(null);
+    try {
+      await projectsApi.setAssignees(task.id, next);
+      await reload();
+    } catch (err) {
+      setError(String((err as Error).message));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function addAssignees() {
+    // A whole pasted list at once, not one at a time: the PUT replaces the set
+    // anyway, so batching them is one event rather than N.
+    let next = assignees;
+    for (const who of parseAssignees(assignee)) next = withAssignee(next, who);
+    // Identity means nothing changed — skipping the PUT is what stops a
+    // re-assert emitting pm.task.assigned and re-dispatching an agent run.
+    if (next === assignees) {
+      setAssignee("");
+      return;
+    }
+    setAssignee("");
+    await saveAssignees(next);
+  }
+
+  async function addSubtask() {
+    const title = subtask.trim();
+    if (!title) return;
+    setBusy(true);
+    setError(null);
+    try {
+      // A subtask is a task with a parent (§3.5) — no second endpoint and no
+      // second table, so it inherits statuses, timeline and assignment whole.
+      await projectsApi.createTask({
+        project_id: task.project_id,
+        parent_task_id: task.id,
+        title,
+      });
+      setSubtask("");
+      await reload();
+      onTaskAdded?.();
     } catch (err) {
       setError(String((err as Error).message));
     } finally {
@@ -145,16 +268,129 @@ export function TaskPanel({ task, statuses, onClose, onChanged }: Props) {
             ))}
           </select>
         </label>
-        {task.assignees?.length ? (
-          <p className="text-xs text-muted-foreground">
-            Assigned to {task.assignees.join(", ")}
-          </p>
-        ) : null}
+        <div>
+          <span className="text-xs text-muted-foreground">Assignees</span>
+          <div className="mt-1 flex flex-wrap gap-1">
+            {assignees.map((who) => {
+              const kind = classify(who);
+              return (
+                <span
+                  key={who}
+                  title={kind === "unknown" ? "Not an email or agent:<name>" : who}
+                  className={`flex items-center gap-1 rounded-md px-2 py-1 text-xs ${
+                    kind === "unknown"
+                      ? "border border-border text-muted-foreground"
+                      : "bg-muted text-foreground"
+                  }`}
+                >
+                  {/* Agents and people are one vocabulary (D-PM-4), so the
+                      difference is an icon, never a separate field. */}
+                  {kind === "agent" ? <Icon name="Bot" className="h-3 w-3" /> : null}
+                  {assigneeLabel(who)}
+                  <button
+                    type="button"
+                    disabled={busy}
+                    aria-label={`Unassign ${who}`}
+                    onClick={() => void saveAssignees(withoutAssignee(assignees, who))}
+                    className="text-muted-foreground hover:text-foreground"
+                  >
+                    <Icon name="X" className="h-3 w-3" />
+                  </button>
+                </span>
+              );
+            })}
+            {assignees.length === 0 ? (
+              <span className="text-xs text-muted-foreground">Nobody yet</span>
+            ) : null}
+          </div>
+          <input
+            value={assignee}
+            disabled={busy}
+            onChange={(e) => setAssignee(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                void addAssignees();
+              }
+            }}
+            onBlur={() => void addAssignees()}
+            placeholder="email or agent:name"
+            aria-label="Add an assignee"
+            className="mt-1 w-full rounded-md border border-border bg-background px-2 py-1.5 text-sm text-foreground"
+          />
+        </div>
         {task.description ? (
           <p className="whitespace-pre-wrap text-sm text-foreground">
             {task.description}
           </p>
         ) : null}
+        <div>
+          <span className="text-xs text-muted-foreground">Files</span>
+          <div className="mt-1 space-y-1">
+            {files.map((f) => (
+              <div key={f.attachment_id} className="flex items-center gap-2 text-xs">
+                {f.kind === "image" ? (
+                  <Icon name="Image" className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                ) : (
+                  <Icon name="Paperclip" className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                )}
+                <a
+                  href={f.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="min-w-0 flex-1 truncate text-foreground hover:underline"
+                >
+                  {f.name}
+                </a>
+                <span className="shrink-0 text-muted-foreground">
+                  {Math.max(1, Math.round(f.size / 1024))} KB
+                </span>
+                <button
+                  type="button"
+                  disabled={busy}
+                  aria-label={`Remove ${f.name}`}
+                  title="Removes it from this task; the file itself is kept"
+                  onClick={() => void detach(f.attachment_id)}
+                  className="shrink-0 text-muted-foreground hover:text-foreground"
+                >
+                  <Icon name="X" className="h-3 w-3" />
+                </button>
+              </div>
+            ))}
+            {files.length === 0 ? (
+              <p className="text-xs text-muted-foreground">Nothing attached.</p>
+            ) : null}
+          </div>
+          <input
+            type="file"
+            multiple
+            disabled={busy}
+            aria-label="Attach files"
+            onChange={(e) => {
+              void uploadFiles(e.target.files);
+              // Reset so picking the SAME file twice still fires a change.
+              e.target.value = "";
+            }}
+            className="mt-1 w-full text-xs text-muted-foreground file:mr-2 file:rounded-md file:border file:border-border file:bg-background file:px-2 file:py-1 file:text-xs file:text-foreground"
+          />
+        </div>
+        <div>
+          <span className="text-xs text-muted-foreground">Subtask</span>
+          <input
+            value={subtask}
+            disabled={busy}
+            onChange={(e) => setSubtask(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                void addSubtask();
+              }
+            }}
+            placeholder="Break this down…"
+            aria-label="Add a subtask"
+            className="mt-1 w-full rounded-md border border-border bg-background px-2 py-1.5 text-sm text-foreground"
+          />
+        </div>
       </div>
 
       {error ? (
@@ -188,17 +424,14 @@ export function TaskPanel({ task, statuses, onClose, onChanged }: Props) {
           rows={2}
           className="w-full rounded-md border border-border bg-background px-2 py-1.5 text-sm text-foreground"
         />
-        <Button
+        <button
           type="button"
-          variant="primary"
-          size="sm"
           onClick={addComment}
-          loading={busy}
-          disabled={!comment.trim()}
-          className="mt-2 w-full"
+          disabled={busy || !comment.trim()}
+          className="mt-2 w-full rounded-md bg-primary px-3 py-1.5 text-sm text-primary-foreground disabled:opacity-50"
         >
           Comment
-        </Button>
+        </button>
       </div>
     </aside>
   );

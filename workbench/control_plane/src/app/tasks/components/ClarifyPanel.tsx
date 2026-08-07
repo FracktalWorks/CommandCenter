@@ -113,6 +113,7 @@ export function ClarifyPanel({
   const createWorkspaceProject = useTaskStore((s) => s.createWorkspaceProject);
   const createWorkspaceFolder = useTaskStore((s) => s.createWorkspaceFolder);
   const localHierarchy = useTaskStore((s) => s.localHierarchy);
+  const loadPeople = useTaskStore((s) => s.loadPeople);
   const loadLocalHierarchy = useTaskStore((s) => s.loadLocalHierarchy);
   const createLocalSpace = useTaskStore((s) => s.createLocalSpace);
   const createLocalFolder = useTaskStore((s) => s.createLocalFolder);
@@ -322,10 +323,14 @@ export function ClarifyPanel({
   }, [backend, item.id, reclarify, note, title, seedFromProposal, renameItem]);
 
   // Load the local hierarchy once (Where axis, local destination) if it hasn't
-  // been fetched yet — the Projects view normally triggers this, but Clarify
-  // can open first.
+  // been fetched yet. This used to be a fallback for "the Projects view
+  // normally triggers this"; since that view moved to /projects it is the ONLY
+  // trigger, and the same now goes for the roster the Who axis offers — a
+  // delegate list that silently stays empty reads as a company with no people.
   useEffect(() => {
-    if (backend === "live" && !localHierarchy) void loadLocalHierarchy();
+    if (backend !== "live") return;
+    if (!localHierarchy) void loadLocalHierarchy();
+    if (people.length === 0) void loadPeople();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [backend]);
 

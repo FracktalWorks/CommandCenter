@@ -1749,10 +1749,41 @@ Two findings worth carrying forward:
    `lower(owner_email) = :owner` and not an OR, so folding them server-side would give a
    row whose count came from one rule and whose ₹ came from another.
 
+**Three defects found in diff review (PR #397) and fixed on the same branch:**
+
+3. **`refreshCollection()`'s `reports` branch was unreachable from the one write its own
+   comment named.** `moveDeal` hard-coded `api.getPipeline` and never called
+   `refreshCollection()`, so from `?tab=reports&deal=<id>` the sheet's status pill moved a
+   deal and all four blocks kept their old numbers indefinitely — while the fetched
+   pipeline landed in `lanes`, state that tab does not render, so board and reports
+   disagreed on one screen. A *lead* status change went through `patchRecord` and DID
+   refresh, so the two entities behaved differently for no visible reason. `moveDeal` now
+   goes through the same seam every other write uses (`loadBoard` issues the identical
+   owner-scoped request, so the board keeps its scope). **There was no `store.test.ts` at
+   all** — the branch was asserted only by its comment. There is one now, and it pins WHICH
+   request each write issues rather than the state it settles into: a store's job is
+   deciding what to re-read, and final-state assertions cannot see a decision never made.
+4. **The leaderboard's bucket key and its SQL predicate normalised differently.** `_owners`
+   grouped on `.strip().lower()` while the aggregate matched `lower(owner_email)` with no
+   `trim()`, so `'vj@fracktal.in'` and `'vj@fracktal.in '` shared a bucket the SQL then
+   under-filled: the padded deal landed in NO bucket, `omitted` still said 0, and "By owner"
+   silently disagreed with "Forecast by stage". Now `lower(trim(owner_email))`, and the
+   fake reads the wrapper as an expression (`_LOWER_EQ` captures it, `_normalized` applies
+   it) so dropping `trim()` changes the test's answer.
+5. **The trailing window had a lower bound only.** f4 backfills `closed_at` from Zoho's
+   `Closing_Date`, which is a *forecast* date — imported deals routinely carry one in the
+   future — so a `Closed Lost` deal dated next quarter counted as closed in the last 90
+   days, moved `win_rate`, and added its whole forward span to the cycle average. The
+   report would have got *worse* the moment the owner ran the repair meant to make it work.
+   Both predicates (win/loss and the leaderboard's won ₹) now carry `closed_at <= :until`,
+   inclusive at both ends, stated in the test name.
+
 **Mutants measured red:** the `entity_type` filter (a), `from_status` → `to_status` dwell
 grouping (b), the current-stage union term (c — the 551-imported-deals-report-zero case),
 the weighted formula's inner `COALESCE` in SQL *and* in `board.ts` (d, both parity halves),
-and silently dropping unmatched names (e).
+silently dropping unmatched names (e), `trim()` off the owner predicate (f), the win/loss
+upper bound (g), the leaderboard's upper bound alone (h), and `moveDeal` reverted to its
+hard-coded board fetch (i, three vitest cases).
 
 ### WS-26h — Stage discipline: entry requirements + rot · 🟢 AGENT-SAFE · after f2
 *(§5.1 system 3. The mechanism exists in miniature: lost-type moves already demand a

@@ -131,7 +131,13 @@ function Forecast({ reports }: { reports: CrmReports }) {
         <Figure label="Weighted" value={money(pipeline.weighted)} />
       </div>
       {!hasPipeline(pipeline) ? (
-        <Empty>No open stages carry deals yet.</Empty>
+        // `hasPipeline` tests whether any open/ongoing STAGE exists, not
+        // whether one holds a deal — an empty lane still renders a row, the
+        // same courtesy the board gives its empty columns.
+        <Empty>
+          No open or ongoing stages are configured — the forecast reads those
+          lanes only.
+        </Empty>
       ) : (
         <ul className="space-y-2">
           {ordered.map((stage, index) => (

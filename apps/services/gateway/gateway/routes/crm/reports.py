@@ -514,18 +514,30 @@ async def win_loss_report(
     Built for two data truths rather than around them (module docstring facts
     3 and 4): NULL ``closed_at`` rows fall outside the window and are counted
     separately, and lost deals with no reason land in a named bucket.
+
+    ⚠️ **The window is closed at BOTH ends**, and the upper bound is not
+    decoration. WS-26f f4 backfills ``closed_at`` from Zoho's ``Closing_Date``
+    as a *labelled proxy*, and a Closing_Date is a forecast — imported deals
+    routinely carry one in the future. With a lower bound only, an imported
+    ``Closed Lost`` deal dated next quarter counts as closed in the last 90
+    days, lands in ``lost``, moves ``win_rate``, and inflates
+    ``average_cycle_days`` by its entire forward span. Both bounds are
+    INCLUSIVE: ``closed_at`` is an instant, so the endpoints are a measure-zero
+    set, and stating the rule beats leaving it to be inferred from an operator.
     """
     db = await _get_db()
     try:
         lanes = await _deal_stages(db)
         types = {str(lane.id): getattr(lane, "type", "open") for lane in lanes}
-        since = now() - timedelta(days=WINDOW_DAYS)
+        until = now()
+        since = until - timedelta(days=WINDOW_DAYS)
         closed = (await db.execute(
             text(
                 "SELECT id, status_id, amount, created_at, closed_at, "
-                "lost_reason_id FROM crm_deals WHERE closed_at >= :since"
+                "lost_reason_id FROM crm_deals "
+                "WHERE closed_at >= :since AND closed_at <= :until"
             ),
-            {"since": since},
+            {"since": since, "until": until},
         )).fetchall()
 
         won = [d for d in closed if types.get(str(d.status_id)) == "won"]
@@ -649,9 +661,11 @@ async def owner_leaderboard(
     try:
         lanes = await _deal_stages(db)
         ranked, omitted = await _owners(db)
-        since = now() - timedelta(days=WINDOW_DAYS)
+        until = now()
+        since = until - timedelta(days=WINDOW_DAYS)
         rows = [
-            await _owner_row(db, lanes, owner, since=since) for owner in ranked
+            await _owner_row(db, lanes, owner, since=since, until=until)
+            for owner in ranked
         ]
         rows.sort(key=lambda r: (-r.weighted, -r.won_amount, r.owner_email or "~"))
         return OwnerLeaderboard(
@@ -662,12 +676,22 @@ async def owner_leaderboard(
 
 
 async def _owners(db: Any) -> tuple[list[str | None], int]:
-    """The owners to compute, ranked by deal count, and how many were cut.
+    """The owners to compute, ranked by TOTAL deal count, and how many were cut.
 
     Read as rows and counted in Python rather than as a ``GROUP BY``: it is one
     column off a 551-row table, and it keeps the module's single statement
     vocabulary (see the docstring's GROUP BY note). Addresses are lowered and
-    stripped — R10, email comparisons are case-insensitive on both sides.
+    stripped — R10, email comparisons are case-insensitive on both sides — and
+    :func:`_owner_scope`'s predicate carries the matching ``lower(trim(…))`` so
+    the two cannot group differently.
+
+    ⚠️ The ranking counts **every** deal, closed ones included, so a departed
+    rep holding nothing but won/lost history can occupy a capped slot showing
+    zeros. That is the honest reading of "who has the most in this table" and
+    it is what the cheap read supports; ranking by open deals would need each
+    row's stage type, i.e. a second read of the whole table to order a list
+    that is 2-3 long in practice. Said plainly here because the earlier wording
+    ("least in play") described a rule this does not implement.
 
     ⚠️ A NULL is its own key and an empty string is a DIFFERENT one, on
     purpose. Collapsing the two here would be a tally SQL cannot reproduce:
@@ -694,14 +718,23 @@ def _owner_scope(owner: str | None) -> tuple[tuple[str, ...], dict[str, Any]]:
     NULL is its own predicate rather than a parameter: ``lower(owner_email) =
     :owner`` can never match a NULL, so the unassigned bucket would silently
     report zeros for deals that are visibly on the board.
+
+    ⚠️ **``trim()`` here is not tidiness — it is what makes this predicate agree
+    with the bucket key.** :func:`_owners` groups on ``.strip().lower()``, so
+    ``'vj@fracktal.in'`` and ``'vj@fracktal.in '`` are ONE owner in the tally.
+    Without the matching ``trim()`` the aggregate matched only the unpadded
+    row: the leaderboard reported that owner's figures short, the padded deal
+    landed in no bucket at all, ``omitted`` still said 0, and "By owner"
+    silently disagreed with "Forecast by stage" on the same screen. Any
+    normalisation added to one side belongs on both, in the same order.
     """
     if owner is None:
         return ("owner_email IS NULL",), {}
-    return ("lower(owner_email) = :owner",), {"owner": owner}
+    return ("lower(trim(owner_email)) = :owner",), {"owner": owner}
 
 
 async def _owner_row(
-    db: Any, lanes: list[Any], owner: str | None, *, since: Any,
+    db: Any, lanes: list[Any], owner: str | None, *, since: Any, until: Any,
 ) -> OwnerRow:
     where, params = _owner_scope(owner)
     open_deals = 0
@@ -716,14 +749,20 @@ async def _owner_row(
             open_deals += totals.count
             weighted += totals.weighted
         elif kind == "won":
-            # Won ₹ is scoped to the SAME window the win/loss block uses, so
-            # the two reports cannot print two different "won" numbers. NULL
-            # `closed_at` falls outside it — every imported won deal, until the
-            # owner runs f4's backfill.
+            # Won ₹ is scoped to the SAME window the win/loss block uses —
+            # BOTH bounds included — so the two reports cannot print two
+            # different "won" numbers on one screen. NULL `closed_at` falls
+            # outside it (every imported won deal, until the owner runs f4's
+            # backfill) and so does a future one (f4's proxy is a forecast
+            # date, so imported deals routinely carry them).
             totals = await _lane_totals(
                 db, lane,
-                extra_where=(*where, "closed_at >= :closed_since"),
-                params={**params, "closed_since": since},
+                extra_where=(
+                    *where,
+                    "closed_at >= :closed_since",
+                    "closed_at <= :closed_until",
+                ),
+                params={**params, "closed_since": since, "closed_until": until},
             )
             won_amount += totals.amount
     return OwnerRow(

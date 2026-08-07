@@ -71,8 +71,19 @@ _BOUND_RE = re.compile(r":(\w+)")
 
 #: ``<col> = CAST(:param AS uuid)``
 _UUID_EQ = re.compile(r"(\w+)\s*=\s*CAST\(:(\w+)\s+AS\s+uuid\)", re.I)
-#: ``lower(<col>) = :param``
-_LOWER_EQ = re.compile(r"lower\((\w+)\)\s*=\s*:(\w+)", re.I)
+#: ``lower(<col>) = :param`` and ``lower(trim(<col>)) = :param``.
+#:
+#: The optional wrapper is read as an EXPRESSION and then APPLIED (see
+#: :func:`_normalized`), not tolerated and discarded. WS-26g's leaderboard
+#: groups its buckets on ``.strip().lower()`` in Python while the aggregate
+#: matches ``lower(trim(owner_email))`` in SQL, and the two only agree while
+#: both normalisations are present — so dropping ``trim()`` from the route has
+#: to change the answer here, exactly as dropping the weighted ``COALESCE``
+#: does. A reader that skipped the wrapper would agree with the bug.
+_LOWER_EQ = re.compile(
+    r"lower\((?P<wrap>trim|btrim)?\(?\s*(?P<column>\w+)\s*\)?\)\s*=\s*:(?P<param>\w+)",
+    re.I,
+)
 #: ``<col> = :param`` — never inside a lower() or a CAST.
 _PLAIN_EQ = re.compile(r"(?<!lower\()\b(\w+)\s*=\s*:(\w+)\b")
 #: ``<col> = 'literal'``
@@ -751,7 +762,7 @@ class FakeCrmDB:
             seen = True
             want = str(args.get(param))
             rows = [r for r in rows if str(r.get(column)) == want]
-        for column, param in _LOWER_EQ.findall(where):
+        for wrap, column, param in _LOWER_EQ.findall(where):
             seen = True
             want = str(args.get(param) or "").lower()
             # ⚠️ A NULL column never satisfies an equality — `lower(NULL) = ''`
@@ -763,7 +774,7 @@ class FakeCrmDB:
             rows = [
                 r for r in rows
                 if r.get(column) is not None
-                and str(r.get(column)).lower() == want
+                and _normalized(str(r.get(column)), wrap) == want
             ]
         for column, param in _PLAIN_EQ.findall(where):
             seen = True
@@ -862,6 +873,17 @@ def _weighted(statement: str, rows: list[dict], args: dict) -> float:
             continue  # SQL: NULL * anything is NULL, and SUM skips it
         total += float(amount) * float(probability) / float(divisor)
     return total
+
+
+def _normalized(value: str, wrap: str) -> str:
+    """Apply the normalisation the predicate wraps its column in, then lower().
+
+    ``wrap`` comes from the STATEMENT (:data:`_LOWER_EQ`), so this models what
+    the SQL says rather than what the route meant. ``trim``/``btrim`` strip
+    leading and trailing whitespace, which is what Postgres does; the empty
+    string means the column was compared unwrapped.
+    """
+    return (value.strip() if wrap else value).lower()
 
 
 def _compare(left: Any, operator: str, right: Any) -> bool:

@@ -277,11 +277,26 @@ export const useCrmStore = create<CrmState>((set, get) => ({
     set({ lanes: applyMove(previous, move), saving: true, error: null });
     try {
       await api.moveDeal(move, extra);
-      // Re-read under the SAME owner filter the board is showing. Re-reading
-      // unfiltered would silently widen a scoped board into the whole
-      // pipeline the moment somebody dragged a card on it.
-      const pipeline = await api.getPipeline(get().lastView?.owner ?? null);
-      set({ lanes: toBoardLanes(pipeline) });
+      // Re-read through the SAME seam every other write uses, rather than a
+      // hard-coded pipeline fetch.
+      //
+      // A moved deal changes whatever surface is showing, and only
+      // `refreshCollection()` knows which that is. The hard-coded
+      // `api.getPipeline` here re-read the board *whatever* the active tab
+      // was, which meant: from `?tab=reports&deal=<id>` the status pill moved
+      // the deal to Closed Won and all four report blocks kept their old
+      // numbers indefinitely, while the fetched pipeline landed in `lanes` —
+      // state that tab does not render. Board and reports then disagreed on
+      // one screen. (A lead's status change went through `patchRecord` and
+      // DID refresh, so the two entities behaved differently for no reason a
+      // reader could see.)
+      //
+      // `loadBoard` issues exactly the request this used to — `getPipeline`
+      // under `view.owner` — so the board keeps its owner scope and does not
+      // silently widen to the whole pipeline. It also swallows its own error,
+      // which is why a failed RE-READ no longer reverts a move that the
+      // server accepted; only a failed PATCH reaches the catch below.
+      await get().refreshCollection();
     } catch (err) {
       // Put the card back where it was AND say why. Either alone is a lie.
       set({ lanes: previous, error: message(err) });

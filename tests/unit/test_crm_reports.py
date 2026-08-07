@@ -502,6 +502,70 @@ async def test_win_loss_reads_the_trailing_window(db: FakeCrmDB) -> None:
 
 
 @pytest.mark.asyncio
+async def test_the_window_is_closed_at_both_ends_inclusive(
+    db: FakeCrmDB, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A FUTURE ``closed_at`` is not a close — WS-26f f4's proxy makes them real.
+
+    f4 backfills ``closed_at`` from Zoho's ``Closing_Date``, which is a
+    *forecast* date, so imported deals routinely carry one in the future. With
+    a lower bound only, the deal below counts as lost in the last 90 days,
+    moves ``win_rate``, and adds its whole forward span to the cycle average —
+    a report that gets worse the moment the owner runs the repair that was
+    supposed to make it work.
+
+    Both bounds are INCLUSIVE, and the boundary rows below say so rather than
+    leaving it to be read off an operator. The clock is frozen because the
+    route reads it AFTER the fixture does: a row seeded exactly on the boundary
+    is otherwise a few hundred microseconds outside the window the route then
+    computes, and the test would be asserting clock skew rather than the rule.
+    """
+    until = crm_core.now()
+    monkeypatch.setattr(crm_reports, "now", lambda: until)
+    lanes = seeded_board(db)
+    deal(db, lanes["won"], amount=500000,
+         created_at=until - timedelta(days=40), closed_at=until)
+    deal(db, lanes["won"], amount=200000,
+         created_at=until - timedelta(days=100),
+         closed_at=until - timedelta(days=crm_reports.WINDOW_DAYS))
+    # The one the missing upper bound let in: dated a quarter from now.
+    deal(db, lanes["lost"], amount=9_000_000,
+         created_at=until - timedelta(days=5),
+         closed_at=until + timedelta(days=90))
+
+    report = await crm_reports.win_loss_report(user=USER)
+
+    assert report.won == 2          # both boundary rows are inside
+    assert report.lost == 0         # the future-dated deal is not a close
+    assert report.win_rate == 100.0
+    assert report.won_amount == 700000
+    assert report.lost_amount == 0.0
+    # The two cycles are 40d (created -40d, closed today) and 10d (created
+    # -100d, closed on the boundary at -90d) → 25. The excluded deal's cycle
+    # would be +95d, so the missing upper bound would have reported 48.3.
+    assert report.average_cycle_days == pytest.approx(25.0)
+
+
+@pytest.mark.asyncio
+async def test_the_leaderboards_won_window_is_closed_at_both_ends_too(
+    db: FakeCrmDB,
+) -> None:
+    """The two blocks sit on one screen and must not print two "won" numbers."""
+    lanes = seeded_board(db)
+    until = crm_core.now()
+    deal(db, lanes["won"], amount=400000, owner_email="vj@fracktal.in",
+         closed_at=until - timedelta(days=5))
+    deal(db, lanes["won"], amount=9_000_000, owner_email="vj@fracktal.in",
+         closed_at=until + timedelta(days=90))
+
+    leaderboard = await crm_reports.owner_leaderboard(user=USER)
+    win_loss = await crm_reports.win_loss_report(user=USER)
+
+    assert leaderboard.owners[0].won_amount == 400000
+    assert leaderboard.owners[0].won_amount == win_loss.won_amount
+
+
+@pytest.mark.asyncio
 async def test_a_null_closed_at_falls_outside_the_window_and_is_counted(
     db: FakeCrmDB,
 ) -> None:
@@ -638,6 +702,41 @@ async def test_owner_matching_is_case_insensitive_on_both_sides(
     assert [r.owner_email for r in report.owners] == ["vj@fracktal.in"]
     assert report.owners[0].open_deals == 2
     assert report.owners[0].weighted == 200000
+
+
+@pytest.mark.asyncio
+async def test_a_padded_address_is_the_same_owner_in_the_sql_and_in_the_tally(
+    db: FakeCrmDB,
+) -> None:
+    """The bucket key and the aggregate predicate must normalise identically.
+
+    ``_owners`` groups on ``.strip().lower()``, so both rows below are ONE
+    owner in the tally. If the predicate is only ``lower(owner_email)``, the
+    aggregate matches the unpadded row alone: the row under-reports, the padded
+    deal lands in NO bucket, ``omitted`` still says 0, and "By owner" quietly
+    disagrees with "Forecast by stage" about the same board.
+
+    The invariant, asserted rather than the intermediate figures: every deal is
+    counted exactly once across the leaderboard, and the leaderboard's weighted
+    total equals the forecast's.
+    """
+    lanes = seeded_board(db)
+    deal(db, lanes["proposal"], amount=200000, probability=50,
+         owner_email="vj@fracktal.in")
+    deal(db, lanes["proposal"], amount=100000, probability=50,
+         owner_email="  vj@fracktal.in ")
+    deal(db, lanes["proposal"], amount=400000, probability=50,
+         owner_email="VJ@FRACKTAL.IN")
+
+    report = await crm_reports.owner_leaderboard(user=USER)
+    forecast = await crm_reports.pipeline_report(user=USER)
+
+    assert [r.owner_email for r in report.owners] == ["vj@fracktal.in"]
+    assert report.owners[0].open_deals == 3
+    assert report.owners[0].weighted == 350000
+    assert report.omitted == 0
+    assert sum(r.open_deals for r in report.owners) == forecast.count
+    assert sum(r.weighted for r in report.owners) == forecast.weighted
 
 
 @pytest.mark.asyncio

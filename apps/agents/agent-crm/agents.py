@@ -606,44 +606,83 @@ _ZOHO_NOTE = (
 )
 
 
+#: ``request_confirmation`` truncates ``context`` at 4000 characters
+#: (``ask_tools.py``). Mirrored here so the truncation is OURS and visible,
+#: rather than the card silently losing whatever happened to be last.
+_CARD_CONTEXT_LIMIT = 4000
+
+_TRUNCATED = "… [truncated on this card; the full text is what gets written]"
+
+
 def _fields_block(payload: dict[str, Any]) -> str:
     """The payload as the confirmation card's preformatted body.
 
     Rendered from the payload actually about to be sent, never re-typed from
     the arguments: a card that shows something other than what goes on the
     wire is worse than no card, because it buys a signature for the wrong act.
+
+    ⚠️ **The fixed line goes FIRST, and the variable-length part is budgeted to
+    fit under it.** ``request_confirmation`` clips ``context`` at 4000
+    characters, so appending the Zoho note last meant a 4KB note body silently
+    dropped exactly the warning the person was owed — while the card also
+    stopped matching the wire, which is the failure this function's second
+    paragraph says is worse than showing no card at all. Truncation still
+    happens; it just happens where a reader can see it, and it says so.
     """
-    lines = [f"{key}: {value}" for key, value in payload.items()]
-    lines.append(_ZOHO_NOTE)
-    return "\n".join(lines)
+    body = "\n".join(f"{key}: {value}" for key, value in payload.items())
+    budget = _CARD_CONTEXT_LIMIT - len(_ZOHO_NOTE) - 1
+    if len(body) <= budget:
+        return f"{_ZOHO_NOTE}\n{body}"
+    keep = max(0, budget - len(_TRUNCATED) - 1)
+    return f"{_ZOHO_NOTE}\n{body[:keep]}\n{_TRUNCATED}"
 
 
-def _by_name(rows: Any, field: str, wanted: str) -> dict[str, Any] | None:
-    """Case-insensitive lookup of one vocabulary row by its human-facing name.
-
-    Case-insensitive because "negotiation" and "Negotiation" are the same lane
-    to everybody except a string comparison, and the model is repeating what
-    somebody said in chat, not copying the settings grid.
-    """
-    target = str(wanted or "").strip().lower()
-    if not target:
-        return None
-    for row in rows or []:
-        if not isinstance(row, dict):
-            continue
-        if str(row.get(field) or "").strip().lower() == target:
-            return row
-    return None
-
-
-def _name_list(rows: Any, field: str) -> str:
-    """Every valid name, for a refusal that tells the caller what to say next."""
-    found = [
+def _names(rows: Any, field: str) -> list[str]:
+    """Each row's human-facing name, verbatim — spacing and casing preserved."""
+    return [
         str(row.get(field)).strip()
         for row in rows or []
         if isinstance(row, dict) and str(row.get(field) or "").strip()
     ]
+
+
+def _matches_by_name(rows: Any, field: str, wanted: str) -> list[dict[str, Any]]:
+    """EVERY case-insensitive match for a vocabulary name — never just the first.
+
+    Case-insensitive because "negotiation" and "Negotiation" are the same lane
+    to everybody except a string comparison, and the model is repeating what
+    somebody said in chat rather than copying the settings grid.
+
+    ⚠️ **Returning a list rather than the first hit is the whole point.**
+    Postgres UNIQUE is case-SENSITIVE, so "Closed Won" and "Closed won" can
+    genuinely coexist — and the Zoho importer's ``ensure_status`` mints unseen
+    lanes by name, which is exactly how a case variant appears without anybody
+    deciding to create one. A first-match lookup would silently pick whichever
+    the query happened to order first and move the deal into a lane nobody
+    named. Two lanes with the same spoken name is a question for a human, not
+    a coin toss, so the caller refuses and lists them verbatim.
+    """
+    target = str(wanted or "").strip().lower()
+    if not target:
+        return []
+    return [
+        row for row in rows or []
+        if isinstance(row, dict)
+        and str(row.get(field) or "").strip().lower() == target
+    ]
+
+
+def _name_list(rows: Any, field: str) -> str:
+    """Every valid name, for a refusal that tells the caller what to say next."""
+    found = _names(rows, field)
     return ", ".join(found) if found else "(none are configured)"
+
+
+def _quoted_names(rows: Any, field: str) -> str:
+    """Names with quotes around them — for an ambiguity refusal, where the
+    difference between two candidates may be nothing but casing or padding and
+    an unquoted list would read like the same word printed twice."""
+    return ", ".join(f"'{name}'" for name in _names(rows, field))
 
 
 @_annotate_risk(destructive=True, idempotent=False)
@@ -729,12 +768,19 @@ async def update_deal_status(
     # misdescription. Both of these are GETs — nothing has been written yet.
     deal = await _get(f"/crm/deals/{record}")
     statuses = await _get("/crm/statuses/deal")
-    target = _by_name(statuses, "name", wanted)
-    if target is None:
+    found = _matches_by_name(statuses, "name", wanted)
+    if not found:
         return (
             f"There is no deal stage called '{wanted}', so nothing was moved. "
             f"The stages are: {_name_list(statuses, 'name')}."
         )
+    if len(found) > 1:
+        return (
+            f"'{wanted}' matches more than one deal stage — "
+            f"{_quoted_names(found, 'name')} — so nothing was moved. Ask which "
+            "one is meant, or have the duplicate renamed in the CRM's settings."
+        )
+    target = found[0]
     lane = str(target.get("name") or wanted)
     payload: dict[str, Any] = {"status_id": str(target.get("id") or "")}
     if str(target.get("type") or "").strip().lower() == "lost":
@@ -744,8 +790,8 @@ async def update_deal_status(
         # one, or creating one to make this call succeed, is never right: the
         # list is a deliberate vocabulary somebody curated.
         reasons = await _get("/crm/lost-reasons")
-        chosen = _by_name(reasons, "label", lost_reason or "")
-        if chosen is None:
+        picked = _matches_by_name(reasons, "label", lost_reason or "")
+        if not picked:
             said = str(lost_reason or "").strip()
             return (
                 f"'{lane}' is a lost stage, so it needs a lost reason and "
@@ -753,7 +799,13 @@ async def update_deal_status(
                 + "Nothing was moved. Valid reasons: "
                 + f"{_name_list(reasons, 'label')}."
             )
-        payload["lost_reason_id"] = str(chosen.get("id") or "")
+        if len(picked) > 1:
+            return (
+                f"'{lost_reason}' matches more than one lost reason — "
+                f"{_quoted_names(picked, 'label')} — so nothing was moved. Ask "
+                "which one is meant, or have the duplicate renamed."
+            )
+        payload["lost_reason_id"] = str(picked[0].get("id") or "")
 
     title = _row_title("deals", deal if isinstance(deal, dict) else {})
     from acb_skills.ask_tools import request_confirmation
@@ -806,16 +858,29 @@ async def log_activity(
     if detail:
         payload["body"] = detail
 
+    # Read the record before asking, for the same reason `update_deal_status`
+    # does — and here the reason is sharper, because this tool has no other
+    # variable on its card. `search_crm` routinely returns two deals whose
+    # names differ by a word, and if the model picks the wrong id the card is
+    # BYTE-IDENTICAL to the right one: same type, same subject, same body. The
+    # approver would have had nothing to check, and there is no delete tool to
+    # take the note back off the wrong record — which by D-CRM-9 is by then
+    # queued for the live Zoho tenant. One GET buys the one fact that makes
+    # this card checkable.
+    row = await _get(f"/crm/{slug}/{record}")
+    target = _row_title(slug, row if isinstance(row, dict) else {})
+
     from acb_skills.ask_tools import request_confirmation
+    label = ENTITY_LABELS[slug].lower()
     if not await request_confirmation(
-        title=f"Log this {kind} on the {ENTITY_LABELS[slug].lower()}?",
-        detail=line,
-        context=_fields_block(payload),
+        title=f"Log this {kind} on {target}?",
+        detail=f"{target} ({label}) · {kind}: {line}",
+        context=_fields_block({label: target, **payload}),
     ):
-        return f"Cancelled — nothing was logged: {line}"
+        return f"Cancelled — nothing was logged on {target}: {line}"
     await _post(f"/crm/{slug}/{record}/activities", payload)
     return (
-        f"Logged {kind} on this {ENTITY_LABELS[slug].lower()}: {line}"
+        f"Logged {kind} on {target}: {line}"
         + (" (with detail)" if detail else "")
     )
 

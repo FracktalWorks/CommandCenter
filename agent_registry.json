@@ -16,7 +16,7 @@
   },
   {
     "name": "crm-assistant",
-    "description": "CRM Assistant — reads the native CRM: finds leads, deals, contacts and organizations, reads the deal pipeline by stage, opens a record, and reads its history. Read-only; it cannot modify CRM records.",
+    "description": "CRM Assistant — works the native CRM: finds leads, deals, contacts and organizations, reads the deal pipeline by stage, opens a record, and reads its history; and creates a lead, moves a deal between stages, logs a note/call/meeting/task and converts a lead into a deal. Every write asks the acting user to approve it first and does nothing if nobody is there to ask. It cannot delete a CRM record.",
     "tags": ["crm", "sales", "pipeline", "leads", "deals"],
     "status": "live",
     "agent_runtime": "maf",

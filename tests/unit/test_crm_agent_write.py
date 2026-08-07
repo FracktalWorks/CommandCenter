@@ -126,6 +126,12 @@ def _responder(call: dict) -> Any:
         return {"id": str(uuid4()), **body}
     if path == "/crm/leads" and method == "POST":
         return {**body, "id": _NEW_LEAD_ID, "owner_email": _USER}
+    if method == "GET" and path.count("/") == 3:
+        # Any other single record — the read `log_activity` now makes so its
+        # card can name what it is writing to. Carries every column
+        # `_row_title` consults, so the title is well-defined per entity.
+        return {"id": path.rsplit("/", 1)[-1], "name": "Acme AMC",
+                "lead_name": "Ravi Menon", "first_name": "Ravi"}
     raise AssertionError(f"a tool reached an unexpected route: {method} {path}")
 
 
@@ -148,9 +154,24 @@ _CALLS: dict[str, Any] = {
     "convert_lead": lambda: _M.convert_lead(_LEAD_ID, deal_name="Acme AMC"),
 }
 
-#: The two tools that need nothing from the gateway before they can describe
-#: what they are about to do. They are held to a strictly stronger rule.
-_NO_PRE_READ = ["create_lead", "log_activity"]
+#: The one tool that needs nothing from the gateway before it can describe what
+#: it is about to do — it is creating the record, so it already holds every
+#: fact the card needs. It is held to a strictly stronger rule.
+#:
+#: ``log_activity`` used to be in here and was moved out under review: its card
+#: named the note but not the record, so a wrong ``record_id`` produced a card
+#: byte-identical to the correct call.
+_NO_PRE_READ = ["create_lead"]
+
+#: What the card must NAME, per tool: the record the write lands on. Not "a
+#: card was shown" — *which record*, in words the approver can check against
+#: what they asked for.
+_CARD_MUST_NAME: dict[str, str] = {
+    "create_lead": "Ravi Menon",       # the lead being created
+    "update_deal_status": "Acme AMC",  # the deal being moved
+    "log_activity": "Acme AMC",        # the record being written to
+    "convert_lead": "Ravi Menon",      # the lead being converted
+}
 
 
 def test_the_call_table_covers_every_write_tool() -> None:
@@ -298,6 +319,174 @@ def test_the_confirmation_is_asked_for_before_the_write_is_issued(tool: str) -> 
         f"{tool} writes at line {min(mutations)} but only confirms at "
         f"{min(confirmations)}"
     )
+
+
+# ── 2a. The card identifies WHAT is being written ───────────────────────────
+#
+# Distinct from "a card was shown", which is all the tests above check. A
+# confirmation the approver cannot check is a formality: the model chooses the
+# record id, `search_crm` routinely returns several deals whose names differ by
+# one word, and if it picks the wrong one the approver's only defence is that
+# the card says which record this lands on.
+
+@pytest.mark.parametrize("tool", _WRITE_TOOLS)
+async def test_the_card_names_the_record_being_written_to(
+    tool: str, monkeypatch,
+) -> None:
+    """The card must be DIFFERENT for a different target.
+
+    ``log_activity`` shipped failing this: its card carried the type, the
+    subject and the body — every one of which comes from the same turn of
+    conversation — so logging "Discussed the AMC" against the wrong Acme deal
+    produced a card byte-identical to the right call. There is no delete tool
+    to take that note back, and by D-CRM-9 it is queued for the live Zoho
+    tenant by the time anybody notices.
+    """
+    cards = approve(monkeypatch)
+    _gateway(monkeypatch)
+    await _CALLS[tool]()
+
+    assert len(cards) == 1
+    shown = " · ".join(
+        str(cards[0].get(field) or "")
+        for field in ("title", "detail", "context")
+    )
+    assert _CARD_MUST_NAME[tool] in shown, (
+        f"{tool}'s confirmation card never names the record it writes to — "
+        f"the approver has nothing to check. Card was: {cards[0]}"
+    )
+
+
+async def test_two_similar_records_produce_two_different_cards(
+    monkeypatch,
+) -> None:
+    """The property behind the test above, stated as the failure it prevents:
+    the same note against a different deal must not look the same."""
+    other_id = str(uuid4())
+
+    def _two_deals(call: dict) -> Any:
+        if call["path"] == f"/crm/deals/{other_id}":
+            return {**_DEAL, "id": other_id, "name": "Acme AMC — Bengaluru"}
+        if call["path"] == f"/crm/deals/{other_id}/activities":
+            return {"id": str(uuid4()), **(call["json"] or {})}
+        return _responder(call)
+
+    cards = approve(monkeypatch)
+    _gateway(monkeypatch, _two_deals)
+    await _M.log_activity("deals", _DEAL_ID, "note", "Agreed the price")
+    await _M.log_activity("deals", other_id, "note", "Agreed the price")
+
+    assert cards[0] != cards[1], (
+        "the same note on two different deals produced identical cards"
+    )
+    assert "Bengaluru" in str(cards[1])
+
+
+# ── 2b. The card body fits, and says so when it does not ────────────────────
+
+async def test_a_long_body_keeps_the_zoho_note_and_admits_the_truncation(
+    monkeypatch,
+) -> None:
+    """``request_confirmation`` clips ``context`` at 4000 characters.
+
+    With the Zoho note appended LAST, a 4KB note body pushed it off the end —
+    so the one card that most needed the "this leaves for the live tenant"
+    warning was the one that silently dropped it, and the card stopped
+    matching the wire with nothing on screen to say so. The fixed line now
+    goes first and the payload is budgeted under it.
+    """
+    body = "x" * 5000
+    approve(monkeypatch)
+    calls = _gateway(monkeypatch)
+    cards = approve(monkeypatch)
+    await _M.log_activity("deals", _DEAL_ID, "note", "Long one", body=body)
+
+    context = cards[0]["context"]
+    assert len(context) <= _M._CARD_CONTEXT_LIMIT, (
+        "the card body would be clipped by request_confirmation itself, which "
+        "is the truncation nobody can see"
+    )
+    assert _M._ZOHO_NOTE in context, "the Zoho warning was dropped"
+    assert _M._TRUNCATED in context, "the card was cut without saying so"
+    # The WIRE keeps everything: the truncation is a display budget, never a
+    # quiet edit to what gets written.
+    assert calls[-1]["json"]["body"] == body
+
+
+async def test_a_short_body_is_shown_whole_with_no_marker(monkeypatch) -> None:
+    cards = approve(monkeypatch)
+    _gateway(monkeypatch)
+    await _M.log_activity("deals", _DEAL_ID, "note", "Short", body="all of it")
+
+    context = cards[0]["context"]
+    assert "all of it" in context
+    assert _M._TRUNCATED not in context
+    assert context.startswith(_M._ZOHO_NOTE)
+
+
+# ── 2c. A name that matches two rows is a question, not a coin toss ─────────
+#
+# Postgres UNIQUE is case-SENSITIVE, and the Zoho importer's `ensure_status`
+# mints unseen lanes by name — so "Closed Won" and "Closed won" can coexist
+# without anybody having decided to create both. A case-insensitive lookup that
+# takes the first hit moves the deal into whichever the query happened to order
+# first, which is a silent wrong answer of exactly the class this agent's path
+# and verb guards exist to refuse.
+
+_AMBIGUOUS_STATUSES = [
+    *_STATUSES,
+    {"id": str(uuid4()), "name": "negotiation", "type": "open",
+     "probability": 55},
+]
+_AMBIGUOUS_REASONS = [*_REASONS, {"id": str(uuid4()), "label": "price",
+                                  "position": 30}]
+
+
+def _ambiguous(call: dict) -> Any:
+    if call["path"] == "/crm/statuses/deal":
+        return _AMBIGUOUS_STATUSES
+    if call["path"] == "/crm/lost-reasons":
+        return _AMBIGUOUS_REASONS
+    return _responder(call)
+
+
+async def test_an_ambiguous_stage_name_is_refused_naming_both(
+    monkeypatch,
+) -> None:
+    cards = approve(monkeypatch)
+    calls = _gateway(monkeypatch, _ambiguous)
+    out = await _M.update_deal_status(_DEAL_ID, "Negotiation")
+
+    assert writes(calls) == [], "a deal was moved into a lane nobody named"
+    assert cards == [], "an ambiguous move was put in front of a human as if settled"
+    # Quoted, because the two candidates differ by nothing but casing and an
+    # unquoted list reads like the same word printed twice.
+    assert "'Negotiation'" in out and "'negotiation'" in out
+
+
+async def test_an_ambiguous_lost_reason_is_refused_naming_both(
+    monkeypatch,
+) -> None:
+    approve(monkeypatch)
+    calls = _gateway(monkeypatch, _ambiguous)
+    out = await _M.update_deal_status(
+        _DEAL_ID, "Closed Lost", lost_reason="Price",
+    )
+
+    assert writes(calls) == []
+    assert "'Price'" in out and "'price'" in out
+
+
+async def test_an_unambiguous_name_still_resolves_against_the_same_reader(
+    monkeypatch,
+) -> None:
+    """The other direction: refusing a genuine duplicate must not refuse the
+    ordinary case, which is the failure mode that gets a guard deleted."""
+    approve(monkeypatch)
+    calls = _gateway(monkeypatch, _ambiguous)
+    await _M.update_deal_status(_DEAL_ID, "Qualification")
+    assert calls[-1]["method"] == "PATCH"
+    assert calls[-1]["json"] == {"status_id": _QUALIFICATION}
 
 
 # ── 3. Approved ⇒ exactly the intended request ──────────────────────────────
@@ -452,12 +641,13 @@ async def test_log_activity_posts_to_the_records_own_activities_route(
     out = await _CALLS["log_activity"]()
 
     assert [(c["method"], c["path"]) for c in calls] == [
+        ("GET", f"/crm/deals/{_DEAL_ID}"),
         ("POST", f"/crm/deals/{_DEAL_ID}/activities"),
     ]
-    assert calls[0]["json"] == {
+    assert calls[-1]["json"] == {
         "type": "call", "subject": "Intro call", "body": "Discussed the AMC",
     }
-    assert "Intro call" in out
+    assert "Intro call" in out and "Acme AMC" in out
 
 
 @pytest.mark.parametrize("kind", ["note", "call", "meeting", "task"])
@@ -465,7 +655,7 @@ async def test_every_loggable_type_is_accepted(kind: str, monkeypatch) -> None:
     approve(monkeypatch)
     calls = _gateway(monkeypatch)
     await _M.log_activity("deals", _DEAL_ID, kind, "Something happened")
-    assert calls[0]["json"]["type"] == kind
+    assert calls[-1]["json"]["type"] == kind
 
 
 @pytest.mark.parametrize("kind", ["status_change", "system", "email", "delete"])
@@ -492,7 +682,7 @@ async def test_an_unstated_type_is_a_note_rather_than_a_refusal(
     approve(monkeypatch)
     calls = _gateway(monkeypatch)
     await _M.log_activity("deals", _DEAL_ID, kind, "Subject")
-    assert calls[0]["json"]["type"] == "note"
+    assert calls[-1]["json"]["type"] == "note"
 
 
 async def test_log_activity_reaches_every_entity(monkeypatch) -> None:

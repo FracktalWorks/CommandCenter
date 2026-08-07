@@ -41,13 +41,15 @@
 > applied), `TimelineEntry.kind = "email_thread"` on both sides, and
 > `tests/unit/test_crm_email_timeline.py` (30 cases; two of them are the
 > mutation fence for the scoping rule).
-> · **WS-26d-write: 🟢 BUILT 2026-08-08 (branch `ws-26d-write`, no migration)** —
+> · **WS-26d-write: 🟢 MERGED + DEPLOYED 2026-08-08 (PR #400, no migration;
+> deploy 31217978773 log-verified — gateway restart loads the module)** —
 > the four confirmation-gated write tools in `apps/agents/agent-crm/agents.py`
 > (`create_lead`, `update_deal_status`, `log_activity`, `convert_lead`),
 > `_ALLOWED_METHODS` widened to `{GET, POST, PATCH}` (never DELETE/PUT), the
 > path fence extended past f-strings to `.format`/`%`/`+`, and
 > `tests/unit/test_crm_agent_write.py` (76 cases) + `test_crm_agent.py` grown from
-> 87 to 143. **Built, not deployed.**
+> 87 to 143. **LIVE: a confirmed agent write is born `zoho_dirty` and reaches the
+> live tenant within one 600s sync cycle (D-CRM-9).**
 > · **WS-26e: 🟡 SPEC, nothing built.**
 > **26f** — 🟢 **MERGED + DEPLOYED 2026-08-07 (PR #391), NOT RUN against the tenant.** f1
 > `POST /crm/import/zoho/stages` (`routes/crm/stage_metadata.py`, floor

@@ -1619,10 +1619,11 @@ touched on re-anchor: OFF-window mail is excluded by the anchor predicate whatev
 `rules_processed_at` says, and moving it would skip the triggering batch a second way.
 
 **Documented residual, accepted:** mail received in the final `REANCHOR_GAP_SECONDS` of
-an OFF window IS minted when the flag comes back on. It is bounded — one gap width, and
-at most one capped batch of it — and it is the deliberate price of never dropping the
-message that woke the step. A named test asserts it as the bound rather than leaving it
-to be discovered. Fail-closed otherwise: a missed lead is hand-creatable and visible in
+an OFF window IS minted when the flag comes back on. The bound is on TIME, not on volume
+— one gap-width of mail (an hour), drained across however many cycles the per-cycle cap
+takes, since the cap defers rather than drops. It is the deliberate price of never
+dropping the message that woke the step. A named test asserts it as the bound rather than
+leaving it to be discovered. Fail-closed otherwise: a missed lead is hand-creatable and visible in
 the mailbox; 27 unattended pushes into the live tenant are neither.
 
 **A failure never advances the cursor past lost work (2026-08-08 diff review, P1-2).**

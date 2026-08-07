@@ -441,8 +441,9 @@ async def _reanchor_if_dormant(
     where the triggering message always is.
 
     ⚠️ **Documented residual:** mail received in the final hour of an OFF
-    window IS minted when the flag comes back on. It is bounded (one gap width,
-    and at most one capped batch of it) and it is the deliberate price of never
+    window IS minted when the flag comes back on. It is bounded by TIME, not by
+    one batch — one gap-width of mail (an hour), drained across however many
+    cycles the per-cycle cap takes — and it is the deliberate price of never
     dropping the message that woke the step. `crm_app.md` §9 records it and
     ``work_plan.md`` §6 (b) tells the owner about it before they flip.
 

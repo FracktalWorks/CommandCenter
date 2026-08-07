@@ -654,7 +654,8 @@ That guard was added by diff review after an OFF→ON round trip was measured mi
 **27 leads for a 27-day OFF window**, each pushing unattended into the live tenant —
 so turning the flag off is genuinely a stop, not a pause that accumulates. ⚠️ **With
 one bounded exception the owner should expect: mail received in the FINAL HOUR before
-the flag goes back on IS minted** (up to one capped batch of it). That is deliberate —
+the flag goes back on IS minted** — one gap-width of mail (an hour), drained across
+however many cycles the per-cycle cap takes, not a single batch. That is deliberate —
 the re-anchor clamps the epoch one hour back rather than resetting it to now, because
 this step only runs when a sync persisted mail, so the cycle that detects the gap is
 always the cycle carrying the message that woke it; resetting would drop that message

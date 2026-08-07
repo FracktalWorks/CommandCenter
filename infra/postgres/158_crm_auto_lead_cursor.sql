@@ -35,23 +35,56 @@
 --                              wrote its leads, so a failure is never mistaken
 --                              for work done.
 --
---         last_run_at          when the step last RAN. This is what detects
---                              dormancy — an OFF window, or an outage — and it
---                              has to be its own column: the watermark tracks
---                              MAIL, so a mailbox that is merely quiet over a
---                              weekend has a 60-hour-old watermark while the
---                              step has run faithfully every 600s. Re-anchoring
---                              such an account would drop Monday's first
---                              message, which is exactly the message this
---                              feature exists to catch. (It also keeps a
---                              deliberate stall on a poison message stalled,
---                              instead of quietly re-anchoring past it.)
+--         last_run_at          when the step last RAN — stamped at the end of
+--                              every cycle, including the ones that considered
+--                              nothing and the ones that stalled. This is what
+--                              detects dormancy: an OFF window, or an outage.
 --
---       When `now() - last_run_at` exceeds the step's REANCHOR_GAP_SECONDS,
---       all three are re-stamped to now: the ON epoch restarts and the gap's
---       backlog mints nothing. Fail-closed in both directions — a missed lead
---       is hand-creatable and visible in the mailbox; 27 unattended pushes
---       into a live tenant are neither.
+--                              ⚠️ It is its own column for a NARROW reason, and
+--                              not the one you might expect. Both it and the
+--                              watermark freeze on a mailbox that receives
+--                              nothing, because the step is NOT invoked once
+--                              per scheduler period — `email_ingestion/
+--                              scheduler.py:463-472` reads `synced` off the
+--                              sync result and fires the hook only when mail
+--                              was actually PERSISTED. What separates the two
+--                              columns is a cycle that ran and found no
+--                              CANDIDATES (mail outside the inbox, held back,
+--                              or predating the anchor): that advances
+--                              `last_run_at` and not the watermark. It is also
+--                              the state a deliberate stall holds the watermark
+--                              in, so keying dormancy on the watermark would
+--                              re-anchor past a stall and quietly undo it.
+--
+--       WHAT HAPPENS ON A GAP. When `now() - last_run_at` exceeds the step's
+--       REANCHOR_GAP_SECONDS, the step CLAMPS `activated_at` forward to
+--       `now() - REANCHOR_GAP_SECONDS` — it does NOT re-stamp all three, it
+--       does NOT set anything to `now()`, and it does NOT skip the batch:
+--
+--         * `activated_at`        moves forward to the start of the gap window.
+--         * `processed_watermark` is deliberately left ALONE. OFF-window mail
+--                                 is already excluded by the anchor predicate
+--                                 whatever its `rules_processed_at` says, and
+--                                 moving it would skip the triggering batch a
+--                                 second way.
+--         * `last_run_at`         is advanced by the ordinary end-of-cycle
+--                                 stamp, like any other cycle.
+--
+--       Clamp rather than reset, because the step runs only when a sync
+--       persisted mail — so the cycle that DETECTS the gap is always the cycle
+--       carrying the message that woke it. Resetting the anchor to `now()` and
+--       returning early therefore excluded that message permanently: measured
+--       as no mail 22:00→07:30, a prospect writes at 07:30:50, the step runs at
+--       07:31:05, and the one lead it existed to catch fell fifteen seconds the
+--       wrong side of the anchor its own arrival created. Every night, every
+--       weekend.
+--
+--       ⚠️ ACCEPTED RESIDUAL, and it is not "nothing": mail received in the
+--       FINAL REANCHOR_GAP_SECONDS of the window IS minted — one gap-width of
+--       mail (an hour), drained across however many cycles the per-cycle cap
+--       takes. Everything older stays excluded, which is the fail-closed
+--       property that matters: a missed lead is hand-creatable and visible in
+--       the mailbox; 27 unattended pushes into a live tenant are neither.
 --
 --       ⚠️ There is deliberately NO unique index on `crm_leads.email` to go
 --       with this. Two concurrent `process_new_mail` invocations for one

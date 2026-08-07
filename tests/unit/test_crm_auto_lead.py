@@ -1255,11 +1255,12 @@ async def test_dw8_mail_from_the_last_hour_of_the_off_window_is_minted(
     """The DOCUMENTED RESIDUAL, asserted deliberately rather than accidentally.
 
     Clamping means the tail of the gap window is admitted: mail received
-    within ``REANCHOR_GAP_SECONDS`` of the flag coming back on IS minted. That
-    is bounded — one gap width, and at most one capped batch of it — and it is
-    the price of never dropping the message that woke the step, which is the
-    same message on every ordinary night. Recorded in `crm_app.md` §9 and in
-    the owner note on `work_plan.md` §6 (b).
+    within ``REANCHOR_GAP_SECONDS`` of the flag coming back on IS minted. The
+    bound is on TIME, not on volume — one gap-width of mail (an hour), drained
+    across however many cycles the per-cycle cap takes, since the cap defers
+    rather than drops. It is the price of never dropping the message that woke
+    the step, which is the same message on every ordinary night. Recorded in
+    `crm_app.md` §9 and in the owner note on `work_plan.md` §6 (b).
     """
     _seed_account(db)
     _seed_status(db)

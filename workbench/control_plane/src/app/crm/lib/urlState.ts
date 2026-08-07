@@ -26,14 +26,21 @@ export const SHEET_ENTITY: Record<SheetParam, EntitySlug> = {
 export type OpenRecord = { param: SheetParam; entity: EntitySlug; id: string };
 
 /**
- * The two tabs that are not a collection.
+ * The three tabs that are not a collection.
  *
- * `settings` is the pipeline manager (WS-26f f2) and is deliberately part of
- * the SAME grammar rather than a route of its own: it is one more thing this
- * page can be showing, and giving it a route would mean the record sheet
- * (which is URL state) could not stay open across it.
+ * `settings` is the pipeline manager (WS-26f f2) and `reports` is the forecast
+ * & funnel surface (WS-26g). Both are deliberately part of the SAME grammar
+ * rather than routes of their own: each is one more thing this page can be
+ * showing, and giving them routes would mean the record sheet (which is URL
+ * state) could not stay open across them — `?tab=reports&deal=<id>` is a
+ * legitimate link, and it is how somebody sends "this stage is where we are
+ * losing them, look at this deal".
+ *
+ * ⚠️ Adding one here is not the whole job: `page.tsx`'s branch chain and the
+ * load effect both have to learn it, or the tab parses, the pill highlights
+ * and the screen keeps showing whatever was there.
  */
-export const NON_ENTITY_TABS = ["board", "settings"] as const;
+export const NON_ENTITY_TABS = ["board", "settings", "reports"] as const;
 export type NonEntityTab = (typeof NON_ENTITY_TABS)[number];
 
 export type CrmView = {

@@ -1,7 +1,7 @@
 [project]
 name = "agent-crm"
 version = "0.1.0"
-description = "CRM Assistant agent — search, pipeline, record and timeline reads over the native CRM"
+description = "CRM Assistant agent — search, pipeline, record and timeline reads over the native CRM, plus confirmation-gated lead/deal/activity writes"
 requires-python = ">=3.11"
 dependencies = [
     "acb-common",

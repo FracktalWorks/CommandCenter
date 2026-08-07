@@ -40,7 +40,14 @@
 > caller-scoped email→CRM timeline join, the address index (migration 154,
 > applied), `TimelineEntry.kind = "email_thread"` on both sides, and
 > `tests/unit/test_crm_email_timeline.py` (30 cases; two of them are the
-> mutation fence for the scoping rule). · **WS-26d write half: 🟡 SPEC.**
+> mutation fence for the scoping rule).
+> · **WS-26d-write: 🟢 BUILT 2026-08-08 (branch `ws-26d-write`, no migration)** —
+> the four confirmation-gated write tools in `apps/agents/agent-crm/agents.py`
+> (`create_lead`, `update_deal_status`, `log_activity`, `convert_lead`),
+> `_ALLOWED_METHODS` widened to `{GET, POST, PATCH}` (never DELETE/PUT), the
+> path fence extended past f-strings to `.format`/`%`/`+`, and
+> `tests/unit/test_crm_agent_write.py` (76 cases) + `test_crm_agent.py` grown from
+> 87 to 143. **Built, not deployed.**
 > · **WS-26e: 🟡 SPEC, nothing built.**
 > **26f** — 🟢 **MERGED + DEPLOYED 2026-08-07 (PR #391), NOT RUN against the tenant.** f1
 > `POST /crm/import/zoho/stages` (`routes/crm/stage_metadata.py`, floor
@@ -500,12 +507,17 @@ native funnel history; the log is accruing it now).
   `acb_auth/deps.py` §1b would read as SERVICE_ACCESS).
   **READ half BUILT 2026-08-06** — `search_crm`, `get_pipeline`, `get_record`,
   `get_timeline`, each a thin wrapper over the existing `/crm` routes (the agent never
-  queries the DB). Read-only is enforced at the transport: `_ALLOWED_METHODS = {"GET"}`,
-  checked inside the single round-trip helper every tool goes through, and the module
-  deliberately ships no `_post`/`_patch`/`_delete` helper at all.
-  **Write half STILL SPEC** — `create_lead`, `update_deal_status`, `log_activity`,
-  `convert_lead`; writes risk-annotated, deletes confirmation-gated fail-closed. Blocked on
-  the spec naming that confirmation mechanism (§9, blocker B5).
+  queries the DB).
+  **WRITE half BUILT 2026-08-08** — `create_lead`, `update_deal_status`, `log_activity`,
+  `convert_lead`, each `@_annotate_risk(destructive=True)` and each awaiting
+  `request_confirmation` **before it constructs a mutating request**, with no
+  `non_interactive_default` passed anywhere, so an unattended run writes nothing (B5 closed;
+  see §9 `### WS-26d-write` for the as-built record and its four decisions).
+  The verb allowlist was **widened, never deleted**: `_ALLOWED_METHODS = {"GET", "POST",
+  "PATCH"}`, still checked inside the single round-trip helper every tool goes through, and
+  `DELETE`/`PUT` — and any `_delete`/`_put` helper — are still absent, so the check that
+  used to enforce "read-only" now enforces **"never destroys"**. There is no delete tool and
+  no field-edit tool: the only mutations are the four above.
   Registered in `_KNOWN_AGENTS` + `_AGENT_REGISTRY` (`routes/agent.py`) +
   `agent_registry.json`. **Orchestrator routability comes from `_AGENT_REGISTRY`** —
   `orchestrator/agents.py:303-307` imports it directly (plus `_load_dynamic_agents()`); no
@@ -942,7 +954,7 @@ unknown sender becomes a lead on its own.
 | D1 | **WS-26f** (incl. the new f4 backfill) — ✅ **BUILT 2026-08-07, not run** | The board is the demo's first screen; today it is the broken part. | — |
 | D2 | **WS-26d-email** | The "this is not a toy" moment. Disjoint files from D1 (`activities.py`/`Timeline.tsx` vs. importer/admin/settings). | ∥ with D1 |
 | D3 | **WS-26g** — ✅ **BUILT 2026-08-07** (branch `ws-26g-reports`, no migration) | The forecast number. **After D1** — f2 and the reports tab both extend the `page.tsx`/`urlState.ts` tab grammar, and two parallel PRs there is a needless conflict. | after D1 |
-| D4 | **WS-26d-write** | The AI-creates-a-lead demo beat. Lives in `apps/agents/agent-crm/` — collides with nothing above. | ∥ with any |
+| D4 | **WS-26d-write** ✅ **BUILT 2026-08-08** | The AI-creates-a-lead demo beat. Lives in `apps/agents/agent-crm/` — collides with nothing above. No migration. | ∥ with any |
 | D5 | **WS-26d-autolead** | Build whenever; the **flip is OWNER-GATE** and pushes real leads into Zoho (D-CRM-9) — demo it only if the owner wants that story told live. | ∥ with any |
 
 **Deferred until after the demo, deliberately — not demoted:** WS-26h (discipline),
@@ -1239,11 +1251,18 @@ halves that were fully specified.
    each a thin wrapper over the existing `/crm` routes carrying the caller's
    `X-User-Email`, so the agent inherits the route's authorization instead of holding a
    second opinion about it. Registered in `_KNOWN_AGENTS`, `_AGENT_REGISTRY` and
-   `agent_registry.json`; `build_agents()` constructs one native MAF `Agent`. Read-only is
+   `agent_registry.json`; `build_agents()` constructs one native MAF `Agent`. Read-only was
    a property of the transport (`_ALLOWED_METHODS = {"GET"}` checked in the one round-trip
    helper), asserted three ways in the test file: behaviourally (a POST raises before the
    request is built), structurally (no verb helper exists), and by observation (every call
    the four tools make is a GET).
+   ⚠️ **SUPERSEDED 2026-08-08 by WS-26d-write, which is what this design was for.** The
+   allowlist was widened to `{GET, POST, PATCH}` and `_post`/`_patch` added — but the CHECK
+   stayed in `_request` and `DELETE`/`PUT` stayed out, so the mechanism now enforces "never
+   destroys" rather than "never writes", and the three assertions above were generalised
+   rather than deleted. Read the §9 `### WS-26d-write` as-built block for the current state;
+   what remains true here verbatim is the identity rule, the path guards and the
+   one-authorization-rule design.
    ⚠️ **Diff review found the method allowlist was only half the boundary, and the other
    half was missing.** `record_id` went into the path unvalidated, and httpx removes `..`
    segments before sending, so `get_record("deals", "../../admin/members")` issued
@@ -1434,8 +1453,95 @@ paragraph exists to prevent.
 
 **Tests:** `tests/unit/test_crm_auto_lead.py` (B7).
 
-### WS-26d-write — the CRM write tools · 🟢 AGENT-SAFE
+### WS-26d-write — the CRM write tools · ✅ **BUILT 2026-08-08**
 *(Closes B5. `create_lead`, `update_deal_status`, `log_activity`, `convert_lead`.)*
+
+> **As built** (branch `ws-26d-write`, **no migration** — every route these
+> tools call already existed): the four tools in
+> `apps/agents/agent-crm/agents.py`, each awaiting `request_confirmation` before
+> it constructs a mutating request and none passing
+> `non_interactive_default`; `_ALLOWED_METHODS` widened from `{"GET"}` to
+> `{"GET", "POST", "PATCH"}` with the check kept inside `_request`; `_post` and
+> `_patch` added and `_delete`/`_put` deliberately still absent. Tests:
+> `tests/unit/test_crm_agent_write.py` (new, 76 cases),
+> `tests/unit/test_crm_agent.py` (87 → 143, generalised from the read half's
+> hand-typed tool lists to an `_INVOCATIONS` table fenced against `_TOOLS`), and
+> `tests/unit/_crm_agent_fakes.py` (new — the loader, the recording fake client
+> and the confirmation stubs both files share). Six mutants run red and were
+> reverted (six pre-review, four more for the repairs). R4 sweep — **eleven** read-only claims corrected, the last four found
+> by diff review: `agents.py`'s module docstring · `_request`'s refusal text ·
+> `config.json` · `pyproject.toml` · `_AGENT_REGISTRY` (`routes/agent.py`) ·
+> `apps/AGENTS.md` · `instructions.md` · `agent_registry.json` ·
+> `apps/services/gateway/AGENTS.md` · this spec's §6 Agent bullet · this spec's
+> §9 WS-26d read-half build record (marked superseded rather than rewritten —
+> it is a build record, and the design it describes is what the write half was
+> for).
+>
+> **Four decisions the ticket below did not record, each with its reason:**
+> 1. **Reads may precede the confirmation; writes may not.** Done-when 1 says
+>    "zero HTTP calls when confirmation is denied", but three of the four tools
+>    cannot honestly describe what they are about to do without reading first:
+>    `update_deal_status` resolves the stage NAME to an id, `convert_lead` has to
+>    know whether this lead is already converted, and `log_activity` has to name
+>    the record it is writing to. A card reading "move deal 8f3c-… to <a stage
+>    nobody checked exists>" is a signature bought under a misdescription. So the
+>    asserted invariant is **no mutation before consent** —
+>    `test_everything_read_before_the_confirmation_is_a_read` pins that every
+>    pre-card call is a GET — while `create_lead`, which is creating the record
+>    and so already holds every fact its card needs, is still held to literally
+>    zero calls. (The cited proof shape at
+>    `test_email_tool_consolidation.py:272-280` forbids the specific write rather
+>    than all traffic.)
+>    ⚠️ **`log_activity` moved into this bucket under diff review**, and the
+>    reason is the sharper case for the whole allowance: its card carried the
+>    type, the subject and the body — all from the same turn of conversation — so
+>    a wrong `record_id` produced a card **byte-identical** to the correct call.
+>    `search_crm` routinely returns two deals whose names differ by a word; there
+>    is no delete tool to take the note back; and by D-CRM-9 it is queued for the
+>    live tenant by the time anybody notices. One GET buys the one fact that
+>    makes the card checkable, and
+>    `test_the_card_names_the_record_being_written_to` now holds all four tools
+>    to it.
+> 2. **The stage is resolved by name inside the tool** (supervisor ruling), via
+>    `GET /crm/statuses/deal` — no new read tool, no UUID on the LLM surface, and
+>    an unknown name comes back as the list of real lane names rather than a
+>    relayed 422.
+> 3. **A lost-type target requires a `lost_reason`**, resolved the same way
+>    against `GET /crm/lost-reasons` (supervisor ruling). This pre-empts the 422
+>    `_resolve_status`/`apply_status_transition` raise on the "close this as
+>    lost" demo beat. The tool **never creates** a stage or a reason — pinned by
+>    `test_the_vocabulary_is_only_ever_read`, which watches the refusing paths
+>    too, since those are where minting the missing row would be tempting.
+>    ⚠️ **Both vocabularies resolve to ALL case-insensitive matches, never the
+>    first** (diff review). Postgres UNIQUE is case-SENSITIVE and the importer's
+>    `ensure_status` mints unseen lanes by name, so "Closed Won" and "Closed won"
+>    can coexist without anybody having decided to create both; a first-match
+>    lookup would move the deal into whichever the query happened to order first.
+>    Two rows with the same spoken name is a question for a human — the tool
+>    refuses and lists the candidates **quoted**, since they may differ by
+>    nothing but casing.
+> 4. **`create_lead` takes no `owner_email` argument at all.** `create_record`
+>    already defaults it to the acting user server-side, so surfacing it would
+>    add an LLM-filled identity field whose only power is to attribute a lead to
+>    somebody who never asked for it. Normalize-on-write in
+>    `routes/crm/records.py` was ruled OUT of scope.
+>
+> **`_annotate_risk(open_world=...)` is False, deliberately.** The vocabulary
+> means "the tool reaches outside CommandCenter", and these tools speak only to
+> the gateway; the Zoho hop is `sync_zoho`'s, on its own broker gate. D-CRM-9 is
+> still true — the row is born `zoho_dirty` — and it is said on the confirmation
+> card instead, where the person deciding can weigh it. ⚠️ **That note is the
+> FIRST line of the card body, not the last** (diff review):
+> `request_confirmation` clips `context` at 4000 characters, so appending it
+> meant a ~4KB note body silently dropped exactly the warning it was there to
+> give, while the card also stopped matching the wire. The payload block is now
+> budgeted under the fixed line and carries an explicit truncation marker; the
+> WIRE always carries the full text.
+>
+> **Two findings from diff review are recorded as open and deliberately NOT
+> fixed here**, because both are route-layer behaviour rather than this tool's:
+> clearing `lost_reason_id` when a deal moves back OUT of a lost stage, and
+> validating `expected_close_date` before it reaches `/convert`.
 
 **The mechanism is `request_confirmation` (`acb_skills/ask_tools.py:345-348`), awaited at
 the top of the tool, before the HTTP call.** It is a plain async function — not a

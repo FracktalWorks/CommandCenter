@@ -36,6 +36,12 @@ from gateway.routes.projects.core import (
     row_to_dict,
     update_row,
 )
+from gateway.routes.projects.notifications import (
+    excerpt_of,
+    mention_targets,
+    notify,
+    task_audience,
+)
 from pydantic import BaseModel
 from sqlalchemy import text
 
@@ -112,8 +118,40 @@ async def add_comment(
             db, activity_type="comment", created_by=actor(user),
             task_id=task_id, body=body,
         )
+        # WS-27j. Two audiences, and the order matters: a person who is BOTH
+        # mentioned and an assignee should get the mention, because "you were
+        # named" is a stronger claim on their attention than "the task you hold
+        # got a comment". `notifiable` dedupes within a call, so the assignee
+        # pass is handed only whoever the mention pass did not take.
+        mentioned = mention_targets(body)
+        snippet = excerpt_of(body)
+        mention_result = await notify(
+            db, recipients=mentioned, kind="mention", task_id=task_id,
+            actor_id=actor(user), activity_id=str(row.id), excerpt=snippet,
+        )
+        rest = [
+            who for who in await task_audience(db, task_id)
+            if who.strip().lower() not in set(mentioned)
+        ]
+        await notify(
+            db, recipients=rest, kind="comment", task_id=task_id,
+            actor_id=actor(user), activity_id=str(row.id), excerpt=snippet,
+        )
+        if mention_result["notified"]:
+            # On the timeline too, not only in the recipients' bells. Somebody
+            # reading the task later has to be able to see why a colleague
+            # turned up in the thread; otherwise the reason is recorded only in
+            # rows that one person can read.
+            await record_activity(
+                db, activity_type="mention", created_by=actor(user),
+                task_id=task_id,
+                meta={"mentioned": mention_result["notified"]},
+            )
         await db.commit()
         result = row_to_dict(row, ActivityModel)
+        # Surfaced, not swallowed: a mention that reached nobody would
+        # otherwise leave the author believing they pulled a colleague in.
+        result["not_notified"] = mention_result["skipped"]
     finally:
         await db.close()
 

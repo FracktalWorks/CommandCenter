@@ -55,6 +55,13 @@ export interface ActivityRow {
   meta?: Record<string, unknown> | null;
   created_by?: string | null;
   created_at?: string | null;
+  /**
+   * WS-27j — people this comment named who could not be notified, because they
+   * cannot see the task. Present on the POST response only; the timeline does
+   * not carry it, since who was reachable is a fact about the moment of
+   * posting rather than about the comment.
+   */
+  not_notified?: string[];
 }
 
 export interface GrantRow {
@@ -261,3 +268,42 @@ export interface MyTaskApiRow extends TaskRow {
   energy?: string | null;
   is_two_minute?: boolean;
 }
+
+export interface NotificationRow {
+  id: string;
+  kind: "assigned" | "mention" | "comment";
+  task_id: string;
+  actor: string;
+  excerpt?: string | null;
+  created_at?: string | null;
+  read_at?: string | null;
+  task_title?: string | null;
+  task_number?: number | null;
+  project_id?: string | null;
+}
+
+/**
+ * Notifications (WS-27j).
+ *
+ * No `recipient` parameter anywhere, and that is the contract rather than an
+ * omission: the gateway takes the recipient from the session, so there is no
+ * request shape that reads somebody else's bell.
+ */
+export const notificationsApi = {
+  list: (unreadOnly = false) =>
+    call<{ rows: NotificationRow[]; total: number; unread: number }>(
+      `notifications${unreadOnly ? "?unread_only=true" : ""}`
+    ),
+
+  markRead: (ids: string[]) =>
+    call<{ marked: number }>("notifications/read", {
+      method: "POST",
+      body: JSON.stringify({ ids }),
+    }),
+
+  markAllRead: () =>
+    call<{ marked: number }>("notifications/read", {
+      method: "POST",
+      body: JSON.stringify({ all: true }),
+    }),
+};

@@ -2,8 +2,9 @@
 
 > **Product:** CommandCenter · **Feature:** CRM (Sales Center's primary module) · **Created:** 2026-08-05
 > **Status:** 🟢 **WS-26a + WS-26b + WS-26c BUILT AND DEPLOYED** (2026-08-05/06) ·
-> 🟢 **WS-26d read half BUILT** (2026-08-06). 26a–c merged together on branch
-> `ws-26-crm-app`.
+> 🟢 **WS-26d read half BUILT** (2026-08-06) · 🟢 **WS-26d-email BUILT
+> 2026-08-07 on branch `ws-26d-email-timeline` — NOT merged, NOT deployed.**
+> 26a–c merged together on branch `ws-26-crm-app`.
 > **26a** — migration `144_crm.sql` (§3.1–§3.10), `feature:crm`
 > registered on both sides, `gateway/db.py` engine seam with `routes/tasks/core.py` converted
 > as its proof, and the `routes/crm/` API (§4 minus `import_zoho.py`) live behind the feature
@@ -35,7 +36,12 @@
 > tenant** — that is still true, and stays true until the owner flips `CRM_ZOHO_SYNC`:
 > enabling the flag and any hand-run push cycle against prod remain OWNER-GATE
 > (`work_plan.md` §6).
-> · **WS-26d write half + email join: 🟡 SPEC.** · **WS-26e: 🟡 SPEC, nothing built.**
+> · **WS-26d-email: 🟢 BUILT** (branch `ws-26d-email-timeline`, 2026-08-07) — the
+> caller-scoped email→CRM timeline join, the address index at the next free
+> migration number, `TimelineEntry.kind = "email_thread"` on both sides, and
+> `tests/unit/test_crm_email_timeline.py` (30 cases; two of them are the
+> mutation fence for the scoping rule). · **WS-26d write half: 🟡 SPEC.**
+> · **WS-26e: 🟡 SPEC, nothing built.**
 > · **WS-26f–h (pipeline truth + settings UI · forecast & funnel · stage discipline):
 > 🟢 SPECCED 2026-08-07, dispatchable — §5.1 is the blueprint, trigger was the owner's
 > first live board session (lanes out of order, imported stages at 0% probability).
@@ -1206,7 +1212,18 @@ writes?") is owner-answered — yes, identically (§8 D-CRM-9). The three remain
 slices are therefore dispatchable; each is a separate ticket below and none may be
 narrowed into another.
 
-### WS-26d-email — the email→CRM timeline join · 🟢 AGENT-SAFE
+### WS-26d-email — the email→CRM timeline join · 🟢 BUILT 2026-08-07
+*(Branch `ws-26d-email-timeline`; not merged, not deployed. Everything below is
+the ticket as dispatched and is kept as the record of why it is shaped this
+way. What landed: `activities._email_account_scope` / `_record_addresses` /
+`_email_entries`, `_timeline(entity, record_id, limit, user)` with all four
+routes passing the caller, `email_thread` on both `TimelineEntry` types, the
+third branch in `Timeline.tsx` behind the pure `crm/lib/timeline.ts`, the
+`(account_id, LOWER(from_address->>'email'))` index on `email_messages`, and
+`tests/unit/test_crm_email_timeline.py` + the `_crm_fakes.py` readers it needs.
+Two of those tests are a MUTATION FENCE: deleting the `_email_account_scope(…)`
+call from the query must turn both red — verified, and re-verified green after
+a byte-identical revert.)*
 *(Closes B3. Highest-leverage item in §6 and the one with the sharpest failure mode:
 the CRM is org-visible to every `feature:crm` holder (D-CRM-3) while a mailbox is
 owner-scoped, so an unscoped join publishes one member's inbox to the whole company.)*
@@ -1215,7 +1232,7 @@ owner-scoped, so an unscoped join publishes one member's inbox to the whole comp
 the timeline shows email *the caller can already read*, not email *the record has*. Two
 holders of `feature:crm` opening the same lead may legitimately see different email
 entries, and a holder with no mailbox sees none. The predicate is the email app's own
-`_account_scope` (`routes/email/core.py:424-435`) — a fragment generator that appends
+`_account_scope` (`routes/email/core.py`, `def _account_scope`) — a fragment generator that appends
 `em.account_id IN (SELECT id FROM email_accounts WHERE user_id = :uid)` and mutates the
 caller's `params`; the caller must pre-seed `params["uid"]`. Note it hardcodes the alias
 `em` (`analytics.py:66-68` already had to `.replace()` it) — alias the CRM query's
@@ -1226,8 +1243,9 @@ precedented (`routes/notes/dispatch.py:280-282` imports private names from
 `routes/email/core`), but `routes/crm` has explicitly declined that once already, on
 D-CRM-4 grounds (`routes/crm/broker_handlers.py:61-64`, which re-implemented four lines
 rather than import them). **Decision: copy the twelve-line predicate into `routes/crm/`
-as `_email_account_scope`, with a comment naming `routes/email/core.py:424` as its
-origin and this line as the reason.** Rejected alternatives: importing it (contradicts the
+as `_email_account_scope`, with a comment naming `routes/email/core.py::_account_scope`
+as its origin and this line as the reason.** (Cited by symbol, not by line: the 2026-08-07
+audit found the original `:424-435` citation had already drifted to `:407-418`.) Rejected alternatives: importing it (contradicts the
 CRM package's own stated doctrine, and couples the CRM's read path to the email app's
 private surface) and promoting it to a shared module (correct eventually, but it drags
 `routes/email`'s callers into a WS-26 PR). If it is copied a *third* time anywhere,
@@ -1586,7 +1604,16 @@ PR (R4).
     #   WS-26d-autolead tests/unit/test_crm_auto_lead.py
     #   WS-26d-write    tests/unit/test_crm_agent_write.py
     # Each runs WITH the six-file WS-26a-c block above, never alone: the email
-    # join changes `_timeline`, which test_crm_routes.py already pins.
+    # join changes `_timeline`'s signature and its body, and every CRM route
+    # test shares `_crm_fakes.py` with it.
+    #
+    # ⚠️ An earlier version of this line claimed test_crm_routes.py "already
+    # pins `_timeline`". It did not — it exercises _log_activity,
+    # patch_activity and delete_activity only, and `_timeline` had ZERO direct
+    # coverage until test_crm_email_timeline.py. That file therefore also
+    # carries the regression floor for the behaviour the join did not add:
+    # activity + status-change entries, a deal inheriting its lead's history
+    # labelled `lead`, newest-first order, limit truncation, and the 404.
 
     cd workbench/control_plane && npx tsc --noEmit && npm test
 

@@ -102,6 +102,181 @@ _INNER_JOIN = re.compile(
 #: ``org.name AS organization_name`` — one projected column.
 _ALIASED_COL = re.compile(r"\b(\w+)\.(\w+)\s+AS\s+(\w+)", re.I)
 
+# ── WS-26d-email: the shapes the CRM timeline's email source emits ──────────
+#
+# Four readers, added together because the email join is unreadable without
+# all four — and, worse than unreadable, MISREAD without the first. Same
+# reason `_IN_LITERALS` above exists: a missing reader once made a safety
+# predicate invisible, and a fake that cannot see a predicate agrees with the
+# bug that deletes it.
+
+#: ``em.account_id IN (SELECT id FROM email_accounts WHERE user_id = :uid)``
+#: — the caller-scoping predicate (`activities._email_account_scope`), the one
+#: thing standing between a CRM record and somebody else's mailbox.
+#: ⚠️ Without this reader `_PLAIN_EQ` matches the ``user_id = :uid`` text
+#: *inside* the subquery: that sets ``seen`` (silencing the "refusing to match
+#: every row" guard) and then filters OUTER ``email_messages`` rows on a
+#: ``user_id`` column they do not have — wrong in both directions, silently.
+#: The matched text is stripped from the WHERE clause once it has been
+#: evaluated, so the generic readers never see the subquery's own predicates.
+_ACCOUNT_SCOPE = re.compile(
+    r"(?:(\w+)\.)?(\w+)\s+IN\s*\(\s*SELECT\s+id\s+FROM\s+(\w+)\s+"
+    r"WHERE\s+user_id\s*=\s*:(\w+)(?:\s+AND\s+id\s*=\s*:(\w+))?\s*\)",
+    re.I,
+)
+#: ``LOWER(em.from_address->>'email') IN (:addr_0, :addr_1)`` — and the
+#: ``= :addr`` form the email app's contact card uses. `_LOWER_EQ` reads
+#: neither: the name is qualified and the value lives inside a JSONB blob.
+#: Both arms are read so that rewriting one into the other cannot make the
+#: address filter invisible, which would put every message in scope on every
+#: record's timeline.
+_JSONB_LOWER_CMP = re.compile(
+    r"LOWER\((?:(\w+)\.)?(\w+)->>'(\w+)'\)\s*(?:=\s*:(\w+)|IN\s*\(([^)]*)\))",
+    re.I,
+)
+#: ``LEFT JOIN email_thread_status ts ON ts.account_id = em.account_id AND
+#: ts.thread_id = em.thread_id`` — a COMPOSITE key. `_LEFT_JOIN` above demands
+#: literally ``ON <alias>.id = base.<fk>`` and matches nothing here.
+_COMPOSITE_LEFT_JOIN = re.compile(
+    r"LEFT\s+JOIN\s+(\w+)\s+(\w+)\s+ON\s+\2\.(\w+)\s*=\s*(\w+)\.(\w+)"
+    r"\s+AND\s+\2\.(\w+)\s*=\s*\4\.(\w+)",
+    re.I,
+)
+#: ``SELECT * FROM ( SELECT DISTINCT ON (…) … ) t ORDER BY … LIMIT :limit`` —
+#: newest-message-per-thread. The wrapper exists because Postgres makes
+#: ``DISTINCT ON`` dictate the inner ``ORDER BY``, so the newest-first ordering
+#: the timeline wants has to happen outside it.
+_DERIVED = re.compile(
+    r"^SELECT\s+\*\s+FROM\s*\((?P<inner>.+)\)\s+\w+\s+"
+    r"ORDER\s+BY\s+(?P<order>.+?)(?:\s+LIMIT\s+:(?P<limit>\w+))?$",
+    re.I | re.S,
+)
+#: ``FROM email_messages em`` — the base relation and the alias expressions
+#: qualify themselves with.
+_FROM_ALIAS = re.compile(r"\bFROM\s+(\w+)\s+(\w+)", re.I)
+#: One SELECT-list item: ``<expression> AS <name>``.
+_PROJECTION = re.compile(r"^(?P<expr>.*?)\s+AS\s+(?P<name>\w+)$", re.I | re.S)
+#: ``em.from_address->>'email'`` — one key out of a JSONB column.
+_JSONB_FIELD = re.compile(r"(?:(\w+)\.)?(\w+)->>'(\w+)'")
+#: ``em.subject`` / ``subject``.
+_QUALIFIED = re.compile(r"(?:(\w+)\.)?(\w+)")
+
+
+def _split_terms(clause: str) -> list[str]:
+    """Split on commas at paren depth 0 — ``COALESCE(a, b), c`` is two terms."""
+    terms: list[str] = []
+    depth = start = 0
+    for index, char in enumerate(clause):
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+        elif char == "," and depth == 0:
+            terms.append(clause[start:index])
+            start = index + 1
+    terms.append(clause[start:])
+    return [term.strip() for term in terms if term.strip()]
+
+
+def _evaluate(expression: str, context: dict[str, Any]) -> Any:
+    """One SELECT-list / ORDER BY / DISTINCT ON expression against a row set.
+
+    ``context`` maps a table alias to its row — ``None`` for a LEFT JOIN that
+    matched nothing — plus ``""`` for unqualified names.
+
+    Deliberately tiny: it reads the four shapes the email query emits
+    (``COALESCE``, ``::text``, a JSONB key, a qualified column) and RAISES on
+    anything else. A query that grows a fifth shape fails loudly here rather
+    than projecting silently as NULL, which is the failure a fake exists to
+    make impossible.
+    """
+    expression = expression.strip()
+    lowered = expression.lower()
+    if lowered.startswith("coalesce(") and expression.endswith(")"):
+        for part in _split_terms(expression[len("coalesce(") : -1]):
+            value = _evaluate(part, context)
+            if value is not None:
+                return value
+        return None
+    if lowered.endswith("::text"):
+        value = _evaluate(expression[: -len("::text")], context)
+        return None if value is None else str(value)
+    jsonb = _JSONB_FIELD.fullmatch(expression)
+    if jsonb:
+        blob = (context.get(jsonb.group(1) or "") or {}).get(jsonb.group(2))
+        return blob.get(jsonb.group(3)) if isinstance(blob, dict) else None
+    column = _QUALIFIED.fullmatch(expression)
+    if column:
+        return (context.get(column.group(1) or "") or {}).get(column.group(2))
+    raise AssertionError(f"fake cannot evaluate the expression: {expression!r}")
+
+
+def _balanced(clause: str, opened: int) -> int:
+    """Index of the ``)`` closing the ``(`` at *opened*."""
+    depth = 0
+    for index in range(opened, len(clause)):
+        if clause[index] == "(":
+            depth += 1
+        elif clause[index] == ")":
+            depth -= 1
+            if depth == 0:
+                return index
+    raise AssertionError(f"unbalanced parentheses in: {clause}")
+
+
+def _parse_distinct_on(inner: str) -> tuple[list[str], list[tuple[str, str]], str]:
+    """``SELECT DISTINCT ON (keys) projections FROM …`` → its three parts.
+
+    Parsed rather than regexed because a key can itself contain parentheses
+    (``COALESCE(em.thread_id, em.id::text)``) and a regex that stops at the
+    first ``)`` would silently group by half the key.
+    """
+    head = re.match(r"\s*SELECT\s+DISTINCT\s+ON\s*\(", inner, re.I)
+    if head is None:
+        raise AssertionError(f"fake expected a DISTINCT ON select: {inner}")
+    close = _balanced(inner, head.end() - 1)
+    rest = inner[close + 1 :]
+    at_from = re.search(r"\sFROM\s", rest, re.I)
+    if at_from is None:
+        raise AssertionError(f"fake could not find the FROM clause in: {inner}")
+    projections: list[tuple[str, str]] = []
+    for term in _split_terms(rest[: at_from.start()]):
+        named = _PROJECTION.match(term)
+        if named is None:
+            raise AssertionError(
+                "fake requires every projected column to be named "
+                f"`<expression> AS <name>`, so the answer is the statement's "
+                f"own output shape rather than the whole row: {term!r}"
+            )
+        projections.append((named.group("expr"), named.group("name")))
+    return _split_terms(inner[head.end() : close]), projections, rest[at_from.start() :]
+
+
+def _order_terms(clause: str) -> list[tuple[str, bool]]:
+    """``ORDER BY a, COALESCE(b, c), d DESC`` → ``[(expr, descending), …]``."""
+    found = re.search(r"\bORDER\s+BY\b(.*?)(?:\bLIMIT\b|$)", clause, re.I | re.S)
+    if found is None:
+        return []
+    terms: list[tuple[str, bool]] = []
+    for term in _split_terms(found.group(1)):
+        descending = bool(re.search(r"\bDESC\b", term, re.I))
+        expression = re.sub(r"\s+(ASC|DESC)\s*$", "", term, flags=re.I)
+        terms.append((expression.strip(), descending))
+    return terms
+
+
+def _sorted_by(rows: list[Any], terms: list[tuple[str, bool]]) -> list[Any]:
+    """A multi-key sort, applied right-to-left so each key is stable."""
+    for expression, descending in reversed(terms):
+        rows = sorted(
+            rows,
+            key=lambda row, e=expression: (
+                _evaluate(e, row) is None, _sortable(_evaluate(e, row)),
+            ),
+            reverse=descending,
+        )
+    return rows
+
 
 #: SQL literals a SET clause can name instead of a bound parameter.
 _SQL_LITERALS: dict[str, Any] = {"false": False, "true": True, "null": None}
@@ -357,6 +532,9 @@ class FakeCrmDB:
         return _Result([])
 
     def _select(self, statement: str, table: str, args: dict) -> _Result:
+        derived = _DERIVED.match(statement)
+        if derived:
+            return self._distinct_on(derived, args)
         matched = self._matching(statement, table, args)
         matched = self._ordered(statement, matched)
         matched = self._paged(statement, matched, args)
@@ -376,6 +554,76 @@ class FakeCrmDB:
             return _Result([], scalar=max(values) if values else None)
         matched = self._joined(statement, matched)
         return _Result([SimpleNamespace(**r) for r in matched])
+
+    # newest-per-group ----------------------------------------------------
+    def _distinct_on(self, derived: re.Match[str], args: dict) -> _Result:
+        """``SELECT * FROM (SELECT DISTINCT ON (…) …) t ORDER BY … LIMIT …``.
+
+        Postgres's ``DISTINCT ON`` keeps the FIRST row of each key group under
+        the inner ``ORDER BY``; the wrapper then re-orders what survived. Both
+        halves are read off the statement — change the grouping key or the
+        tie-break in the route and the answer here changes with it. That is the
+        whole point: "newest message per thread" is a property of the SQL, and
+        a fake that hard-coded it could not tell a correct query from one that
+        groups by ``account_id`` alone.
+        """
+        inner = derived.group("inner")
+        keys, projections, body = _parse_distinct_on(inner)
+        base = _FROM_ALIAS.search(body)
+        if base is None:  # pragma: no cover — the statement always aliases it
+            raise AssertionError(f"fake could not find the base alias in: {body}")
+        table, alias = base.group(1), base.group(2)
+
+        joins = {
+            join[1]: (join[0], ((join[2], join[4]), (join[5], join[6])))
+            for join in _COMPOSITE_LEFT_JOIN.findall(body)
+        }
+        contexts = [
+            {
+                "": row, alias: row,
+                **{
+                    joined: self._by_columns(joined_table, row, pairs)
+                    for joined, (joined_table, pairs) in joins.items()
+                },
+            }
+            for row in self._matching(body, table, args)
+        ]
+
+        picked: list[dict[str, Any]] = []
+        seen_keys: set[tuple[str, ...]] = set()
+        for context in _sorted_by(contexts, _order_terms(body)):
+            key = tuple(str(_evaluate(k, context)) for k in keys)
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+            picked.append(context)
+
+        rows = [
+            {"": {name: _evaluate(expression, context)
+                  for expression, name in projections}}
+            for context in picked
+        ]
+        rows = _sorted_by(rows, _order_terms(f"ORDER BY {derived.group('order')}"))
+        limit = derived.group("limit")
+        if limit:
+            rows = rows[: int(args.get(limit, len(rows)))]
+        return _Result([SimpleNamespace(**row[""]) for row in rows])
+
+    def _by_columns(
+        self, table: str, base: dict, pairs: tuple[tuple[str, str], ...],
+    ) -> dict[str, Any] | None:
+        """A composite-key join. A NULL on either side never matches, which is
+        SQL's own answer and the reason an un-threaded message picks up no
+        thread status rather than the first one in the table."""
+        for row in self.tables.get(table, []):
+            if all(
+                row.get(column) is not None
+                and base.get(base_column) is not None
+                and str(row.get(column)) == str(base.get(base_column))
+                for column, base_column in pairs
+            ):
+                return row
+        return None
 
     # joins --------------------------------------------------------------
     def _joined(self, statement: str, rows: list[dict]) -> list[dict]:
@@ -434,6 +682,43 @@ class FakeCrmDB:
         return None
 
     # predicate ----------------------------------------------------------
+    def _email_predicates(
+        self, where: str, rows: list[dict], args: dict,
+    ) -> tuple[str, list[dict], bool]:
+        """Evaluate the two WS-26d-email clauses, then STRIP them from *where*.
+
+        Stripping matters as much as reading. The account-scope subquery
+        contains ``user_id = :uid``; left in place, `_PLAIN_EQ` matches that
+        text and filters OUTER ``email_messages`` rows on a column they do not
+        have — answering "no rows" for a correct query and setting ``seen`` so
+        the refuse-to-match-everything guard below never fires.
+        """
+        seen = False
+        scope = _ACCOUNT_SCOPE.search(where)
+        if scope:
+            seen = True
+            _alias, column, table, uid, aid = scope.groups()
+            allowed = {
+                str(row.get("id")) for row in self.tables.get(table, [])
+                if row.get("user_id") == args.get(uid)
+            }
+            if aid:
+                allowed &= {str(args.get(aid))}
+            rows = [row for row in rows if str(row.get(column)) in allowed]
+            where = where.replace(scope.group(0), "")
+        for _alias, column, key, single, listed in _JSONB_LOWER_CMP.findall(where):
+            seen = True
+            names = (
+                [single] if single
+                else [p.strip().lstrip(":") for p in listed.split(",") if p.strip()]
+            )
+            wanted = {str(args.get(name) or "").lower() for name in names}
+            rows = [
+                row for row in rows
+                if str((row.get(column) or {}).get(key) or "").lower() in wanted
+            ]
+        return _JSONB_LOWER_CMP.sub("", where), rows, seen
+
     def _matching(
         self, statement: str, table: str, args: dict,
     ) -> list[dict[str, Any]]:
@@ -441,8 +726,7 @@ class FakeCrmDB:
         clause = _WHERE_RE.search(statement)
         if clause is None:
             return rows
-        where = clause.group(1)
-        seen = False
+        where, rows, seen = self._email_predicates(clause.group(1), rows, args)
 
         for column, param in _UUID_EQ.findall(where):
             seen = True

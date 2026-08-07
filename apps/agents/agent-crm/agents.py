@@ -443,22 +443,24 @@ _THREAD_STATUS_LABELS: dict[str, str] = {
 
 
 def _email_line(thread: dict[str, Any]) -> str:
-    """One ``email_thread`` entry as prose.
+    """One ``email_thread`` entry as prose: sender, subject, status.
 
-    Surfaces the same fields the ``/crm`` UI's `EmailEntry` chose — sender,
-    subject, snippet, status — because the two are answering the same question
-    in different words, and an answer that drops half the row is worse than no
-    answer: it looks like the record HAS blank mail on it.
+    ⚠️ **Never the snippet or any body text — D-CRM-12.** The timeline join is
+    caller-scoped, so this is the asking person's own mail; but an agent answer
+    does not stay with the asker, it lands in a chat transcript, and a ROOM has
+    other participants who can read it. Sender+subject says a conversation
+    exists; a snippet publishes its CONTENT to everybody present. The `/crm`
+    UI's `EmailEntry` deliberately DOES show the snippet — the payload is
+    unchanged and a browser has an audience of one. This is the one place where
+    what the screen may show and what the agent may say have to differ.
     """
     name, address = thread.get("from_name"), thread.get("from_email")
     both = f"{name} <{address}>" if name and address else ""
     who = both or name or address or "unknown sender"
     raw_status = str(thread.get("status") or "").strip()
     status = _THREAD_STATUS_LABELS.get(raw_status.upper(), raw_status)
-    snippet = (thread.get("snippet") or "").strip().replace("\n", " ")
     return (
         f"email from {who}: {thread.get('subject') or '(no subject)'}"
-        + (f" — {snippet[:160]}" if snippet else "")
         + (f" [{status}]" if status else "")
     )
 
@@ -474,7 +476,9 @@ async def get_timeline(entity: str, record_id: str, limit: int = 20) -> str:
     ⚠️ The email entries are the ASKING PERSON's own mail — the CRM is shared
     but a mailbox is not, so somebody else looking at the same record may see
     different threads and somebody with no mailbox connected sees none. Never
-    report "there has been no email" as a fact about the record."""
+    report "there has been no email" as a fact about the record. Each thread is
+    given as sender, subject and status only, never its contents (D-CRM-12) —
+    do not speculate about what an email said."""
     slug = _entity_slug(entity)
     record = _record_uuid(record_id)
     capped = max(1, min(int(limit or 20), 100))

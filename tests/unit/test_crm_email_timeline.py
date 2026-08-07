@@ -455,10 +455,20 @@ async def test_the_address_comparison_is_case_insensitive(db: FakeCrmDB) -> None
 
 # ── done-when 5 — bounded per source, before the merge ─────────────────────
 
-async def test_email_is_bounded_before_the_merge(db: FakeCrmDB) -> None:
-    """A chatty mailbox cannot crowd the record's own history off its timeline:
-    each source is capped at ``limit`` before they are merged, so the merged
-    list still contains the other sources' newest rows."""
+async def test_a_chatty_mailbox_cannot_evict_the_record_s_own_history(
+    db: FakeCrmDB,
+) -> None:
+    """Email gets at most HALF the merged page, rounded up.
+
+    ⚠️ This case previously asserted the bug. Bounding each source at ``limit``
+    reads like enough, but the merge sorts newest-first and THEN truncates to
+    ``limit`` — so ten recent threads at limit 3 returned three threads and the
+    record's note vanished. Ten emails is an ordinary week on an active deal
+    and the CRM agent's `get_timeline` defaults to 20, so "what's the story
+    with this deal?" answered with nothing but mail.
+
+    Ten threads (all newer) + one older note, at limit 3 → 2 threads + the note.
+    """
     _account(db, PRIYA.email, "acct-priya")
     lead = _lead(db)
     for index in range(10):
@@ -467,20 +477,55 @@ async def test_email_is_bounded_before_the_merge(db: FakeCrmDB) -> None:
             received_at=_at(20 - index),
         )
     db.seed(
-        "crm_activities", type="note", lead_id=lead.id, created_by="a@b.in",
-        created_at=_at(2), occurred_at=_at(2),
+        "crm_activities", type="note", subject="Rang them", lead_id=lead.id,
+        created_by="a@b.in", created_at=_at(2), occurred_at=_at(2),
     )
 
     timeline = await crm_activities._timeline(LEADS, str(lead.id), 3, PRIYA)
 
     assert len(timeline.entries) == 3
+    # The note survives ten newer emails — that is the property.
+    assert [e.kind for e in timeline.entries] == [
+        "email_thread", "email_thread", "activity",
+    ]
+    assert timeline.entries[2].activity["subject"] == "Rang them"
+    # Two threads, and they are the NEWEST two, not an arbitrary pair.
+    assert [t["thread_id"] for t in _emails(timeline)] == ["thread-0", "thread-1"]
+    # The cap is applied in SQL, not by slicing a full read in Python.
     [(statement, params)] = [c for c in db.calls if "email_messages" in c[0]]
     assert "LIMIT :limit" in statement
-    assert params["limit"] == 3
-    # The bound picks the NEWEST threads, not an arbitrary three.
-    assert [t["thread_id"] for t in _emails(timeline)] == [
-        "thread-0", "thread-1", "thread-2",
-    ]
+    assert params["limit"] == 2
+
+
+@pytest.mark.parametrize(
+    ("limit", "budget"), [(1, 1), (2, 1), (3, 2), (20, 10), (100, 50), (500, 250)],
+)
+def test_the_email_budget_is_half_the_page_rounded_up(
+    limit: int, budget: int,
+) -> None:
+    """Rounded UP, so a limit of 1 still admits email at all, and so the half
+    that may end up empty is the RESERVED one — a record with no activity still
+    fills the page with mail, because the other sources just return less and
+    the truncation takes what is there."""
+    assert crm_activities._email_budget(limit) == budget
+
+
+async def test_a_record_with_no_activity_still_fills_the_page_with_email(
+    db: FakeCrmDB,
+) -> None:
+    """The reserve is a floor for the other sources, never a ceiling the email
+    half is padded up to. Nothing is held back for history that does not
+    exist."""
+    _account(db, PRIYA.email, "acct-priya")
+    lead = _lead(db)
+    for index in range(6):
+        _message(
+            db, "acct-priya", "buyer@acme.example", thread_id=f"thread-{index}",
+            received_at=_at(20 - index),
+        )
+
+    timeline = await crm_activities._timeline(LEADS, str(lead.id), 4, PRIYA)
+    assert len(_emails(timeline)) == 2
 
 
 # ── done-when 6 — the index ────────────────────────────────────────────────

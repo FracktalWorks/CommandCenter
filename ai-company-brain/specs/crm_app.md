@@ -746,6 +746,21 @@ WS-2 (the standing "rotate Zoho token" P0 becomes "revoke", strictly better).
   back to the owner *before* the repair is applied, because a name-match repair against
   the wrong pipeline scrambles the board it was meant to fix.
 
+- **D-CRM-12 — `DECISION (agent-proposed, owner may overrule)`: the CRM agent renders an
+  email thread as sender, subject, thread-status and date — and NEVER its snippet or body
+  text.** The timeline join is caller-scoped, so `get_timeline` returns the asking
+  person's own mail. An agent answer does not stay with the asker: it is written into a
+  chat transcript, and a **room** has other participants who can read it
+  (`groups_sessions_authority.md`). Rendering a snippet there publishes the CONTENT of one
+  member's inbox to everybody present; rendering sender+subject publishes only that a
+  conversation exists, which is what any email client's list view already shows a person
+  looking over your shoulder. The line is drawn at content on purpose — it is the one
+  place where "what the screen shows" and "what the agent may say" must differ, because
+  the screen has an audience of one. The `/crm` UI keeps the snippet (`EmailEntry`): the
+  payload is unchanged and the browser is the caller's own. If the owner would rather have
+  richer chat answers, the thing to change is this line, not the payload — and the room
+  clearance filter is the mechanism that would have to carry it instead.
+
 **Build-time decisions, recorded post-hoc (WS-26a implementer, 2026-08-05 — owner may
 overrule any of them):**
 - **B1** — `POST` defaults `owner_email` to the acting user when the field is absent
@@ -1223,8 +1238,10 @@ matching third branch in `agent-crm`'s `get_timeline` (the agent is the **third*
 consumer of this shape and had the same binary dispatch — it rendered every
 email entry as `email_thread: (no subject)`, and because `_timeline` merges then
 truncates, a mail-heavy deal answered "what's the story with this deal?" with
-twenty blank rows), the `(account_id, LOWER(from_address->>'email'))` index on
-`email_messages`, and
+twenty blank rows) — rendering sender/subject/status but never the snippet,
+**D-CRM-12** — the email source capped at half the merged page so a chatty
+mailbox cannot evict the record's own history, the
+`(account_id, LOWER(from_address->>'email'))` index on `email_messages`, and
 `tests/unit/test_crm_email_timeline.py` + the `_crm_fakes.py` readers it needs.
 Two of those tests are a MUTATION FENCE: deleting the `_email_account_scope(…)`
 call from the query must turn both red — verified, and re-verified green after

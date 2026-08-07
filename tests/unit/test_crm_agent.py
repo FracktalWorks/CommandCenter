@@ -458,7 +458,12 @@ async def test_get_timeline_renders_an_email_thread_in_full(monkeypatch) -> None
 
     assert "Re: quote for 40 units" in out
     assert "Ravi Menon" in out and "ravi@acme.example" in out
-    assert "Can you hold that price to month end" in out
+    # D-CRM-12 — sender, subject, status, date; NEVER the snippet. The join is
+    # caller-scoped, but an agent answer lands in a chat transcript and a ROOM
+    # has other participants who can read it: sender+subject says a
+    # conversation exists, a snippet publishes its CONTENT. The `/crm` UI keeps
+    # the snippet on purpose — a browser has an audience of one.
+    assert "Can you hold that price to month end" not in out
     # The status vocabulary is spoken, not echoed as a wire token.
     assert "[Needs reply]" in out and "NEEDS_REPLY" not in out
     # The email branch must not have eaten the other two.

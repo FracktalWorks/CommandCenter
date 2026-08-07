@@ -128,7 +128,10 @@ async def _timeline(
         # a deal's addresses already include its originating lead's, so running
         # it per source would return every inherited thread twice.
         entries.extend(await _email_entries(
-            db, await _record_addresses(db, entity, record_id, record), user, limit,
+            db,
+            await _record_addresses(db, entity, record_id, record),
+            user,
+            _email_budget(limit),
         ))
         # Newest first. `at` is None only for a row with no timestamp at all,
         # which sorts last rather than crashing the comparison.
@@ -202,6 +205,24 @@ async def _status_entries(
 
 
 # ── Email threads — the third source ────────────────────────────────────────
+
+def _email_budget(limit: int) -> int:
+    """How many email threads may compete for a timeline of ``limit`` rows.
+
+    **Half, rounded up — and the halving is the whole point.** Bounding each
+    source at ``limit`` is NOT enough on its own: the merge sorts newest-first
+    and then truncates to ``limit``, so ``limit`` recent threads evict every
+    activity and every status change the record has. That is the common case,
+    not the pathological one — the CRM agent's ``get_timeline`` defaults to 20,
+    and twenty recent emails is an ordinary week on an active deal.
+
+    Rounded UP so a limit of 1 still admits email, and so the reserved half is
+    the one that can be empty: a record with no activity at all still fills the
+    page with mail, because the other sources simply return fewer rows and the
+    truncation takes whatever is there.
+    """
+    return (limit + 1) // 2
+
 
 def _email_account_scope(account_id: str | None, params: dict[str, Any]) -> str:
     """Return a SQL fragment scoping email_messages `em` to the user's accounts.
@@ -296,9 +317,10 @@ async def _email_entries(
     ``email_thread_status`` is LEFT-joined on its own composite key for the
     badge; a thread nobody classified simply has no status.
 
-    The ``limit`` bounds this source BEFORE the merge, exactly as the activity
-    and status sources are bounded, so a chatty mailbox cannot crowd the
-    record's own history off its own timeline.
+    ⚠️ ``limit`` here is the **email budget**, not the caller's limit — see
+    :func:`_email_budget`. The caller's limit is what the MERGED list is
+    truncated to, so bounding this source at the same number would let a chatty
+    mailbox evict the record's entire history and still be "bounded".
     """
     if not origins:
         # No address means no query — an empty IN list is a syntax error, and

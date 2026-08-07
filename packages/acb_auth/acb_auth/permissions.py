@@ -90,6 +90,14 @@ FEATURES: tuple[str, ...] = (
     # scopes DATA as well as navigation — the grant model in §4 is what decides
     # which projects a holder actually sees.
     "projects",
+    # The People Center's directory, person page and org chart (149_people.sql,
+    # category `apps`, sort_order 57: after Projects, so the work surfaces and
+    # the people behind them sit together). NOT a member default, same posture
+    # as `crm` and `projects` (specs/people_center_app.md §6). The directory
+    # itself is open to holders; the HR-sensitive half of a person record stays
+    # restricted by `admin:members:read`, a projection WS-24 N4 already shipped
+    # and which this feature must NOT re-implement.
+    "people",
     "dashboard",
     "observability",
     "artifacts",

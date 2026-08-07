@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Check, Loader2, Search, UserPlus, X } from "lucide-react";
 import { useTaskStore } from "../lib/taskStore";
 import type { GtdItem, Person } from "../lib/types";
@@ -47,6 +47,15 @@ function DelegateBody({
   const people = useTaskStore((s) => s.people);
   const accounts = useTaskStore((s) => s.accounts);
   const updateItem = useTaskStore((s) => s.updateItem);
+  const loadPeople = useTaskStore((s) => s.loadPeople);
+
+  // The roster used to be loaded by opening the sidebar's People view, which
+  // was removed when the directory moved to /people. Loading it HERE, where it
+  // is actually needed, is what stops delegation quietly offering nobody —
+  // a broken picker that looks like an empty company.
+  useEffect(() => {
+    if (people.length === 0) void loadPeople();
+  }, [people.length, loadPeople]);
 
   const isSynced = item.source === "SYNCED";
   const account = item.accountId

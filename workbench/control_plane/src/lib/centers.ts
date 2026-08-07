@@ -303,7 +303,11 @@ export const CENTERS: Center[] = [
         label: "Directory & org chart",
         note: "Members and groups — the same org_group records that scope the Centers",
         icon: "Network",
-        status: "planned",
+        // WS-28b: the read view WS-13 asked for. Live at /people — one app,
+        // not a People-Center fork of one, the same (app + scope) rule the
+        // Projects entries follow.
+        status: "live",
+        href: "/people",
       },
       {
         label: "Onboarding",

@@ -442,7 +442,6 @@ interface TaskState {
   /** when drilled into a single @context under Next Actions */
   selectedContext: string | null;
   selectedItemId: string | null;
-  selectedProjectId: string | null;
   /** A task opened FULL-PAGE (focused overlay) — the ClickUp/Linear-style
    *  maximized view over the same editable detail. null = closed. */
   focusedItemId: string | null;
@@ -515,7 +514,6 @@ interface TaskState {
   selectView: (view: ViewKey) => void;
   selectContext: (context: string | null) => void;
   selectItem: (id: string | null) => void;
-  selectProject: (id: string | null) => void;
   /** Capture a new inbox item (frictionless quick-add). */
   capture: (title: string, attachments?: import("./types").TaskAttachment[], dates?: import("./api").CaptureDates) => void;
   /** Capture many items at once (mind sweep) — one per non-empty line. */
@@ -796,7 +794,6 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   groupBy: "",
   setGroupBy: (g) => set({ groupBy: g }),
   selectedItemId: null,
-  selectedProjectId: null,
   lastCaptureIds: [],
   quickCaptureOpen: false,
   quickCaptureMode: "single",
@@ -824,7 +821,6 @@ export const useTaskStore = create<TaskState>((set, get) => ({
       selectedView: view,
       selectedContext: null,
       selectedItemId: null,
-      selectedProjectId: null,
       // A search/filter is scoped to the view you set it in — reset on nav so a
       // stale query doesn't silently hide items in the next view.
       filters: DEFAULT_FILTERS,
@@ -839,9 +835,6 @@ export const useTaskStore = create<TaskState>((set, get) => ({
           selectedItemId: null }),
 
   selectItem: (id) => set({ selectedItemId: id }),
-
-  selectProject: (id) =>
-    set({ selectedView: "projects", selectedProjectId: id, selectedItemId: null }),
 
   capture: (title, attachments, dates) => {
     const t = title.trim();

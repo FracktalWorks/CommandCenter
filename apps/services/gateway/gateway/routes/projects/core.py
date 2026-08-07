@@ -292,6 +292,10 @@ ARRAY_COLUMNS: frozenset[str] = frozenset({"tags"})
 
 TIMESTAMP_COLUMNS: frozenset[str] = frozenset({
     "due_at", "completed_at", "archived_at", "clickup_synced_at",
+    # The personal overlay's instants (147). Same rule, same reason: bare
+    # `text()` declares no column type, so an ISO string would arrive at a
+    # timestamptz as text.
+    "defer_until", "clarified_at",
 })
 DATE_COLUMNS: frozenset[str] = frozenset({"start_date"})
 

@@ -6,8 +6,6 @@ import {
   ListChecks,
   Clock,
   Calendar,
-  FolderKanban,
-  Users,
   Lightbulb,
   Mountain,
   Cloud,
@@ -47,8 +45,10 @@ const PRIMARY: NavRow[] = [
   { view: "next", label: "My Next Actions", icon: ListChecks, showCount: true },
   { view: "waiting", label: "Waiting For", icon: Clock, showCount: true },
   { view: "calendar", label: "Calendar", icon: Calendar, showCount: true },
-  { view: "projects", label: "Projects", icon: FolderKanban },
-  { view: "people", label: "People", icon: Users },
+  // Projects and People were removed here 2026-08-06 (owner decision): this
+  // app is the personal lens. The company's projects live in `/projects` and
+  // the directory in `/people`, each a whole app rather than a cramped tab
+  // behind a task manager.
   { view: "someday", label: "Someday / Maybe", icon: Lightbulb, showCount: true },
   { view: "done", label: "Done", icon: CheckCircle2, showCount: true },
   { view: "archive", label: "Archive", icon: Archive },
@@ -70,7 +70,6 @@ export function ListsSidebar({
   assistantActive?: boolean;
 } = {}) {
   const items = useTaskStore((s) => s.items);
-  const projects = useTaskStore((s) => s.projects);
   const selectedView = useTaskStore((s) => s.selectedView);
   const selectedContext = useTaskStore((s) => s.selectedContext);
   const selectViewRaw = useTaskStore((s) => s.selectView);
@@ -79,8 +78,6 @@ export function ListsSidebar({
   const openSettings = useTaskStore((s) => s.openSettings);
   const loadArchive = useTaskStore((s) => s.loadArchive);
   const loadDone = useTaskStore((s) => s.loadDone);
-  const loadLocalHierarchy = useTaskStore((s) => s.loadLocalHierarchy);
-  const loadPeople = useTaskStore((s) => s.loadPeople);
   const sourceFilter = useTaskStore((s) => s.sourceFilter);
   const setSourceFilter = useTaskStore((s) => s.setSourceFilter);
   const syncNow = useTaskStore((s) => s.syncNow);
@@ -91,10 +88,6 @@ export function ListsSidebar({
     if (v === "archive") void loadArchive();
     // DONE tasks are excluded from the normal hydrate too — load on open.
     if (v === "done") void loadDone();
-    // The Projects tree (local spaces/folders) is loaded lazily on open.
-    if (v === "projects") void loadLocalHierarchy();
-    // The People roster (full HR records) is loaded lazily on open.
-    if (v === "people") void loadPeople();
     onNavigate?.();
   };
   // Counts must honor the All / Mine / ClickUp source toggle, otherwise the
@@ -152,8 +145,7 @@ export function ListsSidebar({
       )}
 
       {PRIMARY.map((row) => {
-        const count =
-          row.view === "projects" ? projects.length : counts[row.view];
+        const count = counts[row.view];
         // My Next Actions stays highlighted even when an in-view @context pill is
         // active (selectedContext set) — it's still the Next Actions view.
         const active =

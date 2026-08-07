@@ -73,11 +73,47 @@ NODE_TYPE_META = [
         ),
     },
     {
+        "type": "pm_task",
+        "category": "action",
+        "label": "Update task (Projects)",
+        "description": (
+            "Set fields on a task in the Projects app — title, description, "
+            "importance, dates, or its status by lane name. An internal write: "
+            "no approval node required."
+        ),
+    },
+    {
         "type": "output",
         "category": "output",
         "label": "Output",
         "description": "Yield the run's result.",
     },
+]
+
+#: The `pm.*` topics a workflow can bind an event trigger to (WS-27f).
+#: Served rather than typed from memory — an editor offering a topic the app
+#: does not emit is a trigger that silently never fires (D7, the same rule the
+#: agent and integration lists already follow).
+PM_EVENT_TOPICS = [
+    {"source": "projects", "event_type": "pm.task.created", "label": "Task created"},
+    {"source": "projects", "event_type": "pm.task.updated", "label": "Task updated"},
+    {
+        "source": "projects",
+        "event_type": "pm.task.status_changed",
+        "label": "Task status changed",
+    },
+    {"source": "projects", "event_type": "pm.task.assigned", "label": "Task assigned"},
+    {"source": "projects", "event_type": "pm.task.moved", "label": "Task moved"},
+    {"source": "projects", "event_type": "pm.task.deleted", "label": "Task deleted"},
+    {
+        "source": "projects",
+        "event_type": "pm.task.comment_added",
+        "label": "Comment added to a task",
+    },
+    {"source": "projects", "event_type": "pm.project.created", "label": "Project created"},
+    {"source": "projects", "event_type": "pm.project.updated", "label": "Project updated"},
+    {"source": "projects", "event_type": "pm.project.moved", "label": "Project moved"},
+    {"source": "projects", "event_type": "pm.project.deleted", "label": "Project deleted"},
 ]
 
 CONDITION_OPS = [
@@ -219,6 +255,7 @@ async def get_catalog(
     return {
         "node_types": NODE_TYPE_META,
         "condition_ops": CONDITION_OPS,
+        "event_topics": PM_EVENT_TOPICS,
         "agents": _agent_entries(),
         "integrations": _integration_entries(),
         "tools": [_tool_entry(s) for s in list_tools()],

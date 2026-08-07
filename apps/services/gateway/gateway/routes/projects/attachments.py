@@ -1,0 +1,264 @@
+"""Projects · files on a task — WS-27i (spec §11.2 item 1).
+
+    POST   /projects/tasks/{task_id}/attachments        multipart → descriptor
+    GET    /projects/tasks/{task_id}/attachments        → what is attached
+    GET    /projects/attachments/{id}/{filename}        → the bytes
+    DELETE /projects/tasks/{task_id}/attachments/{id}   → detach
+
+**One file store.** The bytes and their metadata go into the existing
+``gtd_attachments`` registry through the same validation the personal capture
+flow uses — imported, not copied, so "is this extension allowed" and "how big
+is too big" have one answer. ``pm_task_attachments`` is a thin join.
+
+**The access model is the point, and it is deliberately not the file's.**
+``gtd_attachments`` is owner-scoped: ``/tasks/attachments/{id}/{name}`` serves
+only to the uploader. Correct for a private capture, useless for a shared task.
+Here the **join** carries the decision — a file is readable by anyone who can
+see a task it is attached to — and the personal route is untouched.
+
+Two consequences worth stating, because both are security properties rather
+than conveniences:
+
+1. **There is no attach-by-id endpoint.** Upload and attach are one call. If a
+   caller could name an arbitrary ``attachment_id``, they could attach somebody
+   else's private capture to a task they own and then read it through the route
+   below — a privilege escalation dressed as a feature. The only way a row
+   enters this table is by uploading the bytes in the same request.
+2. **A personal capture stays unreachable here.** It has no join row, so the
+   serve route below cannot find it no matter who asks.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any
+from uuid import uuid4
+
+from acb_auth import UserContext, get_current_user
+from fastapi import Depends, HTTPException, UploadFile
+from fastapi.responses import FileResponse
+from gateway.routes.projects.core import (
+    ListResponse,
+    _get_db,
+    actor,
+    emit,
+    load_visible_task,
+    record_activity,
+    resolve_visibility,
+    router,
+)
+
+# Imported, never re-implemented: one answer to "what may be uploaded".
+from gateway.routes.tasks.attachments import (
+    _BLOCKED_EXT,
+    _IMAGE_MIMES,
+    _MAX_BYTES,
+    _safe_name,
+    _storage_dir,
+)
+from sqlalchemy import text
+
+
+def descriptor(row: Any) -> dict[str, Any]:
+    """The shape the UI renders — the same field names the capture flow uses."""
+    mime = getattr(row, "mime", None) or "application/octet-stream"
+    name = getattr(row, "name", "attachment")
+    return {
+        "attachment_id": str(row.id),
+        "kind": "image" if mime in _IMAGE_MIMES else "file",
+        "name": name,
+        "mime": mime,
+        "size": int(getattr(row, "size_bytes", 0) or 0),
+        "added_by": getattr(row, "added_by", None),
+        "created_at": (
+            row.created_at.isoformat() if getattr(row, "created_at", None) else None
+        ),
+        "url": f"/api/projects/attachments/{row.id}/{name}",
+    }
+
+
+@router.post("/tasks/{task_id}/attachments", status_code=201)
+async def attach_file(
+    task_id: str,
+    file: UploadFile,
+    user: UserContext = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Upload one file onto a task.
+
+    Visibility is checked FIRST — before the bytes are read, let alone written.
+    Validating a 15MB upload and then discovering the caller cannot see the task
+    would mean an unauthorised caller could still make the server do the work.
+    """
+    email = actor(user)
+    db = await _get_db()
+    try:
+        vis = await resolve_visibility(db, user)
+        task = await load_visible_task(db, vis, task_id)
+
+        name = _safe_name(file.filename or "attachment")
+        if Path(name).suffix.lower() in _BLOCKED_EXT:
+            raise HTTPException(
+                status_code=400, detail=f"File type not allowed: {name}",
+            )
+        content = await file.read()
+        if not content:
+            raise HTTPException(status_code=400, detail="Empty file")
+        if len(content) > _MAX_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=f"Attachment too large ({len(content)} bytes; "
+                       f"max {_MAX_BYTES}).",
+            )
+
+        att_id = str(uuid4())
+        mime = file.content_type or "application/octet-stream"
+        dest = _storage_dir() / f"{att_id}{Path(name).suffix.lower()}"
+        dest.write_bytes(content)
+
+        await db.execute(
+            text(
+                "INSERT INTO gtd_attachments "
+                "(id, user_id, name, mime, size_bytes, path) "
+                "VALUES (CAST(:id AS uuid), :uid, :name, :mime, :size, :path)"
+            ),
+            {"id": att_id, "uid": email, "name": name, "mime": mime,
+             "size": len(content), "path": str(dest)},
+        )
+        await db.execute(
+            text(
+                "INSERT INTO pm_task_attachments (task_id, attachment_id, added_by) "
+                "VALUES (CAST(:tid AS uuid), CAST(:aid AS uuid), :who) "
+                "ON CONFLICT (task_id, attachment_id) DO NOTHING"
+            ),
+            {"tid": task_id, "aid": att_id, "who": email},
+        )
+        await record_activity(
+            db, activity_type="attachment", created_by=email, task_id=task_id,
+            body=f"Attached {name}",
+            meta={"attachment_id": att_id, "name": name, "mime": mime,
+                  "size": len(content)},
+        )
+        await db.commit()
+        result = {
+            "attachment_id": att_id, "name": name, "mime": mime,
+            "size": len(content), "added_by": email,
+            "kind": "image" if mime in _IMAGE_MIMES else "file",
+            "url": f"/api/projects/attachments/{att_id}/{name}",
+        }
+        project_id = str(task.project_id)
+    finally:
+        await db.close()
+
+    await emit("pm.task.updated", {"task_id": task_id, "project_id": project_id,
+                                   "attachment_added": att_id})
+    return result
+
+
+@router.get("/tasks/{task_id}/attachments")
+async def list_attachments(
+    task_id: str, user: UserContext = Depends(get_current_user),
+) -> ListResponse:
+    db = await _get_db()
+    try:
+        vis = await resolve_visibility(db, user)
+        await load_visible_task(db, vis, task_id)
+        rows = (await db.execute(
+            text(
+                "SELECT a.id, a.name, a.mime, a.size_bytes, "
+                "       ta.added_by, ta.created_at "
+                "  FROM pm_task_attachments ta "
+                "  JOIN gtd_attachments a ON a.id = ta.attachment_id "
+                " WHERE ta.task_id = CAST(:tid AS uuid) "
+                " ORDER BY ta.created_at"
+            ),
+            {"tid": task_id},
+        )).fetchall()
+    finally:
+        await db.close()
+    items = [descriptor(r) for r in rows]
+    return ListResponse(rows=items, total=len(items))
+
+
+@router.get("/attachments/{attachment_id}/{filename}")
+async def serve_attachment(
+    attachment_id: str,
+    filename: str,  # cosmetic — the stored name wins, as in the personal route
+    user: UserContext = Depends(get_current_user),
+) -> FileResponse:
+    """Serve the bytes if the caller can see a task this file is attached to.
+
+    Addressed by attachment rather than by task on purpose: a file may hang off
+    more than one task, and requiring the caller to name the *right* one would
+    make a legitimate read fail depending on which task they came from.
+
+    404 for "not attached to anything you can see" as well as "no such file"
+    (R5). A 403 here would confirm the file exists.
+    """
+    db = await _get_db()
+    try:
+        vis = await resolve_visibility(db, user)
+        params: dict[str, Any] = {"aid": attachment_id}
+        clauses = ["ta.attachment_id = CAST(:aid AS uuid)"]
+        if not vis.unrestricted:
+            clauses.append(vis.project_clause("t.root_project_id"))
+            params.update(vis.params)
+        row = (await db.execute(
+            text(
+                "SELECT a.name, a.mime, a.path "
+                "  FROM pm_task_attachments ta "
+                "  JOIN pm_tasks t ON t.id = ta.task_id "
+                "  JOIN gtd_attachments a ON a.id = ta.attachment_id "
+                " WHERE " + " AND ".join(clauses) + " LIMIT 1"
+            ),
+            params,
+        )).fetchone()
+    finally:
+        await db.close()
+    if row is None or not Path(row.path).is_file():
+        raise HTTPException(status_code=404, detail="Attachment not found")
+    return FileResponse(
+        row.path, media_type=row.mime or "application/octet-stream",
+        filename=row.name,
+    )
+
+
+@router.delete("/tasks/{task_id}/attachments/{attachment_id}")
+async def detach_file(
+    task_id: str, attachment_id: str,
+    user: UserContext = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Detach a file from a task.
+
+    **The bytes are kept.** Detaching is a statement about this task, and the
+    same file may hang off another one; deleting the row from under it would
+    turn one person's tidy-up into somebody else's broken link. A file store
+    sweep is a separate, deliberate job.
+
+    Detaching something already gone is a no-op, not a 404 — Paca's "lenient
+    removes" lesson (research §6), which is what makes a retry after a
+    half-failed request safe.
+    """
+    email = actor(user)
+    db = await _get_db()
+    try:
+        vis = await resolve_visibility(db, user)
+        await load_visible_task(db, vis, task_id)
+        result = await db.execute(
+            text(
+                "DELETE FROM pm_task_attachments "
+                " WHERE task_id = CAST(:tid AS uuid) "
+                "   AND attachment_id = CAST(:aid AS uuid)"
+            ),
+            {"tid": task_id, "aid": attachment_id},
+        )
+        removed = int(getattr(result, "rowcount", 0) or 0)
+        if removed:
+            await record_activity(
+                db, activity_type="attachment", created_by=email,
+                task_id=task_id, body="Removed an attachment",
+                meta={"attachment_id": attachment_id, "removed": True},
+            )
+        await db.commit()
+    finally:
+        await db.close()
+    return {"task_id": task_id, "attachment_id": attachment_id, "removed": removed}

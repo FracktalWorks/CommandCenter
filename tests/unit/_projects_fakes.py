@@ -226,6 +226,13 @@ _DEFAULTS: dict[str, dict[str, Any]] = {
                       "project_id": None, "deleted_at": None},
     "pm_views": {"view_type": "list", "config": {}, "position": None},
     "pm_view_task_positions": {"group_key": None},
+    # Composite key, no `id` column — the upsert path keys on (task_id,
+    # member_email) via ON CONFLICT, which _insert already handles generically.
+    "pm_task_personal": {
+        "disposition": None, "next_action": None, "context": None,
+        "energy": None, "time_estimate_mins": None, "is_two_minute": False,
+        "defer_until": None, "clarified_at": None,
+    },
 }
 
 _TIMESTAMPED = {
@@ -447,6 +454,14 @@ class FakeProjectsDB:
         # answered explicitly rather than silently returning project rows with
         # no `subject` attribute — which is how a "no previous mapping" answer
         # would look identical to a broken query.
+        # The personal inbox (147/§6.1) joins pm_tasks to its status, to the
+        # caller's overlay row and to the project, and computes `is_mine` and
+        # `assignee_count`. That is past what a text mirror can read, so the
+        # shape is answered explicitly — like the mapping join below. The
+        # DISCRIMINATOR is the overlay join, which no other statement carries.
+        if "LEFT JOIN pm_task_personal p" in statement:
+            return _Result(self._inbox_rows(statement, args))
+
         # Matched on the JOIN specifically: the visibility CTE also names both
         # tables, and a looser check short-circuited every scoped read.
         if "JOIN pm_project_grants g" in statement:
@@ -507,6 +522,72 @@ class FakeProjectsDB:
                 if parent is not None and str(parent) in out and str(project["id"]) not in out:
                     out.add(str(project["id"]))
                     changed = True
+        return out
+
+    def _inbox_rows(self, statement: str, args: dict) -> list[Any]:
+        """The personal inbox's joined shape, computed in Python.
+
+        Mirrors the SQL's own arms rather than restating them loosely: a task is
+        mine if I am assigned OR its project is my personal one — and the second
+        arm is the one that keeps a self-captured task visible after I clear my
+        own name off it.
+
+        The two optional clauses are keyed off the statement text, so a route
+        that stops emitting them stops being filtered here too.
+        """
+        who = str(args.get("who") or "").lower()
+        personal_projects = {
+            str(p["id"]) for p in self.rows("pm_projects")
+            if str(p.get("personal_owner") or "").lower() == who
+        }
+        statuses = {str(s["id"]): s for s in self.rows("pm_task_statuses")}
+        overlay = {
+            str(o["task_id"]): o for o in self.rows("pm_task_personal")
+            if str(o.get("member_email") or "").lower() == who
+        }
+
+        # Each arm is applied ONLY when the statement carries it. Applying them
+        # unconditionally is what let a mutant delete the personal-project arm
+        # from the SQL with every test still green — the exact failure this
+        # module's docstring warns about, caught by mutation rather than review.
+        wants_assigned = "lower(a.assignee) = :who" in statement
+        wants_personal = "lower(proj.personal_owner) = :who" in statement
+
+        out: list[Any] = []
+        for task in self.rows("pm_tasks"):
+            if task.get("archived_at") is not None:
+                continue
+            assignees = self._assignees_of(task["id"])
+            reached = (wants_assigned and who in assignees) or (
+                wants_personal and str(task.get("project_id")) in personal_projects
+            )
+            if not reached:
+                continue
+
+            mine = overlay.get(str(task["id"]), {})
+            if "p.defer_until IS NULL OR p.defer_until <= now()" in statement:
+                deferred = mine.get("defer_until")
+                if deferred is not None and _as_datetime(deferred) > _now():
+                    continue
+            if "lower(p.context) = :context" in statement:
+                wanted = str(args.get("context") or "").lower()
+                if str(mine.get("context") or "").lower() != wanted:
+                    continue
+
+            status = statuses.get(str(task.get("status_id")), {})
+            out.append(SimpleNamespace(
+                **task,
+                status_category=status.get("category", ""),
+                p_disposition=mine.get("disposition"),
+                p_next_action=mine.get("next_action"),
+                p_context=mine.get("context"),
+                p_energy=mine.get("energy"),
+                p_time_estimate_mins=mine.get("time_estimate_mins"),
+                p_is_two_minute=bool(mine.get("is_two_minute", False)),
+                p_defer_until=mine.get("defer_until"),
+                assignee_count=len(assignees),
+                is_mine=who in assignees,
+            ))
         return out
 
     def _assignees_of(self, task_id: str) -> set[str]:
@@ -661,6 +742,14 @@ class FakeProjectsDB:
         elif re.search(r"\bLIMIT\s+1\b", statement, re.I):
             rows = rows[:1]
         return rows
+
+
+def _as_datetime(value: Any) -> datetime:
+    """A stored `defer_until` as an aware instant, however it was written."""
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=UTC)
+    parsed = datetime.fromisoformat(str(value))
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
 
 
 def _sortable(value: Any) -> Any:

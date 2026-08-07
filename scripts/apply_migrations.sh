@@ -21,7 +21,9 @@ set -euo pipefail
 
 APP_DIR="${APP_DIR:-/opt/acb/app}"
 PG_CONTAINER="${PG_CONTAINER:-acb-postgres}"
-MIGRATIONS_DIR="$APP_DIR/infra/postgres"
+# Overridable so the ladder can be replayed against a scratch database without
+# pretending a temp directory is the whole app checkout.
+MIGRATIONS_DIR="${MIGRATIONS_DIR:-$APP_DIR/infra/postgres}"
 
 # --- Never WAIT for a lock. This is the whole outage, in one setting. ---------
 #
@@ -49,18 +51,30 @@ MIGRATION_LOCK_RETRIES="${MIGRATION_LOCK_RETRIES:-5}"
 
 # Pull DB credentials from .env when present, else fall back to compose defaults.
 ENV_FILE="$APP_DIR/.env"
-PG_USER="acb"
-PG_DB="acb"
+env_user="acb"
+env_db="acb"
 if [ -f "$ENV_FILE" ]; then
-  PG_USER="$(grep -E '^POSTGRES_USER=' "$ENV_FILE" | tail -1 | cut -d= -f2- || true)"
-  PG_DB="$(grep -E '^POSTGRES_DB=' "$ENV_FILE" | tail -1 | cut -d= -f2- || true)"
-  PG_USER="${PG_USER:-acb}"
-  PG_DB="${PG_DB:-acb}"
+  env_user="$(grep -E '^POSTGRES_USER=' "$ENV_FILE" | tail -1 | cut -d= -f2- || true)"
+  env_db="$(grep -E '^POSTGRES_DB=' "$ENV_FILE" | tail -1 | cut -d= -f2- || true)"
 fi
+# An explicitly exported value wins over .env — that is how a replay targets a
+# scratch database. On the VPS neither is exported, so .env stays authoritative.
+PG_USER="${PG_USER:-${env_user:-acb}}"
+PG_DB="${PG_DB:-${env_db:-acb}}"
 
 say() { printf "\n==> %s\n" "$*"; }
 
-if ! docker ps --format '{{.Names}}' | grep -qx "$PG_CONTAINER"; then
+# ── How we reach Postgres ────────────────────────────────────────────────────
+# `docker exec` on the VPS; `PG_MODE=local` for a cluster reached over libpq.
+# The same seam backup_db.sh and restore_db.sh gained, for the same reason: a
+# script that runs on exactly one machine is a script nobody can test, and this
+# one replays 150+ files against the production database.
+PG_MODE="${PG_MODE:-docker}"
+pgi() { if [ "$PG_MODE" = "local" ]; then "$@"; else docker exec -i "$PG_CONTAINER" "$@"; fi; }
+
+if [ "$PG_MODE" = "local" ]; then
+  command -v psql >/dev/null || { echo "ERROR: PG_MODE=local but psql is not on PATH." >&2; exit 1; }
+elif ! docker ps --format '{{.Names}}' | grep -qx "$PG_CONTAINER"; then
   echo "ERROR: Postgres container '$PG_CONTAINER' is not running." >&2
   exit 1
 fi
@@ -114,8 +128,7 @@ fi
 #      undeployable is not.
 LOCK_PRELUDE="SET lock_timeout = '$MIGRATION_LOCK_TIMEOUT';"
 if ! printf '%s\n' "$LOCK_PRELUDE" \
-     | docker exec -i "$PG_CONTAINER" \
-         psql -v ON_ERROR_STOP=1 -U "$PG_USER" -d "$PG_DB" -q \
+     | pgi psql -v ON_ERROR_STOP=1 -U "$PG_USER" -d "$PG_DB" -q \
          >/dev/null 2>/tmp/lock_probe_err; then
   echo "  !! lock_timeout prelude REJECTED by this server:" >&2
   sed 's/^/     /' /tmp/lock_probe_err >&2
@@ -125,6 +138,51 @@ if ! printf '%s\n' "$LOCK_PRELUDE" \
   echo "     Fix the value; do not leave this in place." >&2
   LOCK_PRELUDE=""
 fi
+
+# ── The ledger (BO-6) ────────────────────────────────────────────────────────
+#
+# Until this, every deploy replayed EVERY numbered migration — 152 files. That
+# worked only because each is hand-written to be idempotent, which is a property
+# of 152 authors' care rather than of the system.
+#
+# The cost was not only time. `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` still
+# takes ACCESS EXCLUSIVE when the column is already there, and on 2026-08-06 one
+# such queued ALTER, behind a session left `idle in transaction`, froze every
+# later reader of that table and took the app down. Asking for 150 locks we do
+# not need is the exposure; this removes it.
+#
+# Created here rather than relying on 152_schema_migrations.sql having run,
+# because the ledger must exist BEFORE the loop that would apply that file.
+# `IF NOT EXISTS` makes the two agree; the migration file is what documents the
+# table and what a fresh install gets.
+REPLAY_ALL="${MIGRATION_REPLAY_ALL:-0}"
+
+if [ "$REPLAY_ALL" = "1" ]; then
+  say "MIGRATION_REPLAY_ALL=1 — replaying the whole ladder, ignoring the ledger"
+  APPLIED_SET=""
+else
+  pgi psql -v ON_ERROR_STOP=1 -U "$PG_USER" -d "$PG_DB" -q >/dev/null <<'LEDGER'
+CREATE TABLE IF NOT EXISTS schema_migrations (
+  filename    text PRIMARY KEY,
+  checksum    text NOT NULL,
+  applied_at  timestamptz NOT NULL DEFAULT now(),
+  duration_ms integer
+);
+LEDGER
+  # One query, not one per file: 150 round trips through `docker exec` is
+  # several seconds of deploy for something that fits in a single result.
+  APPLIED_SET="$(pgi psql -tA -U "$PG_USER" -d "$PG_DB" \
+    -c "SELECT filename || ' ' || checksum FROM schema_migrations" 2>/dev/null || true)"
+fi
+
+# "new" | "same" | "changed", from the set read above.
+ledger_state() {
+  row="$(printf '%s\n' "$APPLIED_SET" | grep -F "$1 " || true)"
+  if [ -z "$row" ]; then echo new
+  elif [ "${row#* }" = "$2" ]; then echo same
+  else echo changed
+  fi
+}
 
 say "Applying migrations to db '$PG_DB' as '$PG_USER' (container: $PG_CONTAINER)"
 
@@ -137,17 +195,50 @@ say "Applying migrations to db '$PG_DB' as '$PG_USER' (container: $PG_CONTAINER)
 # initdb on first boot) and contain statements that aren't re-runnable.
 shopt -s nullglob
 applied=0
+skipped=0
+changed_files=""
 # Match 2-OR-MORE-digit numeric prefixes (NN_ … NNN_) and apply in NUMERIC
 # order. `sort -V` (version sort) is essential now that 3-digit numbers exist:
 # plain lexical `sort` puts "100_" BEFORE "99_", which would run a later
 # migration before an earlier one. The 2-digit scheme filled up at 99, so
 # migrations continue at 100+.
-for f in $(ls "$MIGRATIONS_DIR"/[0-9][0-9]*_*.sql | sort -V); do
+migration_files="$(ls "$MIGRATIONS_DIR"/[0-9][0-9]*_*.sql 2>/dev/null | sort -V)"
+if [ -z "$migration_files" ]; then
+  # NOT a silent success. `nullglob` deletes a pattern that matches nothing, so
+  # without this guard the `ls` below runs bare, lists the CURRENT directory,
+  # and hands psql whatever it finds — the first symptom being a syntax error
+  # in AGENTS.md. Found while replaying the ladder against a scratch DB with a
+  # temp APP_DIR, which is exactly how a mis-set APP_DIR would fail in prod.
+  echo "ERROR: no numbered migrations in '$MIGRATIONS_DIR'." >&2
+  echo "       APP_DIR='$APP_DIR' — is it the app checkout?" >&2
+  exit 1
+fi
+for f in $migration_files; do
   base="$(basename "$f")"
   case "$base" in
     00_*|01_*) continue ;;  # init-only, skip
   esac
+
+  # Already applied, unchanged? Skip it. This is the win: a steady-state deploy
+  # runs ~0 files instead of 152, and takes ~0 locks instead of hundreds.
+  sum="$(sha256sum "$f" | cut -d" " -f1)"
+  case "$(ledger_state "$base" "$sum")" in
+    same) skipped=$((skipped + 1)); continue ;;
+    changed)
+      # Re-apply rather than refuse. Every file here is idempotent by
+      # construction and the repo's whole workflow assumes an edit re-runs on
+      # the next deploy; turning that into a hard failure the day the ledger
+      # arrives would break deploys for a legitimate fix. But say it LOUDLY —
+      # editing an applied migration is a real bug class, because on a box that
+      # already ran the original the change only lands if something re-runs it,
+      # and until now nothing recorded that it had.
+      printf "    ! %s CHANGED since it was applied — re-applying\n" "$base"
+      changed_files="$changed_files $base"
+      ;;
+  esac
+
   printf "    - %s ... " "$base"
+  started_ms="$(date +%s%3N)"
   attempt=1
   while :; do
     # The prelude is prepended to the stream rather than passed as a psql flag so
@@ -156,11 +247,22 @@ for f in $(ls "$MIGRATIONS_DIR"/[0-9][0-9]*_*.sql | sort -V); do
     # the probe above rejected it, in which case the migration runs exactly as it
     # did before this guard existed.
     if { [ -n "$LOCK_PRELUDE" ] && printf '%s\n' "$LOCK_PRELUDE"; cat "$f"; } \
-         | docker exec -i "$PG_CONTAINER" \
-             psql -v ON_ERROR_STOP=1 -U "$PG_USER" -d "$PG_DB" -q \
+         | pgi psql -v ON_ERROR_STOP=1 -U "$PG_USER" -d "$PG_DB" -q \
              >/dev/null 2>/tmp/migrate_err; then
       echo "ok"
       applied=$((applied + 1))
+      # Recorded AFTER success, never before: a row for a migration that failed
+      # would make the next deploy skip it and the schema silently diverge.
+      if [ "$REPLAY_ALL" != "1" ]; then
+        pgi psql -v ON_ERROR_STOP=1 -U "$PG_USER" -d "$PG_DB" -q >/dev/null <<SQL || \
+          echo "      !! could not record $base (it WILL re-run next deploy)" >&2
+INSERT INTO schema_migrations (filename, checksum, duration_ms)
+VALUES ('$base', '$sum', $(( $(date +%s%3N) - started_ms )))
+ON CONFLICT (filename) DO UPDATE
+  SET checksum = EXCLUDED.checksum, applied_at = now(),
+      duration_ms = EXCLUDED.duration_ms;
+SQL
+      fi
       break
     fi
     # Only a LOCK timeout is retryable. Any other psql error is a real migration
@@ -189,4 +291,12 @@ for f in $(ls "$MIGRATIONS_DIR"/[0-9][0-9]*_*.sql | sort -V); do
   done
 done
 
-say "Migrations complete ($applied file(s) applied idempotently)"
+if [ -n "$changed_files" ]; then
+  echo
+  echo "  !! These migrations CHANGED after they had been applied:" >&2
+  for c in $changed_files; do echo "     - $c" >&2; done
+  echo "     Re-applied here, but any box that has not deployed since the edit" >&2
+  echo "     is running the ORIGINAL. Prefer a new numbered file." >&2
+fi
+
+say "Migrations complete ($applied applied, $skipped already recorded)"

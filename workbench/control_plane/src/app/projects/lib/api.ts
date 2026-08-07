@@ -1,3 +1,5 @@
+import type { Rule as RecurrenceRule } from "./recurrence";
+
 /**
  * Projects · the browser's client for /api/projects/*.
  *
@@ -200,6 +202,45 @@ export const projectsApi = {
       method: "POST",
       body: JSON.stringify({ body }),
     }),
+
+  /**
+   * WS-27p — subtasks and links in both directions, plus derived blocked-ness.
+   *
+   * ONE call rather than three: the panel needs all of it at once, and three
+   * round trips to fill one block is three chances to paint a half-drawn
+   * dependency section.
+   */
+  relations: (taskId: string) =>
+    call<import("./relations").Relations>(`tasks/${taskId}/relations`),
+
+  createLink: (taskId: string, targetTaskId: string, linkType: string) =>
+    call<{ id: string }>(`tasks/${taskId}/links`, {
+      method: "POST",
+      body: JSON.stringify({ target_task_id: targetTaskId, link_type: linkType }),
+    }),
+
+  deleteLink: (taskId: string, linkId: string) =>
+    call<{ deleted: string }>(`tasks/${taskId}/links/${linkId}`, {
+      method: "DELETE",
+    }),
+
+  /** WS-27o — this task's repeat rule, or `{rule: null}`. */
+  recurrence: (taskId: string) =>
+    call<{ rule: RecurrenceRule | null }>(`tasks/${taskId}/recurrence`),
+
+  /** Set or replace it. A task has at most one rule, so this is a PUT. */
+  setRecurrence: (taskId: string, payload: Record<string, unknown>) =>
+    call<{ rule: RecurrenceRule }>(`tasks/${taskId}/recurrence`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
+
+  /** Stop the series. Everything it already created stays. */
+  clearRecurrence: (taskId: string) =>
+    call<{ cleared: boolean; cascaded?: { tasks_detached: number } }>(
+      `tasks/${taskId}/recurrence`,
+      { method: "DELETE" }
+    ),
 
   /**
    * WS-27n — one edit applied to many tasks.

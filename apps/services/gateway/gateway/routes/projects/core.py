@@ -942,7 +942,25 @@ async def apply_status_transition(
             "to_category": new_status.category,
         },
     )
-    return {"row": row, "from": old_status, "to": new_status}
+
+    # WS-27o — a task crossing INTO a closing category is what advances a
+    # recurring series. Done here rather than in each caller because this is the
+    # one place that knows the crossing happened: the board, My work, an
+    # automation and a bulk edit all arrive through this helper, and a second
+    # call site would be a fifth way to finish a task that forgets to recur.
+    #
+    # Imported inside the function so `core` — the leaf every feature module
+    # imports — gains no dependency on one of them.
+    successor: str | None = None
+    if is_closed and not was_closed:
+        from gateway.routes.projects.recurrence import spawn_successor
+
+        successor = await spawn_successor(db, row, actor_id=created_by)
+
+    return {
+        "row": row, "from": old_status, "to": new_status,
+        "recurred_to": successor,
+    }
 
 
 # ── The activity spine ──────────────────────────────────────────────────────

@@ -1,0 +1,111 @@
+/**
+ * GET/POST/PUT/PATCH/DELETE /api/projects/[…path]
+ *
+ * Proxies every Projects request to the FastAPI gateway's /projects/* API. The
+ * browser talks to the Next server, which holds the session and forwards an
+ * authenticated request (internal bearer + X-User-Email) upstream — the same
+ * shape as the CRM proxy at /api/crm/[...path] and the tasks one before it.
+ *
+ * ⚠️ This is not a convenience layer. `/projects` is gated by
+ * `require_feature_router("projects")` and the gateway takes the acting
+ * identity from `X-User-Email` only, so a page that fetched the gateway
+ * directly would carry neither and 401 — the failure that took out every
+ * email-account connection for six days (workbench/AGENTS.md, "Identity").
+ * Nothing in this app may point the browser at api.* .
+ *
+ * It matters more here than for most apps: `/projects` scopes DATA by grant,
+ * not just navigation, so an unauthenticated upstream call would not merely
+ * fail — under any future relaxation it would be a call with no member to
+ * scope against.
+ */
+import { NextRequest, NextResponse } from "next/server";
+import { GATEWAY_URL, gatewayHeaders, requireIdentity } from "@/lib/gateway";
+
+export const dynamic = "force-dynamic";
+
+function buildUpstreamUrl(path: string[], req: NextRequest): string {
+  const base = `${GATEWAY_URL}/projects/${path.join("/")}`;
+  const qs = req.nextUrl.searchParams.toString();
+  return qs ? `${base}?${qs}` : base;
+}
+
+async function forward(
+  method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE",
+  req: NextRequest,
+  params: Promise<{ path: string[] }>
+): Promise<NextResponse> {
+  const { path } = await params;
+  const upstream = buildUpstreamUrl(path, req);
+  try {
+    const init: RequestInit = {
+      method,
+      headers: {
+        ...(await gatewayHeaders()),
+        ...(method === "GET" || method === "DELETE"
+          ? {}
+          : { "Content-Type": "application/json" }),
+      },
+      signal: AbortSignal.timeout(30_000),
+    };
+    if (method !== "GET" && method !== "DELETE") {
+      const body = await req.json().catch(() => ({}));
+      init.body = JSON.stringify(body);
+    }
+    // A pooled keep-alive socket can be closed by the gateway just as we reuse
+    // it, failing the fetch spuriously (undici vs uvicorn's short keep-alive).
+    // GETs are idempotent — retry once on network failure. A retried POST could
+    // create a second project, so only GETs get the second attempt.
+    let res: Response;
+    try {
+      res = await fetch(upstream, init);
+    } catch (err) {
+      if (method !== "GET") throw err;
+      res = await fetch(upstream, { ...init, signal: AbortSignal.timeout(30_000) });
+    }
+
+    const text = await res.text();
+    if (!text) return new NextResponse(null, { status: res.status });
+    return new NextResponse(text, {
+      status: res.status,
+      headers: { "Content-Type": "application/json" },
+    });
+  } catch (err) {
+    return NextResponse.json(
+      { detail: `Projects gateway unreachable: ${String(err)}` },
+      { status: 502 }
+    );
+  }
+}
+
+// Every verb resolves the identity BEFORE forwarding. `gatewayHeaders()`
+// throwing is what makes an unguarded call fail closed, but that throw lands in
+// the catch below and answers 502 — telling a signed-out member the gateway is
+// down when what they need is a sign-in. Pinned by
+// `src/lib/gateway.test.ts` ("establishes who is asking wherever it reaches the
+// gateway"), which caught exactly this omission here.
+
+export async function GET(req: NextRequest, ctx: { params: Promise<{ path: string[] }> }) {
+  const me = await requireIdentity();
+  if (me instanceof NextResponse) return me;
+  return forward("GET", req, ctx.params);
+}
+export async function POST(req: NextRequest, ctx: { params: Promise<{ path: string[] }> }) {
+  const me = await requireIdentity();
+  if (me instanceof NextResponse) return me;
+  return forward("POST", req, ctx.params);
+}
+export async function PUT(req: NextRequest, ctx: { params: Promise<{ path: string[] }> }) {
+  const me = await requireIdentity();
+  if (me instanceof NextResponse) return me;
+  return forward("PUT", req, ctx.params);
+}
+export async function PATCH(req: NextRequest, ctx: { params: Promise<{ path: string[] }> }) {
+  const me = await requireIdentity();
+  if (me instanceof NextResponse) return me;
+  return forward("PATCH", req, ctx.params);
+}
+export async function DELETE(req: NextRequest, ctx: { params: Promise<{ path: string[] }> }) {
+  const me = await requireIdentity();
+  if (me instanceof NextResponse) return me;
+  return forward("DELETE", req, ctx.params);
+}

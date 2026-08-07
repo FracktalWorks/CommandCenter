@@ -18,18 +18,40 @@
 
 export type CenterAppStatus = "live" | "planned";
 
-export type CenterApp = {
+type CenterAppBase = {
   label: string;
   /** What this sub-app is for — real content, shown on the Center page. */
   note: string;
   /** Lucide icon name (resolveIcon handles the full set). */
   icon: string;
-  status: CenterAppStatus;
-  /** Where it opens today. Live items only; planned items have no href. */
-  href?: string;
   /** Caveat when the live surface is not yet scoped to the Center. */
   caveat?: string;
 };
+
+/**
+ * A sub-app on a Center page.
+ *
+ * ⚠️ **Discriminated on `status`, deliberately, so `live ⇒ href` is a compile
+ * error rather than a rendering bug.** The Center page renders a live tile as
+ * a link to `app.href ?? "#"`, so a `live` item that forgot its href ships as
+ * a clickable card that navigates nowhere — and the only test near this file
+ * (`test_centers_registry_matches_the_feature_vocabulary`) reads each
+ * Center's `feature:` field and nothing else, so it cannot see a mistake in
+ * `apps[]` at all. `planned` items must NOT carry an href for the same
+ * reason in reverse: a destination that exists is not planned, it is live and
+ * mis-labelled, and the Center page files it under "coming soon".
+ * Runtime twin: `centers.test.ts`.
+ */
+export type CenterApp =
+  | (CenterAppBase & {
+      status: "live";
+      /** Where it opens today. Required — that is what `live` means. */
+      href: string;
+    })
+  | (CenterAppBase & {
+      status: "planned";
+      href?: never;
+    });
 
 export type Center = {
   slug: string;
@@ -53,6 +75,13 @@ export const CENTERS: Center[] = [
     group: "sales",
     apps: [
       {
+        label: "Projects & tasks",
+        note: "This Center's slice of the Projects app — the departments and projects granted to group:sales",
+        icon: "FolderKanban",
+        status: "live",
+        href: "/projects?center=sales",
+      },
+      {
         label: "Sales dashboard",
         note: "Pipeline health, quota progress, follow-ups due — the team's morning view",
         icon: "LayoutDashboard",
@@ -73,10 +102,14 @@ export const CENTERS: Center[] = [
         status: "planned",
       },
       {
-        label: "Pipeline (Zoho CRM)",
-        note: "Deals, stages, and contact history from the CRM the team already uses",
+        // WS-26c. The native CRM replaced the Zoho mirror as the destination:
+        // CommandCenter is becoming the system of record and Zoho the import
+        // source (specs/crm_app.md §1), so the tile names ours.
+        label: "CRM",
+        note: "Deals, leads, contacts and organizations — the pipeline the team works",
         icon: "KanbanSquare",
-        status: "planned",
+        status: "live",
+        href: "/crm",
       },
       {
         label: "Shared mailbox",
@@ -100,6 +133,13 @@ export const CENTERS: Center[] = [
     feature: "center.marketing",
     group: "marketing",
     apps: [
+      {
+        label: "Projects & tasks",
+        note: "This Center's slice of the Projects app — the departments and projects granted to group:marketing",
+        icon: "FolderKanban",
+        status: "live",
+        href: "/projects?center=marketing",
+      },
       {
         label: "Marketing dashboard",
         note: "Campaign performance, content calendar, channel health at a glance",
@@ -147,6 +187,13 @@ export const CENTERS: Center[] = [
     group: "finance",
     apps: [
       {
+        label: "Projects & tasks",
+        note: "This Center's slice of the Projects app — the departments and projects granted to group:finance",
+        icon: "FolderKanban",
+        status: "live",
+        href: "/projects?center=finance",
+      },
+      {
         label: "Finance dashboard",
         note: "Cash position, receivables aging, collections due this week",
         icon: "LayoutDashboard",
@@ -186,6 +233,13 @@ export const CENTERS: Center[] = [
     feature: "center.operations",
     group: "operations",
     apps: [
+      {
+        label: "Projects & tasks",
+        note: "This Center's slice of the Projects app — the departments and projects granted to group:operations",
+        icon: "FolderKanban",
+        status: "live",
+        href: "/projects?center=operations",
+      },
       {
         label: "Ops dashboard",
         note: "Builds in progress, dispatches due, open service tickets",
@@ -233,6 +287,13 @@ export const CENTERS: Center[] = [
     group: "people",
     apps: [
       {
+        label: "Projects & work",
+        note: "The whole portfolio — every department, project and task. This Center is the app's home; the others see their granted slice of the same app, never a fork",
+        icon: "FolderKanban",
+        status: "live",
+        href: "/projects",
+      },
+      {
         label: "People dashboard",
         note: "Who's in, who's out, open roles, onboarding in progress",
         icon: "LayoutDashboard",
@@ -272,6 +333,13 @@ export const CENTERS: Center[] = [
     feature: "center.company",
     group: "company",
     apps: [
+      {
+        label: "All projects",
+        note: "Every department's work in one place — the full portfolio, which needs data:org:read",
+        icon: "FolderKanban",
+        status: "live",
+        href: "/projects",
+      },
       {
         label: "Company dashboard",
         note: "The org-wide overview, fed by every Center",

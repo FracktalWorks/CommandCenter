@@ -97,12 +97,21 @@ const COLOR_LITERAL = /#[0-9a-fA-F]{6}\b|#[0-9a-fA-F]{3}\b|\brgba?\(|\bhsla?\(/g
 const ARBITRARY_CLASS = /\b(?:bg|text|border|ring|fill|stroke|from|via|to|shadow|outline|decoration|accent|caret)-\[(?:#|rgb|hsl)[^\]]*\]/g;
 const BUTTON_TAG = /<button\b(?:[^>]|\n)*?>/g;
 /**
- * A SOLID fill — `bg-primary`, not `bg-primary/10`. The negative lookahead is
- * load-bearing: a tinted `bg-primary/10` ghost button is already fully themed
- * (it is a token at an opacity), and counting it would bury the 117 real hits
- * under several hundred false ones.
+ * A SOLID fill — `bg-primary`, and nothing else that merely contains it.
+ *
+ * Both guards are load-bearing, and each was added after the loose version
+ * flagged the wrong thing:
+ *
+ * * the lookAHEAD rejects `bg-primary/10`, a tinted ghost button that is
+ *   already fully themed (a token at an opacity);
+ * * the lookBEHIND rejects `hover:bg-secondary`, a hover tint on an otherwise
+ *   plain control. Without it, four close-buttons in the CRM app were reported
+ *   as un-migrated solid controls when they are neither solid nor wrong.
+ *
+ * Getting this narrow matters more than getting it wide: a gate that cries
+ * wolf is one somebody eventually switches off.
  */
-const SOLID_FILL = /\bbg-(?:primary|secondary|destructive)(?![-/\w])/;
+const SOLID_FILL = /(?<![-\w:])bg-(?:primary|secondary|destructive)(?![-/\w])/;
 
 const count = (text: string, re: RegExp) => (strip(text).match(re) ?? []).length;
 
@@ -261,7 +270,7 @@ describe("solid controls go through the Button primitive", () => {
    * stating is "this number goes down". New files are covered separately and
    * absolutely below — which is the half that governs work we have not done yet.
    */
-  const SOLID_BUTTON_DEBT = 117;
+  const SOLID_BUTTON_DEBT = 30;
 
   function solidButtons(): Record<string, number> {
     const out: Record<string, number> = {};

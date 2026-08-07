@@ -1,7 +1,7 @@
 """Validate agent-generated artifact HTML before it reaches the sandbox.
 
 Generated HTML runs in an opaque-origin iframe under a strict CSP
-(``SandboxedHtml.tsx``). That sandbox is deliberately unforgiving and, crucially,
+(``lib/theme/sandbox-frame.ts``). That sandbox is deliberately unforgiving and, crucially,
 **silent**: a CDN ``<script src>`` is simply blocked, a typo'd ``cc-`` class name
 just renders unstyled, and a ``cc-bar`` missing its ``--v`` custom property draws
 an empty track. The agent gets no signal that any of it went wrong — it writes
@@ -13,7 +13,7 @@ them on the same turn. It is advisory only: linting NEVER blocks a write, and a
 parse failure degrades to "no findings" rather than failing the tool.
 
 The class registry below mirrors the stylesheet injected by
-``workbench/control_plane/src/components/SandboxedHtml.tsx``.
+``workbench/control_plane/src/lib/theme/sandbox-frame.ts``.
 ``tests/unit/test_artifact_lint.py`` parses that file and fails if the two drift
 apart, so a new ``cc-`` block cannot be added to the CSS without being
 registered here (and vice versa).
@@ -27,7 +27,7 @@ from html.parser import HTMLParser
 
 # ── The cc-* class registry ────────────────────────────────────────────────
 # Every class the sandbox stylesheet actually defines, grouped as an agent
-# thinks about them. Kept in sync with SandboxedHtml.tsx by a drift test.
+# thinks about them. Kept in sync with lib/theme/sandbox-frame.ts by a drift test.
 
 _LAYOUT = {
     "cc-report", "cc-card", "cc-grid", "cc-btn",

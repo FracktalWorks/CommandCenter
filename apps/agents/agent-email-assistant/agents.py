@@ -76,8 +76,15 @@ def _current_user_email() -> str:
 
 
 def _internal_token() -> str:
-    """The gateway's internal bearer token. The Settings field is
-    ``litellm_master_key``; ``gateway_internal_token`` isn't a real attribute."""
+    """The gateway's internal bearer token.
+
+    ``gateway_internal_token`` IS a real Settings field
+    (``acb_common/settings.py``) — the service-identity/LLM-key split — and it
+    ships empty, which is why ``litellm_master_key`` is the fallback rather than
+    the primary. The order below is load-bearing in that direction: on a box
+    where the split HAS been provisioned, "simplifying" this to read
+    ``litellm_master_key`` first sends the wrong token and 403s every call.
+    """
     settings = get_settings()
     return (
         getattr(settings, "gateway_internal_token", "")

@@ -34,6 +34,17 @@ const OUT_DIR = resolve(ROOT, "src/lib/theme/icon-data");
  * uses.
  */
 const MAP = {
+  // ── Arrived with the CRM and Projects apps (merged 2026-08-07) ───────────
+  // Without a mapping these render Lucide on every theme — graceful, but they
+  // would be the only Lucide glyphs in a Fluent or Material screen.
+  Kanban: { fluent: ["board"], material: ["view-kanban"] },
+  IndianRupee: { fluent: ["currency-rupee-indian", "money"], material: ["currency-rupee"] },
+  UserCheck: { fluent: ["person-available", "person-accounts"], material: ["how-to-reg", "person-check"] },
+  CircleAlert: { fluent: ["error-circle"], material: ["error"] },
+  Ban: { fluent: ["prohibited"], material: ["block"] },
+  Car: { fluent: ["vehicle-car"], material: ["directions-car"] },
+  Flame: { fluent: ["fire"], material: ["local-fire-department"] },
+  Siren: { fluent: ["alert-urgent"], material: ["emergency", "siren"] },
   // ── Status / feedback ────────────────────────────────────────────────────
   Loader2: { fluent: ["spinner-ios"], material: ["progress-activity"] },
   Loader: { fluent: ["spinner-ios"], material: ["progress-activity"] },

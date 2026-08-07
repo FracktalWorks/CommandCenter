@@ -331,6 +331,16 @@ async def patch_activity(
 async def delete_activity(
     activity_id: str, user: UserContext = Depends(get_current_user),
 ) -> dict:
+    """Delete one timeline entry.
+
+    ⚠️ **No Zoho tombstone, deliberately (WS-26b, §7.1).** Records tombstone
+    their deletes so the sync propagates them; activities do not, in either
+    direction — a note deleted here survives in Zoho, and one deleted in Zoho
+    survives here. Accepted v1 cost: an activity is an append-mostly log entry
+    whose stale copy misleads nobody about the pipeline, and Zoho is being
+    retired. Do not "fix" one direction alone — a native tombstone without the
+    matching Zoho→native delete would make the two sides disagree in a new way.
+    """
     db = await _get_db()
     try:
         row = await require_row(db, "crm_activities", activity_id, "Activity")

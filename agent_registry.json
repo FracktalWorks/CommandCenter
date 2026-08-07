@@ -15,6 +15,16 @@
     ]
   },
   {
+    "name": "crm-assistant",
+    "description": "CRM Assistant — reads the native CRM: finds leads, deals, contacts and organizations, reads the deal pipeline by stage, opens a record, and reads its history. Read-only; it cannot modify CRM records.",
+    "tags": ["crm", "sales", "pipeline", "leads", "deals"],
+    "status": "live",
+    "agent_runtime": "maf",
+    "local_path": "apps/agents/agent-crm",
+    "integrations": [],
+    "optional_integrations": []
+  },
+  {
     "name": "sales",
     "description": "Zoho CRM sales pipeline + deal follow-ups",
     "tags": ["sales", "zoho"],

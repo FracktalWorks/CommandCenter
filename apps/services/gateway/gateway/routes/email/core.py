@@ -17,6 +17,9 @@ from typing import Any
 
 from acb_common import get_logger, get_settings
 from fastapi import APIRouter, HTTPException
+
+# The shared gateway engine (BO-10) — see the DB section below.
+from gateway.db import get_session_factory as _get_session_factory
 from pydantic import BaseModel
 from sqlalchemy import text
 from acb_auth import require_feature_router
@@ -380,37 +383,20 @@ async def hydrate_message_body(db: Any, message_id: str, user_email: str) -> str
         return row.body_text or ""
 
 
-_ENGINE = None
-
-
-_SESSION_FACTORY = None
-
-
-def _get_session_factory():
-    global _ENGINE, _SESSION_FACTORY
-    if _SESSION_FACTORY is None:
-        from sqlalchemy.ext.asyncio import (
-            async_sessionmaker,
-            create_async_engine,
-        )
-        settings = get_settings()
-        db_url = os.environ.get("DATABASE_URL", settings.database_url)
-        if "postgresql+psycopg" in db_url:
-            db_url = db_url.replace("postgresql+psycopg", "postgresql+asyncpg")
-        elif db_url.startswith("postgresql://"):
-            db_url = db_url.replace("postgresql://", "postgresql+asyncpg://")
-        elif "+asyncpg" not in db_url and "postgresql" in db_url:
-            db_url = db_url.replace("postgresql://", "postgresql+asyncpg://")
-        _ENGINE = create_async_engine(
-            db_url, echo=False, pool_pre_ping=True,
-            pool_size=10, max_overflow=20, pool_recycle=1800,
-            # Bound the CONNECT phase (asyncpg's `timeout`) so a slow/unreachable
-            # DB fails fast instead of stalling request handlers — same ceiling
-            # as acb_graph's engine (settings.db_connect_timeout).
-            connect_args={"timeout": settings.db_connect_timeout},
-        )
-        _SESSION_FACTORY = async_sessionmaker(_ENGINE, expire_on_commit=False)
-    return _SESSION_FACTORY
+# ── DB (the one shared gateway engine — gateway/db.py, BO-10) ────────────────
+#
+# This package used to build its own engine here with its own 10+20 pool — the
+# engine that drained on 2026-08-06 behind a transaction left `idle in
+# transaction` for 14h44m. Both bounds that came out of that incident now live
+# on the shared seam (``acb_common.db.engine_connect_args``, re-exported as
+# ``gateway.db``), which is where the reasoning for the 10-minute deadline is
+# written down.
+#
+# `_get_session_factory` at the top of this module is a re-export of that seam.
+# `_get_db` stays a real function here only to keep its signature: callers pass
+# nothing today, but the parameter is part of the historical surface this
+# package flattens into ``gateway.routes.email`` (see __init__.py), and tests
+# monkeypatch `_get_db` on the sibling module they exercise.
 
 
 async def _get_db(request_id: str | None = None):

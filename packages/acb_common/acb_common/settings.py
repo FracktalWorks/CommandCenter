@@ -35,6 +35,19 @@ class Settings(BaseSettings):
     # never trips in normal operation.
     db_connect_timeout: int = 10
 
+    # Size of the ONE shared async pool per process (acb_common.db, BO-10).
+    # Ceiling = db_pool_size + db_max_overflow = 30 connections from a process.
+    #
+    # These are knobs, not constants, because the arithmetic is deployment-wide:
+    # a stock Postgres allows 100 connections total and the gateway is not its
+    # only client — Langfuse, LiteLLM and the ingestion services draw from the
+    # same server. 30 is what `gateway/db.py` already used for the packages that
+    # had been converted, and it is deliberately unchanged here so consolidating
+    # the rest is a no-op per package rather than a silent retune. Raise it when
+    # you have raised `max_connections` (or put PgBouncer in front), not before.
+    db_pool_size: int = 10
+    db_max_overflow: int = 20
+
     # Redis (event bus)
     redis_url: str = "redis://localhost:6379/0"
 
@@ -98,6 +111,14 @@ class Settings(BaseSettings):
     zoho_accounts_url: str = "https://accounts.zoho.com"
     zoho_region: str = "in"
     zoho_webhook_secret: str = ""        # HMAC secret for /webhooks/zoho (WBS 1.1)
+
+    # CRM ⟷ Zoho two-way sync (spec crm_app.md §7.1, D-CRM-7). Gates ONLY the
+    # scheduled loop the gateway lifespan registers (routes/crm/sync_zoho.py);
+    # POST /crm/sync/zoho runs one cycle regardless, because a hand-run cycle
+    # is an explicit admin act. Ships OFF: ON means the platform WRITES the
+    # live Zoho tenant unattended — pushing native edits up and propagating
+    # deletes both ways. Flipping it is an OWNER-GATE act (work_plan.md §6).
+    crm_zoho_sync: bool = False
 
     # Gmail (Phase 1, WBS 1.3)
     gmail_sa_json_path: str = ""         # service-account key file

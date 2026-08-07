@@ -35,9 +35,11 @@ from gateway.routes.crm.core import (
     actor,
     has_column,
     insert_row,
+    link_deal_contact,
     load_default_status,
     load_row,
     now,
+    project_joined,
     record_activity,
     require_row,
     router,
@@ -223,12 +225,19 @@ async def get_pipeline(
                 ),
                 scope,
             )).fetchone()
+            inner = (
+                f"SELECT * FROM crm_deals WHERE {where} "
+                "ORDER BY status_changed_at DESC NULLS LAST, id DESC "
+                "LIMIT :limit"
+            )
             rows = (await db.execute(
-                text(
-                    f"SELECT * FROM crm_deals WHERE {where} "
-                    "ORDER BY status_changed_at DESC NULLS LAST, id DESC "
-                    "LIMIT :limit"
-                ),
+                # Cards print the account name; the board must not make the
+                # browser join a paged organization list to render them
+                # (WS-26c dw 2).
+                text(project_joined(
+                    DEALS, inner,
+                    "base.status_changed_at DESC NULLS LAST, base.id DESC",
+                )),
                 {**scope, "limit": per_lane},
             )).fetchall()
             out.append(PipelineLane(
@@ -432,11 +441,12 @@ async def _create_deal(
         "source": getattr(lead, "source", "manual"),
     })
     if contact is not None:
-        await insert_row(db, "crm_deal_contacts", {
-            "deal_id": str(deal.id),
-            "contact_id": str(contact.id),
-            "is_primary": True,
-        })
+        # Through the shared seam, not a bare INSERT: "at most one primary per
+        # deal" (§3.5) is enforced in code, and code with two writers is a
+        # convention (WS-26c dw 2).
+        await link_deal_contact(
+            db, str(deal.id), str(contact.id), is_primary=True,
+        )
     return deal
 
 

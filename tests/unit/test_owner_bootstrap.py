@@ -96,8 +96,12 @@ def ownerless(monkeypatch):
     )
     access_mod.invalidate()
     monkeypatch.setattr(access_mod, "CACHE_TTL_SECONDS", 0.0)
-    monkeypatch.setattr(access_mod, "_ENGINE", None)
-    monkeypatch.setattr(access_mod, "_SESSION_FACTORY", None)
+    # The engine is the process-wide one in acb_common.db (BO-10) — reset it
+    # there, not on access_mod, which no longer owns any engine state.
+    import acb_common.db as db_mod
+
+    monkeypatch.setattr(db_mod, "_ENGINE", None)
+    monkeypatch.setattr(db_mod, "_SESSION_FACTORY", None)
     yield
     _purge()
     for user_id, role_id, assigned_by in saved:

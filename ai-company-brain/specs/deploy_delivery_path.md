@@ -310,6 +310,35 @@ run this script as `ssh acb@host 'bash -s'`, and the applied script calls `sudo`
 passwordless sudo. So `User=acb` is not a workaround; running it as root was the
 deviation.
 
+⚠️ **Corrections exist on paper until they are installed.** The corrected unit
+below sat in this spec while the box kept running the `User=root` version — the
+poller failed every five minutes from its first tick until 2026-08-06, when the
+WS-26 activation found it. `.claude/` and `/etc/systemd/system/` share the same
+failure mode: not in the repo, so no PR can fix them; every correction here is
+also a hand-carried box change.
+
+**Defect 3 (2026-08-06) — the SHA can be current while the APPLY never
+happened.** The poller skips when `HEAD == origin/release`. But the push path's
+`git reset --hard` moves HEAD *before* migrations and restarts — so when the
+push-path SSH session was killed mid-apply (Defect 4b), the tree said `8d83ca10`
+while the DB had no migration 144/145 and both services still ran old code. The
+poller then reported `already current` and stood down: both delivery paths
+converged on believing a deploy that had not happened. `--force` is the manual
+escape; the durable fix would be gating the skip on the `/var/lib/acb`
+last-success marker (recorded at the END of an apply), not on git state.
+
+**Defect 4 (2026-08-06) — two `deploy.yml` failures, one green run.**
+(a) `publish-release` used the default depth-1 checkout; `git push` proves
+fast-forward client-side, so every publish after the ref-CREATING one was
+rejected with "fetch first" — `release` sat at #360 for three merges. Fixed:
+`fetch-depth: 0`. (b) `ssh_deploy`'s `timeout 900` is shorter than the
+pre-migration backup alone (~11 min on the 4GB box); the session was killed
+mid-apply and `verify()` blessed the still-healthy OLD deployment. Fixed:
+`timeout 1800`, matched to the pull unit's `TimeoutStartSec`. Residual hole,
+accepted and named: health-verify cannot distinguish "deploy succeeded" from
+"deploy never finished but yesterday's app is healthy" — only an
+identity-bearing health signal (commit SHA in `/health`) closes it.
+
 ```ini
 # /etc/systemd/system/acb-pull.service
 [Unit]

@@ -1,4 +1,36 @@
 {
+  "Kanban": {
+    "fluent": "board-20-regular",
+    "material": "view-kanban-rounded"
+  },
+  "IndianRupee": {
+    "fluent": "money-20-regular",
+    "material": "currency-rupee-rounded"
+  },
+  "UserCheck": {
+    "fluent": "person-available-20-regular",
+    "material": "how-to-reg-rounded"
+  },
+  "CircleAlert": {
+    "fluent": "error-circle-20-regular",
+    "material": "error-rounded"
+  },
+  "Ban": {
+    "fluent": "prohibited-20-regular",
+    "material": "block-rounded"
+  },
+  "Car": {
+    "fluent": "vehicle-car-20-regular",
+    "material": "directions-car-rounded"
+  },
+  "Flame": {
+    "fluent": "fire-20-regular",
+    "material": "local-fire-department-rounded"
+  },
+  "Siren": {
+    "fluent": "alert-urgent-20-regular",
+    "material": "emergency-rounded"
+  },
   "Loader2": {
     "fluent": "spinner-ios-20-regular",
     "material": "progress-activity-rounded"

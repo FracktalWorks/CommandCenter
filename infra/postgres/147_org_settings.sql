@@ -1,5 +1,5 @@
 -- ============================================================================
--- 145_org_settings.sql — organisation-wide preference blobs
+-- 147_org_settings.sql — organisation-wide preference blobs
 -- ============================================================================
 -- A generic key → JSON store for settings that belong to the ORGANISATION
 -- rather than to a person or a subsystem. First consumer is the theming

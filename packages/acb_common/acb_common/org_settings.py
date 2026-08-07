@@ -5,7 +5,7 @@ subsystem — currently the theming engine's default look (key ``appearance``),
 which decides what every member sees before choosing a theme for themselves.
 
 Blobs are JSON, keyed by setting name, in the ``org_settings`` Postgres table
-(migration ``145_org_settings.sql``). Storing them in Postgres rather than a
+(migration ``147_org_settings.sql``). Storing them in Postgres rather than a
 git-tracked file is the lesson of ``35_model_config.sql``: a config file is
 wiped by ``git reset --hard origin/main`` on every deploy, which is how hidden
 models kept reappearing. An org-wide theme reverting on deploy would be the

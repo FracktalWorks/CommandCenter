@@ -5,7 +5,7 @@ Two jobs here:
 1. The individual checks catch the mistakes the sandbox swallows silently
    (CSP-blocked CDN fetches, unknown ``cc-`` classes, kit blocks missing the
    custom property that makes them draw).
-2. A drift test parses ``SandboxedHtml.tsx`` and asserts the Python class
+2. A drift test parses ``sandbox-frame.ts`` and asserts the Python class
    registry matches the stylesheet exactly — so a new ``cc-`` block cannot be
    added to the CSS (or removed from it) without updating the linter.
 """
@@ -46,8 +46,13 @@ def _prepare(wa, monkeypatch, tmp_path) -> None:
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+#: The frame's stylesheet, which is the source of truth for the ``cc-`` class
+#: vocabulary. It moved out of ``components/SandboxedHtml.tsx`` when the frame
+#: builder was split from the React component (2026-08-07) — this path is the
+#: coupling, and pointing it at the wrong file makes the drift test vacuous
+#: rather than failing, so it is worth a comment.
 SANDBOX_TSX = (
-    REPO_ROOT / "workbench" / "control_plane" / "src" / "components" / "SandboxedHtml.tsx"
+    REPO_ROOT / "workbench" / "control_plane" / "src" / "lib" / "theme" / "sandbox-frame.ts"
 )
 
 
@@ -321,7 +326,7 @@ def test_emit_generative_ui_inline_card_needs_no_report_wrapper(monkeypatch) -> 
 # ── Drift guard: registry vs. the real stylesheet ──────────────────────────
 
 def test_registry_matches_sandbox_stylesheet() -> None:
-    """CC_CLASSES must equal the cc-* selectors SandboxedHtml.tsx actually defines."""
+    """CC_CLASSES must equal the cc-* selectors the sandbox frame actually defines."""
     assert SANDBOX_TSX.exists(), f"missing {SANDBOX_TSX}"
     source = SANDBOX_TSX.read_text(encoding="utf-8")
 
@@ -333,7 +338,7 @@ def test_registry_matches_sandbox_stylesheet() -> None:
 
     missing_from_registry = found - set(CC_CLASSES)
     assert not missing_from_registry, (
-        "SandboxedHtml.tsx defines cc- classes the linter does not know about "
+        "the sandbox frame defines cc- classes the linter does not know about "
         f"(they would be reported as unknown): {sorted(missing_from_registry)}"
     )
 

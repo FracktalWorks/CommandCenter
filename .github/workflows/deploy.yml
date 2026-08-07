@@ -131,7 +131,15 @@ jobs:
     permissions:
       contents: write
     steps:
+      # fetch-depth: 0, not the default shallow clone. `git push` proves the
+      # fast-forward CLIENT-side: with depth 1 the runner does not have the
+      # commit `release` currently points at, so every push after the one that
+      # CREATED the ref was rejected with "fetch first" — release sat at the
+      # first published commit (#360) while three merges deployed past it,
+      # and the box's pull path had nothing new to converge on.
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
 
       - name: Fast-forward release to this commit
         run: |
@@ -200,7 +208,14 @@ jobs:
           cp scripts/vps_apply.sh /tmp/deploy_remote.sh
 
           ssh_deploy() {
-            timeout 900 ssh \
+            # 1800s, matched to the pull unit's TimeoutStartSec. 900 was fatal
+            # in a way verify() cannot see: the pre-migration backup alone
+            # takes ~11 minutes on the 4GB box, so the session was killed
+            # MID-APPLY — migrations never ran, services never restarted —
+            # and verify() then blessed the still-running OLD deployment as
+            # green. A timeout kill is the one failure mode where "the app is
+            # healthy" says nothing about "the deploy happened".
+            timeout 1800 ssh \
               -i ~/.ssh/deploy_key -p "$SSH_PORT" \
               -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
               -o ConnectTimeout=30 -o ServerAliveInterval=15 \

@@ -28,6 +28,7 @@ import LostReasonModal from "./components/LostReasonModal";
 import PipelineSettings from "./components/PipelineSettings";
 import QuickCreateModal from "./components/QuickCreateModal";
 import RecordList from "./components/RecordList";
+import Reports from "./components/Reports";
 import RecordSheet from "./components/RecordSheet";
 import { boardTotals, needsLostReason, type DealMove } from "./lib/board";
 import { activeChip, applyChip, chipsFor } from "./lib/filters";
@@ -52,6 +53,7 @@ const TABS = [
   { id: "leads", label: "Leads" },
   { id: "contacts", label: "Contacts" },
   { id: "organizations", label: "Organizations" },
+  { id: "reports", label: "Reports", icon: "BarChart3" },
   { id: "settings", label: "Pipeline settings", icon: "Settings" },
 ];
 
@@ -94,9 +96,11 @@ function CrmPageInner() {
 
   useEffect(() => {
     if (view.tab === "board") store.loadBoard(view);
-    // ⚠️ `settings` is a tab and NOT a collection: `loadList("settings", …)`
-    // would request `/crm/settings` and empty the screen with a 404. The
-    // vocabulary it edits is loaded once, above.
+    // ⚠️ `settings` and `reports` are tabs and NOT collections:
+    // `loadList("settings", …)` would request `/crm/settings` and empty the
+    // screen with a 404. The vocabulary settings edits is loaded once, above;
+    // reports has four reads of its own.
+    else if (view.tab === "reports") store.loadReports(view);
     else if (isEntity(view.tab)) store.loadList(view.tab, view);
     // ⚠️ Every field `listQuery` reads has to be in this list, `sort`/`dir`
     // included: a filter the effect does not watch is a control that changes
@@ -125,6 +129,7 @@ function CrmPageInner() {
     // The settings tab's collection IS the vocabulary the whole app renders
     // from, so its re-read is the same call the page makes on mount.
     else if (view.tab === "settings") void store.loadVocabulary();
+    else if (view.tab === "reports") void store.loadReports(view);
     else if (listEntity) void store.loadList(listEntity, view);
   }
   const statusesFor = (entity: EntitySlug | null): Status[] =>
@@ -181,7 +186,9 @@ function CrmPageInner() {
                 `${totals.count} open deals · ${compactMoney(totals.amount)} in the pipeline · ${compactMoney(totals.weighted)} weighted`
               : view.tab === "settings"
                 ? "Stages, statuses and lost reasons — the pipeline is data, not a deploy"
-                : "Pipeline, leads and customers"}
+                : view.tab === "reports"
+                  ? "Forecast, funnel, win rate and who is carrying what"
+                  : "Pipeline, leads and customers"}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -192,7 +199,7 @@ function CrmPageInner() {
           >
             <Icon name="RefreshCw" className={`w-4 h-4 ${store.loading ? "animate-spin" : ""}`} />
           </button>
-          {view.tab !== "settings" && (
+          {view.tab !== "settings" && view.tab !== "reports" && (
             <button
               onClick={() => setCreating(listEntity ?? "deals")}
               className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 tech-transition sm:px-4"
@@ -242,6 +249,8 @@ function CrmPageInner() {
           onOpen={(id) => go(openRecord(view, "deal", id))}
           onCreate={() => setCreating("deals")}
         />
+      ) : view.tab === "reports" ? (
+        <Reports reports={store.reports} loading={store.loading} />
       ) : view.tab === "settings" ? (
         <PipelineSettings
           dealStatuses={store.dealStatuses}
@@ -260,7 +269,7 @@ function CrmPageInner() {
           onPullStages={store.pullZohoStages}
         />
       ) : (
-        // `listEntity` is non-null here by construction — the two branches
+        // `listEntity` is non-null here by construction — the three branches
         // above are the only tabs that are not a collection — but it is read
         // through the guard rather than cast, because the cast is what made
         // `?tab=settings` render a list of nothing on the way in.

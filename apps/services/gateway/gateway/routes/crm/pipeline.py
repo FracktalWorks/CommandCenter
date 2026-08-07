@@ -28,6 +28,7 @@ from gateway.routes.crm.core import (
     LEADS,
     MAX_PAGE_SIZE,
     ORGANIZATIONS,
+    WEIGHTED_SQL,
     WEIGHTED_TYPES,
     DealModel,
     Entity,
@@ -45,6 +46,7 @@ from gateway.routes.crm.core import (
     require_row,
     router,
     row_to_dict,
+    status_wire,
     update_row,
 )
 from pydantic import BaseModel
@@ -179,19 +181,13 @@ def _dwell_seconds(since: Any, changed_at: Any) -> int | None:
 
 
 # ── The board ───────────────────────────────────────────────────────────────
-
-#: The weighted-₹ aggregate, over the WHOLE lane like its two neighbours.
-#:
-#: It cannot be derived from ``rows``: those are capped at ``per_lane`` (50 by
-#: default, and the browser asks for no cap at all), so a rows-derived figure
-#: would silently under-report exactly the busy lane somebody is looking at.
-#: ``COALESCE(probability, :stage_probability)`` is §5.1's inheritance rule read
-#: at query time — the deal's own probability is what forecast math reads
-#: (D-CRM-10), and a NULL only survives on rows that predate a move.
-WEIGHTED_SQL = (
-    "COALESCE(SUM(amount * COALESCE(probability, :stage_probability) / 100.0), 0) "
-    "AS weighted"
-)
+#
+# ⚠️ ``WEIGHTED_SQL`` used to be defined here. It moved to ``core.py`` beside
+# ``WEIGHTED_TYPES`` when WS-26g's reports became its second consumer: the
+# formula is read out of the statement text by ``_crm_fakes._WEIGHTED_SUM_RE``
+# precisely so a drifted copy changes the tests' answer, and a second copy is
+# exactly what defeats that. It is still importable from this module (it is in
+# this namespace), so no existing caller had to move.
 
 
 class PipelineLane(BaseModel):
@@ -266,7 +262,7 @@ async def get_pipeline(
                 {**scope, "limit": per_lane},
             )).fetchall()
             out.append(PipelineLane(
-                status=StatusModel(**_status_wire(lane)),
+                status=status_wire(lane),
                 rows=[row_to_dict(r, DealModel) for r in rows],
                 count=int(getattr(agg, "count", 0) or 0),
                 amount=float(getattr(agg, "amount", 0) or 0),
@@ -282,18 +278,6 @@ async def get_pipeline(
         return PipelineResponse(lanes=out)
     finally:
         await db.close()
-
-
-def _status_wire(row: Any) -> dict[str, Any]:
-    return {
-        "id": str(row.id),
-        "name": row.name,
-        "color": getattr(row, "color", "gray") or "gray",
-        "position": int(getattr(row, "position", 0) or 0),
-        "type": getattr(row, "type", "open"),
-        "is_default": bool(getattr(row, "is_default", False)),
-        "probability": getattr(row, "probability", None),
-    }
 
 
 # ── Lead → deal conversion ──────────────────────────────────────────────────

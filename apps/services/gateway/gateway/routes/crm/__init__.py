@@ -28,6 +28,12 @@ pipeline repair that reads the tenant's real lane order out of Zoho's settings
 API. It is a sibling of ``import_zoho`` rather than part of it because it
 imports records nowhere: it rewrites native config, and its one deal-row write
 (the ``closed_at`` proxy) deliberately bypasses ``core.update_row``.
+
+``reports.py`` is WS-26g — the four read-only ``/crm/reports/*`` blocks
+(forecast by stage, funnel, win/loss, owner leaderboard) over
+``crm_status_changes`` and ``crm_deals``. It writes nothing and adds no
+migration; the weighted-₹ expression it shares with ``pipeline`` lives in
+``core.WEIGHTED_SQL`` so there is exactly one copy of the formula.
 """
 
 from gateway.routes.crm import activities as _activities  # noqa: F401
@@ -36,6 +42,7 @@ from gateway.routes.crm import deal_contacts as _deal_contacts  # noqa: F401
 from gateway.routes.crm import import_zoho as _import_zoho  # noqa: F401
 from gateway.routes.crm import pipeline as _pipeline  # noqa: F401
 from gateway.routes.crm import records as _records  # noqa: F401
+from gateway.routes.crm import reports as _reports  # noqa: F401
 from gateway.routes.crm import stage_metadata as _stage_metadata  # noqa: F401
 from gateway.routes.crm import sync_zoho as _sync_zoho  # noqa: F401
 from gateway.routes.crm.core import router

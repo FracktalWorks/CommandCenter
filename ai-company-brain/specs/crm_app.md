@@ -58,12 +58,37 @@
 > (`work_plan.md` §6) and has NOT been done**; the expected first outcome is `no_scope`,
 > because the tenant's refresh token was never minted with `ZohoCRM.settings.*` and
 > re-minting it is the owner's act. f2's grids are the fallback that needs no token at all.
-> · **WS-26g–h (forecast & funnel · stage discipline):
+> **26g** — 🟢 **BUILT 2026-08-07** (branch `ws-26g-reports`, **no migration** — 144's
+> `crm_status_changes` already carried every column this reads). `routes/crm/reports.py`
+> = four read-only endpoints on the shared gated router (`/crm/reports/{pipeline,funnel,
+> win-loss,owners}`); `?tab=reports` on the existing URL grammar with
+> `components/Reports.tsx` + pure `lib/reports.ts`. **`WEIGHTED_SQL` was lifted into
+> `core.py` beside `WEIGHTED_TYPES`** (`pipeline.py` still re-exports it) so the formula
+> has exactly one definition, and `core.status_wire` replaced the two hand-kept status
+> projections rather than becoming a third. **The cross-language parity mechanism is
+> minted, not inherited**: `tests/fixtures/crm_weighted_parity.json` (new directory) is
+> read by BOTH `tests/unit/test_crm_reports.py` — through the emitted SQL, whose
+> expression `_crm_fakes._WEIGHTED_SUM_RE` parses out of the statement text — and
+> `board.test.ts`, through `weightedDeal`/`weightedRows`. ⚠️ **The funnel is written for
+> what the log RECORDS**: "entered" is a visited-set union (`from_status`, `to_status`,
+> and the deal's current stage), because `crm_status_changes` logs transitions only and
+> all 551 imported deals have zero rows; dwell is grouped by **`from_status`**, the stage
+> being LEFT; renamed lanes orphan their history and are reported in `unmatched`, never
+> dropped; and NULL `closed_at` (every imported closed deal until f4's owner-gated
+> backfill runs) falls outside the trailing window and is counted separately so a 0% win
+> rate is explicable. Lost reasons carry a NAMED unattributed bucket — the earlier claim
+> that reason data is "complete by construction" is FALSE, because the importer bypasses
+> both gates. **No `GROUP BY` is emitted** (the ticket's deliberate choice): per-key
+> aggregates in `get_pipeline`'s shape, so the weighted expression stays the one the fake
+> reads. 47 hermetic cases + 20 vitest + the 14-row shared fixture on both sides; 5
+> mutants measured red. One fake-fidelity bug found and fixed on the way: `_crm_fakes`'
+> `lower(col) = :param` reader matched a NULL column, which SQL never does.
+> · **WS-26h (stage discipline):
 > 🟢 SPECCED 2026-08-07, dispatchable — §5.1 is the blueprint, trigger was the owner's
 > first live board session (lanes out of order, imported stages at 0% probability).
 > WS-26i (data management): 🟡 SPEC-THIN, audit-narrow before dispatch.
 > **DEMO CRITICAL PATH (owner-directed 2026-08-07, §9.0): ~~dispatch D1 f~~ (∥ D2 d-email) →
-> D3 g → D4 d-write → D5 d-autolead; h/i/e deferred past the demo. Full chain and all
+> ~~D3 g~~ → D4 d-write → D5 d-autolead; h/i/e deferred past the demo. Full chain and all
 > gates intact — the order re-sequences, it does not thin.**
 > · **Owner:** vjvarada · **Board row:** WS-26
 >
@@ -295,7 +320,7 @@ Modules and endpoints (all under `feature:crm` unless noted):
 
 | Module | Endpoints |
 |---|---|
-| `core.py` | router, engine import, models, `list_contract()` helper |
+| `core.py` | router, engine import, models, `list_contract()` helper. Also the two things every forecast surface shares, kept here so they have ONE definition: **`WEIGHTED_SQL`** (lifted out of `pipeline.py` at WS-26g when it gained a second consumer — `pipeline` re-exports it, so nothing that imported it from there had to move; a second copy would defeat `_crm_fakes._WEIGHTED_SUM_RE`, which reads the expression out of the statement text so a drifted formula changes the tests' answer) and **`status_wire`** (the status row→model projection, which `admin` and `pipeline` each had a private copy of; `reports` would have been the third). |
 | `records.py` | CRUD ×4: `GET/POST /crm/{leads,deals,contacts,organizations}`, `GET/PATCH/DELETE /crm/<entity>/{id}`. List contract: `q, sort, dir, page, page_size≤100`, per-entity filters (`status_id, owner, source`) → `{rows, total}`. Sort via **allowlist**, never interpolated (trycompai's `resolveOrderBy` rule). |
 | `pipeline.py` | `GET /crm/pipeline` (deals grouped by status: rows ordered per-lane, count + `SUM(amount)` + — WS-26f f3 — `weighted` per lane, all three aggregated over the WHOLE lane rather than the returned page) · `POST /crm/leads/{id}/convert` (§3.7) · status transition inside `PATCH` writes dwell log + activity + `status_changed_at` + probability default |
 | `activities.py` | `GET /crm/<entity>/{id}/timeline` (merged: activities ∪ status changes ∪ — Phase D — linked email threads; a deal's timeline unions its `lead_id`'s history, labeled) · `POST /crm/<entity>/{id}/activities` · `PATCH/DELETE /crm/activities/{aid}` (complete task, edit note) |
@@ -303,6 +328,7 @@ Modules and endpoints (all under `feature:crm` unless noted):
 | `admin.py` | `GET/POST/PATCH/DELETE /crm/statuses/{lead,deal}` + `/crm/lost-reasons` (reorder = PATCH `position`). Gated `feature:crm` (v1 decision D-CRM-3: the sales team manages its own pipeline; revisit when WS-24 admits colleague #1). `DELETE` on an in-use status → 409 (FK RESTRICT surfaces it). **WS-26f adds D-CRM-10's clamp to `_validate_status`**: probability outside 0-100 → 422, and a won-type lane that would not forecast 100 (or a lost-type one that would not forecast 0) → 422 naming the rule. It reads the state the write LEAVES — the row plus the payload — because `{"type": "won"}` alone and `{"probability": 40}` alone each contradict the rule only in combination with what is stored, so `patch_status` loads the row before validating. |
 | `import_zoho.py` | `POST /crm/import/zoho` — **gated `require_permission("admin:access:manage")`** (existing admin capability; minting nothing per `user_management_contract.md` §3). ⚠️ `integrations:use:zoho-crm` was the first choice and is **wrong**: `131_integration_memory_permissions.sql` grants `member` `integrations:use:*`, so under `permission_matches` every member would hold it — the code floor must be an admin capability; the §6 owner gate governs the *run* on top of it. §7.1. Also owns the Zoho→native **field mapping**, which `sync_zoho.py` imports rather than re-deriving. |
 | `stage_metadata.py` *(WS-26f)* | `POST /crm/import/zoho/stages` — the pipeline repair (§5.1 system 1), same `admin:access:manage` floor and the same reasoning: it rewrites the pipeline rather than a record. **Dry-run by default; `?apply=true` is the write and the registered owner gate (§6 (d)).** More than one pipeline STOPS the run before the database is opened (D-CRM-11). Also owns f4's `closed_at` proxy backfill, the one deal-row write in the package that deliberately **bypasses `core.update_row`** so it cannot dirty 500+ imported rows into the push queue. Reaches Zoho through `import_zoho._client()` — one seam, not two. |
+| `reports.py` *(WS-26g)* | `GET /crm/reports/{pipeline,funnel,win-loss,owners}` — the four forecast & funnel blocks (§5.1 system 2). **Read-only**: no write, no Zoho call, no flag, no migration. Reuses `core.WEIGHTED_SQL` rather than retyping it. Emits **no `GROUP BY`** — per-key aggregates in `pipeline.get_pipeline`'s shape, because the weighted expression binds the lane's own default as `:stage_probability`, and a grouped statement would have to reach that through a join and would stop being the expression the parity fixture and the test fake both read; the set-shaped questions (visited sets, medians, orphan names) read their rows and are answered in Python. Three data truths it is written FOR, each of which makes the naive query wrong: the log records **transitions only** (so "entered" is a visited-set union including the deal's current stage — a `to_status` count reports zero for all 551 imported deals), it stores **names not ids** and `entity_type` is the only thing saying which vocabulary they came from (renamed lanes are reported in `unmatched`, never dropped), and **`closed_at` is NULL on every imported closed deal** until f4's owner-gated backfill runs. |
 | `sync_zoho.py` | The two-way sync engine (§7.1's seven bullets) + `POST /crm/sync/zoho` (same `admin:access:manage` floor; runs one cycle **with or without** `CRM_ZOHO_SYNC`) + the gateway-lifespan loop, flag-gated. `execute_push` is the writer's only caller. |
 | `broker_handlers.py` | The Action-Broker gate every push crosses and the three `crm.zoho_*` handlers, registered from `main.py` exactly like `register_task_broker_handlers` (D-CRM-8). **Registers no routes** — deliberately not imported from `__init__.py`. |
 
@@ -344,6 +370,17 @@ module; also a flat `PANES` entry `/crm`) · `access.ts` `HREF_FEATURES` `["/crm
 4. **Convert modal** — resolves dedup interactively: pick matched contact/org or create new
    (§3.7's caller-chosen ids).
 5. **Quick-create modals** (~6 fields) per entity.
+6. **Pipeline settings** (`?tab=settings`, WS-26f f2) — three grids over the existing admin
+   API, plus the Zoho stage pull whose `?apply=true` is an owner gate.
+7. **Reports** (`?tab=reports`, WS-26g) — the four blocks of §5.1 system 2 rendered from
+   `/crm/reports/*`: forecast by stage, funnel, win/loss, owner leaderboard. Another tab on
+   the SAME URL grammar rather than a route, so the record sheet stays open across it
+   (`?tab=reports&deal=<id>` is a link somebody sends). ⚠️ **It computes nothing.** Every
+   figure is server-side and rendered verbatim; `lib/reports.ts` holds bar widths and the
+   wording only. The one formula that legitimately exists on both sides is `board.ts`'s
+   weighted ₹, and the shared fixture `tests/fixtures/crm_weighted_parity.json` is what
+   holds it to the SQL — read by pytest and vitest, because two independently typed tables
+   are not parity.
 
 Theming: Tailwind v4 semantic tokens (`bg-background`, `text-muted-foreground`, …), Lucide
 icon names as strings, `useViewMode()` for mobile. State: zustand store + pure helpers in
@@ -904,7 +941,7 @@ unknown sender becomes a lead on its own.
 |---|-------|----------|-----------|
 | D1 | **WS-26f** (incl. the new f4 backfill) — ✅ **BUILT 2026-08-07, not run** | The board is the demo's first screen; today it is the broken part. | — |
 | D2 | **WS-26d-email** | The "this is not a toy" moment. Disjoint files from D1 (`activities.py`/`Timeline.tsx` vs. importer/admin/settings). | ∥ with D1 |
-| D3 | **WS-26g** | The forecast number. **After D1** — f2 and the reports tab both extend the `page.tsx`/`urlState.ts` tab grammar, and two parallel PRs there is a needless conflict. | after D1 |
+| D3 | **WS-26g** — ✅ **BUILT 2026-08-07** (branch `ws-26g-reports`, no migration) | The forecast number. **After D1** — f2 and the reports tab both extend the `page.tsx`/`urlState.ts` tab grammar, and two parallel PRs there is a needless conflict. | after D1 |
 | D4 | **WS-26d-write** | The AI-creates-a-lead demo beat. Lives in `apps/agents/agent-crm/` — collides with nothing above. | ∥ with any |
 | D5 | **WS-26d-autolead** | Build whenever; the **flip is OWNER-GATE** and pushes real leads into Zoho (D-CRM-9) — demo it only if the owner wants that story told live. | ∥ with any |
 
@@ -1607,7 +1644,7 @@ Zoho tenant on the next cycle.
 **Tests:** `tests/unit/test_crm_stage_metadata.py` (new), `test_crm_routes.py` (clamps),
 vitest: `board.test.ts` (weighted math), settings-grid helpers colocated.
 
-### WS-26g — Forecast & funnel reports · 🟢 AGENT-SAFE
+### WS-26g — Forecast & funnel reports · ✅ **BUILT 2026-08-07** (branch `ws-26g-reports`, no migration)
 *(§5.1 system 2. The instrument has run since 26a — but read what it actually records:
 `crm_status_changes` logs TRANSITIONS only. Record creation writes no row
 (`records.py::create_record`) and the Zoho importer writes none either, so every
@@ -1677,6 +1714,45 @@ existing expression-reading style (or emit per-key queries in `get_pipeline`'s s
 accept the N+1 over 3.4k rows — pick deliberately and say which in the PR). Never
 hard-code an aggregation answer into the fake: that turns "fixture tests proving the
 math" into a mirror agreeing with itself.
+
+**As built (2026-08-07).** *The choice above was made: **per-key queries**, no `GROUP BY`
+reader added.* The weighted expression binds the LANE's own default as
+`:stage_probability`, so a grouped statement would have to reach that value through a
+join and would stop being the expression `_WEIGHTED_SUM_RE` reads — which is the whole
+mechanism that makes a drifted formula change the test's answer. The set-shaped questions
+(visited sets, medians, orphan names) read their rows and are answered in Python, where
+"a deal's visited set" is expressible at all. Cost: O(stages) + O(owners × stages) small
+aggregates over 551 rows, with the owner list capped at 25 and the remainder REPORTED.
+
+Endpoints: `GET /crm/reports/{pipeline,funnel,win-loss,owners}`, registered on the shared
+gated router. `WEIGHTED_SQL` moved to `core.py` beside `WEIGHTED_TYPES` (`pipeline.py`
+re-exports it); `core.status_wire` absorbed `admin`'s and `pipeline`'s duplicate status
+projections rather than gaining a third. `?tab=reports` extends `NON_ENTITY_TABS` and the
+`page.tsx` chain; `components/Reports.tsx` renders and `lib/reports.ts` holds the pure
+helpers.
+
+Two findings worth carrying forward:
+
+1. **The `entity_type = 'deal'` filter was not, at first, load-bearing** — the funnel keys
+   every set through deal ids, so a lead's log row (carrying a lead's `entity_id`) is
+   excluded twice over and the obvious mutant SURVIVED. `crm_status_changes.entity_id` has
+   **no foreign key** (144, so the log outlives the row), so the id space is not a
+   guarantee and a mis-stamped write is a live possibility. The behavioural test now seeds
+   a row stamped `lead` against a DEAL's id — the exact state the filter rejects — and the
+   mutant goes red with lead-vocabulary stage names appearing in the deal funnel's
+   `unmatched`. A statement-text assertion backs it up.
+2. **`_crm_fakes`' `lower(col) = :param` reader matched a NULL column**, which SQL never
+   does (`lower(NULL) = ''` is UNKNOWN, not true). It made the unassigned-owner bucket
+   count rows its own aggregate would never have summed. Fixed to SQL's semantics, which
+   is also why NULL and blank `owner_email` are two rows on the wire and one word
+   ("Unassigned") in the UI: the per-owner aggregate can bind `IS NULL` or
+   `lower(owner_email) = :owner` and not an OR, so folding them server-side would give a
+   row whose count came from one rule and whose ₹ came from another.
+
+**Mutants measured red:** the `entity_type` filter (a), `from_status` → `to_status` dwell
+grouping (b), the current-stage union term (c — the 551-imported-deals-report-zero case),
+the weighted formula's inner `COALESCE` in SQL *and* in `board.ts` (d, both parity halves),
+and silently dropping unmatched names (e).
 
 ### WS-26h — Stage discipline: entry requirements + rot · 🟢 AGENT-SAFE · after f2
 *(§5.1 system 3. The mechanism exists in miniature: lost-type moves already demand a

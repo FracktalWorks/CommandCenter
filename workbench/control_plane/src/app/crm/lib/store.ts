@@ -25,6 +25,7 @@ import {
 import { isEntity, type CrmView } from "./urlState";
 import type {
   Contact,
+  CrmReports,
   Deal,
   DealContact,
   EntitySlug,
@@ -52,6 +53,8 @@ type CrmState = {
   record: Record<string, unknown> | null;
   timeline: TimelineEntry[];
   dealContacts: DealContact[];
+  /** The four WS-26g report blocks, or null before the tab has been opened. */
+  reports: CrmReports | null;
   loading: boolean;
   saving: boolean;
   error: string | null;
@@ -71,6 +74,8 @@ type CrmState = {
   refreshCollection: () => Promise<void>;
   loadVocabulary: () => Promise<void>;
   loadBoard: (view: CrmView) => Promise<void>;
+  /** WS-26g — the reports tab's read. All four blocks, in one pass. */
+  loadReports: (view: CrmView) => Promise<void>;
   loadList: (entity: EntitySlug, view: CrmView) => Promise<void>;
   loadRecord: (entity: EntitySlug, id: string) => Promise<void>;
   loadDirectories: () => Promise<void>;
@@ -145,6 +150,7 @@ export const useCrmStore = create<CrmState>((set, get) => ({
   record: null,
   timeline: [],
   dealContacts: [],
+  reports: null,
   loading: false,
   saving: false,
   error: null,
@@ -156,6 +162,12 @@ export const useCrmStore = create<CrmState>((set, get) => ({
     const view = get().lastView;
     if (!view) return;
     if (view.tab === "board") await get().loadBoard(view);
+    // The reports tab has no writes of its own, but the record sheet opens
+    // OVER it (`?tab=reports&deal=<id>`) and moving a deal from there changes
+    // every number behind the sheet. The store's one rule — a write re-reads
+    // what is on screen — does not stop applying because the surface is a
+    // chart.
+    else if (view.tab === "reports") await get().loadReports(view);
     // `settings` is a tab with no collection behind it — its own writes
     // re-read the vocabulary directly. Falling through to `loadList` would
     // request `/crm/settings`.
@@ -182,6 +194,34 @@ export const useCrmStore = create<CrmState>((set, get) => ({
       set({ lanes: toBoardLanes(pipeline), error: null });
     } catch (err) {
       set({ error: message(err) });
+    } finally {
+      set({ loading: false });
+    }
+  },
+
+  async loadReports(view) {
+    // `lastView` like every other loader: `refreshCollection()` reads it to
+    // decide what is on screen, and a tab that does not record itself there
+    // is one a write silently fails to refresh.
+    set({ loading: true, lastView: view });
+    try {
+      // All four together: they are four independent GETs and the tab shows
+      // them on one screen, so serialising them would make the page assemble
+      // itself in front of the reader. `Promise.all` also means a single
+      // refusal surfaces once, with its own status, rather than four times.
+      const [pipeline, funnel, winLoss, owners] = await Promise.all([
+        api.getPipelineReport(),
+        api.getFunnelReport(),
+        api.getWinLossReport(),
+        api.getOwnerLeaderboard(),
+      ]);
+      set({ reports: { pipeline, funnel, winLoss, owners }, error: null });
+    } catch (err) {
+      // The stale payload is dropped rather than left on screen: a report that
+      // keeps rendering last week's numbers under a failed refresh is the same
+      // lie as a stale row after a 409, and it is worse here because nothing
+      // about a chart says how old it is.
+      set({ error: message(err), reports: null });
     } finally {
       set({ loading: false });
     }

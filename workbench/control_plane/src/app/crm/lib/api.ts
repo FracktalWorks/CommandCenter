@@ -18,15 +18,19 @@ import type {
   Deal,
   DealContact,
   EntitySlug,
+  FunnelReport,
   Lead,
   ListResponse,
   LostReason,
   Organization,
+  OwnerLeaderboard,
   Pipeline,
+  PipelineReport,
   StageMetadataReport,
   Status,
   StatusKind,
   TimelineEntry,
+  WinLossReport,
 } from "./types";
 
 export class CrmError extends Error {
@@ -221,6 +225,34 @@ export function importZohoStages(
     `/import/zoho/stages${apply ? "?apply=true" : ""}`,
     { method: "POST" }
   );
+}
+
+// ── Reports (WS-26g) ──────────────────────────────────────────────────────
+//
+// Four reads, not one bundled payload. They answer four different questions
+// off different tables, and bundling them would make the slowest one decide
+// when any of them renders — plus a single failure would blank the whole tab
+// instead of the block that could not be computed.
+//
+// All four are GET, take no parameters, and write nothing. The trailing window
+// is the server's constant (`reports.WINDOW_DAYS`) and travels back on the
+// payload so the surface can label the number it is showing rather than
+// assuming one.
+
+export function getPipelineReport(): Promise<PipelineReport> {
+  return call<PipelineReport>("/reports/pipeline");
+}
+
+export function getFunnelReport(): Promise<FunnelReport> {
+  return call<FunnelReport>("/reports/funnel");
+}
+
+export function getWinLossReport(): Promise<WinLossReport> {
+  return call<WinLossReport>("/reports/win-loss");
+}
+
+export function getOwnerLeaderboard(): Promise<OwnerLeaderboard> {
+  return call<OwnerLeaderboard>("/reports/owners");
 }
 
 // ── Timeline ──────────────────────────────────────────────────────────────

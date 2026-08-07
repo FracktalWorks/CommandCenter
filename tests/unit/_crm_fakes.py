@@ -754,7 +754,17 @@ class FakeCrmDB:
         for column, param in _LOWER_EQ.findall(where):
             seen = True
             want = str(args.get(param) or "").lower()
-            rows = [r for r in rows if str(r.get(column) or "").lower() == want]
+            # ⚠️ A NULL column never satisfies an equality — `lower(NULL) = ''`
+            # is UNKNOWN in SQL, not true. Coercing it to `""` first (which is
+            # what `r.get(column) or ""` did) made `lower(owner_email) = :owner`
+            # with an empty parameter match every unowned row, so a bucket
+            # counted rows its own aggregate would never have summed. Same rule
+            # the `_compare` helper below already follows.
+            rows = [
+                r for r in rows
+                if r.get(column) is not None
+                and str(r.get(column)).lower() == want
+            ]
         for column, param in _PLAIN_EQ.findall(where):
             seen = True
             rows = [r for r in rows if r.get(column) == args.get(param)]

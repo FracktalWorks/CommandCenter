@@ -30,7 +30,6 @@ Hermetic: statement-fingerprint double, no Postgres.
 from __future__ import annotations
 
 import asyncio
-import json
 import re
 from types import SimpleNamespace
 from typing import Any
@@ -122,12 +121,14 @@ class FakeDB:
                  items: list[Any] | None = None,
                  existing_projects: set[str] | None = None,
                  existing_tasks: set[str] | None = None,
-                 root: Any = None):
+                 root: Any = None,
+                 hierarchy: list[Any] | None = None):
         self.lists = lists or []
         self.items = items or []
         self.existing_projects = existing_projects or set()
         self.existing_tasks = existing_tasks or set()
         self.root = root
+        self.hierarchy = hierarchy
         self.statements: list[str] = []
         self.params: list[dict] = []
         self.inserts: list[tuple[str, dict]] = []
@@ -162,6 +163,11 @@ class FakeDB:
             )
         if "FROM pm_task_statuses WHERE project_id" in statement:
             return _Result([SimpleNamespace(id="lane-todo", name="To do")])
+        if "FROM task_accounts" in statement:
+            return _Result([SimpleNamespace(
+                schema_cache={"hierarchy": self.hierarchy}
+                if self.hierarchy is not None else None,
+            )])
         if "FROM gtd_projects p" in statement:
             return _Result(self.lists)
         if "FROM gtd_items i" in statement:
@@ -281,16 +287,74 @@ def test_a_second_run_reuses_the_same_department(bind):
     assert result["projects"]["already_present"] == 1
 
 
-def test_each_project_remembers_the_space_it_came_from(bind):
-    """What makes the department split a MOVE later rather than a re-import."""
-    db = bind(FakeDB(lists=[gtd_list()], items=[]))
+def test_the_clickup_space_and_folder_become_real_projects(bind):
+    """What makes the department split a MOVE later rather than a re-import —
+    and the claim the first version of this file got WRONG twice.
+
+    It read `gtd_projects.space_id`, which migration 60 defines as LOCAL-only
+    and which is therefore always NULL on the synced rows here; and it wrote the
+    result into a `clickup_snapshot` column that `pm_projects` does not have, so
+    the very first real run would have 500'd. Postgres found both; the fake
+    could not, because a fake accepts any column.
+
+    The placement comes from `task_accounts.schema_cache->'hierarchy'`, and the
+    tree itself records it: a Space and a Folder are projects carrying their own
+    `clickup_id` and `clickup_kind`.
+    """
+    db = bind(FakeDB(
+        lists=[gtd_list()], items=[],
+        hierarchy=[{
+            "id": "cu-space-eng", "name": "Engineering",
+            "folders": [{"id": "cu-folder-hw", "name": "Hardware",
+                         "lists": [{"id": "cu-list-1", "name": "Firmware"}]}],
+            "lists": [],
+        }],
+    ))
     run(go())
-    child = next(p for p in db.inserted_into("pm_projects") if p.get("clickup_id"))
-    assert child["clickup_id"] == "cu-list-1"
-    assert child["clickup_kind"] == "list"
-    # `_bindable` JSON-encodes JSONB values on the way to the driver, so the
-    # bound parameter is a string — asserted as sent rather than as authored.
-    assert json.loads(child["clickup_snapshot"])["space_id"] == "cu-space-1"
+    written = db.inserted_into("pm_projects")
+    kinds = {p.get("clickup_kind"): p for p in written if p.get("clickup_kind")}
+    assert set(kinds) == {"space", "folder", "list"}
+    assert kinds["space"]["name"] == "Engineering"
+    assert kinds["space"]["clickup_id"] == "cu-space-eng"
+    assert kinds["folder"]["name"] == "Hardware"
+    assert kinds["list"]["clickup_id"] == "cu-list-1"
+    # Nothing writes a column pm_projects does not have.
+    assert all("clickup_snapshot" not in p for p in written)
+
+
+def test_a_list_with_no_hierarchy_entry_still_lands_under_the_department(bind):
+    """The cache can be stale or absent. Dropping the list would lose real
+    work; parking it directly under the department loses only its nesting."""
+    db = bind(FakeDB(lists=[gtd_list()], items=[], hierarchy=[]))
+    run(go())
+    written = db.inserted_into("pm_projects")
+    assert not [p for p in written if p.get("clickup_kind") in ("space", "folder")]
+    assert [p for p in written if p.get("clickup_kind") == "list"]
+
+
+def test_index_hierarchy_places_lists_under_space_and_folder():
+    from gateway.routes.projects.import_tasks import index_hierarchy
+
+    index = index_hierarchy([{
+        "id": "s1", "name": "Engineering",
+        "lists": [{"id": "l1", "name": "Firmware"}],
+        "folders": [{"id": "f1", "name": "Hardware",
+                     "lists": [{"id": "l2", "name": "Enclosure"}]}],
+    }])
+    assert index["l1"] == {
+        "space_id": "s1", "space_name": "Engineering",
+        "folder_id": None, "folder_name": None,
+    }
+    assert index["l2"]["folder_id"] == "f1"
+    assert index["l2"]["space_id"] == "s1"
+
+
+def test_index_hierarchy_survives_a_malformed_cache():
+    """It is a cache written by another app; a bad row must not 500 the import."""
+    from gateway.routes.projects.import_tasks import index_hierarchy
+
+    assert index_hierarchy(None) == {}
+    assert index_hierarchy(["nonsense", {"id": "s1", "lists": ["nope", {}]}]) == {}
 
 
 # ── Idempotency ────────────────────────────────────────────────────────────
@@ -407,6 +471,27 @@ def test_a_dry_run_over_an_ALREADY_IMPORTED_workspace_still_writes_nothing(bind)
     # button that tells you nothing.
     assert result["tasks"]["created"] == 1
     assert result["projects"]["created"] == 1
+
+
+def test_the_preview_counts_the_space_and_folder_nodes_it_would_create(bind):
+    """The preview must agree with the run. It said "4 projects" against a real
+    Postgres where the run then made 7, because the Space and Folder nodes were
+    only counted on the write path — a number somebody would have read out loud
+    during a demo."""
+    hierarchy = [{
+        "id": "cu-space-eng", "name": "Engineering",
+        "folders": [{"id": "cu-folder-hw", "name": "Hardware",
+                     "lists": [{"id": "cu-list-1", "name": "Firmware"}]}],
+        "lists": [],
+    }]
+    preview = bind(FakeDB(lists=[gtd_list()], items=[], hierarchy=hierarchy))
+    dry = run(go(dry_run=True))
+    assert preview.inserts == []
+    real = bind(FakeDB(lists=[gtd_list()], items=[], hierarchy=hierarchy))
+    wet = run(go())
+    assert dry["projects"]["created"] == wet["projects"]["created"]
+    # …and it is really 4: department + Space + Folder + List.
+    assert wet["projects"]["created"] == 4
 
 
 def test_a_dry_run_does_not_commit(bind):

@@ -61,12 +61,15 @@
 > re-anchor need. **Nothing has been flipped and nothing has been deployed** —
 > the flip stays OWNER-GATE (`work_plan.md` §6 (b)), and while the flag is off
 > this changes no runtime behaviour at all. Tests:
-> `tests/unit/test_crm_auto_lead.py` (73 cases); thirteen mutants run red and
-> reverted. ⚠️ **One diff-review round landed on this branch** and closed two
-> P1s that only a running cursor would have shown: an OFF→ON round trip minted
-> the whole OFF window (27 leads measured), and a single failure advanced the
-> cursor over every candidate behind it (3 leads lost, measured). See the
-> ticket's done-when 8 and 9.
+> `tests/unit/test_crm_auto_lead.py` (75 cases); fifteen mutants run red and
+> reverted. ⚠️ **Two review rounds landed on this branch.** The first closed two P1s
+> that only a running cursor would have shown: an OFF→ON round trip minted the
+> whole OFF window (27 leads measured), and a single failure advanced the
+> cursor over every candidate behind it (3 leads lost, measured). The second
+> closed a P1 the FIRST FIX introduced — the re-anchor reset the anchor to
+> `now` and returned early, which discarded the very message that woke the
+> step, every night and every weekend; it now clamps to `now - 1h` and runs the
+> batch. See the ticket's done-when 8 and 9.
 > · **WS-26e: 🟡 SPEC, nothing built.**
 > **26f** — 🟢 **MERGED + DEPLOYED 2026-08-07 (PR #391), NOT RUN against the tenant.** f1
 > `POST /crm/import/zoho/stages` (`routes/crm/stage_metadata.py`, floor
@@ -1457,7 +1460,7 @@ Frontend: extend the existing CRM vitest for the third `kind`.
 >   import sits INSIDE the `try`, so a `routes/crm` module that fails to import
 >   is logged on `sync.auto_lead_failed` like any other CRM failure rather than
 >   raised out of the mail path.
-> * `tests/unit/test_crm_auto_lead.py` — **73 cases**, each done-when named in
+> * `tests/unit/test_crm_auto_lead.py` — **75 cases**, each done-when named in
 >   a test. `tests/unit/_crm_fakes.py` gained two readers and one capability:
 >   `@>` jsonb containment and the case-folding
 >   `EXISTS (… jsonb_array_elements …)` form (each needed because a probe the
@@ -1466,13 +1469,15 @@ Frontend: extend the existing CRM vitest for the third `kind`.
 >   reader misreads its inner comparison), plus `fail_on(..., after=N)`,
 >   because *where* in a batch a failure lands is the whole property under
 >   test in done-when 9.
-> * **Thirteen mutants run red and were reverted** (seven pre-review, six more
->   for the repair round): the flag check · the `received_at > activated_at`
+> * **Fifteen mutants run red and were reverted** (seven pre-review, six for
+>   the repair round, two more for the delta re-review): the flag check · the `received_at > activated_at`
 >   predicate · the watermark advance · the internal-domain second gate ·
 >   `type='system'` · the service write path · in-batch dedup · the dormancy
 >   re-anchor · the prefix-only advance · the stall WARNING (demoted to INFO) ·
 >   the case-folding Sent probe · suffix-aware internal domains · the
->   `last_run_at` stamp on a quiet cycle. The Sent-probe mutant is additionally
+>   `last_run_at` stamp on a quiet cycle · the anchor CLAMP (reset to `now`) ·
+>   the early return that discarded the triggering batch. The Sent-probe mutant
+>   is additionally
 >   checked for PRECISION: reverting it must NOT redden the lower-case
 >   already-emailed case, or the mutant broke the probe rather than narrowing
 >   it.
@@ -1508,21 +1513,22 @@ Frontend: extend the existing CRM vitest for the third `kind`.
 >    even activated.** `actor()` would attribute the lead to `"anonymous"`,
 >    and a lead that is nobody's follow-up and that the `owner` filter cannot
 >    match is worse than no lead.
-> 6. ⚠️ **Dormancy is measured on a THIRD column, `last_run_at`, not on
->    `processed_watermark`** — a deliberate departure from the shape the P1-1
->    ruling prescribed, because the watermark tracks MAIL rather than runs and
->    the literal version has two production failures. (a) A mailbox that is
->    merely quiet over a weekend carries a 60-hour-old watermark while the step
->    has run every 600s, so it would be re-anchored and **Monday's first
->    message — the one this feature exists to catch — would fall before the new
->    anchor and mint nothing. Every Monday.** (b) A poison head message holds
->    the watermark still ON PURPOSE (decision 3); a watermark-based test would
->    re-anchor past it after an hour and silently undo the stall that was
->    supposed to stay visible. `last_run_at` is stamped on every cycle
->    including empty and stalled ones, so "quiet" and "not running" stay
->    different facts. The ruling's constant (3600s), log key
->    (`sync.auto_lead_reanchored`) and behaviour on a real OFF window or outage
->    are unchanged.
+> 6. ⚠️ **The re-anchor CLAMPS `activated_at` to `now - REANCHOR_GAP_SECONDS`
+>    and runs the batch anyway** — it does not stamp `now`, and it does not
+>    return early. Corrected in the delta re-review after the first fix shipped
+>    a P1 regression of its own: this step is invoked only when a sync
+>    PERSISTED mail (`email_ingestion/scheduler.py:463-472`), never once per
+>    period, so the cycle that trips dormancy is always the cycle carrying the
+>    message that woke it — and resetting the anchor excluded that message
+>    permanently, every night and every weekend. **The premise the earlier
+>    version of this note gave for the third column was false** (it claimed the
+>    step runs every 600s on a quiet mailbox; it does not run at all).
+>    `last_run_at` is still the right clock, for the narrower reason recorded in
+>    the cursor paragraph, and it is stamped on every cycle including empty and
+>    stalled ones. The ruling's constant (3600s), log key
+>    (`sync.auto_lead_reanchored`) and fail-closed behaviour on a genuine OFF
+>    window are unchanged; the accepted residual — the last gap-width of the
+>    window is minted — is recorded there and in §6 (b).
 > 7. **Both attacker-controlled strings are clipped** (`MAX_NAME_CHARS` 120,
 >    `MAX_SUBJECT_CHARS` 500, with a `…` marker). Nothing upstream bounds
 >    either: a display name is whatever the sending server put in the header,
@@ -1579,10 +1585,13 @@ The step therefore keeps a **per-account three-timestamp cursor** in a new table
   (`rules_processed_at IS NOT NULL`, `rules_held_back_at IS NULL`) with
   `rules_processed_at > processed_watermark`.
 - `last_run_at` — when the step last RAN, stamped on **every** cycle including the ones
-  that considered nothing. This is the dormancy clock, and it is a third column rather
-  than a reading of the second because the watermark tracks MAIL: a mailbox that is
-  merely quiet over a weekend has a 60-hour-old watermark while the step has run
-  faithfully every cycle.
+  that considered nothing. This is the dormancy clock. ⚠️ It is a third column rather
+  than a reading of the second for a narrower reason than first claimed: BOTH freeze on
+  a mailbox that receives nothing, because the hook does not fire at all without new
+  mail. What separates them is a cycle that ran and found no *candidates* — mail outside
+  the inbox, held back, or predating the anchor — which advances `last_run_at` and not
+  the watermark; and that is also the state a deliberate stall holds the watermark in,
+  so keying dormancy on the watermark would re-anchor past a stall and quietly undo it.
 
 **Re-anchoring, and why "set ONCE" was wrong (2026-08-08 diff review, P1-1).**
 `activated_at` alone guards a deep resync and does nothing about a flag that was on,
@@ -1590,11 +1599,31 @@ turned OFF for four weeks, and turned back on: the cursor still carries the old 
 so the first ON cycle mints the whole OFF window in one batch — **measured at 27 leads
 for a 27-day window**, each pushing unattended into the live tenant. So when an
 ON-state cycle finds `now - last_run_at > REANCHOR_GAP_SECONDS` (a named constant,
-3600 — six scheduler periods), it **re-stamps all three timestamps to now**, mints
-nothing from the gap, and logs `sync.auto_lead_reanchored` with `gap_seconds`.
-Fail-closed in both directions — an OFF window and a real outage each skip their
-backlog. A missed lead is hand-creatable and visible in the mailbox; 27 unattended
-pushes into the live tenant are neither.
+3600), it **clamps `activated_at` forward to `now - REANCHOR_GAP_SECONDS`**, logs
+`sync.auto_lead_reanchored` with `gap_seconds`, and **runs the batch normally**.
+
+⚠️ **CLAMP, never reset — and never discard the triggering batch** (2026-08-08 delta
+re-review; the first fix stamped `now` and returned early, which was a P1 regression in
+its own right). **This step is not invoked once per scheduler period.**
+`email_ingestion/scheduler.py:463-472` reads `synced` off the sync result and fires the
+hook **only when mail was actually persisted**, so a mailbox with no new mail does not
+run this step at all — which means the cycle that trips the dormancy test is *always*
+the cycle carrying the message that woke it. Measured: no mail 22:00→07:30, a cold
+prospect writes at 07:30:50, the sync persists it, the step runs at 07:31:05, and a
+reset-to-`now` anchor excluded that message **permanently — every night and every
+weekend**. Clamping keeps the fail-closed property that matters (anything received
+longer ago than the gap width stays excluded, so a real OFF window or multi-day outage
+still mints nothing from its backlog) while admitting everything received inside the
+last hour, which is where the triggering message always is. The watermark is NOT
+touched on re-anchor: OFF-window mail is excluded by the anchor predicate whatever its
+`rules_processed_at` says, and moving it would skip the triggering batch a second way.
+
+**Documented residual, accepted:** mail received in the final `REANCHOR_GAP_SECONDS` of
+an OFF window IS minted when the flag comes back on. It is bounded — one gap width, and
+at most one capped batch of it — and it is the deliberate price of never dropping the
+message that woke the step. A named test asserts it as the bound rather than leaving it
+to be discovered. Fail-closed otherwise: a missed lead is hand-creatable and visible in
+the mailbox; 27 unattended pushes into the live tenant are neither.
 
 **A failure never advances the cursor past lost work (2026-08-08 diff review, P1-2).**
 The watermark advances to the max `rules_processed_at` of the **contiguous prefix of
@@ -1696,10 +1725,14 @@ real prospect's leads, which is the same damage in the other direction.
    the test seeds a year-old classified backlog and runs the ON-state hook against it.
 8. **An OFF→ON round trip mints nothing from the OFF window** (added 2026-08-08, P1-1):
    the hook run against an account whose cursor was anchored weeks ago and whose
-   `last_run_at` is stale creates zero leads and re-anchors the cursor — seed a stale
-   cursor plus a backlog. Its control is named too: a mailbox that is merely QUIET but
-   still running is never re-anchored, because re-anchoring it would drop the first
-   message to arrive after the quiet spell — the one this feature exists to catch.
+   `last_run_at` is stale creates zero leads and re-anchors the cursor. ⚠️ Its
+   counterpart is equally named and equally load-bearing: **the message that WOKE the
+   step is minted, not discarded** — an overnight lull expressed the way the scheduler
+   produces it (the step simply not called), then a message arrives and IS turned into a
+   lead in the same cycle that re-anchors. Neither test may seed `last_run_at` by hand:
+   a stale value the scheduler cannot produce is a test green on fiction, which is
+   exactly how the first fix shipped its regression. The residual is asserted too — mail
+   from the last gap-width of the OFF window is minted, deliberately and boundedly.
 9. **A failure never advances the cursor past lost work** (added 2026-08-08, P1-2):
    a batch of `[ok, raise, ok]` leaves the watermark at the FIRST message's stamp, the
    next cycle re-considers messages 2 and 3, and a cycle whose watermark did not move

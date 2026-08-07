@@ -44,9 +44,13 @@ real damage rather than merely be wrong:
    * ``processed_watermark`` — the incremental cursor over
      ``rules_processed_at``.
    * ``last_run_at`` — when this step last RAN. It is what detects dormancy,
-     and it is a separate column because the watermark cannot answer that
-     question: a quiet mailbox has a watermark hours old while the step has
-     been running faithfully every cycle. See :func:`_reanchor_if_dormant`.
+     and on a gap it CLAMPS ``activated_at`` forward to
+     ``now - REANCHOR_GAP_SECONDS`` rather than resetting it, so the OFF/outage
+     backlog stays excluded while the message that woke the step survives.
+     ⚠️ The step is invoked only when a sync PERSISTED mail
+     (``email_ingestion/scheduler.py:463-472``), never once per period, so this
+     column trips overnight and over weekends routinely — which is why
+     re-anchoring has to be cheap. See :func:`_reanchor_if_dormant`.
 
    Without the first, connecting a second mailbox mints a lead per unknown
    sender in a year of mail — each born ``zoho_dirty`` and queued for the live
@@ -91,7 +95,7 @@ not add it.
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from acb_auth import UserContext, UserRole
@@ -123,16 +127,27 @@ from sqlalchemy import text
 #: reads as "covered everything".
 MAX_CANDIDATES_PER_CYCLE = 200
 
-#: How long a gap in this step's own RUNS means the ON epoch ended.
-#: Six scheduler periods at the 600s sync interval, so an ordinary slow cycle,
-#: a restart or a single missed poll can never trip it.
+#: How long a gap in this step's own RUNS means the ON epoch ended — and,
+#: because the anchor is CLAMPED to it rather than reset, also how much recent
+#: mail survives that gap.
 #:
-#: ⚠️ This is the OFF→ON guard and it is not optional. ``activated_at`` alone
-#: stops a deep resync, but it does nothing about a flag that was on, turned
-#: off for four weeks, and turned back on: the cursor still carries day-1's
-#: anchor, so the first ON cycle would mint the entire OFF window in one batch
-#: — measured at 27 leads for a 27-day window, each pushing unattended into the
-#: live tenant. Re-anchoring makes the anchor mean "the current ON epoch".
+#: ⚠️ **This is not "six scheduler periods".** The step does not run once per
+#: period: ``email_ingestion/scheduler.py:463-472`` fires the hook only when a
+#: sync actually persisted mail, so a quiet mailbox does not run it at all.
+#: What this measures is therefore "how long since mail last arrived AND was
+#: processed", which on a real mailbox means it trips overnight and over
+#: weekends as a matter of course. That is precisely why the re-anchor clamps
+#: instead of resetting: tripping has to be cheap, because it is routine.
+#:
+#: One hour is the trade. Larger admits more of a genuine OFF window's backlog;
+#: smaller starts excluding mail that arrived during an ordinary evening lull
+#: just before the message that woke the step.
+#:
+#: The guard itself is not optional: ``activated_at`` alone stops a deep
+#: resync, but it does nothing about a flag that was on, turned off for four
+#: weeks, and turned back on — the cursor still carries day-1's anchor, so the
+#: first ON cycle would mint the entire OFF window in one batch, measured at 27
+#: leads for a 27-day window, each pushing unattended into the live tenant.
 REANCHOR_GAP_SECONDS = 3600
 
 #: The activity ``type`` the originating message is logged as. **Not 'note'.**
@@ -262,10 +277,12 @@ async def create_leads_from_new_mail(account_id: str) -> dict[str, int]:
         cursor = await _load_or_activate_cursor(db, account_id)
         if cursor is None:  # pragma: no cover — the row was just written
             return stats
-        if await _reanchor_if_dormant(db, account_id, cursor):
-            stats["reanchored"] = 1
-            _emit(account_id, stats)
-            return stats
+        cursor, reanchored = await _reanchor_if_dormant(db, account_id, cursor)
+        stats["reanchored"] = int(reanchored)
+        # ⚠️ NO early return here, and that is the whole correction. This step
+        # is only ever invoked because a sync PERSISTED mail, so the batch that
+        # tripped the dormancy test is the batch containing the message that
+        # woke it up. Returning early discarded exactly that message, forever.
         await _run_batch(db, account, cursor, stats)
         _emit(account_id, stats)
         return stats
@@ -393,50 +410,79 @@ def _aware(value: Any) -> datetime:
     return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
 
 
-async def _reanchor_if_dormant(db: Any, account_id: str, cursor: Any) -> bool:
-    """Did this step stop running? Then the ON epoch ended; start a new one.
+async def _reanchor_if_dormant(
+    db: Any, account_id: str, cursor: Any,
+) -> tuple[Any, bool]:
+    """Did this step stop running? Then CLAMP the epoch — never reset it.
 
     ``activated_at`` guards a deep RESYNC. It does nothing about a flag that
     was on, turned off for four weeks and turned back on — the cursor still
-    carries the old anchor, so the first ON cycle mints the whole OFF window
-    at once, unattended, into a live tenant. Re-anchoring is what makes
-    ``activated_at`` mean *the current ON epoch* rather than *the first time
-    anyone ever enabled this*.
+    carries the old anchor, so the first ON cycle would mint the whole OFF
+    window at once, unattended, into a live tenant (27 leads, measured).
 
-    ⚠️ **Dormancy is measured on ``last_run_at``, not on
-    ``processed_watermark``** — a deliberate departure from the shape first
-    prescribed, for two reasons that both bite in production:
+    **The anchor is clamped to ``now - REANCHOR_GAP_SECONDS``, not set to
+    ``now``, and the batch still runs.** Both halves of that are load-bearing,
+    and the first version of this function got both wrong for the same reason:
+    it assumed the step is invoked once per scheduler period. **It is not.**
+    ``email_ingestion/scheduler.py:463-472`` reads ``synced`` off the sync
+    result and calls the hook **only when mail was actually persisted**, so a
+    mailbox with no new mail does not run this step at all — which means the
+    cycle that trips the dormancy test is *always* the cycle carrying the
+    message that woke it. Resetting the anchor to ``now`` and returning early
+    therefore excluded that message permanently: no mail 22:00→07:30, a cold
+    prospect writes at 07:30:50, the step runs at 07:31:05, and the one lead it
+    existed to catch fell a quarter-minute the wrong side of its own anchor.
+    Every night, every weekend.
 
-    * the watermark tracks MAIL, not runs. A mailbox that is simply quiet over
-      a weekend has a watermark 60 hours old while this step has run faithfully
-      every 600s, so a watermark-based test re-anchors it and the first message
-      to arrive on Monday — the one this whole feature exists to catch — falls
-      before the new anchor and mints nothing. Every Monday.
-    * a genuinely poison head message holds the watermark still ON PURPOSE
-      (property 5). A watermark-based test would then re-anchor after an hour
-      and skip the very backlog the stall was protecting, quietly undoing the
-      stall it was supposed to make visible.
+    Clamping keeps the fail-closed property that matters — anything received
+    longer ago than the gap width stays excluded, so a real OFF window or a
+    multi-day outage still mints nothing from its backlog — while admitting
+    everything received inside the last ``REANCHOR_GAP_SECONDS``, which is
+    where the triggering message always is.
 
-    Both directions fail closed: an OFF window and a real outage each skip
-    their backlog. A missed lead is hand-creatable and visible in the mailbox;
-    27 unattended pushes into the live Zoho tenant are neither.
+    ⚠️ **Documented residual:** mail received in the final hour of an OFF
+    window IS minted when the flag comes back on. It is bounded (one gap width,
+    and at most one capped batch of it) and it is the deliberate price of never
+    dropping the message that woke the step. `crm_app.md` §9 records it and
+    ``work_plan.md`` §6 (b) tells the owner about it before they flip.
+
+    ``last_run_at`` rather than ``processed_watermark`` is still the clock
+    here, but the honest reason is narrower than first claimed: both freeze on
+    a mailbox that receives nothing, since neither advances when the hook never
+    fires. What separates them is a cycle that ran and found no *candidates* —
+    mail that landed outside the inbox, or was held back, or predates the
+    anchor. That cycle advances ``last_run_at`` and not the watermark, and it
+    is also exactly the state a deliberate stall (property 5) holds the
+    watermark in; keying dormancy on the watermark would re-anchor past a stall
+    after an hour and quietly undo it.
+
+    Returns the cursor to run the batch against — re-read, because the anchor
+    it carries has just changed.
     """
     gap = (now() - _aware(cursor.last_run_at)).total_seconds()
     if gap <= REANCHOR_GAP_SECONDS:
-        return False
-    at = now()
+        return cursor, False
+    # `max` is a floor, not arithmetic: inside this branch `last_run_at` is
+    # always older than the window, so it resolves to the window's start. It
+    # exists so a clock that jumped backwards cannot move the anchor EARLIER
+    # than the last known-good run and re-admit history.
+    anchor = max(
+        _aware(cursor.last_run_at),
+        now() - timedelta(seconds=REANCHOR_GAP_SECONDS),
+    )
     await db.execute(text(
         "UPDATE crm_auto_lead_cursors "
-        "SET activated_at = :activated_at, "
-        "processed_watermark = :processed_watermark, "
-        "last_run_at = :last_run_at, updated_at = now() "
+        "SET activated_at = :activated_at, updated_at = now() "
         "WHERE account_id = :account_id"
-    ), {"account_id": account_id, "activated_at": at,
-        "processed_watermark": at, "last_run_at": at})
+    ), {"account_id": account_id, "activated_at": anchor})
     await db.commit()
+    # The watermark is deliberately NOT touched: OFF-window mail is excluded by
+    # the anchor predicate whatever its `rules_processed_at` says, and moving
+    # the watermark forward here would skip the triggering batch a second way.
     _log.warning("sync.auto_lead_reanchored", account_id=account_id,
-                 gap_seconds=int(gap), threshold_seconds=REANCHOR_GAP_SECONDS)
-    return True
+                 gap_seconds=int(gap), threshold_seconds=REANCHOR_GAP_SECONDS,
+                 anchored_at=anchor.isoformat())
+    return await _read_cursor(db, account_id), True
 
 
 async def _stamp_cursor(

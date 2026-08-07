@@ -136,6 +136,36 @@ def log(monkeypatch: pytest.MonkeyPatch) -> _Log:
     return recorder
 
 
+class _Clock:
+    """A movable clock for the step's ``now()``.
+
+    The dormancy tests are about ELAPSED TIME BETWEEN INVOCATIONS, and the
+    honest way to express "nine hours passed and the step was never called" is
+    to move the clock and not call it — not to hand-seed a ``last_run_at`` the
+    scheduler could never have produced. The first version of these tests did
+    exactly that and was green on a state that cannot occur.
+    """
+
+    def __init__(self, start: datetime) -> None:
+        self.at = start
+
+    def __call__(self) -> datetime:
+        return self.at
+
+    def advance(self, **delta: float) -> datetime:
+        self.at = self.at + timedelta(**delta)
+        return self.at
+
+
+@pytest.fixture
+def clock(monkeypatch: pytest.MonkeyPatch) -> _Clock:
+    """Starts at 22:00 — the beginning of the overnight lull these tests are
+    about."""
+    movable = _Clock(datetime(2026, 8, 7, 22, 0, tzinfo=UTC))
+    monkeypatch.setattr(auto_lead, "now", movable)
+    return movable
+
+
 @pytest.fixture
 def quiet_pipeline(monkeypatch: pytest.MonkeyPatch) -> None:
     """Silence the five mail steps ``process_new_mail`` runs before ours.
@@ -1110,26 +1140,104 @@ def test_the_module_registers_no_routes() -> None:
 
 # ── done-when 8: an OFF→ON round trip mints nothing from the OFF window ─────
 
-async def test_dw8_an_off_then_on_round_trip_mints_nothing_from_the_gap(
-    db: FakeCrmDB, on: None, log: _Log,
+async def test_dw8_the_first_message_after_an_overnight_lull_is_minted(
+    db: FakeCrmDB, on: None, log: _Log, clock: _Clock,
 ) -> None:
-    """The hole ``activated_at`` alone does NOT cover.
+    """The regression the CLAMP exists to prevent, in its real shape.
 
-    Flag on day 1 (cursor anchored), off days 2-29, on again day 30. Nothing
-    about the cursor changed while the flag was off, so the anchor still says
-    day 1 and every message in the OFF window passes both predicates — the
-    first ON cycle mints the entire four-week backlog in one batch, each lead
-    pushing unattended into the live tenant. Re-anchoring on dormancy is what
-    makes ``activated_at`` mean *the current ON epoch*.
+    ⚠️ This step is NOT invoked once per scheduler period.
+    ``email_ingestion/scheduler.py:463-472`` reads ``synced`` off the sync
+    result and fires the hook **only when mail was actually persisted**, so a
+    mailbox with no new mail does not run it at all. Which means the cycle
+    that trips the dormancy test is ALWAYS the cycle carrying the message that
+    woke it — and a re-anchor that stamped ``now`` and returned early excluded
+    exactly that message, permanently, every night and every weekend.
+
+    So the lull below is expressed the way the scheduler produces it: by NOT
+    CALLING the step. Nothing about ``last_run_at`` is hand-seeded.
     """
     _seed_account(db)
     _seed_status(db)
-    _seed_cursor(db, activated_at=_at(1), watermark=_at(1),
-                 last_run_at=_at(1, 10))  # the last cycle before the flag went off
+
+    # 22:00 — a sync persisted mail, the step runs, the cursor is activated.
+    await auto_lead.create_leads_from_new_mail(ACCOUNT_ID)
+
+    # 22:05 — an ordinary evening cycle, minting normally.
+    clock.advance(minutes=5)
+    _message(db, address="evening@elsewhere.com",
+             received_at=clock() - timedelta(minutes=2),
+             processed_at=clock() - timedelta(minutes=1))
+    evening = await auto_lead.create_leads_from_new_mail(ACCOUNT_ID)
+    assert evening["created"] == 1
+    assert evening["reanchored"] == 0
+
+    # ── THE LULL ── nine and a half hours in which no mail arrives, so the
+    # scheduler never fires the hook and this step is never entered.
+    clock.advance(hours=9, minutes=26)
+
+    # 07:31 — a cold prospect wrote at 07:30:45 and the sync persisted it.
+    _message(db, address="prospect@elsewhere.com",
+             received_at=clock() - timedelta(seconds=15),
+             processed_at=clock() - timedelta(seconds=5))
+    morning = await auto_lead.create_leads_from_new_mail(ACCOUNT_ID)
+
+    assert morning["reanchored"] == 1, "the lull must trip the dormancy test"
+    assert morning["created"] == 1, (
+        "the message that WOKE the step was excluded by the anchor the same "
+        "cycle stamped — the overnight regression is back"
+    )
+    assert sorted(row["email"] for row in _leads(db)) == [
+        "evening@elsewhere.com", "prospect@elsewhere.com",
+    ]
+    reanchors = log.at("warning", "sync.auto_lead_reanchored")
+    assert len(reanchors) == 1
+    assert reanchors[0]["gap_seconds"] > auto_lead.REANCHOR_GAP_SECONDS
+
+
+async def test_dw8_the_clamp_lands_one_gap_width_back_not_at_now(
+    db: FakeCrmDB, on: None, clock: _Clock,
+) -> None:
+    """The mechanism, asserted directly: the anchor moves FORWARD to the start
+    of the gap window, never to the clock. It is what admits the triggering
+    message while still excluding the window behind it."""
+    _seed_account(db)
+    _seed_status(db)
+    await auto_lead.create_leads_from_new_mail(ACCOUNT_ID)
+    clock.advance(days=27)
+    _message(db, received_at=clock() - timedelta(seconds=10),
+             processed_at=clock() - timedelta(seconds=5))
+
+    await auto_lead.create_leads_from_new_mail(ACCOUNT_ID)
+
+    anchored = db.rows("crm_auto_lead_cursors")[0]["activated_at"]
+    assert anchored == clock() - timedelta(
+        seconds=auto_lead.REANCHOR_GAP_SECONDS)
+    assert anchored < clock()
+
+
+async def test_dw8_an_off_then_on_round_trip_mints_nothing_from_the_gap(
+    db: FakeCrmDB, on: None, log: _Log, clock: _Clock,
+) -> None:
+    """The hole ``activated_at`` alone does NOT cover, and the case the clamp
+    must not regress.
+
+    Flag on day 1, off for 27 days, on again. Nothing about the cursor changed
+    while the flag was off, so a naive anchor still says day 1 and every
+    message in the OFF window passes both predicates — the first ON cycle
+    mints the entire four-week backlog in one batch, each lead pushing
+    unattended into the live tenant (27 of 27, measured).
+    """
+    _seed_account(db)
+    _seed_status(db)
+    await auto_lead.create_leads_from_new_mail(ACCOUNT_ID)
+
     for index in range(27):
+        clock.advance(days=1)
         _message(db, address=f"stranger{index}@elsewhere.com",
-                 received_at=_at(2) + timedelta(days=index),
-                 processed_at=_at(2) + timedelta(days=index))
+                 received_at=clock(), processed_at=clock())
+    # The flag comes back on a full day after the last of it arrived, so the
+    # whole window sits outside the clamp's one-hour tail.
+    clock.advance(days=1)
 
     stats = await auto_lead.create_leads_from_new_mail(ACCOUNT_ID)
 
@@ -1137,62 +1245,40 @@ async def test_dw8_an_off_then_on_round_trip_mints_nothing_from_the_gap(
     assert stats["candidates"] == 0
     assert stats["created"] == 0
     assert _leads(db) == []
-    cursor = db.rows("crm_auto_lead_cursors")[0]
-    assert cursor["activated_at"] == cursor["processed_watermark"]
-    assert cursor["activated_at"] > _at(1)  # a NEW epoch, not the old anchor
-    reanchors = log.at("warning", "sync.auto_lead_reanchored")
-    assert len(reanchors) == 1
-    assert reanchors[0]["gap_seconds"] > auto_lead.REANCHOR_GAP_SECONDS
+    assert _activities(db) == []
+    assert len(log.at("warning", "sync.auto_lead_reanchored")) == 1
 
 
-async def test_dw8_mail_arriving_after_the_reanchor_mints_normally(
-    db: FakeCrmDB, on: None,
+async def test_dw8_mail_from_the_last_hour_of_the_off_window_is_minted(
+    db: FakeCrmDB, on: None, clock: _Clock,
 ) -> None:
-    """The control: re-anchoring must start an epoch, not end the feature."""
-    _seed_account(db)
-    _seed_status(db)
-    _seed_cursor(db, activated_at=_at(1), watermark=_at(1),
-                 last_run_at=_at(1, 10))
-    _message(db, address="old@elsewhere.com", received_at=_at(2))
+    """The DOCUMENTED RESIDUAL, asserted deliberately rather than accidentally.
 
-    await auto_lead.create_leads_from_new_mail(ACCOUNT_ID)
-    assert _leads(db) == []
-
-    # Now a message that arrives after the new anchor.
-    later = datetime.now(UTC) + timedelta(minutes=5)
-    _message(db, address="new@elsewhere.com", received_at=later,
-             processed_at=later)
-    stats = await auto_lead.create_leads_from_new_mail(ACCOUNT_ID)
-
-    assert stats["created"] == 1
-    assert [row["email"] for row in _leads(db)] == ["new@elsewhere.com"]
-
-
-async def test_dw8_a_quiet_but_running_mailbox_is_never_reanchored(
-    db: FakeCrmDB, on: None, log: _Log,
-) -> None:
-    """Why dormancy reads ``last_run_at`` and not ``processed_watermark``.
-
-    A mailbox with no classified inbox mail over a weekend has a watermark 60
-    hours old while this step has run faithfully every 600s. Anchoring the
-    dormancy test on the watermark would re-anchor it and drop the first
-    message to arrive on Monday morning — which is precisely the message this
-    feature exists to catch, dropped every Monday. ``last_run_at`` moves on
-    every cycle, so "quiet" and "not running" stay different facts.
+    Clamping means the tail of the gap window is admitted: mail received
+    within ``REANCHOR_GAP_SECONDS`` of the flag coming back on IS minted. That
+    is bounded — one gap width, and at most one capped batch of it — and it is
+    the price of never dropping the message that woke the step, which is the
+    same message on every ordinary night. Recorded in `crm_app.md` §9 and in
+    the owner note on `work_plan.md` §6 (b).
     """
     _seed_account(db)
     _seed_status(db)
-    _seed_cursor(db, activated_at=_at(1), watermark=_at(1),
-                 last_run_at=datetime.now(UTC) - timedelta(seconds=300))
-    monday = datetime.now(UTC) + timedelta(seconds=1)
-    _message(db, address="customer@elsewhere.com", received_at=monday,
-             processed_at=monday)
+    await auto_lead.create_leads_from_new_mail(ACCOUNT_ID)
+    clock.advance(days=27)
+
+    _message(db, address="mid_window@elsewhere.com",
+             received_at=clock() - timedelta(days=3),
+             processed_at=clock() - timedelta(days=3))
+    _message(db, address="half_an_hour_ago@elsewhere.com",
+             received_at=clock() - timedelta(minutes=30),
+             processed_at=clock() - timedelta(minutes=30))
 
     stats = await auto_lead.create_leads_from_new_mail(ACCOUNT_ID)
 
-    assert stats["reanchored"] == 0
-    assert log.at("warning", "sync.auto_lead_reanchored") == []
-    assert stats["created"] == 1
+    assert stats["reanchored"] == 1
+    assert [row["email"] for row in _leads(db)] == [
+        "half_an_hour_ago@elsewhere.com"
+    ], "the accepted bound is ONE gap width — no more, and no less"
 
 
 async def test_dw8_every_cycle_stamps_last_run_at(
@@ -1544,6 +1630,25 @@ def test_the_migration_is_idempotent(bare: str) -> None:
         f"unguarded CREATE: {unguarded}. apply_migrations.sh replays the whole "
         "ladder on every deploy"
     )
+
+
+def test_the_column_added_after_the_first_cut_is_repaired_in_place(
+    bare: str,
+) -> None:
+    """`CREATE TABLE IF NOT EXISTS` is a no-op against a database that already
+    has the table, so it cannot ADD a column to one. A scratch database that
+    applied this file while it was still the two-column version would keep the
+    old shape and fail on every cycle."""
+    assert re.search(
+        r"ALTER TABLE crm_auto_lead_cursors\s+ADD COLUMN IF NOT EXISTS\s+last_run_at",
+        bare,
+    ), "no guarded ADD COLUMN for last_run_at — an already-created table keeps the old shape"
+    assert re.search(
+        r"ALTER COLUMN last_run_at SET NOT NULL", bare,
+    ), "the repaired column must end up NOT NULL like the created one"
+    assert re.search(
+        r"UPDATE crm_auto_lead_cursors\s+SET last_run_at = COALESCE", bare,
+    ), "SET NOT NULL will fail unless existing rows are backfilled first"
 
 
 def test_the_migration_drops_or_truncates_nothing(bare: str) -> None:

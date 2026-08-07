@@ -95,6 +95,28 @@ CREATE TABLE IF NOT EXISTS crm_auto_lead_cursors (
     updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- ⚠️ `CREATE TABLE IF NOT EXISTS` above is a NO-OP against a database that
+-- already has the table, so it cannot add a column to one. A scratch or dev
+-- database that applied this file while it was still the two-column version
+-- (it was numbered 157 then, and briefly had no `last_run_at`) would keep the
+-- old shape and every cycle would fail on the missing column. These three
+-- statements are the repair, and they are all no-ops on a fresh database:
+--   * ADD COLUMN IF NOT EXISTS — nullable, because an existing row has no
+--     value to give it and NOT NULL would refuse the ALTER outright;
+--   * the backfill takes the best answer available, in order: the row already
+--     tells us how far the step got, and failing that when it was activated;
+--   * SET NOT NULL then restores the invariant, and is itself a no-op when
+--     the column was created NOT NULL by the CREATE TABLE above.
+ALTER TABLE crm_auto_lead_cursors
+    ADD COLUMN IF NOT EXISTS last_run_at TIMESTAMPTZ;
+
+UPDATE crm_auto_lead_cursors
+   SET last_run_at = COALESCE(processed_watermark, activated_at, now())
+ WHERE last_run_at IS NULL;
+
+ALTER TABLE crm_auto_lead_cursors
+    ALTER COLUMN last_run_at SET NOT NULL;
+
 -- The candidate query reads this row by primary key, so no second index is
 -- needed here. This one supports the operator question the log line raises —
 -- "which mailboxes has auto-lead run on, and when?" — without a seq scan

@@ -1115,10 +1115,16 @@ the data is backwards. This one reads `gtd_projects` and `gtd_items`, the
 ClickUp mirror the Tasks app already holds, so there is no API call, no token,
 no rate limit and no model spend, and it works when the connector is stale.
 
-**One department, and the split stays cheap.** Everything lands under a single
-root the caller names. Each child carries its ClickUp list id in `clickup_id`
-and its **Space** id in `clickup_snapshot`, so breaking it into real departments
-later is a `/move` per subtree rather than a re-import.
+**One department, and the real ClickUp shape beneath it.** Everything lands
+under a single root the caller names; below that, **Space → Folder → List** are
+rebuilt as projects, each carrying its own `clickup_id` and `clickup_kind` —
+the same flattening `import_clickup` performs, so both paths produce one shape.
+Promoting a Space node to a root is how the department split happens later: one
+`/move`, not a re-import.
+
+⚠️ **The placement comes from `task_accounts.schema_cache->'hierarchy'`, not
+from `gtd_projects.space_id`.** Migration 60 defines that column as LOCAL-only
+and it is *always NULL* on the synced rows this importer reads.
 
 **The root IS org-granted, and that is narrower than it sounds.** §11.6's
 importer deliberately does not org-grant unmapped Spaces, because bulk-granting
@@ -1141,6 +1147,26 @@ be locked out of the thing it just made.
 4. **A task whose list did not come across is counted, not dropped.** "412
    imported" while 30 were silently skipped is a number that gets trusted and
    should not be.
+
+**Three defects a real Postgres found that the hermetic suite could not.**
+Run against a scratch database with the full migration set and a seeded mirror:
+
+1. **`gtd_projects.space_id` is LOCAL-only.** The first version read it for the
+   Space, so every import would have recorded `null` — a promise in the
+   docstring, the commit message and the PR body that was never true.
+2. **`pm_projects` has no `clickup_snapshot` column** (only `pm_tasks` does).
+   The first real click on "Bring it all in" would have answered 500. A fake DB
+   accepts any column; Postgres does not. This shipped in #393 and was fixed
+   before anybody pressed the button.
+3. **The preview under-counted.** It reported 4 projects where the run then
+   created 7, because Space and Folder nodes were only tallied on the write
+   path — a number somebody would have read out loud during a demo.
+
+Verified end to end afterwards: the tree comes out
+`Fracktal Works / Engineering [space] / Hardware [folder] / Enclosure [list]`,
+statuses keep their ClickUp names, assignee emails lowercase, a LOCAL capture
+("Buy milk") stays out, `gtd_*` is untouched, and a re-run reports
+`created: 0, already_present: 4`.
 
 **A gap mutation testing found, worth recording.** Deleting `dry_run` from the
 write guards left every test green: on a *first* dry run `_root_department`

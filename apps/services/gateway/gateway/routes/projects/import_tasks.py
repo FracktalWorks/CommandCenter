@@ -19,11 +19,19 @@ already hold the synced ClickUp lists and tasks, so:
 * it is fast enough to run in front of an audience.
 
 **One department, deliberately.** Everything lands under a single root the
-caller names, because that is a shape nobody has to decide anything to get. The
-department split is a later, reversible act: a ClickUp Space is remembered on
-each child (``clickup_kind='list'``, and the Space id in ``clickup_snapshot``),
-so re-parenting into real departments later is a ``/move`` per subtree rather
-than a re-import.
+caller names, because that is a shape nobody has to decide anything to get.
+
+Beneath it the real ClickUp shape is rebuilt — **Space → Folder → List**, each a
+project carrying its own ``clickup_id`` and ``clickup_kind`` — which is the same
+flattening ``import_clickup`` performs, so the two paths produce one shape. That
+tree is what makes the department split a later, reversible act: promoting a
+Space node to a root is one ``/move``, not a re-import.
+
+⚠️ The placement comes from ``task_accounts.schema_cache->'hierarchy'``, NOT from
+``gtd_projects.space_id``. Migration 60's ``space_id``/``folder_id`` are for
+LOCAL projects only and are **always NULL** on the synced rows read here — the
+first version of this file believed otherwise and wrote ``{"space_id": null}``
+into a ``clickup_snapshot`` column that ``pm_projects`` does not even have.
 
 **The root is org-granted, and that is a narrower disclosure than it sounds.**
 ``import_clickup`` deliberately does NOT org-grant unmapped Spaces — bulk
@@ -116,6 +124,47 @@ def lane_name(status_name: str | None) -> str:
     """
     clean = (status_name or "").strip()
     return clean or FALLBACK_STATUS
+
+
+def index_hierarchy(hierarchy: Any) -> dict[str, dict[str, Any]]:
+    """``{list_id: {space_id, space_name, folder_id, folder_name}}``.
+
+    The ClickUp Space→Folder→List tree lives in
+    ``task_accounts.schema_cache->'hierarchy'``, NOT on ``gtd_projects``:
+    migration 60's ``space_id``/``folder_id`` are for LOCAL projects only and
+    are always NULL on the synced rows this importer reads. Believing otherwise
+    is how the first version of this file promised each project "remembers
+    which Space it came from" while writing ``{"space_id": null}`` every time.
+    """
+    out: dict[str, dict[str, Any]] = {}
+
+    def place(node: Any, space: Any, folder: Any = None) -> None:
+        if not isinstance(node, dict) or node.get("id") is None:
+            return
+        out[str(node["id"])] = {
+            "space_id": str(space.get("id")) if space.get("id") is not None else None,
+            "space_name": (space.get("name") or "").strip() or None,
+            "folder_id": (
+                str(folder["id"]) if isinstance(folder, dict)
+                and folder.get("id") is not None else None
+            ),
+            "folder_name": (
+                (folder.get("name") or "").strip() or None
+                if isinstance(folder, dict) else None
+            ),
+        }
+
+    for space in hierarchy or []:
+        if not isinstance(space, dict):
+            continue
+        for lst in space.get("lists") or []:
+            place(lst, space)
+        for folder in space.get("folders") or []:
+            if not isinstance(folder, dict):
+                continue
+            for lst in folder.get("lists") or []:
+                place(lst, space, folder)
+    return out
 
 
 def assignee_email(assignee: Any) -> str | None:
@@ -226,6 +275,75 @@ async def _ensure_lane(
     return lanes[key]
 
 
+
+async def _load_placement(db: Any, account_id: str | None) -> dict[str, dict[str, Any]]:
+    """``{list_id: placement}`` across the relevant accounts."""
+    clause = " WHERE id = CAST(:acct AS uuid)" if account_id else ""
+    params = {"acct": account_id} if account_id else {}
+    rows = (await db.execute(
+        text(f"SELECT schema_cache FROM task_accounts{clause}"), params,
+    )).fetchall()
+    out: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        cache = getattr(row, "schema_cache", None)
+        if isinstance(cache, str):
+            import json
+
+            try:
+                cache = json.loads(cache)
+            except ValueError:
+                cache = None
+        if isinstance(cache, dict):
+            out.update(index_hierarchy(cache.get("hierarchy")))
+    return out
+
+
+async def _container(
+    db: Any, *, root_id: str, where: dict[str, Any], who: str,
+    containers: dict[str, str], tally: _Tally, dry_run: bool = False,
+) -> str:
+    """The project a list hangs under: its Folder, its Space, or the department.
+
+    Mirrors `import_clickup`'s flattening so both paths produce the same shape —
+    a Space is a project, a Folder is its child, a List is a child of whichever
+    contains it. Created lazily, so a Space with no imported lists never appears
+    as an empty node.
+    """
+    parent = root_id
+    space_id = where.get("space_id")
+    if space_id:
+        key = f"space:{space_id}"
+        if key not in containers:
+            tally.projects_created += 1
+            if dry_run:
+                containers[key] = ""
+            else:
+                node = await insert_row(db, "pm_projects", {
+                    "name": where.get("space_name") or "Space",
+                    "parent_project_id": root_id, "created_by": who,
+                    "source": "import", "clickup_id": str(space_id),
+                    "clickup_kind": "space",
+                })
+                containers[key] = str(node.id)
+        parent = containers[key]
+    folder_id = where.get("folder_id")
+    if folder_id:
+        key = f"folder:{folder_id}"
+        if key not in containers:
+            tally.projects_created += 1
+            if dry_run:
+                containers[key] = ""
+            else:
+                node = await insert_row(db, "pm_projects", {
+                    "name": where.get("folder_name") or "Folder",
+                    "parent_project_id": parent, "created_by": who,
+                    "source": "import", "clickup_id": str(folder_id),
+                    "clickup_kind": "folder",
+                })
+                containers[key] = str(node.id)
+        parent = containers[key]
+    return parent
+
 @router.post("/import/from-tasks", dependencies=[require_import_admin])
 async def import_from_tasks(
     payload: ImportFromTasksIn, user: UserContext = Depends(get_current_user),
@@ -266,6 +384,9 @@ async def import_from_tasks(
 
         lanes = await _lanes(db, root_id) if root_id else {}
         by_gtd_project: dict[str, str] = {}
+        placement = await _load_placement(db, payload.account_id)
+        # Space and Folder nodes, created lazily so an empty one never appears.
+        containers: dict[str, str] = {}
 
         for row in lists:
             name = (getattr(row, "name", None) or "Untitled list").strip()
@@ -279,15 +400,22 @@ async def import_from_tasks(
                 by_gtd_project[str(row.id)] = str(existing.id)
                 continue
             tally.projects_created += 1
-            if payload.dry_run or root_id is None:
+            # Resolved even on a dry run, so the preview counts the Space and
+            # Folder nodes it would create. Skipping this made the preview say
+            # "4 projects" where the real run made 7 — a number somebody would
+            # have read out loud.
+            where = placement.get(clickup_id, {})
+            pretend = payload.dry_run or root_id is None
+            parent = await _container(
+                db, root_id=root_id or "", where=where, who=who,
+                containers=containers, tally=tally, dry_run=pretend,
+            )
+            if pretend:
                 continue
             child = await insert_row(db, "pm_projects", {
-                "name": name, "parent_project_id": root_id, "created_by": who,
+                "name": name, "parent_project_id": parent, "created_by": who,
                 "source": "import", "clickup_id": clickup_id,
                 "clickup_kind": "list",
-                # The Space is remembered so splitting this department into real
-                # ones later is a move, not a re-import.
-                "clickup_snapshot": {"space_id": getattr(row, "space_id", None)},
             })
             by_gtd_project[str(row.id)] = str(child.id)
 

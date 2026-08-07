@@ -24,6 +24,64 @@ from gateway.routes.admin._common import get_db, get_org_id
 me_router = APIRouter(prefix="/auth", tags=["auth"])
 
 
+async def _catalog_slugs(db: Any) -> list[str]:
+    """Every feature slug the DATABASE knows about, in catalog order.
+
+    ``feature_catalog`` is the registry — 130's own header says so: *"the nav-pane
+    registry the admin UI renders from, so adding a pane is a seeded row, not a
+    code change in the gateway AND the frontend."* ``FEATURES`` is a mirror of it
+    kept in code for the places that cannot reach a database.
+
+    Reading the catalog here is what stops a stale mirror from hiding a pane.
+    ``allowed_features()`` iterates ``FEATURES`` alone, so a slug seeded by a
+    migration but missing from the deployed ``acb_auth`` is invisible to the
+    sidebar even for a caller holding ``*`` — the pane simply is not there, with
+    no error anywhere to explain it.
+    """
+    from sqlalchemy import text
+
+    rows = (await db.execute(
+        text("SELECT slug FROM feature_catalog ORDER BY category, sort_order"),
+    )).fetchall()
+    return [r.slug for r in rows if getattr(r, "slug", None)]
+
+
+def resolve_features(access: Any, catalog: list[str]) -> dict[str, list[Any]]:
+    """Split every known feature into what this caller may reach and what they
+    may not, naming the permission each absent one needs.
+
+    **The union, not one or the other.** The catalog can carry a slug the code
+    has never heard of (a pane added by migration); the code can carry one the
+    database has not been seeded with yet (a fresh box mid-deploy). Taking
+    either alone loses a real pane, and the failure looks identical both ways:
+    nothing renders and nothing says why.
+
+    **This grants nothing.** The gate is ``require_feature_router`` on each
+    router, which asks ``access.has("feature:<slug>")`` directly and does not
+    consult either list. Everything here is a *report* about that same
+    decision — so widening the report can only stop the UI hiding a pane the
+    API would already have served.
+
+    ``denied`` is what makes the failure legible: "Projects needs
+    `feature:projects`" is something a person can act on. A pane that silently
+    is not there is something they can only guess at.
+    """
+    from acb_auth.permissions import FEATURES, feature_permission
+
+    known: list[str] = []
+    for slug in [*catalog, *FEATURES]:
+        if slug and slug not in known:
+            known.append(slug)
+
+    allowed = [s for s in known if access.has(feature_permission(s))]
+    denied = [
+        {"slug": s, "permission": feature_permission(s)}
+        for s in known
+        if s not in set(allowed)
+    ]
+    return {"features": allowed, "features_denied": denied}
+
+
 def _agent_names() -> list[str]:
     try:
         from gateway.routes.agent import (  # noqa: PLC0415
@@ -46,6 +104,7 @@ async def get_me(user: UserContext = Depends(get_current_user)) -> dict[str, Any
     access = user.access
 
     organization: dict[str, str] = {}
+    catalog: list[str] = []
     try:
         db = await get_db()
         async with db:
@@ -67,9 +126,12 @@ async def get_me(user: UserContext = Depends(get_current_user)) -> dict[str, Any
                     "slug": row["slug"],
                     "display_name": row["display_name"],
                 }
+            catalog = await _catalog_slugs(db)
     except Exception:  # noqa: BLE001
         # An unprovisioned org must not stop a member from loading the app —
-        # the access set is authoritative either way.
+        # the access set is authoritative either way. An unreachable catalog
+        # falls back to the code mirror inside `resolve_features`, which is the
+        # behaviour this endpoint had before the catalog was consulted at all.
         organization = {}
 
     return {
@@ -81,7 +143,12 @@ async def get_me(user: UserContext = Depends(get_current_user)) -> dict[str, Any
         "roles": sorted(access.roles),
         # Legacy coarse role, still consumed by pre-migration UI checks.
         "legacy_role": user.role.value,
-        "features": list(access.allowed_features()),
+        # Resolved against the CATALOG unioned with the code mirror, so a pane
+        # seeded by a migration is reachable even if the deployed `acb_auth`
+        # predates its slug — and `features_denied` names the permission each
+        # absent pane needs, so "why is Projects missing" has an answer on
+        # screen instead of being a silent nothing.
+        **resolve_features(access, catalog),
         "agents": [n for n in _agent_names() if access.can_run_agent(n)],
         "permissions": sorted(access.granted),
         # Resolved yes/no for every concrete capability, so the browser never

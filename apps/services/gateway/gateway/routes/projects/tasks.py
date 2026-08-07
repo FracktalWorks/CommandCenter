@@ -62,6 +62,10 @@ from gateway.routes.projects.filters import (
     build_task_filters,
 )
 from gateway.routes.projects.notifications import notify
+from gateway.routes.projects.relations import (
+    DIRECTED_TYPES,
+    assert_no_block_cycle,
+)
 from gateway.routes.projects.tags import apply_task_tags
 from pydantic import BaseModel
 from sqlalchemy import text
@@ -618,6 +622,12 @@ async def create_link(
         # Both ends must be visible: a link is readable from either side, so
         # accepting an unreadable target would disclose that it exists.
         await load_visible_task(db, vis, str(payload.target_task_id))
+        # WS-27p — the same guard `assert_no_task_cycle` has always put on
+        # `parent_task_id`, finally on the edge that can actually deadlock:
+        # A blocks B blocks C blocks A is a loop no human can resolve by
+        # finishing something, and every walk over it runs forever.
+        if payload.link_type in DIRECTED_TYPES:
+            await assert_no_block_cycle(db, task_id, str(payload.target_task_id))
         row = (await db.execute(
             text(
                 "INSERT INTO pm_task_links "

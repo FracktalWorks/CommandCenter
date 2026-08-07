@@ -946,7 +946,7 @@ interesting it is to build.
 | 5 | ~~**Tags**~~ | — | **WS-27m ✅ BUILT 2026-08-07** |
 | 6 | ~~**Bulk edit / multi-select**~~ | — | **WS-27n ✅ BUILT 2026-08-07 · unblocks g** |
 | 7 | ~~**Recurring tasks**~~ | — | **WS-27o ✅ BUILT 2026-08-07** |
-| 8 | **Dependency and subtask UI** — `pm_task_links` and `parent_task_id` both exist, unreachable from the board | Data with no surface is a promise the product does not keep | **WS-27p** |
+| 8 | ~~**Dependency and subtask UI**~~ | — | **WS-27p ✅ BUILT 2026-08-07** |
 | 9 | **Calendar / timeline view** | The third view ClickUp users actually use, after list and board | **WS-27q** |
 | 10 | **Global task search** | `?q=` exists on the list endpoint; there is no search surface | **WS-27r** |
 
@@ -1559,3 +1559,53 @@ to it — shown live rather than on save, because picking the wrong anchor is in
 cadence has drifted for three months. The occurrence limit reads as what is **left**, not the
 cap, and switching frequency clears the fields the new one does not use so a stale
 `day_of_month` cannot reappear.
+
+### 11.14 WS-27p — dependencies and subtasks, made reachable (built 2026-08-07)
+
+*"`pm_task_links` and `parent_task_id` both exist, unreachable from the board. Data with no
+surface is a promise the product does not keep."*
+
+`routes/projects/relations.py` (`GET /projects/tasks/{id}/relations`), `lib/relations.ts` and
+a relations block in the task panel. 21 hermetic + 16 vitest cases, 11 mutants red, 19 checks
+against a real Postgres. **No migration** — the tables have been right since 146.
+
+**Both halves were unreachable, and for different reasons.** Links could be *created* and
+*deleted* since WS-27a but never **listed**: `get_task` returns a `links` **count** and nothing
+else, so no client could draw one. Subtasks could be created from the panel but never listed
+either — `?parent_task_id=` has existed on the list endpoint since WS-27a and nothing called
+it. What was missing was a way to read them, and one rule nobody had written down.
+
+**That rule: `blocks` may not form a cycle.** `assert_no_task_cycle` has guarded
+`parent_task_id` since WS-27a, and the identical hazard sat unguarded on links the whole time.
+A blocks B blocks C blocks A is a deadlock no human can resolve by finishing something, and
+every walk over it runs forever. `assert_no_block_cycle` closes it, bounded by the same
+`MAX_DEPTH` its sibling uses, and it **tracks what it has seen** — data can already contain a
+loop, since every link created before the guard existed went in unchecked, and the walk has to
+terminate over one rather than spin.
+
+**Only `blocks` is guarded.** A cycle in `relates_to` or `duplicates` is redundant, not
+harmful, and refusing one would be a rule with no failure to prevent.
+
+**Blocked-ness is DERIVED and SHOWN, never enforced.** A task is blocked when something that
+blocks it is still open, so a blocker reaching `done` makes the section go quiet — that is how
+you learn you can start. Refusing to *close* a blocked task is the obvious next step and is
+deliberately not taken: dependencies in a real workspace are frequently approximate, and a
+tool that will not let somebody finish work they have finished is a tool they route around —
+after which the links stop being maintained and the feature is worse than absent.
+
+**Visibility is applied to the CHILDREN, not inherited from the parent.** A subtask can be
+moved into a project the reader cannot see, and listing it because its parent is readable
+would disclose a title from behind a grant. The live run asserts a subtask in an ungranted
+project is absent *and* that its title does not appear.
+
+**One endpoint, both directions.** `blocks` outgoing means "this holds those up"; incoming
+means "this is waiting". A client given one side would have to ask twice and would still not
+know which was which — so each link carries a `direction`, and the browser's `populated()`
+turns that into headings, with **Blocked by first** because it is the only section that
+changes what somebody should do next. Empty sections are dropped: six empty headings on every
+task is how a panel becomes something people scroll past.
+
+**Progress counts the status CATEGORY**, not `completed_at`, for the same reason everything
+else in this app does: a project can name its finished lane "Shipped" or "Signed off", and
+`cancelled` counts as resolved even though nothing was completed. It reads as "1 of 3" rather
+than a percentage — 33% is a worse answer than "1 of 3" to the question people are asking.

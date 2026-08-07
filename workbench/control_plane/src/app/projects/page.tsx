@@ -731,6 +731,9 @@ function ProjectsWorkspace() {
           statuses={panelStatuses}
           fields={fields}
           tags={tags}
+          // WS-27p — opening a subtask or a linked task resolves ITS project's
+          // statuses, which the panel has no tree to do.
+          onOpenTask={(id) => void openTaskById(id)}
           onClose={() => setOpenTask(null)}
           onTaskAdded={() => {
             if (selected) void loadProject(selected);

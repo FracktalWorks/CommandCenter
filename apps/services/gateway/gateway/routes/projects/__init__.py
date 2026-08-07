@@ -32,6 +32,7 @@ from gateway.routes.projects import me as _me  # noqa: F401
 from gateway.routes.projects import notifications as _notifications  # noqa: F401
 from gateway.routes.projects import personal as _personal  # noqa: F401
 from gateway.routes.projects import recurrence as _recurrence  # noqa: F401
+from gateway.routes.projects import relations as _relations  # noqa: F401
 from gateway.routes.projects import tags as _tags  # noqa: F401
 from gateway.routes.projects import tasks as _tasks  # noqa: F401
 from gateway.routes.projects import tree as _tree  # noqa: F401

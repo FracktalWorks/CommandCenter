@@ -203,6 +203,27 @@ export const projectsApi = {
       body: JSON.stringify({ body }),
     }),
 
+  /**
+   * WS-27p — subtasks and links in both directions, plus derived blocked-ness.
+   *
+   * ONE call rather than three: the panel needs all of it at once, and three
+   * round trips to fill one block is three chances to paint a half-drawn
+   * dependency section.
+   */
+  relations: (taskId: string) =>
+    call<import("./relations").Relations>(`tasks/${taskId}/relations`),
+
+  createLink: (taskId: string, targetTaskId: string, linkType: string) =>
+    call<{ id: string }>(`tasks/${taskId}/links`, {
+      method: "POST",
+      body: JSON.stringify({ target_task_id: targetTaskId, link_type: linkType }),
+    }),
+
+  deleteLink: (taskId: string, linkId: string) =>
+    call<{ deleted: string }>(`tasks/${taskId}/links/${linkId}`, {
+      method: "DELETE",
+    }),
+
   /** WS-27o — this task's repeat rule, or `{rule: null}`. */
   recurrence: (taskId: string) =>
     call<{ rule: RecurrenceRule | null }>(`tasks/${taskId}/recurrence`),

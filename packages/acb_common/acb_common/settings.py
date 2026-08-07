@@ -120,6 +120,17 @@ class Settings(BaseSettings):
     # deletes both ways. Flipping it is an OWNER-GATE act (work_plan.md §6).
     crm_zoho_sync: bool = False
 
+    # CRM auto-lead from inbound email (spec crm_app.md §9 WS-26d-autolead,
+    # D-CRM-9). Gates ONLY the CRM step inside
+    # `routes/email/scheduler_hooks.py::process_new_mail`, and the gate is read
+    # BEFORE the step is entered, so with this off no CRM code runs and no CRM
+    # query is issued on the mail path at all. Ships OFF: ON means unknown
+    # inbound senders become `crm_leads` rows unattended — each born
+    # `zoho_dirty`, i.e. queued for the LIVE Zoho tenant on the next sync cycle,
+    # with no confirmation card anywhere on a scheduler hook and no delete tool.
+    # Flipping it is an OWNER-GATE act (work_plan.md §6 (b)).
+    crm_auto_lead: bool = False
+
     # Gmail (Phase 1, WBS 1.3)
     gmail_sa_json_path: str = ""         # service-account key file
     gmail_workspace_domain: str = ""     # e.g. fracktal.in

@@ -50,6 +50,26 @@
 > `tests/unit/test_crm_agent_write.py` (76 cases) + `test_crm_agent.py` grown from
 > 87 to 143. **LIVE: a confirmed agent write is born `zoho_dirty` and reaches the
 > live tenant within one 600s sync cycle (D-CRM-9).**
+> · **WS-26d-autolead: 🟢 BUILT 2026-08-08 (branch `ws-26d-autolead`) — NOT
+> FLIPPED, NOT DEPLOYED.** `CRM_AUTO_LEAD` exists in
+> `acb_common/settings.py` and ships **False**; the CRM step is
+> `routes/crm/auto_lead.py`, called from `process_new_mail` from **inside
+> `if auto_lead_enabled():`** so the OFF state enters nothing; the new
+> `crm_auto_lead_cursors` table (migration **158** — 157 is held by open PR
+> #399) carries the `activated_at` / `processed_watermark` / `last_run_at`
+> trio the deep-resync discriminator, the incremental cursor and the dormancy
+> re-anchor need. **Nothing has been flipped and nothing has been deployed** —
+> the flip stays OWNER-GATE (`work_plan.md` §6 (b)), and while the flag is off
+> this changes no runtime behaviour at all. Tests:
+> `tests/unit/test_crm_auto_lead.py` (75 cases); fifteen mutants run red and
+> reverted. ⚠️ **Two review rounds landed on this branch.** The first closed two P1s
+> that only a running cursor would have shown: an OFF→ON round trip minted the
+> whole OFF window (27 leads measured), and a single failure advanced the
+> cursor over every candidate behind it (3 leads lost, measured). The second
+> closed a P1 the FIRST FIX introduced — the re-anchor reset the anchor to
+> `now` and returned early, which discarded the very message that woke the
+> step, every night and every weekend; it now clamps to `now - 1h` and runs the
+> batch. See the ticket's done-when 8 and 9.
 > · **WS-26e: 🟡 SPEC, nothing built.**
 > **26f** — 🟢 **MERGED + DEPLOYED 2026-08-07 (PR #391), NOT RUN against the tenant.** f1
 > `POST /crm/import/zoho/stages` (`routes/crm/stage_metadata.py`, floor
@@ -957,7 +977,7 @@ unknown sender becomes a lead on its own.
 | D2 | **WS-26d-email** | The "this is not a toy" moment. Disjoint files from D1 (`activities.py`/`Timeline.tsx` vs. importer/admin/settings). | ∥ with D1 |
 | D3 | **WS-26g** — ✅ **BUILT 2026-08-07** (branch `ws-26g-reports`, no migration) | The forecast number. **After D1** — f2 and the reports tab both extend the `page.tsx`/`urlState.ts` tab grammar, and two parallel PRs there is a needless conflict. | after D1 |
 | D4 | **WS-26d-write** ✅ **BUILT 2026-08-08** | The AI-creates-a-lead demo beat. Lives in `apps/agents/agent-crm/` — collides with nothing above. No migration. | ∥ with any |
-| D5 | **WS-26d-autolead** | Build whenever; the **flip is OWNER-GATE** and pushes real leads into Zoho (D-CRM-9) — demo it only if the owner wants that story told live. | ∥ with any |
+| D5 | **WS-26d-autolead** — ✅ **BUILT 2026-08-08, flag OFF, NOT flipped, NOT deployed** (migration 158) | Built whenever; the **flip is OWNER-GATE** and pushes real leads into Zoho (D-CRM-9) — demo it only if the owner wants that story told live. | ∥ with any |
 
 **Deferred until after the demo, deliberately — not demoted:** WS-26h (discipline),
 WS-26i (data management), WS-26e (cutover). No demo viewer sees them; they lose nothing
@@ -1404,8 +1424,130 @@ in a later slice.
 **Tests:** `tests/unit/test_crm_email_timeline.py` (B7), reusing `tests/unit/_crm_fakes.py`.
 Frontend: extend the existing CRM vitest for the third `kind`.
 
-### WS-26d-autolead — `CRM_AUTO_LEAD` · 🟡 AGENT-SAFE to build · 🔴 OWNER-GATE to flip
+### WS-26d-autolead — `CRM_AUTO_LEAD` · ✅ **BUILT 2026-08-08** · 🔴 **OWNER-GATE to flip — NOT FLIPPED, NOT DEPLOYED**
 *(Closes B4.)*
+
+> **As built** (branch `ws-26d-autolead`, migration **158**
+> `158_crm_auto_lead_cursor.sql` — the number taken from the directory at
+> build time per R1, and `test_crm_auto_lead.py` finds the file by CONTENT,
+> so a renumber in review breaks nothing). **The flag is `False` everywhere and nothing has been
+> deployed**: with `CRM_AUTO_LEAD` off this branch changes no runtime
+> behaviour, which is the whole point of done-when 2.
+>
+> * `crm_auto_lead: bool = False` in `packages/acb_common/acb_common/settings.py`,
+>   beside `crm_zoho_sync` (its precedent shape). **`.env.example` deliberately
+>   untouched** — plan-guard territory; the flag is documented here and in
+>   `settings.py` only, and a test pins its absence from that file.
+> * `apps/services/gateway/gateway/routes/crm/auto_lead.py` — the whole step.
+>   **It lives in `routes/crm` and not in the email package** because what it
+>   does is write a CRM record; it registers no routes and, like
+>   `broker_handlers.py`, is deliberately absent from
+>   `routes/crm/__init__.py`. It **imports** the automation package's PUBLIC
+>   identity primitives (`sender_scope` / `resolve_org_domains` /
+>   `normalize_domain`) rather than copying them — D-CRM-4 declined to import
+>   another package's *private* helper, and a third copy of "is this person a
+>   colleague?" is the drift that rule exists to prevent.
+> * The call site in `routes/email/scheduler_hooks.py::process_new_mail` is
+>   `if auto_lead_enabled():` with the step's own import INSIDE the branch, so
+>   the OFF state does not load `routes/crm` on the mail path at all. The
+>   predicate stays above the gate on purpose: `auto_lead_enabled` is the
+>   flag's ONE definition, and reading `settings.crm_auto_lead` in the hook
+>   instead would make two places responsible for agreeing what the flag means
+>   (the `sync_enabled` precedent). **It runs LAST, after auto-archive**, so
+>   the step considers what is still in the INBOX once the account's own
+>   automation has finished — mail the user's own rules archived never becomes
+>   a lead. ⚠️ **One divergence from the five sibling steps, recorded:** the
+>   import sits INSIDE the `try`, so a `routes/crm` module that fails to import
+>   is logged on `sync.auto_lead_failed` like any other CRM failure rather than
+>   raised out of the mail path.
+> * `tests/unit/test_crm_auto_lead.py` — **75 cases**, each done-when named in
+>   a test. `tests/unit/_crm_fakes.py` gained two readers and one capability:
+>   `@>` jsonb containment and the case-folding
+>   `EXISTS (… jsonb_array_elements …)` form (each needed because a probe the
+>   fake cannot see is a probe it answers "yes" to for every Sent message —
+>   and the second must be STRIPPED before the existing `_JSONB_LOWER_CMP`
+>   reader misreads its inner comparison), plus `fail_on(..., after=N)`,
+>   because *where* in a batch a failure lands is the whole property under
+>   test in done-when 9.
+> * **Fifteen mutants run red and were reverted** (seven pre-review, six for
+>   the repair round, two more for the delta re-review): the flag check · the `received_at > activated_at`
+>   predicate · the watermark advance · the internal-domain second gate ·
+>   `type='system'` · the service write path · in-batch dedup · the dormancy
+>   re-anchor · the prefix-only advance · the stall WARNING (demoted to INFO) ·
+>   the case-folding Sent probe · suffix-aware internal domains · the
+>   `last_run_at` stamp on a quiet cycle · the anchor CLAMP (reset to `now`) ·
+>   the early return that discarded the triggering batch. The Sent-probe mutant
+>   is additionally
+>   checked for PRECISION: reverting it must NOT redden the lower-case
+>   already-emailed case, or the mutant broke the probe rather than narrowing
+>   it.
+>
+> **Five decisions the ticket did not record, each with its reason:**
+> 1. **`activated_at` and `processed_watermark` are stamped to the SAME
+>    instant on activation**, so the activating cycle mints nothing. That is
+>    the deep-resync case stated positively: on the day the flag flips, every
+>    mailbox's entire history predates activation.
+> 2. **The two colleague gates answer different questions, and gate 1 is asked
+>    WITHOUT the configured extra domains.** `sender_scope`'s own extra-domain
+>    arm only `lstrip('@')`s its input while `resolve_org_domains` runs
+>    `normalize_domain` — the exact divergence `runner.py:1635-1641` documents.
+>    Routing the configured list through gate 2 alone means there is ONE
+>    normalisation of it here rather than two that can disagree; it is also
+>    what makes gate 2 load-bearing rather than a restatement of gate 1, and a
+>    named test (a colleague on an org domain somebody typed as an address)
+>    goes red when it is deleted.
+> 3. **The watermark advances over the successful PREFIX** — over messages
+>    that minted nothing, never past one whose lead write raised (done-when 9,
+>    rewritten 2026-08-08 after the diff review measured the first version
+>    losing three leads permanently on a single pool exhaustion). A held cursor
+>    is reported at WARNING every cycle rather than left to look like a quiet
+>    mailbox. Each candidate is wrapped in `core.savepoint` so one statement
+>    error cannot abort the batch's transaction (the WS-26b lesson).
+> 4. **The lead and its first activity are two transactions.**
+>    `create_record` opens and commits its own session — it is the same
+>    function `POST /crm/leads` calls — so a failure between the two leaves a
+>    lead with an empty timeline, logged and counted. The alternative was a
+>    second, divergent write path for the record itself, which is what
+>    done-when 3 forbids.
+> 5. **An account whose `user_id` is blank is skipped before the cursor is
+>    even activated.** `actor()` would attribute the lead to `"anonymous"`,
+>    and a lead that is nobody's follow-up and that the `owner` filter cannot
+>    match is worse than no lead.
+> 6. ⚠️ **The re-anchor CLAMPS `activated_at` to `now - REANCHOR_GAP_SECONDS`
+>    and runs the batch anyway** — it does not stamp `now`, and it does not
+>    return early. Corrected in the delta re-review after the first fix shipped
+>    a P1 regression of its own: this step is invoked only when a sync
+>    PERSISTED mail (`email_ingestion/scheduler.py:463-472`), never once per
+>    period, so the cycle that trips dormancy is always the cycle carrying the
+>    message that woke it — and resetting the anchor excluded that message
+>    permanently, every night and every weekend. **The premise the earlier
+>    version of this note gave for the third column was false** (it claimed the
+>    step runs every 600s on a quiet mailbox; it does not run at all).
+>    `last_run_at` is still the right clock, for the narrower reason recorded in
+>    the cursor paragraph, and it is stamped on every cycle including empty and
+>    stalled ones. The ruling's constant (3600s), log key
+>    (`sync.auto_lead_reanchored`) and fail-closed behaviour on a genuine OFF
+>    window are unchanged; the accepted residual — the last gap-width of the
+>    window is minted — is recorded there and in §6 (b).
+> 7. **Both attacker-controlled strings are clipped** (`MAX_NAME_CHARS` 120,
+>    `MAX_SUBJECT_CHARS` 500, with a `…` marker). Nothing upstream bounds
+>    either: a display name is whatever the sending server put in the header,
+>    and it becomes `lead_name` — a column every CRM list, board card and Zoho
+>    push then carries.
+>
+> **What an owner still has to do, in order:** merge → deploy (migration 158
+> applies automatically) → flip `CRM_AUTO_LEAD` (§6 (b)). The first ON-state
+> run on each mailbox activates the cursor and mints nothing; leads start
+> appearing from mail that arrives after that moment. The same is true after
+> any period with the flag off or the service down for more than an hour: the
+> next cycle re-anchors, mints nothing from the gap, and says so at WARNING.
+>
+> ⚠️ **The migration is numbered 158, not 157.** Open PR #399
+> (`157_projects_recurrence.sql`) holds 157, and two migrations sharing a
+> number replay in filename order against the wrong schema. The ladder
+> therefore carries a deliberate reservation gap at 157 until that PR lands;
+> the migration header names it, and the test finds the file by CONTENT so a
+> further renumber in review costs nothing.
 
 **The hook is `process_new_mail(account_id)` — `routes/email/scheduler_hooks.py:57`.**
 It is the shared new-mail pipeline (rules → sweep → categorize senders → classify threads
@@ -1433,17 +1575,81 @@ does not go through this hook). A candidate query of "everything classified" wou
 therefore mint a lead per unknown external sender in a year of mail the moment a second
 mailbox connects — each born `zoho_dirty`, each pushed to the live tenant within one
 600s cycle, with no confirmation card anywhere on a scheduler hook and no delete tool.
-The step therefore keeps a **per-account two-timestamp cursor** in a new table
+The step therefore keeps a **per-account three-timestamp cursor** in a new table
 (migration at the next free number at build time, R1):
-- `activated_at` — set ONCE, to the clock time of the step's first ON-state run for
-  that account, never advanced. **The backfill discriminator is
-  `received_at > activated_at`**: mail received before auto-lead was first active on
-  the account is history and mints nothing, no matter when a resync classifies it.
+- `activated_at` — **the start of the current ON epoch**, not "the first time anyone
+  ever enabled this". **The backfill discriminator is `received_at > activated_at`**:
+  mail that ARRIVED before this epoch began is history and mints nothing, no matter
+  when a resync classifies it.
 - `processed_watermark` — the incremental cursor: candidates are classified inbox mail
   (`rules_processed_at IS NOT NULL`, `rules_held_back_at IS NULL`) with
-  `rules_processed_at > processed_watermark`, advanced only after the batch commits.
-Both predicates apply together. Per-cycle candidate cap (a named constant, ~200) with
-the overflow COUNTED in the log line — silent truncation reads as "covered everything".
+  `rules_processed_at > processed_watermark`.
+- `last_run_at` — when the step last RAN, stamped on **every** cycle including the ones
+  that considered nothing. This is the dormancy clock. ⚠️ It is a third column rather
+  than a reading of the second for a narrower reason than first claimed: BOTH freeze on
+  a mailbox that receives nothing, because the hook does not fire at all without new
+  mail. What separates them is a cycle that ran and found no *candidates* — mail outside
+  the inbox, held back, or predating the anchor — which advances `last_run_at` and not
+  the watermark; and that is also the state a deliberate stall holds the watermark in,
+  so keying dormancy on the watermark would re-anchor past a stall and quietly undo it.
+
+**Re-anchoring, and why "set ONCE" was wrong (2026-08-08 diff review, P1-1).**
+`activated_at` alone guards a deep resync and does nothing about a flag that was on,
+turned OFF for four weeks, and turned back on: the cursor still carries the old anchor,
+so the first ON cycle mints the whole OFF window in one batch — **measured at 27 leads
+for a 27-day window**, each pushing unattended into the live tenant. So when an
+ON-state cycle finds `now - last_run_at > REANCHOR_GAP_SECONDS` (a named constant,
+3600), it **clamps `activated_at` forward to `now - REANCHOR_GAP_SECONDS`**, logs
+`sync.auto_lead_reanchored` with `gap_seconds`, and **runs the batch normally**.
+
+⚠️ **CLAMP, never reset — and never discard the triggering batch** (2026-08-08 delta
+re-review; the first fix stamped `now` and returned early, which was a P1 regression in
+its own right). **This step is not invoked once per scheduler period.**
+`email_ingestion/scheduler.py:463-472` reads `synced` off the sync result and fires the
+hook **only when mail was actually persisted**, so a mailbox with no new mail does not
+run this step at all — which means the cycle that trips the dormancy test is *always*
+the cycle carrying the message that woke it. Measured: no mail 22:00→07:30, a cold
+prospect writes at 07:30:50, the sync persists it, the step runs at 07:31:05, and a
+reset-to-`now` anchor excluded that message **permanently — every night and every
+weekend**. Clamping keeps the fail-closed property that matters (anything received
+longer ago than the gap width stays excluded, so a real OFF window or multi-day outage
+still mints nothing from its backlog) while admitting everything received inside the
+last hour, which is where the triggering message always is. The watermark is NOT
+touched on re-anchor: OFF-window mail is excluded by the anchor predicate whatever its
+`rules_processed_at` says, and moving it would skip the triggering batch a second way.
+
+**Documented residual, accepted:** mail received in the final `REANCHOR_GAP_SECONDS` of
+an OFF window IS minted when the flag comes back on. The bound is on TIME, not on volume
+— one gap-width of mail (an hour), drained across however many cycles the per-cycle cap
+takes, since the cap defers rather than drops. It is the deliberate price of never
+dropping the message that woke the step. A named test asserts it as the bound rather than
+leaving it to be discovered. Fail-closed otherwise: a missed lead is hand-creatable and visible in
+the mailbox; 27 unattended pushes into the live tenant are neither.
+
+**A failure never advances the cursor past lost work (2026-08-08 diff review, P1-2).**
+The watermark advances to the max `rules_processed_at` of the **contiguous prefix of
+the batch that successfully wrote its leads**; on the first lead-write failure it stops
+moving, and later successes in the same batch are simply re-considered next cycle (free
+— the third unknown-sender step finds the lead they already created). This matters
+because the step opens a SECOND session per lead through `create_record` while holding
+the batch's own, so pool exhaustion fails many candidates at once and an unconditional
+advance steps over every one of them permanently — **measured at 3 candidates, 3
+errors, watermark advanced, three leads lost for good.** When the watermark does not
+move and errors > 0 the cycle logs `sync.auto_lead_stalled` at **WARNING, every cycle**:
+a held cursor and a quiet mailbox both create nothing, so the counters cannot tell them
+apart and only the level makes it visible. The accepted cost is a visible stall on a
+genuinely poison head message, deliberately — fail closed toward the CRM. ⚠️ A failure
+to write the first **activity** does NOT hold the cursor: the lead is already committed,
+so the message would be skipped on re-consideration and the activity never retried.
+
+Per-cycle candidate cap (a named constant, ~200) with the overflow COUNTED in the log
+line — silent truncation reads as "covered everything". The fetch takes cap+1 so
+"there is more" is a fact rather than an inference, and if the cap falls INSIDE a group
+of rows sharing one `rules_processed_at` the whole group is deferred to the next cycle
+(the watermark is a timestamp, so advancing it into a cut group loses the rest of it);
+`ORDER BY rules_processed_at, id` gives that group a stable order. Latent only —
+production stamps one transaction per message, so ties do not occur today.
+
 Residual race accepted and recorded: two concurrent `process_new_mail` invocations for
 one account can read the same watermark and double-mint; the cost is one visible,
 hand-deletable duplicate lead, and the alternative (a unique index minted on a column
@@ -1460,6 +1666,15 @@ email (`idx_crm_leads_email` is a plain index; only `zoho_id` is UNIQUE).** The 
 shape is the SELECT guard above plus **in-batch de-duplication** (one sender emailing
 twice in a single batch mints one lead), and the cross-invocation race is accepted per
 the cursor paragraph.
+
+⚠️ **The Sent probe folds case HERE, unlike `_maybe_block_cold` (2026-08-08 diff
+review, P2-4).** Postgres's `@>` is case-EXACT, so an owner who wrote to
+`Asha@AcmeRobotics.com` has, as far as containment is concerned, never emailed
+`asha@acmerobotics.com` — and she replies in lower case, so her reply minted a lead for
+somebody already mid-conversation. This step asks the question with
+`EXISTS (SELECT 1 FROM jsonb_array_elements(to_addresses) … WHERE lower(…) = :addr)`
+instead. `_maybe_block_cold` is deliberately **left alone**: it is the email package's
+predicate and its blast radius is the cold-email blocker, not this.
 
 **The first activity is metadata, never content (audit blocker G2).** The originating
 message is logged with **`type='system'`** — deliberately outside the Zoho push
@@ -1479,7 +1694,12 @@ colleague?" across the automation package, and it fails SAFE to `"external"` —
 the wrong direction here, so the CRM step must treat `"external"` as *necessary but not
 sufficient* and still apply the internal-domain list (`cleanup.py:298-303`). A lead row
 for your own CFO, pushed into the live Zoho tenant (D-CRM-9), is the failure this
-paragraph exists to prevent.
+paragraph exists to prevent. ⚠️ **That list matches SUBDOMAINS too** (2026-08-08 diff
+review, P2-6): `cfo@mail.fracktal.in` is the CFO, and a company's own
+`mail.`/`corp.`/regional subdomains are routine — exact matching alone let him through
+while `cfo@fracktal.in` was caught. The suffix test is anchored on a leading dot, so
+`notfracktal.in` is not a subdomain of `fracktal.in`; a bare `endswith` would refuse a
+real prospect's leads, which is the same damage in the other direction.
 
 **Done-when:**
 1. `crm_auto_lead: bool = False` in `acb_common/settings.py`, shipping OFF.
@@ -1504,6 +1724,22 @@ paragraph exists to prevent.
 7. **A deep resync / first sync of a newly-connected mailbox mints NOTHING**: the hook
    run against an account whose messages all predate `activated_at` creates zero leads —
    the test seeds a year-old classified backlog and runs the ON-state hook against it.
+8. **An OFF→ON round trip mints nothing from the OFF window** (added 2026-08-08, P1-1):
+   the hook run against an account whose cursor was anchored weeks ago and whose
+   `last_run_at` is stale creates zero leads and re-anchors the cursor. ⚠️ Its
+   counterpart is equally named and equally load-bearing: **the message that WOKE the
+   step is minted, not discarded** — an overnight lull expressed the way the scheduler
+   produces it (the step simply not called), then a message arrives and IS turned into a
+   lead in the same cycle that re-anchors. Neither test may seed `last_run_at` by hand:
+   a stale value the scheduler cannot produce is a test green on fiction, which is
+   exactly how the first fix shipped its regression. The residual is asserted too — mail
+   from the last gap-width of the OFF window is minted, deliberately and boundedly.
+9. **A failure never advances the cursor past lost work** (added 2026-08-08, P1-2):
+   a batch of `[ok, raise, ok]` leaves the watermark at the FIRST message's stamp, the
+   next cycle re-considers messages 2 and 3, and a cycle whose watermark did not move
+   with errors > 0 logs `sync.auto_lead_stalled` at WARNING **on every cycle it
+   persists**. A failed first *activity* is the counter-case: it is counted separately
+   and does not hold the cursor.
 
 **Tests:** `tests/unit/test_crm_auto_lead.py` (B7).
 

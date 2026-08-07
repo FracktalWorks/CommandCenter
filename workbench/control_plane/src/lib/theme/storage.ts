@@ -10,6 +10,8 @@
 import type { Density, ThemeMode } from "./types";
 import { DENSITY_SCALE } from "./types";
 
+import { accentInk } from "./contrast";
+
 export const STORAGE_KEYS = {
   /** The member's own theme choice. Absent means "follow the org default". */
   theme: "cc-theme",
@@ -17,6 +19,12 @@ export const STORAGE_KEYS = {
   density: "cc-density",
   /** Optional primary-colour override. */
   accent: "cc-accent",
+  //: The ink that pairs with the stored accent, computed by `accentInk` at the
+  //: moment the accent is SET. Stored rather than derived in the pre-paint
+  //: script so there is exactly one implementation of the luminance decision —
+  //: a second, minified copy inside a template string is precisely the kind of
+  //: duplicate that drifts and that nobody can test.
+  accentInk: "cc-accent-ink",
   /**
    * Last-known organisation defaults, cached so a member who has never opened
    * Settings still gets the company look on first paint instead of a flash of
@@ -34,6 +42,16 @@ export const DENSITY_PROPERTY = "--ui-scale";
 
 /** Custom properties an accent override replaces. */
 export const ACCENT_PROPERTIES = ["--primary", "--ring", "--sidebar-primary"] as const;
+
+/**
+ * The INK tokens that must follow the accent, not the theme.
+ *
+ * Setting `--primary` without these leaves the theme's own primary-foreground
+ * painted on a colour it was never chosen for — black-on-red on Graphite dark.
+ * Kept as a separate list because the value differs: these get
+ * `accentInk(accent)`, the others get the accent itself.
+ */
+export const ACCENT_INK_PROPERTIES = ["--primary-foreground", "--sidebar-primary-foreground"] as const;
 
 /** localStorage key next-themes uses for the colour mode. */
 export const MODE_STORAGE_KEY = "theme";
@@ -62,7 +80,13 @@ export const themeStorage = {
   getDensity: () => read(STORAGE_KEYS.density) as Density | null,
   setDensity: (d: Density | null) => write(STORAGE_KEYS.density, d),
   getAccent: () => read(STORAGE_KEYS.accent),
-  setAccent: (c: string | null) => write(STORAGE_KEYS.accent, c),
+  getAccentInk: () => read(STORAGE_KEYS.accentInk),
+  setAccent: (c: string | null) => {
+    write(STORAGE_KEYS.accent, c);
+    // Written together so the two can never disagree, and cleared together so
+    // removing the accent cannot leave orphaned ink behind.
+    write(STORAGE_KEYS.accentInk, c ? accentInk(c) || null : null);
+  },
   getOrgTheme: () => read(STORAGE_KEYS.orgTheme),
   setOrgTheme: (id: string) => write(STORAGE_KEYS.orgTheme, id),
   getOrgDensity: () => read(STORAGE_KEYS.orgDensity) as Density | null,

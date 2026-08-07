@@ -142,7 +142,13 @@ export default function Sidebar() {
       </div>
 
       {/* Nav sections */}
-      <nav className="flex flex-col flex-1 overflow-y-auto">
+      {/* `scrollbar-thin` is not cosmetic here. Without it this container gets the
+          platform's default scrollbar, which on Linux/Windows is ~15px wide with
+          stepper arrows — a quarter of the 56px COLLAPSED rail, shoving every
+          icon off-centre and painting a light-grey bar down a dark sidebar. The
+          themed utility already existed in globals.css; this scroller just never
+          opted in. */}
+      <nav className="scrollbar-thin flex flex-col flex-1 overflow-y-auto">
         {sections.map((section) => (
           <NavSectionBlock
             key={section.id}

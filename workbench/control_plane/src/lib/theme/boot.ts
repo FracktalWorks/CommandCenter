@@ -18,6 +18,7 @@
 import { DEFAULT_THEME_ID, THEMES } from "./themes";
 import { DENSITY_SCALE } from "./types";
 import {
+  ACCENT_INK_PROPERTIES,
   ACCENT_PROPERTIES,
   DENSITY_PROPERTY,
   STORAGE_KEYS,
@@ -32,6 +33,7 @@ export function themeBootScript(): string {
   const ids = JSON.stringify(THEMES.map((t) => t.id));
   const scales = JSON.stringify(DENSITY_SCALE);
   const accentProps = JSON.stringify(ACCENT_PROPERTIES);
+  const accentInkProps = JSON.stringify(ACCENT_INK_PROPERTIES);
 
   return `(function(){try{
 var d=document.documentElement,ls=window.localStorage;
@@ -42,6 +44,7 @@ d.setAttribute(${JSON.stringify(THEME_ATTRIBUTE)},t);
 var den=ls.getItem(${JSON.stringify(STORAGE_KEYS.density)})||ls.getItem(${JSON.stringify(STORAGE_KEYS.orgDensity)});
 if(scale[den])d.style.setProperty(${JSON.stringify(DENSITY_PROPERTY)},String(scale[den]));
 var a=ls.getItem(${JSON.stringify(STORAGE_KEYS.accent)});
-if(a){var p=${accentProps};for(var i=0;i<p.length;i++)d.style.setProperty(p[i],a);}
+if(a){var p=${accentProps};for(var i=0;i<p.length;i++)d.style.setProperty(p[i],a);
+var ink=ls.getItem(${JSON.stringify(STORAGE_KEYS.accentInk)});if(ink){var q=${accentInkProps};for(var j=0;j<q.length;j++)d.style.setProperty(q[j],ink);}}
 }catch(e){}})();`;
 }

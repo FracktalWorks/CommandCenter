@@ -22,10 +22,12 @@ import {
   type StatusRow,
   type TaskRow,
   type FieldRow,
+  type TagRow,
   type ViewRow,
   projectsApi,
 } from "./lib/api";
 import { FieldManager } from "./components/FieldManager";
+import { TagManager } from "./components/TagManager";
 import { FilterBar } from "./components/FilterBar";
 import { ImportClickUp } from "./components/ImportClickUp";
 import { MyWork } from "./components/MyWork";
@@ -96,6 +98,12 @@ function ProjectsWorkspace() {
   // the panel opens and closes far more often than these change.
   const [fields, setFields] = useState<FieldRow[]>([]);
   const [managingFields, setManagingFields] = useState(false);
+
+  // WS-27m — the selected node's tag registry. Root-scoped like the fields, and
+  // held here for the same reason: the filter bar, the panel's picker and the
+  // manager all read it, and three fetches of one list would disagree.
+  const [tags, setTags] = useState<TagRow[]>([]);
+  const [managingTags, setManagingTags] = useState(false);
 
   useEffect(() => {
     // Only for the "Mine" toggle. `fetchAccess` never throws, and an empty
@@ -187,6 +195,7 @@ function ProjectsWorkspace() {
   useEffect(() => {
     if (!selected) {
       setFields([]);
+      setTags([]);
       return;
     }
     let live = true;
@@ -200,10 +209,18 @@ function ProjectsWorkspace() {
       .catch(() => {
         if (live) setFields([]);
       });
+    projectsApi
+      .tags(selected.id)
+      .then((res) => {
+        if (live) setTags(res.rows);
+      })
+      .catch(() => {
+        if (live) setTags([]);
+      });
     return () => {
       live = false;
     };
-  }, [selected]);
+  }, [selected, treeKey]);
 
   // Saved views belong to the selected node, and are re-read whenever it
   // changes — a chip from the previous project would apply filters that make
@@ -520,6 +537,16 @@ function ProjectsWorkspace() {
                 Fields
               </Button>
             ) : null}
+            {selected && !mine ? (
+              <Button
+                variant="ghost"
+                size="sm"
+                icon="Tag"
+                onClick={() => setManagingTags(true)}
+              >
+                Tags
+              </Button>
+            ) : null}
             <NotificationBell onOpenTask={openTaskById} />
           </div>
           <div className={`flex shrink-0 gap-1 ${mine ? "hidden" : ""}`}>
@@ -556,6 +583,7 @@ function ProjectsWorkspace() {
               setActiveViewId(null);
             }}
             me={me}
+            tags={tags}
             // The project's order-bearing board is withheld from the chips
             // entirely: it is not a saved filter, and offering its ✕ would
             // offer to delete every hand-arranged position on the project.
@@ -614,6 +642,7 @@ function ProjectsWorkspace() {
           task={openTask}
           statuses={panelStatuses}
           fields={fields}
+          tags={tags}
           onClose={() => setOpenTask(null)}
           onTaskAdded={() => {
             if (selected) void loadProject(selected);
@@ -623,6 +652,20 @@ function ProjectsWorkspace() {
             setTasks((current) =>
               current.map((t) => (t.id === fresh.id ? { ...t, ...fresh } : t))
             );
+          }}
+        />
+      ) : null}
+
+      {managingTags && selected ? (
+        <TagManager
+          projectId={selected.id}
+          projectName={selected.name}
+          onClose={() => setManagingTags(false)}
+          onChanged={setTags}
+          // A rename or merge rewrites task rows, so the board is stale until
+          // it reloads — the chips would otherwise show a name no card carries.
+          onTasksTouched={() => {
+            if (selected) void loadProject(selected);
           }}
         />
       ) : null}

@@ -62,6 +62,7 @@ from gateway.routes.projects.filters import (
     build_task_filters,
 )
 from gateway.routes.projects.notifications import notify
+from gateway.routes.projects.tags import apply_task_tags
 from pydantic import BaseModel
 from sqlalchemy import text
 
@@ -118,6 +119,9 @@ async def list_tasks(
     overdue: bool = False,
     due_before: str | None = None,
     importance_gte: int | None = None,
+    # WS-27m. `tags` is ANY, `tags_all` is ALL — see `build_task_filters`.
+    tags: str | None = None,
+    tags_all: str | None = None,
 ) -> ListResponse:
     """The one task-list endpoint every surface reads through.
 
@@ -175,7 +179,7 @@ async def list_tasks(
             status_category=status_category, assignee=assignee,
             assignees=assignees, unassigned=unassigned, overdue=overdue,
             due_before=due_before, importance_gte=importance_gte, q=q,
-            include_archived=include_archived,
+            tags=tags, tags_all=tags_all, include_archived=include_archived,
         )
         clauses.extend(extra_clauses)
         params.update(extra_params)
@@ -263,6 +267,14 @@ async def create_task(
         )
         values["status_id"] = str(status.id)
         values["task_number"] = await next_task_number(db, root)
+        # WS-27m — through the registry, never straight into the array. Create
+        # and patch both go this way, so there is no route by which a tag enters
+        # the system unregistered; that is the only thing that keeps the
+        # registry's "one spelling per tag" true rather than aspirational.
+        if "tags" in values:
+            values["tags"] = await apply_task_tags(
+                db, root, values["tags"], by=actor(user),
+            )
 
         row = await insert_row(db, "pm_tasks", values)
         task_id = str(row.id)
@@ -317,6 +329,11 @@ async def patch_task(
         # caller's current project: a task opened from My work can belong to a
         # project the board is not showing, and validating against the wrong
         # project's fields would refuse a perfectly good value.
+        if "tags" in values:
+            values["tags"] = await apply_task_tags(
+                db, str(before.root_project_id), values["tags"], by=actor(user),
+            )
+
         custom_changes: dict[str, Any] = {}
         if custom is not None:
             definitions = await load_definitions(db, str(before.root_project_id))

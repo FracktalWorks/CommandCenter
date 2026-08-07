@@ -220,3 +220,62 @@ describe("saved view config", () => {
     }
   });
 });
+
+describe("groupTasks by tag (WS-27m)", () => {
+  it("puts a task with three tags in all three columns", () => {
+    // Same reason as two assignees: it genuinely belongs to each, and picking
+    // one hides it from the others.
+    const groups = groupTasks([task({ tags: ["bug", "ops", "urgent"] })], "tag", ctx);
+    expect(groups.map((g) => g.label)).toEqual(["bug", "ops", "urgent"]);
+    expect(groups.every((g) => g.tasks.length === 1)).toBe(true);
+  });
+
+  it("collects untagged work under one bucket, last", () => {
+    const groups = groupTasks(
+      [task({ id: "a", tags: [] }), task({ id: "b", tags: ["bug"] }), task({ id: "c" })],
+      "tag",
+      ctx,
+    );
+    expect(groups.map((g) => g.key)).toEqual(["bug", UNSET]);
+    expect(groups[1].tasks.map((t) => t.id)).toEqual(["a", "c"]);
+  });
+
+  it("shows a tag's own spelling, not a prettified one", () => {
+    // The registry already decided the canonical spelling; re-casing it here
+    // would show something no filter matches.
+    expect(groupTasks([task({ tags: ["needs review"] })], "tag", ctx)[0].label).toBe(
+      "needs review",
+    );
+  });
+
+  it("drops nothing into an empty board", () => {
+    expect(groupTasks([], "tag", ctx)).toEqual([]);
+  });
+});
+
+describe("tag filters in the query", () => {
+  it("sends tags as CSV, matching the gateway's split_csv", () => {
+    expect(toQuery({ ...EMPTY_FILTERS, tags: ["bug", "ops"] })).toEqual({
+      tags: "bug,ops",
+    });
+  });
+
+  it("sends nothing for an empty tag list", () => {
+    expect(toQuery({ ...EMPTY_FILTERS, tags: [] })).toEqual({});
+  });
+
+  it("counts as filtered", () => {
+    expect(isFiltered({ ...EMPTY_FILTERS, tags: ["bug"] })).toBe(true);
+  });
+
+  it("round-trips through a saved view", () => {
+    const filters = { ...EMPTY_FILTERS, tags: ["bug", "ops"] };
+    expect(fromConfig(toConfig(filters, "tag"))).toEqual({ filters, groupBy: "tag" });
+  });
+
+  it("survives a config that stored tags as an array instead of CSV", () => {
+    // An older or hand-written config. Reading it as a string and getting
+    // garbage would be worse than reading it as unset.
+    expect(fromConfig({ filters: { tags: ["bug"] } }).filters.tags).toEqual([]);
+  });
+});

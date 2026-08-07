@@ -85,6 +85,18 @@ export interface ViewRow {
   position?: number | null;
 }
 
+/** WS-27m — a registered tag. `task_count` is present on the list endpoint. */
+export interface TagRow {
+  id: string;
+  project_id: string;
+  name: string;
+  color: string;
+  description?: string | null;
+  task_count?: number;
+  /** How many tasks a rename rewrote. Present on the PATCH response only. */
+  retagged?: number;
+}
+
 /** WS-27l — a custom field definition. Shape mirrors the gateway's row. */
 export interface FieldRow {
   id: string;
@@ -188,6 +200,37 @@ export const projectsApi = {
       method: "POST",
       body: JSON.stringify({ body }),
     }),
+
+  tags: (projectId: string) =>
+    call<{ rows: TagRow[]; total: number }>(`nodes/${projectId}/tags`),
+
+  createTag: (projectId: string, payload: Record<string, unknown>) =>
+    call<TagRow>(`nodes/${projectId}/tags`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+
+  /** Rename or recolour. A rename rewrites every task wearing the tag. */
+  patchTag: (tagId: string, payload: Record<string, unknown>) =>
+    call<TagRow>(`tags/${tagId}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
+
+  /** Fold one tag into another. The source is deleted; the target absorbs it. */
+  mergeTag: (tagId: string, intoTagId: string) =>
+    call<{ merged: string; into: string; retagged: number }>(
+      `tags/${tagId}/merge`,
+      { method: "POST", body: JSON.stringify({ into_tag_id: intoTagId }) }
+    ),
+
+  /** Deletes the tag AND takes it off every task — the count comes back. */
+  deleteTag: (tagId: string) =>
+    call<{
+      deleted: string;
+      name: string;
+      cascaded: { tasks_untagged: number };
+    }>(`tags/${tagId}`, { method: "DELETE" }),
 
   fields: (projectId: string) =>
     call<{ rows: FieldRow[]; total: number }>(`nodes/${projectId}/fields`),

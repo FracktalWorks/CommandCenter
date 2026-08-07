@@ -13,7 +13,13 @@
 
 import type { StatusRow, TaskRow } from "./api";
 
-export type GroupBy = "status" | "assignee" | "project" | "importance" | "none";
+export type GroupBy =
+  | "status"
+  | "assignee"
+  | "project"
+  | "importance"
+  | "tag"
+  | "none";
 
 /** Mirrors the gateway's `filters.GROUP_BY`. */
 export const GROUP_OPTIONS: GroupBy[] = [
@@ -21,6 +27,7 @@ export const GROUP_OPTIONS: GroupBy[] = [
   "assignee",
   "project",
   "importance",
+  "tag",
   "none",
 ];
 
@@ -40,6 +47,8 @@ export interface Filters {
   assignee: string;
   unassigned: boolean;
   overdue: boolean;
+  /** WS-27m — ANY of these tags. `tags_all` on the wire is not exposed here yet. */
+  tags: string[];
 }
 
 export const EMPTY_FILTERS: Filters = {
@@ -48,6 +57,7 @@ export const EMPTY_FILTERS: Filters = {
   assignee: "",
   unassigned: false,
   overdue: false,
+  tags: [],
 };
 
 /**
@@ -65,6 +75,10 @@ export function toQuery(filters: Filters): Record<string, string> {
   if (filters.assignee.trim()) out.assignee = filters.assignee.trim();
   if (filters.unassigned) out.unassigned = "true";
   if (filters.overdue) out.overdue = "true";
+  // CSV, matching `split_csv` on the gateway. A tag containing a comma would
+  // break this — which is why the picker treats a comma as a separator, so
+  // one can never be stored.
+  if (filters.tags.length) out.tags = filters.tags.join(",");
   return out;
 }
 
@@ -82,6 +96,10 @@ export function fromConfig(config: unknown): { filters: Filters; groupBy: GroupB
       assignee: typeof stored.assignee === "string" ? stored.assignee : "",
       unassigned: stored.unassigned === true,
       overdue: stored.overdue === true,
+      tags:
+        typeof stored.tags === "string" && stored.tags
+          ? stored.tags.split(",").map((s) => s.trim()).filter(Boolean)
+          : [],
     },
     groupBy: GROUP_OPTIONS.includes(groupBy as GroupBy)
       ? (groupBy as GroupBy)
@@ -105,6 +123,10 @@ export function toConfig(filters: Filters, groupBy: GroupBy): Record<string, unk
   if (filters.assignee.trim()) stored.assignee = filters.assignee.trim();
   if (filters.unassigned) stored.unassigned = true;
   if (filters.overdue) stored.overdue = true;
+  // A CSV string here too, not an array: `build_task_filters` parses it with
+  // `split_csv`, so a saved view and a typed query string must be the same
+  // shape or the view would be the one that breaks.
+  if (filters.tags.length) stored.tags = filters.tags.join(",");
   return { filters: stored, group_by: groupBy };
 }
 
@@ -171,6 +193,13 @@ export function groupTasks(
       const people = task.assignees ?? [];
       if (people.length === 0) put(UNSET, "Unassigned", task);
       else for (const who of people) put(who, personLabel(who), task);
+    } else if (by === "tag") {
+      // A task with three tags appears in three columns, for the same reason a
+      // task with two assignees appears in both theirs: it genuinely belongs to
+      // each, and picking one hides it from the others.
+      const names = task.tags ?? [];
+      if (names.length === 0) put(UNSET, "Untagged", task);
+      else for (const name of names) put(name, name, task);
     } else if (by === "project") {
       const id = task.project_id;
       put(id, ctx.projectName?.(id) ?? "Project", task);

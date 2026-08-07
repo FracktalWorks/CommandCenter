@@ -22,7 +22,7 @@ import Button from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { useEffect, useState } from "react";
 
-import type { ViewRow } from "../lib/api";
+import type { TagRow, ViewRow } from "../lib/api";
 import {
   EMPTY_FILTERS,
   type Filters,
@@ -30,6 +30,7 @@ import {
   type GroupBy,
   isFiltered,
 } from "../lib/grouping";
+import { byUsage, chipClass } from "../lib/tags";
 
 /** The status categories, labelled. Mirrors the gateway's `STATUS_CATEGORIES`. */
 const CATEGORIES: Array<[string, string]> = [
@@ -46,6 +47,7 @@ const GROUP_LABELS: Record<GroupBy, string> = {
   assignee: "Assignee",
   project: "Project",
   importance: "Priority",
+  tag: "Tag",
   none: "Nothing",
 };
 
@@ -60,6 +62,8 @@ interface Props {
   onGroupBy: (next: GroupBy) => void;
   /** The signed-in member's address, for the "Mine" toggle. Empty while loading. */
   me: string;
+  /** WS-27m — the project's registered tags, for the tag row. */
+  tags: TagRow[];
   views: ViewRow[];
   activeViewId: string | null;
   onApplyView: (view: ViewRow) => void;
@@ -75,6 +79,7 @@ export function FilterBar({
   groupBy,
   onGroupBy,
   me,
+  tags,
   views,
   activeViewId,
   onApplyView,
@@ -187,6 +192,42 @@ export function FilterBar({
           </Button>
         ) : null}
       </div>
+
+      {/* WS-27m — tag chips, only when the project has any. A row of controls
+          for a feature nobody uses is a row of noise, and a project that never
+          tags anything should not look like it forgot to. */}
+      {tags.length ? (
+        <div className="mt-2 flex flex-wrap items-center gap-1">
+          {byUsage(tags)
+            .slice(0, 12)
+            .map((tag) => {
+              const on = filters.tags.includes(tag.name);
+              return (
+                <button
+                  key={tag.id}
+                  type="button"
+                  aria-pressed={on}
+                  onClick={() =>
+                    onFilters({
+                      ...filters,
+                      tags: on
+                        ? filters.tags.filter((name) => name !== tag.name)
+                        : [...filters.tags, tag.name],
+                    })
+                  }
+                  className={`rounded-md px-1.5 py-0.5 text-[11px] ${
+                    on
+                      ? "bg-accent text-accent-foreground"
+                      : chipClass(tag.color)
+                  }`}
+                >
+                  {tag.name}
+                  <span className="ml-1 opacity-70">{tag.task_count ?? 0}</span>
+                </button>
+              );
+            })}
+        </div>
+      ) : null}
 
       {/* Saved views. Chips rather than a dropdown: the point of saving one is
           that it is one click away, and a menu puts it two. */}

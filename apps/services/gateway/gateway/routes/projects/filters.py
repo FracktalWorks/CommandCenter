@@ -107,6 +107,8 @@ def build_task_filters(
     due_before: str | None = None,
     importance_gte: int | None = None,
     q: str | None = None,
+    tags: str | None = None,
+    tags_all: str | None = None,
     include_archived: bool = False,
 ) -> tuple[list[str], dict[str, Any]]:
     """The WHERE fragments for one task query, and their bound parameters.
@@ -182,6 +184,24 @@ def build_task_filters(
         clauses.append("(t.title ILIKE :q OR t.description ILIKE :q)")
         params["q"] = f"%{q.strip()}%"
 
+    # WS-27m. TWO tag filters, because both questions get asked and one cannot
+    # answer the other: `tags` is ANY (`&&` — "show me bugs or regressions"),
+    # `tags_all` is ALL (`@>` — "the ones that are both"). Collapsing them into
+    # one parameter would silently pick a meaning, and with three tags the two
+    # answers differ by almost everything.
+    #
+    # Both use the array operators the GIN index on `pm_tasks.tags` (146) serves,
+    # so a tag filter across an imported workspace is an index scan.
+    wanted_any = split_csv(tags)[:MAX_MULTI]
+    if wanted_any:
+        clauses.append("t.tags && CAST(:tags_any AS text[])")
+        params["tags_any"] = wanted_any
+
+    wanted_all = split_csv(tags_all)[:MAX_MULTI]
+    if wanted_all:
+        clauses.append("t.tags @> CAST(:tags_all AS text[])")
+        params["tags_all"] = wanted_all
+
     if not include_archived:
         clauses.append("t.archived_at IS NULL")
 
@@ -193,12 +213,15 @@ def build_task_filters(
 #: (`parent_task_id` is navigation, not a filter).
 VIEW_FILTER_KEYS: frozenset[str] = frozenset({
     "status_id", "status_category", "assignee", "assignees", "unassigned",
-    "overdue", "due_before", "importance_gte", "q", "include_archived",
+    "overdue", "due_before", "importance_gte", "q", "tags", "tags_all",
+    "include_archived",
 })
 
 #: What a board may group by. `status` is the board's own axis; the others are
 #: what §11.2 asked for by name.
-GROUP_BY: tuple[str, ...] = ("status", "assignee", "project", "importance", "none")
+GROUP_BY: tuple[str, ...] = (
+    "status", "assignee", "project", "importance", "tag", "none",
+)
 
 
 def normalise_view_config(config: Any) -> dict[str, Any]:

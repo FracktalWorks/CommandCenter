@@ -89,8 +89,9 @@ extra middle phase two-way sync demands.
 - ~~**Custom fields.**~~ Paca's `field_key`→JSONB pattern was the recorded additive path,
   and **WS-27l took it 2026-08-07** (§11.9). The departure from the recorded plan is one
   line: deleting a definition also strips its values, which Paca does not do.
-- **Tags as a first-class registry.** v1 is `tags TEXT[]` on tasks (searchable, no colors);
-  Paca's bare-JSONB tags are its weakest area and a registry is additive later.
+- ~~**Tags as a first-class registry.**~~ v1 was `tags TEXT[]` on tasks (searchable, no
+  colors) and the registry was named as additive later; **WS-27m added it 2026-08-07**
+  (§11.10). The array stayed — the registry sits beside it, not instead of it.
 - **Time tracking, docs/wiki, dashboards-in-app.** Notes and the Center dashboards
   (WS-15) own those concerns; the Projects app binds, never rebuilds (§6).
 - **A second automation engine.** ADR-028/D6: `/workflows` is the only engine; WS-27
@@ -942,7 +943,7 @@ interesting it is to build.
 | 2 | ~~**Notifications + @mentions**~~ | — | **WS-27j ✅ BUILT 2026-08-07** |
 | 3 | ~~**Filters, grouping and saved views**~~ | — | **WS-27k ✅ BUILT 2026-08-07** |
 | 4 | ~~**Custom fields**~~ | — | **WS-27l ✅ BUILT 2026-08-07** |
-| 5 | **Tags** — refused Paca's bare JSONB array (research row 13) and nothing replaced it | The refusal was right and left a hole. A tag registry with rename/merge is the version worth having | **WS-27m** |
+| 5 | ~~**Tags**~~ | — | **WS-27m ✅ BUILT 2026-08-07** |
 | 6 | **Bulk edit / multi-select** | Re-triaging fifty imported tasks one at a time is how an import gets abandoned — this one gates the migration itself | **WS-27n** |
 | 7 | **Recurring tasks** | Every operations cadence is recurring. Without it those live in someone's head or in ClickUp | **WS-27o** |
 | 8 | **Dependency and subtask UI** — `pm_task_links` and `parent_task_id` both exist, unreachable from the board | Data with no surface is a promise the product does not keep | **WS-27p** |
@@ -1312,3 +1313,75 @@ that **every module declaring a `@router` route is imported by `__init__.py`**, 
 trap `department_centers.md` C1 documents: a module left out mounts nothing while every test
 that calls its functions directly still passes. Verified by deleting the import and watching
 it fail.
+
+### 11.10 WS-27m — the tag registry (built 2026-08-07)
+
+The fifth row of the parity backlog, and the one the research notes left open **on purpose**.
+`paca_pm_research_2026-08.md` row 13 REFUSED Paca's model — *"a bare jsonb string array on
+tasks. No registry, no colors, no rename/merge — the weakest part of Paca's model; don't copy
+it as-is"* — and §5's non-goals shipped `pm_tasks.tags TEXT[]` in its place with a registry
+named as additive later. This is that registry.
+
+Migration `156_projects_tags.sql`, `routes/projects/tags.py`, `lib/tags.ts`, a picker in the
+task panel, a tag row in the filter bar, a `tag` axis on the board, and a manager behind
+**Tags** in the header. 31 hermetic + 37 vitest cases, 16 mutants red, 30 checks against a
+real Postgres.
+
+**The array stays.** The obvious "proper" alternative is a join table, and it is the wrong
+trade here for the same reason §11.9 gave for custom fields: the array arrives with the task,
+and its GIN index (146) already answers *"tagged X"* without touching another relation. A
+join table would add a row per tag per task and a join to every board paint, to buy
+referential integrity this app can enforce in one place instead.
+
+**What the registry buys, given that:**
+
+* **One spelling per tag.** "Bug", "bug" and "BUG" are one tag, so filtering by it finds all
+  of it rather than a third of it. The task's array stores the **registry's** display form,
+  which is what makes that true rather than aspirational — and what lets a rename be one
+  statement. Identity is case-insensitive (a unique index over `lower(name)`, so two racing
+  requests cannot create both); display is case-preserving.
+* **Rename**, which rewrites every task wearing the tag and reports the count.
+* **Merge**, which is the answer to the real failure mode of free tagging.
+* **A colour**, so a board can show a tag rather than spell it.
+
+**Applying an unregistered tag REGISTERS it.** Refusing would make tagging a two-step errand —
+leave the task, create the tag, come back — which is how tagging gets abandoned, and an
+abandoned tag set is worse than a messy one. **The cost, stated: every typo becomes a tag.**
+Which is exactly why merge is here and is not optional, and why the picker *shows* the moment
+of creation ("Create …") rather than minting silently.
+
+**A rename onto an existing name is a 409, not a silent merge.** They are different operations
+with different outcomes — a merge destroys one tag — and quietly doing the destructive one
+because the names collided is the kind of surprise that stops people using a rename button.
+The error names the tag that is in the way and points at merge.
+
+**A task carrying BOTH tags ends a merge with the target once.** That is the case that is easy
+to get wrong, and getting it wrong leaves a duplicate that renders twice and survives the next
+merge too. `merged_tags` is a pure function precisely so that case can be asserted directly —
+and it is why the rewrite runs over the affected rows in Python rather than as an
+`array_replace`, which would leave the duplicate.
+
+**Two tag filters, because both questions get asked and one cannot answer the other.** `tags`
+is ANY (`&&` — *"bugs or regressions"*), `tags_all` is ALL (`@>` — *"the ones that are both"*).
+Collapsing them into one parameter would silently pick a meaning, and with three tags the two
+answers differ by almost everything. Both use the operators the existing GIN index serves.
+
+**On the board, a task with three tags appears in three columns** — the same honesty as a task
+with two assignees appearing in both theirs (§11.8).
+
+**The migration backfills, and rewrites data — deliberately, and narrowly.** `tags` has been on
+`pm_tasks` since 146 and the import path writes them, so an empty registry beside a tagged
+corpus would mean the first rename found nothing and the manager showed nothing. The winning
+display form is **the spelling people actually use** (the most frequent), ties broken
+deterministically — `min()` alone would canonicalise a corpus of 400 "Bug" to a single stray
+"BUG". Task arrays are then made to agree with the registry: it only ever replaces a tag with
+a different *casing* of the same tag, the meaning is identical, and the count is reported in a
+NOTICE. Leaving it undone would make the registry's central claim false on day one.
+
+**A bug the live run caught in that block.** The canonicalisation used
+`FROM pm_tasks t, unnest(t.tags) AS tag LEFT JOIN pm_tags g ON … t.root_project_id …` — with
+the implicit comma form the `LEFT JOIN` binds only to `unnest(...)` and `t` is not in scope
+for its `ON` clause, so the migration aborted with *"invalid reference to FROM-clause entry
+for table t"*. Rewritten as `CROSS JOIN LATERAL … WITH ORDINALITY`, which also fixed a second
+problem the first version would have shipped: `array_agg(DISTINCT ...)` sorts by its own
+expression, so every task's tag list would have come back alphabetised.

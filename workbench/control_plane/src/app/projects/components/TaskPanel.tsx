@@ -15,11 +15,13 @@ import {
   type AttachmentRow,
   type FieldRow,
   type StatusRow,
+  type TagRow,
   type TaskRow,
   attachmentsApi,
   projectsApi,
 } from "../lib/api";
 import { CustomFieldValues } from "./CustomFieldValues";
+import { TagPicker } from "./TagPicker";
 import { changeLabel } from "../lib/customFields";
 import {
   assigneeLabel,
@@ -48,6 +50,8 @@ interface Props {
    * per click for data that does not change between clicks.
    */
   fields?: FieldRow[];
+  /** WS-27m — the project's registered tags, for the picker's suggestions. */
+  tags?: TagRow[];
 }
 
 function describe(activity: ActivityRow, defs: FieldRow[] = []): string {
@@ -91,6 +95,7 @@ export function TaskPanel({
   onChanged,
   onTaskAdded,
   fields = [],
+  tags = [],
 }: Props) {
   const [timeline, setTimeline] = useState<ActivityRow[]>([]);
   const [comment, setComment] = useState("");
@@ -366,6 +371,23 @@ export function TaskPanel({
         ) : null}
         {/* Renders nothing at all when the project has no custom fields, so a
             project that never wanted them never grows an empty heading. */}
+        {/* Saved on every change rather than behind a button: a chip is a
+            single decision, and a Save beside it would be a second click for
+            something that is already unambiguous. */}
+        <TagPicker
+          value={task.tags ?? []}
+          registry={tags}
+          disabled={busy}
+          onChange={(next) => {
+            void (async () => {
+              try {
+                onChanged(await projectsApi.patchTask(task.id, { tags: next }));
+              } catch (err) {
+                setError(String((err as Error).message));
+              }
+            })();
+          }}
+        />
         <CustomFieldValues task={task} fields={fields} onChanged={onChanged} />
         <div>
           <span className="text-xs text-muted-foreground">Files</span>

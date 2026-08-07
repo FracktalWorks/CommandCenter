@@ -101,7 +101,12 @@ BEGIN
      WHERE t.relname = 'gtd_people'
        AND c.contype = 'u'
        AND (
-            SELECT array_agg(a.attname ORDER BY a.attname)
+            -- attname is type `name`; without the cast the aggregate is
+            -- name[] and `name[] = text[]` has no operator — this exact line
+            -- aborted EVERY deploy from #374's merge until 2026-08-07, and
+            -- with it every migration after 148. CI cannot see this class:
+            -- nothing replays the real SQL against a real Postgres.
+            SELECT array_agg(a.attname::text ORDER BY a.attname)
               FROM unnest(c.conkey) AS k
               JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = k
            ) = ARRAY['name']

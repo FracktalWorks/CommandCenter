@@ -205,9 +205,17 @@ before §4.1 and §4.2 exist. Nightly verified dumps take the RPO from ~7 days t
 ≤24 hours; PITR would take it to ~minutes, and is the right *next* step, not
 the first one.
 
-## 5. Unit files to create under `deploy/`
+## 5. Unit files under `deploy/` — CREATED 2026-08-07
 
-Blocked by `plan-guard`. Create verbatim.
+Both now exist at `deploy/hostinger/acb-backup.service` and
+`deploy/hostinger/acb-backup.timer`, verbatim as below. `deploy.sh` installs
+every `.service`/`.timer` in that directory into `/etc/systemd/system` on each
+deploy, reloads systemd when a file actually changed, and `enable --now`s the
+timers — so a unit added to the repo reaches the box with the code rather than
+waiting for someone to remember. (`acb-health-watchdog.timer` was in the same
+position and is picked up by the same loop.)
+
+Kept below as the reference copy.
 
 **`deploy/hostinger/acb-backup.service`**
 
@@ -278,5 +286,36 @@ docker exec acb-postgres psql -U acb -d acb_restored_<ts> \
 systemctl list-timers acb-backup.timer
 ```
 
-Until step 2 has been run once against a real dump, this system has scripts,
-not a tested restore path — which is the state BO-23 exists to end.
+### 6.1 What is already verified, and what is not — 2026-08-07
+
+**The tooling is tested.** `scripts/rehearse_restore.sh` does the full round
+trip against a real Postgres — seed known rows, `backup_db.sh --verify-restore`
+(the same command the systemd unit runs), `DROP` the table, `restore_db.sh`,
+then compare an **md5 of the restored rows against the originals**. That last
+comparison is the one that matters: every preceding step also passes against an
+empty database, which is the failure you must never accept from a restore.
+
+It additionally asserts the live database is untouched by a default restore,
+and that a *truncated* dump is rejected — a verifier that passes on garbage is
+worse than no verifier, because it converts an unnoticed problem into a false
+assurance.
+
+It runs in CI on every PR (`pr-check.yml` → "Backup/restore rehearsal"), and it
+was checked in **both directions**: with `restore_db.sh` deliberately sabotaged
+to create the scratch database without restoring into it, the rehearsal exits 1
+with `restored 0 rows, backed up 250`.
+
+This was only possible after both scripts stopped reaching Postgres exclusively
+through `docker exec acb-postgres` — the coupling that meant they could not be
+run anywhere but the VPS, which is exactly why they never had been. They now go
+through a `pg`/`pgi` seam with `PG_MODE=local`; the VPS path is unchanged.
+
+**What remains owed, and what no test can supply.** Steps 1–3 above, once, on
+the box. The rehearsal proves the scripts are correct; it cannot prove that
+*this* deployment's dump contains what you believe it does, that
+`/opt/acb/backups` has room for fourteen of them, or that `BACKUP_REMOTE`
+points anywhere at all. Those are properties of the machine.
+
+Until step 2 has been run once against a **production** dump, this system has a
+tested restore *path* but an unverified restore of *your data* — a materially
+better position than BO-23 was filed against, and still not the finished one.

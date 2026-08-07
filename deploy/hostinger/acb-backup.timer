@@ -1,0 +1,18 @@
+[Unit]
+Description=Nightly CommandCenter database backup
+Documentation=file:///opt/acb/app/ai-company-brain/specs/backup_and_restore.md
+
+[Timer]
+# 02:30 UTC — clear of the 05:00 UTC Monday codebase-health job, so a long
+# verify restore cannot contend with it.
+OnCalendar=*-*-* 02:30:00
+# The box does get rebooted. Persistent=true runs a missed backup on the next
+# boot instead of silently skipping a day — the exact gap you would only
+# discover while trying to restore it.
+Persistent=true
+RandomizedDelaySec=5min
+AccuracySec=1min
+Unit=acb-backup.service
+
+[Install]
+WantedBy=timers.target

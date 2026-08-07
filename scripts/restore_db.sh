@@ -48,6 +48,51 @@ if [ -f "$ENV_FILE" ]; then
   PG_USER="${PG_USER:-acb}"
 fi
 
+# ── How we reach Postgres ────────────────────────────────────────────────────
+#
+# On the VPS the cluster lives in a container, so every command goes through
+# `docker exec`. That coupling is also why this script had never been run
+# anywhere else — and therefore why, per this ticket's own rule, it was not yet
+# a backup. `PG_MODE=local` runs the identical logic against a Postgres reached
+# through libpq (PGHOST/PGPORT/PGUSER), which is what makes the restore
+# rehearsal in scripts/rehearse_restore.sh possible on any machine.
+#
+# The seam is two functions rather than a variable prefix on purpose: `docker
+# exec -i` and a bare local command differ in more than a prefix, and a string
+# that is sometimes empty splits badly under `set -u`.
+PG_MODE="${PG_MODE:-docker}"
+# ⚠️ Same seam, same rule as backup_db.sh: the docker branch must invoke
+# `docker exec`, never the function's own name (that recursion segfaulted every
+# deploy's pre-migration gate, 2026-08-07). Covered by the executing guard in
+# tests/unit/test_backup_deploy_wiring.py.
+pg()  { if [ "$PG_MODE" = "local" ]; then "$@"; else docker exec "$PG_CONTAINER" "$@"; fi; }
+pgi() { if [ "$PG_MODE" = "local" ]; then "$@"; else docker exec -i "$PG_CONTAINER" "$@"; fi; }
+
+require_postgres() {
+  if [ "$PG_MODE" = "local" ]; then
+    command -v psql >/dev/null || { echo "ERROR: PG_MODE=local but psql is not on PATH." >&2; exit 1; }
+    psql -U "$PG_USER" -d postgres -tAc 'select 1' >/dev/null 2>&1 || {
+      echo "ERROR: PG_MODE=local but no Postgres answers as '$PG_USER' (check PGHOST/PGPORT/PGPASSWORD)." >&2
+      exit 1
+    }
+  elif ! docker ps --format '{{.Names}}' | grep -qx "$PG_CONTAINER"; then
+    echo "ERROR: Postgres container '$PG_CONTAINER' is not running." >&2
+    exit 1
+  fi
+}
+
+require_postgres
+
+# Copy-pasteable follow-ups, phrased for whichever way we reached the cluster —
+# a docker command is useless advice on a box where Postgres is a local service.
+if [ "$PG_MODE" = "local" ]; then
+  INSPECT_CMD="psql -U $PG_USER -d \$SCRATCH"
+  DROP_CMD="dropdb -U $PG_USER \$SCRATCH"
+else
+  INSPECT_CMD="docker exec -it $PG_CONTAINER psql -U $PG_USER -d \$SCRATCH"
+  DROP_CMD="docker exec $PG_CONTAINER dropdb -U $PG_USER \$SCRATCH"
+fi
+
 if [ "$LIST" = "1" ]; then
   say "Backups in $BACKUP_DIR"
   for d in "$BACKUP_DIR"/[0-9]*Z; do
@@ -69,7 +114,7 @@ SRC="$BACKUP_DIR/$FROM/$DB.dump"
 
 # Re-check integrity before doing anything. The backup script checked this when
 # it was written; disks rot, and a restore is exactly when you find out.
-docker exec -i "$PG_CONTAINER" pg_restore --list > /dev/null < "$SRC" 2>/dev/null \
+pgi pg_restore --list > /dev/null < "$SRC" 2>/dev/null \
   || die "$SRC is unreadable — pick an older backup"
 
 say "Source: $SRC"
@@ -85,7 +130,7 @@ if [ -n "$TARGET" ] && [ "$TARGET" = "$DB" ]; then
   say "Safety dump of CURRENT '$TARGET' before overwriting"
   PRE="$BACKUP_DIR/pre-restore-$(date -u '+%Y-%m-%dT%H%M%SZ')"
   mkdir -p "$PRE"
-  docker exec "$PG_CONTAINER" pg_dump -U "$PG_USER" -d "$TARGET" -Fc > "$PRE/$TARGET.dump"
+  pg pg_dump -U "$PG_USER" -d "$TARGET" -Fc > "$PRE/$TARGET.dump"
   echo "    saved -> $PRE/$TARGET.dump"
 
   # Stop the app before swapping the database under it. Left running, the
@@ -97,7 +142,7 @@ if [ -n "$TARGET" ] && [ "$TARGET" = "$DB" ]; then
   say "Restoring into '$TARGET' (clean)"
   # --clean --if-exists drops each object before recreating it, so this is a
   # true replacement rather than a merge into whatever is already there.
-  docker exec -i "$PG_CONTAINER" pg_restore -U "$PG_USER" -d "$TARGET" \
+  pgi pg_restore -U "$PG_USER" -d "$TARGET" \
       --clean --if-exists --no-owner --no-acl < "$SRC" 2>&1 | tail -20 || true
 
   say "Restarting gateway + workbench"
@@ -109,22 +154,22 @@ fi
 # --- Safe path (default) -----------------------------------------------------
 SCRATCH="${TARGET:-acb_restored_$(date -u +%Y%m%d%H%M%S)}"
 say "Restoring into SCRATCH database '$SCRATCH' — nothing live is touched"
-docker exec "$PG_CONTAINER" createdb -U "$PG_USER" "$SCRATCH" 2>/dev/null || true
+pg createdb -U "$PG_USER" "$SCRATCH" 2>/dev/null || true
 
 if [ -n "$TABLE" ]; then
   # Single-table extraction is the whole reason for the -Fc custom format.
   say "Restoring only table '$TABLE'"
-  docker exec -i "$PG_CONTAINER" pg_restore -U "$PG_USER" -d "$SCRATCH" \
+  pgi pg_restore -U "$PG_USER" -d "$SCRATCH" \
       --no-owner --no-acl --table "$TABLE" < "$SRC" 2>&1 | tail -20 || true
 else
-  docker exec -i "$PG_CONTAINER" pg_restore -U "$PG_USER" -d "$SCRATCH" \
+  pgi pg_restore -U "$PG_USER" -d "$SCRATCH" \
       --no-owner --no-acl < "$SRC" 2>&1 | tail -20 || true
 fi
 
 say "Done — '$SCRATCH' is populated and the live database is untouched."
 cat <<EOF
     Inspect it:
-      docker exec -it $PG_CONTAINER psql -U $PG_USER -d $SCRATCH
+      $INSPECT_CMD
 
     Copy rows back into live (example):
       INSERT INTO gtd_task SELECT * FROM ${SCRATCH}.public.gtd_task WHERE ...
@@ -132,5 +177,5 @@ cat <<EOF
       -- pg_dump -t <table> the scratch DB and psql it into live.
 
     Drop it when finished:
-      docker exec $PG_CONTAINER dropdb -U $PG_USER $SCRATCH
+      $DROP_CMD
 EOF

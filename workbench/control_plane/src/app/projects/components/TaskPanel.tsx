@@ -22,6 +22,7 @@ import {
 } from "../lib/api";
 import { CustomFieldValues } from "./CustomFieldValues";
 import { TagPicker } from "./TagPicker";
+import { RepeatEditor } from "./RepeatEditor";
 import { changeLabel } from "../lib/customFields";
 import {
   assigneeLabel,
@@ -388,6 +389,7 @@ export function TaskPanel({
             })();
           }}
         />
+        <RepeatEditor taskId={task.id} />
         <CustomFieldValues task={task} fields={fields} onChanged={onChanged} />
         <div>
           <span className="text-xs text-muted-foreground">Files</span>

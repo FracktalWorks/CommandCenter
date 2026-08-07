@@ -945,7 +945,7 @@ interesting it is to build.
 | 4 | ~~**Custom fields**~~ | — | **WS-27l ✅ BUILT 2026-08-07** |
 | 5 | ~~**Tags**~~ | — | **WS-27m ✅ BUILT 2026-08-07** |
 | 6 | ~~**Bulk edit / multi-select**~~ | — | **WS-27n ✅ BUILT 2026-08-07 · unblocks g** |
-| 7 | **Recurring tasks** | Every operations cadence is recurring. Without it those live in someone's head or in ClickUp | **WS-27o** |
+| 7 | ~~**Recurring tasks**~~ | — | **WS-27o ✅ BUILT 2026-08-07** |
 | 8 | **Dependency and subtask UI** — `pm_task_links` and `parent_task_id` both exist, unreachable from the board | Data with no surface is a promise the product does not keep | **WS-27p** |
 | 9 | **Calendar / timeline view** | The third view ClickUp users actually use, after list and board | **WS-27q** |
 | 10 | **Global task search** | `?q=` exists on the list endpoint; there is no search surface | **WS-27r** |
@@ -1479,3 +1479,83 @@ tests failed for a reason with nothing to do with the code under test. The probe
 matched first and the audience branch keys off `assignee AS who`, which only its own query
 has. A fake that dispatches on substrings needs its fingerprints to be *specific*, not merely
 present.
+
+### 11.13 WS-27o — recurring tasks (built 2026-08-07)
+
+*"Every operations cadence is recurring. Without it those live in someone's head or in
+ClickUp."*
+
+Migration `157_projects_recurrence.sql`, `routes/projects/recurrence.py`, `lib/recurrence.ts`
+and a repeat row in the task panel. 45 hermetic + 27 vitest cases, 31 mutants red, 39 checks
+against a real Postgres.
+
+**No scheduler — and that is forced rather than chosen.** §5's non-goals: *"A second
+automation engine. ADR-028/D6: `/workflows` is the only engine; WS-27 contributes events and
+node types to it."* A recurrence worker here would be exactly that second engine. So the
+successor is created **when a task closes**: `apply_status_transition` already owns that
+moment, which means a task finished from the board, from My work, from an automation or from a
+bulk edit all recur identically. A second call site would be a fifth way to finish a task that
+forgets to.
+
+**What that costs, stated rather than discovered.** A series only advances when somebody
+finishes the current one. A monthly report nobody closes does not pile up twelve copies —
+which is right — but a daily stand-up nobody ticks does not appear tomorrow, which is the
+honest limitation. Materialising ahead of time is already reachable through the engine that
+owns scheduling (a cron trigger plus the `pm_task` node WS-27f added), so nothing here has to
+be undone to get it.
+
+**The anchor is per rule, because the two answers mean different things.** `due` keeps the
+schedule — "stock count on the 1st" stays on the 1st however late the last one was closed, so
+the series does not drift. `completed` measures the interval from when the work was actually
+done — "water the plants every 3 days" restarts when you water them. Neither is a sensible
+global default. A `due` anchor also **catches up**: a monthly task closed six weeks late would
+otherwise produce a successor already overdue the moment it appeared, which teaches people the
+date is meaningless. The missed occurrences are *skipped rather than backfilled* — nobody
+wants four copies of a stand-up they did not attend.
+
+**The date arithmetic is where this is either right or quietly wrong for a year**, so it is
+pure and each case is one assertion:
+
+* **January 31st, monthly.** The day is clamped at *computation* time and stored as asked.
+  Storing the clamped value instead would permanently demote the rule to the 28th after its
+  first February.
+* **February 29th, yearly.** The same shape, once every four years.
+* **"Every other Monday and Thursday."** Within a week the rule takes the next allowed day;
+  only when the week runs out does it jump `interval` weeks. A naive `+14 days` alternates
+  between the two days instead of giving both days of every second week.
+* **A stand-up at 09:00** stays at 09:00.
+
+**Closing a task twice must not spawn twice.** A task can cross into `done` more than once —
+close it, reopen it to add a note, close it again — and every crossing reaches the same seam.
+`recurrence_spawned_at` is the guard, and it is never cleared: reopening undoes `completed_at`,
+but it does not un-emit a successor that already exists and may already have been worked on.
+
+**Stopping a series keeps the work.** Deleting the rule detaches the tasks it produced rather
+than deleting them: they are real work, some of it finished, and a "stop repeating this"
+button that swept away three months of completed reports would be the last time anybody
+pressed it.
+
+**Two bugs the live run caught, and reading could not.**
+
+1. **The weekly CHECK passed the very row it existed to reject.**
+   `CHECK (freq <> 'weekly' OR array_length(weekdays, 1) >= 1)` looks correct and is not:
+   `array_length('{}', 1)` returns **NULL**, `NULL >= 1` is NULL, and a CHECK constraint only
+   *fails* on FALSE. A weekly rule with no weekdays inserted happily. `coalesce(…, 0)` fixes
+   it, and a test now asserts the coalesce is present because the hermetic suite has no
+   database to try the expression on.
+2. **`_next_number` and `_default_status` were reimplementations**, and one of them invented a
+   column (`last_number`; the real one is `last_value`). Both were replaced by `core`'s own
+   `next_task_number` and `load_default_status` — the same mistake WS-27n had just been careful
+   to avoid, made two tickets later in the same package.
+
+**A third, caught by its own test:** `int(rule.get("interval") or 1)` turns an explicit `0`
+into "every 1" — a typo that looks exactly like a save, and one the database's CHECK would
+then have refused as a 500 rather than a 422. Absent now means "every 1"; zero means the
+sender made a mistake.
+
+**In the browser, the sentence is the feature.** A form of five controls is a shape; *"Every 2
+weeks on Mon, Thu, keeping to the schedule"* is something somebody can check before committing
+to it — shown live rather than on save, because picking the wrong anchor is invisible until a
+cadence has drifted for three months. The occurrence limit reads as what is **left**, not the
+cap, and switching frequency clears the fields the new one does not use so a stale
+`day_of_month` cannot reappear.

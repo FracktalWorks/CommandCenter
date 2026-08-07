@@ -71,6 +71,32 @@ CLOSING_TYPES: tuple[str, ...] = ("won", "lost")
 #: pipeline number stays high while the quarter empties.
 WEIGHTED_TYPES: tuple[str, ...] = ("open", "ongoing")
 
+#: The weighted-₹ aggregate — ONE expression, shared by every forecast surface.
+#:
+#: It lives here rather than beside its first caller because it now has two
+#: (``pipeline.get_pipeline`` and ``reports``), and a second copy would defeat
+#: ``tests/unit/_crm_fakes.py::_WEIGHTED_SUM_RE``, which reads the formula OUT
+#: of the statement text precisely so a drifted copy changes the test's answer
+#: rather than agreeing with itself. Import it; never retype it (WS-26g).
+#:
+#: ``COALESCE(probability, :stage_probability)`` is §5.1's inheritance rule read
+#: at query time: the deal's own probability is what forecast math reads
+#: (D-CRM-10), and a NULL only survives on rows that predate a move — which is
+#: every imported deal, i.e. most of the live board. Reading those as 0% would
+#: zero the forecast on exactly the rows the forecast is about.
+#:
+#: It also cannot be derived from a page of rows: ``get_pipeline`` caps ``rows``
+#: at ``per_lane`` and the browser sends no cap, so a rows-derived figure would
+#: silently under-report exactly the busy lane somebody is looking at.
+#:
+#: Cross-language twin: ``lib/board.ts::weightedDeal``/``weightedRows``. The one
+#: fixture both sides read is ``tests/fixtures/crm_weighted_parity.json`` — two
+#: independently typed tables are not parity.
+WEIGHTED_SQL = (
+    "COALESCE(SUM(amount * COALESCE(probability, :stage_probability) / 100.0), 0) "
+    "AS weighted"
+)
+
 #: `crm_activities.type`, mirrored from the same migration.
 ACTIVITY_TYPES: tuple[str, ...] = (
     "note", "call", "meeting", "task", "status_change", "system",
@@ -506,6 +532,29 @@ def row_to_model(row: Any, model: type[BaseModel]) -> Any:
 
 def row_to_dict(row: Any, model: type[BaseModel]) -> dict[str, Any]:
     return row_to_model(row, model).model_dump()
+
+
+def status_wire(row: Any) -> StatusModel:
+    """A ``crm_{lead,deal}_statuses`` row → its wire model.
+
+    Not :func:`row_to_model`: every reader wants the same defensive defaults
+    (a NULL ``color`` renders as grey, a missing ``position`` sorts first),
+    and ``probability`` exists on deal statuses only.
+
+    It lives here rather than beside a caller because there are now THREE —
+    ``admin``, ``pipeline`` and ``reports`` — and three hand-kept copies of one
+    projection is how one of them quietly stops reporting ``probability``,
+    which is the number every forecast surface reads.
+    """
+    return StatusModel(
+        id=str(row.id),
+        name=row.name,
+        color=getattr(row, "color", "gray") or "gray",
+        position=int(getattr(row, "position", 0) or 0),
+        type=getattr(row, "type", "open"),
+        is_default=bool(getattr(row, "is_default", False)),
+        probability=getattr(row, "probability", None),
+    )
 
 
 def actor(user: Any) -> str:

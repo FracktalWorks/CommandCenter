@@ -51,6 +51,21 @@ describe("parseView", () => {
     expect(parseView("?tab=settings").tab).toBe("settings");
   });
 
+  it("admits the reports tab on the same grammar", () => {
+    // WS-26g. The second non-collection tab, and the reason `isTab` is its own
+    // predicate rather than a ternary that only knew about `board`.
+    expect(parseView("?tab=reports").tab).toBe("reports");
+  });
+
+  it("keeps the record sheet open over the reports tab", () => {
+    // `?tab=reports&deal=<id>` is a legitimate link — "this stage is where we
+    // are losing them, look at this deal" — and it only works because the tab
+    // is URL state rather than a route of its own.
+    const view = parseView("?tab=reports&deal=d1");
+    expect(view.tab).toBe("reports");
+    expect(view.record).toEqual({ param: "deal", entity: "deals", id: "d1" });
+  });
+
   it("reads the list filters", () => {
     const view = parseView("?tab=leads&q=bosch&status=s1&converted=1&owner=vj@x.in");
     expect(view).toMatchObject({
@@ -158,6 +173,13 @@ describe("selectTab", () => {
     expect(viewHref(settings)).toBe("/crm?tab=settings");
     expect(parseView(serializeView(settings))).toEqual(settings);
     expect(selectTab(settings, "board").tab).toBe("board");
+
+    // WS-26g's tab round-trips the same way — it is one more thing this page
+    // can be showing, not a second app.
+    const reports = selectTab(list, "reports");
+    expect(reports).toMatchObject({ tab: "reports", statusId: null, record: null });
+    expect(viewHref(reports)).toBe("/crm?tab=reports");
+    expect(parseView(serializeView(reports))).toEqual(reports);
   });
 
   it("clears the sort, because the keys are a per-entity allowlist", () => {

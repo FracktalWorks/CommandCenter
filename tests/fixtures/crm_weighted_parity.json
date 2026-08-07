@@ -1,0 +1,132 @@
+{
+  "$comment": [
+    "The weighted-₹ parity table (WS-26g, specs/crm_app.md §9 'WS-26g' block 1).",
+    "",
+    "ONE file, read by BOTH runners: tests/unit/test_crm_reports.py drives it",
+    "through the emitted SQL (gateway/routes/crm/core.py::WEIGHTED_SQL, read out",
+    "of the statement text by tests/unit/_crm_fakes.py::_WEIGHTED_SUM_RE), and",
+    "workbench/control_plane/src/app/crm/lib/board.test.ts drives it through",
+    "board.ts::weightedDeal / weightedRows. Two independently typed tables are",
+    "not parity — that is the whole reason this file exists rather than a",
+    "comment pointing one implementation at the other.",
+    "",
+    "A row is (amount, deal_probability, stage_probability, stage_type) and the",
+    "single number both sides must produce for it. `null` means the column is",
+    "NULL / the field is absent, which is a distinct case from 0 on three of",
+    "these rows and is the case most of the live board is in."
+  ],
+  "rows": [
+    {
+      "name": "the deal's own probability wins over the stage's",
+      "amount": 200000,
+      "deal_probability": 20,
+      "stage_probability": 50,
+      "stage_type": "open",
+      "expected_weighted": 40000
+    },
+    {
+      "name": "a NULL deal probability inherits the stage default",
+      "amount": 200000,
+      "deal_probability": null,
+      "stage_probability": 50,
+      "stage_type": "ongoing",
+      "expected_weighted": 100000
+    },
+    {
+      "name": "a stated 0 is a measurement, not a missing value",
+      "amount": 200000,
+      "deal_probability": 0,
+      "stage_probability": 50,
+      "stage_type": "open",
+      "expected_weighted": 0
+    },
+    {
+      "name": "100 carries through unchanged",
+      "amount": 200000,
+      "deal_probability": 100,
+      "stage_probability": 50,
+      "stage_type": "open",
+      "expected_weighted": 200000
+    },
+    {
+      "name": "a deal with no amount forecasts nothing",
+      "amount": null,
+      "deal_probability": 80,
+      "stage_probability": 50,
+      "stage_type": "open",
+      "expected_weighted": 0
+    },
+    {
+      "name": "neither the deal nor the stage says: zero, not an error",
+      "amount": 200000,
+      "deal_probability": null,
+      "stage_probability": null,
+      "stage_type": "open",
+      "expected_weighted": 0
+    },
+    {
+      "name": "a zero amount is zero however sure anybody is",
+      "amount": 0,
+      "deal_probability": 50,
+      "stage_probability": 50,
+      "stage_type": "open",
+      "expected_weighted": 0
+    },
+    {
+      "name": "an inherited stage default on an ongoing lane",
+      "amount": 100000,
+      "deal_probability": null,
+      "stage_probability": 33,
+      "stage_type": "ongoing",
+      "expected_weighted": 33000
+    },
+    {
+      "name": "an override that disagrees with a high stage prior",
+      "amount": 125000,
+      "deal_probability": 35,
+      "stage_probability": 10,
+      "stage_type": "ongoing",
+      "expected_weighted": 43750
+    },
+    {
+      "name": "a small deal on an early lane",
+      "amount": 75000,
+      "deal_probability": 7,
+      "stage_probability": 20,
+      "stage_type": "open",
+      "expected_weighted": 5250
+    },
+    {
+      "name": "a won lane forecasts nothing — that is booked revenue",
+      "amount": 500000,
+      "deal_probability": 100,
+      "stage_probability": 100,
+      "stage_type": "won",
+      "expected_weighted": 0
+    },
+    {
+      "name": "a lost lane forecasts nothing",
+      "amount": 300000,
+      "deal_probability": 0,
+      "stage_probability": 0,
+      "stage_type": "lost",
+      "expected_weighted": 0
+    },
+    {
+      "name": "on_hold is excluded too — the fifth type the prose never mentions",
+      "amount": 400000,
+      "deal_probability": 40,
+      "stage_probability": 40,
+      "stage_type": "on_hold",
+      "expected_weighted": 0
+    },
+    {
+      "name": "an on_hold deal that would otherwise be the biggest forecast",
+      "amount": 1000000,
+      "deal_probability": null,
+      "stage_probability": 90,
+      "stage_type": "on_hold",
+      "expected_weighted": 0
+    }
+  ]
+}

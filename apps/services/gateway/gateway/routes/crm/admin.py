@@ -32,6 +32,7 @@ from gateway.routes.crm.core import (
     insert_row,
     require_row,
     router,
+    status_wire,
     update_row,
 )
 from pydantic import BaseModel
@@ -70,18 +71,6 @@ def _kind(kind: str) -> tuple[str, str]:
             status_code=404,
             detail=f"Unknown status kind '{kind}'. One of: {sorted(STATUS_KINDS)}.",
         ) from None
-
-
-def _status_wire(row: Any) -> StatusModel:
-    return StatusModel(
-        id=str(row.id),
-        name=row.name,
-        color=getattr(row, "color", "gray") or "gray",
-        position=int(getattr(row, "position", 0) or 0),
-        type=getattr(row, "type", "open"),
-        is_default=bool(getattr(row, "is_default", False)),
-        probability=getattr(row, "probability", None),
-    )
 
 
 #: D-CRM-10 — a won-type lane forecasts 100 and a lost-type lane 0.
@@ -197,7 +186,7 @@ async def list_statuses(
         rows = (await db.execute(
             text(f"SELECT * FROM {table} ORDER BY position, name"), {},
         )).fetchall()
-        return [_status_wire(r) for r in rows]
+        return [status_wire(r) for r in rows]
     finally:
         await db.close()
 
@@ -219,7 +208,7 @@ async def create_status(
             values["position"] = await _next_position(db, table)
         row = await insert_row(db, table, values)
         await db.commit()
-        return _status_wire(row)
+        return status_wire(row)
     finally:
         await db.close()
 
@@ -243,10 +232,10 @@ async def patch_status(
         row = await require_row(db, table, status_id, "Status")
         _validate_status(kind, values, existing=row)
         if not values:
-            return _status_wire(row)
+            return status_wire(row)
         row = await update_row(db, table, status_id, values, touch=False)
         await db.commit()
-        return _status_wire(row)
+        return status_wire(row)
     finally:
         await db.close()
 

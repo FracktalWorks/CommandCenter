@@ -94,6 +94,109 @@ export type StageMetadataReport = {
   errors: string[];
 };
 
+// ── The WS-26g reports (§5.1 system 2) ────────────────────────────────────
+//
+// Mirrors routes/crm/reports.py's Pydantic models. Four independent reads
+// rather than one bundled payload: they answer four different questions, and a
+// single endpoint would make the slowest one decide when any of them renders.
+
+export type StageTotals = {
+  status: Status;
+  count: number;
+  amount: number;
+  weighted: number;
+};
+
+/** Only open/ongoing stages appear — won is booked, lost is nothing. */
+export type PipelineReport = {
+  stages: StageTotals[];
+  count: number;
+  amount: number;
+  weighted: number;
+};
+
+export type FunnelStage = {
+  status: Status;
+  /** Deals whose VISITED SET includes this stage (from ∪ to ∪ current). */
+  entered: number;
+  advanced: number;
+  /** `advanced / entered` as a percentage; 0 when nothing entered. */
+  conversion_forward: number;
+  /**
+   * Median time spent in this stage by the deals that LEFT it, in days.
+   * `null` means no departure has ever been measured — which is not zero, and
+   * is why the surface labels it median-over-departures.
+   */
+  median_dwell_days: number | null;
+  dwell_samples: number;
+};
+
+/**
+ * A status name in the funnel log matching no current lane.
+ *
+ * The settings tab can rename a lane and the log keeps the old name forever
+ * (it stores names, not ids, deliberately). Rendered rather than hidden: a
+ * funnel whose totals silently shrank the day somebody fixed a typo is a
+ * funnel nobody can trust again.
+ */
+export type UnmatchedStage = { name: string; deals: number; mentions: number };
+
+export type FunnelReport = {
+  stages: FunnelStage[];
+  deals: number;
+  transitions: number;
+  unmatched: UnmatchedStage[];
+};
+
+export type LostReasonShare = {
+  label: string;
+  deals: number;
+  amount: number;
+  /** False for the unattributed bucket — missing data, not a chosen reason. */
+  attributed: boolean;
+};
+
+export type WinLossReport = {
+  window_days: number;
+  since: string;
+  won: number;
+  lost: number;
+  win_rate: number;
+  won_amount: number;
+  lost_amount: number;
+  average_cycle_days: number | null;
+  /**
+   * Deals in a won/lost lane with NO `closed_at` — every imported closed deal,
+   * until the owner runs the f4 backfill. They are outside every window by
+   * construction, and the count is what makes a 0% win rate explicable.
+   */
+  closed_without_date: number;
+  lost_reasons: LostReasonShare[];
+};
+
+export type OwnerRow = {
+  /** `null` (or blank) is the unassigned bucket — see `ownerLabel`. */
+  owner_email: string | null;
+  open_deals: number;
+  weighted: number;
+  won_amount: number;
+};
+
+export type OwnerLeaderboard = {
+  owners: OwnerRow[];
+  window_days: number;
+  /** Owners past the server's cap, reported rather than silently cut. */
+  omitted: number;
+};
+
+/** The four blocks the reports tab loads together. */
+export type CrmReports = {
+  pipeline: PipelineReport;
+  funnel: FunnelReport;
+  winLoss: WinLossReport;
+  owners: OwnerLeaderboard;
+};
+
 type Provenance = {
   source?: string;
   zoho_id?: string | null;

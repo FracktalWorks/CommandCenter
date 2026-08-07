@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   applyMove,
@@ -12,7 +14,7 @@ import {
   WEIGHTED_TYPES,
   type BoardLane,
 } from "./board";
-import type { Deal, Pipeline, Status } from "./types";
+import type { Deal, Pipeline, Status, StatusType } from "./types";
 
 // ── Fixtures ──────────────────────────────────────────────────────────────
 //
@@ -253,6 +255,73 @@ describe("weightedRows", () => {
   it("is zero for an empty lane rather than NaN", () => {
     expect(weightedRows([], PROPOSAL)).toBe(0);
   });
+});
+
+// ── WS-26g · the cross-language weighted parity fixture ───────────────────
+//
+// ONE file, read by BOTH runners. `tests/unit/test_crm_reports.py` drives the
+// same rows through the emitted SQL (`core.WEIGHTED_SQL`, read out of the
+// statement text by `_crm_fakes._WEIGHTED_SUM_RE`); this drives them through
+// `weightedDeal`/`weightedRows`. Two independently typed tables are not
+// parity, which is the whole reason the fixture exists rather than a comment
+// pointing one implementation at the other.
+
+type ParityRow = {
+  name: string;
+  amount: number | null;
+  deal_probability: number | null;
+  stage_probability: number | null;
+  stage_type: StatusType;
+  expected_weighted: number;
+};
+
+const PARITY: ParityRow[] = JSON.parse(
+  readFileSync(
+    fileURLToPath(
+      // …/crm/lib → …/crm → …/app → …/src → control_plane → workbench → repo
+      new URL(
+        "../../../../../../tests/fixtures/crm_weighted_parity.json",
+        import.meta.url
+      )
+    ),
+    "utf-8"
+  )
+).rows;
+
+describe("the weighted parity fixture", () => {
+  it("is present and non-trivial", () => {
+    // A fixture that quietly disappeared would leave this file asserting
+    // nothing while the pytest half stayed green — the exact failure a shared
+    // fixture exists to remove, so its absence must be loud on both sides.
+    expect(PARITY.length).toBeGreaterThanOrEqual(10);
+  });
+
+  it.each(PARITY)(
+    "weightedRows agrees with the SQL: $name",
+    (row: ParityRow) => {
+      // `weightedRows` is the function the fixture pins because it applies the
+      // open/ongoing filter, exactly as the gateway's `_lane_totals` does — so
+      // the won/lost/on_hold rows assert the exclusion rather than skipping.
+      expect(
+        weightedRows(
+          [{ amount: row.amount, probability: row.deal_probability }],
+          { type: row.stage_type, probability: row.stage_probability }
+        )
+      ).toBeCloseTo(row.expected_weighted, 6);
+    }
+  );
+
+  it.each(PARITY.filter((row) => WEIGHTED_TYPES.includes(row.stage_type)))(
+    "weightedDeal agrees for a forecastable stage: $name",
+    (row: ParityRow) => {
+      expect(
+        weightedDeal(
+          { amount: row.amount, probability: row.deal_probability },
+          { probability: row.stage_probability }
+        )
+      ).toBeCloseTo(row.expected_weighted, 6);
+    }
+  );
 });
 
 describe("planMove", () => {

@@ -27,6 +27,9 @@ import { type GroupBy, type TaskGroup, personLabel } from "../lib/grouping";
 interface Props {
   groups: TaskGroup[];
   groupBy: GroupBy;
+  /** WS-27n — ids currently multi-selected. Empty when nobody is bulk editing. */
+  selected?: ReadonlySet<string>;
+  onToggle?: (id: string, shift: boolean) => void;
   onSelect: (task: TaskRow) => void;
   onDrop: (
     task: TaskRow,
@@ -35,7 +38,14 @@ interface Props {
   ) => void;
 }
 
-export function TaskBoard({ groups, groupBy, onSelect, onDrop }: Props) {
+export function TaskBoard({
+  groups,
+  groupBy,
+  selected,
+  onToggle,
+  onSelect,
+  onDrop,
+}: Props) {
   const [dragging, setDragging] = useState<TaskRow | null>(null);
   const draggable = groupBy === "status";
 
@@ -89,14 +99,31 @@ export function TaskBoard({ groups, groupBy, onSelect, onDrop }: Props) {
           </header>
           <ul className="flex-1 space-y-2 p-2">
             {column.tasks.map((task) => (
-              <li key={task.id}>
+              <li key={task.id} className="flex items-start gap-1.5">
+                {onToggle ? (
+                  <input
+                    type="checkbox"
+                    className="mt-2 shrink-0"
+                    aria-label={`Select ${task.title}`}
+                    checked={selected?.has(task.id) ?? false}
+                    // The click must not also open the task — a checkbox
+                    // inside a card that opens on click is otherwise one
+                    // gesture with two outcomes.
+                    onClick={(e) => e.stopPropagation()}
+                    onChange={(e) =>
+                      onToggle(task.id, (e.nativeEvent as MouseEvent).shiftKey)
+                    }
+                  />
+                ) : null}
                 <button
                   type="button"
                   draggable={draggable}
                   onDragStart={() => setDragging(task)}
                   onDragEnd={() => setDragging(null)}
                   onClick={() => onSelect(task)}
-                  className="w-full rounded-md border border-border bg-background p-2 text-left text-sm hover:border-ring"
+                  className={`w-full rounded-md border bg-background p-2 text-left text-sm hover:border-ring ${
+                    selected?.has(task.id) ? "border-primary" : "border-border"
+                  }`}
                 >
                   <span className="block truncate text-foreground">{task.title}</span>
                   <span className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">

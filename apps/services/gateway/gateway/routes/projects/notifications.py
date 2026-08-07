@@ -41,6 +41,7 @@ from gateway.routes.projects.core import (
     resolve_visibility,
     resolve_visibility_for,
     router,
+    task_visibility_clause,
 )
 from pydantic import BaseModel
 from sqlalchemy import text
@@ -143,6 +144,16 @@ def notifiable(recipients: object, *, exclude: str) -> list[str]:
 async def deliverable(db: Any, recipients: list[str], task_id: str) -> list[str]:
     """Of these people, the ones who can actually open this task (rule 3).
 
+    Uses ``task_visibility_clause`` — the SAME predicate ``list_tasks`` and
+    ``load_visible_task`` use — and that is the whole point rather than a tidy
+    detail. There are **two** ways to see a task: a grant on its project, or
+    being an assignee of it. This function originally checked only the first,
+    so anybody assigned work in a project they hold no grant on was judged
+    undeliverable — they could open the task, and the assignment that put them
+    on it notified nobody, while the response told the assigner they could not
+    see it. That is precisely the silent assignment WS-27j exists to end, still
+    open for the most common case in a grant-scoped app: delegating outward.
+
     One visibility resolution per recipient. That is N queries for N people,
     and it is the right trade: the alternative is a single clever join that
     re-implements the grant closure, and the closure already has exactly one
@@ -155,7 +166,7 @@ async def deliverable(db: Any, recipients: list[str], task_id: str) -> list[str]
             text(
                 "SELECT 1 FROM pm_tasks t "
                 "WHERE t.id = CAST(:tid AS uuid) "
-                f"AND {vis.project_clause('t.root_project_id')} LIMIT 1"
+                f"AND {task_visibility_clause(vis)} LIMIT 1"
             ),
             {"tid": task_id, **vis.params},
         )).fetchone()

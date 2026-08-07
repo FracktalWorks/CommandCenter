@@ -21,10 +21,24 @@ interface Props {
   groups: TaskGroup[];
   groupBy: GroupBy;
   statuses: StatusRow[];
+  /** WS-27n — ids currently multi-selected. */
+  selected?: ReadonlySet<string>;
+  onToggle?: (id: string, shift: boolean) => void;
+  onToggleAll?: () => void;
+  allChecked?: boolean;
   onSelect: (task: TaskRow) => void;
 }
 
-export function TaskList({ groups, groupBy, statuses, onSelect }: Props) {
+export function TaskList({
+  groups,
+  groupBy,
+  statuses,
+  selected,
+  onToggle,
+  onToggleAll,
+  allChecked = false,
+  onSelect,
+}: Props) {
   const statusById = new Map(statuses.map((s) => [s.id, s]));
   const total = groups.reduce((sum, group) => sum + group.tasks.length, 0);
 
@@ -37,6 +51,16 @@ export function TaskList({ groups, groupBy, statuses, onSelect }: Props) {
       <table className="w-full min-w-[640px] text-sm">
         <thead className="border-b border-border text-left text-xs text-muted-foreground">
           <tr>
+            {onToggle ? (
+              <th className="px-3 py-2 font-medium">
+                <input
+                  type="checkbox"
+                  aria-label="Select every task on this page"
+                  checked={allChecked}
+                  onChange={() => onToggleAll?.()}
+                />
+              </th>
+            ) : null}
             <th className="px-3 py-2 font-medium">#</th>
             <th className="px-3 py-2 font-medium">Title</th>
             <th className="px-3 py-2 font-medium">Status</th>
@@ -54,7 +78,7 @@ export function TaskList({ groups, groupBy, statuses, onSelect }: Props) {
               {groupBy === "none" ? null : (
                 <tr className="bg-muted">
                   <th
-                    colSpan={5}
+                    colSpan={onToggle ? 6 : 5}
                     className="px-3 py-1.5 text-left text-xs font-medium text-foreground"
                   >
                     {group.label}
@@ -70,8 +94,26 @@ export function TaskList({ groups, groupBy, statuses, onSelect }: Props) {
                   <tr
                     key={task.id}
                     onClick={() => onSelect(task)}
-                    className="cursor-pointer border-b border-border last:border-0 hover:bg-muted"
+                    className={`cursor-pointer border-b border-border last:border-0 hover:bg-muted ${
+                      selected?.has(task.id) ? "bg-accent/40" : ""
+                    }`}
                   >
+                    {onToggle ? (
+                      <td className="px-3 py-2">
+                        <input
+                          type="checkbox"
+                          aria-label={`Select ${task.title}`}
+                          checked={selected?.has(task.id) ?? false}
+                          onClick={(e) => e.stopPropagation()}
+                          onChange={(e) =>
+                            onToggle(
+                              task.id,
+                              (e.nativeEvent as MouseEvent).shiftKey,
+                            )
+                          }
+                        />
+                      </td>
+                    ) : null}
                     <td className="px-3 py-2 text-muted-foreground">
                       {task.task_number ?? "—"}
                     </td>

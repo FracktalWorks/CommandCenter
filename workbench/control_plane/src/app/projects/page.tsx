@@ -28,6 +28,7 @@ import {
 } from "./lib/api";
 import { FieldManager } from "./components/FieldManager";
 import { TagManager } from "./components/TagManager";
+import { BulkBar } from "./components/BulkBar";
 import { FilterBar } from "./components/FilterBar";
 import { ImportClickUp } from "./components/ImportClickUp";
 import { MyWork } from "./components/MyWork";
@@ -46,6 +47,15 @@ import {
   toConfig,
   toQuery,
 } from "./lib/grouping";
+import {
+  allSelected as everySelected,
+  buildRequest,
+  describeOutcome,
+  prune,
+  range as selectRange,
+  toggle as toggleId,
+  visibleIds,
+} from "./lib/selection";
 import { fetchAccess } from "@/lib/access";
 import { filterByCenter, flatten } from "./lib/tree";
 
@@ -104,6 +114,13 @@ function ProjectsWorkspace() {
   // manager all read it, and three fetches of one list would disagree.
   const [tags, setTags] = useState<TagRow[]>([]);
   const [managingTags, setManagingTags] = useState(false);
+
+  // WS-27n — multi-select. `anchor` is the last card clicked without shift,
+  // which is what a shift-click measures its range from.
+  const [picked, setPicked] = useState<ReadonlySet<string>>(new Set());
+  const [anchor, setAnchor] = useState<string | null>(null);
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkNotice, setBulkNotice] = useState<string | null>(null);
 
   useEffect(() => {
     // Only for the "Mine" toggle. `fetchAccess` never throws, and an empty
@@ -256,6 +273,52 @@ function ProjectsWorkspace() {
     () => groupTasks(tasks, groupBy, { statuses, projectName }),
     [tasks, groupBy, statuses, projectName]
   );
+
+  const onScreen = useMemo(() => visibleIds(groups), [groups]);
+
+  // A selection that outlives its filter is how a bulk edit hits tasks nobody
+  // can see any more: select forty, narrow to three, press Done believing you
+  // are acting on the three in front of you.
+  useEffect(() => {
+    setPicked((current) => {
+      const pruned = prune(current, onScreen);
+      return pruned.size === current.size ? current : pruned;
+    });
+  }, [onScreen]);
+
+  function toggleSelection(id: string, shift: boolean) {
+    setBulkNotice(null);
+    setPicked((current) => {
+      if (shift && anchor) {
+        const next = new Set(current);
+        for (const each of selectRange(onScreen, anchor, id)) next.add(each);
+        return next;
+      }
+      return toggleId(current, id);
+    });
+    if (!shift) setAnchor(id);
+  }
+
+  async function applyBulk(request: ReturnType<typeof buildRequest>) {
+    if (!request) return;
+    setBulkBusy(true);
+    setBulkNotice(null);
+    try {
+      const outcome = await projectsApi.bulkEdit({
+        ...request,
+        task_ids: [...picked],
+      });
+      setBulkNotice(describeOutcome(outcome));
+      // The selection is KEPT: a sweep is usually several passes over the same
+      // set ("these fifty: status, then owner, then tag"), and clearing after
+      // each would make the second pass a re-selection.
+      if (selected) await loadProject(selected);
+    } catch (err) {
+      setBulkNotice(String((err as Error).message));
+    } finally {
+      setBulkBusy(false);
+    }
+  }
 
   function applyView(view: ViewRow) {
     const { filters: next, groupBy: nextGroup } = fromConfig(view.config);
@@ -596,6 +659,21 @@ function ProjectsWorkspace() {
           />
         ) : null}
 
+        {!mine && selected && picked.size > 0 ? (
+          <BulkBar
+            count={picked.size}
+            statuses={statuses}
+            busy={bulkBusy}
+            notice={bulkNotice}
+            onClear={() => {
+              setPicked(new Set());
+              setAnchor(null);
+              setBulkNotice(null);
+            }}
+            onApply={(request) => void applyBulk(request)}
+          />
+        ) : null}
+
         {!mine && selected ? (
           // Capture-first here too: a title and Enter. Everything else about a
           // task — status, assignee, subtasks — is set from the panel once it
@@ -623,6 +701,8 @@ function ProjectsWorkspace() {
             <TaskBoard
               groups={groups}
               groupBy={groupBy}
+              selected={picked}
+              onToggle={toggleSelection}
               onSelect={(task) => void openWithStatuses(task)}
               onDrop={handleDrop}
             />
@@ -631,6 +711,14 @@ function ProjectsWorkspace() {
               groups={groups}
               groupBy={groupBy}
               statuses={statuses}
+              selected={picked}
+              onToggle={toggleSelection}
+              allChecked={everySelected(picked, onScreen)}
+              onToggleAll={() =>
+                setPicked(
+                  everySelected(picked, onScreen) ? new Set() : new Set(onScreen)
+                )
+              }
               onSelect={(task) => void openWithStatuses(task)}
             />
           )}

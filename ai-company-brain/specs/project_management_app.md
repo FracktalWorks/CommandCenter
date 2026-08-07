@@ -944,7 +944,7 @@ interesting it is to build.
 | 3 | ~~**Filters, grouping and saved views**~~ | — | **WS-27k ✅ BUILT 2026-08-07** |
 | 4 | ~~**Custom fields**~~ | — | **WS-27l ✅ BUILT 2026-08-07** |
 | 5 | ~~**Tags**~~ | — | **WS-27m ✅ BUILT 2026-08-07** |
-| 6 | **Bulk edit / multi-select** | Re-triaging fifty imported tasks one at a time is how an import gets abandoned — this one gates the migration itself | **WS-27n** |
+| 6 | ~~**Bulk edit / multi-select**~~ | — | **WS-27n ✅ BUILT 2026-08-07 · unblocks g** |
 | 7 | **Recurring tasks** | Every operations cadence is recurring. Without it those live in someone's head or in ClickUp | **WS-27o** |
 | 8 | **Dependency and subtask UI** — `pm_task_links` and `parent_task_id` both exist, unreachable from the board | Data with no surface is a promise the product does not keep | **WS-27p** |
 | 9 | **Calendar / timeline view** | The third view ClickUp users actually use, after list and board | **WS-27q** |
@@ -956,10 +956,11 @@ Gantt. If any is wanted, it is a decision to record, not an omission to fix.
 
 ### 11.3 Sequencing, and the one dependency that matters
 
-**WS-27n (bulk edit) gates WS-27g.** The cutover imports a real workspace, and an import
-that cannot be re-triaged in bulk is an import somebody abandons halfway — leaving two live
-systems, which is the exact state the retirement exists to end. Build it before the cutover,
-not after.
+**WS-27n (bulk edit) gates WS-27g — and as of 2026-08-07 it is built (§11.11), so this
+dependency is satisfied.** The cutover imports a real workspace, and an import that cannot be
+re-triaged in bulk is an import somebody abandons halfway — leaving two live systems, which is
+the exact state the retirement exists to end. It was built before the cutover, as required.
+WS-27g itself remains 🔴 OWNER-GATE for its own reasons (§6), which this does not change.
 
 **1 → 2 → 3 are the daily-use tier** and should go first as a block: a member who can
 attach a file, hear about an assignment, and filter their board can run a day here. 4-5
@@ -1385,3 +1386,96 @@ for its `ON` clause, so the migration aborted with *"invalid reference to FROM-c
 for table t"*. Rewritten as `CROSS JOIN LATERAL … WITH ORDINALITY`, which also fixed a second
 problem the first version would have shipped: `array_agg(DISTINCT ...)` sorts by its own
 expression, so every task's tag list would have come back alphabetised.
+
+### 11.11 WS-27n — bulk edit (built 2026-08-07)
+
+The sixth row of the backlog, and **the one §11.3 names as gating WS-27g**. That dependency is
+now satisfied: the cutover imports a real workspace, and an import that cannot be re-triaged
+in bulk is one somebody abandons halfway, leaving two live systems — the exact state the
+retirement exists to end.
+
+`routes/projects/bulk.py` (`POST /projects/tasks/bulk`), `lib/selection.ts`,
+`components/BulkBar.tsx`, plus checkboxes on the board and the list. 35 hermetic + 32 vitest
+cases, 16 mutants red, 34 checks against a real Postgres. **No migration.**
+
+**It reuses `automation.apply_task_patch` rather than growing a second writer.** That service
+exists because WS-27f needed a task edit *indistinguishable in validation from a human PATCH*;
+a bulk endpoint with its own field handling would be a third opinion about what a task edit is,
+and three opinions drift. Assignees and tags are separate write paths on the task, so those
+are handled here — once, and through the same registry the panel uses, because the tag
+registry cannot be true if bulk is a second door into the array.
+
+**Status is named, never keyed — and here that is load-bearing rather than stylistic.** A
+selection can span projects, and a status id belongs to exactly one root. Sending `status_id`
+for fifty tasks across three projects would put two thirds of them in a lane that is not
+theirs, or fail on the foreign key. `status_id` in a bulk patch is therefore a 422 with its
+own message, because it is the mistake somebody makes by copying a single-task PATCH body and
+"unknown field" would not explain why the thing that works on one task is refused on fifty.
+
+**Assignees and tags are ADD/REMOVE, never SET.** "Assign these to Priya" means *also* Priya;
+a replace across a selection wipes every individual assignment the fifty tasks already
+carried. The destructive spelling is absent rather than merely discouraged.
+
+**Shape is validated once, up front; outcomes are per task.** Those are genuinely different
+failures. A field nobody can set is the same mistake for every task in the selection and earns
+a 422 before anything is written. A status name that exists in one project and not another is
+a fact about *that task*, and failing the whole batch for it would make a mixed selection
+unusable — which is precisely the selection somebody makes after an import.
+
+**A task the caller cannot see is skipped, not an error** (R5). Reporting it per id says
+exactly what a per-id 404 would say and nothing more; aborting instead would let a caller
+probe for existence by watching whether the batch failed. **One transaction**, because partial
+application is the worst outcome available: a re-triage that half-happened is harder to
+recover from than one that did not, since nobody can tell which half.
+
+**Re-asserting a value is not a change.** Fifty tasks that were already Priya's would each
+gain a timeline entry saying nothing, and a bulk edit reporting "50 changed" when it changed
+nothing is one whose count nobody can trust. `moved_people` is pure so that claim is asserted
+directly.
+
+**One notification per person per batch, not one per task.** Being handed fifty tasks should
+ring once and say fifty. Fifty bells is a bell people turn off, and a muted bell notifies
+nobody about anything — WS-27j's own argument, applied to the case that would have broken it.
+
+In the browser, the selection is **pruned whenever the filter changes**: selecting forty,
+narrowing to three and pressing Done must not act on thirty-seven tasks nobody can see. A
+shift-click ranges over the board's *on-screen* order (after filtering and grouping), and a
+task drawn in two columns — a two-assignee card, §11.8 — counts once. The outcome line names
+every category including the boring ones, because "47 changed" against "I selected 50" is a
+support conversation, whereas "2 already like that, 1 not available" is a sentence somebody
+already read.
+
+### 11.12 A shipped notification bug this ticket uncovered
+
+Building bulk assignment surfaced a defect in WS-27j that had been live since it shipped.
+
+**There are two ways to see a task** — a grant on its project, or being an assignee of it —
+and `core.task_visibility_clause` says so in one place, with a docstring warning that a second
+implementation "would drift the moment one is edited alone". `notifications.deliverable` had
+drifted exactly that way: it probed only `vis.project_clause('t.root_project_id')`.
+
+Two consequences, both silent:
+
+1. **Anybody assigned work in a project they hold no grant on was judged undeliverable.** They
+   could open the task — `get_task` uses the shared clause — but the assignment that put them
+   there notified nobody, and the response told the assigner they could not see it. That is
+   the silent assignment WS-27j exists to end, still open for the most common case in a
+   grant-scoped app: delegating outward.
+2. **Scoping to `root_project_id` also missed a grant made on a SUBPROJECT.** The old test
+   asserted that scoping, on the argument that "probing `project_id` would miss a grant made
+   on an ancestor" — which is backwards, and running it against a real Postgres is what showed
+   it: the grant closure is recursive and expands *downward*, so `project_id` catches an
+   ancestor grant, while `root_project_id` is the one that misses a subproject grant.
+
+`deliverable` now uses `task_visibility_clause`. The test that encoded the wrong reasoning has
+been replaced with one that records why it was wrong, and a second asserts the shared clause
+still carries both branches.
+
+**A fake collision the fix exposed, worth recording.** The hermetic suite's `FakeDB` matched
+the rule-3 probe by substring. The new clause embeds both `pm_task_assignees` and the
+closure's `UNION`, which is exactly the fingerprint the *audience* branch used — so
+`deliverable` received a list of assignees where it expected a visibility answer, and four
+tests failed for a reason with nothing to do with the code under test. The probe is now
+matched first and the audience branch keys off `assignee AS who`, which only its own query
+has. A fake that dispatches on substrings needs its fingerprints to be *specific*, not merely
+present.

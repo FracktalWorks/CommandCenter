@@ -201,6 +201,22 @@ export const projectsApi = {
       body: JSON.stringify({ body }),
     }),
 
+  /**
+   * WS-27n — one edit applied to many tasks.
+   *
+   * Answers per-task outcomes rather than a single success: a selection can
+   * span projects, so a status name valid in one and absent from another is a
+   * fact about that task, not a reason to fail the batch.
+   */
+  bulkEdit: (payload: Record<string, unknown>) =>
+    call<{
+      requested: number;
+      applied: number;
+      results: Array<{ task_id: string; changed: string[]; status?: string | null }>;
+      skipped: Array<{ task_id: string; reason: string }>;
+      failed: Array<{ task_id: string; reason: string }>;
+    }>("tasks/bulk", { method: "POST", body: JSON.stringify(payload) }),
+
   tags: (projectId: string) =>
     call<{ rows: TagRow[]; total: number }>(`nodes/${projectId}/tags`),
 

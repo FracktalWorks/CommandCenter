@@ -171,8 +171,14 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 LEDGER
   # One query, not one per file: 150 round trips through `docker exec` is
   # several seconds of deploy for something that fits in a single result.
+  # `< /dev/null`: `pgi` is `docker exec -i`, which DRAINS stdin. A caller that
+  # feeds this script on stdin (the deploy does — `ssh 'bash -s' < …`) would
+  # lose every unread line to this one query. Belt as well as braces: the deploy
+  # also isolates the whole script, but a helper that steals stdin should not
+  # rely on every caller remembering.
   APPLIED_SET="$(pgi psql -tA -U "$PG_USER" -d "$PG_DB" \
-    -c "SELECT filename || ' ' || checksum FROM schema_migrations" 2>/dev/null || true)"
+    -c "SELECT filename || ' ' || checksum FROM schema_migrations" \
+    2>/dev/null < /dev/null || true)"
 fi
 
 # "new" | "same" | "changed", from the set read above.

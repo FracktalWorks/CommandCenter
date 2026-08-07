@@ -15,6 +15,7 @@ the documentation, not the wiring.
 from __future__ import annotations
 
 import pathlib
+import re
 
 _ROOT = pathlib.Path(__file__).resolve().parents[2]
 _APPLY = _ROOT / "scripts/vps_apply.sh"
@@ -122,3 +123,66 @@ def test_the_manual_runbook_and_the_live_path_carry_the_same_loop() -> None:
         assert any(
             "deploy/hostinger/*.timer" in ln and "for " in ln for ln in lines
         ), f"{path.name} lost the timer-sync loop"
+
+
+# ── The deploy script is stdin, and stdin can be stolen ─────────────────────
+#
+# `deploy.yml` delivers the apply script as `ssh 'bash -s' < vps_apply.sh`, so
+# the script IS the shell's stdin. Anything it runs that reads stdin swallows
+# every line not yet parsed; bash then hits EOF and exits **0**, so the deploy
+# reports success having skipped whatever came after.
+#
+# That happened on 2026-08-07 and it was invisible: six consecutive deploys
+# went green while the box served an old bundle, because `verify()` health-
+# checks the still-running PREVIOUS deployment and cannot tell it from a new
+# one. `apply_migrations.sh`'s `pgi` is `docker exec -i` — the `-i` is what
+# attaches stdin — and a newly added ledger query was the first call to reach
+# it without piping its own input.
+
+_MIGRATE = _ROOT / "scripts/apply_migrations.sh"
+
+
+def test_the_migration_call_cannot_eat_the_rest_of_the_deploy_script() -> None:
+    """The one line that made six deploys into no-ops."""
+    line = next(
+        ln for ln in _executable_lines(_APPLY)
+        if "apply_migrations.sh" in ln
+    )
+    assert "< /dev/null" in line, (
+        "vps_apply.sh is piped to `bash -s` on stdin. apply_migrations.sh runs "
+        "`docker exec -i`, which DRAINS stdin — without `< /dev/null` it eats "
+        "the rest of this script and the deploy silently stops here, exit 0."
+    )
+
+
+def test_the_workbench_rebuild_comes_after_the_migration_call() -> None:
+    """Ordering is what makes the bug above catastrophic rather than cosmetic:
+    everything a user can SEE is rebuilt after migrations, so a script that
+    dies at migrations ships no UI at all while reporting success."""
+    text = _APPLY.read_text(encoding="utf-8")
+    assert text.index("apply_migrations.sh") < text.index(
+        "Rebuilding + restarting workbench"
+    )
+
+
+def test_every_stdin_attaching_psql_call_supplies_its_own_input() -> None:
+    """`pgi` is `docker exec -i`. Each call must either pipe into it, use a
+    heredoc, or redirect from /dev/null — never inherit the caller's stdin."""
+    lines = _MIGRATE.read_text(encoding="utf-8").splitlines()
+    for i, line in enumerate(lines):
+        if "pgi psql" not in line or line.strip().startswith("#"):
+            continue
+        window = "\n".join(lines[max(0, i - 2): i + 4])
+        # `2>/dev/null` is STDERR and proves nothing — the check must see a
+        # pipe, a heredoc, or a redirect of fd 0 specifically. Matching any
+        # "/dev/null" let the real bug back in under mutation.
+        # Each guard is exact, because the loose versions both let the real
+        # bug back in under mutation: bare "/dev/null" matched `2>/dev/null`
+        # (stderr), and bare "|" matched `|| true`.
+        piped_in = re.search(r"[^|]\|\s*pgi psql", window)
+        heredoc = "<<" in window
+        stdin_redirect = re.search(r"(?<!\d)<\s*/dev/null", window)
+        assert (piped_in or heredoc or stdin_redirect), (
+            f"line {i + 1} runs `docker exec -i` with the caller's stdin "
+            f"attached:\n{window}"
+        )

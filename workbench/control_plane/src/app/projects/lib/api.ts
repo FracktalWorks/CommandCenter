@@ -55,6 +55,13 @@ export interface ActivityRow {
   meta?: Record<string, unknown> | null;
   created_by?: string | null;
   created_at?: string | null;
+  /**
+   * WS-27j — people this comment named who could not be notified, because they
+   * cannot see the task. Present on the POST response only; the timeline does
+   * not carry it, since who was reachable is a fact about the moment of
+   * posting rather than about the comment.
+   */
+  not_notified?: string[];
 }
 
 export interface GrantRow {
@@ -261,3 +268,108 @@ export interface MyTaskApiRow extends TaskRow {
   energy?: string | null;
   is_two_minute?: boolean;
 }
+
+export interface NotificationRow {
+  id: string;
+  kind: "assigned" | "mention" | "comment";
+  task_id: string;
+  actor: string;
+  excerpt?: string | null;
+  created_at?: string | null;
+  read_at?: string | null;
+  task_title?: string | null;
+  task_number?: number | null;
+  project_id?: string | null;
+}
+
+/**
+ * Notifications (WS-27j).
+ *
+ * No `recipient` parameter anywhere, and that is the contract rather than an
+ * omission: the gateway takes the recipient from the session, so there is no
+ * request shape that reads somebody else's bell.
+ */
+export const notificationsApi = {
+  list: (unreadOnly = false) =>
+    call<{ rows: NotificationRow[]; total: number; unread: number }>(
+      `notifications${unreadOnly ? "?unread_only=true" : ""}`
+    ),
+
+  markRead: (ids: string[]) =>
+    call<{ marked: number }>("notifications/read", {
+      method: "POST",
+      body: JSON.stringify({ ids }),
+    }),
+
+  markAllRead: () =>
+    call<{ marked: number }>("notifications/read", {
+      method: "POST",
+      body: JSON.stringify({ all: true }),
+    }),
+};
+
+export interface TaskAccountRow {
+  id: string;
+  provider: string;
+  workspace_id: string;
+  label?: string;
+}
+
+/**
+ * The ClickUp import (WS-27b's endpoints, finally reachable).
+ *
+ * `plan` and a `dry_run` import both write NOTHING — they are what answers
+ * "what is actually in ClickUp" before anything touches this database. Only
+ * `run({dry_run:false})` writes, and the UI never calls it without an explicit
+ * click on a button that says so.
+ *
+ * Accounts come from the tasks API because that is where the ClickUp
+ * connection already lives; a second place to connect ClickUp would be a
+ * second thing to retire at WS-27g.
+ */
+export const importApi = {
+  accounts: async (): Promise<TaskAccountRow[]> => {
+    const res = await fetch("/api/tasks/accounts");
+    if (!res.ok) throw new ProjectsApiError("Couldn't list accounts", res.status);
+    return (await res.json()) as TaskAccountRow[];
+  },
+
+  plan: (accountId: string, useLlm: boolean) =>
+    call<unknown>("import/clickup/plan", {
+      method: "POST",
+      body: JSON.stringify({ account_id: accountId, use_llm: useLlm }),
+    }),
+
+  /**
+   * The fast path: project the ClickUp mirror the Tasks app ALREADY holds into
+   * one department. No ClickUp call, no token, no mapping decision — it reads
+   * `gtd_projects`/`gtd_items` locally, so it works when the connector is
+   * stale and is quick enough to run in front of an audience.
+   */
+  fromTasks: (department: string, dryRun: boolean) =>
+    call<{
+      dry_run: boolean;
+      department: string;
+      projects: { created: number; already_present: number };
+      tasks: { created: number; already_present: number };
+      lanes_created: number;
+      tasks_without_a_list: number;
+    }>("import/from-tasks", {
+      method: "POST",
+      body: JSON.stringify({ department, dry_run: dryRun }),
+    }),
+
+  run: (
+    accountId: string,
+    mappings: Array<{ space_id: string; center: string | null }>,
+    dryRun: boolean
+  ) =>
+    call<unknown>("import/clickup", {
+      method: "POST",
+      body: JSON.stringify({
+        account_id: accountId,
+        mappings,
+        dry_run: dryRun,
+      }),
+    }),
+};

@@ -219,13 +219,46 @@ export type StatusChange = {
   dwell_seconds?: number | null;
 };
 
+/**
+ * One email conversation on a CRM timeline (WS-26d-email).
+ *
+ * The unit is the THREAD, not the message: `thread_id` groups it and the
+ * fields describe the newest message in it. `status` is the email app's own
+ * per-thread classification (NEEDS_REPLY / AWAITING / FYI / DONE) and is null
+ * for a thread nobody has classified.
+ *
+ * ⚠️ What is shown here is scoped to the SIGNED-IN CALLER's mailboxes, not to
+ * the record: two colleagues opening the same lead may legitimately see
+ * different threads, and somebody with no mailbox sees none. That is not a
+ * bug report.
+ */
+export type EmailThread = {
+  thread_id: string;
+  account_id: string;
+  message_id: string;
+  subject?: string | null;
+  snippet?: string | null;
+  folder?: string | null;
+  from_name?: string | null;
+  from_email?: string | null;
+  received_at?: string | null;
+  status?: string | null;
+};
+
 export type TimelineEntry = {
-  kind: "activity" | "status_change";
+  /**
+   * A CLOSED union, deliberately: it is the fence that makes the gateway's
+   * `TimelineEntry.kind` and this type impossible to update one side of.
+   * Adding a kind here without adding its payload field below (and a branch in
+   * `timelineBranch`) is the shape of the bug this comment exists to prevent.
+   */
+  kind: "activity" | "status_change" | "email_thread";
   at?: string | null;
   /** 'lead' marks a deal inheriting its originating lead's history (§5.3). */
   origin: "own" | "lead";
   activity?: Activity | null;
   status_change?: StatusChange | null;
+  email_thread?: EmailThread | null;
 };
 
 export type DealContact = {

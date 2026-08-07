@@ -20,7 +20,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { AA_LARGE_TEXT, AA_NORMAL_TEXT, contrast, parseColor } from "./contrast";
+import { AA_LARGE_TEXT, AA_NORMAL_TEXT, accentInk, contrast, parseColor } from "./contrast";
 import { THEMES } from "./themes";
 import type { ColorTokens } from "./types";
 
@@ -174,5 +174,48 @@ describe("theme contrast", () => {
       (id) => !id.startsWith("rapidtool/"),
     );
     expect(offenders, "new themes must meet AA outright").toEqual([]);
+  });
+});
+
+describe("accentInk", () => {
+  /**
+   * The bug: an accent override replaced `--primary` but not the ink drawn on
+   * it, so Graphite dark (primary near-white, therefore primary-foreground
+   * near-black) rendered black-on-red for every primary-filled surface — the
+   * sidebar logo mark, every primary button, every active pill.
+   */
+  it("picks the ink that is actually legible on the fill", () => {
+    expect(accentInk("#ffffff")).toBe("#000000");
+    expect(accentInk("#000000")).toBe("#ffffff");
+    // The five presets offered in Settings → Appearance.
+    for (const preset of [
+      "hsl(206 100% 42%)", // Azure
+      "hsl(258 60% 55%)",  // Violet
+      "hsl(158 64% 38%)",  // Emerald
+      "hsl(32 95% 48%)",   // Amber
+      "hsl(347 77% 50%)",  // Rose
+    ]) {
+      const ink = accentInk(preset);
+      expect(ink, preset).not.toBe("");
+      // The claim is not "an ink was chosen" but "this ink is readable".
+      expect(contrast(ink, preset)!, `${ink} on ${preset}`).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+
+  it("beats the alternative ink on every preset", () => {
+    // A weaker test would pass by always answering black. This asserts the
+    // CHOICE — that the other option would have been worse.
+    for (const preset of ["hsl(206 100% 42%)", "hsl(32 95% 48%)", "hsl(347 77% 50%)"]) {
+      const chosen = accentInk(preset);
+      const other = chosen === "#000000" ? "#ffffff" : "#000000";
+      expect(contrast(chosen, preset)!, preset).toBeGreaterThan(contrast(other, preset)!);
+    }
+  });
+
+  it("returns empty for a colour it cannot parse, keeping the theme's pairing", () => {
+    // Guessing would be worse than deferring: the theme's own primary/ink pair
+    // is at least a pair somebody chose.
+    expect(accentInk("rebeccapurple")).toBe("");
+    expect(accentInk("not-a-colour")).toBe("");
   });
 });

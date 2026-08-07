@@ -8,6 +8,7 @@
  * hierarchy.
  */
 import Icon from "@/components/Icon";
+import Button from "@/components/ui/Button";
 import { useState } from "react";
 
 import type { ProjectRow } from "../lib/api";
@@ -18,6 +19,9 @@ interface Props {
   onSelect: (project: ProjectRow) => void;
   /** Start creating a subproject under this node. Omitted = read-only tree. */
   onAddChild?: (parent: ProjectRow) => void;
+  /** Open the ClickUp import. Offered only from the empty state, where it is
+   *  the answer to "there is nothing here". */
+  onImport?: () => void;
 }
 
 function Node({
@@ -112,12 +116,34 @@ function Node({
   );
 }
 
-export function ProjectTree({ roots, selectedId, onSelect, onAddChild }: Props) {
+export function ProjectTree({
+  roots,
+  selectedId,
+  onSelect,
+  onAddChild,
+  onImport,
+}: Props) {
   if (roots.length === 0) {
     return (
-      <p className="px-2 py-6 text-sm text-muted-foreground">
-        No projects yet. Create one, or import a ClickUp workspace.
-      </p>
+      <div className="px-2 py-6">
+        <p className="text-sm text-muted-foreground">
+          No projects yet. Create one with the + above, or bring your ClickUp
+          workspace across.
+        </p>
+        {/* This copy named an action that had no control anywhere in the
+            product for as long as the app has existed. Now it is a button. */}
+        {onImport ? (
+          <Button
+            variant="secondary"
+            size="sm"
+            icon="Download"
+            className="mt-2"
+            onClick={onImport}
+          >
+            Import from ClickUp
+          </Button>
+        ) : null}
+      </div>
     );
   }
   return (

@@ -12,8 +12,13 @@ source, because everything said before conversion was said about this deal —
 losing it at the conversion boundary is the failure the ``lead_id`` provenance
 column exists to prevent (§5.3).
 
-Email threads join in at Phase D (WS-26d) by address, with no link table
-(D-CRM-5). The merge below is already shaped for a third source.
+Email threads are the third source (WS-26d-email), joined by address with no
+link table (D-CRM-5). ⚠️ **That join is CALLER-scoped, never record-scoped**:
+the CRM is org-visible to every ``feature:crm`` holder (D-CRM-3) while a
+mailbox belongs to one person, so the timeline shows email *the caller can
+already read*, not email *the record has*. Two holders opening the same lead
+may legitimately see different threads, and a holder with no mailbox sees
+none. That is why :func:`_timeline` takes the caller.
 
 Paths are written out per entity for the same reason as ``records.py``: a
 generic ``/crm/{entity}/{id}/…`` template would make route registration order
@@ -83,6 +88,12 @@ class TimelineEntry(BaseModel):
     origin: str = "own"
     activity: dict | None = None
     status_change: dict | None = None
+    #: The email thread's display row. Every ``kind`` carries its OWN payload
+    #: field — a third kind with no payload of its own renders an empty line,
+    #: and the browser's `entry.activity!` would read the wrong one. Mirrored
+    #: by `EmailThread` in `src/app/crm/lib/types.ts`, whose union is closed
+    #: so tsc fails if only one side of this pair is updated.
+    email_thread: dict | None = None
 
 
 class TimelineResponse(BaseModel):
@@ -91,7 +102,11 @@ class TimelineResponse(BaseModel):
 
 # ── Shared behaviour ────────────────────────────────────────────────────────
 
-async def _timeline(entity: Entity, record_id: str, limit: int) -> TimelineResponse:
+async def _timeline(
+    entity: Entity, record_id: str, limit: int, user: UserContext,
+) -> TimelineResponse:
+    """The merged timeline. ``user`` is required because one of the three
+    sources — email — is scoped to the CALLER's mailboxes, not to the record."""
     db = await _get_db()
     try:
         record = await require_row(db, entity.table, record_id, entity.label)
@@ -109,6 +124,15 @@ async def _timeline(entity: Entity, record_id: str, limit: int) -> TimelineRespo
             entries.extend(
                 await _status_entries(db, source_entity, source_id, origin, limit)
             )
+        # Email is resolved ONCE for the whole record rather than per source:
+        # a deal's addresses already include its originating lead's, so running
+        # it per source would return every inherited thread twice.
+        entries.extend(await _email_entries(
+            db,
+            await _record_addresses(db, entity, record_id, record),
+            user,
+            _email_budget(limit),
+        ))
         # Newest first. `at` is None only for a row with no timestamp at all,
         # which sorts last rather than crashing the comparison.
         entries.sort(key=lambda e: (e.at or ""), reverse=True)
@@ -180,6 +204,185 @@ async def _status_entries(
     ]
 
 
+# ── Email threads — the third source ────────────────────────────────────────
+
+def _email_budget(limit: int) -> int:
+    """How many email threads may compete for a timeline of ``limit`` rows.
+
+    **Half, rounded up — and the halving is the whole point.** Bounding each
+    source at ``limit`` is NOT enough on its own: the merge sorts newest-first
+    and then truncates to ``limit``, so ``limit`` recent threads evict every
+    activity and every status change the record has. That is the common case,
+    not the pathological one — the CRM agent's ``get_timeline`` defaults to 20,
+    and twenty recent emails is an ordinary week on an active deal.
+
+    Rounded UP so a limit of 1 still admits email, and so the reserved half is
+    the one that can be empty: a record with no activity at all still fills the
+    page with mail, because the other sources simply return fewer rows and the
+    truncation takes whatever is there.
+    """
+    return (limit + 1) // 2
+
+
+def _email_account_scope(account_id: str | None, params: dict[str, Any]) -> str:
+    """Return a SQL fragment scoping email_messages `em` to the user's accounts.
+
+    Adds :uid (and optionally :aid) to `params`. The caller must have already
+    set params["uid"] to the user's email.
+
+    ⚠️ **A verbatim copy of ``routes/email/core.py``'s ``_account_scope``**, and
+    the copy is deliberate (D-CRM-4, §9 WS-26d-email). Importing another route
+    package's private helper is the cross-app coupling this package already
+    declined once (``broker_handlers.broker_gate``); promoting it to a shared
+    module is correct eventually but drags ``routes/email``'s callers into a
+    WS-26 PR. Two copies is a coincidence — **if this predicate is copied a
+    THIRD time anywhere, promote it instead of copying it again.**
+
+    It hardcodes the alias ``em`` (``email/automation/analytics.py`` had to
+    ``.replace()`` it), so the query below aliases ``email_messages`` as ``em``
+    and the fragment drops in unchanged.
+    """
+    frag = "em.account_id IN (SELECT id FROM email_accounts WHERE user_id = :uid"
+    if account_id:
+        frag += " AND id = :aid"
+        params["aid"] = account_id
+    frag += ")"
+    return frag
+
+
+async def _record_addresses(
+    db: Any, entity: Entity, record_id: str, record: Any,
+) -> dict[str, str]:
+    """The addresses this record reaches email by → the origin label each earns.
+
+    Organizations, contacts and leads carry their own ``email`` column.
+    ``crm_deals`` deliberately does not (§3.4): a deal reaches email through its
+    originating ``lead_id`` and through the contacts linked to it, and v1 takes
+    **both, unioned** — the same union ``_timeline`` already applies to activity
+    history. Organizations do NOT join by email domain: an ``@fracktal.in``
+    match would attach the whole company mailbox to our own org record.
+
+    Lead addresses are collected first so that an address that is BOTH the
+    lead's and a linked contact's ends up labelled ``own`` — the contact is the
+    deal's own, and the more specific label is the truer one.
+    """
+    origins: dict[str, str] = {}
+
+    def remember(value: Any, origin: str) -> None:
+        address = str(value or "").strip().lower()
+        if address:
+            origins[address] = origin
+
+    if entity is not DEALS:
+        remember(getattr(record, "email", None), "own")
+        return origins
+
+    inherited = getattr(record, "lead_id", None)
+    if inherited:
+        rows = (await db.execute(
+            text("SELECT email FROM crm_leads WHERE id = CAST(:record_id AS uuid)"),
+            {"record_id": str(inherited)},
+        )).fetchall()
+        for row in rows:
+            remember(getattr(row, "email", None), "lead")
+
+    rows = (await db.execute(
+        text(
+            "SELECT c.email AS email FROM crm_deal_contacts dc "
+            "JOIN crm_contacts c ON c.id = dc.contact_id "
+            "WHERE dc.deal_id = CAST(:record_id AS uuid)"
+        ),
+        {"record_id": record_id},
+    )).fetchall()
+    for row in rows:
+        remember(getattr(row, "email", None), "own")
+    return origins
+
+
+async def _email_entries(
+    db: Any, origins: dict[str, str], user: UserContext, limit: int,
+) -> list[TimelineEntry]:
+    """Email threads from these addresses, in the CALLER's own mailboxes.
+
+    **The unit is the thread, not the message.** There is no ``email_threads``
+    table; ``email_messages.thread_id`` is the grouping column, and the
+    conversation is already the unit of classification and snooze across the
+    email app. ``DISTINCT ON`` keeps the newest message per
+    ``(account_id, thread)`` for the display row — a row-per-message timeline
+    double-counts every conversation. A message with a NULL ``thread_id``
+    stands for itself (``COALESCE(…, em.id::text)``, the contact card's rule):
+    without it Postgres would treat every un-threaded message in an account as
+    one group and collapse them into a single entry.
+
+    ``email_thread_status`` is LEFT-joined on its own composite key for the
+    badge; a thread nobody classified simply has no status.
+
+    ⚠️ ``limit`` here is the **email budget**, not the caller's limit — see
+    :func:`_email_budget`. The caller's limit is what the MERGED list is
+    truncated to, so bounding this source at the same number would let a chatty
+    mailbox evict the record's entire history and still be "bounded".
+    """
+    if not origins:
+        # No address means no query — an empty IN list is a syntax error, and
+        # "match nothing" must never degrade into "match the whole mailbox".
+        return []
+
+    params: dict[str, Any] = {"uid": user.email or "anonymous", "limit": limit}
+    scope = _email_account_scope(None, params)
+    placeholders: list[str] = []
+    for index, address in enumerate(sorted(origins)):
+        key = f"addr_{index}"
+        params[key] = address
+        placeholders.append(f":{key}")
+
+    rows = (await db.execute(
+        text(
+            "SELECT * FROM ("
+            " SELECT DISTINCT ON (em.account_id, COALESCE(em.thread_id, em.id::text))"
+            " em.id AS message_id,"
+            " em.account_id AS account_id,"
+            " COALESCE(em.thread_id, em.id::text) AS thread_id,"
+            " em.subject AS subject,"
+            " em.snippet AS snippet,"
+            " em.folder AS folder,"
+            " em.from_address->>'name' AS from_name,"
+            " em.from_address->>'email' AS from_email,"
+            " em.received_at AS received_at,"
+            " ts.status AS thread_status"
+            " FROM email_messages em"
+            " LEFT JOIN email_thread_status ts"
+            " ON ts.account_id = em.account_id AND ts.thread_id = em.thread_id"
+            f" WHERE {scope}"
+            f" AND LOWER(em.from_address->>'email') IN ({', '.join(placeholders)})"
+            " ORDER BY em.account_id, COALESCE(em.thread_id, em.id::text),"
+            " em.received_at DESC"
+            ") t ORDER BY received_at DESC LIMIT :limit"
+        ),
+        params,
+    )).fetchall()
+
+    return [
+        TimelineEntry(
+            kind="email_thread",
+            at=wire(row.received_at),
+            origin=origins.get(str(row.from_email or "").lower(), "own"),
+            email_thread={
+                "thread_id": str(row.thread_id),
+                "account_id": wire(row.account_id),
+                "message_id": wire(row.message_id),
+                "subject": row.subject,
+                "snippet": row.snippet,
+                "folder": row.folder,
+                "from_name": row.from_name,
+                "from_email": row.from_email,
+                "received_at": wire(row.received_at),
+                "status": row.thread_status,
+            },
+        )
+        for row in rows
+    ]
+
+
 async def _log_activity(
     entity: Entity, record_id: str, payload: ActivityIn, user: UserContext,
 ) -> dict:
@@ -223,7 +426,7 @@ async def lead_timeline(
     limit: int = Query(100, ge=1, le=500),
     user: UserContext = Depends(get_current_user),
 ) -> TimelineResponse:
-    return await _timeline(LEADS, record_id, limit)
+    return await _timeline(LEADS, record_id, limit, user)
 
 
 @router.get("/deals/{record_id}/timeline", response_model=TimelineResponse)
@@ -233,7 +436,7 @@ async def deal_timeline(
     user: UserContext = Depends(get_current_user),
 ) -> TimelineResponse:
     """A deal's own history, unioned with its originating lead's (§5.3)."""
-    return await _timeline(DEALS, record_id, limit)
+    return await _timeline(DEALS, record_id, limit, user)
 
 
 @router.get("/contacts/{record_id}/timeline", response_model=TimelineResponse)
@@ -242,7 +445,7 @@ async def contact_timeline(
     limit: int = Query(100, ge=1, le=500),
     user: UserContext = Depends(get_current_user),
 ) -> TimelineResponse:
-    return await _timeline(CONTACTS, record_id, limit)
+    return await _timeline(CONTACTS, record_id, limit, user)
 
 
 @router.get("/organizations/{record_id}/timeline", response_model=TimelineResponse)
@@ -251,7 +454,7 @@ async def organization_timeline(
     limit: int = Query(100, ge=1, le=500),
     user: UserContext = Depends(get_current_user),
 ) -> TimelineResponse:
-    return await _timeline(ORGANIZATIONS, record_id, limit)
+    return await _timeline(ORGANIZATIONS, record_id, limit, user)
 
 
 # ── Logging ─────────────────────────────────────────────────────────────────

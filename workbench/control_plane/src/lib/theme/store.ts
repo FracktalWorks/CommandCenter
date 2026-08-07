@@ -19,6 +19,7 @@ import { create } from "zustand";
 import type { Density, ThemeMode } from "./types";
 import { DEFAULT_THEME_ID, findTheme, resolveTheme } from "./themes";
 import {
+  ACCENT_INK_PROPERTIES,
   ACCENT_PROPERTIES,
   DENSITY_PROPERTY,
   THEME_ATTRIBUTE,
@@ -26,6 +27,7 @@ import {
   themeStorage,
 } from "./storage";
 import { isSafeColor } from "./css";
+import { accentInk } from "./contrast";
 
 type AppearanceState = {
   /** Member's theme override; `null` inherits the org default. */
@@ -85,6 +87,13 @@ function applyToDocument(state: AppearanceState): void {
   const accent = state.accent && isSafeColor(state.accent) ? state.accent : null;
   for (const prop of ACCENT_PROPERTIES) {
     if (accent) root.style.setProperty(prop, accent);
+    else root.style.removeProperty(prop);
+  }
+  // An accent brings its own ink. Without this the theme's primary-foreground
+  // stays painted on a colour it was never paired with — see accentInk().
+  const ink = accent ? accentInk(accent) : "";
+  for (const prop of ACCENT_INK_PROPERTIES) {
+    if (ink) root.style.setProperty(prop, ink);
     else root.style.removeProperty(prop);
   }
 }

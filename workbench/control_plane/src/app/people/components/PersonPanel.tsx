@@ -6,15 +6,24 @@
  * Identity, skills, capacity, work. The panels are deliberately in that order:
  * who they are, what they can do, how loaded they are, what they are holding.
  */
-import Icon from "@/components/Icon";
 import { useEffect, useState } from "react";
+
+import Button from "@/components/ui/Button";
 
 import { type PersonDetail, type WorkRow, peopleApi } from "../lib/api";
 import { initials, loadBar, skillOrigin, statusTone } from "../lib/directory";
 
 interface Props {
   personId: string;
+  /** Bumped by the page after a save, so the panel re-reads what was written. */
+  reloadKey?: number;
   onClose: () => void;
+  /**
+   * Opens the editor on this person. The panel raises it rather than rendering
+   * the editor itself: the editor needs the directory (for the manager picker)
+   * and the status vocabulary, and both belong to the page.
+   */
+  onEdit?: (person: PersonDetail) => void;
 }
 
 const TONE: Record<string, string> = {
@@ -23,7 +32,7 @@ const TONE: Record<string, string> = {
   muted: "text-muted-foreground",
 };
 
-export function PersonPanel({ personId, onClose }: Props) {
+export function PersonPanel({ personId, reloadKey = 0, onClose, onEdit }: Props) {
   const [person, setPerson] = useState<PersonDetail | null>(null);
   const [work, setWork] = useState<{ rows: WorkRow[]; available: boolean } | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -47,7 +56,7 @@ export function PersonPanel({ personId, onClose }: Props) {
     return () => {
       live = false;
     };
-  }, [personId]);
+  }, [personId, reloadKey]);
 
   if (error) {
     return (
@@ -80,14 +89,26 @@ export function PersonPanel({ personId, onClose }: Props) {
             </p>
           </div>
         </div>
-        <button
-          type="button"
-          onClick={onClose}
-          aria-label="Close person"
-          className="rounded p-1 text-muted-foreground hover:bg-muted"
-        >
-          <Icon name="X" className="h-4 w-4" />
-        </button>
+        <div className="flex shrink-0 items-center gap-1">
+          {/* Absent without `admin:members:manage`, never disabled (§3.2). */}
+          {person.can_manage && onEdit ? (
+            <Button
+              variant="secondary"
+              size="sm"
+              icon="Pencil"
+              onClick={() => onEdit(person)}
+            >
+              Edit
+            </Button>
+          ) : null}
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            icon="X"
+            aria-label="Close person"
+            onClick={onClose}
+          />
+        </div>
       </header>
 
       {/* 1 — Identity. The login badge is the visible half of the two-store

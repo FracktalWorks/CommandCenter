@@ -427,6 +427,37 @@ else
   sudo systemctl status acb-health-watchdog.timer --no-pager 2>&1 | head -15 || true
 fi
 
+echo "==> Syncing systemd units (BO-23)"
+# The repo is the source of truth for the box's units; without this step a
+# unit added there only reaches the machine if somebody remembers to copy it
+# by hand — which is how acb-backup.timer sat unscheduled while the tooling
+# existed. PR #380 added this loop to deploy/hostinger/deploy.sh, but that is
+# the MANUAL runbook script: both automated delivery paths (the workflow and
+# the box's poller) run THIS file, so the loop must live here to run at all.
+#
+# Files only, plus `enable --now` for TIMERS. Services are deliberately left
+# alone: restarting the gateway is this script's own earlier step, and a
+# surprise restart here would be harder to explain than a stale unit file.
+UNITS_CHANGED=0
+for unit in "$APP_DIR"/deploy/hostinger/*.service "$APP_DIR"/deploy/hostinger/*.timer; do
+  [ -e "$unit" ] || continue
+  name="$(basename "$unit")"
+  if ! sudo cmp -s "$unit" "/etc/systemd/system/$name"; then
+    sudo install -m 0644 "$unit" "/etc/systemd/system/$name"
+    echo "    installed $name"
+    UNITS_CHANGED=1
+  fi
+done
+if [ "$UNITS_CHANGED" = "1" ]; then
+  sudo systemctl daemon-reload
+fi
+for timer in "$APP_DIR"/deploy/hostinger/*.timer; do
+  [ -e "$timer" ] || continue
+  sudo systemctl enable --now "$(basename "$timer")" >/dev/null 2>&1 \
+    || echo "    !! could not enable $(basename "$timer") — check: systemctl status $(basename "$timer")"
+done
+systemctl list-timers --no-pager 'acb-*' 2>/dev/null | head -5 || true
+
 echo "==> Running infra health probe"
 cd "$APP_DIR"
 uv run python scripts/check_infra.py || {

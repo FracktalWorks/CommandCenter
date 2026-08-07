@@ -59,6 +59,7 @@ from gateway.routes.projects.core import (
 from gateway.routes.projects.custom_fields import apply_values, load_definitions
 from gateway.routes.projects.filters import (
     attach_assignees,
+    attach_relation_counts,
     build_task_filters,
 )
 from gateway.routes.projects.notifications import notify
@@ -200,15 +201,14 @@ async def list_tasks(
             ),
             {**params, "limit": page.limit, "offset": page.offset},
         )).fetchall()
-        # Assignees on the LIST, not only on the single-task read. Without
-        # them the board cannot draw an owner or group by one, and fetching
-        # them per card is N+1 across an imported workspace of hundreds.
-        return ListResponse(
-            rows=await attach_assignees(
-                db, [row_to_dict(r, TaskModel) for r in rows],
-            ),
-            total=int(total),
-        )
+        # Assignees, subtask progress and blocked-ness on the LIST, not only on
+        # the single-task read. Without them a card cannot draw an owner, a
+        # progress count or a blocked flag — and fetching any of the three per
+        # card is N+1 across an imported workspace of hundreds.
+        page_rows = [row_to_dict(r, TaskModel) for r in rows]
+        await attach_assignees(db, page_rows)
+        await attach_relation_counts(db, page_rows)
+        return ListResponse(rows=page_rows, total=int(total))
     finally:
         await db.close()
 

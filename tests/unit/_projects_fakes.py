@@ -361,6 +361,17 @@ class FakeProjectsDB:
                 SimpleNamespace(task_id=task_id, people=sorted(people))
                 for task_id, people in grouped.items()
             ])
+        # The two card-badge roll-ups, taught for the same reason as the
+        # assignee one above: `GROUP BY` is not a shape the generic WHERE
+        # reader can parse. Both fingerprints name a statement-specific ALIAS
+        # rather than a table, because `pm_tasks` and `pm_task_links` each
+        # appear in several statements and a fingerprint that is merely
+        # *present* in the target is how the WS-27n audience-clause collision
+        # happened.
+        if "AS parent," in statement and "GROUP BY" in statement:
+            return _Result(self._subtask_counts(statement, args))
+        if "AS blocked," in statement and "GROUP BY" in statement:
+            return _Result(self._blocker_counts(statement, args))
         head = statement.split(None, 1)[0].upper()
         table = self._table(statement)
         if head == "INSERT":
@@ -376,6 +387,88 @@ class FakeProjectsDB:
         if match is None:  # pragma: no cover — every statement names a table
             raise AssertionError(f"fake could not find a table in: {sql}")
         return match.group(1)
+
+    # page roll-ups ------------------------------------------------------
+    def _categories(self) -> dict[str, str]:
+        return {
+            str(s["id"]): str(s.get("category") or "")
+            for s in self.rows("pm_task_statuses")
+        }
+
+    def _subtask_counts(self, statement: str, args: dict) -> list[Any]:
+        """``{parent, total, done}`` per parent, over the page's ids.
+
+        Every clause is applied ONLY when the statement carries it, the
+        ``_select`` convention: a mirror that filters unconditionally agrees
+        with itself no matter what the route stops emitting, which is how a
+        deleted WHERE clause survives a green suite.
+        """
+        wanted = {str(i) for i in (args.get("ids") or [])}
+        closed = set(args.get("closed") or [])
+        skips_archived = "t.archived_at IS NULL" in statement
+        counts_closed = "FILTER (WHERE s.category = ANY(:closed))" in statement
+        categories = self._categories()
+        grouped: dict[str, list[str]] = {}
+        for task in self.rows("pm_tasks"):
+            parent = str(task.get("parent_task_id") or "")
+            if parent not in wanted:
+                continue
+            if skips_archived and task.get("archived_at") is not None:
+                continue
+            grouped.setdefault(parent, []).append(
+                categories.get(str(task.get("status_id")), "")
+            )
+        return [
+            SimpleNamespace(
+                parent=parent,
+                total=len(found),
+                done=(
+                    sum(1 for c in found if c in closed)
+                    if counts_closed else len(found)
+                ),
+            )
+            for parent, found in grouped.items()
+        ]
+
+    def _blocker_counts(self, statement: str, args: dict) -> list[Any]:
+        """``{blocked, blockers}`` counting only blockers that are still OPEN.
+
+        Which end of the link is the blocked one is read off the statement
+        rather than assumed, so reversing the SQL's direction reverses this
+        mirror's answer instead of being invisible to it.
+        """
+        wanted = {str(i) for i in (args.get("ids") or [])}
+        closed = set(args.get("closed") or [])
+        blocked_col = (
+            "target_task_id" if "l.target_task_id AS blocked" in statement
+            else "source_task_id"
+        )
+        blocker_col = (
+            "source_task_id" if "t.id = l.source_task_id" in statement
+            else "target_task_id"
+        )
+        only_blocks = "l.link_type = 'blocks'" in statement
+        skips_closed = "NOT (s.category = ANY(:closed))" in statement
+        categories = self._categories()
+        tasks = {str(t["id"]): t for t in self.rows("pm_tasks")}
+        counted: dict[str, int] = {}
+        for link in self.rows("pm_task_links"):
+            blocked = str(link.get(blocked_col) or "")
+            if blocked not in wanted:
+                continue
+            if only_blocks and link.get("link_type") != "blocks":
+                continue
+            blocker = tasks.get(str(link.get(blocker_col) or ""))
+            if blocker is None:
+                continue
+            category = categories.get(str(blocker.get("status_id")), "")
+            if skips_closed and category in closed:
+                continue
+            counted[blocked] = counted.get(blocked, 0) + 1
+        return [
+            SimpleNamespace(blocked=blocked, blockers=count)
+            for blocked, count in counted.items()
+        ]
 
     # verbs --------------------------------------------------------------
     def _insert(self, statement: str, table: str, args: dict) -> _Result:

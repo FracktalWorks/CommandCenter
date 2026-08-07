@@ -949,6 +949,7 @@ interesting it is to build.
 | 8 | ~~**Dependency and subtask UI**~~ | — | **WS-27p ✅ BUILT 2026-08-07** |
 | 9 | **Calendar / timeline view** | The third view ClickUp users actually use, after list and board | **WS-27q** |
 | 10 | **Global task search** | `?q=` exists on the list endpoint; there is no search surface | **WS-27r** |
+| 11 | ~~**The card looks nothing like /tasks'**~~ | — | **WS-27s ✅ BUILT 2026-08-07** |
 
 **Deliberately NOT on this list:** sprints (a stated non-goal, §1), time tracking and
 checklists (Paca moved both out of core into plugins — the growth path is subtraction), and
@@ -1609,3 +1610,51 @@ task is how a panel becomes something people scroll past.
 else in this app does: a project can name its finished lane "Shipped" or "Signed off", and
 `cancelled` counts as resolved even though nothing was completed. It reads as "1 of 3" rather
 than a percentage — 33% is a worse answer than "1 of 3" to the question people are asking.
+
+### 11.15 WS-27s — the shared task card (built 2026-08-07)
+
+Not on the parity backlog, and asked for directly: *"the UI, kanban, task cards etc can be
+taken from the tasks app right? so that the experience seems familiar?"*
+
+**Familiar, yes. Taken, no — and the difference is the whole ticket.** `/tasks`'s `TaskCard`
+is 395 lines bound to `useTaskStore` and to `GtdItem`'s own fields — `energy`, `deepWork`,
+`disposition`, `nextAction` — none of which `pm_tasks` has or should grow. Worse, D-PM-6 has
+`gtd_items` retiring at WS-27h, so a straight port would take the Projects board down with
+it. What moved instead is the **vocabulary**: `@/lib/taskCard` holds how a duration reads,
+what an avatar's letters are, what counts as overdue, and which chips a task earns;
+`@/components/TaskMeta` is the one file that turns a tone name into a colour. Both apps draw
+from those, and neither knows about the other's store.
+
+**A card can only show what the LIST endpoint returns, and it was returning almost nothing.**
+`pm_task_links` and `parent_task_id` have been readable since WS-27p — *one task at a time*.
+A board draws them on every card at once, so this ticket is mostly a backend one: two
+aggregates over the page's ids (`attach_relation_counts`), filling `subtasks {done,total}`
+and `blocked_by_count` on every row. Per card it would be N+1 across an imported workspace of
+hundreds, and at the three-task scale of any test the two look identical.
+
+**A finished blocker does not block, and the count says so in SQL.** The same rule WS-27p's
+`blocked_by_open` makes, moved into the aggregate rather than applied after: a card still
+marked blocked after its dependency shipped is a card people learn to ignore, and one round
+trip per card to find out is the N+1 again. Archived subtasks leave the denominator for the
+matching reason — counted, "2/3" could never reach 3/3.
+
+**A zero earns no chip.** Most tasks have no subtasks, no tags and no blockers; drawing "0"
+for each turns the meta row into noise and pushes the chips that mean something off the edge
+of a 288px column. Chip order is fixed — blocked, due, progress, then the quiet counts — so
+the row can be scanned rather than read.
+
+**Overdue is past due AND still open**, and it changes the *icon* as well as the tone, so the
+signal survives a reader who cannot tell muted from destructive. `/tasks` was checking only
+the date, which painted every completed task with a past due date red forever; sharing the
+function fixed that side too, and it is the one behaviour change this ticket makes outside
+Projects.
+
+**What the card honestly does not claim.** No attachment count and no estimate: attachments
+are counted on the single-task read (WS-27i) and there is no estimate column at all. A
+plausible zero would be the card asserting something the endpoint never told it.
+
+The hermetic fake needed teaching, as it did for WS-27n — and the lesson recorded there
+applied again: every clause in the two roll-ups is mirrored **only when the statement carries
+it**, and which end of a `blocks` link is the blocked one is read off the SQL rather than
+assumed. A mirror that filters unconditionally agrees with itself no matter what the route
+stops emitting, which is how a deleted WHERE clause survives a green suite.

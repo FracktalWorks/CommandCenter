@@ -43,6 +43,14 @@ export interface TaskRow {
    * unset rather than that the values have not loaded.
    */
   custom_fields?: Record<string, unknown>;
+  /**
+   * WS-27s — the two counts a card draws, aggregated for the whole page rather
+   * than fetched per row. Always present on the list endpoint; optional here
+   * because the same type describes a row from `getTask`, where the panel reads
+   * the full relations block instead.
+   */
+  subtasks?: { done: number; total: number };
+  blocked_by_count?: number;
 }
 
 export interface StatusRow {

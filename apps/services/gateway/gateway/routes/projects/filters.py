@@ -265,6 +265,73 @@ SELECT task_id, array_agg(assignee ORDER BY assignee) AS people
 """
 
 
+#: Subtask progress and open-blocker counts for a page of tasks, in TWO queries.
+#:
+#: The same trade `_ASSIGNEES_SQL` makes and for the same reason: a board draws
+#: these badges on every card, and asking per card is N+1 across an imported
+#: workspace of hundreds. Aggregated over the page's ids rather than joined onto
+#: the list itself, because a join would repeat the task row per child and break
+#: `LIMIT`.
+_SUBTASK_COUNTS_SQL = """
+SELECT t.parent_task_id AS parent,
+       count(*) AS total,
+       count(*) FILTER (WHERE s.category = ANY(:closed)) AS done
+  FROM pm_tasks t
+  JOIN pm_task_statuses s ON s.id = t.status_id
+ WHERE t.parent_task_id = ANY(CAST(:ids AS uuid[]))
+   AND t.archived_at IS NULL
+ GROUP BY t.parent_task_id
+"""
+
+#: How many still-OPEN tasks block each of these.
+#:
+#: Filtered to open blockers in SQL rather than counted and filtered after: a
+#: finished blocker blocks nothing (WS-27p), and a card that stays marked
+#: blocked after its dependency shipped is a card people learn to ignore.
+_BLOCKER_COUNTS_SQL = """
+SELECT l.target_task_id AS blocked, count(*) AS blockers
+  FROM pm_task_links l
+  JOIN pm_tasks t ON t.id = l.source_task_id
+  JOIN pm_task_statuses s ON s.id = t.status_id
+ WHERE l.link_type = 'blocks'
+   AND l.target_task_id = ANY(CAST(:ids AS uuid[]))
+   AND NOT (s.category = ANY(:closed))
+ GROUP BY l.target_task_id
+"""
+
+
+async def attach_relation_counts(
+    db: Any, rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Fill each row's ``subtasks`` and ``blocked_by_count``, mutating in place.
+
+    Every row gets both keys, including the ones with neither — a missing key
+    and a zero read the same to a careless client, and "has no subtasks" is a
+    state the card draws nothing for rather than an absence it guesses at.
+    """
+    for row in rows:
+        row["subtasks"] = {"done": 0, "total": 0}
+        row["blocked_by_count"] = 0
+    ids = [str(r["id"]) for r in rows if r.get("id")]
+    if not ids:
+        return rows
+
+    args = {"ids": ids, "closed": list(CLOSED_CATEGORIES)}
+    counts = (await db.execute(text(_SUBTASK_COUNTS_SQL), args)).fetchall()
+    by_parent = {
+        str(r.parent): {"done": int(r.done or 0), "total": int(r.total or 0)}
+        for r in counts
+    }
+    blocked = (await db.execute(text(_BLOCKER_COUNTS_SQL), args)).fetchall()
+    by_blocked = {str(r.blocked): int(r.blockers or 0) for r in blocked}
+
+    for row in rows:
+        key = str(row["id"])
+        row["subtasks"] = by_parent.get(key, {"done": 0, "total": 0})
+        row["blocked_by_count"] = by_blocked.get(key, 0)
+    return rows
+
+
 async def attach_assignees(db: Any, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Fill each row's ``assignees``, mutating and returning the list.
 

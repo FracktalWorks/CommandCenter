@@ -279,12 +279,22 @@ under `deploy/` — owner)*.
 
 - **5 ✅ Something runs automatically.** `deploy/hostinger/acb-backup.service`
   and `.timer` now exist (verbatim from §5 — the `deploy/` gate that blocked
-  the earlier pass was not active), and `deploy.sh` syncs *every* unit in that
-  directory into `/etc/systemd/system`, reloads on change, and `enable --now`s
-  the timers on each deploy. Files only for `.service` units — restarting the
-  gateway mid-deploy is the compose stack's job, not this loop's. This also
-  fixes `acb-health-watchdog.timer`, which was in the repo and likewise
-  depended on somebody having installed it by hand.
+  the earlier pass was not active), and **`scripts/vps_apply.sh`** installs
+  every timer-driven unit into `/etc/systemd/system`, reloads on change, and
+  `enable --now`s the timers on each deploy. This also fixes
+  `acb-health-watchdog.timer`, which was in the repo and likewise depended on
+  somebody having installed it by hand.
+  ⚠️ **`vps_apply.sh`, not `deploy/hostinger/deploy.sh`** — and the difference
+  cost a deploy. PR #380 put the sync loop in `deploy.sh`, which reads like the
+  deploy script but is the BY-HAND path; `.github/workflows/deploy.yml` runs
+  `vps_apply.sh`, as does the box's own pull unit. The PR merged green, the
+  deploy ran green, and the timer stayed unscheduled — "the correction exists
+  on paper", one file over. Corrected on main, and now pinned by
+  `tests/unit/test_backup_deploy_wiring.py`, which asserts the loop is in the
+  file that actually runs and that the manual copy has not drifted from it.
+  (Both copies are deliberate: the runbook script must install the timer too
+  when somebody runs it by hand. The guard's docstring says how to retire the
+  duplication if that ever changes.)
 - **6 ✅ A restore has been executed — and keeps being.**
   `scripts/rehearse_restore.sh` runs the real round trip: seed a database with
   known rows, run `backup_db.sh --verify-restore` (the exact command the

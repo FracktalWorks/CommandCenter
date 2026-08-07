@@ -1,4 +1,4 @@
--- 152_schema_migrations.sql — the migration ledger (BO-6, first step)
+-- 153_schema_migrations.sql — the migration ledger (BO-6, first step)
 --
 -- Until this table, `scripts/apply_migrations.sh` replayed EVERY numbered
 -- migration on EVERY deploy — 151 files by the time this landed. That worked

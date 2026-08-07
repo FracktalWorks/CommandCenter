@@ -141,7 +141,7 @@ fi
 
 # ── The ledger (BO-6) ────────────────────────────────────────────────────────
 #
-# Until this, every deploy replayed EVERY numbered migration — 152 files. That
+# Until this, every deploy replayed EVERY numbered migration — 150+ files. That
 # worked only because each is hand-written to be idempotent, which is a property
 # of 152 authors' care rather than of the system.
 #
@@ -151,7 +151,7 @@ fi
 # later reader of that table and took the app down. Asking for 150 locks we do
 # not need is the exposure; this removes it.
 #
-# Created here rather than relying on 152_schema_migrations.sql having run,
+# Created here rather than relying on 153_schema_migrations.sql having run,
 # because the ledger must exist BEFORE the loop that would apply that file.
 # `IF NOT EXISTS` makes the two agree; the migration file is what documents the
 # table and what a fresh install gets.

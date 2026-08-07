@@ -23,6 +23,7 @@ import {
   projectsApi,
 } from "./lib/api";
 import { MyWork } from "./components/MyWork";
+import { NotificationBell } from "./components/NotificationBell";
 import { ProjectTree } from "./components/ProjectTree";
 import { TaskBoard } from "./components/TaskBoard";
 import { TaskList } from "./components/TaskList";
@@ -152,6 +153,45 @@ function ProjectsWorkspace() {
     },
     [selected, statuses]
   );
+
+  /**
+   * Open one task by id — what a notification, and the People Center's "Open
+   * work" list, both link to.
+   *
+   * Those links have been generating `/projects?task=<id>` since WS-28b and
+   * landing on an unchanged board, because nothing here read the parameter.
+   */
+  const openTaskById = useCallback(
+    async (taskId: string) => {
+      try {
+        await openWithStatuses(await projectsApi.task(taskId));
+      } catch (err) {
+        setError(String((err as Error).message));
+      }
+    },
+    [openWithStatuses]
+  );
+
+  const deepLink = searchParams.get("task");
+  useEffect(() => {
+    // Keyed on the id alone, deliberately: `openTaskById` closes over the
+    // selected project, so depending on it would reopen the task every time
+    // the board reloaded — including right after somebody closed the panel.
+    if (!deepLink) return;
+    let live = true;
+    (async () => {
+      try {
+        const task = await projectsApi.task(deepLink);
+        if (live) await openWithStatuses(task);
+      } catch (err) {
+        if (live) setError(String((err as Error).message));
+      }
+    })();
+    return () => {
+      live = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [deepLink]);
 
   async function submitProject(event: React.FormEvent) {
     event.preventDefault();
@@ -307,6 +347,9 @@ function ProjectsWorkspace() {
                 {selected.description}
               </p>
             ) : null}
+          </div>
+          <div className="flex shrink-0 items-center gap-1">
+            <NotificationBell onOpenTask={openTaskById} />
           </div>
           <div className={`flex shrink-0 gap-1 ${mine ? "hidden" : ""}`}>
             {(["board", "list"] as ViewMode[]).map((m) => (

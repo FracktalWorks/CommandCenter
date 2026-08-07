@@ -17,6 +17,7 @@ from fastapi import Depends, HTTPException
 from gateway.routes.people.core import (
     STATUSES,
     _get_db,
+    can_manage_people,
     can_read_hr_fields,
     has_login,
     router,
@@ -39,6 +40,13 @@ class DirectoryResponse(BaseModel):
     #: not see this" and one meaning "nobody filled it in" are different facts,
     #: and a UI that cannot tell them apart will pick the wrong one (§3.1).
     hr_visible: bool
+    #: True when the caller holds `admin:members:manage`. The third of this
+    #: app's "say what the answer's shape is" flags, and the one the editor
+    #: needs: §3.2 renders write controls **absent** rather than disabled, and
+    #: the only alternative to being told is drawing the button and letting the
+    #: click discover a 403 — which teaches people to hunt for permissions they
+    #: may never get.
+    can_manage: bool = False
 
 
 class WorkResponse(BaseModel):
@@ -149,7 +157,8 @@ async def list_directory(
         people = [_row_to_person(r, include_hr=hr).model_dump() for r in rows]
     finally:
         await db.close()
-    return DirectoryResponse(rows=people, total=len(people), hr_visible=hr)
+    return DirectoryResponse(rows=people, total=len(people), hr_visible=hr,
+                             can_manage=can_manage_people(user))
 
 
 @router.get("/facets")
@@ -217,6 +226,11 @@ async def get_person(
     finally:
         await db.close()
     person["hr_visible"] = hr
+    # Independent of `hr_visible` on purpose. The two permissions are separate
+    # grants, and an admin who may edit a record but not read its HR half is a
+    # real principal — the editor has to open with the skills strip restricted
+    # and the save button present.
+    person["can_manage"] = can_manage_people(user)
     return person
 
 

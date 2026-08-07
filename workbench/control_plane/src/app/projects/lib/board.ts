@@ -115,6 +115,32 @@ export function planDrop<T extends PositionedTask>(
 }
 
 /**
+ * Where a saved view is positioned (WS-27k).
+ *
+ * Above the two views `tree.py` seeds on every project — "All tasks" at 100 and
+ * "Board" at 200 — because the server returns views ordered by position, and
+ * `orderBearingView` takes the first board it sees. A view saved below 200
+ * would quietly become the one every drag writes its order into.
+ */
+export const SAVED_VIEW_POSITION = 300;
+
+/**
+ * The view whose `pm_view_task_positions` rows the board's drags write.
+ *
+ * There is no `is_default` column, so "the board" is the first `board` view the
+ * server returned — and the server orders by position, which is why saved views
+ * sit above the seeded one. Naming this once matters because two places need
+ * the same answer: the drag handler writes to it, and the delete button must
+ * refuse it. Deleting it CASCADEs every hand-arranged position on the project,
+ * which is exactly the silent loss `delete_view` warns about.
+ */
+export function orderBearingView<T extends { view_type: string }>(
+  views: readonly T[]
+): T | null {
+  return views.find((view) => view.view_type === "board") ?? null;
+}
+
+/**
  * The field patch a cross-column drag implies.
  *
  * Board columns come from the view's `column_by`, so dropping a card into a

@@ -35,6 +35,7 @@ from gateway.routes.projects.core import (
     row_to_dict,
     update_row,
 )
+from gateway.routes.projects.filters import normalise_view_config
 from pydantic import BaseModel
 from sqlalchemy import text
 
@@ -107,7 +108,10 @@ async def create_view(
         await load_visible_project(db, vis, project_id)
         row = await insert_row(db, "pm_views", {
             "project_id": project_id, "name": name, "view_type": view_type,
-            "config": values.get("config") or {},
+            # Normalised on the way IN, so a view can never be stored carrying
+            # a filter the list endpoint would refuse — a saved view that 422s
+            # when opened is worse than one that quietly saved less.
+            "config": normalise_view_config(values.get("config")),
             "position": values.get("position"),
             "created_by": actor(user),
         })
@@ -136,6 +140,10 @@ async def patch_view(
         await load_visible_project(db, vis, str(existing.project_id))
         if not values:
             return row_to_dict(existing, ViewModel)
+        # Same normalisation as create — an edit must not be the way an
+        # un-openable config gets in.
+        if "config" in values:
+            values["config"] = normalise_view_config(values["config"])
         row = await update_row(db, "pm_views", view_id, values)
         await db.commit()
         return row_to_dict(row, ViewModel)

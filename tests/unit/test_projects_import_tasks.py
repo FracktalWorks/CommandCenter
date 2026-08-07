@@ -63,6 +63,47 @@ def test_every_known_status_maps_to_its_category(name, expected):
     assert categorise(name) == expected
 
 
+def test_every_category_it_maps_to_is_one_the_DATABASE_allows():
+    """The fence that was missing, and it caught a live bug.
+
+    The first version mapped ClickUp's "Blocked"/"On hold" to a `blocked`
+    category. Migration 146's CHECK has no such value, so `_ensure_lane` would
+    have raised a CheckViolation and rolled the WHOLE import back — for any
+    workspace with a Blocked status, which is most of them. The hermetic double
+    accepts any string; only the migration knows.
+
+    Read from the migration rather than restated, so the next category added to
+    either side fails here instead of in front of somebody.
+    """
+    from gateway.routes.projects.filters import STATUS_CATEGORIES
+
+    text = (
+        __import__("pathlib").Path(__file__).resolve().parents[2]
+        / "infra/postgres/146_projects.sql"
+    ).read_text(encoding="utf-8")
+    text = "\n".join(re.sub(r"--.*$", "", ln) for ln in text.splitlines())
+    match = re.search(
+        r"category\s+TEXT\s+NOT\s+NULL[^,]*?CHECK\s*\(\s*category\s+IN\s*\((.*?)\)\)",
+        text, re.S | re.I,
+    )
+    assert match, "146 no longer constrains pm_task_statuses.category"
+    allowed = set(re.findall(r"'([a-z_]+)'", match.group(1)))
+    assert set(CATEGORY_BY_NAME.values()) <= allowed, (
+        f"the importer would write categories the database refuses: "
+        f"{sorted(set(CATEGORY_BY_NAME.values()) - allowed)}"
+    )
+    # …and the filter vocabulary mirrors the same CHECK.
+    assert set(STATUS_CATEGORIES) == allowed
+
+
+def test_an_unmapped_status_also_lands_in_an_allowed_category():
+    """The fallback has to be legal too — it is the one every unrecognised
+    ClickUp status takes."""
+    from gateway.routes.projects.filters import STATUS_CATEGORIES
+
+    assert categorise("Whatever Nobody Anticipated") in STATUS_CATEGORIES
+
+
 def test_status_matching_ignores_case_and_padding():
     """The mirror stores the provider's own casing; "In Progress" and
     "in progress" are not a distinction anybody means to make."""
@@ -487,7 +528,7 @@ def test_the_preview_counts_the_space_and_folder_nodes_it_would_create(bind):
     preview = bind(FakeDB(lists=[gtd_list()], items=[], hierarchy=hierarchy))
     dry = run(go(dry_run=True))
     assert preview.inserts == []
-    real = bind(FakeDB(lists=[gtd_list()], items=[], hierarchy=hierarchy))
+    bind(FakeDB(lists=[gtd_list()], items=[], hierarchy=hierarchy))
     wet = run(go())
     assert dry["projects"]["created"] == wet["projects"]["created"]
     # …and it is really 4: department + Space + Folder + List.

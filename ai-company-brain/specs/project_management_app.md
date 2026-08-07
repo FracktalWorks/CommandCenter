@@ -86,10 +86,12 @@ extra middle phase two-way sync demands.
 **Non-goals (v1 — record departures here per `user_management_contract.md` §7):**
 - **Sprints.** Paca has them; we don't run Scrum. The schema leaves room (nothing blocks a
   later `pm_sprints` + a `sprint` view context); no table now.
-- **Custom fields.** Paca's `field_key`→JSONB pattern is the recorded additive path; v1
-  fields live in the schema.
-- **Tags as a first-class registry.** v1 is `tags TEXT[]` on tasks (searchable, no colors);
-  Paca's bare-JSONB tags are its weakest area and a registry is additive later.
+- ~~**Custom fields.**~~ Paca's `field_key`→JSONB pattern was the recorded additive path,
+  and **WS-27l took it 2026-08-07** (§11.9). The departure from the recorded plan is one
+  line: deleting a definition also strips its values, which Paca does not do.
+- ~~**Tags as a first-class registry.**~~ v1 was `tags TEXT[]` on tasks (searchable, no
+  colors) and the registry was named as additive later; **WS-27m added it 2026-08-07**
+  (§11.10). The array stayed — the registry sits beside it, not instead of it.
 - **Time tracking, docs/wiki, dashboards-in-app.** Notes and the Center dashboards
   (WS-15) own those concerns; the Projects app binds, never rebuilds (§6).
 - **A second automation engine.** ADR-028/D6: `/workflows` is the only engine; WS-27
@@ -939,10 +941,10 @@ interesting it is to build.
 |---|---|---|---|
 | 1 | ~~**Attachments**~~ | — | **WS-27i ✅ BUILT 2026-08-06** |
 | 2 | ~~**Notifications + @mentions**~~ | — | **WS-27j ✅ BUILT 2026-08-07** |
-| 3 | **Filters, grouping and saved views** — `pm_views` exists; the UI has a board/list toggle and nothing else | "My open bugs in Ops, grouped by assignee" is a daily question with no answer. The **table is already there**, so this is a UI ticket, not a schema one | **WS-27k** |
-| 4 | **Custom fields** — no definitions table, no values | ClickUp's signature feature. Paca's shape (`custom_field_definitions` + a JSONB column keyed by `field_key`) is proven and portable | **WS-27l** |
-| 5 | **Tags** — refused Paca's bare JSONB array (research row 13) and nothing replaced it | The refusal was right and left a hole. A tag registry with rename/merge is the version worth having | **WS-27m** |
-| 6 | **Bulk edit / multi-select** | Re-triaging fifty imported tasks one at a time is how an import gets abandoned — this one gates the migration itself | **WS-27n** |
+| 3 | ~~**Filters, grouping and saved views**~~ | — | **WS-27k ✅ BUILT 2026-08-07** |
+| 4 | ~~**Custom fields**~~ | — | **WS-27l ✅ BUILT 2026-08-07** |
+| 5 | ~~**Tags**~~ | — | **WS-27m ✅ BUILT 2026-08-07** |
+| 6 | ~~**Bulk edit / multi-select**~~ | — | **WS-27n ✅ BUILT 2026-08-07 · unblocks g** |
 | 7 | **Recurring tasks** | Every operations cadence is recurring. Without it those live in someone's head or in ClickUp | **WS-27o** |
 | 8 | **Dependency and subtask UI** — `pm_task_links` and `parent_task_id` both exist, unreachable from the board | Data with no surface is a promise the product does not keep | **WS-27p** |
 | 9 | **Calendar / timeline view** | The third view ClickUp users actually use, after list and board | **WS-27q** |
@@ -954,10 +956,11 @@ Gantt. If any is wanted, it is a decision to record, not an omission to fix.
 
 ### 11.3 Sequencing, and the one dependency that matters
 
-**WS-27n (bulk edit) gates WS-27g.** The cutover imports a real workspace, and an import
-that cannot be re-triaged in bulk is an import somebody abandons halfway — leaving two live
-systems, which is the exact state the retirement exists to end. Build it before the cutover,
-not after.
+**WS-27n (bulk edit) gates WS-27g — and as of 2026-08-07 it is built (§11.11), so this
+dependency is satisfied.** The cutover imports a real workspace, and an import that cannot be
+re-triaged in bulk is an import somebody abandons halfway — leaving two live systems, which is
+the exact state the retirement exists to end. It was built before the cutover, as required.
+WS-27g itself remains 🔴 OWNER-GATE for its own reasons (§6), which this does not change.
 
 **1 → 2 → 3 are the daily-use tier** and should go first as a block: a member who can
 attach a file, hear about an assignment, and filter their board can run a day here. 4-5
@@ -1175,3 +1178,304 @@ beside it never has to do anything. On a **second** dry run the department
 already exists and its id comes back regardless — and the projects resolve too —
 leaving `dry_run` as the only thing between a preview and a write. That is the
 realistic case (preview → import → preview again), and it now has its own test.
+
+### 11.8 WS-27k — filters, grouping and saved views (built 2026-08-07)
+
+*"My open bugs in Ops, grouped by assignee"* is the sentence §11.2 used to name the gap. It
+is now typeable: `routes/projects/filters.py`, `lib/grouping.ts`, `components/FilterBar.tsx`,
+with the board and the list both drawing whatever `groupTasks` returned. 34 hermetic + 24
+vitest cases, 13 mutants red, and 23 checks run against a real Postgres.
+
+**One filter builder, shared by the endpoint and by saved views.** A saved view is nothing
+but a stored set of these filters. Two implementations would drift, and a *saved* view that
+shows a different set of tasks than the same filters typed by hand is the one thing it may
+not do — so `build_task_filters` is a pure function that both paths call, and the test that
+says so compares the two outputs directly.
+
+**Every filter is a WHERE clause.** Pagination happens in SQL. A filter applied in Python
+after `LIMIT` returns short pages, and *"page 2 is empty but there are 40 more"* is the kind
+of bug people work around for months instead of reporting.
+
+**`overdue` means past due AND still open.** A finished task with a past due date is not
+overdue, it is done. Colouring it red forever is how a board teaches people to ignore red.
+
+**An unknown status category is a 422, not an empty board.** A client filtering on
+`in-progress` (hyphen) would otherwise see nothing and conclude the project is empty. The
+error names the five real categories, which is the whole difference between a typo that takes
+five seconds and one that takes an afternoon.
+
+**An unknown config *key* is dropped; an unknown *value* falls back.** Those are different
+failures. A view is a saved preference written by an older client, so refusing to open one
+because it carries a key this version has never heard of would turn every deploy into a
+migration of everybody's saved views. A bad `group_by`, on the other hand, still has to
+render something, and `status` is the board's own axis rather than a guess.
+
+**A task with two assignees appears in BOTH columns.** It is both people's work; picking one
+arbitrarily hides it from the other. The consequence is that group sizes sum to more than the
+task count, which is why the header counts tasks.
+
+**Empty status lanes are kept; every other grouping drops empties.** A board missing its "In
+progress" column reads as *"this project has no in-progress state"*, not *"nothing is in
+progress"*. There is no equivalent meaning to an "assignees with nothing assigned" column.
+
+**Dragging is offered only when the columns are statuses.** A drop writes the field the
+columns represent, and status is the one that is a plain `PATCH status_id` — assignees are a
+separate PUT, priority is an integer, and moving a task between projects crosses a grant
+boundary. A card that can be dragged into a column which cannot accept it, and snaps back, is
+worse than a column that is honestly static.
+
+**`toConfig` is deliberately not `toQuery`.** A query string carries only text, so `toQuery`
+writes `"true"`; a config is JSON and keeps a boolean a boolean. `fromConfig` refuses a string
+where a toggle belongs — a hand-edited `"false"` must not read as on — so a view built from
+query shape would come back with every toggle silently cleared. That round trip is a test.
+
+**The project's order-bearing board is withheld from the chips.** `tree.py` seeds two views
+per project, and the `board` one owns every `pm_view_task_positions` row. Offering its ✕
+would offer to delete every hand-arranged position on the project. Saved views sit at
+position 300, above the seeded pair, so `orderBearingView` — one function, used by both the
+drag handler and the delete guard — keeps answering the seeded board.
+
+**A fifth live bug, found the same way as the previous four.** `due_before` was
+`t.due_at < CAST(:due_before AS timestamptz)` with the string straight off the query string.
+asyncpg infers the parameter's type *from that cast* and then refuses to encode a `str`, so
+the query never reached the database and **`?due_before=…` answered 500** — while the
+hermetic fake, which agrees with whatever SQL it is handed, stayed green. `parse_when` now
+parses on this side and binds a real `datetime`, an unparseable value is a 422 that says what
+was expected, and a naive value is read as UTC rather than inheriting the connection's
+TimeZone. Two tests: one on the bound value's *type*, one refusing any `CAST(:param AS
+timestamp…)` anywhere in the builder, so the next `after=` filter written the obvious way
+fails in CI instead of in production.
+
+### 11.9 WS-27l — custom fields (built 2026-08-07)
+
+ClickUp's signature feature, and the fourth row of the parity backlog. Migration
+`155_projects_custom_fields.sql`, `routes/projects/custom_fields.py`, `lib/customFields.ts`,
+a field block in the task panel and a manager dialog behind **Fields** in the header. 47
+hermetic + 36 vitest cases, 23 mutants red, 35 checks against a real Postgres.
+
+The shape is the one §5's non-goals recorded as the additive path: **definitions in a table,
+values denormalised onto the task as JSONB keyed by `field_key`.**
+
+**Why not a row per (task, field).** That is the textbook EAV answer and it costs a join per
+field on every board paint — five custom fields across two hundred imported tasks is a
+thousand rows to gather and re-pivot, per render. The JSONB column arrives with the task for
+free, which is what makes the denormalisation worth its cost.
+
+**What the denormalisation costs, stated rather than discovered.** A value is not
+referentially tied to its definition, so the *database* cannot stop a key no definition owns
+from being written. That guarantee moves into Python, and it is why the validation is the
+feature rather than a formality:
+
+* **An unknown key is a 422**, not a silent drop. A typo that no-ops looks exactly like a
+  save, and the sender finds out weeks later.
+* **A patch MERGES.** A client that knows about three of five fields must not wipe the other
+  two by sending what it knows — and an older client, or an automation written before a field
+  existed, is precisely that client.
+* **An explicit `null` CLEARS the key**, removing it rather than storing a null. It is the
+  only way to express "unset this", and a stored null would make "never filled in" and
+  "deliberately emptied" the same value in every filter downstream.
+* **`true` is not the number 1.** `isinstance(True, int)` is True in Python, so a number
+  branch reached before the boolean one accepts both, in both directions. The coercers are
+  one-per-type in a dispatch dict specifically so that ordering cannot be undone by accident.
+
+**The deliberate departure from Paca: deleting a definition strips its values.** Paca's
+research notes record "deleting a definition does not clean task data" as an accepted cost
+(§2.3). It is not accepted here. A key left behind in the JSONB is invisible — no definition
+means no column, no form row, no filter — right up until somebody creates a field with the
+same name, and then every old value resurfaces carrying the new meaning. The count of tasks
+cleared is reported (R7/R8), for the same reason `delete_view` reports its cascade.
+
+**Two things a definition may not change once values exist**, both because the stored values
+would stop meaning what they say: **`field_key` is never editable** — it is the identity
+every value is filed under, and changing it orphans the lot in one statement — and
+**`field_type` is refused with a 409 naming the count**, because "Customer" going from text to
+select cannot re-interpret what is already written. Dropping a *select option* some task still
+holds is refused the same way; adding one is free. The UI shows the derived key while the name
+is still being typed, since that is the last moment anybody can change it.
+
+**Custom fields are revertible, which makes them first-class.** `patch_task` folds a custom
+edit into the SAME `field_change` activity under namespaced keys (`custom.<key>`) rather than
+inventing an activity type — `record_activity` refuses a type the migration's CHECK does not
+list, the trap that made every attachment upload answer 422, and a custom field changing *is*
+a field change. Revert then restores it by **merging onto what the task holds now**, never by
+writing back the whole object: another field may have been edited since, and replacing the
+blob would silently undo that too — a revert that reverts more than it names.
+
+**A bug this ticket's own tests caught before it shipped.** `changedValues` compared a form's
+boolean against a `null` baseline, so a task with an unanswered checkbox sent `open: false` on
+*every* save and posted a timeline entry for an edit nobody made. A checkbox has no "unset"
+state to render — an unticked box and a never-answered field are the same pixels — so `false`
+is the baseline for a boolean and `null` for everything else.
+
+**A fence that was quietly a subset check.** `test_projects_routes` asserted that a list of
+paths was mounted, which catches the module somebody remembered to add a path for — i.e. the
+one least likely to have been forgotten. It now also reads the package directory and asserts
+that **every module declaring a `@router` route is imported by `__init__.py`**, which is the
+trap `department_centers.md` C1 documents: a module left out mounts nothing while every test
+that calls its functions directly still passes. Verified by deleting the import and watching
+it fail.
+
+### 11.10 WS-27m — the tag registry (built 2026-08-07)
+
+The fifth row of the parity backlog, and the one the research notes left open **on purpose**.
+`paca_pm_research_2026-08.md` row 13 REFUSED Paca's model — *"a bare jsonb string array on
+tasks. No registry, no colors, no rename/merge — the weakest part of Paca's model; don't copy
+it as-is"* — and §5's non-goals shipped `pm_tasks.tags TEXT[]` in its place with a registry
+named as additive later. This is that registry.
+
+Migration `156_projects_tags.sql`, `routes/projects/tags.py`, `lib/tags.ts`, a picker in the
+task panel, a tag row in the filter bar, a `tag` axis on the board, and a manager behind
+**Tags** in the header. 31 hermetic + 37 vitest cases, 16 mutants red, 30 checks against a
+real Postgres.
+
+**The array stays.** The obvious "proper" alternative is a join table, and it is the wrong
+trade here for the same reason §11.9 gave for custom fields: the array arrives with the task,
+and its GIN index (146) already answers *"tagged X"* without touching another relation. A
+join table would add a row per tag per task and a join to every board paint, to buy
+referential integrity this app can enforce in one place instead.
+
+**What the registry buys, given that:**
+
+* **One spelling per tag.** "Bug", "bug" and "BUG" are one tag, so filtering by it finds all
+  of it rather than a third of it. The task's array stores the **registry's** display form,
+  which is what makes that true rather than aspirational — and what lets a rename be one
+  statement. Identity is case-insensitive (a unique index over `lower(name)`, so two racing
+  requests cannot create both); display is case-preserving.
+* **Rename**, which rewrites every task wearing the tag and reports the count.
+* **Merge**, which is the answer to the real failure mode of free tagging.
+* **A colour**, so a board can show a tag rather than spell it.
+
+**Applying an unregistered tag REGISTERS it.** Refusing would make tagging a two-step errand —
+leave the task, create the tag, come back — which is how tagging gets abandoned, and an
+abandoned tag set is worse than a messy one. **The cost, stated: every typo becomes a tag.**
+Which is exactly why merge is here and is not optional, and why the picker *shows* the moment
+of creation ("Create …") rather than minting silently.
+
+**A rename onto an existing name is a 409, not a silent merge.** They are different operations
+with different outcomes — a merge destroys one tag — and quietly doing the destructive one
+because the names collided is the kind of surprise that stops people using a rename button.
+The error names the tag that is in the way and points at merge.
+
+**A task carrying BOTH tags ends a merge with the target once.** That is the case that is easy
+to get wrong, and getting it wrong leaves a duplicate that renders twice and survives the next
+merge too. `merged_tags` is a pure function precisely so that case can be asserted directly —
+and it is why the rewrite runs over the affected rows in Python rather than as an
+`array_replace`, which would leave the duplicate.
+
+**Two tag filters, because both questions get asked and one cannot answer the other.** `tags`
+is ANY (`&&` — *"bugs or regressions"*), `tags_all` is ALL (`@>` — *"the ones that are both"*).
+Collapsing them into one parameter would silently pick a meaning, and with three tags the two
+answers differ by almost everything. Both use the operators the existing GIN index serves.
+
+**On the board, a task with three tags appears in three columns** — the same honesty as a task
+with two assignees appearing in both theirs (§11.8).
+
+**The migration backfills, and rewrites data — deliberately, and narrowly.** `tags` has been on
+`pm_tasks` since 146 and the import path writes them, so an empty registry beside a tagged
+corpus would mean the first rename found nothing and the manager showed nothing. The winning
+display form is **the spelling people actually use** (the most frequent), ties broken
+deterministically — `min()` alone would canonicalise a corpus of 400 "Bug" to a single stray
+"BUG". Task arrays are then made to agree with the registry: it only ever replaces a tag with
+a different *casing* of the same tag, the meaning is identical, and the count is reported in a
+NOTICE. Leaving it undone would make the registry's central claim false on day one.
+
+**A bug the live run caught in that block.** The canonicalisation used
+`FROM pm_tasks t, unnest(t.tags) AS tag LEFT JOIN pm_tags g ON … t.root_project_id …` — with
+the implicit comma form the `LEFT JOIN` binds only to `unnest(...)` and `t` is not in scope
+for its `ON` clause, so the migration aborted with *"invalid reference to FROM-clause entry
+for table t"*. Rewritten as `CROSS JOIN LATERAL … WITH ORDINALITY`, which also fixed a second
+problem the first version would have shipped: `array_agg(DISTINCT ...)` sorts by its own
+expression, so every task's tag list would have come back alphabetised.
+
+### 11.11 WS-27n — bulk edit (built 2026-08-07)
+
+The sixth row of the backlog, and **the one §11.3 names as gating WS-27g**. That dependency is
+now satisfied: the cutover imports a real workspace, and an import that cannot be re-triaged
+in bulk is one somebody abandons halfway, leaving two live systems — the exact state the
+retirement exists to end.
+
+`routes/projects/bulk.py` (`POST /projects/tasks/bulk`), `lib/selection.ts`,
+`components/BulkBar.tsx`, plus checkboxes on the board and the list. 35 hermetic + 32 vitest
+cases, 16 mutants red, 34 checks against a real Postgres. **No migration.**
+
+**It reuses `automation.apply_task_patch` rather than growing a second writer.** That service
+exists because WS-27f needed a task edit *indistinguishable in validation from a human PATCH*;
+a bulk endpoint with its own field handling would be a third opinion about what a task edit is,
+and three opinions drift. Assignees and tags are separate write paths on the task, so those
+are handled here — once, and through the same registry the panel uses, because the tag
+registry cannot be true if bulk is a second door into the array.
+
+**Status is named, never keyed — and here that is load-bearing rather than stylistic.** A
+selection can span projects, and a status id belongs to exactly one root. Sending `status_id`
+for fifty tasks across three projects would put two thirds of them in a lane that is not
+theirs, or fail on the foreign key. `status_id` in a bulk patch is therefore a 422 with its
+own message, because it is the mistake somebody makes by copying a single-task PATCH body and
+"unknown field" would not explain why the thing that works on one task is refused on fifty.
+
+**Assignees and tags are ADD/REMOVE, never SET.** "Assign these to Priya" means *also* Priya;
+a replace across a selection wipes every individual assignment the fifty tasks already
+carried. The destructive spelling is absent rather than merely discouraged.
+
+**Shape is validated once, up front; outcomes are per task.** Those are genuinely different
+failures. A field nobody can set is the same mistake for every task in the selection and earns
+a 422 before anything is written. A status name that exists in one project and not another is
+a fact about *that task*, and failing the whole batch for it would make a mixed selection
+unusable — which is precisely the selection somebody makes after an import.
+
+**A task the caller cannot see is skipped, not an error** (R5). Reporting it per id says
+exactly what a per-id 404 would say and nothing more; aborting instead would let a caller
+probe for existence by watching whether the batch failed. **One transaction**, because partial
+application is the worst outcome available: a re-triage that half-happened is harder to
+recover from than one that did not, since nobody can tell which half.
+
+**Re-asserting a value is not a change.** Fifty tasks that were already Priya's would each
+gain a timeline entry saying nothing, and a bulk edit reporting "50 changed" when it changed
+nothing is one whose count nobody can trust. `moved_people` is pure so that claim is asserted
+directly.
+
+**One notification per person per batch, not one per task.** Being handed fifty tasks should
+ring once and say fifty. Fifty bells is a bell people turn off, and a muted bell notifies
+nobody about anything — WS-27j's own argument, applied to the case that would have broken it.
+
+In the browser, the selection is **pruned whenever the filter changes**: selecting forty,
+narrowing to three and pressing Done must not act on thirty-seven tasks nobody can see. A
+shift-click ranges over the board's *on-screen* order (after filtering and grouping), and a
+task drawn in two columns — a two-assignee card, §11.8 — counts once. The outcome line names
+every category including the boring ones, because "47 changed" against "I selected 50" is a
+support conversation, whereas "2 already like that, 1 not available" is a sentence somebody
+already read.
+
+### 11.12 A shipped notification bug this ticket uncovered
+
+Building bulk assignment surfaced a defect in WS-27j that had been live since it shipped.
+
+**There are two ways to see a task** — a grant on its project, or being an assignee of it —
+and `core.task_visibility_clause` says so in one place, with a docstring warning that a second
+implementation "would drift the moment one is edited alone". `notifications.deliverable` had
+drifted exactly that way: it probed only `vis.project_clause('t.root_project_id')`.
+
+Two consequences, both silent:
+
+1. **Anybody assigned work in a project they hold no grant on was judged undeliverable.** They
+   could open the task — `get_task` uses the shared clause — but the assignment that put them
+   there notified nobody, and the response told the assigner they could not see it. That is
+   the silent assignment WS-27j exists to end, still open for the most common case in a
+   grant-scoped app: delegating outward.
+2. **Scoping to `root_project_id` also missed a grant made on a SUBPROJECT.** The old test
+   asserted that scoping, on the argument that "probing `project_id` would miss a grant made
+   on an ancestor" — which is backwards, and running it against a real Postgres is what showed
+   it: the grant closure is recursive and expands *downward*, so `project_id` catches an
+   ancestor grant, while `root_project_id` is the one that misses a subproject grant.
+
+`deliverable` now uses `task_visibility_clause`. The test that encoded the wrong reasoning has
+been replaced with one that records why it was wrong, and a second asserts the shared clause
+still carries both branches.
+
+**A fake collision the fix exposed, worth recording.** The hermetic suite's `FakeDB` matched
+the rule-3 probe by substring. The new clause embeds both `pm_task_assignees` and the
+closure's `UNION`, which is exactly the fingerprint the *audience* branch used — so
+`deliverable` received a list of assignees where it expected a visibility answer, and four
+tests failed for a reason with nothing to do with the code under test. The probe is now
+matched first and the audience branch keys off `assignee AS who`, which only its own query
+has. A fake that dispatches on substrings needs its fingerprints to be *specific*, not merely
+present.

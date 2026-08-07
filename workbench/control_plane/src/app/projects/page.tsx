@@ -21,8 +21,15 @@ import {
   type ProjectRow,
   type StatusRow,
   type TaskRow,
+  type FieldRow,
+  type TagRow,
+  type ViewRow,
   projectsApi,
 } from "./lib/api";
+import { FieldManager } from "./components/FieldManager";
+import { TagManager } from "./components/TagManager";
+import { BulkBar } from "./components/BulkBar";
+import { FilterBar } from "./components/FilterBar";
 import { ImportClickUp } from "./components/ImportClickUp";
 import { MyWork } from "./components/MyWork";
 import { NotificationBell } from "./components/NotificationBell";
@@ -30,8 +37,27 @@ import { ProjectTree } from "./components/ProjectTree";
 import { TaskBoard } from "./components/TaskBoard";
 import { TaskList } from "./components/TaskList";
 import { TaskPanel } from "./components/TaskPanel";
-import type { planDrop } from "./lib/board";
-import { filterByCenter } from "./lib/tree";
+import { SAVED_VIEW_POSITION, orderBearingView, type planDrop } from "./lib/board";
+import {
+  EMPTY_FILTERS,
+  type Filters,
+  type GroupBy,
+  fromConfig,
+  groupTasks,
+  toConfig,
+  toQuery,
+} from "./lib/grouping";
+import {
+  allSelected as everySelected,
+  buildRequest,
+  describeOutcome,
+  prune,
+  range as selectRange,
+  toggle as toggleId,
+  visibleIds,
+} from "./lib/selection";
+import { fetchAccess } from "@/lib/access";
+import { filterByCenter, flatten } from "./lib/tree";
 
 type ViewMode = "board" | "list";
 
@@ -66,6 +92,43 @@ function ProjectsWorkspace() {
   const [newTask, setNewTask] = useState("");
   const [treeKey, setTreeKey] = useState(0);
   const [importing, setImporting] = useState(false);
+
+  // WS-27k — filters go to the server, grouping is applied here. `activeView`
+  // is only a highlight: applying a view copies its config into these two, so
+  // editing a filter afterwards leaves the chip lit but the board honest, and
+  // the chip clears the moment the state stops matching what was saved.
+  const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS);
+  const [groupBy, setGroupBy] = useState<GroupBy>("status");
+  const [views, setViews] = useState<ViewRow[]>([]);
+  const [activeViewId, setActiveViewId] = useState<string | null>(null);
+  const [me, setMe] = useState("");
+
+  // WS-27l — the selected node's custom field definitions. Root-scoped, so the
+  // whole subtree shares one set; held here rather than in the panel because
+  // the panel opens and closes far more often than these change.
+  const [fields, setFields] = useState<FieldRow[]>([]);
+  const [managingFields, setManagingFields] = useState(false);
+
+  // WS-27m — the selected node's tag registry. Root-scoped like the fields, and
+  // held here for the same reason: the filter bar, the panel's picker and the
+  // manager all read it, and three fetches of one list would disagree.
+  const [tags, setTags] = useState<TagRow[]>([]);
+  const [managingTags, setManagingTags] = useState(false);
+
+  // WS-27n — multi-select. `anchor` is the last card clicked without shift,
+  // which is what a shift-click measures its range from.
+  const [picked, setPicked] = useState<ReadonlySet<string>>(new Set());
+  const [anchor, setAnchor] = useState<string | null>(null);
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkNotice, setBulkNotice] = useState<string | null>(null);
+
+  useEffect(() => {
+    // Only for the "Mine" toggle. `fetchAccess` never throws, and an empty
+    // address disables the button rather than filtering on nobody.
+    const controller = new AbortController();
+    void fetchAccess(controller.signal).then((access) => setMe(access.email));
+    return () => controller.abort();
+  }, []);
 
   // The tree, plus every root's grants — the grants are what the Center filter
   // reads, and fetching them per root keeps `filterByCenter` a pure function
@@ -115,25 +178,188 @@ function ProjectsWorkspace() {
     if (!stillVisible) setSelected(visibleRoots[0]);
   }, [visibleRoots, selected]);
 
-  const loadProject = useCallback(async (project: ProjectRow) => {
-    setError(null);
-    try {
-      const [statusRes, taskRes] = await Promise.all([
-        projectsApi.statuses(project.id),
-        projectsApi.tasks({ project_id: project.id, include_subtree: true, page_size: 100 }),
-      ]);
-      setStatuses(statusRes.rows);
-      setTasks(taskRes.rows);
-    } catch (err) {
-      setError(String((err as Error).message));
-      setStatuses([]);
-      setTasks([]);
-    }
-  }, []);
+  const loadProject = useCallback(
+    async (project: ProjectRow) => {
+      setError(null);
+      try {
+        const [statusRes, taskRes] = await Promise.all([
+          projectsApi.statuses(project.id),
+          // Filters travel to the server, never applied to the page after it
+          // arrives: paging happens in SQL, so a filter applied here would
+          // return short pages and hide work that is genuinely there.
+          projectsApi.tasks({
+            project_id: project.id,
+            include_subtree: true,
+            page_size: 100,
+            ...toQuery(filters),
+          }),
+        ]);
+        setStatuses(statusRes.rows);
+        setTasks(taskRes.rows);
+      } catch (err) {
+        setError(String((err as Error).message));
+        setStatuses([]);
+        setTasks([]);
+      }
+    },
+    [filters]
+  );
 
   useEffect(() => {
     if (selected) void loadProject(selected);
   }, [selected, loadProject]);
+
+  useEffect(() => {
+    if (!selected) {
+      setFields([]);
+      setTags([]);
+      return;
+    }
+    let live = true;
+    projectsApi
+      .fields(selected.id)
+      .then((res) => {
+        if (live) setFields(res.rows);
+      })
+      // A board that works without its custom columns beats a board that
+      // refuses to load because their definitions did not arrive.
+      .catch(() => {
+        if (live) setFields([]);
+      });
+    projectsApi
+      .tags(selected.id)
+      .then((res) => {
+        if (live) setTags(res.rows);
+      })
+      .catch(() => {
+        if (live) setTags([]);
+      });
+    return () => {
+      live = false;
+    };
+  }, [selected, treeKey]);
+
+  // Saved views belong to the selected node, and are re-read whenever it
+  // changes — a chip from the previous project would apply filters that make
+  // sense but claim a name that does not.
+  useEffect(() => {
+    if (!selected) {
+      setViews([]);
+      return;
+    }
+    let live = true;
+    projectsApi
+      .views(selected.id)
+      .then((res) => {
+        if (live) setViews(res.rows);
+      })
+      .catch(() => {
+        // A board that works without its chips beats a board that refuses to
+        // load because its view list did.
+        if (live) setViews([]);
+      });
+    return () => {
+      live = false;
+    };
+  }, [selected]);
+
+  const projectName = useCallback(
+    (id: string) =>
+      flatten(roots).find((entry) => entry.node.id === id)?.node.name ?? "Project",
+    [roots]
+  );
+
+  const groups = useMemo(
+    () => groupTasks(tasks, groupBy, { statuses, projectName }),
+    [tasks, groupBy, statuses, projectName]
+  );
+
+  const onScreen = useMemo(() => visibleIds(groups), [groups]);
+
+  // A selection that outlives its filter is how a bulk edit hits tasks nobody
+  // can see any more: select forty, narrow to three, press Done believing you
+  // are acting on the three in front of you.
+  useEffect(() => {
+    setPicked((current) => {
+      const pruned = prune(current, onScreen);
+      return pruned.size === current.size ? current : pruned;
+    });
+  }, [onScreen]);
+
+  function toggleSelection(id: string, shift: boolean) {
+    setBulkNotice(null);
+    setPicked((current) => {
+      if (shift && anchor) {
+        const next = new Set(current);
+        for (const each of selectRange(onScreen, anchor, id)) next.add(each);
+        return next;
+      }
+      return toggleId(current, id);
+    });
+    if (!shift) setAnchor(id);
+  }
+
+  async function applyBulk(request: ReturnType<typeof buildRequest>) {
+    if (!request) return;
+    setBulkBusy(true);
+    setBulkNotice(null);
+    try {
+      const outcome = await projectsApi.bulkEdit({
+        ...request,
+        task_ids: [...picked],
+      });
+      setBulkNotice(describeOutcome(outcome));
+      // The selection is KEPT: a sweep is usually several passes over the same
+      // set ("these fifty: status, then owner, then tag"), and clearing after
+      // each would make the second pass a re-selection.
+      if (selected) await loadProject(selected);
+    } catch (err) {
+      setBulkNotice(String((err as Error).message));
+    } finally {
+      setBulkBusy(false);
+    }
+  }
+
+  function applyView(view: ViewRow) {
+    const { filters: next, groupBy: nextGroup } = fromConfig(view.config);
+    setFilters(next);
+    setGroupBy(nextGroup);
+    setActiveViewId(view.id);
+  }
+
+  async function saveView(name: string) {
+    if (!selected) return;
+    try {
+      const created = await projectsApi.createView(selected.id, {
+        name,
+        view_type: mode,
+        config: toConfig(filters, groupBy),
+        // Above the seeded pair, so the drag handler keeps writing its order
+        // into the project's original board rather than into a saved filter.
+        position: SAVED_VIEW_POSITION + views.length,
+      });
+      setViews((current) => [...current, created]);
+      setActiveViewId(created.id);
+    } catch (err) {
+      setError(String((err as Error).message));
+    }
+  }
+
+  async function deleteView(view: ViewRow) {
+    try {
+      await projectsApi.deleteView(view.id);
+      setViews((current) => current.filter((v) => v.id !== view.id));
+      setActiveViewId((current) => (current === view.id ? null : current));
+    } catch (err) {
+      setError(String((err as Error).message));
+    }
+  }
+
+  function changeFilters(next: Filters) {
+    setFilters(next);
+    // Editing after applying a view means the board is no longer that view.
+    setActiveViewId(null);
+  }
 
   // Opening a task always resolves ITS project's statuses. From the board that
   // is the set already loaded; from My work it may be any project the member
@@ -253,8 +479,8 @@ function ProjectsWorkspace() {
     }
     try {
       if (patch) await projectsApi.patchTask(task.id, patch);
-      const views = await projectsApi.views(task.root_project_id);
-      const board = views.rows.find((v) => v.view_type === "board");
+      const rootViews = await projectsApi.views(task.root_project_id);
+      const board = orderBearingView(rootViews.rows);
       if (board) await projectsApi.setPositions(board.id, writes);
       if (selected) await loadProject(selected);
     } catch (err) {
@@ -364,6 +590,26 @@ function ProjectsWorkspace() {
             >
               ClickUp
             </Button>
+            {selected && !mine ? (
+              <Button
+                variant="ghost"
+                size="sm"
+                icon="SlidersHorizontal"
+                onClick={() => setManagingFields(true)}
+              >
+                Fields
+              </Button>
+            ) : null}
+            {selected && !mine ? (
+              <Button
+                variant="ghost"
+                size="sm"
+                icon="Tag"
+                onClick={() => setManagingTags(true)}
+              >
+                Tags
+              </Button>
+            ) : null}
             <NotificationBell onOpenTask={openTaskById} />
           </div>
           <div className={`flex shrink-0 gap-1 ${mine ? "hidden" : ""}`}>
@@ -391,6 +637,44 @@ function ProjectsWorkspace() {
         ) : null}
 
         {!mine && selected ? (
+          <FilterBar
+            filters={filters}
+            onFilters={changeFilters}
+            groupBy={groupBy}
+            onGroupBy={(next) => {
+              setGroupBy(next);
+              setActiveViewId(null);
+            }}
+            me={me}
+            tags={tags}
+            // The project's order-bearing board is withheld from the chips
+            // entirely: it is not a saved filter, and offering its ✕ would
+            // offer to delete every hand-arranged position on the project.
+            views={views.filter((v) => v.id !== orderBearingView(views)?.id)}
+            activeViewId={activeViewId}
+            onApplyView={applyView}
+            onSaveView={(name) => void saveView(name)}
+            onDeleteView={(view) => void deleteView(view)}
+            canSave={Boolean(selected)}
+          />
+        ) : null}
+
+        {!mine && selected && picked.size > 0 ? (
+          <BulkBar
+            count={picked.size}
+            statuses={statuses}
+            busy={bulkBusy}
+            notice={bulkNotice}
+            onClear={() => {
+              setPicked(new Set());
+              setAnchor(null);
+              setBulkNotice(null);
+            }}
+            onApply={(request) => void applyBulk(request)}
+          />
+        ) : null}
+
+        {!mine && selected ? (
           // Capture-first here too: a title and Enter. Everything else about a
           // task — status, assignee, subtasks — is set from the panel once it
           // exists, because a create form that asks six questions is a create
@@ -415,15 +699,26 @@ function ProjectsWorkspace() {
             </p>
           ) : mode === "board" ? (
             <TaskBoard
-              tasks={tasks}
-              statuses={statuses}
+              groups={groups}
+              groupBy={groupBy}
+              selected={picked}
+              onToggle={toggleSelection}
               onSelect={(task) => void openWithStatuses(task)}
               onDrop={handleDrop}
             />
           ) : (
             <TaskList
-              tasks={tasks}
+              groups={groups}
+              groupBy={groupBy}
               statuses={statuses}
+              selected={picked}
+              onToggle={toggleSelection}
+              allChecked={everySelected(picked, onScreen)}
+              onToggleAll={() =>
+                setPicked(
+                  everySelected(picked, onScreen) ? new Set() : new Set(onScreen)
+                )
+              }
               onSelect={(task) => void openWithStatuses(task)}
             />
           )}
@@ -434,6 +729,8 @@ function ProjectsWorkspace() {
         <TaskPanel
           task={openTask}
           statuses={panelStatuses}
+          fields={fields}
+          tags={tags}
           onClose={() => setOpenTask(null)}
           onTaskAdded={() => {
             if (selected) void loadProject(selected);
@@ -444,6 +741,31 @@ function ProjectsWorkspace() {
               current.map((t) => (t.id === fresh.id ? { ...t, ...fresh } : t))
             );
           }}
+        />
+      ) : null}
+
+      {managingTags && selected ? (
+        <TagManager
+          projectId={selected.id}
+          projectName={selected.name}
+          onClose={() => setManagingTags(false)}
+          onChanged={setTags}
+          // A rename or merge rewrites task rows, so the board is stale until
+          // it reloads — the chips would otherwise show a name no card carries.
+          onTasksTouched={() => {
+            if (selected) void loadProject(selected);
+          }}
+        />
+      ) : null}
+
+      {managingFields && selected ? (
+        <FieldManager
+          projectId={selected.id}
+          projectName={selected.name}
+          onClose={() => setManagingFields(false)}
+          // Kept in sync while the dialog is open, so a field added here shows
+          // on the next task opened without closing anything first.
+          onChanged={setFields}
         />
       ) : null}
 

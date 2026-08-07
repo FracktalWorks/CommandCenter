@@ -13,11 +13,16 @@ import { useEffect, useRef, useState } from "react";
 import {
   type ActivityRow,
   type AttachmentRow,
+  type FieldRow,
   type StatusRow,
+  type TagRow,
   type TaskRow,
   attachmentsApi,
   projectsApi,
 } from "../lib/api";
+import { CustomFieldValues } from "./CustomFieldValues";
+import { TagPicker } from "./TagPicker";
+import { changeLabel } from "../lib/customFields";
 import {
   assigneeLabel,
   classify,
@@ -38,9 +43,18 @@ interface Props {
    * seen, so it needs a real reload rather than a merge.
    */
   onTaskAdded?: () => void;
+  /**
+   * WS-27l — the project's custom field definitions. Passed in rather than
+   * fetched here: they belong to the root project, the page already holds them
+   * for the selected node, and re-fetching per panel open would be a request
+   * per click for data that does not change between clicks.
+   */
+  fields?: FieldRow[];
+  /** WS-27m — the project's registered tags, for the picker's suggestions. */
+  tags?: TagRow[];
 }
 
-function describe(activity: ActivityRow): string {
+function describe(activity: ActivityRow, defs: FieldRow[] = []): string {
   const meta = (activity.meta ?? {}) as Record<string, unknown>;
   switch (activity.type) {
     case "comment":
@@ -57,7 +71,11 @@ function describe(activity: ActivityRow): string {
     }
     case "field_change": {
       const changes = (meta.changes as Array<{ field: string }> | undefined) ?? [];
-      return `Edited ${changes.map((c) => c.field).join(", ") || "fields"}`;
+      // `patch_task` files a custom edit as `custom.<key>`. Rendering that raw
+      // would put a database key in front of somebody reading their own
+      // history, so the definition's label is used where one is loaded.
+      const named = changes.map((c) => changeLabel(c.field, defs as never));
+      return `Edited ${named.join(", ") || "fields"}`;
     }
     case "agent_run":
       return `Agent run ${String(meta.agent ?? "")}`.trim();
@@ -76,6 +94,8 @@ export function TaskPanel({
   onClose,
   onChanged,
   onTaskAdded,
+  fields = [],
+  tags = [],
 }: Props) {
   const [timeline, setTimeline] = useState<ActivityRow[]>([]);
   const [comment, setComment] = useState("");
@@ -349,6 +369,26 @@ export function TaskPanel({
             {task.description}
           </p>
         ) : null}
+        {/* Renders nothing at all when the project has no custom fields, so a
+            project that never wanted them never grows an empty heading. */}
+        {/* Saved on every change rather than behind a button: a chip is a
+            single decision, and a Save beside it would be a second click for
+            something that is already unambiguous. */}
+        <TagPicker
+          value={task.tags ?? []}
+          registry={tags}
+          disabled={busy}
+          onChange={(next) => {
+            void (async () => {
+              try {
+                onChanged(await projectsApi.patchTask(task.id, { tags: next }));
+              } catch (err) {
+                setError(String((err as Error).message));
+              }
+            })();
+          }}
+        />
+        <CustomFieldValues task={task} fields={fields} onChanged={onChanged} />
         <div>
           <span className="text-xs text-muted-foreground">Files</span>
           <div className="mt-1 space-y-1">
@@ -433,7 +473,7 @@ export function TaskPanel({
                 ? ` · ${new Date(activity.created_at).toLocaleString()}`
                 : ""}
             </p>
-            <p className="whitespace-pre-wrap text-foreground">{describe(activity)}</p>
+            <p className="whitespace-pre-wrap text-foreground">{describe(activity, fields)}</p>
           </li>
         ))}
         {timeline.length === 0 ? (

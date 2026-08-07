@@ -203,14 +203,24 @@ class FakeDB:
                 SimpleNamespace(subject=s)
                 for s in self.groups.get(args.get("email", ""), [])
             ])
-        if "FROM pm_task_assignees" in statement and "UNION" in statement:
-            return _Result([SimpleNamespace(who=w) for w in self.audience])
-        if "SELECT 1 FROM pm_tasks" in statement:
-            # The rule-3 probe. `vis_email` is absent for an unrestricted
-            # caller, whose clause is the literal TRUE.
+        # ⚠️ FINGERPRINT ORDER AND SPECIFICITY BOTH MATTER HERE.
+        #
+        # The rule-3 probe now embeds `task_visibility_clause`, which contains
+        # BOTH `pm_task_assignees` (the assignee path) and `UNION` (the
+        # recursive grant closure). The audience branch used to match on those
+        # two substrings and silently swallowed the probe, so `deliverable`
+        # got a list of assignees where it expected a visibility answer — four
+        # tests failed for a reason that had nothing to do with the code under
+        # test. The probe is matched FIRST, and the audience branch keys off
+        # `assignee AS who`, which only its own query has.
+        if statement.startswith("SELECT 1 FROM pm_tasks"):
+            # `vis_email` is absent for an unrestricted caller, whose clause is
+            # the literal TRUE.
             who = args.get("vis_email")
             seen = who is None or who in self.visible_to
             return _Result([SimpleNamespace(x=1)] if seen else [])
+        if "assignee AS who" in statement:
+            return _Result([SimpleNamespace(who=w) for w in self.audience])
         if "UPDATE pm_notifications" in statement:
             return _Result([], rowcount=2)
         return _Result([])
@@ -284,12 +294,28 @@ def test_deliverability_is_the_RECIPIENTS_visibility_not_the_actors(monkeypatch)
     assert [r["recipient"] for r in db.inserted] == ["insider@fracktal.in"]
 
 
-def test_the_visibility_probe_is_scoped_to_the_root_project(monkeypatch):
-    """Grants hang off the project tree, and a task's authority is its ROOT —
-    probing `project_id` would miss a grant made on an ancestor."""
+def test_the_visibility_probe_uses_the_SAME_predicate_the_read_path_uses(monkeypatch):
+    """This test used to assert the probe was scoped to `root_project_id`, on
+    the argument that "probing `project_id` would miss a grant made on an
+    ancestor". That argument is backwards, and checking it against a real
+    Postgres is what showed it:
+
+    * the grant closure is RECURSIVE and expands **downward**, so a grant on an
+      ancestor already puts every descendant in the set — `project_id` catches
+      it;
+    * `root_project_id` is the one that misses a grant made directly on a
+      **subproject**, because the task's root is not itself granted.
+
+    So the old scoping silently dropped notifications for anyone granted a
+    subproject — a second way to lose an assignment on top of the assignee path
+    it also missed. `task_visibility_clause` is the one predicate `list_tasks`
+    and `load_visible_task` already use, and its own docstring says a second
+    implementation "would drift the moment one is edited alone". It had.
+    """
     db = FakeDB(visible_to={"priya@fracktal.in"})
     run(pm_notify.deliverable(db, ["priya@fracktal.in"], "t1"))
-    assert db.issued("root_project_id")
+    assert db.issued("t.project_id IN")
+    assert db.issued("pm_task_assignees"), "the assignee path must be probed too"
 
 
 # ── resolve_visibility_for — the third-party answer ─────────────────────────
@@ -583,3 +609,49 @@ def test_the_kind_vocabulary_matches_the_module(sql: str):
                       sql, re.S)
     assert match
     assert set(re.findall(r"'([a-z_]+)'", match.group(1))) == set(NOTIFICATION_KINDS)
+
+
+# ── Rule 3 uses the SAME clause the read path uses (found by WS-27n) ────────
+
+def test_deliverable_asks_the_one_visibility_predicate_not_a_second_one():
+    """A shipped bug, found while building bulk assignment.
+
+    There are TWO ways to see a task — a grant on its project, or being an
+    assignee of it — and `task_visibility_clause` says so in one place, with a
+    docstring warning that a second implementation "would drift the moment one
+    is edited alone". `deliverable` had drifted exactly that way: it checked
+    only `project_clause`, so anybody assigned work in a project they hold no
+    grant on was judged undeliverable. They could open the task; the assignment
+    that put them there notified nobody; and the response told the assigner
+    they could not see it. That is the silent assignment WS-27j exists to end,
+    still open for the most common case in a grant-scoped app.
+
+    Asserted against the SOURCE rather than by simulating a grant, because the
+    claim is "there is one implementation" — which a passing behavioural test
+    could satisfy while a copy quietly grew beside it.
+    """
+    from pathlib import Path
+
+    import gateway.routes.projects.notifications as notif
+
+    source = Path(notif.__file__).read_text(encoding="utf-8")
+    body = source.split("async def deliverable", 1)[1].split("\nasync def ", 1)[0]
+    assert "task_visibility_clause(" in body, (
+        "deliverable must use the shared task predicate, not a private one"
+    )
+    assert "project_clause(" not in body, (
+        "project_clause alone misses the assignee path — the drift this test "
+        "exists to prevent"
+    )
+
+
+def test_the_shared_clause_really_carries_both_ways_in():
+    """The other half: the test above is only meaningful if the clause it
+    points at is the one with both branches."""
+    from gateway.routes.projects.core import Visibility, task_visibility_clause
+
+    clause = task_visibility_clause(
+        Visibility(unrestricted=False, email="priya@fracktal.in", groups=())
+    )
+    assert "pm_project_grants" in clause or "project_id IN" in clause
+    assert "pm_task_assignees" in clause, "the assignee path is gone"

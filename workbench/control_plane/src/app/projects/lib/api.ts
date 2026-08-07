@@ -35,6 +35,12 @@ export interface TaskRow {
   assignees?: string[];
   view_position?: number | null;
   view_group_key?: string | null;
+  /**
+   * WS-27l — values keyed by `field_key`. Always an object, never absent: the
+   * column is `NOT NULL DEFAULT '{}'`, so a missing key means the field is
+   * unset rather than that the values have not loaded.
+   */
+  custom_fields?: Record<string, unknown>;
 }
 
 export interface StatusRow {
@@ -62,6 +68,53 @@ export interface ActivityRow {
    * posting rather than about the comment.
    */
   not_notified?: string[];
+}
+
+export interface ViewRow {
+  id: string;
+  project_id: string;
+  name: string;
+  view_type: string;
+  /**
+   * Filters and grouping, in the gateway's key names. Read it through
+   * `grouping.fromConfig` rather than indexing into it — the server drops keys
+   * it does not know, so a view written by a newer client comes back thinner
+   * than it went in, and every field here is optional in practice.
+   */
+  config: Record<string, unknown>;
+  position?: number | null;
+}
+
+/** WS-27m — a registered tag. `task_count` is present on the list endpoint. */
+export interface TagRow {
+  id: string;
+  project_id: string;
+  name: string;
+  color: string;
+  description?: string | null;
+  task_count?: number;
+  /** How many tasks a rename rewrote. Present on the PATCH response only. */
+  retagged?: number;
+}
+
+/** WS-27l — a custom field definition. Shape mirrors the gateway's row. */
+export interface FieldRow {
+  id: string;
+  project_id: string;
+  field_key: string;
+  name: string;
+  description?: string | null;
+  field_type:
+    | "text"
+    | "number"
+    | "date"
+    | "select"
+    | "multi_select"
+    | "boolean"
+    | "url";
+  options: string[];
+  position: number;
+  created_by?: string | null;
 }
 
 export interface GrantRow {
@@ -148,10 +201,95 @@ export const projectsApi = {
       body: JSON.stringify({ body }),
     }),
 
-  views: (projectId: string) =>
-    call<{ rows: Array<{ id: string; name: string; view_type: string; config: Record<string, unknown> }>; total: number }>(
-      `nodes/${projectId}/views`
+  /**
+   * WS-27n — one edit applied to many tasks.
+   *
+   * Answers per-task outcomes rather than a single success: a selection can
+   * span projects, so a status name valid in one and absent from another is a
+   * fact about that task, not a reason to fail the batch.
+   */
+  bulkEdit: (payload: Record<string, unknown>) =>
+    call<{
+      requested: number;
+      applied: number;
+      results: Array<{ task_id: string; changed: string[]; status?: string | null }>;
+      skipped: Array<{ task_id: string; reason: string }>;
+      failed: Array<{ task_id: string; reason: string }>;
+    }>("tasks/bulk", { method: "POST", body: JSON.stringify(payload) }),
+
+  tags: (projectId: string) =>
+    call<{ rows: TagRow[]; total: number }>(`nodes/${projectId}/tags`),
+
+  createTag: (projectId: string, payload: Record<string, unknown>) =>
+    call<TagRow>(`nodes/${projectId}/tags`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+
+  /** Rename or recolour. A rename rewrites every task wearing the tag. */
+  patchTag: (tagId: string, payload: Record<string, unknown>) =>
+    call<TagRow>(`tags/${tagId}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
+
+  /** Fold one tag into another. The source is deleted; the target absorbs it. */
+  mergeTag: (tagId: string, intoTagId: string) =>
+    call<{ merged: string; into: string; retagged: number }>(
+      `tags/${tagId}/merge`,
+      { method: "POST", body: JSON.stringify({ into_tag_id: intoTagId }) }
     ),
+
+  /** Deletes the tag AND takes it off every task — the count comes back. */
+  deleteTag: (tagId: string) =>
+    call<{
+      deleted: string;
+      name: string;
+      cascaded: { tasks_untagged: number };
+    }>(`tags/${tagId}`, { method: "DELETE" }),
+
+  fields: (projectId: string) =>
+    call<{ rows: FieldRow[]; total: number }>(`nodes/${projectId}/fields`),
+
+  createField: (projectId: string, payload: Record<string, unknown>) =>
+    call<FieldRow>(`nodes/${projectId}/fields`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+
+  patchField: (fieldId: string, payload: Record<string, unknown>) =>
+    call<FieldRow>(`fields/${fieldId}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
+
+  /** Deletes the definition AND every value filed under it — the count comes back. */
+  deleteField: (fieldId: string) =>
+    call<{
+      deleted: string;
+      field_key: string;
+      cascaded: { values_cleared: number };
+    }>(`fields/${fieldId}`, { method: "DELETE" }),
+
+  views: (projectId: string) =>
+    call<{ rows: ViewRow[]; total: number }>(`nodes/${projectId}/views`),
+
+  createView: (projectId: string, payload: Record<string, unknown>) =>
+    call<ViewRow>(`nodes/${projectId}/views`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+
+  patchView: (viewId: string, payload: Record<string, unknown>) =>
+    call<ViewRow>(`views/${viewId}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
+
+  deleteView: (viewId: string) =>
+    call<{ deleted: string; cascaded: { positions: number } }>(`views/${viewId}`, {
+      method: "DELETE",
+    }),
 
   setPositions: (
     viewId: string,

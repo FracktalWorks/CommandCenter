@@ -55,6 +55,16 @@ _REVERTIBLE: frozenset[str] = frozenset({
     "title", "description", "importance", "due_at", "start_date", "estimate_mins",
 })
 
+#: The prefix `patch_task` files a custom-field change under (WS-27l).
+#:
+#: Custom fields ARE revertible, and deliberately so: the whole reason §3.8
+#: stores both ends of a change is diff-and-revert, and a field that can be
+#: edited from the panel but not undone from the timeline is a second-class
+#: field. They cannot go in ``_REVERTIBLE`` because that set names COLUMNS —
+#: a custom value is one key inside the `custom_fields` object, so restoring it
+#: is a merge rather than an assignment.
+_CUSTOM_PREFIX = "custom."
+
 
 class CommentIn(BaseModel):
     body: str
@@ -226,6 +236,35 @@ async def delete_comment(
         await db.close()
 
 
+def _restore_custom(task: Any, changes: list[dict]) -> dict | None:
+    """The `custom_fields` object a revert should write, or ``None`` if this
+    change touched no custom field.
+
+    ``None`` and ``{}`` are different answers: an empty object means "this
+    revert clears every custom value the task has", which is what reverting the
+    creation of the only value legitimately does.
+    """
+    custom = [
+        c for c in changes
+        if str(c.get("field") or "").startswith(_CUSTOM_PREFIX)
+    ]
+    if not custom:
+        return None
+    merged = dict(from_jsonb(getattr(task, "custom_fields", None)) or {})
+    for change in custom:
+        key = str(change["field"])[len(_CUSTOM_PREFIX):]
+        old = change.get("old")
+        # `old` of None means the key did not exist before this change, so the
+        # revert REMOVES it rather than storing a null — the same rule
+        # `apply_values` follows, because "never set" and "set to nothing" must
+        # not become one value.
+        if old is None:
+            merged.pop(key, None)
+        else:
+            merged[key] = old
+    return merged
+
+
 @router.post("/activities/{activity_id}/revert")
 async def revert_change(
     activity_id: str, user: UserContext = Depends(get_current_user),
@@ -258,10 +297,19 @@ async def revert_change(
             c["field"]: c.get("old") for c in changes
             if c.get("field") in _REVERTIBLE
         }
+        # Custom values are restored by MERGING onto whatever the task holds
+        # now, never by writing back the whole object: another field may have
+        # been edited since, and replacing the blob would silently undo that
+        # too — a revert that reverts more than it names.
+        custom_restored = _restore_custom(task, changes)
+        if custom_restored is not None:
+            restore["custom_fields"] = custom_restored
+
         skipped = sorted(
             {
                 str(c.get("field")) for c in changes
                 if c.get("field") not in _REVERTIBLE
+                and not str(c.get("field") or "").startswith(_CUSTOM_PREFIX)
             }
         )
         if not restore:
@@ -281,14 +329,24 @@ async def revert_change(
             meta={
                 "changes": [
                     {"field": f, "old": c.get("new"), "new": c.get("old")}
-                    for c in changes for f in [c.get("field")] if f in restore
+                    for c in changes for f in [c.get("field")]
+                    if f in restore or (
+                        custom_restored is not None
+                        and str(f or "").startswith(_CUSTOM_PREFIX)
+                    )
                 ],
                 "reverted_activity_id": activity_id,
             },
         )
         await db.commit()
         task_id = str(task.id)
-        reverted = sorted(restore)
+        reverted = sorted(
+            [k for k in restore if k != "custom_fields"]
+            + [
+                str(c["field"]) for c in changes
+                if str(c.get("field") or "").startswith(_CUSTOM_PREFIX)
+            ]
+        )
     finally:
         await db.close()
 

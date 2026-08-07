@@ -40,6 +40,7 @@ from gateway.routes.projects.core import (
     count_where,
     diff_changes,
     emit,
+    from_jsonb,
     insert_row,
     load_default_status,
     load_visible_project,
@@ -55,7 +56,13 @@ from gateway.routes.projects.core import (
     update_row,
     validate_choice,
 )
+from gateway.routes.projects.custom_fields import apply_values, load_definitions
+from gateway.routes.projects.filters import (
+    attach_assignees,
+    build_task_filters,
+)
 from gateway.routes.projects.notifications import notify
+from gateway.routes.projects.tags import apply_task_tags
 from pydantic import BaseModel
 from sqlalchemy import text
 
@@ -104,6 +111,17 @@ async def list_tasks(
     direction: str = "desc",
     page: Page = Depends(),
     include_archived: bool = False,
+    # WS-27k. CSV rather than repeated params so a saved view's stored config
+    # round-trips through a query string unchanged.
+    status_category: str | None = None,
+    assignees: str | None = None,
+    unassigned: bool = False,
+    overdue: bool = False,
+    due_before: str | None = None,
+    importance_gte: int | None = None,
+    # WS-27m. `tags` is ANY, `tags_all` is ALL — see `build_task_filters`.
+    tags: str | None = None,
+    tags_all: str | None = None,
 ) -> ListResponse:
     """The one task-list endpoint every surface reads through.
 
@@ -152,23 +170,19 @@ async def list_tasks(
             else:
                 clauses.append("t.project_id = CAST(:pid AS uuid)")
             params["pid"] = project_id
-        if parent_task_id:
-            clauses.append("t.parent_task_id = CAST(:parent AS uuid)")
-            params["parent"] = parent_task_id
-        if status_id:
-            clauses.append("t.status_id = CAST(:status_id AS uuid)")
-            params["status_id"] = status_id
-        if assignee:
-            clauses.append(
-                "EXISTS (SELECT 1 FROM pm_task_assignees a "
-                "        WHERE a.task_id = t.id AND lower(a.assignee) = :assignee)"
-            )
-            params["assignee"] = assignee.strip().lower()
-        if q:
-            clauses.append("(t.title ILIKE :q OR t.description ILIKE :q)")
-            params["q"] = f"%{q.strip()}%"
-        if not include_archived:
-            clauses.append("t.archived_at IS NULL")
+        # Every filter but the project scoping above comes from ONE pure
+        # builder, shared with saved views — two implementations would let a
+        # saved view show a different set of tasks than the same filters typed
+        # by hand, which is the one thing a saved view may not do.
+        extra_clauses, extra_params = build_task_filters(
+            parent_task_id=parent_task_id, status_id=status_id,
+            status_category=status_category, assignee=assignee,
+            assignees=assignees, unassigned=unassigned, overdue=overdue,
+            due_before=due_before, importance_gte=importance_gte, q=q,
+            tags=tags, tags_all=tags_all, include_archived=include_archived,
+        )
+        clauses.extend(extra_clauses)
+        params.update(extra_params)
 
         where = " WHERE " + " AND ".join(clauses)
         total = (await db.execute(
@@ -182,8 +196,14 @@ async def list_tasks(
             ),
             {**params, "limit": page.limit, "offset": page.offset},
         )).fetchall()
+        # Assignees on the LIST, not only on the single-task read. Without
+        # them the board cannot draw an owner or group by one, and fetching
+        # them per card is N+1 across an imported workspace of hundreds.
         return ListResponse(
-            rows=[row_to_dict(r, TaskModel) for r in rows], total=int(total),
+            rows=await attach_assignees(
+                db, [row_to_dict(r, TaskModel) for r in rows],
+            ),
+            total=int(total),
         )
     finally:
         await db.close()
@@ -247,6 +267,14 @@ async def create_task(
         )
         values["status_id"] = str(status.id)
         values["task_number"] = await next_task_number(db, root)
+        # WS-27m — through the registry, never straight into the array. Create
+        # and patch both go this way, so there is no route by which a tag enters
+        # the system unregistered; that is the only thing that keeps the
+        # registry's "one spelling per tag" true rather than aspirational.
+        if "tags" in values:
+            values["tags"] = await apply_task_tags(
+                db, root, values["tags"], by=actor(user),
+            )
 
         row = await insert_row(db, "pm_tasks", values)
         task_id = str(row.id)
@@ -290,11 +318,30 @@ async def patch_task(
                        f"'{guarded}'.",
             )
     new_status = values.pop("status_id", None)
+    custom = values.pop("custom_fields", None)
 
     db = await _get_db()
     try:
         vis = await resolve_visibility(db, user)
         before = await load_visible_task(db, vis, task_id)
+
+        # WS-27l. Merged against the definitions on the task's OWN root, not the
+        # caller's current project: a task opened from My work can belong to a
+        # project the board is not showing, and validating against the wrong
+        # project's fields would refuse a perfectly good value.
+        if "tags" in values:
+            values["tags"] = await apply_task_tags(
+                db, str(before.root_project_id), values["tags"], by=actor(user),
+            )
+
+        custom_changes: dict[str, Any] = {}
+        if custom is not None:
+            definitions = await load_definitions(db, str(before.root_project_id))
+            merged, custom_changes = apply_values(
+                from_jsonb(before.custom_fields), custom, definitions,
+            )
+            if custom_changes:
+                values["custom_fields"] = merged
 
         after = before
         if values:
@@ -303,6 +350,16 @@ async def patch_task(
             )
             after = await update_row(db, "pm_tasks", task_id, values)
             changes = diff_changes(before, after, _TRACKED_TASK_FIELDS)
+            # Folded into the SAME `field_change` entry, under namespaced keys,
+            # rather than given an activity type of its own. `record_activity`
+            # refuses a type the migration's CHECK does not list — the trap that
+            # made every attachment upload answer 422 — and a custom field
+            # changing IS a field change, so a new vocabulary word would buy a
+            # migration and a second timeline shape for nothing.
+            changes.extend(
+                {"field": f"custom.{key}", "old": moved["from"], "new": moved["to"]}
+                for key, moved in sorted(custom_changes.items())
+            )
             if changes:
                 await record_activity(
                     db, activity_type="field_change", created_by=actor(user),

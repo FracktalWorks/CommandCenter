@@ -2,8 +2,8 @@
 
 > **Product:** CommandCenter · **Feature:** CRM (Sales Center's primary module) · **Created:** 2026-08-05
 > **Status:** 🟢 **WS-26a + WS-26b + WS-26c BUILT AND DEPLOYED** (2026-08-05/06) ·
-> 🟢 **WS-26d read half BUILT** (2026-08-06) · 🟢 **WS-26d-email BUILT
-> 2026-08-07 on branch `ws-26d-email-timeline` — NOT merged, NOT deployed.**
+> 🟢 **WS-26d read half BUILT** (2026-08-06) · 🟢 **WS-26d-email BUILT, MERGED (PR #392)
+> AND DEPLOYED 2026-08-07** — the address index landed as migration 154, applied on prod.
 > 26a–c merged together on branch `ws-26-crm-app`.
 > **26a** — migration `144_crm.sql` (§3.1–§3.10), `feature:crm`
 > registered on both sides, `gateway/db.py` engine seam with `routes/tasks/core.py` converted
@@ -36,13 +36,13 @@
 > tenant** — that is still true, and stays true until the owner flips `CRM_ZOHO_SYNC`:
 > enabling the flag and any hand-run push cycle against prod remain OWNER-GATE
 > (`work_plan.md` §6).
-> · **WS-26d-email: 🟢 BUILT** (branch `ws-26d-email-timeline`, 2026-08-07) — the
-> caller-scoped email→CRM timeline join, the address index at the next free
-> migration number, `TimelineEntry.kind = "email_thread"` on both sides, and
+> · **WS-26d-email: 🟢 MERGED + DEPLOYED 2026-08-07 (PR #392)** — the
+> caller-scoped email→CRM timeline join, the address index (migration 154,
+> applied), `TimelineEntry.kind = "email_thread"` on both sides, and
 > `tests/unit/test_crm_email_timeline.py` (30 cases; two of them are the
 > mutation fence for the scoping rule). · **WS-26d write half: 🟡 SPEC.**
 > · **WS-26e: 🟡 SPEC, nothing built.**
-> **26f** (branch `ws-26f-pipeline-truth`) — 🟢 **BUILT 2026-08-07, NOT RUN.** f1
+> **26f** — 🟢 **MERGED + DEPLOYED 2026-08-07 (PR #391), NOT RUN against the tenant.** f1
 > `POST /crm/import/zoho/stages` (`routes/crm/stage_metadata.py`, floor
 > `admin:access:manage`, **dry-run by default**, `?apply=true` to write, >1 pipeline STOPS
 > before the DB is opened per D-CRM-11) + the two settings readers on the Zoho read client
@@ -1608,30 +1608,75 @@ Zoho tenant on the next cycle.
 vitest: `board.test.ts` (weighted math), settings-grid helpers colocated.
 
 ### WS-26g — Forecast & funnel reports · 🟢 AGENT-SAFE
-*(§5.1 system 2. The instrument already ran: `crm_status_changes` has logged every
-transition with actor+timestamp since 26a; `closed_at` and `status_changed_at` are
-stamped by the same move path.)*
+*(§5.1 system 2. The instrument has run since 26a — but read what it actually records:
+`crm_status_changes` logs TRANSITIONS only. Record creation writes no row
+(`records.py::create_record`) and the Zoho importer writes none either, so every
+imported deal has zero log rows and a deal's first stage never appears as a
+`to_status`. The funnel definition below is written for that shape, not around it.
+`closed_at` and `status_changed_at` are stamped by the move path; `dwell_seconds` is
+stamped on the row for the stage being LEFT and is deliberately NULL on a first
+transition — "we have no earlier timestamp" is not a measurement of zero.)*
 
 `?tab=reports`, read-only SQL in a new `routes/crm/reports.py` (same router+gate;
 core.py-is-the-leaf). Four blocks, each a named endpoint:
 1. **Pipeline by stage** — per open/ongoing stage: deal count, ₹ total, ₹ weighted;
-   grand totals. Same formula as f3's board math — a cross-language parity test pins
-   `board.ts` against the SQL on one shared fixture (the `priority.ts ⟷ priority.py`
-   precedent).
-2. **Funnel** — per stage: deals that ever *entered* it (visited stages only — a deal
-   jumping Qualification→Negotiation counts in those two, no backfill of skipped lanes;
-   stated because both conventions exist in the wild), conversion-forward %, median dwell
-   days from `crm_status_changes`.
+   grand totals. Same formula as f3's board math — **do not retype it**: reuse the one
+   weighted SQL expression (lifting `WEIGHTED_SQL` into `core.py` beside
+   `WEIGHTED_TYPES` is the sanctioned move; `_crm_fakes.py::_WEIGHTED_SUM_RE` reads the
+   formula out of the statement text precisely so a drifted copy changes the test's
+   answer). The cross-language parity test pins `board.ts::weightedDeal`/`weightedRows`
+   against the SQL on ONE shared fixture file — `tests/fixtures/crm_weighted_parity.json`
+   (new directory), rows of `(amount, deal_probability, stage_probability, stage_type,
+   expected_weighted)` — read by BOTH runners, pytest and vitest. Two independently
+   typed tables are not parity. (The `priority.ts ⟷ priority.py` "precedent" is two
+   hand-maintained mirrors joined by a comment, with no shared fixture anywhere in the
+   repo — WS-26g mints the mechanism, it does not follow one.)
+2. **Funnel** — per stage, three numbers, each defined here because both conventions
+   exist in the wild and the log's shape makes naive readings wrong:
+   - **Entered** = deals whose VISITED SET includes the stage. A deal's visited set is
+     every `from_status` ∪ every `to_status` across its `crm_status_changes` rows
+     (`entity_type = 'deal'`) ∪ its CURRENT stage name. The union is what makes
+     creation- and import-stage membership count despite the transitions-only log: a
+     deal imported into Qualification then moved once carries Qualification only in
+     `from_status`; a deal with zero rows carries its stage only in `status_id`.
+     Visited stages only — a deal jumping Qualification→Negotiation counts in those
+     two, no backfill of skipped lanes.
+   - **Conversion-forward %** = of the deals that visited stage N, the share whose
+     visited set includes ANY deal-stage with `position` strictly greater than N's —
+     "ever got past it", not "went to exactly N+1". Zero when the denominator is zero,
+     never an error.
+   - **Median dwell days** = median of `dwell_seconds` grouped by **`from_status`** —
+     that column names the stage being LEFT, the opposite key from the `to_status`
+     reading. NULL `dwell_seconds` rows are excluded (first transitions, by design),
+     and a deal still sitting in a stage has no dwell row at all — label the number as
+     median-over-departures, because that is what it is.
+   Status names are the join key (the log stores NAMES, not ids) and f2's settings grid
+   can RENAME a lane, which orphans that name's history: rows whose
+   `from_status`/`to_status` match no current deal-stage name are tallied into an
+   explicit `unmatched` field on the payload — reported, never silently dropped.
 3. **Win/loss** — trailing 90d: win rate (won/(won+lost) by `closed_at`), average cycle
-   (created→closed), lost-reason breakdown (mandatory on lost since 26a, so the data is
-   complete by construction).
+   (`created_at`→`closed_at`), lost-reason breakdown. Two data truths this block is
+   built FOR: `closed_at` is NULL on every imported closed deal until the owner runs
+   f4's backfill (§6 gate (d) — NOT yet run), so NULL-`closed_at` rows fall outside the
+   window — zeros, never errors, never "closed today"; and the lost-reason gate binds
+   native transitions only — the importer bypasses both gates and `lost_reason_id` is
+   `ON DELETE SET NULL` — so the breakdown carries a NAMED unattributed bucket rather
+   than dropping those rows. (An earlier version of this block claimed the reason data
+   is "complete by construction". It is not: imports.)
 4. **Owner leaderboard** — per `owner_email`: open count, weighted ₹, won ₹ trailing 90d.
 
-**Done-when:** each block has fixture tests proving the math (funnel visited-only rule
-named in a test); an empty CRM returns zeros, never errors; the tab renders through the
-BFF; all math server-side except f3's board duplication, which the parity test bridges.
+**Done-when:** each block has fixture tests proving the math (the visited-set union
+rule and the `from_status` dwell key each named in a test); an empty CRM returns zeros,
+never errors; NULL `closed_at` / NULL `dwell_seconds` never error; unmatched status
+names are reported, not dropped; the tab renders through the BFF; all math server-side
+except f3's board duplication, which the shared-fixture parity test bridges.
 
-**Tests:** `tests/unit/test_crm_reports.py`, shared fixtures via `_crm_fakes.py`.
+**Tests:** `tests/unit/test_crm_reports.py`, shared fixtures via `_crm_fakes.py`. If
+the reports SQL aggregates with `GROUP BY`, teach the fake a GROUP BY reader in its
+existing expression-reading style (or emit per-key queries in `get_pipeline`'s shape and
+accept the N+1 over 3.4k rows — pick deliberately and say which in the PR). Never
+hard-code an aggregation answer into the fake: that turns "fixture tests proving the
+math" into a mirror agreeing with itself.
 
 ### WS-26h — Stage discipline: entry requirements + rot · 🟢 AGENT-SAFE · after f2
 *(§5.1 system 3. The mechanism exists in miniature: lost-type moves already demand a
@@ -1725,6 +1770,14 @@ PR (R4).
     # carries the regression floor for the behaviour the join did not add:
     # activity + status-change entries, a deal inheriting its lead's history
     # labelled `lead`, newest-first order, limit truncation, and the 404.
+
+    # WS-26f + WS-26g — the settings/stage-metadata slice and the reports slice.
+    # Written BEFORE WS-26g's code, per the discipline above. Both bind
+    # _crm_fakes.py with every other CRM route test, so they run together:
+    uv run pytest tests/unit/test_crm_reports.py tests/unit/test_crm_stage_metadata.py \
+                  tests/unit/test_crm_email_timeline.py tests/unit/test_crm_routes.py \
+                  tests/unit/test_crm_pipeline.py tests/unit/test_crm_convert.py \
+                  tests/unit/test_crm_migration.py -q
 
     cd workbench/control_plane && npx tsc --noEmit && npm test
 

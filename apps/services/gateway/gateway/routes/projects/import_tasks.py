@@ -81,8 +81,13 @@ CATEGORY_BY_NAME: dict[str, str] = {
     "in progress": "in_progress",
     "in review": "in_progress",
     "review": "in_progress",
-    "blocked": "blocked",
-    "on hold": "blocked",
+    # NOT a `blocked` category — migration 146's CHECK has no such value, and
+    # emitting one makes `_ensure_lane` raise a CheckViolation that rolls the
+    # whole import back. `in_progress` is the honest reading anyway: blocked
+    # work is started and stuck, not queued and not finished. The LANE keeps
+    # ClickUp's own name, so the board still says "Blocked".
+    "blocked": "in_progress",
+    "on hold": "in_progress",
     "done": "done",
     "complete": "done",
     "completed": "done",

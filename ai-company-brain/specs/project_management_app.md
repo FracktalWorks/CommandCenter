@@ -939,7 +939,7 @@ interesting it is to build.
 |---|---|---|---|
 | 1 | ~~**Attachments**~~ | — | **WS-27i ✅ BUILT 2026-08-06** |
 | 2 | ~~**Notifications + @mentions**~~ | — | **WS-27j ✅ BUILT 2026-08-07** |
-| 3 | **Filters, grouping and saved views** — `pm_views` exists; the UI has a board/list toggle and nothing else | "My open bugs in Ops, grouped by assignee" is a daily question with no answer. The **table is already there**, so this is a UI ticket, not a schema one | **WS-27k** |
+| 3 | ~~**Filters, grouping and saved views**~~ | — | **WS-27k ✅ BUILT 2026-08-07** |
 | 4 | **Custom fields** — no definitions table, no values | ClickUp's signature feature. Paca's shape (`custom_field_definitions` + a JSONB column keyed by `field_key`) is proven and portable | **WS-27l** |
 | 5 | **Tags** — refused Paca's bare JSONB array (research row 13) and nothing replaced it | The refusal was right and left a hole. A tag registry with rename/merge is the version worth having | **WS-27m** |
 | 6 | **Bulk edit / multi-select** | Re-triaging fifty imported tasks one at a time is how an import gets abandoned — this one gates the migration itself | **WS-27n** |
@@ -1175,3 +1175,70 @@ beside it never has to do anything. On a **second** dry run the department
 already exists and its id comes back regardless — and the projects resolve too —
 leaving `dry_run` as the only thing between a preview and a write. That is the
 realistic case (preview → import → preview again), and it now has its own test.
+
+### 11.8 WS-27k — filters, grouping and saved views (built 2026-08-07)
+
+*"My open bugs in Ops, grouped by assignee"* is the sentence §11.2 used to name the gap. It
+is now typeable: `routes/projects/filters.py`, `lib/grouping.ts`, `components/FilterBar.tsx`,
+with the board and the list both drawing whatever `groupTasks` returned. 34 hermetic + 24
+vitest cases, 13 mutants red, and 23 checks run against a real Postgres.
+
+**One filter builder, shared by the endpoint and by saved views.** A saved view is nothing
+but a stored set of these filters. Two implementations would drift, and a *saved* view that
+shows a different set of tasks than the same filters typed by hand is the one thing it may
+not do — so `build_task_filters` is a pure function that both paths call, and the test that
+says so compares the two outputs directly.
+
+**Every filter is a WHERE clause.** Pagination happens in SQL. A filter applied in Python
+after `LIMIT` returns short pages, and *"page 2 is empty but there are 40 more"* is the kind
+of bug people work around for months instead of reporting.
+
+**`overdue` means past due AND still open.** A finished task with a past due date is not
+overdue, it is done. Colouring it red forever is how a board teaches people to ignore red.
+
+**An unknown status category is a 422, not an empty board.** A client filtering on
+`in-progress` (hyphen) would otherwise see nothing and conclude the project is empty. The
+error names the five real categories, which is the whole difference between a typo that takes
+five seconds and one that takes an afternoon.
+
+**An unknown config *key* is dropped; an unknown *value* falls back.** Those are different
+failures. A view is a saved preference written by an older client, so refusing to open one
+because it carries a key this version has never heard of would turn every deploy into a
+migration of everybody's saved views. A bad `group_by`, on the other hand, still has to
+render something, and `status` is the board's own axis rather than a guess.
+
+**A task with two assignees appears in BOTH columns.** It is both people's work; picking one
+arbitrarily hides it from the other. The consequence is that group sizes sum to more than the
+task count, which is why the header counts tasks.
+
+**Empty status lanes are kept; every other grouping drops empties.** A board missing its "In
+progress" column reads as *"this project has no in-progress state"*, not *"nothing is in
+progress"*. There is no equivalent meaning to an "assignees with nothing assigned" column.
+
+**Dragging is offered only when the columns are statuses.** A drop writes the field the
+columns represent, and status is the one that is a plain `PATCH status_id` — assignees are a
+separate PUT, priority is an integer, and moving a task between projects crosses a grant
+boundary. A card that can be dragged into a column which cannot accept it, and snaps back, is
+worse than a column that is honestly static.
+
+**`toConfig` is deliberately not `toQuery`.** A query string carries only text, so `toQuery`
+writes `"true"`; a config is JSON and keeps a boolean a boolean. `fromConfig` refuses a string
+where a toggle belongs — a hand-edited `"false"` must not read as on — so a view built from
+query shape would come back with every toggle silently cleared. That round trip is a test.
+
+**The project's order-bearing board is withheld from the chips.** `tree.py` seeds two views
+per project, and the `board` one owns every `pm_view_task_positions` row. Offering its ✕
+would offer to delete every hand-arranged position on the project. Saved views sit at
+position 300, above the seeded pair, so `orderBearingView` — one function, used by both the
+drag handler and the delete guard — keeps answering the seeded board.
+
+**A fifth live bug, found the same way as the previous four.** `due_before` was
+`t.due_at < CAST(:due_before AS timestamptz)` with the string straight off the query string.
+asyncpg infers the parameter's type *from that cast* and then refuses to encode a `str`, so
+the query never reached the database and **`?due_before=…` answered 500** — while the
+hermetic fake, which agrees with whatever SQL it is handed, stayed green. `parse_when` now
+parses on this side and binds a real `datetime`, an unparseable value is a 422 that says what
+was expected, and a naive value is read as UTC rather than inheriting the connection's
+TimeZone. Two tests: one on the bound value's *type*, one refusing any `CAST(:param AS
+timestamp…)` anywhere in the builder, so the next `after=` filter written the obvious way
+fails in CI instead of in production.

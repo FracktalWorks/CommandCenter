@@ -8,7 +8,9 @@ import { describe, expect, it } from "vitest";
 
 import {
   POSITION_MAX,
+  SAVED_VIEW_POSITION,
   buildColumnDropUpdate,
+  orderBearingView,
   planDrop,
   positionBetween,
   sortForView,
@@ -115,5 +117,48 @@ describe("buildColumnDropUpdate", () => {
     // The drop still reorders within the column; it simply moves no field.
     expect(buildColumnDropUpdate("assignee", "someone")).toBeNull();
     expect(buildColumnDropUpdate(undefined, null)).toBeNull();
+  });
+});
+
+describe("orderBearingView", () => {
+  /**
+   * The views a project is seeded with, in the order the server returns them
+   * (`ORDER BY position NULLS LAST, name` — see `views.list_views`).
+   */
+  const seeded = [
+    { id: "v-list", name: "All tasks", view_type: "list", position: 100 },
+    { id: "v-board", name: "Board", view_type: "board", position: 200 },
+  ];
+
+  it("is the project's seeded board", () => {
+    expect(orderBearingView(seeded)?.id).toBe("v-board");
+  });
+
+  it("ignores list views however they are ordered", () => {
+    expect(orderBearingView([...seeded].reverse())?.id).toBe("v-board");
+  });
+
+  it("is not stolen by a board view somebody saved later", () => {
+    // The one that matters: every drag writes its positions here, so if a
+    // saved filter could become it, arranging the board would silently
+    // reorder a *filtered* subset and the real board would look shuffled.
+    const withSaved = [
+      ...seeded,
+      { id: "v-mine", name: "Mine", view_type: "board", position: SAVED_VIEW_POSITION },
+    ];
+    expect(orderBearingView(withSaved)?.id).toBe("v-board");
+  });
+
+  it("saves above the seeded pair, which is what keeps that true", () => {
+    // The claim above is only true because the server orders by position. If
+    // a saved view were allowed below 200 it would sort first and win.
+    for (const view of seeded) {
+      expect(SAVED_VIEW_POSITION).toBeGreaterThan(view.position);
+    }
+  });
+
+  it("is null for a project with no board at all, rather than throwing", () => {
+    expect(orderBearingView([])).toBeNull();
+    expect(orderBearingView([seeded[0]])).toBeNull();
   });
 });

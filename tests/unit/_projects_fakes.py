@@ -345,6 +345,22 @@ class FakeProjectsDB:
         args = dict(params or {})
         self.statements.append(statement)
         self.calls.append((statement, args))
+        # WS-27k's assignee roll-up: one aggregate for a whole page of tasks,
+        # rather than a query per card. Taught to the fake explicitly because
+        # `GROUP BY` + `array_agg` is not a shape the generic WHERE reader can
+        # parse — and an unparsed WHERE is an assertion here, deliberately, so
+        # that a route which loses its filter cannot silently match every row.
+        if "array_agg(assignee" in statement:
+            wanted = {str(i) for i in (args.get("ids") or [])}
+            grouped: dict[str, list[str]] = {}
+            for row in self.tables.get("pm_task_assignees", []):
+                task_id = str(row.get("task_id"))
+                if task_id in wanted:
+                    grouped.setdefault(task_id, []).append(str(row.get("assignee")))
+            return _Result([
+                SimpleNamespace(task_id=task_id, people=sorted(people))
+                for task_id, people in grouped.items()
+            ])
         head = statement.split(None, 1)[0].upper()
         table = self._table(statement)
         if head == "INSERT":

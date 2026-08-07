@@ -64,6 +64,21 @@ export interface ActivityRow {
   not_notified?: string[];
 }
 
+export interface ViewRow {
+  id: string;
+  project_id: string;
+  name: string;
+  view_type: string;
+  /**
+   * Filters and grouping, in the gateway's key names. Read it through
+   * `grouping.fromConfig` rather than indexing into it — the server drops keys
+   * it does not know, so a view written by a newer client comes back thinner
+   * than it went in, and every field here is optional in practice.
+   */
+  config: Record<string, unknown>;
+  position?: number | null;
+}
+
 export interface GrantRow {
   id: string;
   project_id: string;
@@ -149,9 +164,24 @@ export const projectsApi = {
     }),
 
   views: (projectId: string) =>
-    call<{ rows: Array<{ id: string; name: string; view_type: string; config: Record<string, unknown> }>; total: number }>(
-      `nodes/${projectId}/views`
-    ),
+    call<{ rows: ViewRow[]; total: number }>(`nodes/${projectId}/views`),
+
+  createView: (projectId: string, payload: Record<string, unknown>) =>
+    call<ViewRow>(`nodes/${projectId}/views`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+
+  patchView: (viewId: string, payload: Record<string, unknown>) =>
+    call<ViewRow>(`views/${viewId}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
+
+  deleteView: (viewId: string) =>
+    call<{ deleted: string; cascaded: { positions: number } }>(`views/${viewId}`, {
+      method: "DELETE",
+    }),
 
   setPositions: (
     viewId: string,

@@ -55,6 +55,10 @@ from gateway.routes.projects.core import (
     update_row,
     validate_choice,
 )
+from gateway.routes.projects.filters import (
+    attach_assignees,
+    build_task_filters,
+)
 from gateway.routes.projects.notifications import notify
 from pydantic import BaseModel
 from sqlalchemy import text
@@ -104,6 +108,14 @@ async def list_tasks(
     direction: str = "desc",
     page: Page = Depends(),
     include_archived: bool = False,
+    # WS-27k. CSV rather than repeated params so a saved view's stored config
+    # round-trips through a query string unchanged.
+    status_category: str | None = None,
+    assignees: str | None = None,
+    unassigned: bool = False,
+    overdue: bool = False,
+    due_before: str | None = None,
+    importance_gte: int | None = None,
 ) -> ListResponse:
     """The one task-list endpoint every surface reads through.
 
@@ -152,23 +164,19 @@ async def list_tasks(
             else:
                 clauses.append("t.project_id = CAST(:pid AS uuid)")
             params["pid"] = project_id
-        if parent_task_id:
-            clauses.append("t.parent_task_id = CAST(:parent AS uuid)")
-            params["parent"] = parent_task_id
-        if status_id:
-            clauses.append("t.status_id = CAST(:status_id AS uuid)")
-            params["status_id"] = status_id
-        if assignee:
-            clauses.append(
-                "EXISTS (SELECT 1 FROM pm_task_assignees a "
-                "        WHERE a.task_id = t.id AND lower(a.assignee) = :assignee)"
-            )
-            params["assignee"] = assignee.strip().lower()
-        if q:
-            clauses.append("(t.title ILIKE :q OR t.description ILIKE :q)")
-            params["q"] = f"%{q.strip()}%"
-        if not include_archived:
-            clauses.append("t.archived_at IS NULL")
+        # Every filter but the project scoping above comes from ONE pure
+        # builder, shared with saved views — two implementations would let a
+        # saved view show a different set of tasks than the same filters typed
+        # by hand, which is the one thing a saved view may not do.
+        extra_clauses, extra_params = build_task_filters(
+            parent_task_id=parent_task_id, status_id=status_id,
+            status_category=status_category, assignee=assignee,
+            assignees=assignees, unassigned=unassigned, overdue=overdue,
+            due_before=due_before, importance_gte=importance_gte, q=q,
+            include_archived=include_archived,
+        )
+        clauses.extend(extra_clauses)
+        params.update(extra_params)
 
         where = " WHERE " + " AND ".join(clauses)
         total = (await db.execute(
@@ -182,8 +190,14 @@ async def list_tasks(
             ),
             {**params, "limit": page.limit, "offset": page.offset},
         )).fetchall()
+        # Assignees on the LIST, not only on the single-task read. Without
+        # them the board cannot draw an owner or group by one, and fetching
+        # them per card is N+1 across an imported workspace of hundreds.
         return ListResponse(
-            rows=[row_to_dict(r, TaskModel) for r in rows], total=int(total),
+            rows=await attach_assignees(
+                db, [row_to_dict(r, TaskModel) for r in rows],
+            ),
+            total=int(total),
         )
     finally:
         await db.close()

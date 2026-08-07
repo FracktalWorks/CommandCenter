@@ -33,13 +33,15 @@ added**:
 | # | Exception | Item | The one‑line reason |
 |---|---|---|---|
 | 1 | ~~**`main` has no branch protection**~~ **CLOSED 2026‑08‑03** | §BO‑17 / `work_plan.md` WS‑5 | Was 404 / rulesets `[]` for months. **Now enabled:** PRs required (`required_approving_review_count: 0` — a sole maintainer must still be able to land work), `enforce_admins: true` (without it the protection is decorative for the only person who pushes), force‑pushes and deletions **blocked**. ⚠️ **`required_status_checks` is deliberately `null`** — `pr-check.yml` carries `paths-ignore: ["**.md", "ai-company-brain/**"]`, so a docs‑only PR runs **no** checks at all; requiring those contexts would leave every docs PR permanently unmergeable. To require them, first give `pr-check` an always‑runs sentinel job, then add that job as the only required context. |
-| 2 | **No *scheduled* backup; no restore ever exercised** | **§BO‑23** (below) | ◐ 2026‑08‑03: `backup_db.sh` + `restore_db.sh` + runbook shipped, and `apply_migrations.sh` now fails closed without a pre‑migration dump. **But nothing schedules it** (the systemd units need a `deploy/` write) and **no restore has been run**. Measured recovery position meanwhile: Hostinger VM images only, weekly, **2 retained, newest 5 days old**, ~58 min restore, whole‑machine granularity. **OWNER‑GATE** — install the timer, then run one restore. |
+| 2 | **No *scheduled* backup; no restore ever exercised** — ◑ **both halves now addressed in-repo 2026‑08‑07; one owner step left** | **§BO‑23** (below) | The `acb-backup.service`/`.timer` units now exist under `deploy/hostinger/`, and `deploy.sh` installs and enables every unit in that directory on each deploy — so the schedule arrives with the code instead of waiting for someone to remember. **A restore has now been executed**, and keeps being executed: `scripts/rehearse_restore.sh` does a real round trip (seed → dump → DROP → restore → md5 compare) and runs on every PR against a real Postgres. Verified to fail when the restore does not restore, not only to pass when it does. **Left for the owner:** run one restore against a *production* backup — the rehearsal proves the tooling, not that this box's data and volume are what you think. Recovery position otherwise unchanged: Hostinger VM images, weekly, 2 retained, ~58 min, whole-machine. |
 | 3 | ~~**DB engine sprawl**~~ **CLOSED 2026‑08‑06** | §BO‑10 | Was **12 `create_async_engine` call sites across 10 modules** (+ one sync engine), 8 of them undisposed process‑lifetime singletons, one arriving per app — the only item whose cost compounded per app. **Now one engine and one pool for every async caller**, in `acb_common/db.py` (not the gateway: `acb_auth.access` runs in the gateway process and cannot import it). `acb_audit.record()` is non-blocking on the loop, drained at shutdown. A new engine now fails `tests/unit/test_db_engine_seam.py`. Remaining by design: `acb_graph`'s **sync** engine and `email_ingestion`'s per‑run engines. |
 
 Nothing else on this list needs to be closed first. Items 1 and 2 are risk
 containment the owner must action; item 3 was the one an agent should fix before
 the next app opened engine number 13 — **closed 2026‑08‑06, and the seam is now
-guarded by a test rather than by a note in this file.**
+guarded by a test rather than by a note in this file.** Item 2's agent-safe half
+is likewise closed and guarded by CI (2026‑08‑07); what is left there is one
+restore against real production data, which no test can stand in for.
 
 ---
 
@@ -241,14 +243,41 @@ is met)*, 4 ✅ (`apply_migrations.sh` now takes a dump before replaying the
 ladder and **fails closed** if it cannot), 5 ☐ and 6 ☐ *(both require writes
 under `deploy/` — owner)*.
 
-**Still ☐, and the reason the box is not ticked:**
+**Update 2026‑08‑07 — done-when 5 ✅ and 6 ✅-in-repo. One owner step left.**
 
-- **Nothing runs automatically.** The `acb-backup.service`/`.timer` units are
-  written out verbatim in §5 of the spec but could not be created — `deploy/`
-  is gated. Until they are installed, backups only happen when the deploy
-  triggers one or a human runs the script.
-- **No restore has been executed.** Per this item's own rule — *a backup nobody
-  has restored is not a backup* — the tooling does not close the ticket.
+- **5 ✅ Something runs automatically.** `deploy/hostinger/acb-backup.service`
+  and `.timer` now exist (verbatim from §5 — the `deploy/` gate that blocked
+  the earlier pass was not active), and `deploy.sh` syncs *every* unit in that
+  directory into `/etc/systemd/system`, reloads on change, and `enable --now`s
+  the timers on each deploy. Files only for `.service` units — restarting the
+  gateway mid-deploy is the compose stack's job, not this loop's. This also
+  fixes `acb-health-watchdog.timer`, which was in the repo and likewise
+  depended on somebody having installed it by hand.
+- **6 ✅ A restore has been executed — and keeps being.**
+  `scripts/rehearse_restore.sh` runs the real round trip: seed a database with
+  known rows, run `backup_db.sh --verify-restore` (the exact command the
+  systemd unit runs), `DROP` the table, run `restore_db.sh`, and compare an
+  **md5 of the restored rows against the originals**. That last comparison is
+  the whole point — every other step passes against an empty database. It also
+  asserts the live DB is untouched by a default restore, and that a truncated
+  dump is *rejected*, because a verifier that passes on garbage is worse than
+  none. Run here on a real Postgres 16, and **verified in both directions**: it
+  exits 1 with `restored 0 rows, backed up 250` when the restore is sabotaged.
+  Wired into `pr-check.yml` so it runs on every PR — "we tested it once in
+  August" decays, and a `pg_dump` format change on a Postgres upgrade would
+  otherwise break it silently.
+- **What made either possible:** both scripts reached Postgres only through
+  `docker exec acb-postgres`, so they could not run anywhere but the VPS —
+  which is precisely why they had never been run. They now go through a two
+  function `pg`/`pgi` seam with `PG_MODE=local` for a cluster reached over
+  libpq. The VPS path is byte-for-byte what it was.
+
+**Still ☐ — and it needs the owner, not an agent:**
+
+- **One restore against a *production* backup.** The rehearsal proves the
+  tooling is correct; it cannot prove that this box's dump contains what you
+  think, that `/opt/acb/backups` has room, or that `BACKUP_REMOTE` is set to
+  anywhere. That is §6 of the spec, and it is ten minutes with a terminal.
 - **The gate note in the old §BO‑23 was right and worth keeping:** the
   prediction that `plan-guard` might block the intended paths was correct in
   the opposite direction from the one anticipated. Authoring `scripts/*_db.sh`

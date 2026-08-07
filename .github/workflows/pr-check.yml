@@ -100,6 +100,53 @@ jobs:
       - name: Run unit tests
         run: uv run python -m pytest tests/unit/ -x -v
 
+  # BO-23. The backup and restore scripts shipped on 2026-08-03 and had never
+  # been executed anywhere — they reached Postgres only through
+  # `docker exec acb-postgres`, which exists on one machine. The first run of an
+  # untested restore should not be during an incident, and "we ran it once in
+  # August" decays: a refactor to either script, or a pg_dump format change on a
+  # Postgres upgrade, would break it silently and nothing would notice until it
+  # mattered. So it runs here, against a real server, on every PR.
+  #
+  # It is a real round trip — seed, dump, DROP the table, restore, and compare
+  # an md5 of the rows. The comparison is the point: every other step passes
+  # against an empty database.
+  backup-restore:
+    name: "Backup/restore rehearsal"
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: rehearsal
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v5
+
+      # The runner's client must not be OLDER than the server: pg_dump refuses
+      # to dump a newer server, which would fail the job for a reason that has
+      # nothing to do with our scripts.
+      - name: Install the postgresql-16 client
+        run: |
+          sudo sh -c 'echo "deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
+          curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo gpg --dearmor -o /usr/share/keyrings/pgdg.gpg
+          sudo sed -i 's|deb http|deb [signed-by=/usr/share/keyrings/pgdg.gpg] http|' /etc/apt/sources.list.d/pgdg.list
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-client-16
+
+      - name: Rehearse
+        env:
+          PGHOST: localhost
+          PGPORT: "5432"
+          PGUSER: postgres
+          PGPASSWORD: rehearsal
+        run: bash scripts/rehearse_restore.sh
+
   # The workbench had NO CI at all: a type error or a broken pure helper only
   # surfaced when the VPS rebuilt after merge. Typecheck + vitest are seconds,
   # and they're where the frontend-side invariants live (e.g. genUiText's

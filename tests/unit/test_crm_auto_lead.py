@@ -104,6 +104,38 @@ def on(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(auto_lead, "auto_lead_enabled", lambda: True)
 
 
+class _Log:
+    """A structlog stand-in that records (level, key, kwargs).
+
+    The stall and the re-anchor are *log lines by design* — WARNING, repeating
+    every cycle, because the state they report is invisible in the row counts
+    (a held cursor and a quiet mailbox both create nothing). A test that only
+    checked the counters would let the line be deleted.
+    """
+
+    def __init__(self) -> None:
+        self.lines: list[tuple[str, str, dict[str, Any]]] = []
+
+    def info(self, key: str, **kwargs: Any) -> None:
+        self.lines.append(("info", key, kwargs))
+
+    def warning(self, key: str, **kwargs: Any) -> None:
+        self.lines.append(("warning", key, kwargs))
+
+    def at(self, level: str, key: str) -> list[dict[str, Any]]:
+        return [kw for lvl, k, kw in self.lines if lvl == level and k == key]
+
+    def keys(self) -> list[str]:
+        return [key for _lvl, key, _kw in self.lines]
+
+
+@pytest.fixture
+def log(monkeypatch: pytest.MonkeyPatch) -> _Log:
+    recorder = _Log()
+    monkeypatch.setattr(auto_lead, "_log", recorder)
+    return recorder
+
+
 @pytest.fixture
 def quiet_pipeline(monkeypatch: pytest.MonkeyPatch) -> None:
     """Silence the five mail steps ``process_new_mail`` runs before ours.
@@ -145,11 +177,18 @@ def _seed_status(db: FakeCrmDB) -> Any:
 
 def _seed_cursor(
     db: FakeCrmDB, *, activated_at: datetime = ACTIVATED,
-    watermark: datetime | None = None,
+    watermark: datetime | None = None, last_run_at: datetime | None = None,
 ) -> Any:
+    """An account auto-lead is already active on.
+
+    ``last_run_at`` defaults to NOW, not to ``activated_at``: the ordinary
+    state of a running account is "the step ran a moment ago", and seeding it
+    stale is how a test asks for the dormancy path.
+    """
     return db.seed("crm_auto_lead_cursors", account_id=ACCOUNT_ID,
                    activated_at=activated_at,
-                   processed_watermark=watermark or activated_at)
+                   processed_watermark=watermark or activated_at,
+                   last_run_at=last_run_at or datetime.now(UTC))
 
 
 #: "you did not say" — distinct from an explicit ``None``, which is how a test
@@ -322,6 +361,39 @@ def test_dw2_the_gate_is_lexically_outside_the_step() -> None:
         and node.func.id == "create_leads_from_new_mail"
     )
     assert total == 1
+
+
+def test_dw2_the_step_is_not_even_imported_when_the_flag_is_off() -> None:
+    """The import of the STEP lives inside the guarded branch too.
+
+    Not cosmetic: `from gateway.routes.crm.auto_lead import
+    create_leads_from_new_mail` above the gate would run on every mail cycle
+    of every mailbox with the flag off. What must stay above the gate is the
+    predicate — `auto_lead_enabled` is the flag's one definition, and reading
+    `settings.crm_auto_lead` here instead would make two places responsible
+    for agreeing what the flag means.
+    """
+    function = _process_new_mail_ast()
+    branches = [
+        branch for branch in ast.walk(function)
+        if isinstance(branch, ast.If)
+        and _calls_named(branch.test, "auto_lead_enabled")
+    ]
+    assert branches, "the flag gate is gone"
+    imported_inside = {
+        alias.name
+        for branch in branches
+        for node in ast.walk(branch)
+        if isinstance(node, ast.ImportFrom)
+        for alias in node.names
+    }
+    assert "create_leads_from_new_mail" in imported_inside, (
+        "the step is imported above the flag gate — routes/crm loads on every "
+        "mail cycle even with CRM_AUTO_LEAD off"
+    )
+    assert "auto_lead_enabled" not in imported_inside, (
+        "the predicate cannot be imported inside its own gate"
+    )
 
 
 def test_dw2_a_crm_failure_never_breaks_mail_sync(
@@ -933,13 +1005,12 @@ async def test_a_missing_account_row_is_skipped(
     assert db.rows("crm_auto_lead_cursors") == []
 
 
-async def test_one_bad_message_does_not_lose_the_batch(
+async def test_a_failed_activity_write_does_not_lose_the_batch(
     db: FakeCrmDB, on: None,
 ) -> None:
     """The WS-26b lesson: Postgres aborts the TRANSACTION on a statement
     error, so a bare per-record try/except loses every row after the bad one.
-    The savepoint is what makes "one bad message" true, and the error is
-    counted rather than swallowed."""
+    The savepoint is what makes "one bad activity" true."""
     _ready(db)
     _message(db, address="first@elsewhere.com", processed_at=_at(5, 9))
     _message(db, address="second@elsewhere.com", processed_at=_at(5, 10))
@@ -947,10 +1018,56 @@ async def test_one_bad_message_does_not_lose_the_batch(
 
     stats = await auto_lead.create_leads_from_new_mail(ACCOUNT_ID)
 
-    assert stats["errors"] == 1
-    assert stats["created"] == 1
+    # Both leads exist, and BOTH are counted created — see the test below for
+    # why that is the point rather than a rounding error.
+    assert stats["created"] == 2
+    assert stats["activity_errors"] == 1
+    assert stats["errors"] == 0
+    assert len(_leads(db)) == 2
+    assert len(_activities(db)) == 1
     assert db.savepoints == 2
     assert db.savepoint_rollbacks == 1
+
+
+async def test_a_lead_whose_activity_failed_is_still_counted_created(
+    db: FakeCrmDB, on: None, log: _Log,
+) -> None:
+    """`created` counts COMMITTED LEADS, not completed pairs.
+
+    The lead is committed on its own session before the activity is attempted,
+    so by the time the activity fails the row exists and is already
+    `zoho_dirty` — it WILL push to the live tenant. A cycle that logged
+    `created=0` next to that row would send whoever read it looking in the
+    wrong place entirely.
+    """
+    _ready(db)
+    _message(db)
+    db.fail_on("INSERT INTO crm_activities", times=1)
+
+    stats = await auto_lead.create_leads_from_new_mail(ACCOUNT_ID)
+
+    assert stats["created"] == 1
+    assert stats["activity_errors"] == 1
+    assert len(_leads(db)) == 1
+    assert _leads(db)[0]["zoho_dirty"] is True
+    failures = log.at("warning", "crm.auto_lead_activity_failed")
+    assert len(failures) == 1
+    assert failures[0]["lead_id"] == _leads(db)[0]["id"]
+
+
+async def test_the_activity_failure_does_not_hold_the_cursor(
+    db: FakeCrmDB, on: None,
+) -> None:
+    """It must not: the lead is committed, so the next cycle finds it at step 3
+    and skips — the activity would never be retried and the cursor would stall
+    forever on work that cannot be redone."""
+    _ready(db)
+    _message(db, processed_at=_at(5, 9))
+    db.fail_on("INSERT INTO crm_activities", times=1)
+
+    await auto_lead.create_leads_from_new_mail(ACCOUNT_ID)
+
+    assert db.rows("crm_auto_lead_cursors")[0]["processed_watermark"] == _at(5, 9)
 
 
 async def test_the_watermark_advances_over_messages_that_minted_nothing(
@@ -991,6 +1108,355 @@ def test_the_module_registers_no_routes() -> None:
     assert "auto_lead" not in package
 
 
+# ── done-when 8: an OFF→ON round trip mints nothing from the OFF window ─────
+
+async def test_dw8_an_off_then_on_round_trip_mints_nothing_from_the_gap(
+    db: FakeCrmDB, on: None, log: _Log,
+) -> None:
+    """The hole ``activated_at`` alone does NOT cover.
+
+    Flag on day 1 (cursor anchored), off days 2-29, on again day 30. Nothing
+    about the cursor changed while the flag was off, so the anchor still says
+    day 1 and every message in the OFF window passes both predicates — the
+    first ON cycle mints the entire four-week backlog in one batch, each lead
+    pushing unattended into the live tenant. Re-anchoring on dormancy is what
+    makes ``activated_at`` mean *the current ON epoch*.
+    """
+    _seed_account(db)
+    _seed_status(db)
+    _seed_cursor(db, activated_at=_at(1), watermark=_at(1),
+                 last_run_at=_at(1, 10))  # the last cycle before the flag went off
+    for index in range(27):
+        _message(db, address=f"stranger{index}@elsewhere.com",
+                 received_at=_at(2) + timedelta(days=index),
+                 processed_at=_at(2) + timedelta(days=index))
+
+    stats = await auto_lead.create_leads_from_new_mail(ACCOUNT_ID)
+
+    assert stats["reanchored"] == 1
+    assert stats["candidates"] == 0
+    assert stats["created"] == 0
+    assert _leads(db) == []
+    cursor = db.rows("crm_auto_lead_cursors")[0]
+    assert cursor["activated_at"] == cursor["processed_watermark"]
+    assert cursor["activated_at"] > _at(1)  # a NEW epoch, not the old anchor
+    reanchors = log.at("warning", "sync.auto_lead_reanchored")
+    assert len(reanchors) == 1
+    assert reanchors[0]["gap_seconds"] > auto_lead.REANCHOR_GAP_SECONDS
+
+
+async def test_dw8_mail_arriving_after_the_reanchor_mints_normally(
+    db: FakeCrmDB, on: None,
+) -> None:
+    """The control: re-anchoring must start an epoch, not end the feature."""
+    _seed_account(db)
+    _seed_status(db)
+    _seed_cursor(db, activated_at=_at(1), watermark=_at(1),
+                 last_run_at=_at(1, 10))
+    _message(db, address="old@elsewhere.com", received_at=_at(2))
+
+    await auto_lead.create_leads_from_new_mail(ACCOUNT_ID)
+    assert _leads(db) == []
+
+    # Now a message that arrives after the new anchor.
+    later = datetime.now(UTC) + timedelta(minutes=5)
+    _message(db, address="new@elsewhere.com", received_at=later,
+             processed_at=later)
+    stats = await auto_lead.create_leads_from_new_mail(ACCOUNT_ID)
+
+    assert stats["created"] == 1
+    assert [row["email"] for row in _leads(db)] == ["new@elsewhere.com"]
+
+
+async def test_dw8_a_quiet_but_running_mailbox_is_never_reanchored(
+    db: FakeCrmDB, on: None, log: _Log,
+) -> None:
+    """Why dormancy reads ``last_run_at`` and not ``processed_watermark``.
+
+    A mailbox with no classified inbox mail over a weekend has a watermark 60
+    hours old while this step has run faithfully every 600s. Anchoring the
+    dormancy test on the watermark would re-anchor it and drop the first
+    message to arrive on Monday morning — which is precisely the message this
+    feature exists to catch, dropped every Monday. ``last_run_at`` moves on
+    every cycle, so "quiet" and "not running" stay different facts.
+    """
+    _seed_account(db)
+    _seed_status(db)
+    _seed_cursor(db, activated_at=_at(1), watermark=_at(1),
+                 last_run_at=datetime.now(UTC) - timedelta(seconds=300))
+    monday = datetime.now(UTC) + timedelta(seconds=1)
+    _message(db, address="customer@elsewhere.com", received_at=monday,
+             processed_at=monday)
+
+    stats = await auto_lead.create_leads_from_new_mail(ACCOUNT_ID)
+
+    assert stats["reanchored"] == 0
+    assert log.at("warning", "sync.auto_lead_reanchored") == []
+    assert stats["created"] == 1
+
+
+async def test_dw8_every_cycle_stamps_last_run_at(
+    db: FakeCrmDB, on: None,
+) -> None:
+    """Including the ones that considered nothing — otherwise a mailbox with
+    no new mail drifts into looking dormant purely by being calm."""
+    _seed_account(db)
+    _seed_status(db)
+    stale = datetime.now(UTC) - timedelta(seconds=300)
+    _seed_cursor(db, last_run_at=stale)
+
+    await auto_lead.create_leads_from_new_mail(ACCOUNT_ID)
+
+    assert db.rows("crm_auto_lead_cursors")[0]["last_run_at"] > stale
+
+
+# ── done-when 9: a failure never advances the cursor past lost work ─────────
+
+async def test_dw9_the_watermark_advances_over_the_successful_prefix_only(
+    db: FakeCrmDB, on: None, log: _Log,
+) -> None:
+    """[ok, raise, ok] — the shape a pool exhaustion produces.
+
+    This step opens a SECOND session per lead (``create_record``) while
+    holding the batch's own, so a pool that runs out fails several candidates
+    at once. An unconditional advance would step the cursor over every one of
+    them permanently: the reviewer measured 3 candidates, 3 errors, watermark
+    advanced, three leads lost for good.
+    """
+    _ready(db)
+    _message(db, address="first@elsewhere.com", processed_at=_at(5, 9))
+    _message(db, address="second@elsewhere.com", processed_at=_at(5, 10))
+    _message(db, address="third@elsewhere.com", processed_at=_at(5, 11))
+    # `after=1` so the poison lands on the SECOND candidate: a prefix rule and
+    # an unconditional advance are indistinguishable when the FIRST record is
+    # the one that fails.
+    db.fail_on("INSERT INTO crm_leads", times=1, after=1)
+
+    stats = await auto_lead.create_leads_from_new_mail(ACCOUNT_ID)
+
+    assert stats["candidates"] == 3
+    assert stats["errors"] == 1
+    # Held at message ONE's stamp — not message three's.
+    assert db.rows("crm_auto_lead_cursors")[0]["processed_watermark"] == _at(5, 9)
+
+
+async def test_dw9_the_next_cycle_reconsiders_everything_after_the_failure(
+    db: FakeCrmDB, on: None,
+) -> None:
+    """The other half: holding the cursor is only useful if the work comes
+    back. Message 3 succeeded in cycle 1 and is re-considered in cycle 2 —
+    that is free, because step 3 of the unknown-sender check finds the lead it
+    already created and skips."""
+    _ready(db)
+    _message(db, address="first@elsewhere.com", processed_at=_at(5, 9))
+    _message(db, address="second@elsewhere.com", processed_at=_at(5, 10))
+    _message(db, address="third@elsewhere.com", processed_at=_at(5, 11))
+    db.fail_on("INSERT INTO crm_leads", times=1, after=1)
+
+    await auto_lead.create_leads_from_new_mail(ACCOUNT_ID)
+    second = await auto_lead.create_leads_from_new_mail(ACCOUNT_ID)
+
+    assert second["candidates"] == 2          # messages 2 and 3, again
+    assert second["created"] == 1             # message 2, finally
+    assert second["skipped_known"] == 1       # message 3, already a lead
+    assert sorted(row["email"] for row in _leads(db)) == [
+        "first@elsewhere.com", "second@elsewhere.com", "third@elsewhere.com",
+    ]
+
+
+async def test_dw9_a_stuck_head_message_is_logged_at_warning_every_cycle(
+    db: FakeCrmDB, on: None, log: _Log,
+) -> None:
+    """A held cursor and a quiet mailbox both create nothing, so the counters
+    cannot tell them apart. The WARNING is the whole difference, and it
+    repeats — an INFO line saying `created=0` is what a stuck head message
+    looked like before."""
+    _ready(db)
+    _message(db, address="poison@elsewhere.com", processed_at=_at(5, 9))
+    db.fail_on("INSERT INTO crm_leads", times=2)
+
+    await auto_lead.create_leads_from_new_mail(ACCOUNT_ID)
+    await auto_lead.create_leads_from_new_mail(ACCOUNT_ID)
+
+    stalls = log.at("warning", "sync.auto_lead_stalled")
+    assert len(stalls) == 2, (
+        "the stall must be reported on EVERY cycle it persists, not once"
+    )
+    assert stalls[0]["errors"] == 1
+    assert db.rows("crm_auto_lead_cursors")[0]["processed_watermark"] == ACTIVATED
+
+
+async def test_dw9_a_healthy_cycle_logs_no_stall(
+    db: FakeCrmDB, on: None, log: _Log,
+) -> None:
+    _ready(db)
+    _message(db)
+
+    await auto_lead.create_leads_from_new_mail(ACCOUNT_ID)
+
+    assert log.at("warning", "sync.auto_lead_stalled") == []
+
+
+# ── The Sent probe folds case (P2-4) ───────────────────────────────────────
+
+async def test_a_reply_from_someone_we_emailed_in_another_case_mints_nothing(
+    db: FakeCrmDB, on: None,
+) -> None:
+    """The owner wrote to ``Asha@AcmeRobotics.com``; she replies from
+    ``asha@acmerobotics.com``. Postgres's ``@>`` is case-EXACT, so the
+    containment form of this probe says we have never emailed her and mints a
+    lead for somebody already mid-conversation. This module folds case
+    explicitly; ``_maybe_block_cold`` is left alone, being the email package's
+    predicate with its own blast radius."""
+    _ready(db)
+    db.seed("email_messages", account_id=ACCOUNT_ID, folder="SENT",
+            from_address={"email": OWNER},
+            to_addresses=[{"email": "Asha@AcmeRobotics.com"}],
+            rules_processed_at=None, rules_held_back_at=None)
+    _message(db, address="asha@acmerobotics.com")
+
+    stats = await auto_lead.create_leads_from_new_mail(ACCOUNT_ID)
+
+    assert stats["skipped_known"] == 1
+    assert _leads(db) == []
+
+
+async def test_the_case_folding_probe_still_distinguishes_recipients(
+    db: FakeCrmDB, on: None,
+) -> None:
+    """Folding case must not fold everything: mail to somebody else is still
+    mail to somebody else."""
+    _ready(db)
+    db.seed("email_messages", account_id=ACCOUNT_ID, folder="SENT",
+            from_address={"email": OWNER},
+            to_addresses=[{"email": "Someone.Else@Elsewhere.com"}],
+            rules_processed_at=None, rules_held_back_at=None)
+    _message(db)
+
+    stats = await auto_lead.create_leads_from_new_mail(ACCOUNT_ID)
+
+    assert stats["created"] == 1
+
+
+# ── Subdomain colleagues (P2-6) ────────────────────────────────────────────
+
+async def test_a_colleague_on_a_subdomain_creates_nothing(
+    db: FakeCrmDB, on: None,
+) -> None:
+    """``cfo@mail.fracktal.in`` is the CFO. Exact matching alone let him
+    through while ``cfo@fracktal.in`` was caught, and a company's own
+    ``mail.``/``corp.``/regional subdomains are routine."""
+    _ready(db)
+    _message(db, address="cfo@mail.fracktal.in", name="Our CFO")
+
+    stats = await auto_lead.create_leads_from_new_mail(ACCOUNT_ID)
+
+    assert stats["skipped_internal"] == 1
+    assert _leads(db) == []
+
+
+async def test_a_lookalike_domain_is_not_a_subdomain(
+    db: FakeCrmDB, on: None,
+) -> None:
+    """The mistake a bare ``endswith`` makes: ``notfracktal.in`` is a
+    different company, and refusing its leads would be the suffix test doing
+    real damage in the other direction."""
+    _ready(db)
+    _message(db, address="sales@notfracktal.in", name="Not Us")
+
+    stats = await auto_lead.create_leads_from_new_mail(ACCOUNT_ID)
+
+    assert stats["created"] == 1
+
+
+# ── The cap's tie boundary (P2-5) ──────────────────────────────────────────
+
+def test_the_candidate_order_carries_a_tiebreak() -> None:
+    """Asserted as SQL TEXT, deliberately: the shared fake orders on the first
+    key only, so the tiebreak is not observable through it. Without ``, id``
+    the order of rows sharing a timestamp is undefined and the cap could cut a
+    tie group in a different place on each read."""
+    assert "ORDER BY rules_processed_at, id" in auto_lead._CANDIDATE_SQL
+
+
+async def test_a_tie_group_split_by_the_cap_is_deferred_whole(
+    db: FakeCrmDB, on: None, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The watermark is a TIMESTAMP, so advancing it to a stamp the cap cut
+    through would step over the rest of that group forever."""
+    monkeypatch.setattr(auto_lead, "MAX_CANDIDATES_PER_CYCLE", 3)
+    _ready(db)
+    for index, stamp in enumerate(
+        [_at(5, 9), _at(5, 10), _at(5, 11), _at(5, 11), _at(5, 12)]
+    ):
+        _message(db, address=f"stranger{index}@elsewhere.com",
+                 received_at=_at(5), processed_at=stamp)
+
+    first = await auto_lead.create_leads_from_new_mail(ACCOUNT_ID)
+
+    assert first["boundary_deferred"] == 1
+    assert first["candidates"] == 2
+    assert db.rows("crm_auto_lead_cursors")[0]["processed_watermark"] == _at(5, 10)
+
+    second = await auto_lead.create_leads_from_new_mail(ACCOUNT_ID)
+
+    assert second["candidates"] == 3          # the whole tie group, plus 5
+    assert len(_leads(db)) == 5
+
+
+async def test_a_cap_that_falls_between_groups_defers_nothing(
+    db: FakeCrmDB, on: None, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The control, and the reason the drop is conditional: deferring the last
+    group unconditionally would shrink every capped batch by one message for
+    no reason at all."""
+    monkeypatch.setattr(auto_lead, "MAX_CANDIDATES_PER_CYCLE", 3)
+    _ready(db)
+    for index in range(5):
+        _message(db, address=f"stranger{index}@elsewhere.com",
+                 received_at=_at(5),
+                 processed_at=_at(5, 9) + timedelta(minutes=index))
+
+    stats = await auto_lead.create_leads_from_new_mail(ACCOUNT_ID)
+
+    assert stats["boundary_deferred"] == 0
+    assert stats["candidates"] == 3
+
+
+# ── Attacker-controlled text is bounded ────────────────────────────────────
+
+async def test_a_huge_display_name_and_subject_are_clipped(
+    db: FakeCrmDB, on: None,
+) -> None:
+    """Nothing upstream bounds either: a display name is whatever the sending
+    server put in the header, and it lands in a column every CRM list, board
+    card and Zoho push then carries."""
+    _ready(db)
+    _message(db, name="Asha " + ("x" * 5000), subject="Q: " + ("y" * 5000))
+
+    await auto_lead.create_leads_from_new_mail(ACCOUNT_ID)
+
+    lead = _leads(db)[0]
+    assert len(lead["last_name"]) <= auto_lead.MAX_NAME_CHARS
+    assert len(lead["lead_name"]) <= auto_lead.MAX_NAME_CHARS + len("Asha ")
+    assert lead["last_name"].endswith(auto_lead.CLIP_MARKER)
+    activity = _activities(db)[0]
+    assert len(activity["subject"]) == auto_lead.MAX_SUBJECT_CHARS
+    assert activity["subject"].endswith(auto_lead.CLIP_MARKER)
+
+
+async def test_an_ordinary_name_and_subject_are_untouched(
+    db: FakeCrmDB, on: None,
+) -> None:
+    _ready(db)
+    _message(db, name="Asha Menon", subject="Quote for 40 printers")
+
+    await auto_lead.create_leads_from_new_mail(ACCOUNT_ID)
+
+    assert _leads(db)[0]["lead_name"] == "Asha Menon"
+    assert auto_lead.CLIP_MARKER not in _activities(db)[0]["subject"]
+
+
 # ── The migration, read as text ─────────────────────────────────────────────
 
 def _cursor_migration() -> Path:
@@ -1023,18 +1489,37 @@ def bare(migration: str) -> str:
     return "\n".join(re.sub(r"--.*$", "", line) for line in migration.splitlines())
 
 
-def test_the_migration_takes_the_next_free_number() -> None:
-    numbers = sorted(
+def test_the_migration_number_is_unique() -> None:
+    """The property that actually protects the ladder, and the ONLY one this
+    branch can hold.
+
+    Two migrations sharing a number replay in filename order against the wrong
+    schema — that is the failure, and it is asserted. Contiguity is
+    deliberately NOT asserted: open PR #399 holds 157, so this file took 158
+    and the ladder carries a reservation gap until that PR lands. (Nor is "the
+    highest number in the repo" asserted — `test_crm_migration.py` records
+    that version going red the moment any later workstream's migration landed,
+    and a red unit test silently blocks deploy.)
+    """
+    numbers = [
         int(path.name.split("_", 1)[0])
         for path in MIGRATIONS.glob("*.sql")
         if path.name.split("_", 1)[0].isdigit()
-    )
+    ]
     mine = int(_cursor_migration().name.split("_", 1)[0])
     assert numbers.count(mine) == 1, (
         f"two migrations share number {mine} — the ladder replays them in "
         "filename order, so one runs against the wrong schema"
     )
-    assert mine - 1 in numbers, "the ladder has a gap immediately below it"
+
+
+def test_the_migration_number_records_why_it_skipped_one() -> None:
+    """A gap in the ladder is a thing a future reader will trip over, so the
+    file says who holds the number it skipped."""
+    header = _cursor_migration().read_text(encoding="utf-8")[:1200]
+    assert "#399" in header, (
+        "the migration skips a number without naming the PR that holds it"
+    )
 
 
 def test_the_migration_header_says_what_why_and_what_it_depends_on() -> None:
@@ -1065,11 +1550,14 @@ def test_the_migration_drops_or_truncates_nothing(bare: str) -> None:
     assert not re.search(r"\b(DROP|TRUNCATE|DELETE\s+FROM)\b", bare, re.I)
 
 
-def test_the_cursor_carries_both_timestamps_not_null(bare: str) -> None:
-    for column in ("activated_at", "processed_watermark"):
+def test_the_cursor_carries_all_three_timestamps_not_null(bare: str) -> None:
+    """Three columns because that is three questions: which ON epoch is this
+    (`activated_at`), how far has the step got (`processed_watermark`), and did
+    it run at all (`last_run_at`). A NULL on any of them is a predicate that
+    matches nothing, which reads exactly like a working feature."""
+    for column in ("activated_at", "processed_watermark", "last_run_at"):
         assert re.search(rf"{column}\s+TIMESTAMPTZ\s+NOT NULL", bare), (
-            f"{column} must be NOT NULL — a NULL cursor is a predicate that "
-            "matches nothing, which reads exactly like a working feature"
+            f"{column} must exist and be NOT NULL"
         )
 
 

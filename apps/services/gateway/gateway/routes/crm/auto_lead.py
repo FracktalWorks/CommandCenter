@@ -20,25 +20,37 @@ helper, and "is this person a colleague?" already has one public answer across
 the automation package. A third copy of it here would be the drift the rule
 exists to prevent.
 
-Four properties are load-bearing, and each one is a way this feature can do
+Five properties are load-bearing, and each one is a way this feature can do
 real damage rather than merely be wrong:
 
 1. **The flag is read BEFORE the step is entered.** ``CRM_AUTO_LEAD`` ships OFF
    and :func:`auto_lead_enabled` is its single definition, but the *call site*
-   is what is guarded — with the flag off nothing here runs and no CRM query is
-   issued on the mail path at all. A short-circuit *inside* this module would
-   satisfy a careless test and still open a database session on every sync
-   cycle of every mailbox.
+   is what is guarded — with the flag off this module opens no session, issues
+   no query and creates nothing, and ``process_new_mail`` does not even import
+   :func:`create_leads_from_new_mail`. (It does import *this module* to read
+   the predicate; that is one ``sys.modules`` lookup after boot, because
+   ``routes/crm`` is mounted by ``main.py`` regardless. One definition of what
+   the flag means is worth more than saving it — two places that must agree
+   about a flag is how a loop runs with the flag off.)
 
-2. **Two cursor predicates, together.** ``process_new_mail`` is also reached by
-   deep resyncs and by the first-ever sync of a newly connected mailbox, and
-   neither marks the mail it classifies as history. ``received_at >
-   activated_at`` is therefore the backfill discriminator (mail that ARRIVED
-   before auto-lead was first active on the account mints nothing, whenever it
-   is classified), and ``rules_processed_at > processed_watermark`` is the
-   incremental cursor. Without the first, connecting a second mailbox mints a
-   lead per unknown sender in a year of mail — each born ``zoho_dirty`` and
-   queued for the live Zoho tenant within one 600s cycle.
+2. **THREE cursor facts, and they answer three different questions.**
+   ``process_new_mail`` is also reached by deep resyncs and by the first-ever
+   sync of a newly connected mailbox, and neither marks the mail it classifies
+   as history.
+
+   * ``activated_at`` — the start of the CURRENT ON epoch.
+     ``received_at > activated_at`` is the backfill discriminator: mail that
+     ARRIVED before this epoch began mints nothing, whenever it is classified.
+   * ``processed_watermark`` — the incremental cursor over
+     ``rules_processed_at``.
+   * ``last_run_at`` — when this step last RAN. It is what detects dormancy,
+     and it is a separate column because the watermark cannot answer that
+     question: a quiet mailbox has a watermark hours old while the step has
+     been running faithfully every cycle. See :func:`_reanchor_if_dormant`.
+
+   Without the first, connecting a second mailbox mints a lead per unknown
+   sender in a year of mail — each born ``zoho_dirty`` and queued for the live
+   Zoho tenant within one 600s cycle.
 
 3. **"Unknown" is three questions, and "external" is only necessary.**
    :func:`_is_unknown_sender` mirrors ``senders._maybe_block_cold``'s two steps
@@ -47,7 +59,8 @@ real damage rather than merely be wrong:
    Separately, :func:`_is_external_sender` runs TWO gates, because
    ``sender_scope`` fails SAFE to ``"external"`` — the wrong direction here. A
    lead row for your own CFO, pushed into the live Zoho tenant, is what the
-   second gate exists to prevent.
+   second gate exists to prevent, and it is SUFFIX-aware: a colleague on
+   ``mail.fracktal.in`` is a colleague.
 
 4. **The first activity is metadata, never content** (D-CRM-12 applied to what
    a machine writes). ``type='system'`` — deliberately outside the Zoho push
@@ -56,6 +69,15 @@ real damage rather than merely be wrong:
    disclosure for a cold inbound inquiry on an org-visible record; the mail
    body is not, and no snippet of it is either. This module never reads
    ``body_text`` or ``snippet``.
+
+5. **The watermark advances over the successful PREFIX only.** A failure is not
+   a reason to skip work: the step opens a second session per lead (through
+   ``create_record``) while holding the batch's own, so pool exhaustion fails
+   many candidates at once, and an unconditional advance would step over every
+   one of them permanently. On the first lead-write failure the cursor stops
+   moving and the cycle logs ``sync.auto_lead_stalled`` at WARNING every cycle
+   until a human looks. That trades silent loss for a visible stall on a poison
+   head message, deliberately: fail closed toward the CRM.
 
 **One race is accepted and recorded** (spec §9): two concurrent
 ``process_new_mail`` invocations for one account can read the same watermark
@@ -69,6 +91,7 @@ not add it.
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from typing import Any
 
 from acb_auth import UserContext, UserRole
@@ -100,6 +123,18 @@ from sqlalchemy import text
 #: reads as "covered everything".
 MAX_CANDIDATES_PER_CYCLE = 200
 
+#: How long a gap in this step's own RUNS means the ON epoch ended.
+#: Six scheduler periods at the 600s sync interval, so an ordinary slow cycle,
+#: a restart or a single missed poll can never trip it.
+#:
+#: ⚠️ This is the OFF→ON guard and it is not optional. ``activated_at`` alone
+#: stops a deep resync, but it does nothing about a flag that was on, turned
+#: off for four weeks, and turned back on: the cursor still carries day-1's
+#: anchor, so the first ON cycle would mint the entire OFF window in one batch
+#: — measured at 27 leads for a 27-day window, each pushing unattended into the
+#: live tenant. Re-anchoring makes the anchor mean "the current ON epoch".
+REANCHOR_GAP_SECONDS = 3600
+
 #: The activity ``type`` the originating message is logged as. **Not 'note'.**
 #: ``sync_zoho.push_activities`` pushes ``type IN ('note', 'task')`` only, so
 #: 'system' is how this row stays inside the native CRM — the mail's subject
@@ -118,6 +153,17 @@ LEAD_SOURCE = "email"
 INBOX_FOLDER = "inbox"
 SENT_FOLDER = "sent"
 
+#: Ceilings on the two attacker-controlled strings that reach TEXT columns —
+#: the sender's display name (which becomes ``first_name``/``last_name`` and
+#: therefore ``lead_name``) and the subject line. Nothing upstream bounds
+#: either: a display name is whatever the sending server put in the header, and
+#: it lands in a column every CRM list, board card and Zoho push then carries.
+MAX_NAME_CHARS = 120
+MAX_SUBJECT_CHARS = 500
+#: Appended when either ceiling bites, so a clipped value reads as clipped
+#: rather than as the sender's actual name.
+CLIP_MARKER = "…"
+
 #: The candidate predicate, written ONCE and shared by the fetch and the
 #: overflow count. Two copies would let the count answer a different question
 #: from the batch — and the count is the number an operator reads to decide
@@ -134,14 +180,37 @@ _CANDIDATE_WHERE = (
 #: ⚠️ The projection is the privacy boundary: ``body_text`` and ``snippet`` are
 #: absent on purpose and must stay absent. Nothing downstream can leak a body
 #: it was never handed.
+#:
+#: ``ORDER BY rules_processed_at, id`` — the ``id`` is a TIEBREAK, and without
+#: it the ordering of rows sharing a timestamp is undefined, so the cap could
+#: cut a tie group in a different place than the watermark assumes and lose the
+#: rows in between. See :func:`_drop_boundary_group`.
 _CANDIDATE_SQL = (
     "SELECT id, subject, from_address, received_at, thread_id, "
     "internet_message_id, rules_processed_at "
     f"FROM email_messages WHERE {_CANDIDATE_WHERE} "
-    "ORDER BY rules_processed_at LIMIT :limit"
+    "ORDER BY rules_processed_at, id LIMIT :limit"
 )
 
 _CANDIDATE_COUNT_SQL = f"SELECT COUNT(*) FROM email_messages WHERE {_CANDIDATE_WHERE}"
+
+#: "Have we ever emailed them" — ``_maybe_block_cold``'s second step, with the
+#: one difference this module needs.
+#:
+#: ⚠️ That helper asks it with jsonb containment (``to_addresses @> :json``),
+#: which Postgres evaluates EXACTLY: an owner who wrote to
+#: ``Asha@AcmeRobotics.com`` has not, as far as ``@>`` is concerned, emailed
+#: ``asha@acmerobotics.com`` — and she replies in lower case, so the reply
+#: minted a lead for somebody already in the middle of a conversation. Here the
+#: probe folds case explicitly. ``_maybe_block_cold`` is left alone: it is the
+#: email package's predicate and its blast radius is the cold-email blocker,
+#: not this.
+_EVER_EMAILED_SQL = (
+    "SELECT 1 FROM email_messages "
+    "WHERE account_id = :account_id AND LOWER(folder) = :folder "
+    "AND EXISTS (SELECT 1 FROM jsonb_array_elements(to_addresses) recipient "
+    "WHERE lower(recipient->>'email') = :address) LIMIT 1"
+)
 
 
 def auto_lead_enabled() -> bool:
@@ -164,12 +233,15 @@ def _new_stats() -> dict[str, int]:
     return {
         "candidates": 0,
         "overflow": 0,
+        "boundary_deferred": 0,
         "created": 0,
         "skipped_internal": 0,
         "skipped_known": 0,
         "skipped_unusable": 0,
         "deduped_in_batch": 0,
         "errors": 0,
+        "activity_errors": 0,
+        "reanchored": 0,
     }
 
 
@@ -190,31 +262,71 @@ async def create_leads_from_new_mail(account_id: str) -> dict[str, int]:
         cursor = await _load_or_activate_cursor(db, account_id)
         if cursor is None:  # pragma: no cover — the row was just written
             return stats
-        candidates = await _load_candidates(db, account_id, cursor)
-        stats["candidates"] = len(candidates)
-        if not candidates:
+        if await _reanchor_if_dormant(db, account_id, cursor):
+            stats["reanchored"] = 1
             _emit(account_id, stats)
             return stats
-        stats["overflow"] = await _count_overflow(db, account_id, cursor,
-                                                  len(candidates))
-        domains = await _internal_domains(db, account_id, account.email_address)
-        seen: set[str] = set()
-        for message in candidates:
-            await _consider(db, account, message, domains, seen, stats)
-        # Advanced over everything CONSIDERED, including the messages that
-        # minted nothing and the ones that raised: this is a best-effort
-        # enrichment step, not a queue, and a poison message that held the
-        # cursor still would re-fail on every cycle forever. The errors are
-        # counted in the line below instead.
-        await _advance_watermark(
-            db, account_id,
-            max(message.rules_processed_at for message in candidates),
-        )
-        await db.commit()
+        await _run_batch(db, account, cursor, stats)
         _emit(account_id, stats)
         return stats
     finally:
         await db.close()
+
+
+async def _run_batch(
+    db: Any, account: Any, cursor: Any, stats: dict[str, int],
+) -> None:
+    """One cycle's candidates, considered in order, cursor stamped once."""
+    account_id = str(account.id)
+    candidates, next_stamp = await _load_candidates(db, account_id, cursor)
+    capped = next_stamp is not None
+    if capped and candidates[-1].rules_processed_at == next_stamp:
+        # …and ONLY then. A cap that fell between two timestamp groups cut
+        # nothing in half, so deferring its last group would shrink the batch
+        # by one message every single cycle for no reason.
+        candidates = _drop_boundary_group(candidates, stats)
+    stats["candidates"] = len(candidates)
+    if not candidates:
+        # A cap that dropped a whole batch into the boundary group is a stall,
+        # not a quiet cycle, and the two must not read the same in the log.
+        if stats["boundary_deferred"]:
+            _log.warning("sync.auto_lead_stalled", account_id=account_id,
+                         reason="boundary_group_fills_the_cap",
+                         boundary_deferred=stats["boundary_deferred"])
+        await _stamp_cursor(db, account_id, run_at=now())
+        await db.commit()
+        return
+    if capped:
+        stats["overflow"] = await _count_overflow(
+            db, account_id, cursor, len(candidates),
+        )
+    domains = await _internal_domains(db, account_id, account.email_address)
+    seen: set[str] = set()
+
+    #: The stamp of the last message in the contiguous prefix that did NOT
+    #: fail to write its lead. Everything after the first failure is
+    #: deliberately left for the next cycle: re-considering a message whose
+    #: lead already exists costs one indexed SELECT (step 3 of
+    #: `_is_unknown_sender` finds it and skips), and that is far cheaper than
+    #: the alternative, which is stepping the cursor over work that was lost.
+    advance_to: Any = None
+    blocked = False
+    for message in candidates:
+        failed = await _consider(db, account, message, domains, seen, stats)
+        if failed:
+            blocked = True
+        elif not blocked:
+            advance_to = message.rules_processed_at
+
+    await _stamp_cursor(db, account_id, watermark=advance_to, run_at=now())
+    await db.commit()
+    if advance_to is None and stats["errors"]:
+        # WARNING, and it repeats every cycle: an INFO line saying "created 0"
+        # is what a stuck head message looked like before, which is to say it
+        # looked like a quiet mailbox.
+        _log.warning("sync.auto_lead_stalled", account_id=account_id,
+                     reason="lead_write_failed_on_the_first_candidate",
+                     candidates=stats["candidates"], errors=stats["errors"])
 
 
 # ── The account, and the cursor that decides what is history ────────────────
@@ -238,7 +350,7 @@ async def _load_account(db: Any, account_id: str) -> Any | None:
 
 async def _read_cursor(db: Any, account_id: str) -> Any | None:
     return (await db.execute(text(
-        "SELECT account_id, activated_at, processed_watermark "
+        "SELECT account_id, activated_at, processed_watermark, last_run_at "
         "FROM crm_auto_lead_cursors WHERE account_id = :account_id"
     ), {"account_id": account_id})).fetchone()
 
@@ -246,12 +358,12 @@ async def _read_cursor(db: Any, account_id: str) -> Any | None:
 async def _load_or_activate_cursor(db: Any, account_id: str) -> Any | None:
     """Read the account's cursor, creating it on the first ON-state run.
 
-    Activation stamps ``activated_at`` and ``processed_watermark`` to the SAME
-    instant, so the activating cycle itself mints nothing: everything already
-    in the mailbox arrived before auto-lead existed for this account, which is
-    precisely the deep-resync case. ``ON CONFLICT DO NOTHING`` + a re-read
-    means a concurrent activation is one row and one activation instant, not a
-    primary-key error on the mail path.
+    Activation stamps all three timestamps to the SAME instant, so the
+    activating cycle itself mints nothing: everything already in the mailbox
+    arrived before auto-lead existed for this account, which is precisely the
+    deep-resync case. ``ON CONFLICT DO NOTHING`` + a re-read means a concurrent
+    activation is one row and one activation instant, not a primary-key error
+    on the mail path.
     """
     row = await _read_cursor(db, account_id)
     if row is not None:
@@ -259,13 +371,93 @@ async def _load_or_activate_cursor(db: Any, account_id: str) -> Any | None:
     at = now()
     await db.execute(text(
         "INSERT INTO crm_auto_lead_cursors "
-        "(account_id, activated_at, processed_watermark) "
-        "VALUES (:account_id, :activated_at, :processed_watermark) "
+        "(account_id, activated_at, processed_watermark, last_run_at) "
+        "VALUES (:account_id, :activated_at, :processed_watermark, :last_run_at) "
         "ON CONFLICT (account_id) DO NOTHING"
-    ), {"account_id": account_id, "activated_at": at, "processed_watermark": at})
+    ), {"account_id": account_id, "activated_at": at,
+        "processed_watermark": at, "last_run_at": at})
     await db.commit()
     _log.info("crm.auto_lead_activated", account_id=account_id)
     return await _read_cursor(db, account_id)
+
+
+def _aware(value: Any) -> datetime:
+    """A stored instant as tz-aware UTC.
+
+    ``TIMESTAMPTZ`` comes back aware from asyncpg; this exists so that a naive
+    value from any other source cannot raise mid-cycle on the subtraction and
+    take the whole step down through the hook's ``except``.
+    """
+    if not isinstance(value, datetime):
+        return now()
+    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+
+
+async def _reanchor_if_dormant(db: Any, account_id: str, cursor: Any) -> bool:
+    """Did this step stop running? Then the ON epoch ended; start a new one.
+
+    ``activated_at`` guards a deep RESYNC. It does nothing about a flag that
+    was on, turned off for four weeks and turned back on — the cursor still
+    carries the old anchor, so the first ON cycle mints the whole OFF window
+    at once, unattended, into a live tenant. Re-anchoring is what makes
+    ``activated_at`` mean *the current ON epoch* rather than *the first time
+    anyone ever enabled this*.
+
+    ⚠️ **Dormancy is measured on ``last_run_at``, not on
+    ``processed_watermark``** — a deliberate departure from the shape first
+    prescribed, for two reasons that both bite in production:
+
+    * the watermark tracks MAIL, not runs. A mailbox that is simply quiet over
+      a weekend has a watermark 60 hours old while this step has run faithfully
+      every 600s, so a watermark-based test re-anchors it and the first message
+      to arrive on Monday — the one this whole feature exists to catch — falls
+      before the new anchor and mints nothing. Every Monday.
+    * a genuinely poison head message holds the watermark still ON PURPOSE
+      (property 5). A watermark-based test would then re-anchor after an hour
+      and skip the very backlog the stall was protecting, quietly undoing the
+      stall it was supposed to make visible.
+
+    Both directions fail closed: an OFF window and a real outage each skip
+    their backlog. A missed lead is hand-creatable and visible in the mailbox;
+    27 unattended pushes into the live Zoho tenant are neither.
+    """
+    gap = (now() - _aware(cursor.last_run_at)).total_seconds()
+    if gap <= REANCHOR_GAP_SECONDS:
+        return False
+    at = now()
+    await db.execute(text(
+        "UPDATE crm_auto_lead_cursors "
+        "SET activated_at = :activated_at, "
+        "processed_watermark = :processed_watermark, "
+        "last_run_at = :last_run_at, updated_at = now() "
+        "WHERE account_id = :account_id"
+    ), {"account_id": account_id, "activated_at": at,
+        "processed_watermark": at, "last_run_at": at})
+    await db.commit()
+    _log.warning("sync.auto_lead_reanchored", account_id=account_id,
+                 gap_seconds=int(gap), threshold_seconds=REANCHOR_GAP_SECONDS)
+    return True
+
+
+async def _stamp_cursor(
+    db: Any, account_id: str, *, run_at: Any, watermark: Any = None,
+) -> None:
+    """Record that the step ran, and how far it got.
+
+    ``last_run_at`` moves on EVERY cycle — that is what stops a quiet mailbox
+    looking dormant. ``processed_watermark`` moves only when there is a
+    successful prefix to move it over, which is what stops a failure being
+    treated as work done.
+    """
+    assignments = ["last_run_at = :last_run_at", "updated_at = now()"]
+    params: dict[str, Any] = {"account_id": account_id, "last_run_at": run_at}
+    if watermark is not None:
+        assignments.insert(0, "processed_watermark = :processed_watermark")
+        params["processed_watermark"] = watermark
+    await db.execute(text(
+        f"UPDATE crm_auto_lead_cursors SET {', '.join(assignments)} "
+        "WHERE account_id = :account_id"
+    ), params)
 
 
 def _cursor_params(account_id: str, cursor: Any) -> dict[str, Any]:
@@ -277,17 +469,54 @@ def _cursor_params(account_id: str, cursor: Any) -> dict[str, Any]:
     }
 
 
-async def _load_candidates(db: Any, account_id: str, cursor: Any) -> list[Any]:
+async def _load_candidates(
+    db: Any, account_id: str, cursor: Any,
+) -> tuple[list[Any], Any]:
     """Classified inbox mail this account has not been considered for yet.
 
     Both cursor predicates apply. Ordered by ``rules_processed_at`` ascending
     so the batch's maximum IS the new watermark — ordering by ``received_at``
     would advance the cursor past messages the cap left behind.
+
+    Fetches one MORE than the cap and returns that extra row's stamp as the
+    second element (``None`` when the batch was short). Peeking one row is what
+    turns "there is more" from an inference off a full page into a fact, and it
+    is also the only way to know whether the cap fell *inside* a group of rows
+    sharing a timestamp — see the caller.
     """
-    return (await db.execute(
+    rows = list((await db.execute(
         text(_CANDIDATE_SQL),
-        {**_cursor_params(account_id, cursor), "limit": MAX_CANDIDATES_PER_CYCLE},
-    )).fetchall()
+        {**_cursor_params(account_id, cursor),
+         "limit": MAX_CANDIDATES_PER_CYCLE + 1},
+    )).fetchall())
+    if len(rows) > MAX_CANDIDATES_PER_CYCLE:
+        return (rows[:MAX_CANDIDATES_PER_CYCLE],
+                rows[MAX_CANDIDATES_PER_CYCLE].rules_processed_at)
+    return rows, None
+
+
+def _drop_boundary_group(
+    candidates: list[Any], stats: dict[str, int],
+) -> list[Any]:
+    """Drop the trailing rows that share the cap's last timestamp.
+
+    The watermark is a timestamp, so advancing it to a stamp the cap cut
+    *through* would step over the rest of that group forever. Dropping the
+    whole boundary group means the next cycle sees it complete; the rows come
+    back deduped, so re-considering them is free.
+
+    ⚠️ Theoretically this can empty the batch — if every row in a full cap
+    shares one stamp, nothing is left and the cursor cannot move. That is
+    reported as a stall rather than as a quiet cycle. It cannot happen in
+    production: ``rules_processed_at`` is stamped per message inside the rules
+    runner's own loop, one transaction per message, so 200 messages carrying a
+    single identical instant would require 200 messages to be stamped by one
+    statement — which no writer of that column does.
+    """
+    boundary = candidates[-1].rules_processed_at
+    kept = [row for row in candidates if row.rules_processed_at != boundary]
+    stats["boundary_deferred"] = len(candidates) - len(kept)
+    return kept
 
 
 async def _count_overflow(
@@ -295,24 +524,14 @@ async def _count_overflow(
 ) -> int:
     """How many candidates the cap left for the next cycle.
 
-    Only asked when the batch came back full — a short batch is the whole
-    remainder by definition, and a COUNT on every quiet cycle is a scan
+    Only asked when the fetch came back over the cap — a short batch is the
+    whole remainder by definition, and a COUNT on every quiet cycle is a scan
     nobody reads.
     """
-    if taken < MAX_CANDIDATES_PER_CYCLE:
-        return 0
     total = (await db.execute(
         text(_CANDIDATE_COUNT_SQL), _cursor_params(account_id, cursor),
     )).scalar()
     return max(0, int(total or 0) - taken)
-
-
-async def _advance_watermark(db: Any, account_id: str, watermark: Any) -> None:
-    await db.execute(text(
-        "UPDATE crm_auto_lead_cursors "
-        "SET processed_watermark = :processed_watermark, updated_at = now() "
-        "WHERE account_id = :account_id"
-    ), {"account_id": account_id, "processed_watermark": watermark})
 
 
 # ── Who the sender is ───────────────────────────────────────────────────────
@@ -334,6 +553,21 @@ async def _internal_domains(
     return frozenset(domain for domain in domains if domain)
 
 
+def _is_internal_domain(domain: str, internal_domains: frozenset[str]) -> bool:
+    """Is this domain ours, or a SUBDOMAIN of one of ours?
+
+    Exact matching alone let ``cfo@mail.fracktal.in`` through while
+    ``cfo@fracktal.in`` was caught — and mail from a company's own
+    ``mail.``/``corp.``/regional subdomains is routine. The suffix test is
+    anchored on a leading dot so ``notfracktal.in`` is not a subdomain of
+    ``fracktal.in``, which is the mistake a bare ``endswith`` makes.
+    """
+    return any(
+        domain == internal or domain.endswith(f".{internal}")
+        for internal in internal_domains
+    )
+
+
 def _is_external_sender(
     address: str, account_address: str | None, internal_domains: frozenset[str],
 ) -> bool:
@@ -345,12 +579,11 @@ def _is_external_sender(
     **Gate 2** is the configured internal-domain list. It is not a restatement
     of gate 1: ``sender_scope`` fails SAFE to ``"external"`` on an unparseable
     address (the wrong direction when the consequence is a lead row in a live
-    Zoho tenant), and the extra ``org_domains`` reach it through a different
-    normalisation than ``resolve_org_domains`` applies — so a colleague on the
-    company's SECOND domain, configured by somebody who pasted an address
-    rather than a bare host, is external to gate 1 and internal to gate 2.
-    Routing the configured list through gate 2 only means there is exactly one
-    normalisation of it here rather than two that can disagree.
+    Zoho tenant), the extra ``org_domains`` reach it through a different
+    normalisation than ``resolve_org_domains`` applies, and it matches domains
+    exactly where this one matches subdomains too. Routing the configured list
+    through gate 2 only means there is exactly one normalisation of it here
+    rather than two that can disagree.
 
     An address with no domain at all fails gate 2: we do not mint a lead from
     something we could not parse.
@@ -358,7 +591,7 @@ def _is_external_sender(
     if sender_scope(address, account_address or "") != "external":
         return False
     domain = normalize_domain(address)
-    return bool(domain) and domain not in internal_domains
+    return bool(domain) and not _is_internal_domain(domain, internal_domains)
 
 
 async def _is_unknown_sender(db: Any, account_id: str, address: str) -> bool:
@@ -367,12 +600,13 @@ async def _is_unknown_sender(db: Any, account_id: str, address: str) -> bool:
     1. the cold-sender memo: this account has already decided something about
        this address (flagged cold, or whitelisted). Either way it is not a
        stranger who just wrote in.
-    2. have we ever emailed them. ⚠️ ``@>`` is exact, as Postgres is, so a
-       recipient stored with different casing escapes this probe — which is
-       part of why it is not the only step.
+    2. have we ever emailed them — case-insensitively, unlike the containment
+       form the cold blocker uses. See :data:`_EVER_EMAILED_SQL`.
     3. ours: no CRM row already carries the address. A contact or a lead means
        the company already knows this person, and a second lead for them is
-       the duplicate a human then has to merge.
+       the duplicate a human then has to merge. This step is also what makes
+       re-considering a message free, which is what lets the watermark hold
+       still after a failure without costing anything.
     """
     memo = (await db.execute(text(
         "SELECT status FROM email_cold_senders "
@@ -380,13 +614,8 @@ async def _is_unknown_sender(db: Any, account_id: str, address: str) -> bool:
     ), {"account_id": account_id, "address": address})).fetchone()
     if memo:
         return False
-    replied = (await db.execute(text(
-        "SELECT 1 FROM email_messages "
-        "WHERE account_id = :account_id AND LOWER(folder) = :folder "
-        "AND to_addresses @> :recipient LIMIT 1"
-    ), {
-        "account_id": account_id, "folder": SENT_FOLDER,
-        "recipient": json.dumps([{"email": address}]),
+    replied = (await db.execute(text(_EVER_EMAILED_SQL), {
+        "account_id": account_id, "folder": SENT_FOLDER, "address": address,
     })).fetchone()
     if replied:
         return False
@@ -401,12 +630,23 @@ async def _is_unknown_sender(db: Any, account_id: str, address: str) -> bool:
 
 # ── One candidate ───────────────────────────────────────────────────────────
 
+def _clip(value: str | None, limit: int) -> str | None:
+    """Bound one attacker-controlled string, marking it when it bites."""
+    if value is None:
+        return None
+    text_value = str(value)
+    if len(text_value) <= limit:
+        return text_value
+    return text_value[: limit - len(CLIP_MARKER)] + CLIP_MARKER
+
+
 def _sender(message: Any) -> tuple[str, str]:
     """``(address, display name)`` off the message's ``from_address`` JSONB.
 
     The driver hands back a dict or the raw text depending on how the row was
     read; both shapes appear in this codebase, so both are handled here rather
-    than at four call sites.
+    than at four call sites. The display name is CLIPPED here, once, so every
+    consumer of it downstream is bounded by construction.
     """
     raw = getattr(message, "from_address", None)
     if not isinstance(raw, dict):
@@ -418,7 +658,7 @@ def _sender(message: Any) -> tuple[str, str]:
         raw = {}
     return (
         str(raw.get("email") or "").strip().lower(),
-        str(raw.get("name") or "").strip(),
+        _clip(str(raw.get("name") or "").strip(), MAX_NAME_CHARS) or "",
     )
 
 
@@ -463,55 +703,77 @@ def _principal(owner_email: str) -> UserContext:
 async def _consider(
     db: Any, account: Any, message: Any, internal_domains: frozenset[str],
     seen: set[str], stats: dict[str, int],
-) -> None:
-    """Decide about ONE candidate message, and count the decision."""
+) -> bool:
+    """Decide about ONE candidate message, and count the decision.
+
+    Returns True when the LEAD write failed — the only outcome that must hold
+    the watermark. A failure to write the lead's first activity does not: the
+    lead is already committed, so re-considering the message next cycle finds
+    it at step 3 and skips, meaning the activity would never be retried and
+    the cursor would stall forever on work that cannot be redone.
+    """
     address, display_name = _sender(message)
     if not address:
         stats["skipped_unusable"] += 1
-        return
+        return False
     if address in seen:
         # In-batch de-duplication. Not an optimisation: the SELECT guard in
         # `_is_unknown_sender` reads a row `create_record` has committed on
         # ANOTHER session, so without this a sender who wrote twice in one
         # batch is a coin flip between one lead and two.
         stats["deduped_in_batch"] += 1
-        return
+        return False
     seen.add(address)
     if not _is_external_sender(address, account.email_address, internal_domains):
         stats["skipped_internal"] += 1
-        return
+        return False
     if not await _is_unknown_sender(db, str(account.id), address):
         stats["skipped_known"] += 1
-        return
+        return False
     try:
-        async with savepoint(db):
-            await _mint_lead(db, account, message, address, display_name)
+        lead = await _create_lead(account, address, display_name)
     except Exception as exc:
         stats["errors"] += 1
         _log.warning("crm.auto_lead_message_failed",
                      account_id=str(account.id),
                      message_id=str(getattr(message, "id", "")),
                      error=str(exc)[:200])
-        return
+        return True
+    # Counted the moment the lead is COMMITTED, not after its activity: the
+    # row exists and will push to Zoho either way, and a log line reading
+    # `created=0` beside a lead that is already queued is the report that
+    # sends somebody looking in the wrong place.
     stats["created"] += 1
+    try:
+        async with savepoint(db):
+            await _log_origin_activity(
+                db, lead, account, message, address, display_name,
+            )
+    except Exception as exc:
+        stats["activity_errors"] += 1
+        _log.warning("crm.auto_lead_activity_failed",
+                     account_id=str(account.id),
+                     lead_id=str(lead.get("id", "")),
+                     message_id=str(getattr(message, "id", "")),
+                     error=str(exc)[:200])
+    return False
 
 
-async def _mint_lead(
-    db: Any, account: Any, message: Any, address: str, display_name: str,
-) -> None:
-    """Create the lead, then log the originating message against it.
+async def _create_lead(
+    account: Any, address: str, display_name: str,
+) -> dict[str, Any]:
+    """Create the lead through the CRM's own service write path.
 
-    The lead goes through ``records.create_record`` — never a raw INSERT.
-    That path is where ``_resolve_status`` (the NOT NULL ``status_id``), the
-    ``owner_email`` default, ``validate_source`` and, through ``insert_row``,
+    ``records.create_record`` — never a raw INSERT. That path is where
+    ``_resolve_status`` (the NOT NULL ``status_id``), the ``owner_email``
+    default, ``validate_source`` and, through ``insert_row``,
     ``mark_dirty_on_insert`` all live; raw SQL silently loses all four, and
     only the last of them is visible in the row afterwards.
 
-    ``create_record`` opens and commits its OWN session (it is the same
-    function ``POST /crm/leads`` calls), so the lead is committed before the
-    activity is written. A failure between the two therefore leaves a lead with
-    an empty timeline — logged, counted, and the lesser of the two evils: the
-    alternative is a second, divergent write path for the record itself.
+    It opens and commits its OWN session (it is the same function
+    ``POST /crm/leads`` calls), which is also why the caller counts a created
+    lead before it writes the activity: by the time this returns, the row is
+    committed and queued for Zoho.
     """
     first_name, last_name = _split_display_name(display_name)
     # Absent, never explicitly null: ``clean_payload`` is ``exclude_unset``, so
@@ -524,10 +786,9 @@ async def _mint_lead(
         fields["first_name"] = first_name
     if last_name:
         fields["last_name"] = last_name
-    lead = await create_record(
+    return await create_record(
         LEADS, LeadIn(**fields), _principal(str(account.user_id)),
     )
-    await _log_origin_activity(db, lead, account, message, address, display_name)
 
 
 async def _log_origin_activity(
@@ -546,7 +807,7 @@ async def _log_origin_activity(
     """
     await insert_row(db, "crm_activities", {
         "type": ACTIVITY_TYPE,
-        "subject": getattr(message, "subject", None),
+        "subject": _clip(getattr(message, "subject", None), MAX_SUBJECT_CHARS),
         "body": None,
         "occurred_at": getattr(message, "received_at", None),
         "meta": {

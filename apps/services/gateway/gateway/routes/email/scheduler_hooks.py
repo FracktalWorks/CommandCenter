@@ -120,18 +120,28 @@ async def process_new_mail(account_id: str) -> None:
                      error=str(exc)[:200])
     try:
         # WS-26d-autolead. ⚠️ The flag is checked HERE, before the step is
-        # entered — never inside it. With CRM_AUTO_LEAD off no CRM code runs
-        # and no CRM query is issued on the mail path at all; a gate that
-        # lived inside `create_leads_from_new_mail` would open a database
+        # entered — never inside it. With CRM_AUTO_LEAD off the step is not
+        # imported, not called, opens no session and issues no query; a gate
+        # that lived inside `create_leads_from_new_mail` would open a database
         # session on every sync cycle of every mailbox to discover it had
-        # nothing to do. `auto_lead_enabled` is the flag's ONE definition and
-        # is imported rather than restated for the same reason.
-        from gateway.routes.crm.auto_lead import (
-            auto_lead_enabled,
-            create_leads_from_new_mail,
-        )
+        # nothing to do.
+        #
+        # The predicate itself is imported above the gate, and that is
+        # deliberate: `auto_lead_enabled` is the flag's ONE definition, and
+        # reading `settings.crm_auto_lead` here instead would make two places
+        # responsible for agreeing what the flag means — which is how a loop
+        # ends up running with its flag off (the `sync_enabled` precedent).
+        # The cost is one `sys.modules` lookup, since `routes/crm` is mounted
+        # by `main.py` at boot regardless of this flag.
+        #
+        # ⚠️ Divergence from the five steps above, on purpose: the import sits
+        # INSIDE the try. A `routes/crm` module that fails to import must be
+        # logged like any other CRM failure, not raised out of the mail path.
+        from gateway.routes.crm.auto_lead import auto_lead_enabled
 
         if auto_lead_enabled():
+            from gateway.routes.crm.auto_lead import create_leads_from_new_mail
+
             await create_leads_from_new_mail(account_id)
     except Exception as exc:  # noqa: BLE001
         _log.warning("sync.auto_lead_failed", account_id=account_id,

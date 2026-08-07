@@ -165,6 +165,29 @@ _JSONB_LOWER_CMP = re.compile(
 #: reason `_IN_LITERALS` exists: a fake that cannot see a predicate agrees with
 #: the bug that deletes it.
 _JSONB_CONTAINS = re.compile(r"(?:(\w+)\.)?(\w+)\s*@>\s*:(\w+)", re.I)
+#: ``EXISTS (SELECT 1 FROM jsonb_array_elements(to_addresses) recipient
+#: WHERE lower(recipient->>'email') = :address)`` — the CASE-FOLDING form of
+#: the same "have we ever emailed them" question, which WS-26d-autolead asks
+#: because `@>` is case-exact and a reply from `asha@` after we wrote to
+#: `Asha@` is the same person.
+#:
+#: ⚠️ **Reading it is not the hard part; STRIPPING it is.** Its inner
+#: comparison is literally `lower(recipient->>'email') = :address`, which
+#: `_JSONB_LOWER_CMP` below matches — and that reader would then filter the
+#: OUTER `email_messages` rows on a `recipient` column they do not have,
+#: answering "no rows" for a correct query. Same trap `_ACCOUNT_SCOPE`
+#: documents, one subquery shape further on. Evaluated and removed FIRST.
+#:
+#: The element alias is a backreference, so a statement whose WHERE clause
+#: compares a DIFFERENT alias than the one `jsonb_array_elements` declared
+#: does not match here and fails the "could not read the WHERE clause" guard
+#: rather than being quietly accepted.
+_JSONB_ANY_LOWER = re.compile(
+    r"EXISTS\s*\(\s*SELECT\s+1\s+FROM\s+jsonb_array_elements\(\s*"
+    r"(?:(\w+)\.)?(\w+)\s*\)\s+(\w+)\s+WHERE\s+lower\(\s*\3->>'(\w+)'\s*\)"
+    r"\s*=\s*:(\w+)\s*\)",
+    re.I,
+)
 #: ``LEFT JOIN email_thread_status ts ON ts.account_id = em.account_id AND
 #: ts.thread_id = em.thread_id`` — a COMPOSITE key. `_LEFT_JOIN` above demands
 #: literally ``ON <alias>.id = base.<fk>`` and matches nothing here.
@@ -474,14 +497,20 @@ class FakeCrmDB:
         """
         return _FakeSavepoint(self)
 
-    def fail_on(self, needle: str, *, times: int = 1) -> None:
-        """Make the next ``times`` statements containing *needle* raise.
+    def fail_on(self, needle: str, *, times: int = 1, after: int = 0) -> None:
+        """Make ``times`` statements containing *needle* raise, skipping the
+        first ``after`` matches.
 
         Simulates a driver-level statement error — a `numeric field overflow`,
         a CHECK violation — which is the class of failure a plain
         ``try/except`` around a record cannot actually contain in Postgres.
+
+        ``after`` exists because *where* in a batch the failure lands is the
+        property under test in WS-26d-autolead: a cursor that advances over the
+        successful PREFIX behaves identically to one that advances
+        unconditionally when the very first record is the one that fails.
         """
-        self._failures.append([needle, times])
+        self._failures.append([needle, times, after])
 
     async def execute(self, sql: Any, params: dict | None = None) -> _Result:
         statement = " ".join(str(sql).split())
@@ -490,6 +519,9 @@ class FakeCrmDB:
         self.calls.append((statement, args))
         for entry in self._failures:
             if entry[0] in statement and entry[1] > 0:
+                if entry[2] > 0:
+                    entry[2] -= 1
+                    continue
                 entry[1] -= 1
                 raise RuntimeError(
                     f"fake driver error on statement containing {entry[0]!r}"
@@ -747,6 +779,21 @@ class FakeCrmDB:
                 allowed &= {str(args.get(aid))}
             rows = [row for row in rows if str(row.get(column)) in allowed]
             where = where.replace(scope.group(0), "")
+        # FIRST, and stripped before anything else looks at the clause — its
+        # inner `lower(recipient->>'email') = :address` is exactly what
+        # `_JSONB_LOWER_CMP` below matches, and that reader would filter the
+        # OUTER rows on a `recipient` column they do not have.
+        for _alias, column, _element, key, param in _JSONB_ANY_LOWER.findall(where):
+            seen = True
+            wanted = str(args.get(param) or "").lower()
+            rows = [
+                row for row in rows
+                if any(
+                    str((element or {}).get(key) or "").lower() == wanted
+                    for element in (row.get(column) or [])
+                )
+            ]
+        where = _JSONB_ANY_LOWER.sub("", where)
         for _alias, column, key, single, listed in _JSONB_LOWER_CMP.findall(where):
             seen = True
             names = (

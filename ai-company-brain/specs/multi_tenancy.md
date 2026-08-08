@@ -74,8 +74,17 @@ and an `ALTER` on live rows instead of a one-line default on empty ones.
 
 ### D-MT-1 — Can one person belong to more than one organization?
 
-`DECISION — OWNER-ANSWER REQUIRED.` Everything else in this document is downstream of it, and
-it is a product question about how the SaaS is sold rather than a technical one.
+`DECISION (owner-delegated 2026-08-08).` Put to the owner with both options costed; the
+answer was *"go ahead with what you think is right"*, so the recommendation below was
+taken as the decision. **ANSWERED: (a) — one person, one organization, for v1.**
+Everything else in this document is downstream of it.
+
+**This is the reversible direction, which is why it was safe to take.** (a) → (b) is a
+migration plus an org-switcher, run once, while accounts are few. (b) → (a) takes a
+capability away from people already using it. Given a delegated choice between a door
+that stays open and one that closes, the open one wins — and the moment the product is
+sold to an agency or a consultancy, revisit this before the first such tenant onboards
+rather than after.
 
 * **(a) One person, one organization.** `app_user.email` stays globally unique. A request's
   tenant is *derived* from `X-User-Email`, so the identity seam every app already reads does
@@ -90,11 +99,11 @@ it is a product question about how the SaaS is sold rather than a technical one.
   `pm_project_grants.subject` and `pm_task_assignees.assignee` are bare emails (D-PM-4), and
   under (b) a bare email no longer identifies a person.
 
-**Agent's recommendation: (a) for v1**, because it preserves the `X-User-Email` seam the whole
+**Chosen: (a) for v1**, because it preserves the `X-User-Email` seam the whole
 platform is built on and can be relaxed later behind an org-switcher, whereas (b) is a change
-to identity itself and cannot be deferred once accounts exist. **This is a recommendation, not
-a proposal** — if the intended customers are agencies or consultancies, (b) is right and it is
-much cheaper to decide that now than after the first tenant onboards.
+to identity itself and cannot be deferred once accounts exist. **The trigger to revisit is
+named, not vague:** the first customer who needs one human in two organizations. Until then
+`X-User-Email` alone resolves the tenant, and no app's auth seam changes.
 
 ### D-MT-2 — Where is isolation *enforced*?
 

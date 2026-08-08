@@ -39,7 +39,7 @@ rather than a rewrite, and one is what makes it currently unsafe.
 
 | Fact | Anchor | Why it matters |
 |---|---|---|
-| **One engine, one session factory, one `get_db()`** for the whole process | `packages/acb_common/acb_common/db.py:107-136`; `tests/unit/test_db_engine_seam.py` fails the build if a second `create_async_engine` appears | **The single most important finding.** Tenant scoping installs at *one* function, not at 3,000 query sites. §1.3 |
+| **One engine, one session factory, one `get_db()`** on the gateway **request path**, plus **six enumerable non-request paths** (§0.1) | `packages/acb_common/acb_common/db.py:107-136`; `tests/unit/test_db_engine_seam.py` fails the build if a new `create_async_engine` appears outside its allow-list | **The single most important finding.** Tenant scoping installs at a *named, bounded* set of connection sites, not at 3,000 query sites. ⚠️ **Not literally one — read §0.1 before quoting "one seam".** §1.3 |
 | **`EffectiveAccess.intersect()` already exists** and is already used to narrow an agent's access to its member's | `packages/acb_auth/acb_auth/permissions.py:366-374` | Module entitlements are an intersection with a mask. The mechanism is already written and already tested. §2.4 |
 | **`/v1/chat/completions` is the single LLM choke point**, and `_emit_usage()` already computes tokens + cache stats + USD cost per call, including for streamed responses | `apps/services/gateway/gateway/routes/v1_compat.py`; `packages/acb_llm/acb_llm/client.py:552-612`, rebuilt-from-chunks path at `v1_compat.py:563-573` | Reselling AI is ~4 additions to a seam that already meters. It is not a new subsystem. §3 |
 | **`organization_id` is on 3 of 143 tables** and is read by **zero** authorization decisions | `130_org_access_control.sql:56,86`; `138_…sql:42`; `tenancy_and_visibility.md` §1.1 | The retrofit is 140 tables — but see §1.3 for why that is a generated migration, not 140 tickets |
@@ -50,6 +50,49 @@ rather than a rewrite, and one is what makes it currently unsafe.
 
 Scale of the tree, for cost estimates below: **156 migrations · 143 tables · 209 gateway
 Python files · ~142k Python LOC · ~149k TypeScript LOC.**
+
+### 0.1 The connection inventory — correction, 2026-08-08
+
+> ⚠️ **The first draft of this document said "one engine, one `get_db()`" without
+> qualification. That was overstated and is corrected here.** It is true of the gateway
+> request path and false of the process as a whole. An implementer who took the
+> unqualified claim at face value would bind the tenant in `get_db()`, see the request
+> path work, and ship six unbound connection paths.
+
+Every path that opens a database connection, measured repo-wide:
+
+| # | Path | Driver | Carries tenant data? | Tenant binding needed |
+|---|---|---|---|---|
+| 1 | `acb_common/db.py` — the shared async seam | SQLAlchemy/asyncpg | **Yes** — the whole request path | `SET LOCAL app.tenant_id` from the session |
+| 2 | `email_ingestion/scheduler.py:160,545,578` | SQLAlchemy | **Yes** | Per-run binding from the job's org. Allow-listed in the seam test as *"separate process; per-run engines"* |
+| 3 | `email_ingestion/inbound.py:271` | SQLAlchemy | **Yes** | Per-call binding. Same allow-list entry |
+| 4 | `acb_graph/db.py:32` — entity graph | SQLAlchemy **sync** `create_engine` | **Yes** | Binding required. ⚠️ **The seam test only inspects `create_async_engine`, so this file is unguarded by it** |
+| 5 | `acb_llm/key_store.py:83-108` | raw `psycopg` | Provider keys | Becomes per-org (§6.3) |
+| 6 | `acb_llm/model_config.py:52-76` | raw `psycopg` | Model config | Becomes per-org (§6.3) |
+| 7 | `acb_common/org_settings.py:55-81` | raw `psycopg` | Org settings | Already org-shaped; must bind |
+| 8 | `acb_memory/mem0_client.py:99` | hands a conninfo to **Mem0's own** pgvector client | **Yes** — all memory | Binding must reach Mem0's connections, or memory is scoped by the scope string alone |
+
+**This makes RLS more important, not less — and it is the reason to prefer RLS over
+application-level filtering or `search_path`.** A policy is enforced by the *server*,
+so it covers paths 4–8 no matter which driver opens them and no matter what any
+future package forgets. And it **fails closed**: with `app.tenant_id` unset,
+`current_setting('app.tenant_id', true)` is NULL, `organization_id = NULL` is NULL, and
+the query returns **zero rows**. An unconverted path breaks loudly in testing instead of
+silently serving another tenant's data in production.
+
+**Consequences for Phase 1 (§5), which are now explicit acceptance criteria:**
+
+1. All eight paths bind a tenant. Paths 2–4 bind from the **job's** org, not a session.
+2. **Extend `test_db_engine_seam.py` to `create_engine` as well as
+   `create_async_engine`** — path 4 exists today precisely because the ratchet does not
+   cover the sync call.
+3. Add a companion ratchet for **`psycopg.connect`**, with the same allow-list-with-a-reason
+   discipline. Paths 5–7 were invisible to the existing test.
+4. **Mem0 (path 8) is the genuinely awkward one** — the connection is opened by a
+   third-party library from a conninfo string. Either bind via connection options in the
+   conninfo, or give Mem0 its own tenant-scoped database role per tenant, or accept that
+   memory isolation rests on the scope string and pin that decision here. **Do not leave
+   it undecided.**
 
 ---
 
@@ -109,8 +152,9 @@ enterprise customers who pay for it.**
 *"put a `WHERE organization_id = ?` on 111 tables and every query in the gateway."*
 **That objection is wrong, and the reason is `acb_common/db.py`.**
 
-Because there is exactly **one** engine and **one** `get_db()` (§0), tenancy installs in
-three places and **zero** existing queries change:
+Because the connection sites are a **bounded, named set of eight** (§0.1) rather than
+3,000 query sites, tenancy installs at those eight plus three structural changes — and
+**zero existing `SELECT`/`INSERT` statements are rewritten**:
 
 **(a) One migration, generated — not 140 hand-written ones.**
 ```sql
@@ -229,7 +273,123 @@ as `email | group:<slug> | org`. **That ladder is unchanged and still binding.**
 is not a Center; a Center is never a deployment. Do not introduce a third scoping doctrine
 (§3.2's standing rule).
 
-### 1.6 The surfaces RLS does NOT cover — decide each, or they leak
+### 1.6 Physical layout at multi-GB per tenant *(added 2026-08-08, owner question)*
+
+Pooling is a **logical** isolation decision. It says nothing about physical layout, and at
+several GB per customer the physical layout is a separate design problem that must be
+answered whichever tenancy model wins. Answered here so "pooled" is not mistaken for "one
+undifferentiated heap".
+
+**Where the gigabytes actually are, measured:**
+
+| Store | Shape | Weight |
+|---|---|---|
+| **pgvector embeddings** | `email_embeddings.embedding vector(1536)` (`73_…sql:29`), `whatsapp_embeddings vector(1536)` (`111_…sql:31`), `transcript_segment.embedding vector(1024)` (`95_…sql:79`), `entity.embedding vector(1024)` (`01_schema.sql:86`), plus Mem0's own | **Dominant term.** A 1536-dim float32 vector is ~6 KB; with an HNSW index the on-disk cost is roughly double. 100k embedded emails ≈ **1–1.5 GB for one tenant's email index alone** |
+| **`agent_blob.content BYTEA`** | Blobs stored **inside Postgres** (`71_agent_blob_store.sql:30`), plus a versioned history table | Grows without bound; the natural first candidate to evict |
+| **Email bodies + FTS** | `email_messages` + GIN `to_tsvector` indexes (`72_email_search_fts.sql:31`) | Large, but ordinary relational data |
+| **Meeting media** | `meeting_media.artifact_path TEXT` → filesystem (`NOTES_MEDIA_DIR`, `95_…sql:56`) | ✅ **Already outside Postgres.** Good — keep it that way |
+
+> **The reframe that matters:** for most tenants the "multiple GB" is **embeddings and
+> blobs, not rows.** Move `agent_blob` to object storage keyed by `<org_id>/…` and the
+> relational working set per tenant drops to the hundreds of MB. **Do that regardless of
+> tenancy model** — a BYTEA column is the wrong home for file content in any topology.
+
+**What actually constrains a single Postgres — and it is not total size.** Postgres runs
+multi-TB routinely; 100 tenants × 5 GB is 500 GB, which is unremarkable. The three real
+constraints are:
+
+1. **Working set vs RAM.** One instance with a large `shared_buffers` serves the union of
+   all tenants' hot pages better than N instances that each reserve their own and cannot
+   lend. This is the single strongest efficiency argument for pooling and it is the one
+   that container-per-tenant-on-one-VPS gets exactly backwards (§1.7).
+2. **HNSW index memory.** The vector indexes are the memory-hungry part, and a pooled
+   index means every tenant's search shares one structure. **This is the one place where
+   per-tenant physical separation is worth considering on merit rather than on fear** —
+   see the partitioning rule below.
+3. **Restore time (RTO).** A multi-TB `pg_restore` is measured in hours. This is a real
+   argument for keeping the pooled instance from growing unboundedly, and it is
+   independent of isolation.
+
+**Three rules that make pooled work at this data size:**
+
+- **Partition the heavy tables by tenant.** Declarative partitioning on `organization_id`
+  for `email_messages`, `email_embeddings`, `chat_message`, `audit_event` and the vector
+  tables. Partition pruning means a query for tenant A never touches tenant B's pages —
+  most of the locality and noisy-neighbour benefit of separate databases, inside one
+  instance. **Use LIST partitions for the few largest tenants and a HASH/default partition
+  for the long tail**; one partition per tenant across all tenants recreates the catalog
+  pressure that sinks schema-per-tenant (§1.8).
+- **Per-tenant logical backup is a required capability, not a tenancy-model side effect.**
+  "Restore this one customer to yesterday" must be answerable, and in a pooled instance
+  `pg_restore` cannot answer it. Build a per-tenant logical export/import job in Phase 1.
+  Note this is the one genuine capability that database-per-tenant gives for free — and
+  buying it costs one job, not N databases.
+- **Keep an eviction path.** `tenant_placement` (§1.5) is what makes a large tenant
+  movable: export, load into its own database, flip the row. **A tenancy model you cannot
+  reverse is the actual risk**, and this is the cheapest insurance against picking wrong.
+
+### 1.7 Rejected — one container per organization on the same VPS
+
+Considered explicitly (owner question, 2026-08-08) because it is a different proposal from
+one VPS per customer and deserves its own answer. **It is the worst of the three options**,
+and this is not a close call:
+
+1. **It fragments the one resource that matters.** N Postgres containers each hold their
+   own `shared_buffers`, WAL, autovacuum workers and connection slots, and **cannot lend
+   memory to each other**. Twenty containers on a 16 GB box get well under 1 GB of cache
+   each; one pooled instance gives the *union* of hot working sets the whole cache. At
+   multi-GB tenants with HNSW indexes (§1.6), this is decisive.
+2. **It does not deliver the isolation it appears to.** Same kernel, same page cache
+   pressure, same disk queue. A tenant running a heavy import still starves the others on
+   IOPS. Container boundaries do not partition a shared spindle.
+3. **It keeps the entire operational cost of database-per-tenant.** N migration runs, N
+   backup jobs, N restore procedures, N monitoring targets, N connection pools — all
+   unaffected by whether the containers share a VPS.
+4. **It adds a failure mode neither other option has:** one box's resource exhaustion or
+   reboot takes down *every* tenant, so the blast radius is silo's ops cost with pool's
+   blast radius.
+
+**The honest summary:** dedicated containers only buy something when they are on
+**dedicated hardware** — which is the silo tier in §1.5, priced accordingly. On shared
+hardware they are ceremony.
+
+### 1.8 Rejected — schema-per-tenant *(the closest alternative; recorded properly)*
+
+This is the strongest option **not** chosen, and it was under-weighted in the first draft.
+It deserves a real entry rather than a dismissal.
+
+**What is genuinely good about it:** one Postgres instance, so §1.7's memory-pooling
+argument is preserved; `pg_dump -n <schema>` gives per-tenant backup for free; moving a
+tenant out later is mechanical; and the isolation story is easier to explain to a
+procurement team than an RLS policy.
+
+**Why it still loses, on one decisive property:**
+
+> **RLS fails closed. `search_path` fails open.**
+>
+> With RLS, an unset or wrong `app.tenant_id` yields **zero rows** — a loud, obvious,
+> immediate failure that surfaces in the first test. With schema-per-tenant, a wrong
+> `search_path` yields **a complete, valid-looking result set belonging to another
+> tenant** — silently, with no error, indistinguishable from correct behaviour until a
+> customer reports seeing someone else's data.
+
+Both models concentrate the trust in one per-request binding. They differ entirely in what
+happens when that binding is wrong, and for a system where §0.1 shows eight distinct
+connection paths, the failure mode is the whole argument.
+
+Two secondary costs: **catalog pressure** — 143 tables × N schemas, where the practical
+ceiling is in the low hundreds to low thousands of tenants before `pg_dump`, autovacuum
+and query planning degrade — and **migrations run N times** (better than N instances, but
+still N, against 156 files today).
+
+**Where it would win, stated so the call can be re-taken:** if the target is a few dozen
+large customers rather than many small ones, catalog pressure never arrives, per-tenant
+backup matters more than onboarding speed, and the procurement conversation is easier.
+That is the same condition under which the silo tier makes sense (§8 item 5) — so if the
+market turns out to be a few dozen enterprise accounts, **re-take this section, not just
+the tier mix.**
+
+### 1.9 The surfaces RLS does NOT cover — decide each, or they leak
 
 Postgres RLS protects Postgres. These do not run on Postgres:
 
@@ -612,7 +772,7 @@ Each phase is independently shippable and each one is sellable before the next e
 | Phase | Work | Est. | Gate |
 |---|---|---|---|
 | **0 — Blockers** | §6: per-run credential scoping, per-org provider keys, self-mutation containment | 1–2 wk | **Nothing ships to a second customer before this** |
-| **1 — Tenancy** | org_id + FORCE RLS on all tables (generated), `SET LOCAL` seam, `acb_app` role, background-job tenant binding, Redis prefixing, subdomain resolution, identity/membership split, build-failing coverage test | 3–4 wk | The big one. §1.3, §1.6 |
+| **1 — Tenancy** | org_id + FORCE RLS on all tables (generated), tenant binding at **all eight connection paths** (§0.1), `acb_app` role, `create_engine` + `psycopg.connect` ratchets, Mem0 decision, Redis prefixing, subdomain resolution, identity/membership split, per-tenant logical backup job, partitioning for the heavy tables, build-failing coverage test | 4–5 wk | The big one. §0.1, §1.3, §1.6, §1.9 |
 | **2 — Entitlements** | module catalog, entitlement + seat tables, `intersect()` mask, 402 vs 403, `ModuleGate` + upsell, non-HTTP gating | 2–3 wk | **Sell here.** Invoice by hand while proving the model. |
 | **3 — AI credits** | per-org virtual keys, Redis budget gate, rate card, `usage_event`, credit ledger, top-up | 2–3 wk | §3 |
 | **4 — Billing automation** | Stripe + Razorpay seam, webhooks → entitlements, dunning, Operator Console, reconciler | 3–4 wk | §4 |
@@ -700,6 +860,13 @@ Recorded so they are not re-proposed, and so the reasoning survives:
 
 1. **Container/database per customer as the default tier.** §1.4. Kept as a priced
    enterprise tier only.
+1b. **One container per organization on the same VPS.** §1.7 — it fragments the memory
+   that pooling exists to share, delivers no real isolation on shared hardware, keeps
+   every operational cost of database-per-tenant, and makes one box's failure everyone's.
+   Dedicated containers only buy something on dedicated hardware.
+1c. **Schema-per-tenant.** §1.8 — the strongest rejected alternative, and rejected on one
+   property: **RLS fails closed (zero rows), `search_path` fails open (another tenant's
+   rows, silently).** Re-take it if the market turns out to be a few dozen large accounts.
 2. **`X-Organization-Id` as the tenant source** (proposed in
    `multi_user_organization_research.md` §17.3). Client-settable tenancy is a one-line
    cross-tenant read. The tenant comes from the authenticated session or a tenant-scoped

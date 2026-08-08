@@ -59,7 +59,15 @@ Python files · ~142k Python LOC · ~149k TypeScript LOC.**
 > unqualified claim at face value would bind the tenant in `get_db()`, see the request
 > path work, and ship six unbound connection paths.
 
-Every path that opens a database connection, measured repo-wide:
+Every path that opens a database connection, measured repo-wide.
+
+> ⚠️ **Corrected 2026-08-08, and the correction is the lesson.** This table
+> originally listed **eight** paths and said "measured repo-wide". It was measured
+> across `apps/` and `packages/` — which is where the seam ratchets scan, and
+> therefore exactly where a blind spot cannot hide. **Two more live in
+> `scripts/`**, and one of them writes tenant data. The inventory was wrong in the
+> same shape as the thing it was documenting: a scan whose roots decide its
+> answer. Rows 9 and 10 were found by *building* the ratchet, not by reading.
 
 | # | Path | Driver | Carries tenant data? | Tenant binding needed |
 |---|---|---|---|---|
@@ -71,6 +79,8 @@ Every path that opens a database connection, measured repo-wide:
 | 6 | `acb_llm/model_config.py:52-76` | raw `psycopg` | Model config | Becomes per-org (§6.3) |
 | 7 | `acb_common/org_settings.py:55-81` | raw `psycopg` | Org settings | Already org-shaped; must bind |
 | 8 | `acb_memory/mem0_client.py:99` | hands a conninfo to **Mem0's own** pgvector client | **Yes** — all memory | Binding must reach Mem0's connections, or memory is scoped by the scope string alone |
+| 9 | `scripts/import_hr_people.py:177` | SQLAlchemy `create_async_engine` | **Yes — it UPSERTs people rows** | ⚠️ **Found 2026-08-08 while building MT-1c's ratchet, after this table claimed to be "measured repo-wide".** An operator script, outside `apps/` and `packages/`, so neither ratchet's scan roots saw it. Once phase-4 policies are on it will either fail or write **unowned rows**. Must bind a tenant from argv |
+| 10 | `scripts/check_infra.py:40` | raw `psycopg.connect` | **No** — reads `pg_extension` only | Same blind spot, benign content. Disposition: healthcheck, no tenant needed — but it must be *recorded* as a decision, not left undiscovered |
 
 **This makes RLS more important, not less — and it is the reason to prefer RLS over
 application-level filtering or `search_path`.** A policy is enforced by the *server*,
@@ -82,7 +92,7 @@ silently serving another tenant's data in production.
 
 **Consequences for Phase 1 (§5), which are now explicit acceptance criteria:**
 
-1. All eight paths bind a tenant. Paths 2–4 bind from the **job's** org, not a session.
+1. All **ten** paths bind a tenant. Paths 2–4 bind from the **job's** org, not a session; path 9 from argv; path 10 is exempt-with-a-reason (no tenant data).
 2. **Extend `test_db_engine_seam.py` to `create_engine` as well as
    `create_async_engine`** — path 4 exists today precisely because the ratchet does not
    cover the sync call.

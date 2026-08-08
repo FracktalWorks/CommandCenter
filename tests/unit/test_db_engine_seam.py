@@ -10,11 +10,36 @@ could not be spent, only exceeded. They now all resolve through
 This is the ratchet. It is a source-level check on purpose: the failure mode it
 guards is a *new* engine being introduced by a new app package, which no runtime
 assertion sees until that package is under load in production.
+
+MT-1c — the sync half (``saas_multitenancy.md`` §0.1)
+-----------------------------------------------------
+The connection inventory in §0.1 found **eight** paths that open a database
+connection, and named this file as the reason two of them went unnoticed for
+months: *"the seam test only inspects ``create_async_engine``, so this file is
+unguarded by it"* (path 4, ``acb_graph/db.py:32``, the **sync**
+``create_engine``). Under the pooled tenant boundary (D15) an unguarded
+connection path is not a pool-budget problem any more — it is a path that can
+open a connection with no ``app.tenant_id`` bound, and RLS decides what a
+tenant sees at the connection, not at the query.
+
+So the ratchet now covers both constructors, each with its own allow-list.
+§0.1's acceptance criterion 2 is exactly this test. Criterion 3 — raw
+``psycopg.connect``, paths 5-7 — is the companion ratchet in
+``test_psycopg_seam.py``; it is a separate file because it has a separate
+allow-list with separate reasons, and merging them would blur which discipline
+an entry was admitted under.
+
+Path 8 (``acb_memory/mem0_client.py``) is caught by **neither** ratchet by
+construction: it opens no connection itself, it hands a conninfo string to
+Mem0's own pgvector client. §0.1 criterion 4 calls that out as the genuinely
+awkward one and owns it separately. A source-level ratchet cannot see a
+connection opened inside a third-party library.
 """
 
 from __future__ import annotations
 
 import ast
+from functools import cache
 from pathlib import Path
 
 import pytest
@@ -39,6 +64,20 @@ _ALLOWED: dict[str, str] = {
         "separate process; per-run engines, disposed when the run ends",
 }
 
+#: Every file allowed to call the **sync** ``create_engine``, and why.
+#:
+#: Kept separate from ``_ALLOWED`` above rather than merged into it: the two
+#: calls are admitted on different grounds. An entry above answers "why can this
+#: not use the shared async pool?"; an entry here answers "why does this need a
+#: synchronous engine at all?", and — since MT-1c — "which tenant does it bind?".
+#: One list would let an entry inherit a reason it was never granted.
+_ALLOWED_SYNC: dict[str, str] = {
+    "packages/acb_graph/acb_graph/db.py":
+        "the entity-graph sync engine — connection path 4 in "
+        "saas_multitenancy.md §0.1; carries tenant data and MUST bind a tenant "
+        "under MT-1c",
+}
+
 
 def _python_files() -> list[Path]:
     roots = [_REPO / "apps", _REPO / "packages"]
@@ -51,28 +90,49 @@ def _python_files() -> list[Path]:
     return out
 
 
-def _calls_create_async_engine(path: Path) -> bool:
-    """True if the file CALLS ``create_async_engine``.
+@cache
+def _called_names(path: Path) -> frozenset[str]:
+    """Every name the file CALLS, as bare identifiers.
 
-    Parsed rather than grepped: every one of these modules mentions the name in
-    prose explaining that it does not call it, and a substring match would read
+    Parsed rather than grepped: several of these modules mention the engine
+    constructors in prose explaining that they do not call them
+    (``acb_skills/history_tools.py`` names the sync ``create_engine`` in its
+    module docstring while calling nothing), and a substring match would read
     the documentation as a violation.
+
+    Attribute calls collapse to their final segment, so ``sa.create_engine(...)``
+    counts the same as an imported ``create_engine(...)`` — the ratchet is about
+    a connection being opened, not about how the symbol was spelled.
+
+    Cached because the tree is walked once per constructor and the file set is
+    the same both times.
     """
     # utf-8-sig: at least one module in the tree carries a BOM, and a leading
     # ﻿ is a syntax error to ast.parse.
     tree = ast.parse(path.read_text(encoding="utf-8-sig"), filename=str(path))
+    names: set[str] = set()
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
         func = node.func
-        name = (
-            func.id if isinstance(func, ast.Name)
-            else func.attr if isinstance(func, ast.Attribute)
-            else None
-        )
-        if name == "create_async_engine":
-            return True
-    return False
+        if isinstance(func, ast.Name):
+            names.add(func.id)
+        elif isinstance(func, ast.Attribute):
+            names.add(func.attr)
+    return frozenset(names)
+
+
+def _calls_create_async_engine(path: Path) -> bool:
+    return "create_async_engine" in _called_names(path)
+
+
+def _calls_create_engine(path: Path) -> bool:
+    """True if the file CALLS the **sync** ``create_engine``.
+
+    Exact-match on the identifier, so ``create_async_engine`` — a different
+    name, checked by its own allow-list above — never lands here.
+    """
+    return "create_engine" in _called_names(path)
 
 
 def test_no_new_async_engines() -> None:
@@ -106,6 +166,46 @@ def test_allowlist_has_no_stale_entries() -> None:
     assert not stale, f"Allowlist entries that no longer create an engine: {stale}"
 
 
+def test_no_new_sync_engines() -> None:
+    """MT-1c, ``saas_multitenancy.md`` §0.1 criterion 2.
+
+    A sync ``create_engine`` is as much a connection path as an async one, and
+    RLS binds ``app.tenant_id`` per connection. A new unlisted one is a path
+    that reaches tenant rows with nothing bound.
+    """
+    offenders = sorted(
+        str(p.relative_to(_REPO)).replace("\\", "/")
+        for p in _python_files()
+        if _calls_create_engine(p)
+    )
+    unexpected = [p for p in offenders if p not in _ALLOWED_SYNC]
+    assert not unexpected, (
+        "New sync create_engine() call site(s):\n  "
+        + "\n  ".join(unexpected)
+        + "\n\nPrefer acb_common.db (get_db / get_session_factory) — one engine "
+          "and one pool per process. If this engine genuinely must be "
+          "synchronous, add it to _ALLOWED_SYNC in this test with the reason, "
+          "and state how it binds a tenant (saas_multitenancy.md §0.1)."
+    )
+
+
+def test_sync_allowlist_has_no_stale_entries() -> None:
+    """Same discipline as the async list: an entry that stopped calling leaves.
+
+    Stated separately rather than folded into the async check so a stale sync
+    entry names itself in the failure instead of arriving in a mixed list.
+    """
+    offenders = {
+        str(p.relative_to(_REPO)).replace("\\", "/")
+        for p in _python_files()
+        if _calls_create_engine(p)
+    }
+    stale = sorted(set(_ALLOWED_SYNC) - offenders)
+    assert not stale, (
+        f"Sync allowlist entries that no longer create an engine: {stale}"
+    )
+
+
 def test_gateway_makes_no_engine_of_its_own() -> None:
     """The gateway process holds exactly one pool.
 
@@ -113,12 +213,17 @@ def test_gateway_makes_no_engine_of_its_own() -> None:
     gateway is where the twelve pools were, and it is the process where a second
     one is most expensive — it also runs ``acb_auth.access``, which resolves
     permissions from Postgres on the request path.
+
+    Covers the sync constructor too since MT-1c: a synchronous engine in the
+    gateway is a second pool AND a second connection path to bind, and it would
+    block the event loop besides.
     """
     gateway = _REPO / "apps" / "services" / "gateway"
     offenders = sorted(
         str(p.relative_to(_REPO)).replace("\\", "/")
         for p in gateway.rglob("*.py")
-        if "__pycache__" not in p.parts and _calls_create_async_engine(p)
+        if "__pycache__" not in p.parts
+        and (_calls_create_async_engine(p) or _calls_create_engine(p))
     )
     assert offenders == []
 

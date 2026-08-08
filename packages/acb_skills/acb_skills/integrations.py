@@ -33,7 +33,8 @@ directly — see §5 of ``ai-company-brain/agent_repo_compatibility.md``.
 from __future__ import annotations
 
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
+from contextvars import ContextVar, Token
 from typing import Any
 
 from acb_common import get_logger
@@ -212,10 +213,10 @@ def _google_sheets(s: Any) -> dict[str, Any]:
 
 
 # Canonical credential-dict-field → env-var mapping per service. Single source
-# of truth shared by the executor's run-scoped env injection
-# (``_inject_integrations_to_env``) and the coding skill's script-subprocess
-# env (``code_tools._script_env``): whatever the executor exports for a run is
-# exactly what a declared integration's scripts may read.
+# of truth shared by the executor's run-scoped credential binding
+# (``bind_run_credentials``) and the coding skill's script-subprocess env
+# (``code_tools._script_env``): whatever a run binds is exactly what a declared
+# integration's scripts may read.
 FIELD_TO_ENV: dict[str, list[tuple[str, str]]] = {
     "zoho-crm": [
         ("client_id",     "ZOHO_CLIENT_ID"),
@@ -254,6 +255,104 @@ def env_var_names(services: list[str] | tuple[str, ...]) -> set[str]:
         for _field, env_var in FIELD_TO_ENV.get(service, []):
             names.add(env_var)
     return names
+
+
+# ---------------------------------------------------------------------------
+# Per-run credential binding (MT-0a) — contextvar, NOT os.environ
+#
+# `saas_multitenancy.md` §6.1 / MT-0a. The executor used to export a run's
+# resolved credentials into the gateway's process-global ``os.environ`` and
+# restore them at teardown. That removed *permanent accumulation* but could not
+# remove *concurrent* exposure, and the code said so itself: "os.environ is
+# process-global, so under concurrent in-process runs the scoping is
+# best-effort — two overlapping runs still share the env for the overlap
+# window."
+#
+# Under one tenant that is a within-org concern. Under two it is a credential
+# leak: tenant A's ClickUp token is readable by tenant B's concurrently-running
+# agent — and agents run model-generated tool calls over content ingested from
+# email and WhatsApp, which is precisely the code that must be assumed hostile.
+#
+# A ContextVar is per-asyncio-task and is copied into tasks created from the
+# binding context, so two overlapping runs each see only their own credentials
+# with no window at all. That is the whole change.
+# ---------------------------------------------------------------------------
+
+#: ``None`` default rather than ``{}`` — a mutable ContextVar default is shared
+#: by every context that never sets one (ruff B039), which is precisely the
+#: process-global sharing this whole change exists to remove. Readers normalise
+#: it through :func:`run_credentials`.
+_RUN_CREDENTIALS: ContextVar[Mapping[str, str] | None] = ContextVar(
+    "acb_run_credentials", default=None,
+)
+
+
+def bind_run_credentials(integrations: dict[str, Any]) -> Token[Mapping[str, str] | None]:
+    """Bind *integrations*' credentials to the current run's async context.
+
+    Returns a token the caller **must** pass to :func:`release_run_credentials`
+    at the run's teardown. Empty values are skipped, so an unconfigured optional
+    integration binds nothing rather than an empty string a caller might treat
+    as present.
+
+    Unlike the ``os.environ`` export this replaces, nothing here is visible to
+    any other task: a concurrent run in the same process binds its own value and
+    the two never observe each other.
+    """
+    env: dict[str, str] = {}
+    for service, creds in (integrations or {}).items():
+        if not isinstance(creds, dict):
+            continue
+        for field, env_var in FIELD_TO_ENV.get(service, []):
+            val = creds.get(field, "")
+            if val:
+                env[env_var] = str(val)
+    return _RUN_CREDENTIALS.set(env)
+
+
+def release_run_credentials(token: Token[Mapping[str, str] | None] | None) -> None:
+    """Undo :func:`bind_run_credentials`. Never raises.
+
+    ``ContextVar.reset`` rejects a token created in a *different* Context, which
+    a teardown running on another task would hit. Falling back to an explicit
+    empty bind keeps the failure closed — the run's credentials are gone either
+    way — rather than leaving them readable because the reset raised.
+    """
+    if token is None:
+        return
+    try:
+        _RUN_CREDENTIALS.reset(token)
+    except (ValueError, RuntimeError):
+        _RUN_CREDENTIALS.set(None)
+
+
+def run_credentials() -> Mapping[str, str]:
+    """This run's bound credentials, keyed by canonical env-var name.
+
+    Empty mapping when nothing is bound — callers never see the ``None`` the
+    ContextVar stores as its (deliberately immutable) default.
+    """
+    return _RUN_CREDENTIALS.get() or {}
+
+
+def credential(name: str, default: str = "") -> str:
+    """Read one credential by canonical env-var name.
+
+    **This is what in-process skills must call instead of ``os.getenv``.**
+
+    Precedence is deliberate and unchanged from the behaviour this replaces:
+    an operator-provided value in the process environment wins, because it is a
+    deployment-wide setting the operator chose and the old code explicitly did
+    not overwrite it ("Gateway .env still wins"). Only then does the run's own
+    bound credential apply.
+
+    ⚠️ **Honest limit, and it is the reason MT-0d exists.** An operator-provided
+    var IS still process-global and therefore still shared across tenants. MT-0a
+    scopes the *run-resolved* credentials; making the operator's own store
+    per-tenant is MT-0d (``provider_keys`` keyed ``(organization_id, provider)``).
+    Do not read this function as making the process environment tenant-safe.
+    """
+    return os.environ.get(name) or run_credentials().get(name, "") or default
 
 
 # Master registry: service-name → resolver

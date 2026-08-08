@@ -118,9 +118,13 @@ async def _serpapi_search(query: str, max_results: int) -> list[dict] | str:
     Returns a ddgs-shaped list of {title, href, body} dicts on success, or an
     error string ("" = no key configured, so nothing to report).
     """
-    import os
+    # MT-0a: the run's bound credential, not the process env — this helper is
+    # called in-process from a tool, where `os.environ` would expose whatever a
+    # concurrent run exported (`saas_multitenancy.md` §6.1). An operator-set
+    # value still wins; the Settings fallback below is unchanged.
+    from acb_skills.integrations import credential
 
-    key = os.environ.get("SERPAPI_API_KEY", "")
+    key = credential("SERPAPI_API_KEY")
     if not key:
         try:
             from acb_common import get_settings

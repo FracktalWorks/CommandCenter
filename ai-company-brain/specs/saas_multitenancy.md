@@ -1418,7 +1418,7 @@ updates this spec's status header in the same PR.
 > These are not features and they do not gate on the tenancy decision. **MT-0a and MT-0c
 > are live defects the day two companies share a process — not a database, a *process*.**
 
-#### MT-0a · Per-run credential scoping — kill process-global `os.environ` · 🟢 AGENT-SAFE
+#### MT-0a · Per-run credential scoping — kill process-global `os.environ` · ✅ **BUILT 2026-08-08, pending review**
 **Owner:** §6.1 · **Anchor:** `orchestrator/executor.py:4335-4411` (write `:4388`, restore
 `:4409`; the flaw is documented in-code at `:4364`)
 
@@ -1433,8 +1433,30 @@ updates this spec's status header in the same PR.
 4. `uv run ruff check` clean on the touched files only (never `ruff check .` — ~1983
    pre-existing errors on this tree, not a signal).
 
-**Verify:** `uv run pytest tests/unit/test_agent_paths.py <new file> -v -rs` ·
-`grep -n "os.environ\[" apps/services/orchestrator/orchestrator/executor.py`
+**Verify:** `uv run pytest tests/unit/test_integration_env_scoping.py -v -rs` (12 passed)
+· `uv run pytest tests/unit/test_code_tools.py tests/unit/test_web_tools_fallback.py
+tests/unit/test_acb_skills.py tests/unit/test_agent_paths.py -q` (72 passed across the fence)
+
+**As built.** The bridge is a **`ContextVar` in `acb_skills.integrations`**
+(`bind_run_credentials` / `release_run_credentials` / `run_credentials` /
+`credential`), not a scoped `os.environ` write. Consumers: `code_tools._script_env`
+for subprocess scripts, and `integrations.credential()` for the **three in-process
+reader lines** that existed — `skill-clickup-sync/core.py` ×2 and `web_tools.py` ×1.
+The ~20 `os.getenv` calls in `integrations.py` itself are **resolvers reading the
+operator's `.env`** and correctly still do.
+
+**Verified red first**, and quoted: replaying the interleaving against the previous
+implementation printed `run B saw run A's : clk-secret-123` → `FAIL (RED) —
+AssertionError: run B could read run A's credential`. *(Only one direction
+reproduced; the other was masked because run B's teardown completed before run A
+resumed — itself a demonstration of how timing-dependent the old scoping was.)*
+
+⚠️ **Two limits, deliberately not closed by this ticket.** (1) An **operator-provided**
+env value still wins and is still process-global — that is unchanged precedence, and
+making the operator's own store per-tenant is **MT-0d**. (2) The declared-*list*
+(`_WRITE_ARTIFACT_CONTEXT`) is still a process-global dict despite a docstring calling
+itself coroutine-local; a concurrent run can still widen *which names* are looked up,
+but a widened name now yields nothing unless this run also holds that credential.
 
 #### MT-0b · Self-mutation containment for non-first-party tenants · 🟢 AGENT-SAFE
 **Owner:** §6.2 · root `AGENTS.md` non-negotiable 3 · `docs/DESIGN_LIMITATION_native_maf_mutation.md`

@@ -108,7 +108,10 @@ a rehydratable cache.
     (`create`/`modify`/`delete`/`promote`), actor, run/session provenance.
 - **Store module:** `acb_memory/blob_store.py` — `put_file / get_file / list_files
   / delete_file / file_history / rehydrate_workspace`. Keyed by `agent_name` only
-  (the sole tenant key → portable to a second tenant deployment unchanged). Graceful: DB down →
+  (⚠️ **this was the sole tenant key under D11 and is no longer sufficient** — D15
+  makes the tenant an `organization_id` row, so `agent_blob` gains that column plus RLS in
+  **MT-1b** and its content moves to object storage in **MT-1g**;
+  `saas_multitenancy_implementation.md` §1 holds the shapes). Graceful: DB down →
   no-op, agents keep working off disk.
 - **Write-through** at every write path (disk write + store mirror + history row):
   - Agent-side: `write_artifact` and `save_note` → `mirror_to_blob_store(...)`.

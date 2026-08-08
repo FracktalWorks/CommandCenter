@@ -100,12 +100,17 @@ guessing. If a criterion changes here, change it there in the same PR.
 
 **Scope.** This doc owns the *gate* and the *matrix*. It does not own the
 access model (`org_access_control.md`), the visibility doctrine
-(`tenancy_and_visibility.md` — D11/D12), or the Centers IA
-(`department_centers.md`). Where they disagree with a cell here, re-measure and
+(`tenancy_and_visibility.md` **§3–§5 / D12** — still binding), the **tenancy
+boundary** (`saas_multitenancy.md` **§1 / D15**, which re-took D11 on 2026-08-08),
+or the Centers IA (`department_centers.md`). Where they disagree with a cell here, re-measure and
 fix whichever is stale.
 
 **Non-goals.** Not an HR onboarding process. Not a rollout plan for a second
-tenant (D11: the tenant boundary is the deployment). Not a fix for §4's open
+tenant — that is **`saas_multitenancy.md` §5.1 / WS-29** now. ⚠️ **The old text
+here cited D11 ("the tenant boundary is the deployment"), which was re-taken as
+**D15** on 2026-08-08: a tenant is an `organization_id` row. This doc's gate is
+about **colleague #1 inside one org** and is unaffected — but do not cite D11
+from here. Not a fix for §4's open
 holes — this is the gate that says they must be fixed, and sizes them.
 
 > **Two facts in this doc are OWNER-REPORTED, not measured.** *"Exactly one

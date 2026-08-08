@@ -93,14 +93,27 @@ Copilot SDK sandboxes.
 1. No in-app agent/skill *code* editing -- all code authoring is VS Code + Git. The Workflows app (`/workflows`) is the sanctioned exception-by-design: workflows are DB-persisted configuration orchestrating code-authored agents, compiled to MAF Workflows (ADR-028; spec ai-company-brain/specs/workflows_app.md) -- not generated agent code, not a second runtime
 2. No credentials in agent or skill repos -- Integration Registry holds all secrets
 3. Self-mutation max_mutation_attempts = 1 per failure event
-   - ⚠️ **DEV-ONLY / must be replaced before production:** native MAF agents (local_path, no own remote) currently land approved self-mutations by opening a PR against THIS Command Center monorepo. This is fine only while all agents are first-party and Command Center is WIP. It MUST be swapped for a tenant-isolated mechanism before any multi-tenant/customer deployment — third parties must never push to the shared monorepo. See `docs/DESIGN_LIMITATION_native_maf_mutation.md`.
+   - ⚠️ **DEV-ONLY / must be replaced before production:** native MAF agents (local_path, no own remote) currently land approved self-mutations by opening a PR against THIS Command Center monorepo. This is fine only while all agents are first-party and Command Center is WIP. It MUST be swapped for a tenant-isolated mechanism before any multi-tenant/customer deployment — third parties must never push to the shared monorepo. See `docs/DESIGN_LIMITATION_native_maf_mutation.md`. **This is now ticketed as `saas_multitenancy.md` MT-0b (WS-29) and is a HARD BLOCKER before customer #2** — the cheapest sufficient fix is a config gate defaulting to disabled, not a redesign.
 4. No autonomous writes to source systems until Action Broker is live
 5. Git is the single source of truth for all agent artefacts
 6. MAF is the PRIMARY native agent runtime. The Copilot SDK is the supported second runtime for interactive coworker chat (Tier 1.5, /copilot/chat, BYOK-routed through the gateway) and the self-mutation sandbox -- not a general execution path for event-driven specialist agents
 7. No Theia / browser IDE
 8. Source systems are authoritative -- CommandCenter is a read-mostly mirror
 9. New event-driven / specialist-agent execution features default to MAF paths; the Copilot-SDK runtime is reserved for interactive chat + mutation (both gateway-routed), not new autonomous execution entrypoints
-10. **All gateway endpoints require auth, by construction rather than by opting in.** `require_authenticated` is attached app-wide at the `FastAPI(dependencies=[…])` level, so a route added tomorrow is covered without anyone remembering; `PUBLIC_ROUTES` is the exemption list and every entry authenticates itself another way. **Before building or modifying ANY app, read `ai-company-brain/specs/user_management_contract.md`** — the ten binding rules for identity, membership and authorization, each one learned by breaking it. In particular: never navigate the browser directly at the gateway (it carries no credentials), never add a route to `PUBLIC_ROUTES` to make it reachable, and never take the acting identity from a query parameter or request body.
+10. **All gateway endpoints require auth, by construction rather than by opting in.** `require_authenticated` is attached app-wide at the `FastAPI(dependencies=[…])` level, so a route added tomorrow is covered without anyone remembering; `PUBLIC_ROUTES` is the exemption list and every entry authenticates itself another way. **Before building or modifying ANY app, read `ai-company-brain/specs/user_management_contract.md`** — the ten binding rules for identity, membership and authorization, each one learned by breaking it. In particular: never navigate the browser directly at the gateway (it carries no credentials), never add a route to `PUBLIC_ROUTES` to make it reachable, and never take the acting identity from a query parameter or request body — **nor the acting TENANT, which is R11, added 2026-08-08 with D15; the tenant comes from the authenticated session or a tenant-scoped API key and from nowhere else.** The contract carries **eleven** rules, not ten.
+11. **Multi-tenancy is `organization_id` + Postgres RLS, and it is NOT built yet.**
+    The tenant boundary was re-taken on 2026-08-08 (**D15**, board **WS-29**, spec
+    `ai-company-brain/specs/saas_multitenancy.md`): a tenant is a **row** isolated by
+    `FORCE ROW LEVEL SECURITY` bound at the `get_db()` seam; a deployment is a
+    *placement*, not a boundary. This **supersedes `tenancy_and_visibility.md` §1 and §6**
+    (one-deployment-per-tenant) — **§2–§5 of that document, the private → Center → org
+    visibility ladder, are unchanged and still binding.** Before building anything that
+    persists tenant data: read `saas_multitenancy.md` §1 and §11, and
+    `saas_multitenancy_implementation.md` for the shapes. Two rules bind today, ahead of
+    the build: **never introduce a second scoping doctrine** (tenant isolation is
+    `organization_id`; visibility inside a tenant stays `email | group:<slug> | org`), and
+    **never give an agent a raw-SQL tool or a database connection** — §0.9.3 makes that a
+    condition on the whole tenancy decision, not a nicety.
 
 ## Global Conventions
 

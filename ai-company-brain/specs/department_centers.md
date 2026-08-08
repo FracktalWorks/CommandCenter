@@ -38,9 +38,17 @@ platform's apps, agents, memory, and workflows; it is not a second product that
 "feeds data back."
 
 This supersedes the earlier informal framing of per-department apps as separate
-systems. It does not change the tenant rule: a *separate deployment* is reserved
-for a separate organization (the multi-tenant path in
-`multi_user_organization_research.md` §17), never for a department.
+systems. It does not change the tenant rule — **but the tenant rule itself changed on
+2026-08-08 (D15, `saas_multitenancy.md` §1)**, so state it in its current form:
+
+> **A Center is never a tenant.** A tenant is an `organization_id` row, isolated by
+> Postgres RLS; a Center is an `org_group` *inside* one tenant. A separate **deployment**
+> is now a *placement* (a priced tier), not the tenant boundary — and it was never
+> available for a department either way.
+
+*(The superseded phrasing read "a separate deployment is reserved for a separate
+organization, never for a department." The second half is unchanged and still binding;
+the first half described D11, which D15 re-took.)*
 
 **Why not separate systems.** Every load-bearing capability shipped in July is
 cross-cutting and assumes one deployment: intersection authority

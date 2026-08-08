@@ -72,6 +72,17 @@ _LITERAL_EQ = re.compile(r"\b(?:\w+\.)?(\w+)\s*=\s*'([^']*)'")
 _IS_NULL = re.compile(r"\b(?:\w+\.)?(\w+)\s+IS\s+(NOT\s+)?NULL", re.I)
 #: ``<col> ILIKE :q``
 _ILIKE = re.compile(r"(?:\w+\.)?(\w+)\s+ILIKE\s+:(\w+)", re.I)
+#: ``<col> < now()`` — the date half of the `overdue` filter. Unmirrored until
+#: WS-27q, which meant every `overdue` test was really only asserting the
+#: status half and would have passed with the date comparison deleted.
+_NOW_LT = re.compile(r"\b(?:\w+\.)?(\w+)\s*<\s*now\(\)", re.I)
+#: WS-27q's calendar window: ``coalesce(<a>, <b>) < :window_to``. The captured
+#: expression is what says WHICH interval endpoint the comparison is about, so
+#: the mirror reads the SQL's coalesce order rather than assuming one.
+_WINDOW_CMP = re.compile(
+    r"coalesce\(([^()]*(?:\([^()]*\)[^()]*)*)\)\s*(<|>=)\s*:(window_to|window_from)",
+    re.I | re.S,
+)
 #: The column a subquery restricts: ``t.project_id IN ( WITH RECURSIVE …``
 _IN_SUBQUERY = re.compile(
     r"(?:\w+\.)?(\w+)\s+IN\s*\(\s*WITH\s+RECURSIVE\s+(\w+)", re.I
@@ -822,6 +833,26 @@ class FakeProjectsDB:
         if re.search(r"\bAND\s+is_default\b", top, re.I):
             seen = True
             rows = [r for r in rows if r.get("is_default")]
+        for column in _NOW_LT.findall(top):
+            seen = True
+            rows = [
+                r for r in rows
+                if r.get(column) is not None and _as_datetime(r[column]) < _now()
+            ]
+        # WS-27q's calendar window. Applied ONLY when the statement carries the
+        # bound, and each comparison is evaluated against the interval endpoint
+        # the SQL's own `coalesce` order names — so swapping that order, which
+        # is the mutation that turns "overlaps" back into "due inside", changes
+        # this mirror's answer instead of being invisible to it.
+        window = _WINDOW_CMP.findall(top)
+        if window:
+            seen = True
+            for expr, operator, bound in window:
+                edge = _as_datetime(args[bound])
+                rows = [
+                    r for r in rows
+                    if _compare_window(_coalesced(r, expr), operator, edge)
+                ]
         if re.search(r"\bTRUE\b", top, re.I):
             # The unrestricted (`data:org:read`) form of the visibility clause.
             # It is a readable clause that filters nothing, which is different
@@ -859,6 +890,34 @@ def _as_datetime(value: Any) -> datetime:
         return value if value.tzinfo else value.replace(tzinfo=UTC)
     parsed = datetime.fromisoformat(str(value))
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+
+
+def _coalesced(row: dict, expression: str) -> datetime | None:
+    """What one ``coalesce(...)`` from the window clause evaluates to.
+
+    The argument ORDER is read off the SQL rather than assumed, because that
+    order is the whole rule: `coalesce(start_date, due_at)` is the interval's
+    start and `coalesce(due_at, start_date)` is its end, and a mirror that
+    hard-coded either would agree with a route that swapped them.
+    """
+    for part in expression.split(","):
+        column = "start_date" if "start_date" in part else "due_at"
+        value = row.get(column)
+        if value is not None:
+            return _as_datetime(value)
+    return None
+
+
+def _compare_window(value: datetime | None, operator: str, edge: datetime) -> bool:
+    """One window comparison, with SQL's NULL semantics.
+
+    A task with neither date has no interval, so both comparisons are NULL and
+    the row is not matched — the behaviour the endpoint relies on to keep
+    undated tasks off the calendar without a clause anybody can see.
+    """
+    if value is None:
+        return False
+    return value < edge if operator == "<" else value >= edge
 
 
 def _sortable(value: Any) -> Any:

@@ -30,6 +30,14 @@ export interface TaskRow {
   title: string;
   description?: string | null;
   importance?: number | null;
+  estimate_mins?: number | null;
+  /**
+   * WS-27q — a floating calendar date (`DATE`, not an instant), which is why
+   * it is never routed through `new Date()`: that would read it as midnight
+   * UTC and move it a day west of Greenwich. A column that has existed since
+   * migration 146 and had no surface until the calendar.
+   */
+  start_date?: string | null;
   due_at?: string | null;
   completed_at?: string | null;
   tags?: string[];
@@ -180,6 +188,30 @@ export const projectsApi = {
       if (value !== undefined && value !== "") qs.set(key, String(value));
     }
     return call<{ rows: TaskRow[]; total: number }>(`tasks?${qs.toString()}`);
+  },
+
+  /**
+   * WS-27q — every task whose schedule overlaps a window.
+   *
+   * Deliberately NOT `tasks` with a date filter: that endpoint is paginated,
+   * and a month read at `page_size=50` draws forty of its ninety tasks and
+   * leaves the rest of the days looking empty. `truncated` is the endpoint
+   * telling us when the cap was reached, so the view can say so rather than
+   * present a plausible-looking short month.
+   */
+  calendar: (params: Record<string, string | number | boolean | undefined>) => {
+    const qs = new URLSearchParams();
+    for (const [key, value] of Object.entries(params)) {
+      if (value !== undefined && value !== "") qs.set(key, String(value));
+    }
+    return call<{
+      from: string;
+      to: string;
+      rows: TaskRow[];
+      truncated: boolean;
+      cap: number;
+      undated: number;
+    }>(`calendar?${qs.toString()}`);
   },
 
   task: (taskId: string) => call<TaskRow>(`tasks/${taskId}`),

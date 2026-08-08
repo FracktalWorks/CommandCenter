@@ -25,6 +25,7 @@ from gateway.routes.projects import activities as _activities  # noqa: F401
 from gateway.routes.projects import admin as _admin  # noqa: F401
 from gateway.routes.projects import attachments as _attachments  # noqa: F401
 from gateway.routes.projects import bulk as _bulk  # noqa: F401
+from gateway.routes.projects import calendar as _calendar  # noqa: F401
 from gateway.routes.projects import custom_fields as _custom_fields  # noqa: F401
 from gateway.routes.projects import import_clickup as _import_clickup  # noqa: F401
 from gateway.routes.projects import import_tasks as _import_tasks  # noqa: F401

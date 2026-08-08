@@ -947,7 +947,7 @@ interesting it is to build.
 | 6 | ~~**Bulk edit / multi-select**~~ | — | **WS-27n ✅ BUILT 2026-08-07 · unblocks g** |
 | 7 | ~~**Recurring tasks**~~ | — | **WS-27o ✅ BUILT 2026-08-07** |
 | 8 | ~~**Dependency and subtask UI**~~ | — | **WS-27p ✅ BUILT 2026-08-07** |
-| 9 | **Calendar / timeline view** | The third view ClickUp users actually use, after list and board | **WS-27q** |
+| 9 | ~~**Calendar / timeline view**~~ | — | **WS-27q ✅ BUILT 2026-08-08** |
 | 10 | **Global task search** | `?q=` exists on the list endpoint; there is no search surface | **WS-27r** |
 | 11 | ~~**The card looks nothing like /tasks'**~~ | — | **WS-27s ✅ BUILT 2026-08-07** |
 
@@ -1658,3 +1658,67 @@ applied again: every clause in the two roll-ups is mirrored **only when the stat
 it**, and which end of a `blocks` link is the blocked one is read off the SQL rather than
 assumed. A mirror that filters unconditionally agrees with itself no matter what the route
 stops emitting, which is how a deleted WHERE clause survives a green suite.
+
+### 11.16 WS-27q — the calendar (built 2026-08-08)
+
+The ninth backlog row, and the first view that **cannot be a page**.
+
+**`/projects/tasks` is paginated, which is right for a list and catastrophic for a
+calendar.** A month with ninety tasks read at `page_size=50` draws forty of them and leaves
+the other days looking EMPTY. A short page announces itself — "page 2 of 3"; a short month
+does not, and nobody investigates a quiet week. So `GET /projects/calendar?from=&to=` takes a
+WINDOW, returns everything in it, and when the cap is reached says `truncated` rather than
+handing back a plausible-looking month.
+
+**`start_date` has existed since migration 146 and no surface had ever shown it.** The same
+complaint §11.14 makes about links, and the reason a calendar is the view that needed
+building: a task is a BAR from its start to its due date, not a dot on one day.
+
+**Overlap, not equality.** A task that starts Monday and is due Friday belongs on Wednesday's
+cell. `due_at BETWEEN :from AND :to` — the implementation everyone writes first — puts it on
+Friday alone, which is exactly the week somebody looks at Wednesday and concludes they are
+free. The clause is `coalesce(start_date, due_at) < :to AND coalesce(due_at, start_date) >=
+:from`, so a task with one date is a point and a task with both is a bar.
+
+**A task with NEITHER date falls out through NULL**, which is correct and invisible — so
+`undated` counts them with the SAME filters and the view says "12 unscheduled". Dropping them
+silently is how a calendar comes to look like the whole workspace while showing a third of it.
+
+**The window is read in UTC and the client asks for a day of slack.** A `start_date` is a
+floating calendar date and a `due_at` is an instant; no single frame makes both exact, since a
+`due_at` of 23:00Z sits on the next day in IST and the previous one in PST. Rather than
+pretend, the server OVER-selects and the browser — the only party that knows the viewer's
+timezone — does the placement. `start_date` is anchored with `AT TIME ZONE 'UTC'` rather than
+`CAST(… AS timestamptz)`, which would silently read the connection's `TimeZone`: a session
+setting no caller controls and no test would notice changing. A live run with the session set
+to `America/Los_Angeles` pins that.
+
+**Filters carry across the switch, and one is deliberately excluded.** Board and calendar are
+the same question in different shapes, so a filtered board that shows everything on the
+calendar reads as the FILTER breaking. `due_before` stays out because it bounds the same
+column as the window and the loser of a contradiction leaves no trace; `overdue` looks like
+its twin and is not — "already late" is a fact about the status as much as the date. Since
+FastAPI **ignores an unknown query parameter**, a dropped filter is not an error but a silent
+behaviour change, so a test asserts the calendar's parameter set covers the list's minus a
+named, reasoned exclusion list.
+
+**No second write path.** Dragging a card is `PATCH /tasks/{id}` — the same validation, the
+same `field_change` activity, the same revert. A `POST /calendar/move` is how two paths start
+disagreeing about what is allowed.
+
+**Dragging a bar moves the WHOLE bar, and keeps the time of day.** The span is an estimate
+somebody made; a drag that silently shortens it to one day destroys information the user did
+not offer to change. Writing only the dropped date — the version every calendar implements
+first — leaves the other end behind and inverts the interval the moment you drag left. "Due
+Friday at 5" dragged to Monday is due Monday at 5.
+
+**`new Date("2026-08-07")` is midnight UTC**, which is the 6th anywhere west of Greenwich, and
+routing a `start_date` through it is the single most common way a calendar loses a day. The
+grid works in `YYYY-MM-DD` keys throughout. That claim is only *behaviourally* testable west
+of Greenwich — in UTC and everywhere east, the buggy version happens to give the same answer —
+so the suite runs in four timezones AND pins the rule structurally, because CI runs in one.
+
+**Building it found a hole in the test fake.** `overdue`'s date half (`due_at < now()`) had
+never been mirrored, so every `overdue` test since WS-27k was really asserting only the
+status half and would have passed with the date comparison deleted. Teaching the fake `<
+now()` killed that mutant on the list endpoint as well as the calendar.

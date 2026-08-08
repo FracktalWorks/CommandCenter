@@ -34,10 +34,12 @@ import { ImportClickUp } from "./components/ImportClickUp";
 import { MyWork } from "./components/MyWork";
 import { NotificationBell } from "./components/NotificationBell";
 import { ProjectTree } from "./components/ProjectTree";
+import { CalendarView } from "./components/CalendarView";
 import { TaskBoard } from "./components/TaskBoard";
 import { TaskList } from "./components/TaskList";
 import { TaskPanel } from "./components/TaskPanel";
 import { SAVED_VIEW_POSITION, orderBearingView, type planDrop } from "./lib/board";
+import { calendarWindow, dayKey, monthGrid, shiftMonth } from "./lib/calendar";
 import {
   EMPTY_FILTERS,
   type Filters,
@@ -59,7 +61,11 @@ import {
 import { fetchAccess } from "@/lib/access";
 import { filterByCenter, flatten } from "./lib/tree";
 
-type ViewMode = "board" | "list";
+type ViewMode = "board" | "list" | "calendar";
+
+/** An empty calendar window — the shape before anything has been fetched, and
+ *  the shape after a failure, so the view never renders a stale month. */
+const NO_MONTH = { rows: [] as TaskRow[], undated: 0, truncated: false };
 
 function ProjectsWorkspace() {
   const searchParams = useSearchParams();
@@ -117,6 +123,12 @@ function ProjectsWorkspace() {
 
   // WS-27n — multi-select. `anchor` is the last card clicked without shift,
   // which is what a shift-click measures its range from.
+  // WS-27q — the calendar is a WINDOW, not the paged task list, so it holds
+  // its own rows. Sharing `tasks` would mean either paginating the calendar
+  // (a month with silently missing days) or unpaginating the board.
+  const [monthAnchor, setMonthAnchor] = useState<Date>(() => new Date());
+  const [month, setMonth] = useState(NO_MONTH);
+
   const [picked, setPicked] = useState<ReadonlySet<string>>(new Set());
   const [anchor, setAnchor] = useState<string | null>(null);
   const [bulkBusy, setBulkBusy] = useState(false);
@@ -208,6 +220,42 @@ function ProjectsWorkspace() {
   useEffect(() => {
     if (selected) void loadProject(selected);
   }, [selected, loadProject]);
+
+  // WS-27q — the calendar's own fetch, because it reads a WINDOW rather than a
+  // page. `grid` is derived so the effect re-runs when the month steps, and
+  // `calendarWindow` adds the day of slack the endpoint's UTC reading needs.
+  const grid = useMemo(() => monthGrid(monthAnchor), [monthAnchor]);
+
+  const loadMonth = useCallback(async () => {
+    if (!selected) {
+      setMonth(NO_MONTH);
+      return;
+    }
+    const { from, to } = calendarWindow(grid);
+    try {
+      const res = await projectsApi.calendar({
+        project_id: selected.id,
+        include_subtree: true,
+        from,
+        to,
+        ...toQuery(filters),
+      });
+      setMonth({
+        rows: res.rows,
+        undated: res.undated,
+        truncated: res.truncated,
+      });
+    } catch (err) {
+      setError(String((err as Error).message));
+      // Cleared rather than left as it was: a stale month drawn under a new
+      // heading is a calendar confidently showing the wrong dates.
+      setMonth(NO_MONTH);
+    }
+  }, [selected, grid, filters]);
+
+  useEffect(() => {
+    if (mode === "calendar") void loadMonth();
+  }, [mode, loadMonth]);
 
   useEffect(() => {
     if (!selected) {
@@ -463,6 +511,34 @@ function ProjectsWorkspace() {
     }
   }
 
+  /**
+   * WS-27q — a task dragged to another day.
+   *
+   * A plain `PATCH`, deliberately: the same validation, the same
+   * `field_change` activity and the same revert as an edit typed into the
+   * panel. A dedicated "move" endpoint would be a second write path, which is
+   * how two paths start disagreeing about what is allowed.
+   *
+   * Optimistic like the board's drop, and for the same reason — a drag that
+   * waits for a round trip feels broken even when it is correct. `rescheduleTo`
+   * has already refused a no-op, so this never posts an activity saying a task
+   * moved to where it already was.
+   */
+  async function moveTask(task: TaskRow, patch: Record<string, string | null>) {
+    setMonth((current) => ({
+      ...current,
+      rows: current.rows.map((t) => (t.id === task.id ? { ...t, ...patch } : t)),
+    }));
+    try {
+      await projectsApi.patchTask(task.id, patch);
+    } catch (err) {
+      setError(String((err as Error).message));
+    }
+    // Reloaded either way: on success to pick up anything the server derived,
+    // on failure to replace the optimistic move with the truth.
+    await loadMonth();
+  }
+
   async function handleDrop(
     task: TaskRow,
     writes: ReturnType<typeof planDrop>,
@@ -613,7 +689,7 @@ function ProjectsWorkspace() {
             <NotificationBell onOpenTask={openTaskById} />
           </div>
           <div className={`flex shrink-0 gap-1 ${mine ? "hidden" : ""}`}>
-            {(["board", "list"] as ViewMode[]).map((m) => (
+            {(["board", "list", "calendar"] as ViewMode[]).map((m) => (
               <button
                 key={m}
                 type="button"
@@ -697,6 +773,18 @@ function ProjectsWorkspace() {
             <p className="p-6 text-sm text-muted-foreground">
               Nothing here yet. Projects appear once a department is granted to you.
             </p>
+          ) : mode === "calendar" ? (
+            <CalendarView
+              grid={grid}
+              tasks={month.rows}
+              undated={month.undated}
+              truncated={month.truncated}
+              today={dayKey(new Date())}
+              onSelect={(task) => void openWithStatuses(task)}
+              onMove={(task, patch) => void moveTask(task, patch)}
+              onStep={(months) => setMonthAnchor(shiftMonth(grid, months))}
+              onToday={() => setMonthAnchor(new Date())}
+            />
           ) : mode === "board" ? (
             <TaskBoard
               groups={groups}

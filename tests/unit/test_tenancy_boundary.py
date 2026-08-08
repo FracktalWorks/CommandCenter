@@ -49,9 +49,6 @@ FOREIGN_PREFIX = "LiteLLM"
 #: Tables that carry a tenant key today. Not a baseline — the goal state.
 EXPECTED_SCOPED = {
     "app_user",
-    "crm_activities",
-    "crm_contacts",
-    "crm_deals",
     "org_group",
     "org_role",
     # WS-29a — the whole Projects app, keyed while it was empty.
@@ -62,7 +59,9 @@ EXPECTED_SCOPED = {
     "pm_tasks", "pm_view_task_positions", "pm_views",
 }
 
-#: ⚠️ FROZEN 2026-08-08 at 137, now 120 (WS-29a took the 17 `pm_*` out).
+#: ⚠️ FROZEN 2026-08-08 at 137 → 123. WS-29a took the 17 `pm_*` out (-17);
+#: the three `crm_*` homonyms came IN (+3) once this file started matching
+#: the FK target, because they were never tenant-scoped at all.
 #: Every table predating the multi-tenant decision.
 #: Adding a name here is allowed and must come with a reason in the PR; adding
 #: one *silently* is how a 137 becomes a 160 without anybody choosing it.
@@ -86,7 +85,11 @@ BASELINE_UNSCOPED = {
     "chat_session_participant",
 # copilot_*
     "copilot_config", "copilot_event",
-# crm_*
+# crm_* — ⚠️ `crm_activities`, `crm_contacts` and `crm_deals` DO carry a column
+    # called `organization_id`, but it REFERENCES crm_organizations, a CUSTOMER
+    # COMPANY. They are unscoped like the rest of the family, and they are the
+    # reason this file matches the foreign key's target rather than its name.
+    "crm_activities", "crm_contacts", "crm_deals",
     "crm_deal_contacts", "crm_deal_statuses", "crm_lead_statuses",
     "crm_leads", "crm_lost_reasons", "crm_organizations",
     "crm_status_changes", "crm_sync_cursors", "crm_zoho_tombstones",
@@ -166,6 +169,36 @@ BASELINE_UNSCOPED = {
     "workflows",}
 
 
+#: ``organization_id … REFERENCES organization`` — the TENANT, on the same line
+#: or the next one. Whitespace-tolerant because the migrations column-align.
+_TENANT_FK = re.compile(
+    r"\borganization_id\b[^,]*?REFERENCES\s+organization\s*\(", re.I | re.S
+)
+
+
+def _references_the_tenant(body: str) -> bool:
+    """Does this table body carry a tenant key — as opposed to a HOMONYM?
+
+    ⚠️ **This function exists because the first version of this file was wrong,
+    and wrong in the direction that flatters.** It matched the column NAME, so
+    it counted `crm_activities`, `crm_contacts` and `crm_deals` as tenant-scoped
+    on the strength of an `organization_id` that `REFERENCES crm_organizations`
+    — a CUSTOMER COMPANY, not the tenant root. The published figure was six
+    scoped tables; it was three.
+
+    A guard that can be satisfied by a coincidence of naming is not a guard: any
+    future table with an `organization_id` pointing anywhere at all would have
+    passed silently, which is precisely the failure this ratchet exists to
+    prevent. The foreign key's TARGET is the claim, so the target is what is
+    matched.
+
+    **Consequence worth carrying forward: the column name is already taken in
+    `crm_*`.** Scoping the CRM needs a rename or a different name, and that has
+    to be decided before WS-29d touches those tables.
+    """
+    return bool(_TENANT_FK.search(body))
+
+
 def _scan() -> tuple[set[str], set[str]]:
     """Every table the migrations define, and which of them are tenant-scoped.
 
@@ -193,10 +226,13 @@ def _scan() -> tuple[set[str], set[str]]:
             re.S,
         ):
             tables.add(match.group(1))
-            if re.search(r"\borganization_id\b", match.group(2)):
+            if _references_the_tenant(match.group(2)):
                 scoped.add(match.group(1))
         for match in re.finditer(r"ALTER TABLE\s+([a-z_][a-z0-9_]*)(.*?);", src, re.S):
-            if re.search(r"ADD COLUMN[^;]*\borganization_id\b", match.group(2)):
+            body = match.group(2)
+            if re.search(r"ADD COLUMN[^;]*\borganization_id\b", body) and (
+                _references_the_tenant(body)
+            ):
                 scoped.add(match.group(1))
     return tables, scoped
 
@@ -266,4 +302,4 @@ def test_the_expected_scoped_set_is_real_not_aspirational() -> None:
 def test_the_frozen_count_matches_the_baseline() -> None:
     """The docstring quotes 120. A baseline whose stated size and real size
     disagree is a baseline nobody trusts."""
-    assert len(BASELINE_UNSCOPED) == 120
+    assert len(BASELINE_UNSCOPED) == 123

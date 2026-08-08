@@ -50,6 +50,7 @@ from gateway.routes.projects.core import (
     now,
     record_activity,
     require_organization_of,
+    resolve_organization_id,
     resolve_visibility,
     router,
     row_to_dict,
@@ -376,6 +377,12 @@ def _personal_to_dict(row: Any) -> dict[str, Any]:
 #: The second arm matters — a task I captured and then unassigned is still mine
 #: to see; without it, clearing my own name off a private todo would make it
 #: vanish from the only place it exists.
+#:
+#: ⚠️ ``t.organization_id = :vis_org`` is composed ABOVE both arms (WS-29b), for
+#: the same reason as ``me.assigned_to_me``: the first arm reaches tasks by
+#: matching a bare, unvalidated email, so without it another organization can
+#: place a row in this member's inbox by typing their address. The GRANT clause
+#: is still deliberately absent — the tenant is not.
 _MY_TASKS_SQL = """
 SELECT t.*,
        s.category           AS status_category,
@@ -397,6 +404,7 @@ LEFT JOIN pm_task_personal p
        ON p.task_id = t.id AND lower(p.member_email) = :who
 LEFT JOIN pm_projects proj ON proj.id = t.project_id
 WHERE t.archived_at IS NULL
+  AND t.organization_id = CAST(:vis_org AS uuid)
   AND (
         EXISTS (SELECT 1 FROM pm_task_assignees a
                 WHERE a.task_id = t.id AND lower(a.assignee) = :who)
@@ -446,6 +454,7 @@ async def my_inbox(
     sql = _MY_TASKS_SQL + ("".join(f" AND {c}" for c in clauses))
     db = await _get_db()
     try:
+        params["vis_org"] = await resolve_organization_id(db, email)
         rows = (await db.execute(text(sql), params)).fetchall()
     finally:
         await db.close()

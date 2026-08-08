@@ -325,3 +325,220 @@ def test_every_activity_type_the_routes_write_is_in_the_vocabulary() -> None:
         f"routes write types the vocabulary refuses: "
         f"{sorted(used - set(ACTIVITY_TYPES))}"
     )
+
+
+# ── The tenant key (WS-29a, migration 158) ──────────────────────────────────
+#
+# Same rules as everything above, applied to the SECOND file that defines the
+# `pm_*` shape. Found by content for the same reason (R1 forbids pinning a
+# number), and read with comments stripped for the same reason: this migration
+# explains itself at length and an assertion its own prose can satisfy is not an
+# assertion.
+#
+# Spec: ai-company-brain/specs/multi_tenancy.md §3 (D-MT-1 (a), D-MT-3).
+
+#: Every table §3 specifies, plus the six added by 147/150/152/155/156/157.
+#: Listed rather than derived, so a table quietly dropped from the tenant
+#: migration fails here instead of shrinking the expectation with it.
+TENANT_SCOPED_TABLES: tuple[str, ...] = (
+    *EXPECTED_TABLES,
+    "pm_task_personal",
+    "pm_task_attachments",
+    "pm_notifications",
+    "pm_custom_fields",
+    "pm_tags",
+    "pm_recurrences",
+)
+
+
+def _tenancy_migration() -> Path:
+    """The migration that gives ``pm_projects`` its tenant key."""
+    found = [
+        path for path in sorted(MIGRATIONS.glob("*.sql"))
+        if path.name != "schema.generated.sql"
+        and re.search(
+            r"ALTER TABLE pm_projects\s+ADD COLUMN IF NOT EXISTS organization_id",
+            path.read_text(encoding="utf-8"),
+        )
+    ]
+    assert len(found) == 1, (
+        f"expected exactly one migration adding pm_projects.organization_id, "
+        f"found {[p.name for p in found]}"
+    )
+    return found[0]
+
+
+@pytest.fixture(scope="module")
+def tenancy(request: pytest.FixtureRequest) -> str:
+    raw = _tenancy_migration().read_text(encoding="utf-8")
+    return "\n".join(re.sub(r"--.*$", "", line) for line in raw.splitlines())
+
+
+@pytest.mark.parametrize("table", TENANT_SCOPED_TABLES)
+def test_every_pm_table_gains_the_tenant_key(tenancy: str, table: str) -> None:
+    """D-MT-3: the key is carried on EVERY tenant-owned table, even where it is
+    derivable. A missing one is a table whose rows belong to nobody — and RLS,
+    when D-MT-2 answers, cannot police what it cannot read off the row."""
+    assert re.search(
+        rf"ALTER TABLE {table}\s+ADD COLUMN IF NOT EXISTS organization_id\s+UUID",
+        tenancy,
+    ), f"{table} gains no organization_id"
+
+
+@pytest.mark.parametrize("table", TENANT_SCOPED_TABLES)
+def test_every_tenant_key_is_not_null(tenancy: str, table: str) -> None:
+    """A nullable tenant key is a row belonging to nobody, which is either
+    invisible to everybody or visible to everybody depending on how the
+    predicate is written. Neither is an answer."""
+    assert re.search(
+        rf"ALTER TABLE {table}\s+ALTER COLUMN organization_id SET NOT NULL",
+        tenancy,
+    ), f"{table}.organization_id may be NULL"
+
+
+@pytest.mark.parametrize("table", TENANT_SCOPED_TABLES)
+def test_every_tenant_key_cascades_from_its_organization(
+    tenancy: str, table: str,
+) -> None:
+    """Same posture as `app_user`, `org_group` and `org_role` (§6): deleting an
+    organization takes its rows with it, rather than leaving orphans pointing at
+    an id nothing resolves."""
+    block = re.search(
+        rf"ALTER TABLE {table}\s+ADD COLUMN IF NOT EXISTS organization_id[^;]*;",
+        tenancy,
+    )
+    assert block is not None
+    assert re.search(
+        r"REFERENCES organization \(id\) ON DELETE CASCADE", block.group(0),
+    ), f"{table}.organization_id is not a cascading FK onto organization"
+
+
+@pytest.mark.parametrize("table", TENANT_SCOPED_TABLES)
+def test_every_pm_table_is_backfilled_before_the_constraint(
+    tenancy: str, table: str,
+) -> None:
+    """§2 predicted these tables were empty; the live database said otherwise.
+
+    A `SET NOT NULL` on a table with one un-backfilled row fails the whole
+    deploy, so the fill is not optional and is not conditional on the prediction
+    having been right.
+    """
+    fill = re.search(rf"UPDATE {table}\s+SET organization_id", tenancy)
+    constrain = re.search(
+        rf"ALTER TABLE {table}\s+ALTER COLUMN organization_id SET NOT NULL",
+        tenancy,
+    )
+    assert fill is not None, f"{table} is never backfilled"
+    assert constrain is not None
+    assert constrain.start() > fill.start(), (
+        f"{table} is constrained before it is filled"
+    )
+
+
+def test_the_backfill_names_the_default_organization_and_nothing_else(
+    tenancy: str,
+) -> None:
+    """`slug='default'` is the one seeded row (migration 130). Picking a row by
+    ORDER BY, or inventing one, would be a silent guess at which organization
+    owns somebody's work — worse than a failed migration."""
+    fills = re.findall(
+        r"UPDATE pm_\w+\s+SET organization_id = \(([^)]*)\)", tenancy,
+    )
+    # ⚠️ `\s+`, not a single space: the statements are column-aligned, and a
+    # regex demanding one space silently matched exactly ONE of the seventeen —
+    # found by a mutant that deleted a guard from the other sixteen and lived.
+    assert len(fills) == len(TENANT_SCOPED_TABLES), (
+        f"expected {len(TENANT_SCOPED_TABLES)} backfills, matched {len(fills)}"
+    )
+    for source in fills:
+        assert source.strip() == "SELECT id FROM organization WHERE slug = 'default'"
+
+
+def test_the_backfill_reruns_as_a_no_op(tenancy: str) -> None:
+    """The runner replays this on every deploy. Without the WHERE, a second run
+    would rewrite every row — including any a later ticket had deliberately
+    moved to another organization."""
+    statements = re.findall(r"UPDATE pm_\w+\s+SET organization_id[^;]*;", tenancy)
+    assert len(statements) == len(TENANT_SCOPED_TABLES), (
+        f"expected {len(TENANT_SCOPED_TABLES)} backfills, matched "
+        f"{len(statements)} — the alignment defeated the pattern"
+    )
+    for statement in statements:
+        assert "WHERE organization_id IS NULL" in statement, statement
+
+
+def test_a_childs_tenant_is_checked_against_its_parents(tenancy: str) -> None:
+    """D-MT-3 names this as the cost of carrying the key on every row.
+
+    ⚠️ It cannot be a CHECK — a CHECK constraint may only read its own row, and
+    Postgres refuses a subquery in one. A BEFORE trigger is the only in-database
+    mechanism that can compare against another table, so the guard the spec asks
+    for is a trigger and the migration says why.
+    """
+    assert "CREATE OR REPLACE FUNCTION pm_organization_from_parent()" in tenancy
+    # The FILL half…
+    assert re.search(
+        r"IF NEW\.organization_id IS NULL THEN\s+NEW\.organization_id := parent_org",
+        tenancy,
+    ), "the trigger does not derive a missing tenant from the parent"
+    # …and the REFUSE half, which is the one a mutant can hollow out while
+    # leaving a `RAISE EXCEPTION` in the file for a checker to find. The
+    # COMPARISON is the guard, not the raise.
+    assert re.search(
+        r"ELSIF NEW\.organization_id <> parent_org THEN\s+RAISE EXCEPTION",
+        tenancy,
+    ), "a child may carry a tenant that disagrees with its parent's"
+
+
+def test_the_trigger_is_declared_replaceably(tenancy: str) -> None:
+    """`CREATE TRIGGER` has no `IF NOT EXISTS`; a plain one fails the second
+    deploy, which is the deploy nobody watches."""
+    plain = re.findall(r"CREATE\s+TRIGGER\s+\S+", tenancy, re.I)
+    assert not plain, f"CREATE TRIGGER without OR REPLACE: {plain}"
+    assert len(re.findall(r"CREATE OR REPLACE TRIGGER", tenancy)) >= len(
+        TENANT_SCOPED_TABLES
+    )
+
+
+@pytest.mark.parametrize("table", TENANT_SCOPED_TABLES)
+def test_every_pm_table_derives_its_tenant_from_a_parent(
+    tenancy: str, table: str,
+) -> None:
+    """The FILL half, and the reason 43 INSERT sites did not have to change.
+
+    A table with no attachment is a table whose every insert must remember the
+    key by hand — D-MT-2 (b)'s named failure mode, and the discipline that
+    produced 137 unscoped tables in the first place.
+    """
+    assert re.search(
+        rf"BEFORE INSERT OR UPDATE ON {table}\b", tenancy,
+    ), f"{table} has no tenant-derivation trigger"
+
+
+def test_the_two_rows_that_name_two_parents_verify_both(tenancy: str) -> None:
+    """⚠️ A link and a view position each name TWO rows, so each is a row that
+    could STRADDLE two organizations. One attachment fills; the second is what
+    makes the straddle impossible rather than merely unlikely."""
+    for table, columns in (
+        ("pm_task_links", ("source_task_id", "target_task_id")),
+        ("pm_view_task_positions", ("view_id", "task_id")),
+        # A task's denormalised root must live where the project it sits in does.
+        ("pm_tasks", ("project_id", "root_project_id")),
+        # An activity may hang off either, and when both are set they must agree.
+        ("pm_activities", ("task_id", "project_id")),
+    ):
+        block = tenancy.split(f"BEFORE INSERT OR UPDATE ON {table}\n")
+        assert len(block) == 3, f"{table} does not have exactly two attachments"
+        for column in columns:
+            assert f"'{column}')" in tenancy, f"{table} never verifies {column}"
+
+
+def test_no_row_level_security_is_declared(tenancy: str) -> None:
+    """⚠️ D-MT-2 is OPEN. RLS is *proposed*, not decided, and shipping a policy
+    here would settle by default a decision the spec says is unsettled — while
+    requiring a GUC that no connection in this system sets."""
+    shouted = tenancy.upper()
+    for forbidden in ("ROW LEVEL SECURITY", "CREATE POLICY", "CURRENT_SETTING"):
+        assert forbidden not in shouted, (
+            f"the tenancy migration declares {forbidden}; D-MT-2 is open"
+        )

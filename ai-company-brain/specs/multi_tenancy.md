@@ -20,7 +20,14 @@ which is a better starting position than it sounds and a worse one than it looks
 | App tables defined in migrations | **143** (plus `LiteLLM_*`, vendored, not ours) |
 | Carrying a real tenant key | **3** |
 | Carrying none | **140** |
-| `pm_*` tables (Projects, WS-27) | 17 — **0 scoped** (WS-29a fixes this) |
+| `pm_*` tables (Projects, WS-27) | 17 — **0 scoped** |
+
+**As of WS-29a (2026-08-08) that is 20 scoped and 123 unscoped**: the 17 `pm_*` tables were
+keyed while they were nearly empty. "Nearly", not "entirely" — the premise that they held no
+rows was wrong, and the live database had 10 `pm_tasks` and 2 `pm_projects` of fixture residue
+from WS-27's own live runs. `SET NOT NULL` does not care where a row came from, so the
+migration backfills to `slug='default'` first and fails the deploy loudly if that organization
+is missing rather than guessing one.
 
 The three that are scoped: `app_user`, `org_group`, `org_role` — all
 `REFERENCES organization(id)`.

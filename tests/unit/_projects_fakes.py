@@ -19,6 +19,14 @@ A fake that re-implemented the predicate in Python and applied it regardless
 would pass against an unscoped route — which is the whole defect class this
 package exists to avoid.
 
+⚠️ **The tenant predicate is mirrored the same way** (WS-29b). Three shapes all
+say ``organization_id`` — the grant closure's own arm, the ``data:org:read``
+subquery, and the outer ``AND`` composed above both — and each is applied only
+when the statement carries THAT shape. A mirror that scoped everything by the
+caller's organization regardless would agree with a route that dropped its
+tenant clause, which is the leak ``specs/multi_tenancy.md`` §6 calls the most
+dangerous line in the retrofit.
+
 Its blind spots, stated so nobody reads a green suite as more than it is:
 
 * **Foreign keys and therefore cascades.** Deleting a ``pm_projects`` row leaves
@@ -119,6 +127,13 @@ _IN_TENANT_SUBQUERY = re.compile(
 _CLOSURE_IS_TENANTED = re.compile(
     r"g\.organization_id\s*=\s*CAST\(:vis_org", re.I
 )
+#: ⚠️ And the closure's RECURSIVE step, read SEPARATELY from its seed step.
+#: They are two predicates on two tables and a mirror that inferred one from
+#: the other cannot see a mutant that deletes just the second — which is
+#: exactly what happened, and this is the fix.
+_DESCENT_IS_TENANTED = re.compile(
+    r"p\.organization_id\s*=\s*CAST\(:vis_org", re.I
+)
 #: ``<alias>.organization_id = CAST(:vis_org AS uuid)`` — the tenant composed
 #: ABOVE the grant closure, and the whole of the unrestricted task clause.
 _ROW_TENANT = re.compile(
@@ -135,6 +150,39 @@ _CLOSURE_BODY = re.compile(
 #: row in the real schema (`slug='default'`), and every test that is not ABOUT
 #: tenancy is written against that deployment.
 DEFAULT_ORGANIZATION = "00000000-0000-4000-8000-0000000000aa"
+
+#: Migration 158's trigger table, mirrored: ``table → (parent table, FK column)``.
+#:
+#: The DATABASE derives a child's `organization_id` from its parent on write, so
+#: 43 INSERT sites in 16 modules did not have to grow a tenant argument. That
+#: derivation has to happen here too, or every one of those inserts would land a
+#: NULL and every scoped read of it would come back empty — which looks exactly
+#: like the scoping working.
+#:
+#: Only the first parent is listed. The real trigger also declares SECOND
+#: attachments (`pm_tasks.root_project_id`, `pm_task_links.target_task_id`,
+#: `pm_view_task_positions.task_id`) whose job is to REFUSE a row straddling two
+#: organizations. Those are a database constraint, and constraints are this
+#: fake's stated blind spot — they are proved against a real Postgres.
+_ORGANIZATION_PARENT: dict[str, tuple[str, str]] = {
+    "pm_projects": ("pm_projects", "parent_project_id"),
+    "pm_project_grants": ("pm_projects", "project_id"),
+    "pm_task_statuses": ("pm_projects", "project_id"),
+    "pm_task_types": ("pm_projects", "project_id"),
+    "pm_task_counters": ("pm_projects", "project_id"),
+    "pm_custom_fields": ("pm_projects", "project_id"),
+    "pm_tags": ("pm_projects", "project_id"),
+    "pm_recurrences": ("pm_projects", "project_id"),
+    "pm_views": ("pm_projects", "project_id"),
+    "pm_tasks": ("pm_projects", "project_id"),
+    "pm_activities": ("pm_tasks", "task_id"),
+    "pm_task_assignees": ("pm_tasks", "task_id"),
+    "pm_task_links": ("pm_tasks", "source_task_id"),
+    "pm_task_attachments": ("pm_tasks", "task_id"),
+    "pm_task_personal": ("pm_tasks", "task_id"),
+    "pm_notifications": ("pm_tasks", "task_id"),
+    "pm_view_task_positions": ("pm_views", "view_id"),
+}
 
 
 _SUBQUERY_RE = re.compile(r"\b(SELECT|WITH)\b", re.I)
@@ -349,15 +397,15 @@ class FakeProjectsDB:
         row = {
             "id": columns.pop("id", str(uuid4())),
             **_DEFAULTS.get(table, {}),
-            # WS-29a — every `pm_*` table carries the tenant key (D-MT-3), so a
-            # seeded row that lacked one would be invisible to every scoped read
-            # and would make the whole suite red for the wrong reason. An
-            # explicit `organization_id=` still wins: that is how the two-tenant
-            # tests put rows in the OTHER organization.
-            **({"organization_id": self.organization_id}
-               if table.startswith("pm_") else {}),
             **columns,
         }
+        # WS-29a — every `pm_*` table carries the tenant key (D-MT-3), so a
+        # seeded row that lacked one would be invisible to every scoped read and
+        # would make the whole suite red for the wrong reason. Derived from the
+        # parent exactly as the database does. An explicit `organization_id=`
+        # still wins: that is how the two-tenant tests place a row.
+        if table.startswith("pm_") and row.get("organization_id") is None:
+            row["organization_id"] = self.derive_organization(table, row)
         if table in _TIMESTAMPED:
             row.setdefault("created_at", _now() - timedelta(days=1))
             row.setdefault("updated_at", _now() - timedelta(days=1))
@@ -366,6 +414,27 @@ class FakeProjectsDB:
 
     def rows(self, table: str) -> list[dict[str, Any]]:
         return self.tables.get(table, [])
+
+    def derive_organization(self, table: str, row: dict[str, Any]) -> str | None:
+        """One row's tenant, the way migration 158's trigger derives it.
+
+        The parent's value, or — for a ROOT project, which has no parent — this
+        fake's own organization, standing in for the value the application is
+        required to supply. ``pm_activities`` is the one row that may hang off
+        either a task or a project, so its second parent is tried too.
+        """
+        parent = _ORGANIZATION_PARENT.get(table)
+        candidates = [parent] if parent else []
+        if table == "pm_activities":
+            candidates.append(("pm_projects", "project_id"))
+        for parent_table, column in candidates:
+            parent_id = row.get(column)
+            if parent_id is None:
+                continue
+            for candidate in self.rows(parent_table):
+                if str(candidate.get("id")) == str(parent_id):
+                    return candidate.get("organization_id")
+        return self.organization_id
 
     def statements_touching(self, needle: str) -> list[str]:
         return [s for s in self.statements if needle in s]
@@ -576,6 +645,10 @@ class FakeProjectsDB:
                 str(args.get("vis_org"))
                 if _CLOSURE_IS_TENANTED.search(statement) else None
             ),
+            descendant_organization_id=(
+                str(args.get("vis_org"))
+                if _DESCENT_IS_TENANTED.search(statement) else None
+            ),
         )
         skips_archived = "t.archived_at IS NULL" in statement
         # Same rule as everywhere else: the tenant is applied only when the
@@ -746,13 +819,10 @@ class FakeProjectsDB:
 
         row = {"id": str(uuid4()), **_DEFAULTS.get(table, {}), **values}
         # Migration 158's `pm_organization_from_parent` trigger, mirrored: a
-        # child row inserted without a tenant INHERITS one rather than being
-        # refused, which is what lets 43 INSERT sites stay unedited. The fake
-        # models a single-tenant deployment, so it inherits *the* organization
-        # instead of walking to a parent — the derivation itself is proved
-        # against a real Postgres, not here.
+        # child row inserted without a tenant INHERITS its parent's rather than
+        # being refused, which is what lets 43 INSERT sites stay unedited.
         if table.startswith("pm_") and row.get("organization_id") is None:
-            row["organization_id"] = self.organization_id
+            row["organization_id"] = self.derive_organization(table, row)
         if table in _TIMESTAMPED:
             row.setdefault("created_at", _now())
             row.setdefault("updated_at", _now())
@@ -834,6 +904,7 @@ class FakeProjectsDB:
     def visible_project_ids(
         self, email: str, groups: list[str],
         organization_id: str | None = None,
+        descendant_organization_id: str | None = None,
     ) -> set[str]:
         """The grant closure: directly granted projects, plus their descendants.
 
@@ -846,6 +917,12 @@ class FakeProjectsDB:
         (or the closure itself) that loses its tenant filter stops being scoped
         here too and the cross-tenant test goes red. Defaulting it to the fake's
         own organization would have made the leak invisible.
+
+        ⚠️ The SEED step and the DESCENT step are told apart, and they are two
+        separate arguments for that reason. Inferring the second from the first
+        let a mutant delete the recursive term's tenant filter and survive a
+        green suite — the descent is the arm that would matter most if the
+        database's parent-consistency trigger were ever dropped.
         """
         wanted = {str(g).lower() for g in groups}
         seeds = {
@@ -866,8 +943,9 @@ class FakeProjectsDB:
             changed = False
             for project in self.rows("pm_projects"):
                 parent = project.get("parent_project_id")
-                if organization_id is not None and (
-                    str(project.get("organization_id")) != organization_id
+                if descendant_organization_id is not None and (
+                    str(project.get("organization_id"))
+                    != descendant_organization_id
                 ):
                     continue
                 if parent is not None and str(parent) in out and str(project["id"]) not in out:
@@ -922,10 +1000,19 @@ class FakeProjectsDB:
         # module's docstring warns about, caught by mutation rather than review.
         wants_assigned = "lower(a.assignee) = :who" in statement
         wants_personal = "lower(proj.personal_owner) = :who" in statement
+        # ⚠️ WS-29b's tenant, composed above both arms. Read off the statement
+        # like everything else here: the inbox has no GRANT clause by design, so
+        # this line is the ONLY thing standing between it and another
+        # organization's task, and a mirror that applied it unconditionally
+        # could not tell whether the route still emits it.
+        tenanted = "t.organization_id = CAST(:vis_org AS uuid)" in statement
+        org = str(args.get("vis_org"))
 
         out: list[Any] = []
         for task in self.rows("pm_tasks"):
             if task.get("archived_at") is not None:
+                continue
+            if tenanted and str(task.get("organization_id")) != org:
                 continue
             assignees = self._assignees_of(task["id"])
             reached = (wants_assigned and who in assignees) or (
@@ -1037,6 +1124,10 @@ class FakeProjectsDB:
                 organization_id=(
                     str(args.get("vis_org"))
                     if _CLOSURE_IS_TENANTED.search(where) else None
+                ),
+                descendant_organization_id=(
+                    str(args.get("vis_org"))
+                    if _DESCENT_IS_TENANTED.search(where) else None
                 ),
             )
             column_match = _IN_SUBQUERY.search(where)

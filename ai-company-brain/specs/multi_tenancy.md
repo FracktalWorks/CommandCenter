@@ -18,19 +18,34 @@ which is a better starting position than it sounds and a worse one than it looks
 | | |
 |---|---|
 | App tables defined in migrations | **143** (plus `LiteLLM_*`, vendored, not ours) |
-| Carrying `organization_id` | **6** |
-| Carrying none | **137** |
-| `pm_*` tables (Projects, WS-27) | 17 — **0 scoped** |
+| Carrying a real tenant key | **3** |
+| Carrying none | **140** |
+| `pm_*` tables (Projects, WS-27) | 17 — **0 scoped** (WS-29a fixes this) |
 
-The six that are scoped: `app_user`, `crm_activities`, `crm_contacts`, `crm_deals`,
-`org_group`, `org_role`.
+The three that are scoped: `app_user`, `org_group`, `org_role` — all
+`REFERENCES organization(id)`.
+
+> ⚠️ **CORRECTED 2026-08-08. This document first said six, and it was wrong.**
+> `crm_activities`, `crm_contacts` and `crm_deals` do carry a column spelled
+> `organization_id`, but it `REFERENCES crm_organizations(id)` — a **customer
+> company**, not the tenant root. Verified against the live database's
+> `pg_constraint`. The CRM is unscoped, like everything else.
+>
+> **Two consequences, and the second is worse than the miscount.** First, the
+> column name is *taken*: scoping the CRM needs a rename or a different name,
+> and that must be decided before WS-29d touches `crm_*`. Second,
+> `test_tenancy_boundary.py` matched on the column NAME, so it counted these
+> homonyms as scoped — meaning any future table with an `organization_id`
+> pointing anywhere at all would pass the ratchet silently. **A guard that can
+> be satisfied by a coincidence of naming is not a guard.** It now matches on
+> the foreign key's TARGET.
 
 **An `organization` table already exists** (migration 130) with `slug`, `display_name`,
 `domain`, `settings`, and exactly one seeded row — `slug='default'`. `app_user` gained
 `organization_id` in the same migration. So the spine of a tenant model is there; it was
 simply never carried past the access-control system and the CRM.
 
-**This is not a Projects problem.** WS-27 is 17 of the 137, and the majority of the tree is in
+**This is not a Projects problem.** WS-27 is 17 of the 140, and the majority of the tree is in
 the same position: every `gtd_*`, `email_*`, `wa_*`, `workflow*`, `app*`, `chat_*` table, and
 — tellingly — `org_settings`, `org_role_permission`, `user_role` and `org_group_member`.
 `org_settings` says so in its own comment: *"there is no per-tenant key namespace because this
@@ -67,6 +82,10 @@ grants — into 17 tables with no tenant column. Adding the column afterwards me
 and an `ALTER` on live rows instead of a one-line default on empty ones.
 
 **The cost of waiting is a few days. The cost of not waiting is paid once per table, forever.**
+
+**The same warning belongs on `INGESTION_CONSUMER=1` and `CRM_ZOHO_SYNC=1`**, which the leak
+audit surfaced: both write unscoped rows *unattended*, and each is one environment variable
+away from doing so. The ClickUp import is merely the one with a button.
 
 ---
 

@@ -60,9 +60,22 @@ deployment is one organisation."* That comment is about to stop being true.
 
 ### 1.1 The one number that decides the cost
 
-`app_user.email` is **globally `UNIQUE`** (`app_user_email_key`). Today a person belongs to
-exactly one organization, structurally. Whether that stays true is **D-MT-1**, and it is the
-decision the whole retrofit hangs off.
+`app_user.email` is **globally unique**, so a person belongs to exactly one organization.
+Whether that stays true is **D-MT-1**, and it is the decision the whole retrofit hangs off.
+
+> ⚠️ **CORRECTED 2026-08-08. This paragraph said "structurally", and until migration 159 that
+> was not true.** `app_user_email_key` was `UNIQUE (email)` — **byte-exact** — while every
+> lookup in this codebase matches `lower(email)` (R10). The two disagreed, and a live run
+> proved the gap real: `Casey@Alpha.Example` and `casey@alpha.example` are two rows, and under
+> D-MT-1 they can sit in two organizations. `resolve_organization_id` then returns whichever
+> row the planner hands back, so **a person's tenant becomes non-deterministic** — and with it
+> everything scoped by that tenant.
+>
+> Found by WS-29's S1-1 live run, reproduced directly against Postgres, and closed twice: in
+> application code for the one write path that could reach it, and structurally by
+> **migration 159** (`UNIQUE (lower(email))`, replacing the byte-exact constraint). The
+> decision stands — (a) is still the reversible direction — but its enforcement was
+> application-level while this document claimed it was structural. It is structural now.
 
 ### 1.2 Why Projects is cheaper to retrofit than its size suggests
 

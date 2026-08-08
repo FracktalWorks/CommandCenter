@@ -96,6 +96,172 @@ silently serving another tenant's data in production.
 
 ---
 
+## 0.9 THE TARGET, stated without reference to what exists
+
+Owner question, 2026-08-08: *disregarding the cost of migrating the current database — we
+can start a new one — what is the right multi-tenant architecture for CommandCenter?*
+
+Answered here **before** §1, because §1 onward reasons from the existing tree and a reader
+should be able to see the destination without the retrofit argument attached to it.
+
+### 0.9.1 The thesis — the interesting boundary is not the database
+
+Almost every multi-tenancy discussion is a database discussion. **For CommandCenter that
+is the wrong emphasis, and it is wrong for a reason specific to this product:**
+
+| Ordinary SaaS (Slack, Notion, a CRM) | CommandCenter |
+|---|---|
+| Code paths are written by your engineers | **Agents execute model-generated tool calls** |
+| Input is typed by authenticated users | **Input arrives from email and WhatsApp** — adversarial by default, prompt injection is a routine event, not an exotic one |
+| The app reads and writes rows | Agents **write and run code** (App Workshop, self-mutation) |
+| A breach exposes one product's data | A breach exposes **the company** — mail, CRM, finance, HR, meetings, all of it |
+
+The database can be defended by a mechanism that cannot be forgotten: a server-enforced
+RLS policy. **The agent runtime has no equivalent.** No policy engine constrains what a
+model decides to do with the tools it holds.
+
+> **Therefore: spend the isolation budget on the execution plane, and let the data plane be
+> pooled behind a policy.** The instinct that led to "a container per customer" is sound —
+> it is simply pointed at the wrong layer. Put the container around **the agent run**,
+> not around the database.
+
+This is also the honest answer to why the pooled-vs-silo argument has felt unsatisfying
+throughout this document: **both options isolate the layer that was already the easier one
+to isolate.**
+
+### 0.9.2 Three planes, three different tenancy models
+
+| Plane | Holds | Tenancy model | Why |
+|---|---|---|---|
+| **Control** | organizations, identities, placement, entitlements, subscriptions, usage, credit ledger | **Shared, cross-tenant by design.** No RLS — it must read across tenants | It is the operator's view. Never holds tenant business data, so a compromise exposes contracts, not customers' mail |
+| **Data** | email, CRM, tasks, projects, people, meetings, memory, apps | **Pooled Postgres, `organization_id` in every PK, FORCE RLS, per-tenant envelope encryption for sensitive columns** | §1 and §1.1a. The mechanism cannot be forgotten and fails closed |
+| **Execution** | agent runs, ingestion jobs, app runtimes, mutation, meeting bots | **Ephemeral per-run sandbox, tenant-affine worker pools** | §0.9.3. This is where the money goes |
+
+### 0.9.3 The execution plane — the part worth building properly
+
+**The contract, and it is the whole design:**
+
+> **An agent run receives (a) one tenant binding, (b) only the credentials that run needs,
+> issued for that run and expiring with it, and (c) no database connection at all. It
+> reaches data exclusively through a tenant-bound API. Its egress is allowlisted. The
+> sandbox is destroyed when the run ends.**
+
+Each clause closes a specific hole:
+
+- **No ambient credentials** — kills the class where a compromised agent reads secrets
+  belonging to work it was not doing. Today `executor.py:4388` writes them into
+  process-global `os.environ` (§6.1), which is the exact opposite of this clause.
+- **No database connection** — an agent that cannot open a connection cannot escape RLS,
+  cannot set `app.tenant_id`, and cannot be SQL-injected into another tenant. This is what
+  makes a pooled data plane defensible *given* model-generated tool calls (§1.8a).
+- **Allowlisted egress** — a successfully injected agent that can reach any URL can
+  exfiltrate whatever it legitimately holds. Isolation without egress control is theatre.
+- **Ephemeral** — no state carries from one tenant's run to the next.
+
+**Implementation, in ascending order of strength:** container per run with seccomp and
+no-network-by-default → gVisor → Firecracker microVMs. **Clean slate, start at the first
+and design so the third is a swap, not a rewrite.** Keep per-tenant warm pools for
+start-up latency; the pool is an optimisation and must never become the isolation
+boundary.
+
+> ⚠️ **This inverts a live owner decision and the inversion is the point.** WS-3's T2 tier
+> is **parked** (D10, 2026-08-03) on the explicit ground that *"the ladder must hold
+> against trusted colleagues, not hostile users."* **Selling to external customers
+> replaces that threat model.** Un-parking T2 is not an optional hardening item under this
+> architecture — it *is* the architecture. P5-a (per-run credential scoping) already
+> shipped, which means the hardest conceptual piece exists; what is parked is the
+> enforcement tier above it.
+
+### 0.9.4 Fewer datastores — a clean-slate simplification worth taking
+
+Today: Postgres + pgvector, Redis, Neo4j, Langfuse, plus filesystem workspaces. **Every
+additional datastore is another place tenancy must be enforced and another place it can
+be forgotten** (§1.9's table is that cost, itemised).
+
+Clean slate:
+
+- **Drop Neo4j.** Neo4j Community offers one database and no real multi-tenancy, so the
+  graph becomes a tenancy problem with no good answer. An edge table in Postgres with
+  recursive CTEs covers the entity/memory graph at this scale, and inherits RLS for free.
+  **Removing a datastore removes a boundary** — that is a security improvement, not just
+  an ops one.
+- **Blobs to object storage**, `<org_id>/…` prefixed, per-tenant keys — never `BYTEA`
+  (§1.6).
+- **Redis stays, but tenant prefixing is enforced by a wrapper client**, not by
+  convention. A convention is a thing people forget; a client that cannot construct an
+  unprefixed key is not.
+- **Vectors get per-tenant namespaces** (partition or separate index per large tenant).
+  HNSW is the memory-hungry structure and the one place per-tenant physical separation
+  earns its cost on merit (§1.6).
+
+### 0.9.5 Identity, resolution and placement
+
+- **Global `user_identity` (email unique) + `org_membership`** from day one. Multi-org is
+  not a future feature: your own support staff need it on day two, and partners and
+  consultants on day thirty (§1.5).
+- **Tenant from the authenticated session or a tenant-scoped API key. Never a header,
+  query parameter or body field** (§1.5's binding rule).
+- **Subdomain per tenant** for the workbench.
+- **A `tenant_placement` indirection from day one**, even when every tenant resolves to
+  the same target. It costs one table and one lookup, and it is what turns "move this
+  customer to their own database" from an architecture change into a data move — which is
+  what makes the silo tier, the competitor objection (§1.8a) and version pinning (§1.4b)
+  all answerable with the same mechanism.
+- **Evaluate an external IdP** (WorkOS, Clerk, Keycloak) rather than growing this
+  yourself — SAML and SCIM arrive with the first enterprise deal (§1.8a).
+
+### 0.9.6 The three invariants
+
+Everything above collapses to three lines. If a design question is ever unclear, resolve
+it against these:
+
+> 1. **The tenant is derived from the authenticated principal — never from input.**
+> 2. **No code path reaches tenant data without a tenant bound, and the *database*
+>    enforces that, not the developer.**
+> 3. **Agents hold no ambient authority** — no ambient credentials, no database
+>    connection, no unrestricted egress. Everything per-run, scoped, and expiring.
+
+Invariants 1 and 2 are ordinary good multi-tenancy. **Invariant 3 is the one this product
+lives or dies on**, and it is the one an ordinary SaaS architecture would not tell you to
+write down.
+
+### 0.9.7 Build order, clean slate — and what NOT to build
+
+1. Control plane + identity + tenant resolution, **with placement indirection from day one**
+2. Data plane: RLS, `organization_id` in every PK, partitioning on the heavy tables,
+   object storage for blobs, envelope encryption for secrets and sensitive columns
+3. **Execution plane sandbox contract** (§0.9.3) — before the first external tenant, not after
+4. Entitlements + feature flags (§2, §1.4b)
+5. Metering + credits (§3)
+6. Billing automation (§4)
+
+**Do not build, clean slate or otherwise:** Kubernetes (Docker Compose on a few VMs until
+it genuinely hurts — a small team's scheduler is a distraction, not a capability), Citus or
+any sharding layer (adopt the distribution-key *discipline*, not the technology, §1.8a),
+a service mesh, or a microservice split. **The monolith is correct here**; what needs
+splitting is the **three planes' data and trust boundaries**, not the deployment topology.
+
+### 0.9.8 How much of this the phased plan already reaches
+
+Stated so the clean-slate answer and §5 are not read as two different plans:
+
+| Clean-slate element | In §5? |
+|---|---|
+| Control plane separate from tenant data | ✅ Phase 1 (§1.5) |
+| Pooled + RLS + org_id in PKs | ✅ Phase 1 |
+| Partitioning, object storage for blobs | ✅ Phase 1 (§1.6) |
+| Envelope encryption | ◐ Phase 5, pull into Phase 1 if touching those columns (§1.1a) |
+| Identity/membership split, placement, subdomain | ✅ Phase 1 |
+| Feature flags + release channel | ✅ Phase 2 (§1.4b) |
+| **Execution-plane sandbox contract** | ⚠️ **Phase 0 covers only the credential half (§6.1). The sandbox tier is WS-3 T2 and is currently PARKED.** This is the single largest gap between the phased plan and the target |
+| Drop Neo4j, wrapper-enforced Redis prefixes, per-tenant vector namespaces | ❌ Not in §5. Cheap now, expensive later — **fold into Phase 1** |
+
+**The honest summary:** the phased plan converges on the target for the data plane and
+diverges from it on the execution plane. Given a genuinely clean slate, **build §0.9.3
+first and the database question mostly stops being interesting.**
+
+---
+
 ## 1. DECISION — the tenant boundary is a ROW, and the deployment is a placement
 
 > ### `Tenant = organization_id, enforced by Postgres RLS at the connection seam.`
@@ -1036,7 +1202,7 @@ Each phase is independently shippable and each one is sellable before the next e
 
 | Phase | Work | Est. | Gate |
 |---|---|---|---|
-| **0 — Blockers** | §6: per-run credential scoping, per-org provider keys, self-mutation containment | 1–2 wk | **Nothing ships to a second customer before this** |
+| **0 — Blockers** | §6: per-run credential scoping, per-org provider keys, self-mutation containment, **+ the execution-plane sandbox contract (§0.9.3) — which requires UN-PARKING WS-3 T2 (owner decision D10), because selling externally replaces the internal-tool threat model it was parked under** | 2–4 wk | **Nothing ships to a second customer before this** |
 | **1 — Tenancy** | org_id + FORCE RLS on all tables (generated), **org_id in every PK and index prefix** (§1.8a), tenant binding at **all eight connection paths** (§0.1), `acb_app` role, `create_engine` + `psycopg.connect` ratchets, Mem0 decision, **no raw-SQL tool for agents** (§1.8a), Redis prefixing, subdomain resolution, identity/membership split (+ the external-IdP call, §1.8a), per-tenant logical backup job, partitioning for the heavy tables, build-failing coverage test | 4–5 wk | The big one. §0.1, §1.3, §1.6, §1.8a, §1.9 |
 | **2 — Entitlements** | module catalog, entitlement + seat tables, `intersect()` mask, 402 vs 403, `ModuleGate` + upsell, non-HTTP gating, **per-org feature flags + release channel** (§1.4b — same lookup shape as the entitlement mask) | 2–3 wk | **Sell here.** Invoice by hand while proving the model. |
 | **3 — AI credits** | per-org virtual keys, Redis budget gate, rate card, `usage_event`, credit ledger, top-up | 2–3 wk | §3 |

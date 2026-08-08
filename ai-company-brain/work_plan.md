@@ -137,6 +137,12 @@ looks. Full statements live in `FOUNDATION_BUILDOUT_CHECKLIST.md`.
 | WS-15 | **Centers D — dashboards + Company Center** (Center dashboards, personal dashboard, weekly digest workflows, orchestrator org-memory fix per D4) | 🟡 WS-13 | Digest workflows double as `workflows_app.md` G1 launch metric — one artifact, both scorecards. |
 | WS-16 | **Centers E — AI budgets** (per-member caps at the LLM choke points; per-room degrade later) | 🟡 WS-6 | Subjects per D2. |
 
+### Multi-tenancy (SaaS) — `saas_multitenancy.md`
+
+| WS | Workstream | Owning spec | State | Next / notes |
+|---|---|---|---|---|
+| **WS-29** | **Multi-tenancy — turning CommandCenter into a product sold to other companies** | **`specs/saas_multitenancy.md`** (architecture of record, owner-requested 2026-08-08; §11 is the dispatchable ticket list) | 🟢 **MT-0a/b/d + MT-1a…i AGENT-SAFE** · 🔴 **MT-0c OWNER-GATE** · ◐ MT-2…MT-5 scoped, not dispatchable | **Re-takes D11.** `tenancy_and_visibility.md` §1 set the tenant boundary at THE DEPLOYMENT and §6 put row-level tenancy, an org switcher and multi-org users out of scope. The business model changed — per module, per user, per month, plus metered AI — so §1/§6 are **superseded** by that spec's own re-take procedure. **§2–§5 of `tenancy_and_visibility.md` (the visibility ladder, the `group:` project grant, the gap table) are UNCHANGED and still binding**; tenancy is *which company*, visibility is *who inside it*. **The decision: tenant = `organization_id` enforced by Postgres RLS at the connection seam; the deployment is a placement, not a boundary.** Pooled standard tier, dedicated DB/stack as priced tiers. ⚠️ **The thesis is not a database thesis** (§0.9): agents execute model-generated tool calls over adversarial input, and the database can be defended by a policy that cannot be forgotten while the agent runtime cannot — so **the isolation budget belongs on the execution plane**, and MT-0c is the load-bearing ticket, not MT-1b. **Three findings that changed the plan:** (1) *"one engine, one `get_db()`"* was **wrong** — true of the request path, false of the process; §0.1 enumerates **eight** connection paths, two of which the seam ratchet never inspected (`acb_graph`'s sync `create_engine`; three raw `psycopg.connect` callers), which is why MT-1c also extends the ratchets. (2) **RLS fails closed** (unset `app.tenant_id` → NULL → zero rows) where `search_path` fails open — that property, not topology, is why schema-per-tenant was rejected (§1.8). (3) The customization layer that makes per-customer code forks unnecessary **already ships** — Custom Apps, Workflows (ADR-028), `dynamic_agents`, `pm_custom_fields`, `settings JSONB` (§1.4b). **Blockers before ANY second tenant, silo or pooled — process-level, not database-level:** MT-0a (integration credentials reach agents via process-global `os.environ`, `executor.py:4388`, flaw documented in-code at `:4364`) and MT-0b (self-mutation opens PRs against this monorepo — root `AGENTS.md` non-negotiable 3). **MT-0c is OWNER-GATE and inverts D10:** T2 is parked because *"the ladder must hold against trusted colleagues, not hostile users"* — selling externally replaces that threat model, so un-parking is the architecture, not optional hardening. **Rollout (§5.1): silo customers 1–5, build MT-1 in parallel, cut over at 8–12** — crossover is where silo's linear cost meets MT-1's one-time 4–5 weeks; every silo runs the pooled schema with `organization_id` + RLS from day one, or the bridge becomes a rewrite. **Absorbs WS-14a** as MT-1i: the three `org_group` slug-only joins were "wrong within one org, leaking in none" under D11 — **under D15 they leak**, and `_HAS_OWNER_SQL` (`access.py:522`, no org filter) is a **lockout RLS does not fix**. §11.2 is the week-one list. |
+
 ### Apps
 
 | WS | Workstream | Owning spec | State | Next / notes |
@@ -161,6 +167,20 @@ are labelled `agent-proposed, owner may overrule` in their owning specs and stay
 distinct from D11/D12's `owner-answered`); D9, D10, D11 and D12 are owner calls,
 taken and dated.
 
+- **D15 — The tenant boundary is a ROW, not a deployment.** *(owner-requested
+  2026-08-08; re-takes **D11**.)* Tenant = `organization_id`, enforced by Postgres
+  **FORCE ROW LEVEL SECURITY** bound at the `get_db()` seam with `SET LOCAL
+  app.tenant_id`; the deployment becomes a *placement* (region/tier), and a dedicated
+  database or stack survives as a **priced tier**, not the architecture. D11's cost
+  objection — *"a `WHERE organization_id = ?` on 111 tables and every query"* — does not
+  hold: connection sites are a bounded set of **eight** (`saas_multitenancy.md` §0.1) and
+  **zero existing `SELECT`/`INSERT` statements are rewritten**. **D11's §2–§5 survive
+  untouched** — this changes tenancy only, never visibility. Consequences: row-level
+  tenancy, an org switcher, multi-org users and per-org credentials all move **into**
+  scope (D11 §6 listed all four as out); leak sites 1–10 stop being moot and become
+  MT-1i; and **MT-0c requires un-parking D10's T2**, because "trusted colleagues, not
+  hostile users" is exactly the threat model that selling externally retires. Owner:
+  **WS-29**, spec `specs/saas_multitenancy.md`.
 - **D1 — Cost attribution is one workstream.** Stamp every LLM call at the
   gateway choke points with (run_id, member_email, agent, instance). Per-room
   (multiplayer §5.3), per-instance (agent-kinds §9.4), per-member and
@@ -471,6 +491,18 @@ banner (D6) · "Agent Creator"→"Agent Workshop" sweep (R3, 5 sites) ·
 drawio §12's stray Hostinger-token action item moved to WS-2's list.
 
 ## 6. Owner-gate registry (agents must refuse these)
+
+> **WS-29 / MT-0c — un-parking the WS-3 T2 isolation tier.** `saas_multitenancy.md`
+> §0.9.3 makes the per-run agent sandbox load-bearing for multi-tenancy: an agent must
+> hold no ambient credentials, **no database connection**, and no unrestricted egress.
+> T2 is parked by owner decision **D10** on the ground that the ladder need only hold
+> against trusted colleagues. **An agent must refuse to build T2, and say so**, until the
+> owner re-takes D10. MT-0a (per-run credential scoping) is AGENT-SAFE and is the
+> prerequisite — build that first regardless.
+>
+> **WS-29 — moving any customer onto the pooled tier.** Cutover is a data move against
+> live customer data. AGENT-SAFE to build; **OWNER-GATE to execute.**
+
 
 > **Two identity-boundary items, measured on the running deployment 2026-08-05 —
 > both OWNER-GATE, and together they are what makes every other access control

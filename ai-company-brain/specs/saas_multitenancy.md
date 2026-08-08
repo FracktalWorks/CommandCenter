@@ -1,6 +1,6 @@
 # SaaS multi-tenancy — selling CommandCenter to other companies
 
-**Status:** Architecture of record (owner-requested 2026-08-08) · **Owner:** vjvarada ·
+**Status:** Architecture of record (owner-requested 2026-08-08) · **Board row: `work_plan.md` §2 → WS-29 · Decision: D15** · **§11 is the dispatchable ticket list — start there** · **Owner:** vjvarada ·
 **Supersedes:** `tenancy_and_visibility.md` §1 and §6 · **Verified against code:** 2026-08-08,
 working tree at `b09093a`
 
@@ -1391,6 +1391,239 @@ grep -n "_ORG_MEMBER_SQL\|_HAS_OWNER_SQL" -A 6 packages/acb_auth/acb_auth/access
 grep -rn "organization_id" infra/postgres/*.sql | grep -ci "add column\|organization_id UUID"
 ls infra/postgres/[0-9]*_*.sql | wc -l
 ```
+
+---
+
+## 11. THE WORK PLAN — dispatchable tickets
+
+**Board rows:** `work_plan.md` §2 *Multi-tenancy* → **WS-29**. Ticket IDs are `MT-n`
+(R2: no phase-ID reuse). This section owns *what to build and how*; the board owns
+*order and ownership*.
+
+**Honesty about dispatchability.** MT-0 and MT-1 carry the full seven-point contract
+(`work_plan.md` §1) and are dispatchable today. **MT-2 through MT-5 are scoped, not
+dispatchable** — each names what must be answered to make it so. Writing testable
+acceptance for Phase 4 today would be inventing it, and §1's contract point 3 forbids
+"done when: owner call" dressed up as a criterion.
+
+**Standing rules for every ticket below.** R1 — migration numbers are *"next free at build
+time"*, never written here. Anchors are re-verified at dispatch, never trusted from
+authoring time (§0.1 exists because that rule was broken). R4 — a PR that ships a ticket
+updates this spec's status header in the same PR.
+
+---
+
+### MT-0 — Blockers · *nothing ships to a second tenant until all four are in*
+
+> These are not features and they do not gate on the tenancy decision. **MT-0a and MT-0c
+> are live defects the day two companies share a process — not a database, a *process*.**
+
+#### MT-0a · Per-run credential scoping — kill process-global `os.environ` · 🟢 AGENT-SAFE
+**Owner:** §6.1 · **Anchor:** `orchestrator/executor.py:4335-4411` (write `:4388`, restore
+`:4409`; the flaw is documented in-code at `:4364`)
+
+**Done when:**
+1. A run's resolved integration credentials reach the agent through the **run context or a
+   per-run scoped subprocess environment** — never `os.environ` of the gateway process.
+2. A hermetic test proves two concurrent runs with different credential sets **cannot
+   observe each other's values.** Verified **red** against today's code first, and the
+   failure quoted in the PR.
+3. `os.environ` is not written by `executor.py` for integration credentials at all — a
+   grep assertion in the test, so a later PR cannot reintroduce it.
+4. `uv run ruff check` clean on the touched files only (never `ruff check .` — ~1983
+   pre-existing errors on this tree, not a signal).
+
+**Verify:** `uv run pytest tests/unit/test_agent_paths.py <new file> -v -rs` ·
+`grep -n "os.environ\[" apps/services/orchestrator/orchestrator/executor.py`
+
+#### MT-0b · Self-mutation containment for non-first-party tenants · 🟢 AGENT-SAFE
+**Owner:** §6.2 · root `AGENTS.md` non-negotiable 3 · `docs/DESIGN_LIMITATION_native_maf_mutation.md`
+
+**Done when:** a config gate disables native-MAF self-mutation for any tenant not flagged
+first-party; it **defaults to disabled**; a test asserts a non-first-party tenant's failure
+event produces no PR attempt. ⚠️ **`work_plan.md` WS-3 records that no `first_party` field
+exists on any manifest, config or column** — this ticket creates it. Do not assume it.
+
+#### MT-0c · Un-park WS-3 T2 — the execution-plane sandbox · 🔴 **OWNER-GATE**
+**Owner:** §0.9.3 · `permissions_sandbox_b6.md` P5-c · board WS-3
+
+**Why it is owner-gate:** T2 is parked by **owner decision D10 (2026-08-03)** on the
+ground that *"the ladder must hold against trusted colleagues, not hostile users."*
+Selling externally replaces that threat model. **An agent must refuse this ticket and say
+so** until the owner un-parks it. `work_plan.md` §6 gains the entry.
+
+**Scope once un-parked** (§0.9.3's four clauses): one tenant binding · per-run expiring
+credentials (MT-0a is the prerequisite) · **no database connection in the agent process**
+· allowlisted egress · ephemeral teardown.
+
+#### MT-0d · Per-organization provider keys · 🟢 AGENT-SAFE
+**Owner:** §6.3 · **Anchor:** `08_provider_keys.sql:6-7` (`provider TEXT PRIMARY KEY`)
+
+**Done when:** `provider_keys` is keyed `(organization_id, provider)`; `mcp_servers`,
+`plugins` and `model_config` carry an org column; `acb_llm/key_store.py` and
+`model_config.py` resolve by tenant; the single existing org backfills; a test asserts a
+lookup without a tenant returns nothing rather than another tenant's key.
+
+---
+
+### MT-1 — Tenancy foundation · *the big one · 4–5 weeks*
+
+#### MT-1a · Control plane, identity split, placement · 🟢 AGENT-SAFE
+**Owner:** §1.5, §0.9.5
+
+**Done when:**
+1. A **separate control-plane database** (or at minimum a separate schema with its own
+   role) holds `organization`, `tenant_placement`, and the billing/entitlement/usage
+   tables. It carries **no** tenant business data and is **not** under RLS.
+2. `user_identity(id, email UNIQUE, …)` + `org_membership(user_id, org_id, status, …)`
+   replace `app_user`'s dual role. ⚠️ **`app_user.email` global uniqueness is depended on
+   by `members.py:173` and `access.py:447` (`ON CONFLICT (email)`)** — both are rewritten
+   in this ticket, and a test pins that the same email can hold membership in two orgs.
+3. `tenant_placement(organization_id, target, region)` exists and is consulted, **even
+   though every row resolves to the same target on day one.** A test asserts the resolver
+   reads it rather than a constant.
+
+#### MT-1b · `organization_id` + FORCE RLS on every table · 🟢 AGENT-SAFE
+**Owner:** §1.3 · **the generated migration, not 143 hand-written ones**
+
+**Done when:**
+1. Every application table carries `organization_id UUID NOT NULL DEFAULT
+   current_setting('app.tenant_id', true)::uuid` with an FK, an index, **and**
+   `ENABLE` + `FORCE ROW LEVEL SECURITY` with a `tenant_isolation` policy.
+2. **`organization_id` is in every primary key and every index prefix** (§1.8a — the
+   distribution-key discipline; retrofitting it later means rewriting every PK).
+3. The gateway connects as a **non-owner, non-superuser role** (`acb_app`). Migrations
+   still run as the owner. A test asserts the app role has neither `BYPASSRLS` nor
+   ownership.
+4. **A build-failing coverage test** enumerates `pg_tables` and fails if any application
+   table lacks the column, FORCE RLS, or a policy — the same ratchet discipline as
+   `tests/unit/test_db_engine_seam.py`, so a table added tomorrow is covered.
+5. **Zero `SELECT`/`INSERT` statements in the gateway are rewritten by this ticket.** If a
+   query needed changing, the column default or the policy is wrong.
+
+#### MT-1c · Tenant binding at all eight connection paths + two new ratchets · 🟢 AGENT-SAFE
+**Owner:** §0.1 — **read its table before starting; the inventory is the ticket**
+
+**Done when:**
+1. All eight paths bind a tenant. **`SET LOCAL`, never `SET`** (§1.3) — a dedicated test
+   proves a pooled connection returned and re-borrowed carries **no** tenant setting.
+2. `test_db_engine_seam.py` is extended to **`create_engine`** as well as
+   `create_async_engine` — path 4 (`acb_graph/db.py:32`) exists today precisely because
+   the ratchet only inspected the async name.
+3. A **new ratchet for `psycopg.connect`**, allow-list-with-a-reason, covering paths 5–7.
+4. **The Mem0 decision (path 8) is taken and written into this spec** — conninfo options,
+   a per-tenant role, or scope-string-only isolation. **Leaving it undecided fails this
+   ticket.**
+5. A test asserts an **unbound** connection returns **zero rows** rather than another
+   tenant's (the fail-closed property §0.1 rests on).
+
+#### MT-1d · Background-job tenant binding · 🟢 AGENT-SAFE
+**Owner:** §1.9 — *"a job that forgets doesn't leak one row; it leaks unbounded"*
+
+**Done when:** every scheduled/queued unit of work (ingestion scheduler, reconciler,
+orchestrator runs, broker handlers, the Redis Streams consumer) carries an explicit
+`organization_id` on its job record and binds it before any DB access; a test asserts a job
+constructed without one **refuses to run** rather than defaulting.
+
+#### MT-1e · Redis: prefixes enforced by the client · 🟢 AGENT-SAFE
+**Owner:** §0.9.4, §1.9 · **Anchor:** today's untenanted `cc:activity`, `cc:room`,
+`cc:cost`, `cc:presence`, `cc:runactor`, …
+
+**Done when:** a wrapper client is the only way the codebase reaches Redis and it **cannot
+construct an unprefixed key**; consumer groups are per-tenant; a grep-assertion test fails
+the build on a direct `redis.asyncio` client outside the wrapper. *A convention is a thing
+people forget; a client that cannot express the wrong thing is not.*
+
+#### MT-1f · Subdomain tenant resolution · 🟢 AGENT-SAFE
+**Owner:** §1.5's binding rule
+
+**Done when:** the workbench resolves `<slug>.<domain>` and the tenant claim rides the
+**authenticated session**; the gateway derives the tenant from the session or a
+tenant-scoped API key **only**; a test asserts an `X-Organization-Id` header, query
+parameter or body field is **ignored**, not honoured. *(This extends
+`user_management_contract.md` rule 10 — that spec gains the eleventh rule in this PR.)*
+
+#### MT-1g · Blobs out of Postgres · 🟢 AGENT-SAFE
+**Owner:** §1.6 · **Anchor:** `71_agent_blob_store.sql:30` (`content BYTEA`)
+
+**Done when:** `agent_blob` content lives in object storage keyed `<org_id>/…`; the table
+keeps metadata and a pointer; meeting media (already filesystem-backed at
+`95_note_taker.sql:56`) moves to the same store. *Worth doing in any tenancy model — a
+BYTEA column is the wrong home for file content in any topology.*
+
+#### MT-1h · Partitioning + per-tenant logical backup · 🟢 AGENT-SAFE
+**Owner:** §1.6
+
+**Done when:** the heavy tables (`email_messages`, the `*_embeddings` vector tables,
+`chat_message`, `audit_event`) are partitioned on `organization_id` — **LIST for the
+largest tenants, HASH/default for the tail** (one partition per tenant across all tenants
+recreates the catalog pressure §1.8 rejects); **and** a per-tenant logical export/import
+job exists and has been **run end-to-end at least once**, quoted in the PR. *"Restore this
+one customer to yesterday" is the one capability database-per-tenant gives free, and it
+costs one job here, not N databases.*
+
+#### MT-1i · The leak sites this decision un-mooted · 🟢 AGENT-SAFE
+**Owner:** §6.4, §6.5 · absorbs board **WS-14a**
+
+**Done when:** the three `org_group` slug-only joins carry a derived org predicate
+(`tenancy_and_visibility.md` §2's done-when 1–5 apply **verbatim** and are not restated
+here — that spec owns them); `_ORG_MEMBER_SQL` (`access.py:400`) is org-filtered; and
+`_HAS_OWNER_SQL` (`:522`) is org-filtered — **that last one is a lockout RLS does not fix**
+and must be repaired by hand.
+
+---
+
+### MT-2 … MT-5 — scoped, not yet dispatchable
+
+Each names the one thing that would make it so. **Do not hand these to an agent as written.**
+
+| Ticket | Scope | Owning § | To become dispatchable |
+|---|---|---|---|
+| **MT-2** Entitlements | `module_catalog` · `org_module_entitlement` · `user_module_seat` · the `intersect()` mask · 402-vs-403 · `ModuleGate` + upsell · non-HTTP gating · per-org feature flags + release channel | §2, §1.4b | **The SKU list and price points** (§8 items 1–2). The table in §2.4 is a proposal drawn from today's `FEATURES`, not a decision |
+| **MT-3** AI credits | Per-org virtual keys · Redis budget gate + per-run circuit breaker · `usage_event` (idempotent on `request_id`) · `model_rate_card` · `credit_ledger` · BYOK tier | §3 | **The credit-to-rupee rate and target gross margin** (§8 item 2) |
+| **MT-4** Billing | `payment_provider` seam · Stripe + Razorpay · webhooks → entitlements · dunning state machine · Operator Console · reconciler | §4 | **The provider split decision** (§8 item 3) and MT-2 shipped |
+| **MT-5** Tiers & compliance | Per-tenant envelope encryption · dedicated-DB tier activation · **drop Neo4j / graph into Postgres** · residency · SOC 2 groundwork | §1.1a, §0.9.4 | Nothing blocking. ⚠️ **Envelope encryption should be pulled into MT-1 if MT-0d or MT-1g touch those columns anyway** — retrofitting encryption onto populated columns is materially harder |
+
+---
+
+### 11.1 Sequencing, and the one thing that is not sequential
+
+```
+MT-0a ──► MT-0c (owner-gate)          MT-0b, MT-0d  ─┐
+                                                      ├─► MT-1a ─► MT-1b ─► MT-1c ─► MT-1d
+                                                      │              └─► MT-1e, MT-1f, MT-1g, MT-1h, MT-1i (parallel)
+                                                      │
+Customers 1–5 shipped as silos (§5.1) ────────────────┘   ──► MT-2 ──► MT-3 ──► MT-4 ──► MT-5
+```
+
+- **MT-1b before MT-1c.** Binding a tenant against tables with no policy proves nothing.
+- **MT-1a before MT-1b.** The org rows the FK points at must exist first.
+- **MT-1e–MT-1i are parallel** once MT-1c lands — five independent PRs.
+- **MT-0 does not block selling.** §5.1's first five customers ship as silos *while* MT-1
+  is built — but **MT-0a/b/d must be in before customer #2**, silo or not, because they
+  are process-level not database-level defects.
+
+### 11.2 Week one — what to actually do on Monday
+
+1. **Take the MT-0c decision** (un-park T2, or record why not). It is the only owner-gate
+   in MT-0 and everything in §0.9.3 waits behind it. *Owner, ~1 hour.*
+2. **Dispatch MT-0a.** Largest live defect, self-contained, no dependencies.
+3. **Answer §8 items 1–2** — SKU list and credit rate. They unblock MT-2 and MT-3, and
+   they are the two answers the first five silo customers will change, so drafting them
+   now and revising later is correct.
+4. **Write the cutover trigger down** (§5.1 condition 4) before customer #1, not after.
+
+### 11.3 What this plan deliberately does not do
+
+- **No Kubernetes, no Citus, no service mesh, no microservice split** (§0.9.7). The
+  monolith is correct; what needs splitting is the three planes' trust boundaries.
+- **No `organization_id` threaded into query bodies by hand** (§7 item 7). RLS is the
+  control; a hand-written predicate is an optimisation only.
+- **No second scoping doctrine.** `tenancy_and_visibility.md` §3.2's standing rule is
+  unchanged: tenant isolation is `organization_id` + RLS; visibility *inside* a tenant
+  stays `email | group:<slug> | org`.
+- **No acceptance written for MT-2…MT-5 until their named input exists.** A criterion an
+  implementer cannot test is worse than an empty ticket.
 
 ---
 

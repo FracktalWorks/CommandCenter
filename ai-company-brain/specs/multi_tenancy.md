@@ -1,0 +1,182 @@
+# Multi-tenancy — isolating organizations in CommandCenter
+
+> **Minted 2026-08-08** on the owner's notice that *"we are also going to be doing migrations
+> for a multi-tenant system so that multiple organizations can use the command center in an
+> isolated way."*
+>
+> **Everything below §1 is measured, not recalled** — read off the migration tree and checked
+> against a live Postgres 16 with the full set applied. Where this document gives a number,
+> `tests/unit/test_tenancy_boundary.py` recomputes it on every run.
+
+---
+
+## 1. The measured state
+
+CommandCenter is **single-tenant with the beginnings of a tenant boundary already in place**,
+which is a better starting position than it sounds and a worse one than it looks.
+
+| | |
+|---|---|
+| App tables defined in migrations | **143** (plus `LiteLLM_*`, vendored, not ours) |
+| Carrying `organization_id` | **6** |
+| Carrying none | **137** |
+| `pm_*` tables (Projects, WS-27) | 17 — **0 scoped** |
+
+The six that are scoped: `app_user`, `crm_activities`, `crm_contacts`, `crm_deals`,
+`org_group`, `org_role`.
+
+**An `organization` table already exists** (migration 130) with `slug`, `display_name`,
+`domain`, `settings`, and exactly one seeded row — `slug='default'`. `app_user` gained
+`organization_id` in the same migration. So the spine of a tenant model is there; it was
+simply never carried past the access-control system and the CRM.
+
+**This is not a Projects problem.** WS-27 is 17 of the 137, and the majority of the tree is in
+the same position: every `gtd_*`, `email_*`, `wa_*`, `workflow*`, `app*`, `chat_*` table, and
+— tellingly — `org_settings`, `org_role_permission`, `user_role` and `org_group_member`.
+`org_settings` says so in its own comment: *"there is no per-tenant key namespace because this
+deployment is one organisation."* That comment is about to stop being true.
+
+### 1.1 The one number that decides the cost
+
+`app_user.email` is **globally `UNIQUE`** (`app_user_email_key`). Today a person belongs to
+exactly one organization, structurally. Whether that stays true is **D-MT-1**, and it is the
+decision the whole retrofit hangs off.
+
+### 1.2 Why Projects is cheaper to retrofit than its size suggests
+
+128 `FROM`/`JOIN` references to `pm_*` tables across 16 modules — but they do not each scope
+themselves. There is **one closure query**, `_VISIBLE_PROJECTS_SQL`, reached through
+`resolve_visibility` (60 call sites), `load_visible_project` (31), `load_visible_task` (26) and
+`task_visibility_clause` (6). Every read in the app funnels through it.
+
+So the Projects retrofit is: **a column on 17 tables, a predicate in one query, and one line in
+the `Visibility` resolver.** That is contained. It is contained *because the app was built with
+a single visibility seam*, and it stops being contained the moment real data lands in those
+tables.
+
+---
+
+## 2. What this means for the ClickUp import — read this first
+
+🔴 **Do not run `POST /projects/import/clickup` against production until the `pm_*` tenant key
+lands.** This is the one place where the multi-tenant plan collides with work already queued.
+
+The import is an owner gate (`work_plan.md` §6 (a)) and is the next thing WS-27 wants. Running
+it now writes a real ClickUp workspace — hundreds of tasks, their activities, attachments and
+grants — into 17 tables with no tenant column. Adding the column afterwards means a backfill
+and an `ALTER` on live rows instead of a one-line default on empty ones.
+
+**The cost of waiting is a few days. The cost of not waiting is paid once per table, forever.**
+
+---
+
+## 3. The decisions
+
+### D-MT-1 — Can one person belong to more than one organization?
+
+`DECISION — OWNER-ANSWER REQUIRED.` Everything else in this document is downstream of it, and
+it is a product question about how the SaaS is sold rather than a technical one.
+
+* **(a) One person, one organization.** `app_user.email` stays globally unique. A request's
+  tenant is *derived* from `X-User-Email`, so the identity seam every app already reads does
+  not change shape — `resolve_visibility` grows one lookup and every query inherits the answer.
+  **Cost:** a consultant working with two customer organizations needs two accounts with two
+  email addresses. For an internal tool becoming a product this is normal; for an agency
+  product it is a dealbreaker.
+* **(b) One person, many organizations.** `UNIQUE(email)` becomes `UNIQUE(organization_id,
+  email)`, and identity stops being resolvable from the email alone. **Every request needs a
+  tenant discriminator** — a subdomain, a path segment, or a selected-org cookie — and that
+  touches the auth seam of *every* app, not just Projects. It also reopens settled ground:
+  `pm_project_grants.subject` and `pm_task_assignees.assignee` are bare emails (D-PM-4), and
+  under (b) a bare email no longer identifies a person.
+
+**Agent's recommendation: (a) for v1**, because it preserves the `X-User-Email` seam the whole
+platform is built on and can be relaxed later behind an org-switcher, whereas (b) is a change
+to identity itself and cannot be deferred once accounts exist. **This is a recommendation, not
+a proposal** — if the intended customers are agencies or consultancies, (b) is right and it is
+much cheaper to decide that now than after the first tenant onboards.
+
+### D-MT-2 — Where is isolation *enforced*?
+
+`DECISION (agent-proposed, owner may overrule) — OPEN.`
+
+* **(a) Row-level security.** Postgres RLS with `organization_id = current_setting('app.org')`,
+  set per connection. The database refuses cross-tenant reads whether or not the application
+  remembers to filter. **Cost:** every connection must set the GUC — including the ingestion
+  workers, the broker, and the migration runner — and a missed `SET` fails closed, which is
+  the right direction but is an outage rather than a leak.
+* **(b) An application predicate**, exactly as `task_visibility_clause` works today.
+  **Cost:** correctness rests on 143 tables' worth of query authors never forgetting, which is
+  the discipline that produced 137 unscoped tables in the first place.
+* **(c) A schema per tenant.** Strong isolation, no predicate anywhere. **Cost:** migrations
+  run N times, and the connection pool multiplies. At single-digit tenant counts this is fine
+  and at three digits it is a second full-time problem.
+
+**Proposed: (a) RLS, with (b) kept where it already exists.** RLS is the only option where the
+*absence* of code is safe rather than a leak — and given the measured 137, absence of code is
+the failure mode this system actually has. `task_visibility_clause` stays: RLS decides *which
+tenant*, grants decide *which projects within it*, and those are different questions.
+
+### D-MT-3 — `organization_id` on the row, or reachable through a parent?
+
+`DECISION (agent-proposed, owner may overrule) — OPEN.`
+
+`pm_tasks` already has `root_project_id` denormalised precisely so scope checks need no
+recursive walk (migration 146). The same argument applies one level up: **carry
+`organization_id` on every tenant-owned table**, even where it is derivable.
+
+**Rejected:** deriving it through the parent chain. RLS policies cannot afford a join, a
+derived key cannot be indexed usefully, and "derivable" stops being true the moment a row's
+parent is nullable — which `pm_tasks.parent_task_id` already is (`ON DELETE SET NULL`).
+**Cost:** the column must be kept true on write, which is one more thing an `INSERT` can get
+wrong; a `CHECK` against the parent's value is the cheap guard.
+
+---
+
+## 4. The ratchet, in place now
+
+`tests/unit/test_tenancy_boundary.py` freezes the 137 and fails any **new** table without
+`organization_id`, on the model of the frontend's `conformance.test.ts`:
+
+* a table not in the baseline must carry a tenant key;
+* a baselined table may stay as it is;
+* a baselined table that *gained* one fails until it is removed from the baseline, so the
+  figure never quietly becomes fiction.
+
+It reads the migrations — including `ALTER TABLE … ADD COLUMN organization_id`, which is how
+`app_user` got its key and which a `CREATE TABLE`-only scan misses — and its output was
+checked against a live Postgres before it was written. Its purpose is **not** to demand the
+retrofit. It is to stop the number growing while D-MT-1 is answered, because every table added
+between now and then is another backfill.
+
+---
+
+## 5. Proposed sequence
+
+| | Ticket | Depends on |
+|---|---|---|
+| 1 | **WS-29a** — answer D-MT-1; `organization_id` on the 17 `pm_*` tables while they are still empty | D-MT-1 |
+| 2 | **WS-29b** — the tenant predicate in `_VISIBLE_PROJECTS_SQL` + `Visibility`; the `subject='org'` literal becomes org-relative | WS-29a |
+| 3 | **WS-29c** — RLS policies and the connection-level GUC, behind a flag, off | D-MT-2 |
+| 4 | **WS-29d** — the remaining 120 tables, by family, largest blast radius first | WS-29c |
+| — | **WS-27g's ClickUp import** | **after WS-29a** |
+
+**WS-29a is the only urgent one**, and only because of the import. The rest can proceed at
+whatever pace the product needs.
+
+---
+
+## 6. What is already right, and should not be redone
+
+Worth stating so the retrofit does not churn it:
+
+* **`organization` exists and is referenced correctly** where it is used at all — `app_user`,
+  `org_group`, `org_role` all `REFERENCES organization(id) ON DELETE CASCADE`.
+* **Projects has one visibility seam.** That is the property making its retrofit a day rather
+  than a month; it should survive intact, with the tenant predicate composed *above* the grant
+  closure rather than tangled into it.
+* **The grant vocabulary (`email | group:<slug> | org`) is tenant-shaped already** — except
+  that the `org` literal means "everybody", and under multi-tenancy it must mean "everybody in
+  *this* organization". That is one clause, in one query, and it is the single most dangerous
+  line in the retrofit: today it is correct, and after the first second tenant onboards it is a
+  cross-tenant leak.

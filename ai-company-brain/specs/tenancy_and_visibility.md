@@ -1,6 +1,8 @@
 # Tenancy and visibility — who can see what
 
-**Status:** Architecture of record · owner-answered 2026-08-03 · **Date:** 2026-08-03 ·
+**Status:** Architecture of record for **visibility (§2–§5)**. ⚠️ **§1 and §6 (tenancy) were
+re-taken on 2026-08-08 — see [`saas_multitenancy.md`](saas_multitenancy.md) §1.** ·
+owner-answered 2026-08-03 · **Date:** 2026-08-03 ·
 **Verified against code:** 2026-08-03, **re-verified and corrected 2026-08-03** against
 `ws-14-doc-remediation` (parent `bebbd924`) · **Owner:** vjvarada
 
@@ -47,9 +49,44 @@ owner for "who can see what" (`work_plan.md` §4).
 
 ---
 
-## 1. DECISION — the tenant boundary is the deployment
+## 1. DECISION — the tenant boundary is the deployment ⚠️ **SUPERSEDED 2026-08-08**
 
-> ### `Tenant boundary = THE DEPLOYMENT.` *(owner-answered 2026-08-03)*
+> ### ⛔ **RE-TAKEN. Read `saas_multitenancy.md` §1 instead.** *(owner-requested 2026-08-08)*
+>
+> **The reason: the business model changed.** CommandCenter is being sold to external
+> customers, priced per module, per user, per month, plus metered AI. §1.4 of that
+> document shows that price point and one-VM-per-customer are arithmetically
+> incompatible, and §1.3 shows why the cost objection recorded in §1.2 below no longer
+> holds: because `packages/acb_common/acb_common/db.py` is a **single** engine and a
+> **single** `get_db()`, tenant scoping installs at one seam with Postgres RLS and
+> **zero existing queries change** — the "a `WHERE organization_id = ?` on 111 tables"
+> framing below was measured against an assumption, not against that seam.
+>
+> **The new decision:** *tenant = `organization_id`, enforced by Postgres RLS at the
+> connection seam; the deployment is a placement (region/tier), not a tenant boundary.*
+> A dedicated database or dedicated stack survives as a **priced enterprise tier**, which
+> is what §1.2's cost analysis below is now the pricing input for.
+>
+> **§6 of this document is superseded with it** — row-level tenancy, an org switcher and
+> multi-org users are now all in scope, per `saas_multitenancy.md` §1.5.
+>
+> **Everything else in this document survives unchanged and is still binding:** the
+> visibility ladder (§3), the project-grant decision (§4), and the per-surface gap table
+> (§5). Tenancy and visibility are different axes — tenancy is *which company*, visibility
+> is *who inside that company* — and `saas_multitenancy.md` §7.8 restates §3.2's
+> standing rule against a second scoping doctrine.
+>
+> ⚠️ **What un-mootedness costs.** §1.1 below concludes that leak sites 1–10 "cannot fire"
+> because there is one `organization` row. Under the new decision **that premise is gone**
+> and every one of them must be verified rather than assumed —
+> `saas_multitenancy.md` §6.4 and §6.5 carry that list, and §6.1/§6.2 add two hard
+> blockers (process-global credential injection; self-mutation writing to the shared
+> monorepo) that must be fixed **before a second tenant exists at all**.
+>
+> The text below is retained verbatim as the record of the decision that was taken on
+> 2026-08-03 and of why it was correct at the time. **Do not build against it.**
+
+> ### `Tenant boundary = THE DEPLOYMENT.` *(owner-answered 2026-08-03 · superseded 2026-08-08)*
 >
 > One deployment per tenant. If a second organization ever exists it gets its own
 > box, its own database, its own credential set. Row-level organization isolation
@@ -520,7 +557,20 @@ this conversion adds `group:` **only** and must leave `org` rejected.
 
 ---
 
-## 6. Explicitly out of scope
+## 6. Explicitly out of scope ⚠️ **SUPERSEDED 2026-08-08 — all four items are now IN scope**
+
+> ⛔ **Re-taken by `saas_multitenancy.md` §1** (owner-requested 2026-08-08), by exactly the
+> procedure the closing line of this section prescribes. Items 1–4 below are now queued
+> work, not prohibitions:
+>
+> | Was out of scope | Now |
+> |---|---|
+> | 1. Row-level multi-tenancy | **The mechanism.** `organization_id` + `FORCE ROW LEVEL SECURITY` on every table, bound at the `get_db()` seam with `SET LOCAL app.tenant_id` — `saas_multitenancy.md` §1.3 |
+> | 2. An org switcher | **Subdomain-resolved tenant**, bound to the authenticated session. Never a client-settable header — §1.5 |
+> | 3. Users belonging to multiple orgs | **Supported**, via a global `user_identity` + `org_membership` split; RLS is what makes it cheap — §1.5 |
+> | 4. Per-org credentials inside one deployment | **Required.** `provider_keys` becomes `(organization_id, provider)` — §6.3, and it is a *blocker*, not a nice-to-have |
+>
+> The text below is retained as the record of what was decided on 2026-08-03.
 
 Named so nobody builds them, and so a future audit does not re-file them as gaps:
 

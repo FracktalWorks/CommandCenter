@@ -1680,6 +1680,52 @@ async def _integration_authorizer(event_payload: Any, thread_id: str | None = No
         return None
 
 
+def _payload_user(event_payload: Any) -> str:
+    """The acting user this payload names, or ``""`` when it names nobody.
+
+    ``""`` is a real answer, not a missing one — see :func:`_bind_run_identity`.
+    """
+    if not isinstance(event_payload, dict):
+        return ""
+    return str(
+        event_payload.get("user_email") or event_payload.get("user_id") or ""
+    )
+
+
+def _bind_run_identity(event_payload: Any, agent_name: str = "") -> Any:
+    """Open this run's acting-user scope; hand back what closes it.
+
+    One helper for both executors so the two paths cannot drift — they did
+    before, and the drift is invisible until somebody reads the other one.
+    """
+    try:
+        from acb_skills.memory_tools import (
+            _bind_memory_user_id,
+            _get_memory_user_id,
+        )
+        binding = _bind_memory_user_id(_payload_user(event_payload))
+        if not _get_memory_user_id():
+            # Not an error: a platform run (cron, reconciler, an event with no
+            # person behind it) legitimately has nobody. Logged because the
+            # consequence is otherwise invisible — the gateway-calling tools
+            # will refuse, and "the agent said it had nobody to act as" has to
+            # be answerable without a debugger. It used to be answerable the
+            # wrong way, by acting as whoever ran last.
+            _log.info("executor.run_has_no_acting_user", agent=agent_name)
+        return binding
+    except Exception:
+        return None
+
+
+def _unbind_run_identity(binding: Any) -> None:
+    """Close a :func:`_bind_run_identity` scope. Never raises."""
+    try:
+        from acb_skills.memory_tools import _unbind_memory_user_id
+        _unbind_memory_user_id(binding)
+    except Exception:
+        pass
+
+
 async def run_agent(
     agent_name: str,
     event_payload: dict[str, Any],
@@ -1689,6 +1735,12 @@ async def run_agent(
     model: str | None = None,
 ) -> dict[str, Any]:
     """Dynamically load and execute a named agent.
+
+    Thin wrapper over :func:`_run_agent_inner` whose only job is to open and —
+    crucially — CLOSE this run's acting-user scope, so the identity cannot
+    outlive the run on a caller's task. A wrapper rather than a ``try/finally``
+    around the body because the body is three hundred lines and its own
+    ``except`` re-raises; the boundary belongs where it is impossible to miss.
 
     Args:
         agent_name:    Bare agent name, e.g. ``"task-manager"``.
@@ -1701,24 +1753,30 @@ async def run_agent(
     Raises:
         :class:`AgentRunError` on failure (includes mutation PR URL if one was opened).
     """
+    _identity = _bind_run_identity(event_payload, agent_name)
+    try:
+        return await _run_agent_inner(
+            agent_name, event_payload,
+            run_id=run_id, thread_id=thread_id, model=model,
+        )
+    finally:
+        _unbind_run_identity(_identity)
+
+
+async def _run_agent_inner(
+    agent_name: str,
+    event_payload: dict[str, Any],
+    *,
+    run_id: str | None = None,
+    thread_id: str | None = None,
+    model: str | None = None,
+) -> dict[str, Any]:
+    """The batch run itself. Call :func:`run_agent`, not this — this one assumes
+    the acting-user scope is already open."""
     _disable_agent_telemetry_once()
     settings = get_settings()
     run_id = run_id or str(uuid.uuid4())
     thread_id = thread_id or f"{agent_name}:{run_id}"
-
-    # Set the memory/user ContextVar from the payload so user-scoped tools and
-    # memory resolve the acting user (mirrors run_agent_stream).
-    try:
-        from acb_skills.memory_tools import _set_memory_user_id
-        _mu = str(
-            event_payload.get("user_email")
-            or event_payload.get("user_id") or ""
-        ) if isinstance(event_payload, dict) else ""
-        if _mu:
-            _set_memory_user_id(_mu)
-            os.environ["ACB_AGENT_USER_EMAIL"] = _mu
-    except Exception:
-        pass
 
     record(
         AuditEvent(
@@ -2172,25 +2230,13 @@ async def run_agent_stream(
     settings = get_settings()
 
     # ── User context for tools/memory ──────────────────────────────────────
-    # Set the memory ContextVar HERE (inside the generator, before any agent
-    # task spawns) from the payload, so user-scoped tools and memory see the
-    # acting user. Setting it in the calling route doesn't survive into the
-    # streaming/agent execution context.
-    try:
-        from acb_skills.memory_tools import _set_memory_user_id
-        _mu = ""
-        if isinstance(event_payload, dict):
-            _mu = str(
-                event_payload.get("user_email")
-                or event_payload.get("user_id") or ""
-            )
-        if _mu:
-            _set_memory_user_id(_mu)
-            # Fallback for tool callbacks the Copilot SDK runs outside this
-            # ContextVar's reach (single-user deployments).
-            os.environ["ACB_AGENT_USER_EMAIL"] = _mu
-    except Exception:
-        pass
+    # Bind the acting user HERE (inside the generator, before any agent task
+    # spawns) from the payload, so user-scoped tools and memory see it: setting
+    # it in the calling route doesn't survive into the streaming/agent execution
+    # context. Released in this generator's finally — an identity that outlives
+    # its run is the next run's identity, which is the bug this shape exists to
+    # prevent (see _bind_memory_user_id).
+    _identity_binding = _bind_run_identity(event_payload, agent_name)
 
     # ── Run correlation (E2 observability) ─────────────────────────────────
     # Bind run_id/thread_id/agent/user into structlog contextvars so EVERY log
@@ -4048,6 +4094,9 @@ async def run_agent_stream(
                 pass
         _stream_relay_thread_id.reset(_relay_token)
         _active_run_model.reset(_model_token)
+        # Same reason, for the thing that says WHO this run was: an acting user
+        # left bound is inherited by whatever runs next on this task (S1-4).
+        _unbind_run_identity(_identity_binding)
         # B6 Phase-5 Tier 0: tear down this run's scoped integration creds so
         # they don't linger in the shared process env for the next agent.
         _restore_integration_env(_integration_env_token)

@@ -268,7 +268,7 @@ async def test_a_run_with_nobody_to_act_as_refuses_rather_than_calling(
     calls = _fake_gateway(monkeypatch, _responder, user="")
     with pytest.raises(RuntimeError) as exc:
         await invoke()
-    assert "ACB_AGENT_USER_EMAIL" in str(exc.value)
+    assert "nobody to act as" in str(exc.value)
     assert calls == [], "the gateway was called despite having nobody to act as"
 
 

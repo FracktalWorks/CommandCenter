@@ -197,28 +197,78 @@ by-construction discipline root `AGENTS.md` constraint 10 already applies to aut
 That converts a 6-month rewrite into roughly **3–4 weeks**. It is still the largest
 single piece of work in this document, and §1.5 lists what it does *not* cover.
 
-### 1.4 Why container-per-customer specifically fails this business
+### 1.4 Why container-per-customer fails this business — priced at 10–50 seats
 
-Stated as arithmetic so the trade is honest, not as a preference.
+> **Owner input, 2026-08-08: every customer is a company of 10–50 users**, not an
+> individual. This section was first written against a 10-seat single-module customer and
+> **its lead argument does not survive that input.** Corrected here rather than quietly
+> left standing, because the corrected version is what makes the recommendation honest.
 
-`infra/docker-compose.yml` provisions **Postgres+pgvector, Redis, Neo4j, Langfuse**, plus
-gateway/workbench/meeting-bot processes. A realistic per-stack floor is **~6–8 GB RAM**.
-On a 16 GB VPS that is **two customers per box**.
+**What no longer holds — the infrastructure-cost argument.** A 25-user company on three
+modules at ~₹500/user/module is ~₹37,500/month (≈$450). A VPS able to run a full stack is
+~$30–40/month — roughly **8% of revenue**. That is affordable. The original claim that
+*"the SMB tier does not exist under this model"* was priced for a customer a quarter this
+size and **is withdrawn.** At this ACV, dedicated infrastructure is not what breaks.
 
-- A 10-seat customer at, say, ₹500/user/month for two modules is ~₹10,000/month revenue
-  against a dedicated-VM cost that eats a large fraction of it before support. **The SMB
-  tier does not exist under this model.**
-- **156 migrations × N customers × every deploy.** At 20 customers a schema fix is a
-  20-box operation with 20 chances to skew. This is the failure mode that actually kills
-  small teams — not a leaked row.
-- Onboarding becomes provisioning: DNS, TLS, systemd units, credential sets
-  (`tenancy_and_visibility.md` §1.2 already priced this at *"roughly a day of owner-gated
-  work and a permanent second thing to patch"*). **Self-service signup is impossible.**
-- Cross-tenant product features — your own operator console, aggregate usage, benchmarks,
-  a shared agent marketplace — need a fan-out query across N databases.
+**What holds, and holds harder — the cost that scales in people, not servers.**
 
-**Where it is right:** a customer with a genuine regulatory or contractual requirement,
-paying enterprise prices, onboarded by hand. Keep it. Price it. Don't build on it.
+- **156 migrations × N customers × every deploy.** This is the binding constraint and it
+  gets *worse* as the customer base grows, because it is linear in N and paid by a small
+  team every week. At 20 customers, deploy babysitting, per-box backup verification and
+  N incident surfaces realistically consume **half an engineer** — permanently.
+- **N boxes means N versions of your access-control code in production.** A migration that
+  fails on customer 14 leaves customer 14 running the old permission check. With
+  `130_org_access_control.sql` and its successors defining who can see what, **version
+  skew is a security defect, not an ops annoyance** — and it is a defect that pooled
+  cannot have.
+- **Self-service signup is impossible.** Onboarding becomes DNS, TLS, systemd units and
+  credential sets — `tenancy_and_visibility.md` §1.2 priced it at *"roughly a day of
+  owner-gated work and a permanent second thing to patch."*
+- **Cross-tenant product features need fan-out across N databases** — the Operator Console
+  (§4.1), aggregate usage, benchmarks, a shared agent marketplace.
+
+**The crossover, stated as a number so the decision is checkable.** Silo's cost is
+**linear in customers**; pooled's is a **one-time 4–5 weeks** (§5 Phase 1). They cross at
+roughly **8–12 customers**. Below that, silo is genuinely cheaper *and* faster to revenue.
+Above it, silo compounds. See §5.1 for what to do with that.
+
+**Where silo is still right:** a customer with a genuine regulatory or contractual
+requirement, paying for it, onboarded by hand — and the first handful of customers, as a
+deliberate bridge (§5.1). Price it. Don't build the product on it.
+
+### 1.4a The WordPress analogy — why hosting and SaaS answer this differently
+
+Raised by the owner 2026-08-08, and worth recording because the intuition is common,
+reasonable, and points the opposite way once followed through.
+
+Hostinger gives every WordPress install its own database. **That is correct for
+Hostinger and irrelevant to CommandCenter, because Hostinger is a host, not a SaaS.**
+The determining question is:
+
+> **Who controls the schema and the upgrade cadence — you, or the customer?**
+
+| | Customer controls the app | **You** control the app |
+|---|---|---|
+| Examples | WordPress on shared hosting · self-hosted Odoo · Jira Data Center | Salesforce · Google Workspace · Slack · Zoho · **CommandCenter** |
+| Consequence | The host cannot know or migrate the schema; customer A may run WP 5.8 while B runs 6.4; the customer installs arbitrary plugins that alter tables | You ship one version to everyone; customers cannot fork the schema or install plugins into your Postgres |
+| Correct model | **Database per install — mandatory** | **Pooled — the norm** |
+
+**WordPress's own answer, when WordPress is the SaaS, is not database-per-customer.**
+WordPress Multisite puts every site in **one database**, adding a per-site *table prefix*
+(`wp_2_`, `wp_3_`, …) over a set of shared network-wide tables — users among them. And at
+WordPress.com scale the fix was **hash-based sharding into 16 / 256 / 4096 shards**, not a
+database per site.
+
+Two things follow, and both support this document's decisions:
+
+1. **Same software, different business model, different answer.** Hostinger silos because
+   the customer owns the install. WordPress.com pools because WordPress.com owns it. You
+   own CommandCenter. You are on the WordPress.com side of that line, not Hostinger's.
+2. **Multisite's per-site table prefix is schema-per-tenant in a different costume — and
+   it hits exactly the failure §1.8 predicts.** Per-site table sets multiply the catalog
+   (a 1,000-site network is tens of thousands of tables), which is *why* large networks
+   shard. That is independent real-world confirmation of §1.8's catalog-pressure argument,
+   arriving from the very example that seemed to argue the other way.
 
 ### 1.5 The target architecture, concretely
 
@@ -385,9 +435,15 @@ still N, against 156 files today).
 **Where it would win, stated so the call can be re-taken:** if the target is a few dozen
 large customers rather than many small ones, catalog pressure never arrives, per-tenant
 backup matters more than onboarding speed, and the procurement conversation is easier.
-That is the same condition under which the silo tier makes sense (§8 item 5) — so if the
-market turns out to be a few dozen enterprise accounts, **re-take this section, not just
-the tier mix.**
+
+> **Tested against the owner's answer, 2026-08-08 — the condition is NOT met.**
+> 10–50 users per customer is **mid-market, not enterprise**: it is Slack's, Notion's,
+> HubSpot's, Freshworks' and Zoho's core segment, and every one of them is pooled. The
+> flip condition needs *few customers*, and 10–50 seats implies the opposite — a customer
+> base counted in dozens-to-hundreds, where catalog pressure (143 tables × N schemas) does
+> arrive and onboarding speed does matter. **Pooled stands.** Re-take this only if the
+> plan changes to topping out at ~20–30 accounts at high ACV, which is a different
+> business, not a bigger version of this one.
 
 ### 1.9 The surfaces RLS does NOT cover — decide each, or they leak
 
@@ -785,6 +841,35 @@ nothing, and entitlements over unisolated data are a UI convention rather than a
 and is how you learn whether the module split and the price points are right, before
 automating them.
 
+### 5.1 Start siloed, cut over at the crossover *(owner input 2026-08-08: 10–50 seats)*
+
+The phases above describe the destination. They do **not** require waiting 4–5 weeks
+before the first customer, and at 10–50 seats per company they should not.
+
+> **Customers 1–5: run them as silos. Build Phase 1 in parallel. Cut over at 8–12.**
+
+**Why this is right rather than a compromise.** §1.4's crossover is ~8–12 customers, so
+below it silo is genuinely cheaper *and* reaches revenue sooner. Five hand-run
+deployments teach you which modules customers actually buy and what they pay — the two
+inputs §8 says are still open — and that learning is worth more than a month of
+architecture built against guesses.
+
+**The four conditions that make it a bridge rather than a trap.** Without these it is
+not a staged rollout, it is silo-by-default arrived at by drift:
+
+1. **Phase 0 is non-negotiable even for silos.** Process-global credentials (§6.1) leak
+   *between concurrent runs* — the second tenant needn't be on the same database for
+   that to matter, only in the same process. Self-mutation containment (§6.2) likewise.
+2. **Every silo runs the pooled schema**, with `organization_id` populated and RLS
+   enabled from day one, even though the database holds one tenant. A silo is then a
+   pooled deployment with N=1, and cutover is a data move rather than a migration.
+   **Skipping this is what turns the bridge into a rewrite.**
+3. **One deploy pipeline, parameterised by target** — never a per-customer script. The
+   moment two boxes deploy differently, §1.4's version-skew defect has arrived.
+4. **A written cutover trigger**, checked monthly: customer count ≥ 8, *or* deploy
+   overhead exceeding roughly a day a month, *or* the first version-skew incident —
+   whichever comes first. **A bridge with no trigger is a destination.**
+
 ---
 
 ## 6. Blockers — fix before a second tenant exists
@@ -897,10 +982,11 @@ Recorded so they are not re-proposed, and so the reasoning survives:
    market is one geography.
 4. **Data residency commitments.** Whether to promise India-only data at launch. This is
    cheap to promise now (one region) and expensive to add later.
-5. **Whether first customers get the pooled tier or hand-run silos.** Running the first
-   two or three as silos while Phase 1 lands is a legitimate way to start selling
-   sooner — provided Phase 0 is done and it is understood as a bridge, not the
-   architecture.
+5. ~~**Whether first customers get the pooled tier or hand-run silos.**~~
+   **ANSWERED 2026-08-08** by the owner's seat-count input (10–50 users per customer):
+   **silo customers 1–5, build Phase 1 in parallel, cut over at 8–12.** The reasoning,
+   the crossover arithmetic and the four conditions that keep it a bridge rather than a
+   drift are in **§5.1**.
 
 ---
 

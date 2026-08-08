@@ -693,6 +693,64 @@ eval lock, and the owner performs one confirmation step per import run. **Scope 
 supersedes the earlier "pilot Space vs all Spaces" framing — scope is now a per-Space
 decision the plan step surfaces, so both a pilot and a full import are the same code path.
 
+**D-PM-11 — The timeline shows a chosen SCOPE, not every task.**
+`DECISION (agent-proposed, owner may overrule) — OPEN, see WS-27t.` A Gantt of 400 rows is a
+wall nobody reads, so something has to decide which tasks earn a bar. Three candidates, and
+they are not equivalent:
+
+* **(a) A task TYPE, the Paca answer.** Paca's Timeline pre-filters to the `Epic` system type
+  and its view settings let you add others back. Clean, and it costs us a convention we do
+  not have: `pm_task_types` is per-root data with no reserved names, so "Epic" would either
+  become a seeded row every project inherits or a name-match, and a name-match is a rule that
+  silently stops working the day somebody renames a type.
+* **(b) Hierarchy DEPTH.** Top-level tasks get bars; subtasks roll up into the parent's bar
+  and expand on click. Needs no new vocabulary — `parent_task_id` already says it — and it
+  matches how the tree is already drawn everywhere else in this app.
+* **(c) Whatever the current filters select.** No new concept at all: the timeline is the
+  board's filters in a third shape, which is the rule §11.16 already holds for the calendar.
+  Honest, and it puts the wall back the moment somebody clears the filters.
+
+**Proposed: (b), with (c) underneath it** — depth decides the default and the filter bar
+still narrows, so the two compose instead of competing. **Rejected:** (a) as the primary,
+because inventing a reserved type name to make a chart legible is a data-model change in
+service of a rendering problem, and D-PM-2 put types in the hands of each project on purpose.
+**Cost:** a subtask's dates have to roll up into the parent's bar, which means the parent's
+bar is sometimes derived rather than stored, and "why does this bar not match the dates I
+typed" becomes a question the UI has to answer on the bar itself.
+
+**D-PM-12 — Does a dependency CONSTRAIN the schedule, or only describe it?**
+`DECISION — OPEN, OWNER-ANSWER REQUIRED. WS-27t does not start until this is answered.`
+
+This is the one that changes what the data means, which is why it is not agent-proposed.
+Jira and ClickUp both offer to **push** a dependent task's dates when you move its blocker.
+Adopting that turns `pm_task_links` from a description into a constraint:
+
+* **(a) Describe only.** Drawing an arrow records the dependency and moves nothing. This is
+  the straight extension of WS-27p, which states the position explicitly — *"blocked-ness is
+  DERIVED and SHOWN, never enforced"* — on the argument that dependencies in a real workspace
+  are frequently approximate, and a tool that will not let somebody finish work they have
+  finished is a tool they route around. **Cost:** the chart will show arrows pointing
+  backwards in time, because nothing stops a blocker being due after the task it blocks.
+  Users read that as the feature being broken.
+* **(b) Constrain, and auto-push.** Moving a blocker drags its dependents forward. What
+  people expect from Jira. **Cost, and it is not small:** one drag becomes an unbounded
+  cascade of writes across a project — every one of them a real `PATCH` with a
+  `field_change` activity and a revert (§3.8), so a single gesture can produce fifty timeline
+  rows and fifty notifications. It also directly contradicts WS-27p's stated position, so
+  taking it means striking that paragraph rather than quietly living beside it.
+* **(c) Constrain, but only warn.** The arrow goes red and the panel says "this starts before
+  its blocker finishes"; nothing is written. Keeps WS-27p's position intact, kills the
+  backwards-arrow complaint, and adds no cascade. **Cost:** somebody still has to do the
+  rescheduling by hand, which is exactly the work (b) automates.
+
+**Agent's recommendation: (c).** It is the only one of the three that neither contradicts a
+decision already made nor lets one gesture write fifty rows, and it can become (b) later
+behind an explicit per-project setting — whereas (b) cannot become (c) without taking a
+behaviour away from people who have started relying on it. **This is a recommendation, not a
+proposal:** (b) is a defensible answer if the owner wants Jira's behaviour specifically, and
+in that case WS-27p's paragraph gets struck and rewritten, not worked around.
+
+
 ---
 
 ## 9. Tickets
@@ -888,6 +946,66 @@ owner-scoped predicates and the `gtd_*` task tables are gone. See §7.5.
 parity sign-off, sync flips, consumer repoint, token revocation, constraint-8 amendment —
 each registered in `work_plan.md` §6).
 
+**WS-27t — the timeline, and dependencies you can draw.** 🟡 **BLOCKED on D-PM-12**
+(owner-answer required — see §8). Everything else about this ticket is agent-safe; the block
+is on one question, and it is a question about what the data MEANS rather than how it looks,
+which is why building first and asking later is not available.
+
+*Asked for directly, 2026-08-08:* **"a timeline view that can also make tasks and subtasks
+dependent on each other, with wiring them to each other, similar to how it works on Jira and
+ClickUp."** Two things, and the second is the one that matters — a Gantt chart with no
+dependency gesture is decoration, which is precisely why Gantt was a non-goal until now.
+
+**The data is already built.** This is a rendering-and-gesture ticket, not a schema one:
+
+| Needed | Status |
+|---|---|
+| `start_date` (DATE) + `due_at` (timestamptz) on every task | ✅ migration 146, surfaced at WS-27q |
+| `pm_task_links` with `blocks`, `CHECK(source <> target)` | ✅ WS-27a |
+| Cycle refusal on `blocks` (`assert_no_block_cycle`, `MAX_DEPTH`-bounded) | ✅ WS-27p |
+| Both-direction read with `direction` on each link | ✅ WS-27p `GET /tasks/{id}/relations` |
+| Blocked-count and subtask progress per row, in one aggregate | ✅ WS-27s `attach_relation_counts` |
+| Interval-overlap window query, timezone-safe | ✅ WS-27q `OVERLAPS` |
+| Move a task's dates through the ordinary write path | ✅ WS-27q `rescheduleTo` → `PATCH /tasks/{id}` |
+
+**What is genuinely new is three things.** (1) Bar geometry on a continuous date axis instead
+of a day grid. (2) `GET /projects/timeline`, or an argument for why the calendar endpoint
+serves both — it very nearly does, and the honest difference is that a timeline wants the
+LINKS for every row in the window, which is one more aggregate of exactly the shape
+`attach_relation_counts` already is. (3) The arrow gesture, which is the only part with no
+precedent anywhere in this tree.
+
+**Paca has the chart and not the wiring.** `apps/web/src/components/projects/interactions/
+roadmap-view.tsx` (438 lines, Apache-2.0) is a real Gantt and worth taking the geometry from:
+a sticky 280px task column beside a scrolling canvas, `PX_PER_DAY = 28`, month header cells
+computed by walking `Date(y, m+1, 1)`, a today line, a range auto-fitted to the data with
+seven days of padding either side, single-date tasks drawn as a one-day bar, and — the rule
+this app would have arrived at anyway — **an undated task listed on the left with no bar**,
+which is the same honesty §11.16 enforces with its `undated` count. It draws **no dependency
+arrows at all** (zero matches for arrow/svg/path/depend) and is **entirely read-only** (zero
+for drag/resize). So Paca answers "how do I lay out bars"; for the wiring, Jira and ClickUp
+are the reference and the interaction is ours to design.
+
+**Two decisions gate it.** **D-PM-11** — what earns a bar (agent-proposes hierarchy depth,
+owner may overrule). **D-PM-12** — whether an arrow constrains the schedule or only describes
+it (**owner-answer required**; the agent recommends *warn, do not push*, because auto-push
+contradicts WS-27p's stated position and turns one drag into an unbounded cascade of real
+`PATCH`es, each carrying a `field_change` activity and a notification).
+
+**Done when:** (1) a timeline view renders every task in a window as a bar from `start_date`
+to `due_at`, with undated tasks listed and unbarred; (2) `blocks` links are drawn as arrows
+between bars, in the direction WS-27p already stores; (3) dragging from one bar to another
+creates a `blocks` link through the existing endpoint, and a drag that would close a cycle is
+refused with `assert_no_block_cycle`'s existing message rather than a new one; (4) whatever
+D-PM-12 decides is implemented and its rejected alternatives are recorded; (5) the board's
+filters apply, and the parameter-coverage test §11.16 added is extended to the new endpoint
+so a filter cannot be dropped silently; (6) the geometry is pure and tested — including
+across at least three timezones, the WS-27q lesson.
+
+**Not in scope:** resizing a bar by dragging its edge (a second gesture with its own
+half-day/rounding questions), critical-path computation, and baselines. Each is a separate
+decision, and none of them is what was asked for.
+
 ---
 
 ## 10. Verification
@@ -947,13 +1065,23 @@ interesting it is to build.
 | 6 | ~~**Bulk edit / multi-select**~~ | — | **WS-27n ✅ BUILT 2026-08-07 · unblocks g** |
 | 7 | ~~**Recurring tasks**~~ | — | **WS-27o ✅ BUILT 2026-08-07** |
 | 8 | ~~**Dependency and subtask UI**~~ | — | **WS-27p ✅ BUILT 2026-08-07** |
-| 9 | ~~**Calendar / timeline view**~~ | — | **WS-27q ✅ BUILT 2026-08-08** |
+| 9a | ~~**Calendar view**~~ | — | **WS-27q ✅ BUILT 2026-08-08** |
+| 9b | **Timeline view** (Gantt bars on a date axis) | The calendar answers *what is due when*; it cannot answer *what runs alongside what*, which is the question a multi-month project asks | **WS-27t** |
 | 10 | **Global task search** | `?q=` exists on the list endpoint; there is no search surface | **WS-27r** |
 | 11 | ~~**The card looks nothing like /tasks'**~~ | — | **WS-27s ✅ BUILT 2026-08-07** |
+| 12 | **Dependencies cannot be drawn** | `blocks` exists and is cycle-guarded, but wiring one means a dropdown and a task number in a panel — Jira and ClickUp make it a drag between two bars | **WS-27t** |
 
-**Deliberately NOT on this list:** sprints (a stated non-goal, §1), time tracking and
-checklists (Paca moved both out of core into plugins — the growth path is subtraction), and
-Gantt. If any is wanted, it is a decision to record, not an omission to fix.
+**Deliberately NOT on this list:** sprints (a stated non-goal, §1), and time tracking and
+checklists (Paca moved both out of core into plugins — the growth path is subtraction). If
+any is wanted, it is a decision to record, not an omission to fix.
+
+~~and Gantt~~ — **REVERSED 2026-08-08, owner-asked.** Kept struck rather than deleted
+because the reversal is the interesting part: the original note treated Gantt as decoration,
+which is true of the *chart* and false of the thing the owner actually asked for — a surface
+where a dependency is DRAWN rather than typed. `pm_task_links` has been cycle-guarded since
+WS-27p and reachable only through a dropdown and a task number; the chart is the gesture's
+excuse to exist. Recorded as it should have been: a decision, in **D-PM-11** and
+**D-PM-12**, with a ticket (**WS-27t**) that does not start until D-PM-12 is answered.
 
 ### 11.3 Sequencing, and the one dependency that matters
 
@@ -1661,7 +1789,13 @@ stops emitting, which is how a deleted WHERE clause survives a green suite.
 
 ### 11.16 WS-27q — the calendar (built 2026-08-08)
 
-The ninth backlog row, and the first view that **cannot be a page**.
+**Backlog row 9 was named "Calendar / timeline view" and this built the calendar half only.**
+Recorded here because closing the whole row was wrong: a month grid of day cells answers *what
+is due when*, and a timeline of bars on a continuous axis answers *what runs alongside what*.
+They are different questions, the second is the one a multi-month project asks, and the row is
+now split — 9a closed, **9b open as WS-27t**.
+
+The first view that **cannot be a page**.
 
 **`/projects/tasks` is paginated, which is right for a list and catastrophic for a
 calendar.** A month with ninety tasks read at `page_size=50` draws forty of them and leaves

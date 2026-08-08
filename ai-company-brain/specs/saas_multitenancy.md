@@ -125,6 +125,67 @@ those. A tenant-scoped connection that the *database* refuses to widen stops the
 two, and per-run credential scoping (§6.1) stops the fourth. Spend the isolation budget
 where the leaks actually are.
 
+### 1.1a "One database for everyone" — where pooled systems actually get their safety
+
+Owner question, 2026-08-08: *isn't it dangerous that Google Workspace keeps every
+organization in one database?* Recorded because the premise contains a category error
+that is worth fixing permanently, and because the correction produces a Phase-5 item this
+document was missing.
+
+**First, the premise.** Workspace is not "one database" in any physical sense. It is **one
+logical namespace, physically sharded by customer across thousands of machines** —
+Spanner and Colossus, with customer/domain as the partition key. *"Pooled" is a statement
+about the schema, not about the hardware.* One customer's data occupies its own contiguous
+key range on its own machines; it is simply addressed through one logical system rather
+than N administratively separate ones. That is exactly what §1.8a's distribution-key
+discipline buys, in miniature.
+
+**Second, the honest part: yes, pooling concentrates consequence.** A single
+authorization bug in a pooled system is potentially every customer, where in a silo it is
+one. That is real, and no amount of architecture argument makes it not real.
+
+**Third — and this is the load-bearing observation — Google's safety does not come from
+its storage topology. It comes from two layers deliberately built because the storage is
+pooled:**
+
+1. **One central authorization service that every product must ask.** Zanzibar stores
+   ACLs as `user U has relation R to object O` tuples and answers permission checks for
+   Drive, Docs, Calendar, Photos, Maps, YouTube and Cloud — **trillions of ACLs, millions
+   of checks per second, sub-10 ms p95, >99.999% availability**, published in Google's
+   2019 paper. No product re-implements access control; there is exactly one place to get
+   it right, and it cannot be forgotten because there is no other way to answer the
+   question.
+2. **Per-customer encryption keys underneath.** Google's storage layer splits data into
+   chunks and encrypts each with keys **separate from those used for other customers** —
+   and separate even from other chunks of the same customer's data. Pooled storage is
+   therefore not pooled *plaintext*: a compromise at the storage layer does not yield
+   readable cross-tenant data.
+
+> **The transferable rule: safety in a multi-tenant system comes from a single
+> un-forgettable enforcement point plus a layer beneath it that fails safe — not from how
+> many database processes are running.** Silo is one way to buy a weak version of that
+> guarantee; a policy the database enforces is a stronger version, and it is the version
+> that survives a developer forgetting.
+
+**What this changes in this document.** RLS (§1.3) is CommandCenter's Zanzibar-analogue at
+its scale: one enforcement point, on the server, that no route can forget. **The second
+layer is missing and is now a Phase 5 item:**
+
+> **Per-tenant envelope encryption for the sensitive columns** — integration credentials,
+> provider keys, message bodies, transcripts — with a per-tenant DEK wrapped by a master
+> KEK. It makes a raw storage or backup compromise tenant-scoped rather than global, which
+> is the specific residual risk pooling introduces and the only one silo genuinely
+> answered. **Retrofitting encryption to populated columns is materially harder than
+> adding it at rest-write time**, so if any of these columns are being touched during
+> Phase 1, do it then instead.
+
+**What it does not change.** The comparison in §1.4 stands: silo shrinks one category of
+bug, does nothing about the categories that cause most real breaches (session and
+credential handling, SSRF, dependency compromise, a phished admin, an exposed backup), and
+adds one of its own — **wrong-database routing, plus N versions of the access-control code
+in production** (§1.4). Concentrated consequence is a real cost, paid for with a
+lower probability of the bug occurring at all.
+
 ### 1.2 How the companies you named actually do it
 
 The pattern is consistent across all of them, and it is the opposite of
@@ -904,7 +965,7 @@ Each phase is independently shippable and each one is sellable before the next e
 | **2 — Entitlements** | module catalog, entitlement + seat tables, `intersect()` mask, 402 vs 403, `ModuleGate` + upsell, non-HTTP gating | 2–3 wk | **Sell here.** Invoice by hand while proving the model. |
 | **3 — AI credits** | per-org virtual keys, Redis budget gate, rate card, `usage_event`, credit ledger, top-up | 2–3 wk | §3 |
 | **4 — Billing automation** | Stripe + Razorpay seam, webhooks → entitlements, dunning, Operator Console, reconciler | 3–4 wk | §4 |
-| **5 — Tiers & compliance** | Dedicated-DB tier, residency, SOC 2 groundwork, DPA/DPDP | ongoing | Sell before you build this |
+| **5 — Tiers & compliance** | Dedicated-DB tier, **per-tenant envelope encryption for sensitive columns** (§1.1a — pull into Phase 1 if those columns are being touched anyway), residency, SOC 2 groundwork, DPA/DPDP | ongoing | Sell before you build this |
 
 **Do not reorder 1 before 0, or 3 before 1** — metering without tenant resolution meters
 nothing, and entitlements over unisolated data are a UI convention rather than a control.

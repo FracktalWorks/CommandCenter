@@ -297,6 +297,82 @@ Above it, silo compounds. See §5.1 for what to do with that.
 requirement, paying for it, onboarded by hand — and the first handful of customers, as a
 deliberate bridge (§5.1). Price it. Don't build the product on it.
 
+### 1.4b Customers on different versions — the one requirement that could overturn §1
+
+Owner question, 2026-08-08. **This is the strongest argument for silo raised so far**, and
+it is strong because it attacks §1.4a's own test: *who controls the upgrade cadence?* If
+the answer becomes "the customer", the test points at silo and this document must follow
+its own reasoning rather than defend its conclusion.
+
+**The phrase covers four different requirements with four different answers. Establish
+which one is meant before designing anything.**
+
+| What "different versions" means | Answer |
+|---|---|
+| **A. Staged rollout / canary** — A gets v2.1 this week, B next week, everyone converges | **Pooled, unchanged.** Standard practice; needs expand/contract migrations (below) |
+| **B. Release channels** — a customer chooses "give me changes two weeks late" | **Pooled, unchanged.** This is what Google Workspace ships as Rapid vs Scheduled Release: same code, same storage, admin picks the channel |
+| **C. Per-customer configuration/features** — A has modules, fields, workflows or agents B does not | **Pooled, and already solved** — see below. This is the case owners usually mean |
+| **D. Genuine version pinning** — A stays on v1.8 for a year because it was validated and must not move | **Silo tier. Pooled cannot do this**, and no amount of engineering makes it |
+
+**Why pooled handles A, B and C — and exactly where it stops.**
+
+> **Multiple *code* versions against one database: fine.** Every blue/green deploy, canary
+> and rolling update already runs N code versions against one schema simultaneously.
+> **Multiple *schema* versions in one database: impossible.** One database has one schema.
+
+The discipline that makes A and B safe is **expand/contract** (parallel change), and it is
+non-negotiable once two versions run at once: add the column nullable → deploy code that
+writes both old and new → backfill → deploy code that reads new → drop the old **only
+after every running version has passed the read step**. Additive-only, never rename in
+place. Where two versions genuinely need different shapes of the same data, a **view per
+version** over one physical table buys more room. That comfortably supports **two or three
+adjacent versions over a window of weeks**. It does not support eighteen months of drift —
+that is case D.
+
+**Case C is already built, and this is the finding that matters most.** CommandCenter's
+per-customer variation is **data, not code**, across the board:
+
+- **Custom Apps** — `114_custom_apps.sql` + `app_files`: apps are DB rows, not deployed code
+- **Workflows** — root `AGENTS.md` is explicit that they are *"DB-persisted configuration
+  orchestrating code-authored agents"* (ADR-028), the sanctioned exception to no-in-app-authoring
+- **Dynamic agents** — `15_dynamic_agents.sql`: registered and persisted, not compiled in
+- **Custom fields** — `pm_custom_fields` + `custom_fields JSONB` (`155_…sql:28,80`)
+- **Org settings** — `organization.settings JSONB` (`130_…sql:42`), plus `config JSONB`
+  on workflows, plugins, projects and agents
+
+> **The platform's whole design premise is that customers extend it with data rather than
+> with forks.** Per-tenant data is exactly what a pooled database is good at. **Do not
+> reach for per-customer code versions to deliver something the configuration layer
+> already delivers** — that trades a solved problem for an unsolved one.
+
+**What customers actually want when they ask for "our own version".** Almost always:
+*"don't change things under me without warning."* That is a **release channel plus feature
+flags**, not a code fork — and it is why no major SaaS offers version pinning while all of
+them offer rollout control. **Add a feature-flag layer** (per-org, per-feature, evaluated
+beside the entitlement mask in §2.3, since it is the same shape of lookup) and cases A–C
+are covered without touching tenancy. **This is now a Phase 2 item.**
+
+**If the requirement is genuinely D.** Then it is real and it is expensive, and both facts
+should reach the customer:
+
+1. **Version-pinned customers go on the silo tier** (§1.5). This is that tier's **second
+   independent reason to exist**, alongside compliance and the competitor objection
+   (§1.8a) — three unrelated demands, one mechanism, which is a good sign the tier is
+   correctly drawn.
+2. **Price it at what it costs.** Version pinning means a supported branch, backported
+   security fixes, and a separate test matrix — the cost structure that turns enterprise
+   software vendors into maintenance organisations.
+3. **Cap it contractually**: current version plus one prior; older than that is upgrade or
+   lose support. **A cap written after the first pinned customer is a negotiation; written
+   before, it is a policy.**
+
+**When this overturns §1.** If D stops being the exception and becomes what most customers
+buy, the §1.4a test has genuinely flipped — the customer controls the cadence, and
+CommandCenter is on Hostinger's side of the line rather than WordPress.com's. **Re-take §1
+at that point.** Nothing in the phased plan (§5) is wasted if that happens: the silo
+customers of §5.1 are already the mechanism, and every silo running the pooled schema is
+what keeps both doors open.
+
 ### 1.4a The WordPress analogy — why hosting and SaaS answer this differently
 
 Raised by the owner 2026-08-08, and worth recording because the intuition is common,
@@ -962,7 +1038,7 @@ Each phase is independently shippable and each one is sellable before the next e
 |---|---|---|---|
 | **0 — Blockers** | §6: per-run credential scoping, per-org provider keys, self-mutation containment | 1–2 wk | **Nothing ships to a second customer before this** |
 | **1 — Tenancy** | org_id + FORCE RLS on all tables (generated), **org_id in every PK and index prefix** (§1.8a), tenant binding at **all eight connection paths** (§0.1), `acb_app` role, `create_engine` + `psycopg.connect` ratchets, Mem0 decision, **no raw-SQL tool for agents** (§1.8a), Redis prefixing, subdomain resolution, identity/membership split (+ the external-IdP call, §1.8a), per-tenant logical backup job, partitioning for the heavy tables, build-failing coverage test | 4–5 wk | The big one. §0.1, §1.3, §1.6, §1.8a, §1.9 |
-| **2 — Entitlements** | module catalog, entitlement + seat tables, `intersect()` mask, 402 vs 403, `ModuleGate` + upsell, non-HTTP gating | 2–3 wk | **Sell here.** Invoice by hand while proving the model. |
+| **2 — Entitlements** | module catalog, entitlement + seat tables, `intersect()` mask, 402 vs 403, `ModuleGate` + upsell, non-HTTP gating, **per-org feature flags + release channel** (§1.4b — same lookup shape as the entitlement mask) | 2–3 wk | **Sell here.** Invoice by hand while proving the model. |
 | **3 — AI credits** | per-org virtual keys, Redis budget gate, rate card, `usage_event`, credit ledger, top-up | 2–3 wk | §3 |
 | **4 — Billing automation** | Stripe + Razorpay seam, webhooks → entitlements, dunning, Operator Console, reconciler | 3–4 wk | §4 |
 | **5 — Tiers & compliance** | Dedicated-DB tier, **per-tenant envelope encryption for sensitive columns** (§1.1a — pull into Phase 1 if those columns are being touched anyway), residency, SOC 2 groundwork, DPA/DPDP | ongoing | Sell before you build this |

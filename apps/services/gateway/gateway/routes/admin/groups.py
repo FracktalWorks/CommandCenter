@@ -177,7 +177,7 @@ async def list_groups(
     """
     db = await get_db()
     async with db:
-        org_id = await get_org_id(db)
+        org_id = await get_org_id(db, admin)
         rows = (
             await db.execute(
                 text(
@@ -204,7 +204,7 @@ async def create_group(
     slug = _clean_slug(req.slug)
     db = await get_db()
     async with db:
-        org_id = await get_org_id(db)
+        org_id = await get_org_id(db, admin)
         clash = (
             await db.execute(
                 text(
@@ -255,7 +255,7 @@ async def update_group(
     """
     db = await get_db()
     async with db:
-        org_id = await get_org_id(db)
+        org_id = await get_org_id(db, admin)
         group = await _get_group(db, org_id, slug)
         await db.execute(
             text(
@@ -293,7 +293,7 @@ async def delete_group(
     """
     db = await get_db()
     async with db:
-        org_id = await get_org_id(db)
+        org_id = await get_org_id(db, admin)
         group = await _get_group(db, org_id, slug)
         if slug in CENTER_GROUP_SLUGS:
             raise HTTPException(
@@ -368,9 +368,9 @@ async def add_group_member(
 
     db = await get_db()
     async with db:
-        org_id = await get_org_id(db)
+        org_id = await get_org_id(db, admin)
         group = await _get_group(db, org_id, slug)
-        member = await get_member(db, req.email)
+        member = await get_member(db, org_id, req.email)
 
         await db.execute(
             text(
@@ -433,9 +433,9 @@ async def remove_group_member(
     """
     db = await get_db()
     async with db:
-        org_id = await get_org_id(db)
+        org_id = await get_org_id(db, admin)
         group = await _get_group(db, org_id, slug)
-        member = await get_member(db, email)
+        member = await get_member(db, org_id, email)
         result = await db.execute(
             text(
                 "DELETE FROM org_group_member "

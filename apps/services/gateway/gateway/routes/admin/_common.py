@@ -50,19 +50,46 @@ from fastapi import APIRouter, Depends, HTTPException
 # names are re-exported rather than imported at each call site.
 from gateway.db import get_db  # noqa: F401
 from gateway.db import get_session_factory as _get_session_factory  # noqa: F401
+
+# The ONE answer to "which tenant is this caller" (WS-29b, D-MT-1 (a)). Imported
+# rather than re-derived: two implementations of that question is exactly how
+# they drift, and the one that drifts is the one nobody re-reads.
+# `routes/projects/core.py` owns it because Projects needed it first; the
+# question it answers belongs to no package.
+from gateway.routes.projects.core import NO_ORGANIZATION, resolve_organization_id
 from sqlalchemy import text
 
 _log = get_logger("gateway.admin")
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
-#: Slug of the single organization this deployment serves. The column exists on
-#: every table so a second org is a data change; resolving it through one
-#: constant keeps that future honest without shipping an org switcher today.
-DEFAULT_ORG_SLUG = "default"
-
 #: Never assignable to a person — it is the internal service principal.
 NON_ASSIGNABLE_ROLES = frozenset({"agent_service"})
+
+#: ⚠️ **There is deliberately no ``DEFAULT_ORG_SLUG`` here any more.**
+#:
+#: It used to be the whole of this package's tenant model: ``get_org_id`` read
+#: ``WHERE slug = 'default'`` and never consulted the caller, so every admin
+#: read and every admin WRITE — invite, role grant, group membership, permission
+#: override — landed in the `default` organization no matter who asked
+#: (``multi_tenancy_leak_audit.md`` S1-1). A caller the permission system had
+#: correctly authorised for *their own* org was silently redirected into
+#: somebody else's access control.
+#:
+#: It is not kept as a fallback, because a fallback IS the bug: the day the
+#: caller lookup returns nothing is exactly the day the slug would hand them
+#: `default` again. Absence fails closed here (403), which is the whole point.
+#:
+#: The slug survives in precisely two places, both **provisioning, never
+#: resolution**, and both outside the request path:
+#:
+#: * ``infra/postgres/130_org_access_control.sql`` seeds the single row.
+#: * ``acb_auth.access._BOOTSTRAP_OWNER_SQL`` — first-run ownership recovery at
+#:   gateway startup, which has no caller to derive a tenant from because its
+#:   entire reason for existing is that there are no members yet.
+#:
+#: If a second organization is ever provisioned, neither of those is on a path a
+#: request can reach, so neither can answer "which tenant is this request".
 
 
 # ── DB (the one shared gateway engine — gateway/db.py, BO-10) ────────────────
@@ -99,15 +126,57 @@ async def require_admin_user(
 
 # ── Org + role lookups ──────────────────────────────────────────────────────
 
-async def get_org_id(db: Any) -> str:
-    """Resolve the deployment's organization id, or 503 if unprovisioned."""
-    row = (
-        await db.execute(
-            text("SELECT id::text AS id FROM organization WHERE slug = :slug"),
-            {"slug": DEFAULT_ORG_SLUG},
-        )
-    ).mappings().first()
-    if row is None:
+#: Asked ONLY on the failure path of :func:`get_org_id`, to tell an operator
+#: apart from a stranger. A deployment where migration 130 never ran and a
+#: caller who simply has no ``app_user`` row are the same absence to the lookup
+#: above, and they need opposite answers: one is "apply the migration", the
+#: other is "your account is not set up". Both refuse.
+_ANY_ORGANIZATION_SQL = "SELECT 1 FROM organization LIMIT 1"
+
+
+async def get_org_id(db: Any, user: UserContext) -> str:
+    """The **caller's** organization id, or a refusal. Never a slug.
+
+    ⚠️ **This function used to ignore its caller entirely.** It read
+    ``WHERE slug = 'default'``, so every route in this package — the roster,
+    invites, role grants, group membership, permission overrides, the access
+    queue and ``/auth/me`` — operated on one hard-coded organization regardless
+    of who asked. With a second tenant that is not a read leak, it is an
+    unbounded **write into another tenant's access control** by a caller the
+    permission system correctly authorised for their own
+    (``multi_tenancy_leak_audit.md`` S1-1).
+
+    **R3: the tenant comes from the authenticated context, never from a request
+    parameter.** ``user.email`` is asserted by the identity seam
+    (``acb_auth.deps``, which refuses a bare ``X-User-Email`` when an internal
+    token is configured), and D-MT-1 (a) makes that email a single-row answer:
+    ``app_user.email`` is globally UNIQUE, so one person is in exactly one
+    organization and nothing the caller sends can widen it. There is no
+    ``org`` argument on any route in this package, and there must not be.
+
+    **Fail closed, and say which failure it is.** A caller with no
+    ``app_user`` row — an unprovisioned address, or the ``system:internal``
+    service principal, which holds ``*`` and belongs to no organization
+    (``deps.py`` branch 1b) — gets **403** carrying the same
+    :data:`~gateway.routes.projects.core.NO_ORGANIZATION` message the Projects
+    write path already uses for exactly this caller. 403 and not 404, for the
+    reason ``projects.core.require_organization`` states: this says nothing
+    about what exists, it says the caller's own account is not attached, and a
+    404 would send somebody hunting for a record that was never created. R5's
+    "404, never 403" governs *records* — a member, a role, a group, all of
+    which now answer 404 across a tenant boundary.
+
+    The **503** is kept for the one case it was actually written for: a
+    deployment with no ``organization`` row at all. That is an operator fault
+    with an actionable fix, and collapsing it into the 403 would send an
+    operator looking at the wrong account. It costs one extra query on a path
+    that already refuses.
+    """
+    org_id = await resolve_organization_id(db, user.email or "")
+    if org_id:
+        return org_id
+    provisioned = (await db.execute(text(_ANY_ORGANIZATION_SQL))).first()
+    if provisioned is None:
         raise HTTPException(
             status_code=503,
             detail=(
@@ -115,15 +184,26 @@ async def get_org_id(db: Any) -> str:
                 "infra/postgres/130_org_access_control.sql."
             ),
         )
-    return row["id"]
+    raise HTTPException(status_code=403, detail=NO_ORGANIZATION)
 
 
-async def find_member(db: Any, email: str) -> dict[str, Any] | None:
-    """Fetch one member row by email, or ``None``.
+async def find_member(db: Any, org_id: str, email: str) -> dict[str, Any] | None:
+    """Fetch one member row by email **within one organization**, or ``None``.
 
     The non-raising half of :func:`get_member`. Provisioning needs it: it has
     to know whether the address already has a row *before* it writes one, and
     a 404 is the wrong answer there — an absent row is the normal case.
+
+    ⚠️ **The ``organization_id`` predicate is half of S1-1's fix, not a
+    tidy-up.** Making :func:`get_org_id` caller-derived scopes the queries that
+    take an org id; it does nothing for the ones that reach a person by
+    address, and every member-targeted route in this package goes through here
+    — ``PATCH``/``DELETE``/``purge``/``roles``/``overrides`` on
+    ``/admin/members/{email}``, both group-membership writes, and approve. A
+    caller-derived org with an unscoped member lookup is the same cross-tenant
+    write with an extra query in front of it.
+
+    Case-insensitive on the address (R10) and exact on the tenant.
     """
     row = (
         await db.execute(
@@ -131,17 +211,23 @@ async def find_member(db: Any, email: str) -> dict[str, Any] | None:
                 "SELECT id::text AS id, email, display_name, avatar_url, status, "
                 "       role AS legacy_role, invited_by, invited_at, joined_at, "
                 "       last_login_at, last_active_at, created_at "
-                "  FROM app_user WHERE lower(email) = :email"
+                "  FROM app_user WHERE lower(email) = :email "
+                "   AND organization_id = CAST(:org AS uuid)"
             ),
-            {"email": email.lower().strip()},
+            {"email": email.lower().strip(), "org": org_id},
         )
     ).mappings().first()
     return dict(row) if row is not None else None
 
 
-async def get_member(db: Any, email: str) -> dict[str, Any]:
-    """Fetch one member row by email, or 404."""
-    row = await find_member(db, email)
+async def get_member(db: Any, org_id: str, email: str) -> dict[str, Any]:
+    """Fetch one member row by email within one organization, or 404.
+
+    **404, never 403** (R5): a member of another tenant and an address nobody
+    has ever heard of must be the same answer, or the status code becomes an
+    oracle for who exists in the deployment.
+    """
+    row = await find_member(db, org_id, email)
     if row is None:
         raise HTTPException(status_code=404, detail=f"No member '{email}'.")
     return row
@@ -470,13 +556,37 @@ async def set_roles(
 #:   passes the clause and keeps its pre-extraction behaviour byte-for-byte.
 #:
 #: `active` and `suspended` rows are never rewritten by either caller.
+#:
+#: ⚠️ **The trailing ``WHERE`` is the tenant fence, and it is on the DO UPDATE
+#: arm rather than in Python because that is the only place a conflicting row
+#: can be seen.** ``app_user.email`` is globally UNIQUE (D-MT-1 (a)), so
+#: inviting an address that already belongs to ANOTHER organization conflicts
+#: with a row the inviting admin may not touch. Before the fence, this
+#: statement's ``SET organization_id = EXCLUDED.organization_id`` *moved that
+#: person into the inviter's tenant* — the whole membership, roles about to be
+#: replaced by ``set_roles``, in one unauthenticated-by-anything write. That is
+#: S1-1's write leak surviving the caller-derived ``get_org_id``, because the
+#: id being correct says nothing about the row being reachable.
+#:
+#: With the fence the arm is skipped, nothing is written, and ``get_member``
+#: below answers 404 — the same answer as an address that does not exist (R5),
+#: so the invite form is not an oracle for the deployment's directory. The
+#: caller's transaction is abandoned before ``commit`` by that raise.
+#:
+#: ``organization_id`` is now ``COALESCE(app_user.organization_id, EXCLUDED…)``
+#: rather than ``EXCLUDED`` outright — the same shape, for the same reason, as
+#: ``acb_auth.access._BOOTSTRAP_OWNER_SQL``: a row that already has a tenant
+#: keeps it, and a legacy row with a NULL one is adopted by the org that is
+#: legitimately provisioning it. The ``IS NULL`` arm of the fence is what lets
+#: that adoption happen at all.
 _PROVISION_MEMBER_SQL = """
     INSERT INTO app_user (email, display_name, organization_id,
                           status, invited_by, invited_at, joined_at)
     VALUES (:email, :name, CAST(:org AS uuid), :status, :by, now(),
             CASE WHEN :status = 'active' THEN now() END)
     ON CONFLICT (email) DO UPDATE
-       SET organization_id = EXCLUDED.organization_id,
+       SET organization_id = COALESCE(app_user.organization_id,
+                                      EXCLUDED.organization_id),
            display_name    = COALESCE(NULLIF(EXCLUDED.display_name, ''),
                                       app_user.display_name),
            status          = CASE
@@ -494,7 +604,37 @@ _PROVISION_MEMBER_SQL = """
                                ELSE app_user.joined_at
                              END,
            updated_at      = now()
+     WHERE app_user.organization_id IS NULL
+        OR app_user.organization_id = EXCLUDED.organization_id
 """
+
+
+#: ⚠️ **The ONE statement in this package that deliberately crosses the tenant
+#: boundary**, and it exists because the database's uniqueness and this
+#: package's matching disagree about what "the same address" means.
+#:
+#: ``app_user_email_key`` is ``UNIQUE (email)`` — **byte-exact**. Every lookup
+#: here matches ``lower(email)`` (R10). So a row stored as
+#: ``Casey@Alpha.Example`` does **not** conflict with the lower-cased address
+#: :func:`provision_member` inserts, and Postgres cheerfully writes a SECOND
+#: ``app_user`` row. Found by driving the real routes against a real Postgres:
+#: every hermetic test was green, because a fake dict keyed case-insensitively
+#: cannot reproduce a byte-exact index.
+#:
+#: What that costs under D-MT-1 (a): the same human ends up with a row in two
+#: organizations, ``resolve_organization_id`` returns whichever the planner
+#: hands back first, and a person's tenant becomes non-deterministic. The
+#: ``ON CONFLICT`` fence cannot catch it — no conflict ever happens.
+#:
+#: The proper fix is ``UNIQUE (lower(email))``, which is a migration and is
+#: owned elsewhere this wave. Until then the check is here, it answers 404 like
+#: every other cross-tenant miss (R5, so this is not an oracle for the
+#: deployment's directory), and it returns the address's STORED spelling so the
+#: upsert conflicts the way it was always meant to.
+_ADDRESS_TENANT_SQL = (
+    "SELECT organization_id::text AS org, email FROM app_user "
+    " WHERE lower(email) = :email"
+)
 
 
 async def provision_member(
@@ -531,10 +671,39 @@ async def provision_member(
     ``set_roles`` below **replaces** a member's assignments wholesale: inviting
     or approving the last `owner` with the default `member` role would delete
     the org's only owner grant, and the only way back is SQL on the box.
+
+    ``org_id`` is the CALLER's organization — :func:`get_org_id` derives it from
+    the authenticated address and every caller of this function passes what it
+    returned. It bounds three things here and each is a separate door:
+    :func:`resolve_assignable_roles` (which roles exist to grant),
+    :func:`find_member` (whose row is being replaced), and the upsert's own
+    ``WHERE`` fence (whose row may be written at all).
     """
     email = (email or "").strip().lower()
     if "@" not in email or len(email) > 254:
         raise HTTPException(status_code=400, detail="A valid email is required.")
+
+    # Which tenant already holds this address, if any — asked case-insensitively
+    # across the whole directory, because the unique index is not. See
+    # `_ADDRESS_TENANT_SQL` for what this is defending against and why it is
+    # the only cross-tenant read in the package.
+    known = (
+        await db.execute(text(_ADDRESS_TENANT_SQL), {"email": email})
+    ).mappings().all()
+    if any(r["org"] and r["org"] != org_id for r in known):
+        raise HTTPException(status_code=404, detail=f"No member '{email}'.")
+    # Bind the address as it is STORED, so the upsert lands on the existing row
+    # instead of inserting a differently-cased twin beside it. A brand-new
+    # address stays lower-cased, which is what makes every future match work.
+    #
+    # The row is chosen explicitly — mine, else the unattached one, else the
+    # lower-cased new address — and never "whichever came back first". A
+    # directory that already holds a cased pair (which is what this code could
+    # produce before) must not have its outcome decided by the planner.
+    stored_email = next(
+        (r["email"] for r in known if r["org"] == org_id),
+        next((r["email"] for r in known if not r["org"]), email),
+    )
 
     role_ids = await resolve_assignable_roles(db, org_id, roles or ["member"], admin)
 
@@ -545,7 +714,7 @@ async def provision_member(
     # route on purpose — it only asks when the grant is actually about to be
     # taken away, so provisioning is not blocked in an org that has no owner
     # yet (the bootstrap state, where nothing is being lost).
-    existing = await find_member(db, email)
+    existing = await find_member(db, org_id, email)
     if (
         existing is not None
         and "owner" not in {slug for _rid, slug in role_ids}
@@ -557,10 +726,14 @@ async def provision_member(
 
     await db.execute(
         text(_PROVISION_MEMBER_SQL),
-        {"email": email, "name": display_name or "", "org": org_id,
+        {"email": stored_email, "name": display_name or "", "org": org_id,
          "by": admin.email, "status": status},
     )
-    member = await get_member(db, email)
+    # Re-read through the SAME tenant predicate the fence uses. When the upsert
+    # declined a foreign row this is the 404 the caller receives, and it is
+    # raised before `set_roles` — so no role is granted to a person the caller
+    # could not have written to in the first place.
+    member = await get_member(db, org_id, email)
     await set_roles(db, member["id"], role_ids, admin.email)
     return member, [slug for _rid, slug in role_ids]
 

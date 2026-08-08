@@ -110,7 +110,7 @@ async def list_members(
 ) -> list[MemberEntry]:
     db = await get_db()
     async with db:
-        org_id = await get_org_id(db)
+        org_id = await get_org_id(db, admin)
         sql = (
             "SELECT u.id::text AS id, u.email, u.display_name, u.avatar_url, "
             "       u.status, u.invited_by, u.joined_at, u.last_login_at, "
@@ -166,7 +166,7 @@ async def invite_member(
 
     db = await get_db()
     async with db:
-        org_id = await get_org_id(db)
+        org_id = await get_org_id(db, admin)
         member, _assigned = await provision_member(
             db, org_id,
             email=email,
@@ -206,8 +206,8 @@ async def update_member(
 
     db = await get_db()
     async with db:
-        org_id = await get_org_id(db)
-        member = await get_member(db, email)
+        org_id = await get_org_id(db, admin)
+        member = await get_member(db, org_id, email)
 
         # Invariant 4 — nobody locks themselves out. The same helper guards the
         # DELETE below: this route reaches the identical `is_active = False`,
@@ -242,7 +242,7 @@ async def update_member(
                 {"name": patch.display_name, "uid": member["id"]},
             )
         await db.commit()
-        member = await get_member(db, email)
+        member = await get_member(db, org_id, email)
         roles = await roles_for_user(db, member["id"])
 
     invalidate_for(member["email"])
@@ -278,8 +278,8 @@ async def remove_member(
     """
     db = await get_db()
     async with db:
-        org_id = await get_org_id(db)
-        member = await get_member(db, email)
+        org_id = await get_org_id(db, admin)
+        member = await get_member(db, org_id, email)
         # Invariant 4, from the same helper the PATCH above calls — this route
         # used to hold its own copy of the comparison, which is precisely why
         # the other door never grew one.
@@ -585,8 +585,8 @@ async def purge_member(
     """
     db = await get_db()
     async with db:
-        org_id = await get_org_id(db)
-        member = await get_member(db, email)
+        org_id = await get_org_id(db, admin)
+        member = await get_member(db, org_id, email)
 
         # Invariant 4, from the shared helper — same rule, fourth door. The
         # outcome name is not an `app_user.status`; the helper's rule is
@@ -649,8 +649,8 @@ async def set_member_roles(
 ) -> MemberEntry:
     db = await get_db()
     async with db:
-        org_id = await get_org_id(db)
-        member = await get_member(db, email)
+        org_id = await get_org_id(db, admin)
+        member = await get_member(db, org_id, email)
         role_ids = await resolve_assignable_roles(db, org_id, req.roles, admin)
 
         # Invariant 4, third door: this route never touches `status`, so
@@ -798,8 +798,8 @@ async def get_member_access(
     """The member's effective access, with provenance for every decision."""
     db = await get_db()
     async with db:
-        await get_org_id(db)
-        member = await get_member(db, email)
+        org_id = await get_org_id(db, admin)
+        member = await get_member(db, org_id, email)
         roles = await roles_for_user(db, member["id"])
         role_perms = await _role_permission_map(db, member["id"])
         overrides = await _load_overrides(db, member["id"])
@@ -884,8 +884,8 @@ async def set_member_overrides(
 
     db = await get_db()
     async with db:
-        org_id = await get_org_id(db)
-        member = await get_member(db, email)
+        org_id = await get_org_id(db, admin)
+        member = await get_member(db, org_id, email)
 
         # An owner who denies themselves admin cannot undo it from the UI.
         if (member["email"] or "").lower() == (admin.email or "").lower():
@@ -919,7 +919,6 @@ async def set_member_overrides(
                  "reason": reason, "by": admin.email},
             )
         await db.commit()
-        _ = org_id
 
     invalidate_for(member["email"])
     _log.info("member_overrides_set", email=member["email"], by=admin.email,

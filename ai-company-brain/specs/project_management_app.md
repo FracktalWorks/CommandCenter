@@ -694,7 +694,9 @@ supersedes the earlier "pilot Space vs all Spaces" framing — scope is now a pe
 decision the plan step surfaces, so both a pilot and a full import are the same code path.
 
 **D-PM-11 — The timeline shows a chosen SCOPE, not every task.**
-`DECISION (agent-proposed, owner may overrule) — OPEN, see WS-27t.` A Gantt of 400 rows is a
+`DECISION (agent-proposed 2026-08-08, owner delegated the choice back — "go ahead with the
+decision that you think would be best to make the product as useful as possible").`
+**ANSWERED: (b), with (c) underneath.** A Gantt of 400 rows is a
 wall nobody reads, so something has to decide which tasks earn a bar. Three candidates, and
 they are not equivalent:
 
@@ -710,7 +712,7 @@ they are not equivalent:
   board's filters in a third shape, which is the rule §11.16 already holds for the calendar.
   Honest, and it puts the wall back the moment somebody clears the filters.
 
-**Proposed: (b), with (c) underneath it** — depth decides the default and the filter bar
+**Chosen: (b), with (c) underneath it** — depth decides the default and the filter bar
 still narrows, so the two compose instead of competing. **Rejected:** (a) as the primary,
 because inventing a reserved type name to make a chart legible is a data-model change in
 service of a rendering problem, and D-PM-2 put types in the hands of each project on purpose.
@@ -719,7 +721,12 @@ bar is sometimes derived rather than stored, and "why does this bar not match th
 typed" becomes a question the UI has to answer on the bar itself.
 
 **D-PM-12 — Does a dependency CONSTRAIN the schedule, or only describe it?**
-`DECISION — OPEN, OWNER-ANSWER REQUIRED. WS-27t does not start until this is answered.`
+`DECISION (owner-delegated 2026-08-08).` The owner was given the three options and their
+costs, and answered *"go ahead with the decision that you think would be best to make the
+product as useful as possible"* — so the agent's recommendation was taken as the decision
+rather than the question being left open. **ANSWERED: (c) — constrain, but only warn.**
+Recorded this way, and not as an agent proposal, because the delegation was explicit and
+the reasoning below is what it was delegated on.
 
 This is the one that changes what the data means, which is why it is not agent-proposed.
 Jira and ClickUp both offer to **push** a dependent task's dates when you move its blocker.
@@ -743,12 +750,24 @@ Adopting that turns `pm_task_links` from a description into a constraint:
   backwards-arrow complaint, and adds no cascade. **Cost:** somebody still has to do the
   rescheduling by hand, which is exactly the work (b) automates.
 
-**Agent's recommendation: (c).** It is the only one of the three that neither contradicts a
-decision already made nor lets one gesture write fifty rows, and it can become (b) later
-behind an explicit per-project setting — whereas (b) cannot become (c) without taking a
-behaviour away from people who have started relying on it. **This is a recommendation, not a
-proposal:** (b) is a defensible answer if the owner wants Jira's behaviour specifically, and
-in that case WS-27p's paragraph gets struck and rewritten, not worked around.
+**Chosen: (c).** It is the only one of the three that neither contradicts a decision already
+made nor lets one gesture write fifty rows, and it can become (b) later behind an explicit
+per-project setting — whereas (b) cannot become (c) without taking a behaviour away from
+people who have started relying on it. **WS-27p's position therefore stands unamended:**
+blocked-ness is derived and shown, never enforced, and a schedule conflict is now shown the
+same way — a red arrow and a sentence, with nothing written.
+
+**What "useful as possible" actually argued for, since that was the brief.** The reflex
+answer is (b), because auto-push is the feature Jira advertises. But the useful half of a
+dependency is *knowing* — being told, at the moment you move something, that two tasks now
+disagree. (b) delivers that and then also silently rewrites other people's dates, which is
+where it stops being useful: the cascade lands in the timeline (§3.8) as fifty
+`field_change` rows and fifty notifications with no single act to point at, and the first
+time somebody's carefully-negotiated date moves without them touching it, they stop trusting
+the dates. (c) keeps the information and drops the part that costs trust. **What it does not
+do** is reschedule for you, and if that turns out to be the thing actually wanted, (b) is
+still reachable — as an opt-in per project, with the cascade bounded and previewed before it
+writes, which is a better version of (b) than the one that would have shipped today.
 
 
 ---
@@ -946,10 +965,10 @@ owner-scoped predicates and the `gtd_*` task tables are gone. See §7.5.
 parity sign-off, sync flips, consumer repoint, token revocation, constraint-8 amendment —
 each registered in `work_plan.md` §6).
 
-**WS-27t — the timeline, and dependencies you can draw.** 🟡 **BLOCKED on D-PM-12**
-(owner-answer required — see §8). Everything else about this ticket is agent-safe; the block
-is on one question, and it is a question about what the data MEANS rather than how it looks,
-which is why building first and asking later is not available.
+**WS-27t — the timeline, and dependencies you can draw.** ✅ **BUILT 2026-08-08.**
+Was 🟡 blocked on D-PM-12; the owner delegated the choice back on 2026-08-08 and it is
+answered as **(c) constrain-and-warn**, with D-PM-11 as **(b) hierarchy depth**. Both are
+recorded in §8 with the alternatives they beat.
 
 *Asked for directly, 2026-08-08:* **"a timeline view that can also make tasks and subtasks
 dependent on each other, with wiring them to each other, similar to how it works on Jira and
@@ -1856,3 +1875,97 @@ so the suite runs in four timezones AND pins the rule structurally, because CI r
 never been mirrored, so every `overdue` test since WS-27k was really asserting only the
 status half and would have passed with the date comparison deleted. Teaching the fake `<
 now()` killed that mutant on the list endpoint as well as the calendar.
+
+### 11.17 WS-27t — the timeline, and dependencies you can draw (built 2026-08-08)
+
+Asked for directly: *"a timeline view that can also make tasks and subtasks dependent on each
+other, with wiring them to each other, similar to how it works on Jira and ClickUp."* Two
+things, and the second is the one that matters — **a Gantt chart with no dependency gesture is
+decoration**, which is exactly why Gantt was a non-goal until this was asked for.
+
+**Almost none of this was schema work.** Dates, links, the cycle guard, the both-direction
+read, blocked counts and the interval-overlap window all shipped in WS-27a/p/q/s. The whole
+ticket is one aggregate, some geometry, and a gesture.
+
+**The window is the resource, so there is no `/projects/timeline`.** `GET /projects/calendar`
+grew `include_links`, and calendar and timeline are two renderings of one question — the same
+rule §11.8 states for list and board, extended a third time. A second endpoint would be a
+second filter surface to keep in step.
+
+**An arrow needs two bars, so an edge is returned only when BOTH ends are in the window.**
+The edge to an off-window blocker is not lost, it is undrawable: `blocked_by_count` already
+badges the visible bar, which is the honest rendering of *"something you cannot see is holding
+this up"*. Only `blocks` is drawn — `relates_to` and `duplicates` have no direction that means
+anything to a schedule (WS-27p's `DIRECTED_TYPES`), and an arrow would claim a sequence nobody
+asserted.
+
+#### D-PM-11 — hierarchy depth decides what earns a bar
+
+Top-level tasks get rows; subtasks fold in and expand on a chevron. **A parent with no dates
+of its own borrows its children's span**, marked `derived` and drawn dashed, because otherwise
+the default view is blank for exactly the projects that use subtasks properly. **A subtask
+whose parent is off-window is promoted to its own row** rather than hidden — hiding it is how
+a filtered timeline silently drops work.
+
+Paca's Timeline pre-filters to a reserved `Epic` type instead. Rejected: `pm_task_types` is
+per-project data with no reserved names (D-PM-2), so "Epic" would have to become either a
+seeded row every project inherits or a name-match that stops working the day somebody renames
+a type. `parent_task_id` already means depth and cannot be renamed.
+
+#### D-PM-12 — an arrow WARNS; it never reschedules
+
+The owner was given the three options and delegated the choice back. Chosen: **constrain, but
+only warn**. A `blocks` edge whose blocker's END falls after the blocked task's START is drawn
+in the danger tone with a sentence that says *nothing has been rescheduled*.
+
+**Why not Jira's auto-push,** which was the reflex answer: the useful half of a dependency is
+*knowing* — being told, the moment you move something, that two tasks now disagree. Auto-push
+delivers that and then also silently rewrites other people's dates, which is where it stops
+being useful. The cascade lands in the activity spine (§3.8) as dozens of `field_change` rows
+and dozens of notifications with no single act to point at, and the first time somebody's
+negotiated date moves without them touching it, they stop trusting the dates. It also
+contradicts WS-27p's written position — blocked-ness is **derived and shown, never enforced**
+— which now stands unamended. (b) remains reachable later as an opt-in per project, with the
+cascade bounded and previewed before it writes; that is a better version of it than the one
+that would have shipped today.
+
+Three sub-rules, each one a way the warning could have become noise:
+
+* **equal dates are not a conflict.** A blocker due the 10th and a task starting the 10th is
+  the normal way people schedule a handover. Flagging it fires on half a healthy plan, after
+  which nobody reads the warning at all.
+* **a missing date on either end is not a conflict.** It is unknowable, and a warning that
+  fires on absent data teaches people it means nothing.
+* **a finished blocker never conflicts.** WS-27p's rule applied to the warning exactly as it
+  applies to the badge.
+
+**One rule, two surfaces.** `conflicts()` is pure and lives in `lib/timeline.ts`; the timeline
+colours its arrows with it and `RelationsBlock` writes its sentence with it — which is why
+`GET /tasks/{id}/relations` grew `start_date` and `due_at`. Two implementations of *"does this
+start before its blocker finishes"* would eventually disagree, and the one that got it wrong
+would be the surface nobody was looking at.
+
+**The cycle check is NOT duplicated in the browser.** `canLink` refuses only self-links and
+exact duplicates; `a→b` when `b→a` exists is allowed through so `assert_no_block_cycle`
+refuses it with its own message. A second bounded graph walk in the client is the one that
+drifts, and a drag creates a link through the same `POST /tasks/{id}/links` the panel's
+dropdown uses — same guard, same activity, same permission.
+
+**Paca gave the layout and nothing else.** `roadmap-view.tsx` (438 lines, Apache-2.0):
+sticky task column, fixed pixels-per-day, month cells walked with `Date(y, m+1, 1)`, a today
+line, a data-fitted range with padding, an undated task listed and unbarred. It draws **no
+dependency arrows** and is **entirely read-only**, so everything from the handle onwards is
+ours.
+
+**Two rounding traps, and only one is catchable in CI's timezone.** `dayPx` rounds its
+millisecond division because a range that straddles a DST transition is 23 or 25 hours across
+it, and an unrounded quotient lands a fraction of a day off for every day after — permanently.
+The behavioural test only fails in a zone that *has* daylight saving, so the rule is pinned
+structurally too, the same treatment `new Date("2026-08-07")` gets. A bar also covers its
+**last** day rather than stopping at that day's left edge; the alternative makes every span
+one day short and a one-day task a zero-width line.
+
+**Found while building:** the fake's mirror of the new edge query hard-coded which column was
+the blocker, so a mutant that swapped the SQL's two aliases — every arrow drawn backwards —
+passed the whole suite. It now reads the roles and the membership tests off the statement, and
+both mutants die behaviourally.

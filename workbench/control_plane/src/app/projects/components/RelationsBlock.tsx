@@ -20,7 +20,9 @@ import Button from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { useCallback, useEffect, useState } from "react";
 
+import type { TaskRow } from "../lib/api";
 import { projectsApi } from "../lib/api";
+import { conflictLabel, conflicts } from "../lib/timeline";
 import {
   type LinkType,
   type Relations,
@@ -42,12 +44,24 @@ const LINK_LABELS: Array<[LinkType, string]> = [
 
 interface Props {
   taskId: string;
+  /**
+   * WS-27t — the task this block belongs to, so the schedule warning can be
+   * computed here as well as on the timeline. Optional because the rule is a
+   * courtesy: without it the block still lists everything, it just cannot say
+   * that two of the dates disagree.
+   */
+  task?: Pick<TaskRow, "start_date" | "due_at">;
   /** Bumped by the panel when it adds a subtask, so this reloads. */
   refreshKey?: number;
   onOpenTask: (taskId: string) => void;
 }
 
-export function RelationsBlock({ taskId, refreshKey = 0, onOpenTask }: Props) {
+export function RelationsBlock({
+  taskId,
+  task,
+  refreshKey = 0,
+  onOpenTask,
+}: Props) {
   const [data, setData] = useState<Relations | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [linking, setLinking] = useState(false);
@@ -117,6 +131,27 @@ export function RelationsBlock({ taskId, refreshKey = 0, onOpenTask }: Props) {
           Blocked by {data.blocked_by.length}
         </Badge>
       ) : null}
+
+      {/* WS-27t / D-PM-12 — the warning half of "constrain, but only warn".
+          Nothing here reschedules anything, and the sentence says so: a user
+          who assumes the tool fixed it is worse off than one who was never
+          told. Same pure rule as the timeline's red arrow. */}
+      {task
+        ? data.blocked_by
+            .filter((blocker) => conflicts(blocker, task))
+            .map((blocker) => (
+              <p
+                key={`clash:${blocker.link_id}`}
+                className="flex items-start gap-1.5 rounded border border-destructive/40 bg-destructive/10 px-2 py-1.5 text-xs text-foreground"
+              >
+                <Icon
+                  name="AlertTriangle"
+                  className="mt-0.5 h-3.5 w-3.5 shrink-0 text-destructive"
+                />
+                <span>{conflictLabel(blocker.title)}</span>
+              </p>
+            ))
+        : null}
 
       {data.subtasks.length ? (
         <div>

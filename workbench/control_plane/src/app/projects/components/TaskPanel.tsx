@@ -407,6 +407,7 @@ export function TaskPanel({
         {onOpenTask ? (
           <RelationsBlock
             taskId={task.id}
+            task={task}
             refreshKey={relationsKey}
             onOpenTask={onOpenTask}
           />

@@ -22,6 +22,15 @@ export interface RelatedTask {
   status_name?: string | null;
   category?: string | null;
   completed_at?: string | null;
+  /**
+   * WS-27t — carried so the schedule-conflict warning (D-PM-12) can be
+   * computed from the SAME pure rule the timeline draws its red arrows with.
+   * Two implementations of "does this start before its blocker finishes" would
+   * eventually disagree, and the surface that got it wrong would be the one
+   * nobody was looking at.
+   */
+  start_date?: string | null;
+  due_at?: string | null;
 }
 
 export interface SubtaskRow {
@@ -32,6 +41,8 @@ export interface SubtaskRow {
   status_name?: string | null;
   category?: string | null;
   completed_at?: string | null;
+  start_date?: string | null;
+  due_at?: string | null;
 }
 
 export interface Relations {

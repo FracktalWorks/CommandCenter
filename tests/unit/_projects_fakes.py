@@ -83,6 +83,16 @@ _WINDOW_CMP = re.compile(
     r"coalesce\(([^()]*(?:\([^()]*\)[^()]*)*)\)\s*(<|>=)\s*:(window_to|window_from)",
     re.I | re.S,
 )
+#: WS-27t: ``l.source_task_id AS blocker`` — which END plays which ROLE. Read
+#: rather than assumed, because swapping the two aliases points every arrow the
+#: wrong way and a mirror that hard-codes the roles cannot see it.
+_ALIASED_END = re.compile(
+    r"l\.(source_task_id|target_task_id)\s+AS\s+(blocker|blocked)\b", re.I
+)
+#: WS-27t: which end is required to be inside the window.
+_END_IN_WINDOW = re.compile(
+    r"l\.(source_task_id|target_task_id)\s*=\s*ANY\(CAST\(:ids", re.I
+)
 #: The column a subquery restricts: ``t.project_id IN ( WITH RECURSIVE …``
 _IN_SUBQUERY = re.compile(
     r"(?:\w+\.)?(\w+)\s+IN\s*\(\s*WITH\s+RECURSIVE\s+(\w+)", re.I
@@ -383,6 +393,12 @@ class FakeProjectsDB:
             return _Result(self._subtask_counts(statement, args))
         if "AS blocked," in statement and "GROUP BY" in statement:
             return _Result(self._blocker_counts(statement, args))
+        # WS-27t's drawable edges. Fingerprinted on `AS blocker,` — the count
+        # aggregate above uses `AS blocked,` and this one uses BOTH, so the
+        # order of these two branches is load-bearing and the more specific
+        # fingerprint has to be tested first.
+        if "AS blocker," in statement:
+            return _Result(self._window_links(statement, args))
         head = statement.split(None, 1)[0].upper()
         table = self._table(statement)
         if head == "INSERT":
@@ -440,6 +456,38 @@ class FakeProjectsDB:
             )
             for parent, found in grouped.items()
         ]
+
+    def _window_links(self, statement: str, args: dict) -> list[Any]:
+        """The `blocks` edges with BOTH ends inside the page's ids.
+
+        **Which column is the blocker and which columns are membership-tested
+        are both read off the statement**, never assumed. Assuming them was a
+        real mirror gap found by mutation: hard-coding `blocker=source` let a
+        mutant swap the SQL's two aliases — an arrow drawn the wrong way round,
+        the chart asserting the opposite sequence — with every test still green,
+        and counting the membership tests rather than naming their columns let a
+        mutant check the wrong end.
+        """
+        wanted = {str(i) for i in (args.get("ids") or [])}
+        only_blocks = "l.link_type = 'blocks'" in statement
+        roles = {role: column for column, role in _ALIASED_END.findall(statement)}
+        checked = set(_END_IN_WINDOW.findall(statement))
+        out: list[Any] = []
+        for link in self.rows("pm_task_links"):
+            if only_blocks and link.get("link_type") != "blocks":
+                continue
+            ends = {
+                column: str(link.get(column) or "")
+                for column in ("source_task_id", "target_task_id")
+            }
+            if any(ends[column] not in wanted for column in checked):
+                continue
+            out.append(SimpleNamespace(
+                id=link.get("id"),
+                blocker=ends.get(roles.get("blocker", ""), ""),
+                blocked=ends.get(roles.get("blocked", ""), ""),
+            ))
+        return sorted(out, key=lambda r: str(r.id))
 
     def _blocker_counts(self, statement: str, args: dict) -> list[Any]:
         """``{blocked, blockers}`` counting only blockers that are still OPEN.

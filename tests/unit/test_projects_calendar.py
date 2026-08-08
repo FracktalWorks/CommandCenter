@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import re
 from datetime import UTC, datetime
+from itertools import pairwise
 from pathlib import Path
 
 import pytest
@@ -522,3 +523,120 @@ def test_no_second_way_to_move_a_task_was_added() -> None:
     allowed."""
     source = SOURCE.read_text(encoding="utf-8")
     assert not re.search(r"@router\.(post|patch|put|delete)", source)
+
+
+# ── WS-27t — the drawable dependency edges ──────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_links_are_absent_unless_asked_for(db, events):
+    """⚠️ Always PRESENT, always empty until requested. A missing key and an
+    empty list read the same to a careless client, so "this window has no
+    dependencies" must not be confused with "nobody asked"."""
+    project, todo, _ = _workspace(db)
+    a = db.seed_task(project.id, todo.id, title="A", due_at="2026-08-05T10:00:00Z")
+    b = db.seed_task(project.id, todo.id, title="B", due_at="2026-08-10T10:00:00Z")
+    db.seed(
+        "pm_task_links", source_task_id=a.id, target_task_id=b.id,
+        link_type="blocks", created_by="owner@fracktal.in",
+    )
+
+    assert (await _window())["links"] == []
+    assert len((await _window(include_links=True))["links"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_an_edge_names_both_ends_and_which_is_which(db, events):
+    project, todo, _ = _workspace(db)
+    a = db.seed_task(project.id, todo.id, title="A", due_at="2026-08-05T10:00:00Z")
+    b = db.seed_task(project.id, todo.id, title="B", due_at="2026-08-10T10:00:00Z")
+    db.seed(
+        "pm_task_links", source_task_id=a.id, target_task_id=b.id,
+        link_type="blocks", created_by="owner@fracktal.in",
+    )
+
+    edge = (await _window(include_links=True))["links"][0]
+
+    # ⚠️ Named blocker/blocked rather than source/target: an arrow drawn the
+    # wrong way round is a chart confidently asserting the opposite sequence,
+    # and `source`/`target` do not say which is which to a reader.
+    assert edge["blocker_id"] == str(a.id)
+    assert edge["blocked_id"] == str(b.id)
+
+
+@pytest.mark.asyncio
+async def test_an_edge_to_a_task_outside_the_window_is_not_returned(db, events):
+    """⚠️ An arrow needs two bars. The edge is not lost — `blocked_by_count`
+    already badges the visible bar — but a half-edge would be drawn to a point
+    the chart has to invent."""
+    project, todo, _ = _workspace(db)
+    inside = db.seed_task(
+        project.id, todo.id, title="Inside", due_at="2026-08-10T10:00:00Z",
+    )
+    outside = db.seed_task(
+        project.id, todo.id, title="Outside", due_at="2026-12-10T10:00:00Z",
+    )
+    db.seed(
+        "pm_task_links", source_task_id=outside.id, target_task_id=inside.id,
+        link_type="blocks", created_by="owner@fracktal.in",
+    )
+
+    result = await _window(include_links=True)
+
+    assert result["links"] == []
+    # The information survives as a badge rather than as an arrow.
+    assert result["rows"][0]["blocked_by_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_only_blocks_is_drawn_as_an_arrow(db, events):
+    """`relates_to` and `duplicates` are associations with no direction that
+    means anything to a schedule (WS-27p's `DIRECTED_TYPES`). Drawing them
+    would claim a sequence nobody asserted."""
+    project, todo, _ = _workspace(db)
+    a = db.seed_task(project.id, todo.id, title="A", due_at="2026-08-05T10:00:00Z")
+    b = db.seed_task(project.id, todo.id, title="B", due_at="2026-08-10T10:00:00Z")
+    for link_type in ("relates_to", "duplicates"):
+        db.seed(
+            "pm_task_links", source_task_id=a.id, target_task_id=b.id,
+            link_type=link_type, created_by="owner@fracktal.in",
+        )
+
+    assert (await _window(include_links=True))["links"] == []
+
+
+@pytest.mark.asyncio
+async def test_the_edges_are_one_query_for_the_whole_window(db, events):
+    project, todo, _ = _workspace(db)
+    made = [
+        db.seed_task(
+            project.id, todo.id, title=f"T{n}", due_at=f"2026-08-1{n}T10:00:00Z",
+        )
+        for n in range(6)
+    ]
+    for earlier, later in pairwise(made):
+        db.seed(
+            "pm_task_links", source_task_id=earlier.id, target_task_id=later.id,
+            link_type="blocks", created_by="owner@fracktal.in",
+        )
+
+    db.statements.clear()
+    result = await _window(include_links=True)
+
+    assert len(result["links"]) == 5
+    # `"AS blocker"` would ALSO match `_BLOCKER_COUNTS_SQL`'s `AS blockers` —
+    # the same substring collision the fake's own dispatch has to avoid, and it
+    # bit this assertion first. The trailing comma is what makes it specific.
+    assert len([s for s in db.statements if "AS blocker," in s]) == 1
+
+
+def test_the_edge_query_requires_both_ends_in_the_window() -> None:
+    """Structural: the fake mirrors this in Python, so only the statement can
+    say whether the route still asks for it."""
+    source = Path(
+        "apps/services/gateway/gateway/routes/projects/filters.py"
+    ).read_text(encoding="utf-8")
+    match = re.search(r"_WINDOW_LINKS_SQL = \"\"\"(.*?)\"\"\"", source, re.S)
+    assert match is not None
+    body = match.group(1)
+    assert body.count("= ANY(CAST(:ids AS uuid[]))") == 2
+    assert "l.link_type = 'blocks'" in body

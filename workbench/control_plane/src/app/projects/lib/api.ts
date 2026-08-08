@@ -208,6 +208,13 @@ export const projectsApi = {
       from: string;
       to: string;
       rows: TaskRow[];
+      /**
+       * WS-27t — the `blocks` edges with BOTH ends in the window, so an arrow
+       * always has two bars to join. Empty unless `include_links`, and always
+       * present: a missing key and an empty list read the same to a careless
+       * client.
+       */
+      links: { id: string; blocker_id: string; blocked_id: string }[];
       truncated: boolean;
       cap: number;
       undated: number;

@@ -300,6 +300,49 @@ SELECT l.target_task_id AS blocked, count(*) AS blockers
 """
 
 
+#: The `blocks` edges BETWEEN tasks in one window (WS-27t).
+#:
+#: **Both ends must be in the set**, because an arrow is drawn between two bars
+#: and a bar that is not on screen has no end to attach to. The edge to an
+#: off-window blocker is not lost, only undrawable — `blocked_by_count` already
+#: puts a badge on the bar, which is the honest rendering of "something you
+#: cannot see is holding this up".
+#:
+#: Only `blocks`. `relates_to` and `duplicates` are associations with no
+#: direction that means anything to a schedule (WS-27p's `DIRECTED_TYPES`), and
+#: drawing them as arrows would claim a sequence that was never asserted.
+_WINDOW_LINKS_SQL = """
+SELECT l.id, l.source_task_id AS blocker, l.target_task_id AS blocked
+  FROM pm_task_links l
+ WHERE l.link_type = 'blocks'
+   AND l.source_task_id = ANY(CAST(:ids AS uuid[]))
+   AND l.target_task_id = ANY(CAST(:ids AS uuid[]))
+ ORDER BY l.id
+"""
+
+
+async def window_links(db: Any, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The drawable dependency edges among ``rows``, in ONE query.
+
+    Returned beside the rows rather than folded into them: an edge belongs to
+    two tasks, and hanging it off one of them makes the client reconstruct the
+    other end — which is how a chart ends up drawing an arrow to a bar it has
+    already scrolled past.
+    """
+    ids = [str(r["id"]) for r in rows if r.get("id")]
+    if not ids:
+        return []
+    found = (await db.execute(text(_WINDOW_LINKS_SQL), {"ids": ids})).fetchall()
+    return [
+        {
+            "id": str(r.id),
+            "blocker_id": str(r.blocker),
+            "blocked_id": str(r.blocked),
+        }
+        for r in found
+    ]
+
+
 async def attach_relation_counts(
     db: Any, rows: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:

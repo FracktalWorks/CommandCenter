@@ -62,6 +62,7 @@ from gateway.routes.projects.filters import (
     attach_assignees,
     attach_relation_counts,
     build_task_filters,
+    window_links,
 )
 from sqlalchemy import text
 
@@ -190,6 +191,12 @@ async def get_calendar(
     tags: str | None = None,
     tags_all: str | None = None,
     include_archived: bool = False,
+    # WS-27t. Off by default: the calendar draws no arrows and would pay for a
+    # query it never reads. A flag rather than a second endpoint because the
+    # WINDOW is the resource — calendar and timeline are two renderings of the
+    # same question, and the app's standing rule (§11.8) is that a second
+    # endpoint per surface is how the filters start disagreeing.
+    include_links: bool = False,
 ) -> dict:
     """Every visible task whose schedule overlaps ``[from, to)``.
 
@@ -271,6 +278,10 @@ async def get_calendar(
             "truncated": truncated,
             "cap": MAX_WINDOW_ROWS,
             "undated": int(undated),
+            # Always present, empty when not asked for: a missing key and an
+            # empty list read the same to a careless client, and "this window
+            # has no dependencies" must not be confused with "nobody asked".
+            "links": await window_links(db, window_rows) if include_links else [],
         }
     finally:
         await db.close()

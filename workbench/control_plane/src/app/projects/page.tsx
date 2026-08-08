@@ -35,11 +35,13 @@ import { MyWork } from "./components/MyWork";
 import { NotificationBell } from "./components/NotificationBell";
 import { ProjectTree } from "./components/ProjectTree";
 import { CalendarView } from "./components/CalendarView";
+import { TimelineView } from "./components/TimelineView";
 import { TaskBoard } from "./components/TaskBoard";
 import { TaskList } from "./components/TaskList";
 import { TaskPanel } from "./components/TaskPanel";
 import { SAVED_VIEW_POSITION, orderBearingView, type planDrop } from "./lib/board";
 import { calendarWindow, dayKey, monthGrid, shiftMonth } from "./lib/calendar";
+import type { Edge } from "./lib/timeline";
 import {
   EMPTY_FILTERS,
   type Filters,
@@ -61,11 +63,16 @@ import {
 import { fetchAccess } from "@/lib/access";
 import { filterByCenter, flatten } from "./lib/tree";
 
-type ViewMode = "board" | "list" | "calendar";
+type ViewMode = "board" | "list" | "calendar" | "timeline";
 
 /** An empty calendar window — the shape before anything has been fetched, and
  *  the shape after a failure, so the view never renders a stale month. */
-const NO_MONTH = { rows: [] as TaskRow[], undated: 0, truncated: false };
+const NO_MONTH = {
+  rows: [] as TaskRow[],
+  links: [] as Edge[],
+  undated: 0,
+  truncated: false,
+};
 
 function ProjectsWorkspace() {
   const searchParams = useSearchParams();
@@ -238,10 +245,14 @@ function ProjectsWorkspace() {
         include_subtree: true,
         from,
         to,
+        // WS-27t — only the timeline draws arrows, and the calendar would pay
+        // for a query it never reads.
+        include_links: mode === "timeline",
         ...toQuery(filters),
       });
       setMonth({
         rows: res.rows,
+        links: res.links,
         undated: res.undated,
         truncated: res.truncated,
       });
@@ -251,10 +262,12 @@ function ProjectsWorkspace() {
       // heading is a calendar confidently showing the wrong dates.
       setMonth(NO_MONTH);
     }
-  }, [selected, grid, filters]);
+  }, [selected, grid, filters, mode]);
 
   useEffect(() => {
-    if (mode === "calendar") void loadMonth();
+    // Both date views read the same window endpoint — the WINDOW is the
+    // resource, and calendar and timeline are two renderings of it.
+    if (mode === "calendar" || mode === "timeline") void loadMonth();
   }, [mode, loadMonth]);
 
   useEffect(() => {
@@ -524,6 +537,27 @@ function ProjectsWorkspace() {
    * has already refused a no-op, so this never posts an activity saying a task
    * moved to where it already was.
    */
+  /**
+   * WS-27t — a dependency drawn on the timeline.
+   *
+   * The SAME endpoint the task panel's dropdown posts to, so the cycle guard,
+   * the activity row and the permission check are one implementation. The
+   * refusal shown is the gateway's own message — `assert_no_block_cycle`
+   * explains a loop better than anything this component could invent, and a
+   * second wording would be a second rule to keep in step.
+   *
+   * **Nothing is rescheduled (D-PM-12).** Creating the link may make the arrow
+   * red; that is the whole intended effect.
+   */
+  async function linkTasks(blockerId: string, blockedId: string) {
+    try {
+      await projectsApi.createLink(blockerId, blockedId, "blocks");
+    } catch (err) {
+      setError(String((err as Error).message));
+    }
+    await loadMonth();
+  }
+
   async function moveTask(task: TaskRow, patch: Record<string, string | null>) {
     setMonth((current) => ({
       ...current,
@@ -689,7 +723,7 @@ function ProjectsWorkspace() {
             <NotificationBell onOpenTask={openTaskById} />
           </div>
           <div className={`flex shrink-0 gap-1 ${mine ? "hidden" : ""}`}>
-            {(["board", "list", "calendar"] as ViewMode[]).map((m) => (
+            {(["board", "list", "calendar", "timeline"] as ViewMode[]).map((m) => (
               <button
                 key={m}
                 type="button"
@@ -773,6 +807,17 @@ function ProjectsWorkspace() {
             <p className="p-6 text-sm text-muted-foreground">
               Nothing here yet. Projects appear once a department is granted to you.
             </p>
+          ) : mode === "timeline" ? (
+            <TimelineView
+              tasks={month.rows}
+              links={month.links}
+              undated={month.undated}
+              truncated={month.truncated}
+              today={dayKey(new Date())}
+              onSelect={(task) => void openWithStatuses(task)}
+              onLink={(blockerId, blockedId) => void linkTasks(blockerId, blockedId)}
+              onRefuse={(reason) => setError(reason)}
+            />
           ) : mode === "calendar" ? (
             <CalendarView
               grid={grid}

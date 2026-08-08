@@ -132,6 +132,7 @@ async def assert_no_block_cycle(db: Any, source_id: str, target_id: str) -> None
 #: because its parent is readable would disclose a title from behind a grant.
 _SUBTASKS_SQL = """
 SELECT t.id, t.title, t.task_number, t.status_id, t.completed_at,
+       t.start_date, t.due_at,
        s.name AS status_name, s.category
   FROM pm_tasks t
   JOIN pm_task_statuses s ON s.id = t.status_id
@@ -150,6 +151,7 @@ SELECT t.id, t.title, t.task_number, t.status_id, t.completed_at,
 _LINKS_SQL = """
 SELECT l.id, l.link_type, 'outgoing' AS direction,
        t.id AS other_id, t.title, t.task_number, t.completed_at,
+       t.start_date, t.due_at,
        s.name AS status_name, s.category
   FROM pm_task_links l
   JOIN pm_tasks t ON t.id = l.target_task_id
@@ -158,6 +160,7 @@ SELECT l.id, l.link_type, 'outgoing' AS direction,
 UNION ALL
 SELECT l.id, l.link_type, 'incoming' AS direction,
        t.id AS other_id, t.title, t.task_number, t.completed_at,
+       t.start_date, t.due_at,
        s.name AS status_name, s.category
   FROM pm_task_links l
   JOIN pm_tasks t ON t.id = l.source_task_id
@@ -177,6 +180,13 @@ def _row(row: Any) -> dict[str, Any]:
         "status_name": row.status_name,
         "category": row.category,
         "completed_at": wire(row.completed_at),
+        # WS-27t — the dates the schedule-conflict warning is computed from.
+        # Carried here so ONE pure rule serves the timeline's red arrow and the
+        # panel's sentence; two implementations of "does this start before its
+        # blocker finishes" would eventually disagree, and the surface that got
+        # it wrong would be the one nobody was looking at.
+        "start_date": wire(row.start_date),
+        "due_at": wire(row.due_at),
     }
 
 
@@ -201,6 +211,7 @@ async def get_relations(
                 "id": str(r.id), "title": r.title, "task_number": r.task_number,
                 "status_id": str(r.status_id), "status_name": r.status_name,
                 "category": r.category, "completed_at": wire(r.completed_at),
+                "start_date": wire(r.start_date), "due_at": wire(r.due_at),
             }
             for r in (await db.execute(
                 text(_SUBTASKS_SQL.format(visible=visible)),

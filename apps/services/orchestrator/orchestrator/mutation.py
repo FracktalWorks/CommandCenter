@@ -169,6 +169,99 @@ async def _auto_push_commit(agent_dir: str, commit_sha: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# MT-0b — self-mutation is first-party-only
+# ---------------------------------------------------------------------------
+# Root ``AGENTS.md`` non-negotiable 3, verbatim: native MAF agents "land approved
+# self-mutations by opening a PR against THIS Command Center monorepo … It MUST
+# be swapped for a tenant-isolated mechanism before any multi-tenant/customer
+# deployment — third parties must never push to the shared monorepo."
+#
+# So: a customer's agent failing in production must not be able to open a pull
+# request against Fracktal's repository. The containment is a flag that is FALSE
+# by default (``organization.first_party``, migration 157), which means a tenant
+# created tomorrow is contained *by construction* rather than by someone
+# remembering to contain it.
+#
+# This is MT-0b in ``saas_multitenancy.md`` §6.2 — the cheapest sufficient fix,
+# and enough to unblock everything else. Per-tenant agent repositories and a
+# mutation sandbox whose output is a tenant-scoped artifact are the fuller
+# answers; neither is required to stop the leak.
+
+#: Operator hard-off, independent of the per-org flag. Unset means "defer to
+#: ``organization.first_party``" — this exists so a deployment can kill the
+#: whole mechanism without touching data.
+_SELF_MUTATION_DISABLED_ENV = "SELF_MUTATION_DISABLED"
+
+_SQL_FIRST_PARTY_BY_ID = """
+SELECT first_party FROM organization WHERE id = :org_id
+"""
+#: Untenanted resolution. Deliberately requires the org to be the ONLY one: on a
+#: single-tenant box this is the operator's org and behaviour is unchanged, and
+#: the moment a second organization exists it returns no row and the gate fails
+#: closed. A "pick the default org" fallback would keep answering true forever,
+#: which is the failure this ticket exists to prevent.
+_SQL_SOLE_ORG_FIRST_PARTY = """
+SELECT first_party FROM organization
+ WHERE (SELECT count(*) FROM organization) = 1
+"""
+
+
+async def _self_mutation_permitted(
+    organization_id: str | None = None,
+) -> tuple[bool, str]:
+    """May this organization's agents land a self-mutation? Fails CLOSED.
+
+    Returns ``(allowed, reason)``; *reason* is empty when allowed and is written
+    into :attr:`MutationResult.skipped_reason` otherwise, so an operator reading
+    the approval inbox can tell containment from a crash.
+
+    **Every failure path returns False.** An unreachable database, a missing
+    column, a second organization on a box that resolved untenanted — all of
+    them mean "we cannot prove this is first-party", and the only safe answer to
+    that is no. Availability of self-mutation is worth far less than the
+    guarantee that a customer's agent never pushes to our monorepo.
+    """
+    if os.environ.get(_SELF_MUTATION_DISABLED_ENV, "").strip().lower() in (
+        "1", "true", "yes", "on",
+    ):
+        return False, "self-mutation is disabled on this deployment (SELF_MUTATION_DISABLED)"
+
+    try:
+        from acb_common.db import get_db
+        from sqlalchemy import text
+
+        session = await get_db()
+        try:
+            if organization_id:
+                row = (await session.execute(
+                    text(_SQL_FIRST_PARTY_BY_ID), {"org_id": organization_id},
+                )).first()
+            else:
+                row = (await session.execute(text(_SQL_SOLE_ORG_FIRST_PARTY))).first()
+        finally:
+            await session.close()
+    except Exception as exc:
+        _log.warning("mutation.first_party_check_failed", error=str(exc)[:200])
+        return False, (
+            "could not establish that this organization is first-party "
+            "(the check failed, so self-mutation is refused)"
+        )
+
+    if row is None:
+        return False, (
+            "no single first-party organization resolved — self-mutation is "
+            "refused for tenants (saas_multitenancy.md §6.2 / MT-0b)"
+        )
+    if not bool(row[0]):
+        return False, (
+            "this organization is not flagged first-party; a tenant's agent may "
+            "not open a pull request against the CommandCenter monorepo "
+            "(root AGENTS.md non-negotiable 3)"
+        )
+    return True, ""
+
+
+# ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
 
@@ -180,6 +273,7 @@ async def attempt_self_mutation(
     mutation_attempts: int = 0,
     agent_dir: str | None = None,
     incompatibility: bool = False,
+    organization_id: str | None = None,
 ) -> MutationResult:
     """Attempt to fix a failing agent using an isolated Copilot SDK sandbox.
 
@@ -204,9 +298,29 @@ async def attempt_self_mutation(
                           referencing ``agent_repo_compatibility.md`` and is
                           asked to generate a compliant ``agents.py``.
 
+        organization_id:  The org this run belongs to. ``None`` resolves to the
+                          sole organization, which exists only on a
+                          single-tenant box — see
+                          :func:`_self_mutation_permitted`.
+
     Returns:
         A :class:`MutationResult` describing what happened.
     """
+    # MT-0b — FIRST, before the attempt tally, the sandbox, git, or anything
+    # that could reach the network. A tenant's failure must cost nothing.
+    _permitted, _deny_reason = await _self_mutation_permitted(organization_id)
+    if not _permitted:
+        _log.info(
+            "mutation.refused_not_first_party",
+            agent=agent_name, run_id=run_id, reason=_deny_reason,
+        )
+        return MutationResult(
+            agent_name=agent_name,
+            run_id=run_id,
+            attempted=False,
+            skipped_reason=_deny_reason,
+        )
+
     _allowed, _attempt_no = _register_mutation_attempt(run_id, mutation_attempts)
     if not _allowed:
         reason = (

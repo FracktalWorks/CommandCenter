@@ -1458,13 +1458,32 @@ making the operator's own store per-tenant is **MT-0d**. (2) The declared-*list*
 itself coroutine-local; a concurrent run can still widen *which names* are looked up,
 but a widened name now yields nothing unless this run also holds that credential.
 
-#### MT-0b · Self-mutation containment for non-first-party tenants · 🟢 AGENT-SAFE
+#### MT-0b · Self-mutation containment for non-first-party tenants · ✅ **BUILT 2026-08-08, pending review**
 **Owner:** §6.2 · root `AGENTS.md` non-negotiable 3 · `docs/DESIGN_LIMITATION_native_maf_mutation.md`
 
 **Done when:** a config gate disables native-MAF self-mutation for any tenant not flagged
 first-party; it **defaults to disabled**; a test asserts a non-first-party tenant's failure
 event produces no PR attempt. ⚠️ **`work_plan.md` WS-3 records that no `first_party` field
 exists on any manifest, config or column** — this ticket creates it. Do not assume it.
+
+**As built.** Migration **157** adds `organization.first_party BOOLEAN NOT NULL DEFAULT
+false`, backfilling `slug='default'` to true — so today's behaviour is unchanged and every
+organization created afterwards is contained *by construction*.
+`mutation._self_mutation_permitted()` is called **first** in `attempt_self_mutation`,
+before the attempt tally, the sandbox, git or the network, and returns
+`MutationResult(attempted=False, skipped_reason=…)`.
+
+**It fails closed on every path** — unreachable DB, missing column, and (the multi-tenant
+case) no *sole* organization, because the untenanted query requires `count(*) = 1` rather
+than falling back to the default org. A default-org fallback would keep answering `true`
+after tenant #2 arrived, which is the leak. `SELF_MUTATION_DISABLED=1` is an operator
+hard-off that short-circuits before any query.
+
+**Verify:** `uv run pytest tests/unit/test_mt0b_self_mutation_containment.py -v -rs`
+(8 passed) — verified **red** first: 6 of the 8 failed against the pre-gate source.
+One test deliberately guards the *other* direction — that a first-party org still reaches
+the tally — because "refuse everything" would pass every other assertion here while
+silently switching the feature off for Fracktal too.
 
 #### MT-0c · Un-park WS-3 T2 — the execution-plane sandbox · 🔴 **OWNER-GATE**
 **Owner:** §0.9.3 · `permissions_sandbox_b6.md` P5-c · board WS-3
@@ -1478,13 +1497,45 @@ so** until the owner un-parks it. `work_plan.md` §6 gains the entry.
 credentials (MT-0a is the prerequisite) · **no database connection in the agent process**
 · allowlisted egress · ephemeral teardown.
 
-#### MT-0d · Per-organization provider keys · 🟢 AGENT-SAFE
+#### MT-0d · Per-organization provider keys · ✅ **BUILT 2026-08-08, pending review**
 **Owner:** §6.3 · **Anchor:** `08_provider_keys.sql:6-7` (`provider TEXT PRIMARY KEY`)
 
 **Done when:** `provider_keys` is keyed `(organization_id, provider)`; `mcp_servers`,
 `plugins` and `model_config` carry an org column; `acb_llm/key_store.py` and
 `model_config.py` resolve by tenant; the single existing org backfills; a test asserts a
 lookup without a tenant returns nothing rather than another tenant's key.
+
+**As built.** Migration **158** re-keys all four: `provider_keys` →
+`PRIMARY KEY (organization_id, provider)`, `model_config` → `(organization_id, key)`,
+`mcp_servers` → `(organization_id, name)`, and `plugins` keeps its UUID pk while its
+deployment-wide `name UNIQUE` becomes `(organization_id, name)`. Every existing row
+backfills to the operator's org, and a `DO` block **refuses to re-key** if any row is left
+ownerless rather than proceeding.
+
+**The untenanted resolution is the design decision worth reviewing.**
+`key_store._resolve_org(None)` resolves to *the sole organization* — literally
+`WHERE (SELECT count(*) FROM organization) = 1`. So the ~20 existing call sites keep
+working unchanged today, and **every one of them fails closed the moment a second
+organization exists**, which is exactly when MT-1 must supply a real tenant. A
+"default org" fallback would keep answering after tenant #2 and serve the operator's keys
+to a customer. Reads return `""`; **writes raise**, because a credential written with no
+owner is how a key ends up readable by the wrong tenant.
+
+⚠️ **The in-memory cache was the other half, and correct SQL does not protect it.**
+`ProviderKeyStore._cache` was keyed by `provider` alone — the second tenant asking for
+`openai` would have been served the first tenant's **decrypted** key straight from memory,
+with no query issued at all. It is now keyed `(organization_id, provider)`, pinned by its
+own test.
+
+**Verify:** `uv run pytest tests/unit/test_mt0d_per_org_credentials.py -v -rs` (8 passed)
+— verified **red** first: 7 of 8 failed against the pre-fix source.
+
+⚠️ **Not verified against a live database.** No Docker daemon was available in the build
+environment, so migrations 157 and 158 were **statically** checked only: all four
+auto-generated constraint names confirmed against `schema.generated.sql`, and no foreign
+key anywhere references the primary keys being re-pointed (so the drop-and-re-add is
+safe). **Run both against a scratch Postgres before deploying** — `apply_migrations.sh`
+replays from `02_` upward, and a failure there fails the deploy.
 
 ---
 

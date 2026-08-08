@@ -54,7 +54,12 @@ class ProviderKeyStore:
 
     def __init__(self) -> None:
         self._fernet: Fernet | None = None
-        self._cache: dict[str, str] = {}  # provider → plain text key (in-memory)
+        # MT-0d: keyed by (organization_id, provider) — NOT provider alone.
+        # A provider-keyed cache is a cross-tenant leak that no amount of
+        # correctness in the SQL below would catch: the second tenant asking for
+        # "openai" would be served the first tenant's decrypted key straight
+        # from memory, without a query ever running.
+        self._cache: dict[tuple[str, str], str] = {}
 
     @property
     def _f(self) -> Fernet:
@@ -116,14 +121,53 @@ class ProviderKeyStore:
 
         return await asyncio.to_thread(_sync)
 
-    async def get(self, provider: str) -> str:
-        """Return the plain-text API key for a provider, or '' if not set."""
-        # Check in-memory cache first
-        if provider in self._cache:
-            return self._cache[provider]
+    async def _resolve_org(self, organization_id: str | None) -> str:
+        """The organization a credential read/write belongs to. Fails CLOSED.
+
+        MT-0d (``saas_multitenancy.md`` §6.3). ``provider_keys`` was
+        ``provider TEXT PRIMARY KEY`` — one key per provider for the whole box.
+        That was correct under D11 (one deployment per tenant) and is a
+        cross-tenant leak under D15.
+
+        Passing ``organization_id`` explicitly is always right. ``None`` means
+        "the sole organization", which **only resolves while there is exactly
+        one** — every one of the ~20 existing call sites relies on it today and
+        keeps working unchanged, and the moment a second organization is created
+        it returns ``""`` and every untenanted read yields nothing.
+
+        That is the point, and it is why this is not a "default org" lookup: a
+        default-org fallback would keep answering *after* tenant #2 arrived, and
+        would serve the operator's keys to a customer. Failing closed turns that
+        into a visibly missing key at exactly the moment MT-1 must supply a real
+        tenant, instead of a silent leak nobody notices.
+        """
+        if organization_id:
+            return str(organization_id)
+        rows = await self._execute(
+            "SELECT id FROM organization WHERE (SELECT count(*) FROM organization) = 1"
+        )
+        return str(rows[0]["id"]) if rows else ""
+
+    async def get(self, provider: str, organization_id: str | None = None) -> str:
+        """Return the plain-text API key for a provider, or '' if not set.
+
+        MT-0d: scoped to *organization_id*, or to the sole organization when it
+        is omitted (see :meth:`_resolve_org` — that resolution fails closed once
+        a second tenant exists).
+        """
+        org = await self._resolve_org(organization_id)
+        if not org:
+            _log.warning("key_store.no_tenant_resolved", provider=provider)
+            return ""
+
+        cache_key = (org, provider)
+        if cache_key in self._cache:
+            return self._cache[cache_key]
 
         rows = await self._execute(
-            "SELECT encrypted FROM provider_keys WHERE provider = :provider",
+            "SELECT encrypted FROM provider_keys "
+            " WHERE organization_id = :org_id AND provider = :provider",
+            org_id=org,
             provider=provider,
         )
         if not rows:
@@ -131,7 +175,7 @@ class ProviderKeyStore:
 
         try:
             plain = self._f.decrypt(base64.urlsafe_b64decode(rows[0]["encrypted"])).decode("utf-8")
-            self._cache[provider] = plain
+            self._cache[cache_key] = plain
             return plain
         except Exception:
             _log.warning("key_store.decrypt_failed", provider=provider)
@@ -157,8 +201,9 @@ class ProviderKeyStore:
         api_key: str,
         credential_type: str = "llm",
         service: str | None = None,
+        organization_id: str | None = None,
     ) -> None:
-        """Store an encrypted API key (upsert).
+        """Store an encrypted API key (upsert), scoped to an organization.
 
         Args:
             provider: Unique key identifier (e.g. 'openai', 'zoho-crm:client_id').
@@ -166,9 +211,21 @@ class ProviderKeyStore:
             credential_type: 'llm' (default) or 'integration'.
             service: For integration keys, the service name (e.g. 'zoho-crm').
                      Defaults to provider when not given.
+            organization_id: MT-0d — the owning org. Omitted resolves to the sole
+                     organization and **raises** once a second one exists, which
+                     is deliberate: writing a credential with no owner is how a
+                     key ends up readable by the wrong tenant, and a write is a
+                     far better place to fail loudly than a read.
         """
         if not api_key.strip():
             raise ValueError("api_key cannot be empty")
+
+        org = await self._resolve_org(organization_id)
+        if not org:
+            raise RuntimeError(
+                "key_store.put requires an organization_id once more than one "
+                "organization exists (MT-0d / saas_multitenancy.md §6.3)"
+            )
 
         encrypted = base64.urlsafe_b64encode(
             self._f.encrypt(api_key.encode("utf-8"))
@@ -179,108 +236,120 @@ class ProviderKeyStore:
         await self._execute(
             """
             INSERT INTO provider_keys
-                (provider, encrypted, credential_type, service, updated_at)
-            VALUES (:provider, :encrypted, :credential_type, :service, now())
-            ON CONFLICT (provider) DO UPDATE
+                (organization_id, provider, encrypted, credential_type, service, updated_at)
+            VALUES (:org_id, :provider, :encrypted, :credential_type, :service, now())
+            ON CONFLICT (organization_id, provider) DO UPDATE
             SET encrypted = :encrypted,
                 credential_type = :credential_type,
                 service = :service,
                 updated_at = now()
             """,
+            org_id=org,
             provider=provider,
             encrypted=encrypted,
             credential_type=credential_type,
             service=svc,
         )
-        self._cache[provider] = api_key
+        self._cache[(org, provider)] = api_key
         _log.info("key_store.put", provider=provider,
                    credential_type=credential_type)
 
-    async def delete(self, provider: str) -> None:
-        """Remove a provider's API key."""
+    async def delete(self, provider: str, organization_id: str | None = None) -> None:
+        """Remove a provider's API key (MT-0d: within one organization only)."""
+        org = await self._resolve_org(organization_id)
+        if not org:
+            _log.warning("key_store.delete_no_tenant", provider=provider)
+            return
         await self._execute(
-            "DELETE FROM provider_keys WHERE provider = :provider",
+            "DELETE FROM provider_keys "
+            " WHERE organization_id = :org_id AND provider = :provider",
+            org_id=org,
             provider=provider,
         )
-        self._cache.pop(provider, None)
+        self._cache.pop((org, provider), None)
         _log.info("key_store.delete", provider=provider)
 
-    async def get_all(self) -> dict[str, str]:
-        """Return all stored provider keys (decrypted)."""
-        rows = await self._execute("SELECT provider, encrypted FROM provider_keys")
+    async def _decrypt_rows(self, org: str, rows: list[dict[str, Any]]) -> dict[str, str]:
+        """Decrypt ``(provider, encrypted)`` rows, using and filling the cache.
+
+        MT-0d: the cache key is ``(org, provider)``. It was ``provider`` alone,
+        which would have served the first tenant's decrypted key to the second
+        without a query ever running — a leak no amount of correct SQL catches.
+        """
         result: dict[str, str] = {}
         for row in rows:
             provider = row["provider"]
-            if provider in self._cache:
-                result[provider] = self._cache[provider]
+            cache_key = (org, provider)
+            if cache_key in self._cache:
+                result[provider] = self._cache[cache_key]
                 continue
             try:
-                plain = self._f.decrypt(base64.urlsafe_b64decode(row["encrypted"])).decode("utf-8")
-                self._cache[provider] = plain
+                plain = self._f.decrypt(
+                    base64.urlsafe_b64decode(row["encrypted"])
+                ).decode("utf-8")
+                self._cache[cache_key] = plain
                 result[provider] = plain
             except Exception:
                 _log.warning("key_store.decrypt_failed", provider=provider)
         return result
 
-    async def get_by_type(self, credential_type: str) -> dict[str, str]:
-        """Return all keys of a given credential_type (decrypted).
+    async def get_all(self, organization_id: str | None = None) -> dict[str, str]:
+        """Return this organization's stored provider keys (decrypted)."""
+        org = await self._resolve_org(organization_id)
+        if not org:
+            return {}
+        rows = await self._execute(
+            "SELECT provider, encrypted FROM provider_keys "
+            " WHERE organization_id = :org_id",
+            org_id=org,
+        )
+        return await self._decrypt_rows(org, rows)
+
+    async def get_by_type(
+        self, credential_type: str, organization_id: str | None = None,
+    ) -> dict[str, str]:
+        """Return this org's keys of a given credential_type (decrypted).
 
         Args:
             credential_type: 'llm' or 'integration'.
+            organization_id: MT-0d — omitted resolves to the sole organization.
 
         Returns:
             {provider: plain_text_key, ...}
         """
+        org = await self._resolve_org(organization_id)
+        if not org:
+            return {}
         rows = await self._execute(
             "SELECT provider, encrypted FROM provider_keys "
-            "WHERE credential_type = :credential_type",
+            " WHERE organization_id = :org_id AND credential_type = :credential_type",
+            org_id=org,
             credential_type=credential_type,
         )
-        result: dict[str, str] = {}
-        for row in rows:
-            provider = row["provider"]
-            if provider in self._cache:
-                result[provider] = self._cache[provider]
-                continue
-            try:
-                plain = self._f.decrypt(
-                    base64.urlsafe_b64decode(row["encrypted"])
-                ).decode("utf-8")
-                self._cache[provider] = plain
-                result[provider] = plain
-            except Exception:
-                _log.warning("key_store.decrypt_failed", provider=provider)
-        return result
+        return await self._decrypt_rows(org, rows)
 
-    async def get_by_service(self, service: str) -> dict[str, str]:
-        """Return all keys for a given service (decrypted).
+    async def get_by_service(
+        self, service: str, organization_id: str | None = None,
+    ) -> dict[str, str]:
+        """Return this org's keys for a given service (decrypted).
 
         Args:
             service: Service name, e.g. 'zoho-crm', 'clickup'.
+            organization_id: MT-0d — omitted resolves to the sole organization.
 
         Returns:
             {provider: plain_text_key, ...}
         """
+        org = await self._resolve_org(organization_id)
+        if not org:
+            return {}
         rows = await self._execute(
             "SELECT provider, encrypted FROM provider_keys "
-            "WHERE service = :service",
+            " WHERE organization_id = :org_id AND service = :service",
+            org_id=org,
             service=service,
         )
-        result: dict[str, str] = {}
-        for row in rows:
-            provider = row["provider"]
-            if provider in self._cache:
-                result[provider] = self._cache[provider]
-                continue
-            try:
-                plain = self._f.decrypt(
-                    base64.urlsafe_b64decode(row["encrypted"])
-                ).decode("utf-8")
-                self._cache[provider] = plain
-                result[provider] = plain
-            except Exception:
-                _log.warning("key_store.decrypt_failed", provider=provider)
-        return result
+        return await self._decrypt_rows(org, rows)
 
     async def configure_integrations(self) -> None:
         """Load all integration credentials into os.environ.

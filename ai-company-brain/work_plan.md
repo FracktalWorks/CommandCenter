@@ -167,6 +167,23 @@ are labelled `agent-proposed, owner may overrule` in their owning specs and stay
 distinct from D11/D12's `owner-answered`); D9, D10, D11 and D12 are owner calls,
 taken and dated.
 
+- **D16 — The agent sandbox splits; the raw-SQL tool goes now, the container
+  tier waits for the pooled cutover.** *(`agent-proposed, owner may overrule` —
+  2026-08-08, owner delegated the call.)* MT-0c bundled four clauses of wildly
+  different cost and urgency, so the cheapest and most valuable waited behind the
+  most expensive. **MT-0c-1 (built):** `query_history` took a *model-generated SQL
+  string* and ran it through `acb_graph` — and its keyword guard was wrong both
+  ways, rejecting its own documented example (`CREATED_AT` contains `CREATE`)
+  while letting `SELECT * FROM provider_keys` straight through. That is a live
+  within-org read primitive **today**, so it is fixed now: search criteria, bound
+  parameters, two tables, plus a build-failing ratchet against the shape
+  returning. **MT-0c-2 (still parked, still OWNER-GATE):** the container/microVM
+  tier. **D10's reasoning survives for the silo phase** — one tenant per box means
+  an escaped agent reaches only the data it already had — so T2 becomes a
+  precondition of the **§5.1 pooled cutover** (customer 8–12), not of Phase 0.
+  Building Firecracker-grade isolation before customer #1 is speculative
+  infrastructure paid for out of the runway that should be buying customers.
+  Owner: **WS-29**, spec `specs/saas_multitenancy.md` MT-0c.
 - **D15 — The tenant boundary is a ROW, not a deployment.** *(owner-requested
   2026-08-08; re-takes **D11**.)* Tenant = `organization_id`, enforced by Postgres
   **FORCE ROW LEVEL SECURITY** bound at the `get_db()` seam with `SET LOCAL
@@ -493,13 +510,14 @@ drawio §12's stray Hostinger-token action item moved to WS-2's list.
 
 ## 6. Owner-gate registry (agents must refuse these)
 
-> **WS-29 / MT-0c — un-parking the WS-3 T2 isolation tier.** `saas_multitenancy.md`
-> §0.9.3 makes the per-run agent sandbox load-bearing for multi-tenancy: an agent must
-> hold no ambient credentials, **no database connection**, and no unrestricted egress.
-> T2 is parked by owner decision **D10** on the ground that the ladder need only hold
-> against trusted colleagues. **An agent must refuse to build T2, and say so**, until the
-> owner re-takes D10. MT-0a (per-run credential scoping) is AGENT-SAFE and is the
-> prerequisite — build that first regardless.
+> **WS-29 / MT-0c-2 — un-parking the WS-3 T2 container tier.** Still OWNER-GATE, and
+> **still parked** — narrowed by **D16** (2026-08-08). `saas_multitenancy.md` §0.9.3's
+> *conditions* (no raw-SQL tool; no agent-reachable `app.tenant_id` write) are satisfied
+> without it: **MT-0c-1 shipped the first**, and the second cannot be violated before
+> `app.tenant_id` exists (MT-1b). What remains is the container/microVM boundary, which
+> D10 parked on the "trusted colleagues" threat model — a model that survives the silo
+> phase and dies at the pooled cutover. **An agent must refuse to build T2 and say so**;
+> it is a precondition of the §5.1 cutover, not of Phase 0.
 >
 > **WS-29 — moving any customer onto the pooled tier.** Cutover is a data move against
 > live customer data. AGENT-SAFE to build; **OWNER-GATE to execute.**

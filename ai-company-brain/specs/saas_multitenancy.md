@@ -1202,7 +1202,7 @@ Each phase is independently shippable and each one is sellable before the next e
 
 | Phase | Work | Est. | Gate |
 |---|---|---|---|
-| **0 — Blockers** | §6: per-run credential scoping, per-org provider keys, self-mutation containment, **+ the execution-plane sandbox contract (§0.9.3) — which requires UN-PARKING WS-3 T2 (owner decision D10), because selling externally replaces the internal-tool threat model it was parked under** | 2–4 wk | **Nothing ships to a second customer before this** |
+| **0 — Blockers** | §6: per-run credential scoping ✅ · per-org provider keys ✅ · self-mutation containment ✅ · **no-raw-SQL agent tools ✅ (MT-0c-1)**. ⚠️ **MT-0c-2 (the container tier) is deliberately NOT here** — D16 moves it to a precondition of the §5.1 pooled cutover, because with one tenant per box an escaped agent reaches only its own data | 1–2 wk · **DONE** | **Nothing ships to a second customer before this** |
 | **1 — Tenancy** | org_id + FORCE RLS on all tables (generated), **org_id in every PK and index prefix** (§1.8a), tenant binding at **all eight connection paths** (§0.1), `acb_app` role, `create_engine` + `psycopg.connect` ratchets, Mem0 decision, **no raw-SQL tool for agents** (§1.8a), Redis prefixing, subdomain resolution, identity/membership split (+ the external-IdP call, §1.8a), per-tenant logical backup job, partitioning for the heavy tables, build-failing coverage test | 4–5 wk | The big one. §0.1, §1.3, §1.6, §1.8a, §1.9 |
 | **2 — Entitlements** | module catalog, entitlement + seat tables, `intersect()` mask, 402 vs 403, `ModuleGate` + upsell, non-HTTP gating, **per-org feature flags + release channel** (§1.4b — same lookup shape as the entitlement mask) | 2–3 wk | **Sell here.** Invoice by hand while proving the model. |
 | **3 — AI credits** | per-org virtual keys, Redis budget gate, rate card, `usage_event`, credit ledger, top-up | 2–3 wk | §3 |
@@ -1485,17 +1485,66 @@ One test deliberately guards the *other* direction — that a first-party org st
 the tally — because "refuse everything" would pass every other assertion here while
 silently switching the feature off for Fracktal too.
 
-#### MT-0c · Un-park WS-3 T2 — the execution-plane sandbox · 🔴 **OWNER-GATE**
-**Owner:** §0.9.3 · `permissions_sandbox_b6.md` P5-c · board WS-3
+#### MT-0c · The execution-plane sandbox — **SPLIT 2026-08-08 (D16)**
 
-**Why it is owner-gate:** T2 is parked by **owner decision D10 (2026-08-03)** on the
-ground that *"the ladder must hold against trusted colleagues, not hostile users."*
-Selling externally replaces that threat model. **An agent must refuse this ticket and say
-so** until the owner un-parks it. `work_plan.md` §6 gains the entry.
+> **`DECISION (agent-proposed, owner may overrule)` — 2026-08-08.** The owner delegated
+> this call. Recorded under the same label as D13 so it stays overrulable.
+>
+> **MT-0c as one ticket was the wrong shape.** Its four clauses have wildly different
+> costs and wildly different *urgency*, and bundling them meant the cheapest, most
+> valuable one waited behind the most expensive one.
 
-**Scope once un-parked** (§0.9.3's four clauses): one tenant binding · per-run expiring
-credentials (MT-0a is the prerequisite) · **no database connection in the agent process**
-· allowlisted egress · ephemeral teardown.
+**MT-0c-1 · No agent tool accepts SQL · ✅ BUILT 2026-08-08, pending review**
+
+**Why now, not at cutover.** §0.9.3 already names this a *condition on the pooled
+decision*. It was **already violated** — and not only in a multi-tenant sense.
+`query_history` took a **model-generated SQL string** and executed it through
+`acb_graph.get_session()` (connection path 4 in §0.1 — the sync `create_engine` the seam
+ratchet never inspected). It was registered in `agent-orchestrator/config.json`, injected
+at `_tool_injection.py:623`, and advertised to the model as *"Run a SELECT-only SQL
+query"*.
+
+**Its guard was wrong in both directions, measured 2026-08-08:**
+
+| | Result |
+|---|---|
+| `SELECT role, content, created_at FROM chat_message` — *the tool's own documented example* | **Rejected** — `CREATED_AT` contains the substring `CREATE` |
+| `SELECT * FROM provider_keys` | **Allowed.** So were `email_messages`, `app_user`, everything. The guard policed *verbs*; nothing policed *tables* |
+
+So this was a live within-org read primitive **today**, and a cross-tenant one the day
+MT-1 lands. **As built:** `query_history` now takes search criteria — the model supplies
+*values*, never syntax; the SQL is a fixed string with bound parameters over exactly the
+two tables it always documented. Results narrow to the acting member's own sessions when
+the run context names one (the old tool could read any member's conversations — its own
+docstring example did). A **build-failing ratchet** (`test_no_agent_tool_accepts_a_sql_parameter`)
+stops the shape returning.
+
+**Verify:** `uv run pytest tests/unit/test_mt0c1_no_raw_sql_agent_tools.py -v -rs`
+(9 passed; verified **red** — 6 of 9 failed against the SQL version). ⚠️ The pinned call
+contract in `tests/unit/test_tool_schema_diet.py` was updated **deliberately** — that
+ratchet exists to stop a contract changing by accident, and it caught this correctly.
+
+**MT-0c-2 · The container/microVM tier (WS-3 T2) · 🔴 STAYS OWNER-GATE, STAYS PARKED**
+
+**Why parked is still right, and this is the substance of the decision.** D10 parked T2
+because *"the ladder must hold against trusted colleagues, not hostile users."* That
+reasoning **still holds for the silo phase** (§5.1): with one tenant per box, an escaped
+agent reaches only its own tenant's data, which is the blast radius it already had.
+
+T2 becomes load-bearing at the **pooled cutover** (customer 8–12), not at customer #1.
+Building Firecracker-grade isolation before the first customer exists is speculative
+infrastructure — weeks of work whose value arrives months later, paid for out of the
+runway that should be buying customers.
+
+> **The trigger:** MT-0c-2 must land **before** the first pooled tenant, i.e. it is a
+> precondition of the §5.1 cutover, not of Phase 0. Un-parking is still **OWNER-GATE**
+> and `work_plan.md` §6 keeps its entry.
+
+**What this split does NOT do.** It does not weaken §0.9.3. The *condition* on the pooled
+decision was "no raw-SQL tool **and** no agent-reachable path can set `app.tenant_id`" —
+MT-0c-1 satisfies the first half now, and the second half cannot be violated before
+`app.tenant_id` exists (MT-1b). The container tier is defence in depth on top of both,
+which is why it can wait; the two conditions themselves cannot.
 
 #### MT-0d · Per-organization provider keys · ✅ **BUILT 2026-08-08, pending review**
 **Owner:** §6.3 · **Anchor:** `08_provider_keys.sql:6-7` (`provider TEXT PRIMARY KEY`)

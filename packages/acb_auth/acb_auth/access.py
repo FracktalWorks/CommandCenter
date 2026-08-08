@@ -389,16 +389,41 @@ _PARTICIPANT_SQL = """
 SELECT subject FROM chat_session_participant WHERE session_id = :sid
 """
 
+#: Both expansions are scoped to the actor's organization, joined in as `actor`.
+#:
+#: `org_group.slug` is unique only *within* an organization (`UNIQUE
+#: (organization_id, slug)`, `138_groups_and_session_participants.sql:49`), so
+#: the slug-only join matched every tenant's group of that name at once; and the
+#: `org` subject, with no filter at all, expanded to every active user on the
+#: box (`saas_multitenancy.md` §6.4, §6.5 — under D15 the tenant boundary is a
+#: row, so both leak for real). This is the most consequential place to get it
+#: wrong: `resolve_session_access` folds an *intersection*, and admitting a
+#: member who was never in the room widens the fold rather than narrowing it.
+#:
+#: The organization is derived from the acting user's own `app_user` row, not
+#: from a literal org slug, so it cannot go stale (`tenancy_and_visibility.md`
+#: §2 done-when 1). An actor with no `app_user` row — or a member row with a
+#: NULL `organization_id`, which migration 130 backfilled but nothing enforces
+#: — matches nothing and drops out of the expansion. That fails *closed*: the
+#: run keeps the actor's own access instead of borrowing someone else's.
 _GROUP_MEMBER_SQL = """
 SELECT au.email
 FROM org_group g
 JOIN org_group_member m ON m.group_id = g.id
 JOIN app_user au ON au.id = m.user_id
-WHERE g.slug = :slug AND au.status = 'active'
+JOIN app_user actor ON lower(actor.email) = :actor_email
+WHERE g.slug = :slug
+  AND au.status = 'active'
+  AND g.organization_id = actor.organization_id
+  AND au.organization_id = actor.organization_id
 """
 
 _ORG_MEMBER_SQL = """
-SELECT email FROM app_user WHERE status = 'active'
+SELECT au.email
+FROM app_user au
+JOIN app_user actor ON lower(actor.email) = :actor_email
+WHERE au.status = 'active'
+  AND au.organization_id = actor.organization_id
 """
 
 
@@ -419,7 +444,8 @@ async def resolve_session_access(
     * Participant subjects are expanded at read time — an email is itself,
       ``group:<slug>`` becomes the group's active members, ``org`` becomes
       every active member (an org-visible room is readable by all of them,
-      so all of them cap it).
+      so all of them cap it). Both expansions stay inside the *actor's*
+      organization; see ``_GROUP_MEMBER_SQL``.
     * The actor is always included, so a solo session — or any session
       recorded before migration 138 — resolves to exactly the actor's own
       access, byte-identically to today. Everything here activates only when
@@ -460,12 +486,17 @@ async def resolve_session_access(
                 if not s:
                     continue
                 if s == "org":
-                    rows = (await session.execute(text(_ORG_MEMBER_SQL))).fetchall()
+                    rows = (
+                        await session.execute(
+                            text(_ORG_MEMBER_SQL), {"actor_email": actor},
+                        )
+                    ).fetchall()
                     emails.update(r[0].lower() for r in rows if r[0])
                 elif s.startswith("group:"):
                     rows = (
                         await session.execute(
-                            text(_GROUP_MEMBER_SQL), {"slug": s[len("group:"):]},
+                            text(_GROUP_MEMBER_SQL),
+                            {"slug": s[len("group:"):], "actor_email": actor},
                         )
                     ).fetchall()
                     emails.update(r[0].lower() for r in rows if r[0])
@@ -498,9 +529,19 @@ async def resolve_session_access(
 
 # ── Ownership bootstrap (the way back in) ───────────────────────────────────
 
+#: The organization this deployment bootstraps an owner into.
+#:
+#: Still a literal — provisioning a *customer* organization's first owner is
+#: onboarding's job, not an env var's, and EXECUTIVE_EMAILS names the operator
+#: of this box. Named once and bound into both queries below so the guard and
+#: the insert can never disagree about which organization they mean; the guard
+#: used to answer a different question from the insert, which is the whole bug
+#: (`tenancy_and_visibility.md` §1.1 site 9).
+_BOOTSTRAP_ORG_SLUG = "default"
+
 _BOOTSTRAP_OWNER_SQL = """
 WITH org AS (
-    SELECT id FROM organization WHERE slug = 'default'
+    SELECT id FROM organization WHERE slug = :org_slug
 ),
 member AS (
     INSERT INTO app_user (email, display_name, role, status,
@@ -519,9 +560,19 @@ WHERE r.organization_id = org.id AND r.slug = 'owner'
 ON CONFLICT DO NOTHING
 """
 
+#: Does *this* organization have an owner — not "does an owner exist anywhere".
+#:
+#: `org_role` is per-organization, so an unscoped `r.slug = 'owner'` answered a
+#: question nobody asked: once any one tenant had an owner, the guard below went
+#: permanently false and `ensure_owner_bootstrap()` became a no-op for an
+#: organization that had none. That is a **lockout, not a leak** — no owner
+#: means no inviter, and the only way in is hand-run SQL. RLS does not fix it,
+#: because the defect is a missing WHERE on a startup path, not a visible row
+#: (`saas_multitenancy.md` §6.4; `tenancy_and_visibility.md` §1.1 site 9).
 _HAS_OWNER_SQL = """
 SELECT 1 FROM user_role ur
 JOIN org_role r ON r.id = ur.role_id AND r.slug = 'owner'
+JOIN organization o ON o.id = r.organization_id AND o.slug = :org_slug
 LIMIT 1
 """
 
@@ -540,10 +591,13 @@ async def ensure_owner_bootstrap() -> str | None:
     gateway startup, the first place both the database AND the environment
     are readable.
 
-    Deliberately narrow: it runs only when NO member holds ``owner`` — one
-    real owner anywhere (however provisioned) makes this a no-op forever, so
-    a stale or placeholder EXECUTIVE_EMAILS can never overwrite real
-    membership. Returns the provisioned email, or ``None`` when it did
+    Deliberately narrow: it runs only when nobody holds ``owner`` **in the
+    organization it would provision into** (``_BOOTSTRAP_ORG_SLUG``) — one
+    real owner there (however provisioned) makes this a no-op forever, so a
+    stale or placeholder EXECUTIVE_EMAILS can never overwrite real
+    membership. The scoping is the 2026-08-08 fix: unscoped, another tenant's
+    owner satisfied the guard and re-locked this deployment out of its own
+    bootstrap. Returns the provisioned email, or ``None`` when it did
     nothing. Never raises: an ownerless deployment with a broken bootstrap
     should still boot and serve /health, not crash-loop.
     """
@@ -556,7 +610,10 @@ async def ensure_owner_bootstrap() -> str | None:
 
         factory = _get_session_factory()
         async with factory() as session:
-            if (await session.execute(text(_HAS_OWNER_SQL))).first() is not None:
+            has_owner = await session.execute(
+                text(_HAS_OWNER_SQL), {"org_slug": _BOOTSTRAP_ORG_SLUG},
+            )
+            if has_owner.first() is not None:
                 return None
             if candidate is None:
                 _log.warning(
@@ -568,7 +625,10 @@ async def ensure_owner_bootstrap() -> str | None:
                     ),
                 )
                 return None
-            await session.execute(text(_BOOTSTRAP_OWNER_SQL), {"email": candidate})
+            await session.execute(
+                text(_BOOTSTRAP_OWNER_SQL),
+                {"email": candidate, "org_slug": _BOOTSTRAP_ORG_SLUG},
+            )
             await session.commit()
         invalidate(candidate)
         _log.warning(

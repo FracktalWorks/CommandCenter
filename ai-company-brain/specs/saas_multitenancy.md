@@ -1678,7 +1678,24 @@ orchestrator runs, broker handlers, the Redis Streams consumer) carries an expli
 `organization_id` on its job record and binds it before any DB access; a test asserts a job
 constructed without one **refuses to run** rather than defaulting.
 
-#### MT-1e · Redis: prefixes enforced by the client · 🟢 AGENT-SAFE
+#### MT-1e · Redis: prefixes enforced by the client · ◐ **WRAPPER BUILT, CALL SITES NOT CONVERTED**
+
+> **Built:** `acb_common/tenant_redis.py` — a client that *cannot* express an unprefixed key,
+> plus two AST ratchets (direct `redis` import; hand-written `cc:` literals).
+> **NOT converted:** ~58 key sites across 10 clients. Deliberately separate — the docstring
+> carries the migration path, including *not* writing a dual-read shim (every key is cache,
+> presence or a bounded stream, so conversion is a cache-cold event, not a data migration).
+>
+> ⚠️ **Three things no ratchet can catch, all verified against the tree:**
+> 1. `routes/chat.py:707` — `SCAN match="cc:active:*"` **enumerates every tenant's sessions**
+>    the moment a second exists. Highest severity in the inventory.
+> 2. `ingestion/consumer.py:95` — `_GROUP = "cc-ingest"` is **one consumer group shared by all
+>    tenants**; §1.9 requires one per tenant.
+> 3. **Untenanted non-`cc:` namespaces** invisible to the `cc:` ratchet:
+>    `ingestion:{clickup,zoho,gmail,dlq}`, `session_mem:`, `email:att:cache:` — plus
+>    `orchestrator/agents.py:436`, which hands `redis_url` to `agent_framework`'s
+>    `RedisHistoryProvider`, keying chat history **outside this wrapper entirely**. That one
+>    needs its own decision, not a conversion.
 **Owner:** §0.9.4, §1.9 · **Anchor:** today's untenanted `cc:activity`, `cc:room`,
 `cc:cost`, `cc:presence`, `cc:runactor`, …
 

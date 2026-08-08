@@ -445,6 +445,78 @@ backup matters more than onboarding speed, and the procurement conversation is e
 > plan changes to topping out at ~20–30 accounts at high ACV, which is a different
 > business, not a bigger version of this one.
 
+### 1.8a Greenfield check — which arguments here are design, and which are retrofit
+
+Owner question, 2026-08-08: *would this still be the recommendation if it were not
+anchored to what CommandCenter already is?* Recorded because a reader two years from now
+must be able to tell **"we chose this"** from **"we inherited this"**, and because the
+audit produced two changes to Phase 1.
+
+**Arguments that are pure design — they hold for any greenfield system with this customer
+profile, and nothing in them depends on this tree:**
+
+- Pooled over silo for 10–50-seat B2B customers (§1.4). The comparison set — Slack,
+  Notion, HubSpot, Freshworks, Zoho — did not inherit anything from us.
+- RLS over application filtering, on **fails-closed vs fails-open** (§0.1, §1.8). That is
+  a property of the mechanisms.
+- Container-per-org on shared hardware being the worst option (§1.7) — resource arithmetic.
+- Entitlements ≠ permissions (§2.1), credits not tokens (§3.2), assigned seats not active
+  users (§2.2). Three business principles with no code dependency.
+
+**Arguments that are retrofit reasoning, and must not be mistaken for design:**
+
+- *"The seam already exists"* — `get_db()`, `EffectiveAccess.intersect()`, `_emit_usage()`.
+  These make the migration cheap. **Greenfield they carry zero weight**, because greenfield
+  you simply write the tenant column into the first migration and the whole question
+  evaporates.
+- **The 4–5 week Phase 1 estimate is entirely a retrofit number.** Greenfield, multi-tenancy
+  is roughly three days of schema discipline. ⚠️ **This is the largest single distortion in
+  the document:** the pooled-vs-silo debate is expensive *here* only because 143 tables were
+  built without a tenant column. It is not evidence that the decision is hard in general.
+- **§3.1's "don't add a proxy" is ~60% retrofit.** Greenfield, buying an AI gateway
+  (LiteLLM, Portkey, Helicone) versus building metering into the app is close to a coin
+  flip. The one argument that survives greenfield is that a separate proxy must **re-resolve
+  the tenant**, creating a second boundary to get right, and that it lacks the app context
+  (which module, which agent) that per-module margin analysis needs. Buy it if the routing
+  and dashboards are worth more than that. **The conclusion is unchanged; the confidence
+  should be lower than §3.1 implies.**
+
+**Two things a greenfield design would include that this document did not — both cheap
+now, both expensive later, and both therefore added to Phase 1:**
+
+1. **Treat `organization_id` as a distribution key, not just a filter column.** Put it in
+   every primary key and every index prefix, and colocate related tables on it. Costs
+   nothing today and is the precondition for sharding — Citus and every distributed
+   Postgres take tenant-id colocation as their flagship multi-tenant pattern. Retrofitting
+   a distribution key after the fact means rewriting every primary key. **Adopt the
+   discipline; do not adopt Citus, which is unnecessary complexity at this scale.**
+2. **Evaluate an external identity provider for organizations, memberships and SSO**
+   (WorkOS, Clerk, Keycloak) rather than growing `app_user` into it. Enterprise B2B
+   eventually demands SAML and SCIM, and building those is a tar pit. This is a genuine
+   *"greenfield I would not build this myself"* — but note the honest counterweight: the
+   shipped RBAC (`org_access_control.md`) is good, and the migration cost may already
+   exceed the benefit. **Decide deliberately rather than by default.**
+
+**The argument this document under-weighted, and it is independent of the codebase:**
+CommandCenter's agents execute model-generated tool calls over content ingested from
+untrusted sources (email, WhatsApp). That is a **materially higher risk profile than
+ordinary SaaS**, and it is a real point in silo's favour that §1.1 waved past. It does not
+flip the decision — an injected agent already holds its own tenant's data, and RLS blocks
+the incremental "read *other* tenants" step at the server — but it raises the bar on two
+things that are now non-negotiable rather than merely advisable:
+
+> **No agent ever gets a raw-SQL tool, and no agent-reachable code path can set
+> `app.tenant_id`.** The agent must inherit a session already bound by the request or job
+> and must never open a connection of its own. If either of those is violated, pooled
+> tenancy is not defensible and §1 should be re-taken.
+
+**The one go-to-market risk that no architecture answers:** if two customers are
+competitors — plausible when selling manufacturing software from a manufacturer — *"is my
+data in the same database as theirs?"* is a procurement question, and *"no, separate
+database"* is a far easier answer than explaining a row-level policy. That is a **sales**
+argument for the dedicated-data tier (§1.5), not a technical one, and it is the reason
+`tenant_placement` and the eviction path (§1.6) earn their keep on day one.
+
 ### 1.9 The surfaces RLS does NOT cover — decide each, or they leak
 
 Postgres RLS protects Postgres. These do not run on Postgres:
@@ -828,7 +900,7 @@ Each phase is independently shippable and each one is sellable before the next e
 | Phase | Work | Est. | Gate |
 |---|---|---|---|
 | **0 — Blockers** | §6: per-run credential scoping, per-org provider keys, self-mutation containment | 1–2 wk | **Nothing ships to a second customer before this** |
-| **1 — Tenancy** | org_id + FORCE RLS on all tables (generated), tenant binding at **all eight connection paths** (§0.1), `acb_app` role, `create_engine` + `psycopg.connect` ratchets, Mem0 decision, Redis prefixing, subdomain resolution, identity/membership split, per-tenant logical backup job, partitioning for the heavy tables, build-failing coverage test | 4–5 wk | The big one. §0.1, §1.3, §1.6, §1.9 |
+| **1 — Tenancy** | org_id + FORCE RLS on all tables (generated), **org_id in every PK and index prefix** (§1.8a), tenant binding at **all eight connection paths** (§0.1), `acb_app` role, `create_engine` + `psycopg.connect` ratchets, Mem0 decision, **no raw-SQL tool for agents** (§1.8a), Redis prefixing, subdomain resolution, identity/membership split (+ the external-IdP call, §1.8a), per-tenant logical backup job, partitioning for the heavy tables, build-failing coverage test | 4–5 wk | The big one. §0.1, §1.3, §1.6, §1.8a, §1.9 |
 | **2 — Entitlements** | module catalog, entitlement + seat tables, `intersect()` mask, 402 vs 403, `ModuleGate` + upsell, non-HTTP gating | 2–3 wk | **Sell here.** Invoice by hand while proving the model. |
 | **3 — AI credits** | per-org virtual keys, Redis budget gate, rate card, `usage_event`, credit ledger, top-up | 2–3 wk | §3 |
 | **4 — Billing automation** | Stripe + Razorpay seam, webhooks → entitlements, dunning, Operator Console, reconciler | 3–4 wk | §4 |

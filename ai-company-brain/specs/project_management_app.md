@@ -1086,7 +1086,7 @@ interesting it is to build.
 | 8 | ~~**Dependency and subtask UI**~~ | — | **WS-27p ✅ BUILT 2026-08-07** |
 | 9a | ~~**Calendar view**~~ | — | **WS-27q ✅ BUILT 2026-08-08** |
 | 9b | **Timeline view** (Gantt bars on a date axis) | The calendar answers *what is due when*; it cannot answer *what runs alongside what*, which is the question a multi-month project asks | **WS-27t** |
-| 10 | **Global task search** | `?q=` exists on the list endpoint; there is no search surface | **WS-27r** |
+| 10 | ~~**Global task search**~~ | — | **WS-27r ✅ BUILT 2026-08-08** |
 | 11 | ~~**The card looks nothing like /tasks'**~~ | — | **WS-27s ✅ BUILT 2026-08-07** |
 | 12 | **Dependencies cannot be drawn** | `blocks` exists and is cycle-guarded, but wiring one means a dropdown and a task number in a panel — Jira and ClickUp make it a drag between two bars | **WS-27t** |
 
@@ -1969,3 +1969,85 @@ one day short and a one-day task a zero-width line.
 the blocker, so a mutant that swapped the SQL's two aliases — every arrow drawn backwards —
 passed the whole suite. It now reads the roles and the membership tests off the statement, and
 both mutants die behaviourally.
+
+### 11.18 WS-27r — the search surface, and the LIKE defect under it (built 2026-08-08)
+
+The last row of the parity backlog. *"`?q=` exists on the list endpoint; there is no search
+surface."* Both halves turned out to be true, and the second one was worse than advertised.
+
+**`_` and `%` were live wildcards on every search anybody had done.** `build_task_filters`
+bound `%{q}%` raw, so `_` — LIKE's single-character wildcard — meant `task_id` also matched
+`taskXid` and `task-id`, and `50%` quietly meant `50`. In a workspace where people search for
+identifiers all day that is a steady drip of hits nobody asked for, and it reads as fuzzy
+matching rather than as a bug. `like_escape` fixes it **on the shared builder**, so the board
+and every saved view get the fix, not only the new endpoint — fixing only the new code would
+have left the bug exactly where people meet it.
+
+**Why a second endpoint, having twice argued against one.** The list answers *"which tasks
+match these filters, in this order, on this page"*; search answers *"what did you mean"*.
+It **ranks** — and the list's ordering is a column allowlist (`TASK_SORTS`) that deliberately
+cannot express relevance, so a `sort=relevance` would be a sort key that only works when `q`
+is present, a worse contract than a separate route. It is **capped, not paged**: nobody pages
+through search results, they retype, and page 2 of a relevance ordering is where relevance has
+run out. And it **names the project**, which the list does not because its caller already has
+the tree. What decides *what a caller may see* is still shared — same
+`task_visibility_clause`, same archived rule — so search can never surface what the list would
+hide. That is the part that must not be duplicated; the rest is a different question.
+
+**Ranking happens in SQL, before the `LIMIT`.** Ranked afterwards over a capped set, the best
+answer is only present if it was already inside the arbitrary fifty rows the database happened
+to return — a defect that presents as "search is bad at long queries". Four tiers: the exact
+task number, a title PREFIX, a title match, then description-only; ties break on recency, then
+id, so a repeated search does not reshuffle.
+
+**`#42` is a task number.** People quote them, and a search box that returns every task whose
+description mentions 42 has ignored what was typed. Bounded to eighteen digits — `task_number`
+is a BIGINT, and an unbounded `int()` on user input is a parse nobody asked for.
+
+**A short query is empty, not a 422.** A search box types one character on the way to three,
+and an error flashing on every keystroke is noise the user cannot act on. Below the minimum it
+costs no database round trip at all.
+
+**Comments are deliberately not searched.** The largest text in the system and the least
+likely to be what somebody is hunting by name; a comment hit would also have to render as its
+task, which makes ranking across the two incomparable. Recorded so the absence reads as a
+decision rather than an oversight.
+
+#### The palette
+
+`⌘K` from anywhere in Projects, not a search page: the question is *"where is that task"*,
+asked while doing something else, usually about a project the person is not looking at. A page
+makes finding something a place you navigate **to**, which is one navigation more than the
+problem has.
+
+Four rules that only break under real typing speed on a real connection, so all four are
+pure functions in `lib/search.ts` rather than something to click at:
+
+* **"No results" may be claimed only once, and never while a request is in flight.** Shown
+  during the gap it flashes between every keystroke and its answer — the commonest bug in
+  hand-rolled search UIs, and it reads as the search being broken rather than slow. The
+  previous results stay on screen while the next load runs, so the list does not blank and
+  re-fill under the cursor.
+* **A stale response must not win.** "par" and "parser" are two requests with no ordering
+  guarantee; a slow "par" landing last replaces the right answers with old ones and the list
+  changes without a keystroke. The endpoint echoes `query` back, so the guard needs no request
+  ids.
+* **The arrows belong to the palette, unless a modifier is held.** Left to the browser they
+  move the text caret to the start or end of the query — two effects from one key. But
+  `Cmd+Left` is "go to line start", and stealing it breaks editing inside the palette's own
+  box.
+* **The highlight needle is escaped before it becomes a regex.** Searching `(draft)` would
+  otherwise throw a syntax error and blank the palette — the browser-side twin of the very
+  LIKE defect this ticket fixed on the server.
+
+**Found by the live run, invisible to all 43 hermetic tests:** `:number IS NOT NULL` names no
+column, so Postgres has nothing to infer the parameter's type from and asyncpg answers
+`AmbiguousParameterError: could not determine data type of parameter $1` — the query never
+runs. A Python fake has no type system to be ambiguous about. Fixed with an explicit
+`CAST(:number AS bigint)` and pinned structurally, because that is the only level at which a
+hermetic suite can hold it.
+
+**The fake learned to read LIKE properly.** `like_to_regex` translates `%`, `_` and the
+backslash escape rather than doing a substring match — a mirror that treated the pattern as a
+literal would have agreed with both the escaped and the unescaped implementation, and the
+whole defect would have been invisible to the suite that exists to catch it.

@@ -102,6 +102,33 @@ _IN_SUBQUERY = re.compile(
 _SUBQUERY_RE = re.compile(r"\b(SELECT|WITH)\b", re.I)
 
 
+def like_to_regex(pattern: str) -> re.Pattern[str]:
+    """A SQL LIKE pattern → the regex it means, honouring the backslash escape.
+
+    Written properly rather than as a `%`-strip-and-substring, because WS-27r's
+    whole defect was that `_` and `%` are METACHARACTERS: a fake that treated
+    the pattern as a literal substring would agree with both the escaped and
+    the unescaped implementation, and the bug this exists to catch would be
+    invisible here.
+    """
+    out = ["(?is)^"]
+    escaped = False
+    for char in pattern:
+        if escaped:
+            out.append(re.escape(char))
+            escaped = False
+        elif char == "\\":
+            escaped = True
+        elif char == "%":
+            out.append(".*")
+        elif char == "_":
+            out.append(".")
+        else:
+            out.append(re.escape(char))
+    out.append("$")
+    return re.compile("".join(out))
+
+
 def _strip_subqueries(where: str) -> tuple[str, list[str]]:
     """Split a WHERE into its top-level text and its subquery blocks.
 
@@ -399,6 +426,11 @@ class FakeProjectsDB:
         # fingerprint has to be tested first.
         if "AS blocker," in statement:
             return _Result(self._window_links(statement, args))
+        # WS-27r's ranked search. Three joins and a CASE — a shape the generic
+        # WHERE reader cannot parse, and one where `:number IS NOT NULL` would
+        # be mistaken for a column predicate and drop every row.
+        if "END AS rank" in statement:
+            return _Result(self._search_hits(statement, args))
         head = statement.split(None, 1)[0].upper()
         table = self._table(statement)
         if head == "INSERT":
@@ -456,6 +488,62 @@ class FakeProjectsDB:
             )
             for parent, found in grouped.items()
         ]
+
+    def _search_hits(self, statement: str, args: dict) -> list[Any]:
+        """WS-27r's ranked hits.
+
+        Every clause honoured only when the statement carries it — including
+        the visibility closure, so a search that loses it stops being scoped
+        here too and the leak test goes red.
+        """
+        projects = {str(p["id"]): p for p in self.rows("pm_projects")}
+        statuses = {str(x["id"]): x for x in self.rows("pm_task_statuses")}
+        term = like_to_regex(str(args.get("term") or ""))
+        prefix = like_to_regex(str(args.get("prefix") or ""))
+        number = args.get("number")
+        scoped = "pm_project_grants" in statement
+        visible = self.visible_project_ids(
+            str(args.get("vis_email") or ""), list(args.get("vis_groups") or []),
+        )
+        skips_archived = "t.archived_at IS NULL" in statement
+
+        found: list[Any] = []
+        for task in self.rows("pm_tasks"):
+            if scoped and str(task.get("project_id")) not in visible:
+                continue
+            if skips_archived and task.get("archived_at") is not None:
+                continue
+            title = str(task.get("title") or "")
+            body = str(task.get("description") or "")
+            numbered = number is not None and task.get("task_number") == number
+            if not (term.match(title) or term.match(body) or numbered):
+                continue
+            rank = (
+                0 if numbered
+                else 1 if prefix.match(title)
+                else 2 if term.match(title)
+                else 3
+            )
+            project = projects.get(str(task.get("project_id")), {})
+            status = statuses.get(str(task.get("status_id")), {})
+            found.append(SimpleNamespace(
+                **task,
+                project_name=project.get("name"),
+                status_name=status.get("name"),
+                category=status.get("category"),
+                rank=rank,
+            ))
+
+        # The tie-break is read off the statement, not assumed: `rank` alone
+        # leaves ties in seeding order, which would agree with any tie-break
+        # the route chose — including none.
+        recent_first = "t.updated_at DESC" in statement
+        found.sort(key=lambda r: str(r.id))
+        if recent_first:
+            found.sort(key=lambda r: _sortable(r.updated_at), reverse=True)
+        found.sort(key=lambda r: r.rank)
+        cap = int(args.get("cap") or len(found))
+        return found[:cap]
 
     def _window_links(self, statement: str, args: dict) -> list[Any]:
         """The `blocks` edges with BOTH ends inside the page's ids.

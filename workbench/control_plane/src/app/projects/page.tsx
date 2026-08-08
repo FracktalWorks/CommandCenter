@@ -35,12 +35,14 @@ import { MyWork } from "./components/MyWork";
 import { NotificationBell } from "./components/NotificationBell";
 import { ProjectTree } from "./components/ProjectTree";
 import { CalendarView } from "./components/CalendarView";
+import { SearchPalette } from "./components/SearchPalette";
 import { TimelineView } from "./components/TimelineView";
 import { TaskBoard } from "./components/TaskBoard";
 import { TaskList } from "./components/TaskList";
 import { TaskPanel } from "./components/TaskPanel";
 import { SAVED_VIEW_POSITION, orderBearingView, type planDrop } from "./lib/board";
 import { calendarWindow, dayKey, monthGrid, shiftMonth } from "./lib/calendar";
+import { isOpenShortcut } from "./lib/search";
 import type { Edge } from "./lib/timeline";
 import {
   EMPTY_FILTERS,
@@ -133,6 +135,10 @@ function ProjectsWorkspace() {
   // WS-27q — the calendar is a WINDOW, not the paged task list, so it holds
   // its own rows. Sharing `tasks` would mean either paginating the calendar
   // (a month with silently missing days) or unpaginating the board.
+  // WS-27r — the search palette. Held at the page rather than in a view,
+  // because the whole point is that it works from wherever you already are.
+  const [searching, setSearching] = useState(false);
+
   const [monthAnchor, setMonthAnchor] = useState<Date>(() => new Date());
   const [month, setMonth] = useState(NO_MONTH);
 
@@ -140,6 +146,19 @@ function ProjectsWorkspace() {
   const [anchor, setAnchor] = useState<string | null>(null);
   const [bulkBusy, setBulkBusy] = useState(false);
   const [bulkNotice, setBulkNotice] = useState<string | null>(null);
+
+  useEffect(() => {
+    // ⌘K from anywhere in Projects. `preventDefault` because the browser's own
+    // ⌘K is the address bar's search on some, and losing the app to it is a
+    // shortcut that works once.
+    function onKey(event: KeyboardEvent) {
+      if (!isOpenShortcut(event)) return;
+      event.preventDefault();
+      setSearching(true);
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   useEffect(() => {
     // Only for the "Mine" toggle. `fetchAccess` never throws, and an empty
@@ -720,6 +739,15 @@ function ProjectsWorkspace() {
                 Tags
               </Button>
             ) : null}
+            <Button
+              variant="ghost"
+              size="sm"
+              icon="Search"
+              onClick={() => setSearching(true)}
+              title="Search every project (⌘K)"
+            >
+              Search
+            </Button>
             <NotificationBell onOpenTask={openTaskById} />
           </div>
           <div className={`flex shrink-0 gap-1 ${mine ? "hidden" : ""}`}>
@@ -857,6 +885,12 @@ function ProjectsWorkspace() {
           )}
         </div>
       </main>
+
+      <SearchPalette
+        open={searching}
+        onClose={() => setSearching(false)}
+        onOpenTask={(id) => void openTaskById(id)}
+      />
 
       {openTask ? (
         <TaskPanel

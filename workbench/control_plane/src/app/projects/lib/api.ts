@@ -221,6 +221,21 @@ export const projectsApi = {
     }>(`calendar?${qs.toString()}`);
   },
 
+  /**
+   * WS-27r — ranked hits across every project the caller can see.
+   *
+   * Not `tasks?q=`: that endpoint is paginated and its ordering is a column
+   * allowlist, neither of which a search box wants. `query` is echoed back so
+   * a slow response to an earlier keystroke can be recognised and dropped.
+   */
+  search: (q: string) =>
+    call<{
+      rows: import("./search").Hit[];
+      total: number;
+      truncated: boolean;
+      query: string;
+    }>(`search?q=${encodeURIComponent(q)}`),
+
   task: (taskId: string) => call<TaskRow>(`tasks/${taskId}`),
 
   timeline: (taskId: string) =>

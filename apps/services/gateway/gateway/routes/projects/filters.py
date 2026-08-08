@@ -66,6 +66,23 @@ def validate_categories(values: list[str]) -> list[str]:
     return values
 
 
+def like_escape(term: str) -> str:
+    """Neutralise LIKE's metacharacters in a term a human typed (WS-27r).
+
+    ⚠️ **This was a live defect, not a precaution for new code.** `_` matches
+    any single character, so searching `task_id` also returned `taskXid` and
+    `task-id` — and in a workspace where people search for identifiers all day,
+    that is a steady drip of hits nobody asked for. `%` matches any run, so
+    `50%` quietly meant `50`.
+
+    Backslash first, or escaping it afterwards would double the backslashes
+    this function has just introduced. Postgres' default LIKE escape is the
+    backslash and the pattern is BOUND rather than interpolated, so
+    `standard_conforming_strings` does not enter into it.
+    """
+    return term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 def parse_when(raw: str, *, field: str) -> datetime:
     """A query-string timestamp → a real ``datetime``.
 
@@ -182,7 +199,7 @@ def build_task_filters(
 
     if q and q.strip():
         clauses.append("(t.title ILIKE :q OR t.description ILIKE :q)")
-        params["q"] = f"%{q.strip()}%"
+        params["q"] = f"%{like_escape(q.strip())}%"
 
     # WS-27m. TWO tag filters, because both questions get asked and one cannot
     # answer the other: `tags` is ANY (`&&` — "show me bugs or regressions"),

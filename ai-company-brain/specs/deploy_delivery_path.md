@@ -120,6 +120,22 @@ rewrites the file while bash is still reading it — bash reads scripts incremen
 by byte offset, so this executes garbage. The extraction must be two-stage: a small
 stable bootstrap that fetches, then `exec`s the fresh script.
 
+⚠️ **"Executes garbage" was the optimistic guess. Measured 2026-08-08** — build a
+throwaway origin with a 20 KB apply script whose first act resets its own
+checkout, publish a second version, and run it both ways. The trap has *three*
+outcomes and only one of them makes a noise:
+
+| How the file is replaced | What bash does next | Exit |
+|---|---|---|
+| **rename** — what `git reset --hard` actually does | the open fd keeps the OLD inode; every step runs, but they are the **old script's** steps against the **new** tree | **0** |
+| in-place rewrite, new file shorter | resumes past EOF — the remaining steps **silently do not happen** | **0** |
+| in-place rewrite, bytes merely shifted | resumes mid-token: `--quiet` → `iet: command not found` | 127 |
+
+So the failure git actually produces is the **quietest** one: exit 0, `HEAD`
+correct, deploy steps stale. That is Defect 3 (§8.3) one level down — the tree
+says it converged while the work never happened — and it is why no exit-code
+check and no health probe can catch this. Only not running from the checkout can.
+
 ---
 
 ## 4. Options
@@ -253,6 +269,24 @@ unchanged.
 This is what makes one script serve both delivery paths. A poller that carried
 its own copy would drift from the workflow's, and the drift would only surface
 during an incident.
+
+**Amended 2026-08-08 — the byte-identical move left the file unshellcheckable.**
+Line 1 was `set -e`, because a YAML `env:` value fed to `bash -s` has no shell to
+declare. With no shebang and no `shell` directive, `shellcheck scripts/vps_apply.sh`
+refuses to analyse the file at all — SC2148, *error* level, exit 1, nothing
+checked — so half of what D1 was for was not actually delivered. Added
+`#!/usr/bin/env bash` plus the WHY header; the line is inert on both delivery
+paths (each names the interpreter, so `#!` is a comment) and buys the analysis
+for no behaviour change. One real finding then fell out and is fixed: SC2046 at
+the healthcheck wait loop, `[ $(date +%s) -lt $deadline ]` unquoted.
+**`shellcheck scripts/vps_apply.sh` and `shellcheck scripts/vps_pull.sh` are now
+clean at default severity, invoked with no flags.**
+
+The file stays **non-executable** (0644, matching `vps_pull.sh`): nothing execs
+it by path, and a `+x` bit would advertise a fourth way to start a deploy that
+no delivery path uses. Hand-run it as
+`cd /opt/acb/app && APP_DIR=/opt/acb/app bash scripts/vps_apply.sh` — but see
+§3's table first, and copy it out of the object database before you do.
 
 ### 8.2 `scripts/vps_pull.sh` — the poller
 

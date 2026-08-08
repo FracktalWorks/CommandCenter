@@ -98,6 +98,44 @@ _IN_SUBQUERY = re.compile(
     r"(?:\w+\.)?(\w+)\s+IN\s*\(\s*WITH\s+RECURSIVE\s+(\w+)", re.I
 )
 
+# ── The tenant predicate (WS-29b) ───────────────────────────────────────────
+#
+# Three shapes, and they must be told apart because all three say
+# `organization_id`. Reading any of them as another is how a mirror agrees with
+# a route that scoped the wrong table.
+
+#: ``core._TENANT_PROJECTS_SQL`` — the unrestricted (`data:org:read`) clause,
+#: which is the whole portfolio OF ONE ORGANIZATION.
+_TENANT_PROJECTS = re.compile(
+    r"SELECT id FROM pm_projects WHERE organization_id\s*=\s*CAST\(:vis_org", re.I
+)
+#: The column that subquery restricts: ``t.root_project_id IN ( SELECT id FROM…``
+_IN_TENANT_SUBQUERY = re.compile(
+    r"(?:\w+\.)?(\w+)\s+IN\s*\(\s*SELECT id FROM pm_projects WHERE organization_id",
+    re.I,
+)
+#: The grant closure's own tenant arm — ⚠️ the line that makes `subject = 'org'`
+#: mean "everybody **in this organization**".
+_CLOSURE_IS_TENANTED = re.compile(
+    r"g\.organization_id\s*=\s*CAST\(:vis_org", re.I
+)
+#: ``<alias>.organization_id = CAST(:vis_org AS uuid)`` — the tenant composed
+#: ABOVE the grant closure, and the whole of the unrestricted task clause.
+_ROW_TENANT = re.compile(
+    r"\w+\.organization_id\s*=\s*CAST\(:vis_org\s+AS\s+uuid\)", re.I
+)
+#: The closure body, removed before looking for ``_ROW_TENANT`` — it contains
+#: `g.organization_id`, and mistaking that for the outer AND would filter the
+#: statement's own table by a predicate that is about the grant rows.
+_CLOSURE_BODY = re.compile(
+    r"WITH RECURSIVE granted AS.*?SELECT id FROM granted", re.I | re.S
+)
+
+#: The one organization this fake models. `organization` has exactly one seeded
+#: row in the real schema (`slug='default'`), and every test that is not ABOUT
+#: tenancy is written against that deployment.
+DEFAULT_ORGANIZATION = "00000000-0000-4000-8000-0000000000aa"
+
 
 _SUBQUERY_RE = re.compile(r"\b(SELECT|WITH)\b", re.I)
 
@@ -293,6 +331,11 @@ class FakeProjectsDB:
     """An in-memory ``pm_*`` schema that answers the package's statements."""
 
     def __init__(self) -> None:
+        #: The tenant every seeded `pm_*` row belongs to, and the answer this
+        #: fake gives when a route asks the directory which organization the
+        #: caller is in. Set it to ``None`` to model somebody with no
+        #: ``app_user`` row; seed real ``app_user`` rows to model two tenants.
+        self.organization_id: str | None = DEFAULT_ORGANIZATION
         self.tables: dict[str, list[dict[str, Any]]] = {}
         self.statements: list[str] = []
         #: ``(statement, params)`` in order — how a test proves a write happened
@@ -306,6 +349,13 @@ class FakeProjectsDB:
         row = {
             "id": columns.pop("id", str(uuid4())),
             **_DEFAULTS.get(table, {}),
+            # WS-29a — every `pm_*` table carries the tenant key (D-MT-3), so a
+            # seeded row that lacked one would be invisible to every scoped read
+            # and would make the whole suite red for the wrong reason. An
+            # explicit `organization_id=` still wins: that is how the two-tenant
+            # tests put rows in the OTHER organization.
+            **({"organization_id": self.organization_id}
+               if table.startswith("pm_") else {}),
             **columns,
         }
         if table in _TIMESTAMPED:
@@ -393,6 +443,24 @@ class FakeProjectsDB:
         args = dict(params or {})
         self.statements.append(statement)
         self.calls.append((statement, args))
+        # WS-29b's tenant lookup: `X-User-Email` → `app_user.organization_id`.
+        # Answered from seeded `app_user` rows when a test has them — the
+        # two-tenant tests do — and otherwise from this fake's single
+        # organization, which is the deployment every other test is written
+        # against. `self.organization_id = None` models a caller the directory
+        # does not know, who then sees nothing because `column = NULL` is NULL.
+        if "au.organization_id AS organization_id" in statement:
+            who = str(args.get("email") or "").lower()
+            for row in self.rows("app_user"):
+                if str(row.get("email") or "").lower() == who:
+                    return _Result([SimpleNamespace(
+                        organization_id=row.get("organization_id"),
+                    )])
+            if self.rows("app_user") or self.organization_id is None:
+                return _Result([])
+            return _Result([SimpleNamespace(
+                organization_id=self.organization_id,
+            )])
         # WS-27k's assignee roll-up: one aggregate for a whole page of tasks,
         # rather than a query per card. Taught to the fake explicitly because
         # `GROUP BY` + `array_agg` is not a shape the generic WHERE reader can
@@ -504,11 +572,25 @@ class FakeProjectsDB:
         scoped = "pm_project_grants" in statement
         visible = self.visible_project_ids(
             str(args.get("vis_email") or ""), list(args.get("vis_groups") or []),
+            organization_id=(
+                str(args.get("vis_org"))
+                if _CLOSURE_IS_TENANTED.search(statement) else None
+            ),
         )
         skips_archived = "t.archived_at IS NULL" in statement
+        # Same rule as everywhere else: the tenant is applied only when the
+        # statement carries it. Search reaches every task in the app, so this is
+        # the read where losing it costs the most.
+        tenanted = bool(_ROW_TENANT.search(_CLOSURE_BODY.sub("", statement)))
+        org = str(args.get("vis_org"))
+        tenant_only = bool(_TENANT_PROJECTS.search(statement))
 
         found: list[Any] = []
         for task in self.rows("pm_tasks"):
+            if tenanted and str(task.get("organization_id")) != org:
+                continue
+            if tenant_only and str(task.get("project_id")) not in self.tenant_project_ids(org):
+                continue
             if scoped and str(task.get("project_id")) not in visible:
                 continue
             if skips_archived and task.get("archived_at") is not None:
@@ -663,6 +745,14 @@ class FakeProjectsDB:
                     return _Result([SimpleNamespace(**row)])
 
         row = {"id": str(uuid4()), **_DEFAULTS.get(table, {}), **values}
+        # Migration 158's `pm_organization_from_parent` trigger, mirrored: a
+        # child row inserted without a tenant INHERITS one rather than being
+        # refused, which is what lets 43 INSERT sites stay unedited. The fake
+        # models a single-tenant deployment, so it inherits *the* organization
+        # instead of walking to a parent — the derivation itself is proved
+        # against a real Postgres, not here.
+        if table.startswith("pm_") and row.get("organization_id") is None:
+            row["organization_id"] = self.organization_id
         if table in _TIMESTAMPED:
             row.setdefault("created_at", _now())
             row.setdefault("updated_at", _now())
@@ -741,17 +831,30 @@ class FakeProjectsDB:
         return _Result([SimpleNamespace(**r) for r in matched])
 
     # visibility ---------------------------------------------------------
-    def visible_project_ids(self, email: str, groups: list[str]) -> set[str]:
+    def visible_project_ids(
+        self, email: str, groups: list[str],
+        organization_id: str | None = None,
+    ) -> set[str]:
         """The grant closure: directly granted projects, plus their descendants.
 
         Deliberately computed the same way the SQL does — seeds, then descend —
         rather than by walking each project's ancestry, so a subtree granted
         without its parent resolves identically in both.
+
+        ⚠️ ``organization_id=None`` means the STATEMENT carried no tenant arm,
+        not "any tenant is fine". The caller reads that off the SQL, so a route
+        (or the closure itself) that loses its tenant filter stops being scoped
+        here too and the cross-tenant test goes red. Defaulting it to the fake's
+        own organization would have made the leak invisible.
         """
         wanted = {str(g).lower() for g in groups}
         seeds = {
             str(g.get("project_id")) for g in self.rows("pm_project_grants")
             if (
+                organization_id is None
+                or str(g.get("organization_id")) == organization_id
+            )
+            and (
                 g.get("subject") == "org"
                 or str(g.get("subject") or "").lower() == (email or "").lower()
                 or str(g.get("subject") or "").lower() in wanted
@@ -763,10 +866,21 @@ class FakeProjectsDB:
             changed = False
             for project in self.rows("pm_projects"):
                 parent = project.get("parent_project_id")
+                if organization_id is not None and (
+                    str(project.get("organization_id")) != organization_id
+                ):
+                    continue
                 if parent is not None and str(parent) in out and str(project["id"]) not in out:
                     out.add(str(project["id"]))
                     changed = True
         return out
+
+    def tenant_project_ids(self, organization_id: str | None) -> set[str]:
+        """Every project in one organization — the `data:org:read` answer."""
+        return {
+            str(p["id"]) for p in self.rows("pm_projects")
+            if str(p.get("organization_id")) == str(organization_id)
+        }
 
     def _subtree_ids(self, root_id: str) -> set[str]:
         out = {str(root_id)}
@@ -887,13 +1001,43 @@ class FakeProjectsDB:
     ) -> tuple[list[dict], bool]:
         seen = False
 
+        # ⚠️ The tenant, composed ABOVE the grant closure (WS-29b). Read from
+        # the statement with the closure's own body removed first, because that
+        # body ALSO says `organization_id` and the two predicates are about
+        # different tables.
+        #
+        # This is what scopes `load_visible_task`'s assignee escape hatch and
+        # the whole of the unrestricted (`data:org:read`) task clause. Delete
+        # either from the route and this stops applying, which is the point.
+        if _ROW_TENANT.search(_CLOSURE_BODY.sub("", where)):
+            seen = True
+            org = str(args.get("vis_org"))
+            rows = [r for r in rows if str(r.get("organization_id")) == org]
+
+        # `data:org:read` — every project in ONE organization, grants ignored.
+        if any(_TENANT_PROJECTS.search(b) for b in blocks):
+            seen = True
+            column_match = _IN_TENANT_SUBQUERY.search(where)
+            column = column_match.group(1) if column_match else "id"
+            tenant = self.tenant_project_ids(args.get("vis_org"))
+            rows = [r for r in rows if str(r.get(column)) in tenant]
+
         # The grant closure — applied ONLY when the statement actually carries
         # the subquery. A route that loses its visibility clause therefore stops
         # being filtered here, and its 404 test fails.
         if any("pm_project_grants" in b for b in blocks):
             seen = True
+            # ⚠️ And whether the CLOSURE is tenant-scoped is read off the
+            # closure's own text, not assumed. `subject = 'org'` means
+            # "everybody"; only `g.organization_id = :vis_org` makes it mean
+            # "everybody in this organization". Assuming it were always there
+            # is exactly how the leak §6 names would pass a green suite.
             visible = self.visible_project_ids(
                 str(args.get("vis_email") or ""), list(args.get("vis_groups") or []),
+                organization_id=(
+                    str(args.get("vis_org"))
+                    if _CLOSURE_IS_TENANTED.search(where) else None
+                ),
             )
             column_match = _IN_SUBQUERY.search(where)
             column = column_match.group(1) if column_match else "id"

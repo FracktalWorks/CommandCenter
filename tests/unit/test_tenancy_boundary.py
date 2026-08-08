@@ -1,8 +1,15 @@
 """The tenant boundary, as a ratchet (WS-29).
 
-⚠️ **CommandCenter is becoming multi-tenant, and today 137 of its 143 tables
+⚠️ **CommandCenter is becoming multi-tenant, and today 120 of its 143 tables
 carry no tenant key.** That is not a bug list — it is the honest state of a
 system built for one organisation. The bug would be adding the 144th.
+
+**137 → 120 on 2026-08-08 (WS-29a).** Migration 158 gave all 17 `pm_*` tables
+`organization_id`, while they were still empty enough to make it a one-line
+default rather than a backfill (`specs/multi_tenancy.md` §2). The ratchet is
+what made that a required edit rather than an optional one: the
+"gained a key, leave the baseline" rule below went red the moment the migration
+landed, and stayed red until this docstring and the count agreed with it.
 
 Tenancy was started and not carried through: `organization` exists with a
 single seeded row (`slug='default'`), `app_user` gained `organization_id` in
@@ -47,9 +54,16 @@ EXPECTED_SCOPED = {
     "crm_deals",
     "org_group",
     "org_role",
+    # WS-29a — the whole Projects app, keyed while it was empty.
+    "pm_activities", "pm_custom_fields", "pm_notifications",
+    "pm_project_grants", "pm_projects", "pm_recurrences", "pm_tags",
+    "pm_task_assignees", "pm_task_attachments", "pm_task_counters",
+    "pm_task_links", "pm_task_personal", "pm_task_statuses", "pm_task_types",
+    "pm_tasks", "pm_view_task_positions", "pm_views",
 }
 
-#: ⚠️ FROZEN 2026-08-08 at 137. Every table predating the multi-tenant decision.
+#: ⚠️ FROZEN 2026-08-08 at 137, now 120 (WS-29a took the 17 `pm_*` out).
+#: Every table predating the multi-tenant decision.
 #: Adding a name here is allowed and must come with a reason in the PR; adding
 #: one *silently* is how a 137 becomes a 160 without anybody choosing it.
 BASELINE_UNSCOPED = {
@@ -122,11 +136,9 @@ BASELINE_UNSCOPED = {
 # plugins_*
     "plugins",
 # pm_*
-    "pm_activities", "pm_custom_fields", "pm_notifications",
-    "pm_project_grants", "pm_projects", "pm_recurrences", "pm_tags",
-    "pm_task_assignees", "pm_task_attachments", "pm_task_counters",
-    "pm_task_links", "pm_task_personal", "pm_task_statuses", "pm_task_types",
-    "pm_tasks", "pm_view_task_positions", "pm_views",
+#   — all 17 left this baseline in WS-29a (migration 158). They are asserted
+#     as scoped by `EXPECTED_SCOPED` below, so their absence here is checked
+#     rather than merely assumed.
 # project_*
     "project",
 # provider_*
@@ -252,6 +264,6 @@ def test_the_expected_scoped_set_is_real_not_aspirational() -> None:
 
 
 def test_the_frozen_count_matches_the_baseline() -> None:
-    """The docstring quotes 137. A baseline whose stated size and real size
+    """The docstring quotes 120. A baseline whose stated size and real size
     disagree is a baseline nobody trusts."""
-    assert len(BASELINE_UNSCOPED) == 137
+    assert len(BASELINE_UNSCOPED) == 120

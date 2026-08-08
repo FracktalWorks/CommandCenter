@@ -50,6 +50,9 @@ def run(coro):
     return asyncio.run(coro)
 
 
+#: The one organization this deployment has (`organization.slug = 'default'`).
+ORGANIZATION = "00000000-0000-4000-8000-0000000000aa"
+
 ADMIN = UserContext(
     email="owner@fracktal.in", role=UserRole.EXECUTIVE,
     access=build_access(["*"]),
@@ -188,9 +191,27 @@ class FakeDB:
             return _Result([SimpleNamespace(
                 id=f"new-{self._new_id}", last_value=self._new_id,
             )])
-        if "FROM pm_projects WHERE parent_project_id IS NULL" in statement:
+        # WS-29b's tenant lookup. The importer creates a ROOT project, which is
+        # the one row nothing upstream can supply an organization for.
+        if "au.organization_id AS organization_id" in statement:
+            return _Result([SimpleNamespace(organization_id=ORGANIZATION)])
+        # ⚠️ Both of the importer's "is it already there?" lookups are answered
+        # ONLY when the statement carries the tenant, and only for the tenant it
+        # asks about. Answering them unconditionally is what would let a route
+        # that dropped its tenant arm keep passing — and dropping it here is a
+        # cross-tenant WRITE: the second organization to import pours its whole
+        # workspace into the first one's department.
+        if "parent_project_id IS NULL AND lower(name) = :name" in statement:
+            if "organization_id = CAST(:org AS uuid)" not in statement:
+                return _Result([])
+            if args.get("org") != ORGANIZATION:
+                return _Result([])
             return _Result([self.root] if self.root else [])
         if "SELECT id FROM pm_projects WHERE clickup_id" in statement:
+            if "organization_id = CAST(:org AS uuid)" not in statement:
+                return _Result([])
+            if args.get("org") != ORGANIZATION:
+                return _Result([])
             cid = args.get("cid")
             return _Result(
                 [SimpleNamespace(id=f"existing-{cid}")]

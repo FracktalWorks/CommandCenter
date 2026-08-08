@@ -42,6 +42,7 @@ from gateway.routes.projects.core import (
     insert_row,
     load_visible_project,
     record_activity,
+    require_organization,
     resolve_visibility,
     root_project_id,
     router,
@@ -218,6 +219,18 @@ async def create_node(
             # could graft a subtree onto another department by guessing an id,
             # and inherit that department's grants for it.
             await load_visible_project(db, vis, str(parent_id))
+
+        # WS-29a. This is the ONE place in the package that decides a tenant:
+        # `pm_projects` is the root of every other `pm_*` row, and migration
+        # 158's trigger derives the key for all of them from here. Written for
+        # a child project too, not just a root — the trigger then REFUSES it if
+        # it disagrees with the parent's, which turns "the caller's org and the
+        # parent's org differ" into a refused write rather than a silent graft.
+        #
+        # AFTER the parent check, deliberately: a caller with no organization
+        # asking to create inside a project they cannot see must still get R5's
+        # 404. Answering 403 first would confirm the project exists.
+        values["organization_id"] = require_organization(vis)
 
         row = await insert_row(db, "pm_projects", values)
         project_id = str(row.id)

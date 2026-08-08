@@ -110,6 +110,10 @@ MAX_PAGE_SIZE = 100
 #: granting it is registered as an owner gate.
 ORG_READ = "data:org:read"
 
+#: What a caller whose email the directory does not know is told when they try
+#: to CREATE something. Reads never say this — they simply see nothing (§D-MT-1).
+NO_ORGANIZATION = "Your account is not attached to an organization."
+
 
 # ── Models ──────────────────────────────────────────────────────────────────
 #
@@ -414,21 +418,60 @@ JOIN app_user au ON au.id = m.user_id
 WHERE lower(au.email) = :email AND au.status = 'active'
 """
 
+#: The caller's TENANT (WS-29a/b, D-MT-1 (a)). One person belongs to exactly one
+#: organization, so `X-User-Email` alone resolves it and no request carries a
+#: tenant discriminator. `app_user.email` is globally UNIQUE, which is what makes
+#: this a single-row answer rather than a choice the caller could influence.
+#:
+#: A person with no `app_user` row resolves to NULL, and every clause below then
+#: matches nothing — see :attr:`Visibility.organization_id`.
+_MY_ORGANIZATION_SQL = """
+SELECT au.organization_id AS organization_id
+FROM app_user au
+WHERE lower(au.email) = :email AND au.status = 'active'
+"""
+
+#: Every project in the caller's organization, ignoring grants. This is what
+#: ``data:org:read`` means AFTER WS-29b: unrestricted **within a tenant**.
+_TENANT_PROJECTS_SQL = """
+SELECT id FROM pm_projects WHERE organization_id = CAST(:vis_org AS uuid)
+"""
+
 #: Projects the caller may see: those carrying a matching grant, plus everything
 #: beneath them. The recursion descends from the granted seeds rather than
 #: walking each project's ancestry upward — same answer, and it visits a subtree
 #: once instead of once per descendant.
+#:
+#: ⚠️ **`g.organization_id = :vis_org` IS THE SINGLE MOST DANGEROUS LINE IN THIS
+#: PACKAGE** (multi_tenancy.md §6). `subject = 'org'` means "everybody", and
+#: until a second organization exists that is correct. The moment one is
+#: onboarded, an un-tenanted `subject = 'org'` grant hands every project in the
+#: deployment to every caller in it. The predicate is on the GRANT row rather
+#: than joined through `pm_projects` because D-MT-3 put the key on every table
+#: precisely so this needs no join.
+#:
+#: ⚠️ The parentheses around the three subject arms are load-bearing. Without
+#: them `AND` binds tighter than `OR` and the tenant filter would apply to the
+#: `subject = 'org'` arm alone — leaving the email and group arms unscoped,
+#: which is the same leak wearing a subtler hat.
+#:
+#: The recursive step repeats the tenant filter. The trigger in migration 158
+#: already makes a cross-tenant parent impossible, so this is defence in depth:
+#: the closure must not be the thing that would leak if that trigger were ever
+#: dropped.
 _VISIBLE_PROJECTS_SQL = """
 WITH RECURSIVE granted AS (
     SELECT DISTINCT g.project_id AS id
     FROM pm_project_grants g
-    WHERE g.subject = 'org'
-       OR lower(g.subject) = :vis_email
-       OR g.subject = ANY(:vis_groups)
+    WHERE g.organization_id = CAST(:vis_org AS uuid)
+      AND (g.subject = 'org'
+           OR lower(g.subject) = :vis_email
+           OR g.subject = ANY(:vis_groups))
     UNION
     SELECT p.id
     FROM pm_projects p
     JOIN granted a ON p.parent_project_id = a.id
+    WHERE p.organization_id = CAST(:vis_org AS uuid)
 )
 SELECT id FROM granted
 """
@@ -441,23 +484,61 @@ class Visibility:
     ``unrestricted`` is the ``data:org:read`` holder — the People Center's
     full-portfolio view. For everyone else, :attr:`clause` is a subquery over
     the grant closure and callers ``AND`` it into their own WHERE.
+
+    ⚠️ **`unrestricted` means unrestricted WITHIN A TENANT, never across them.**
+    Before WS-29b both clause helpers answered the literal ``TRUE`` for this
+    caller, which was correct while the deployment had one organization and is a
+    whole-database leak the moment it has two. Every arm of every clause below
+    now carries the tenant, including this one.
     """
 
     unrestricted: bool
     email: str
     groups: tuple[str, ...]
+    #: The caller's tenant, or ``None`` for somebody with no ``app_user`` row.
+    #:
+    #: ``None`` FAILS CLOSED and does so by construction rather than by a check:
+    #: every clause compares a column to ``CAST(:vis_org AS uuid)``, and SQL's
+    #: ``column = NULL`` is NULL, never true. A caller the directory does not
+    #: know sees nothing — which is the right answer for a mention recipient or
+    #: a service identity that was never onboarded, and the wrong answer to give
+    #: by accident, so it is stated here.
+    organization_id: str | None = None
 
     @property
     def params(self) -> dict[str, Any]:
+        # `vis_org` is bound even when unrestricted, because the unrestricted
+        # clause is no longer `TRUE` — it is the tenant.
         if self.unrestricted:
-            return {}
-        return {"vis_email": self.email, "vis_groups": list(self.groups)}
+            return {"vis_org": self.organization_id}
+        return {
+            "vis_email": self.email,
+            "vis_groups": list(self.groups),
+            "vis_org": self.organization_id,
+        }
 
     def project_clause(self, column: str = "id") -> str:
         """A predicate restricting ``column`` (a project id) to the visible set."""
         if self.unrestricted:
-            return "TRUE"
+            return f"{column} IN ({_TENANT_PROJECTS_SQL})"
         return f"{column} IN ({_VISIBLE_PROJECTS_SQL})"
+
+
+async def resolve_organization_id(db: Any, email: str) -> str | None:
+    """The tenant one email belongs to, or ``None`` if the directory has no row.
+
+    One lookup per request, on the seam every app already reads. D-MT-1 (a) is
+    what makes it a lookup rather than a negotiation: the answer cannot depend on
+    anything the caller sends.
+    """
+    clean = (email or "").strip().lower()
+    if not clean:
+        return None
+    row = (await db.execute(
+        text(_MY_ORGANIZATION_SQL), {"email": clean},
+    )).fetchone()
+    organization_id = getattr(row, "organization_id", None) if row else None
+    return str(organization_id) if organization_id is not None else None
 
 
 async def resolve_visibility(db: Any, user: UserContext) -> Visibility:
@@ -466,15 +547,25 @@ async def resolve_visibility(db: Any, user: UserContext) -> Visibility:
     ``data:org:read`` short-circuits the group lookup: an unrestricted caller's
     groups cannot change the answer, and asking anyway would put a join on every
     portfolio read.
+
+    ⚠️ It no longer short-circuits the TENANT lookup, and the order here is the
+    whole point: the organization is resolved BEFORE the permission is consulted,
+    because ``data:org:read`` widens a caller inside their organization and must
+    not be able to widen them out of it.
     """
-    if user is not None and user.has_permission(ORG_READ):
-        return Visibility(unrestricted=True, email="", groups=())
     email = actor(user).lower()
+    organization_id = await resolve_organization_id(db, email)
+    if user is not None and user.has_permission(ORG_READ):
+        return Visibility(
+            unrestricted=True, email="", groups=(),
+            organization_id=organization_id,
+        )
     rows = (await db.execute(text(_MY_GROUPS_SQL), {"email": email})).fetchall()
     return Visibility(
         unrestricted=False,
         email=email,
         groups=tuple(r.subject for r in rows if getattr(r, "subject", None)),
+        organization_id=organization_id,
     )
 
 
@@ -519,6 +610,11 @@ async def resolve_visibility_for(db: Any, email: str) -> Visibility:
     clean = (email or "").strip().lower()
     if not clean:
         return Visibility(unrestricted=False, email="", groups=())
+    # Same order as `resolve_visibility`, for the same reason: the tenant is
+    # resolved before the permission, so `data:org:read` cannot widen a
+    # recipient out of their own organization. A directory-only colleague with
+    # no `app_user` row resolves to None and sees nothing.
+    organization_id = await resolve_organization_id(db, clean)
     rows = (await db.execute(
         text(_EFFECTIVE_PERMISSIONS_SQL), {"email": clean},
     )).fetchall()
@@ -531,7 +627,10 @@ async def resolve_visibility_for(db: Any, email: str) -> Visibility:
     # has_permission` delegates to. Same allow/deny precedence, same wildcard
     # matching, one implementation.
     if access.has(ORG_READ):
-        return Visibility(unrestricted=True, email="", groups=())
+        return Visibility(
+            unrestricted=True, email="", groups=(),
+            organization_id=organization_id,
+        )
     group_rows = (await db.execute(
         text(_MY_GROUPS_SQL), {"email": clean},
     )).fetchall()
@@ -540,7 +639,42 @@ async def resolve_visibility_for(db: Any, email: str) -> Visibility:
         email=clean,
         groups=tuple(r.subject for r in group_rows
                      if getattr(r, "subject", None)),
+        organization_id=organization_id,
     )
+
+
+def require_organization(vis: Visibility) -> str:
+    """The caller's tenant, or 403 — for the writes that must DECIDE one.
+
+    Only the creation of a ROOT ``pm_projects`` row reaches this. Everything
+    else beneath a project inherits the tenant from its parent in the database
+    (migration 158's ``pm_organization_from_parent`` trigger), which is what
+    keeps the tenant a single decision instead of a thing 43 INSERT sites each
+    have to remember — D-MT-2 (b)'s named failure mode, and the one this system
+    demonstrably has.
+
+    403 and not 404 (the R5 rule for *records*): this says nothing about what
+    exists. It is the caller's own account that is not set up, and a 404 here
+    would send somebody hunting for a project that was never created.
+    """
+    if not vis.organization_id:
+        raise HTTPException(status_code=403, detail=NO_ORGANIZATION)
+    return vis.organization_id
+
+
+async def require_organization_of(db: Any, email: str) -> str:
+    """:func:`require_organization` for a caller who has no ``Visibility``.
+
+    The personal-project seam and both importers create root projects without
+    ever building one — they are helpers reached from a route that has already
+    authorized the caller, and growing them a ``Visibility`` parameter would
+    push the tenant decision back out to each of their call sites, which is the
+    opposite of the point.
+    """
+    organization_id = await resolve_organization_id(db, email)
+    if not organization_id:
+        raise HTTPException(status_code=403, detail=NO_ORGANIZATION)
+    return organization_id
 
 
 async def load_visible_project(
@@ -576,13 +710,7 @@ async def load_visible_task(db: Any, vis: Visibility, task_id: str) -> Any:
     row = (await db.execute(
         text(
             "SELECT t.* FROM pm_tasks t "
-            "WHERE t.id = CAST(:task_id AS uuid) AND ("
-            f"  t.project_id IN ({_VISIBLE_PROJECTS_SQL})"
-            "   OR EXISTS (SELECT 1 FROM pm_task_assignees a "
-            "              WHERE a.task_id = t.id AND lower(a.assignee) = :vis_email)"
-            ")"
-            if not vis.unrestricted
-            else "SELECT t.* FROM pm_tasks t WHERE t.id = CAST(:task_id AS uuid)"
+            f"WHERE t.id = CAST(:task_id AS uuid) AND {task_visibility_clause(vis)}"
         ),
         {"task_id": task_id, **vis.params},
     )).fetchone()
@@ -596,15 +724,33 @@ def task_visibility_clause(vis: Visibility, alias: str = "t") -> str:
 
     Same two ways in as :func:`load_visible_task`, so a task cannot be listable
     and unreadable (or the reverse) — the two would drift the moment one is
-    edited alone.
+    edited alone. ``load_visible_task`` no longer writes its own copy of this
+    for exactly that reason: it had one, and one copy of a two-armed predicate
+    is how the arms stop matching.
+
+    ⚠️ **The tenant is composed ABOVE the grant closure, never inside it**
+    (multi_tenancy.md §6: "with the tenant predicate composed above the grant
+    closure rather than tangled into it"). The outer ``AND`` is not redundant
+    with the closure's own tenant filter — it is what scopes the SECOND arm:
+
+    ``pm_task_assignees.assignee`` is a bare email (D-PM-4) matched by string,
+    and nothing stops a member of organization B typing a member of A's address
+    into it. Without this outer AND that row would make A's member see B's task,
+    through the escape hatch rather than through a grant. That is a third leak,
+    beside the two §6 names, and it is only visible if you read the arms
+    separately.
     """
+    tenant = f"{alias}.organization_id = CAST(:vis_org AS uuid)"
     if vis.unrestricted:
-        return "TRUE"
+        # `data:org:read` is the whole portfolio OF ONE ORGANIZATION. This
+        # answered the literal `TRUE` before WS-29b.
+        return tenant
     return (
-        f"({alias}.project_id IN ({_VISIBLE_PROJECTS_SQL})"
-        f" OR EXISTS (SELECT 1 FROM pm_task_assignees a"
-        f"            WHERE a.task_id = {alias}.id"
-        f"              AND lower(a.assignee) = :vis_email))"
+        f"({tenant}"
+        f" AND ({alias}.project_id IN ({_VISIBLE_PROJECTS_SQL})"
+        f"      OR EXISTS (SELECT 1 FROM pm_task_assignees a"
+        f"                 WHERE a.task_id = {alias}.id"
+        f"                   AND lower(a.assignee) = :vis_email)))"
     )
 
 

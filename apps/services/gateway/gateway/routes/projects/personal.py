@@ -49,6 +49,7 @@ from gateway.routes.projects.core import (
     next_task_number,
     now,
     record_activity,
+    require_organization_of,
     resolve_visibility,
     router,
     row_to_dict,
@@ -124,6 +125,14 @@ def derive_disposition(
 # ── The personal project ────────────────────────────────────────────────────
 
 async def _load_personal_project(db: Any, email: str) -> Any | None:
+    """This member's personal project.
+
+    Keyed on the email alone and NOT on the tenant, which is safe for exactly
+    one reason and it is worth naming: D-MT-1 (a) makes `app_user.email`
+    globally unique, so an email identifies one person in one organization. If
+    D-MT-1 is ever revisited this lookup is one of the places that has to grow a
+    tenant predicate — the project it returns is then used as a write target.
+    """
     return (await db.execute(
         text(
             "SELECT * FROM pm_projects WHERE lower(personal_owner) = :who"
@@ -147,6 +156,13 @@ async def ensure_personal_project(db: Any, email: str) -> Any:
     if existing is not None:
         return existing
 
+    # WS-29a. A personal project is a ROOT project, so nothing upstream can
+    # supply its tenant — this is the second (and last) place in the package
+    # that decides one. Resolved from the directory rather than taken from a
+    # `Visibility` because two of the three callers do not have one, and a
+    # signature change would push the decision back out to them.
+    organization_id = await require_organization_of(db, email)
+
     project = await insert_row(db, "pm_projects", {
         "name": PERSONAL_PROJECT_NAME,
         "description": "Work only you can see. Tasks assigned to you from team "
@@ -154,6 +170,7 @@ async def ensure_personal_project(db: Any, email: str) -> Any:
         "personal_owner": email,
         "created_by": email,
         "source": "manual",
+        "organization_id": organization_id,
     })
     project_id = str(project.id)
 

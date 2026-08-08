@@ -1600,7 +1600,15 @@ replays from `02_` upward, and a failure there fails the deploy.
 
 ### MT-1 — Tenancy foundation · *the big one · 4–5 weeks*
 
-#### MT-1a · Control plane, identity split, placement · 🟢 AGENT-SAFE
+#### MT-1a · Control plane, identity split, placement · ◐ **PARTIAL 2026-08-08**
+
+> **Built:** migration 159 (`tenant_placement`, `user_identity`, `org_membership`, seeded from
+> `app_user`) + `acb_common/placement.py`. **Additive and inert** — `app_user` is untouched and
+> still authoritative.
+> **NOT built — MT-1a-2:** cutting the auth path over. `acb_auth/access.py` carries two
+> `ON CONFLICT (email)` upserts on the live sign-in path (`:205`, `:509`), and a half-migrated
+> identity is worse than an unmigrated one. ⚠️ The spec cited those in `members.py`; measured,
+> they are not there — another stale anchor.
 **Owner:** §1.5, §0.9.5
 
 **Done when:**
@@ -1615,7 +1623,16 @@ replays from `02_` upward, and a failure there fails the deploy.
    though every row resolves to the same target on day one.** A test asserts the resolver
    reads it rather than a constant.
 
-#### MT-1b · `organization_id` + FORCE RLS on every table · 🟢 AGENT-SAFE
+#### MT-1b · `organization_id` + FORCE RLS on every table · ◐ **GENERATED, NOT APPLIED**
+
+> **Built:** `scripts/gen_tenant_migration.py` + `tests/unit/test_tenant_coverage.py`.
+> 146 tables discovered, **135 tenant-scoped**, 11 exempt-with-a-reason.
+> ⚠️ **Output goes to `infra/postgres/generated/` — OUTSIDE the sequence the deploy replays**,
+> in four separately-appliable phases. `apply_migrations.sh` carries a lock-timeout design
+> written after a **14h44m outage** of exactly this shape, and there is no database in the
+> build environment to try any of it against. Promoting these is a human act in a window.
+> **Phase 4 requires MT-1c deployed and verified first**, or every unbound connection reads
+> zero rows and the product goes dark.
 **Owner:** §1.3 · **the generated migration, not 143 hand-written ones**
 
 **Done when:**
@@ -1633,7 +1650,11 @@ replays from `02_` upward, and a failure there fails the deploy.
 5. **Zero `SELECT`/`INSERT` statements in the gateway are rewritten by this ticket.** If a
    query needed changing, the column default or the policy is wrong.
 
-#### MT-1c · Tenant binding at all eight connection paths + two new ratchets · 🟢 AGENT-SAFE
+#### MT-1c · Tenant binding at all **ten** connection paths + two new ratchets · ◐ **SEAM + RATCHETS BUILT**
+
+> **Built:** `acb_common.db.tenant_session()` (SET LOCAL inside an explicit transaction, fails
+> closed when unbound) · the `create_engine` ratchet · the new `psycopg.connect` ratchet.
+> **NOT built:** converting the ~200 `get_db()` call sites, and the Mem0 decision (§0.1 path 8).
 **Owner:** §0.1 — **read its table before starting; the inventory is the ticket**
 
 **Done when:**
@@ -1694,7 +1715,11 @@ job exists and has been **run end-to-end at least once**, quoted in the PR. *"Re
 one customer to yesterday" is the one capability database-per-tenant gives free, and it
 costs one job here, not N databases.*
 
-#### MT-1i · The leak sites this decision un-mooted · 🟢 AGENT-SAFE
+#### MT-1i · The leak sites this decision un-mooted · ✅ **BUILT 2026-08-08** (one criterion open)
+
+> All five predicates derived, verified red first. ⚠️ `tenancy_and_visibility.md` §2 **done-when 3**
+> (the DB-backed two-org behavioural fixture) is **NOT discharged** — it lives in files that skip
+> entirely without Postgres. It needs a live database.
 **Owner:** §6.4, §6.5 · absorbs board **WS-14a**
 
 **Done when:** the three `org_group` slug-only joins carry a derived org predicate

@@ -1,5 +1,7 @@
 # Calendar × Tasks × AI — comprehensive review
 
+> **Status:** review record (2026-07-22) — findings since triaged into `calendar_focus_os.md` §9 / `calendar_timeboxing.md` §13, which own all acceptance. Cited by migration headers 92/97/100. Not re-verified since. *(Header added 2026-08-09.)*
+
 Date: 2026-07-22 · branch `claude/calendar-productivity-redesign-rdh50k`.
 Scope: (1) the calendar app and its integration with the GTD task manager,
 (2) every place AI already runs, audited for prompt/context correctness,

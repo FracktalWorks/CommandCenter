@@ -436,7 +436,10 @@ payload and enqueues a `workflow_run` (Copilot Studio's unified-trigger idea, Si
 4. **Cron/scheduling.** Adopt APScheduler vs extend the hand-rolled asyncio loops.
    A real cron parser is worth it once schedule triggers exist.
 5. **Multi-tenant scoping.** Workflows are workspace-scoped; reuse the header-trust
-   SSO + RBAC (`acb_auth`). Who can publish (executive vs employee)?
+   SSO + RBAC (`acb_auth`). *[2026-08-09: header-trust is for IDENTITY behind the
+   BFF only — the acting TENANT must never come from a header
+   (user_management_contract.md R11; saas_multitenancy.md §7 item 2). Workflows
+   become org-scoped via RLS at MT-1b.]* Who can publish (executive vs employee)?
 6. **Secrets in nodes.** Nodes must never read raw credentials — resolve through the
    integrations registry at run time, exactly as agents do today.
 7. **MCP.** Both references treat integrations as MCP. CommandCenter already has MCP

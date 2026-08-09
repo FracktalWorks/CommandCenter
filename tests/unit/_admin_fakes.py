@@ -15,9 +15,17 @@ touches Postgres.
 from __future__ import annotations
 
 import re
+from types import SimpleNamespace
 from typing import Any, ClassVar
 
 ORG = "00000000-0000-0000-0000-00000000000a"
+
+#: A SECOND tenant. Every fixture in the existing files seeds only :data:`ORG`,
+#: which is exactly why they could not have caught S1-1: a one-organization
+#: world cannot tell a route that resolves the caller's tenant from one that
+#: resolves a hard-coded slug — both answer `ORG`. ``test_admin_tenancy.py``
+#: seeds both.
+ORG_B = "00000000-0000-0000-0000-00000000000b"
 
 # ── Person-scoped counts and deletes (members.purge_member) ─────────────────
 #
@@ -79,6 +87,19 @@ class _Rows:
 
     def fetchall(self) -> list[Any]:
         return [tuple(r.values()) for r in self._rows]
+
+    def fetchone(self) -> Any:
+        """Attribute access, the way ``resolve_organization_id`` reads it.
+
+        ``projects.core.resolve_organization_id`` — the ONE tenant lookup this
+        package now shares — does ``getattr(row, "organization_id", None)``,
+        not ``row["organization_id"]``. A shim that only spoke mappings would
+        make it return ``None`` for every caller, i.e. make the whole admin
+        surface 403 in tests while passing in production.
+        """
+        if not self._rows:
+            return None
+        return SimpleNamespace(**self._rows[0])
 
     def scalars(self) -> _Scalars:
         return _Scalars(self._rows)
@@ -172,6 +193,25 @@ class _FakeDB:
         #: modelled above and the purge branch reads and writes those, so a
         #: test sees one world rather than two.
         self.rows: dict[str, list[dict[str, Any]]] = {}
+        #: ``organization`` — id → row. Seeded with the single tenant the
+        #: pre-retrofit files assume; ``test_admin_tenancy.py`` adds a second.
+        self.organizations: dict[str, dict[str, Any]] = {
+            ORG: {"id": ORG, "slug": "default", "display_name": "Default Org"},
+        }
+        #: ``org_group`` — id → row, each carrying its own ``organization_id``.
+        #: Group slugs are UNIQUE **per organization**, so `engineering` is a
+        #: legal slug in every tenant at once and matching on the bare slug
+        #: spans them (leak audit S2-5).
+        self.groups: dict[str, dict[str, Any]] = {}
+        #: ``org_group_member`` — (group_id, user_id) → row.
+        self.group_members: dict[tuple[str, str], dict[str, Any]] = {}
+        #: ``user_permission_override`` — (user_id, permission) → row.
+        self.overrides: dict[tuple[str, str], dict[str, Any]] = {}
+        #: Does the deployment have an ``organization`` row at all? Only
+        #: ``get_org_id``'s failure path asks, and only to tell an operator
+        #: whose migration never ran (503) apart from a caller whose account is
+        #: not attached (403). Set ``False`` to model the unprovisioned box.
+        self.provisioned = True
         self.committed = 0
         self.invalidated: list[str] = []
         #: Audit calls, in order, as ``(action, target)``. Ordered because the
@@ -264,12 +304,33 @@ class _FakeDB:
 
     # helpers -----------------------------------------------------------
     def seed_user(self, uid: str, email: str, *, status: str = "active",
-                  name: str = "", joined_at: str | None = None) -> None:
+                  name: str = "", joined_at: str | None = None,
+                  organization_id: str | None = ORG) -> None:
+        """Seed a directory row. ``organization_id`` defaults to :data:`ORG`.
+
+        Defaulted rather than required so the single-tenant files that predate
+        the retrofit read unchanged; ``None`` models the legacy row migration
+        130 left unattached, which is the only row a provisioning upsert may
+        adopt into a tenant.
+        """
         self.users[uid] = {
             "id": uid, "email": email, "display_name": name,
             "avatar_url": "", "status": status, "legacy_role": "employee",
             "invited_by": "", "invited_at": None, "joined_at": joined_at,
             "last_login_at": None, "last_active_at": None, "created_at": None,
+            "organization_id": organization_id,
+        }
+
+    def seed_organization(self, org_id: str, slug: str, name: str) -> None:
+        self.organizations[org_id] = {
+            "id": org_id, "slug": slug, "display_name": name,
+        }
+
+    def seed_group(self, gid: str, slug: str, *, organization_id: str = ORG,
+                   name: str | None = None) -> None:
+        self.groups[gid] = {
+            "id": gid, "slug": slug, "display_name": name or slug.title(),
+            "description": "", "organization_id": organization_id,
         }
 
     def seed_request(self, email: str, *, status: str = "pending",
@@ -305,11 +366,86 @@ class _FakeDB:
         p = params or {}
         self.statements.append(s)
 
-        if "FROM organization WHERE slug" in s:
-            return _Rows([{"id": ORG}])
+        # ── The caller's tenant (WS-29e / S1-1) ─────────────────────────────
+        #
+        # ⚠️ There is deliberately NO `FROM organization WHERE slug` branch any
+        # more. It used to answer `ORG` unconditionally, which is what made the
+        # hard-coded-slug bug invisible to every test in this suite: the fake
+        # agreed that the deployment's org and the caller's org were the same
+        # thing, because in a one-organization world they are.
+        if "FROM app_user au" in s and "organization_id" in s:
+            # `projects.core._MY_ORGANIZATION_SQL`, read for real: the ACTIVE
+            # row for this address, and its tenant. An address with no row, or
+            # an inactive one, resolves to nothing — which is what makes
+            # `get_org_id` fail closed rather than fall back.
+            row = self.user_by_email(p["email"])
+            if row is None or row.get("status") != "active":
+                return _Rows([])
+            org = row.get("organization_id")
+            return _Rows([{"organization_id": org}] if org else [])
+
+        if "FROM organization LIMIT 1" in s:
+            return _Rows([{"one": 1}] if self.provisioned else [])
+
+        if "FROM organization WHERE id" in s:
+            # `/auth/me` naming the caller's org back to the browser. Answered
+            # BY ID, which is the whole change: it used to be answered by the
+            # literal slug `default` for every signed-in member of every tenant.
+            row = self.organizations.get(p["id"])
+            return _Rows([dict(row)] if row else [])
+
+        if "FROM feature_catalog" in s:
+            return _Rows([{"slug": "projects"}])
+
+        if "FROM app_user u" in s and "u.organization_id = CAST(:org AS uuid)" in s:
+            # `members.list_members` — the roster. The tenant predicate is read
+            # from the statement, so a route that stops scoping the roster
+            # shows this fake's other organization and fails.
+            rows = [
+                u for u in self.users.values()
+                if u.get("organization_id") == p.get("org")
+            ]
+            if "u.status <> 'removed'" in s:
+                rows = [u for u in rows if u["status"] != "removed"]
+            return _Rows([
+                dict(u) | {"roles": list(self.user_roles.get(u["id"], []))}
+                for u in sorted(rows, key=lambda u: u["email"])
+            ])
+
+        if "FROM org_group" in s and "AND slug = :slug" in s:
+            # `groups._get_group` — by slug WITHIN one organization.
+            row = next(
+                (g for g in self.groups.values()
+                 if g["slug"] == p["slug"]
+                 and g["organization_id"] == p.get("org")), None,
+            )
+            return _Rows([dict(row)] if row else [])
+
+        if "INSERT INTO org_group_member" in s:
+            key = (p["gid"], p["uid"])
+            existing = self.group_members.get(key)
+            if existing is None:
+                self.group_members[key] = {"role": p["role"], "added_by": p["by"]}
+            else:
+                existing["role"] = p["role"]
+            return _Rows([], rowcount=1)
+
+        if "INSERT INTO user_permission_override" in s:
+            key = (p["uid"], p["perm"])
+            if key in self.overrides:          # ON CONFLICT DO NOTHING
+                return _Rows([], rowcount=0)
+            self.overrides[key] = {
+                "effect": p.get("effect", "allow"), "reason": p.get("reason", ""),
+                "set_by": p.get("by", ""),
+            }
+            return _Rows([], rowcount=1)
 
         if "MIN(r.rank)" in s:
             me = self.user_by_email(p["email"])
+            # `caller_rank`'s SQL joins `org_role` on the org, so a caller's
+            # rank in a tenant they do not belong to is no rank at all.
+            if me is not None and me.get("organization_id") != p.get("org"):
+                return _Rows([{"rank": None}])
             slugs = self.user_roles.get(me["id"], []) if me else []
             ranks = [self.ROLE_RANKS[x] for x in slugs if x in self.ROLE_RANKS]
             return _Rows([{"rank": min(ranks) if ranks else None}])
@@ -340,16 +476,63 @@ class _FakeDB:
                 for slug in p["slugs"] if slug in self.ROLE_RANKS
             ])
 
+        if "SELECT organization_id::text AS org, email FROM app_user" in s:
+            # `_ADDRESS_TENANT_SQL` — the one deliberately cross-tenant read.
+            want = str(p["email"]).lower()
+            return _Rows([
+                {"org": u.get("organization_id"), "email": u["email"]}
+                for u in self.users.values() if u["email"].lower() == want
+            ])
+
         if "INSERT INTO app_user" in s:
-            existing = self.user_by_email(p["email"])
+            # ⚠️ **BYTE-EXACT**, mirroring `app_user_email_key`, which is
+            # `UNIQUE (email)` and NOT `UNIQUE (lower(email))`. A fake that
+            # matched case-insensitively here would agree that a lower-cased
+            # invite of `Casey@Alpha.Example` conflicts — it does not, and the
+            # duplicate row Postgres writes instead is a live finding this
+            # class was previously unable to express.
+            existing = next(
+                (u for u in self.users.values() if u["email"] == p["email"]),
+                None,
+            )
             if existing is None:
                 uid = f"u-{len(self.users) + 1}"
                 self.seed_user(uid, p["email"], status=p.get("status", "invited"),
-                               name=p.get("name", ""))
+                               name=p.get("name", ""),
+                               organization_id=p.get("org"))
                 self.users[uid]["invited_by"] = p.get("by", "")
                 if p.get("status") == "active":
                     self.users[uid]["joined_at"] = "now()"
                 return _Rows([], rowcount=1)
+
+            # ⚠️ The DO UPDATE arm's own `WHERE`, read from the STATEMENT and
+            # not restated as a rule: a conflicting row belonging to another
+            # tenant is not written at all. `app_user.email` is globally UNIQUE
+            # (D-MT-1 (a)), so this arm is the only place a cross-tenant row can
+            # be reached by an INSERT, and deleting the fence from the SQL
+            # changes what this branch does rather than being shrugged at.
+            # Both arms are read separately, not as one "is it fenced" flag:
+            # dropping the `IS NULL` arm is a different defect from dropping
+            # the whole fence — it locks out the pre-130 rows that have no
+            # tenant yet, which looks identical to a correct refusal.
+            allows_null = "app_user.organization_id IS NULL" in s
+            allows_match = "app_user.organization_id = EXCLUDED.organization_id" in s
+            org = existing.get("organization_id")
+            if allows_null or allows_match:
+                writable = (
+                    (allows_null and org is None)
+                    or (allows_match and org is not None and org == p.get("org"))
+                )
+                if not writable:
+                    return _Rows([], rowcount=0)
+
+            # `SET organization_id = COALESCE(app_user.organization_id, …)` —
+            # also read from the statement, so reverting it to the bare
+            # `EXCLUDED.organization_id` (the tenant STEAL) is visible here.
+            keeps_tenant = "COALESCE(app_user.organization_id" in s
+            if org is None or not keeps_tenant:
+                existing["organization_id"] = p.get("org")
+
             # ON CONFLICT (email) DO UPDATE — mirror of _PROVISION_MEMBER_SQL's
             # CASE arms. Keep in step with it; the structural test is the fence.
             if p.get("name"):
@@ -365,6 +548,17 @@ class _FakeDB:
 
         if "FROM app_user WHERE lower(email)" in s:
             row = self.user_by_email(p["email"])
+            # `find_member`'s tenant predicate, read from the statement for the
+            # same reason as the fence above: a member lookup that drops it
+            # hands every member-targeted route in the package a row from
+            # another organization, and a caller-derived `get_org_id` in front
+            # of it changes nothing about that.
+            if (
+                row is not None
+                and "organization_id = CAST(:org AS uuid)" in s
+                and row.get("organization_id") != p.get("org")
+            ):
+                row = None
             return _Rows([dict(row)] if row else [])
 
         if "UPDATE app_user SET status = :status" in s:
@@ -396,12 +590,17 @@ class _FakeDB:
             return _Rows([], rowcount=1)
 
         if "r.slug = 'owner'" in s:
-            # owner_count(): how many ACTIVE members would still hold `owner`.
+            # owner_count(): how many ACTIVE members would still hold `owner`
+            # IN THIS ORGANIZATION — the real statement joins `org_role` on it,
+            # and invariant 1 is per-tenant: another company having an owner
+            # does not stop this one going ownerless.
             excluded = p.get("uid")
             return _Rows([{"count": sum(
                 1 for uid, slugs in self.user_roles.items()
                 if "owner" in slugs and uid != excluded
                 and (self.users.get(uid) or {}).get("status") == "active"
+                and (self.users.get(uid) or {}).get("organization_id")
+                == p.get("org")
             )}])
 
         if "SELECT r.slug FROM user_role ur" in s:

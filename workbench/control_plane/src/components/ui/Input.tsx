@@ -35,6 +35,16 @@ export type InputProps = Omit<React.InputHTMLAttributes<HTMLInputElement>, "size
   /** Lucide icon name shown inside the field's leading edge. */
   icon?: string;
   className?: string;
+  /**
+   * Forwarded to the underlying `<input>`. Declared rather than inherited
+   * because `InputHTMLAttributes` does not carry `ref`: on React 19 a function
+   * component receives it as an ordinary prop, so the spread below is all the
+   * plumbing needed — no `forwardRef` wrapper.
+   *
+   * Added for WS-27r's search palette, which has to focus its field the moment
+   * it opens; a palette you have to click into is a palette you stop using.
+   */
+  ref?: React.Ref<HTMLInputElement>;
 };
 
 export function Input({ inputSize = "md", icon, className = "", ...rest }: InputProps) {

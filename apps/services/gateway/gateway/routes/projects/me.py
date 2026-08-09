@@ -25,6 +25,7 @@ from gateway.routes.projects.core import (
     TaskModel,
     _get_db,
     actor,
+    resolve_organization_id,
     router,
     row_to_dict,
 )
@@ -39,10 +40,22 @@ async def assigned_to_me(
 ) -> ListResponse:
     """Tasks assigned to the caller, across every project they can reach.
 
-    **No visibility clause, on purpose.** Assignment is itself the strongest
-    claim to a task — ``load_visible_task`` already treats it that way — so
-    filtering this by project grants would hide work from the very person asked
-    to do it whenever it was delegated across a Center boundary.
+    **No GRANT clause, on purpose.** Assignment is itself the strongest claim
+    to a task — ``load_visible_task`` already treats it that way — so filtering
+    this by project grants would hide work from the very person asked to do it
+    whenever it was delegated across a Center boundary.
+
+    ⚠️ **But there is a tenant clause, and it is not optional** (WS-29b). This
+    route reaches tasks by MATCHING A STRING: ``pm_task_assignees.assignee`` is
+    a bare email (D-PM-4) that nothing validates, so anyone in another
+    organization can put this caller's address on their task and — without the
+    line below — its title, description and dates appear here. Worse than a
+    read: WS-27e's personal mirror SYNCS this endpoint into ``gtd_items``, so
+    the leak would be copied into a second app and outlive the request.
+
+    Found by driving this endpoint against a real two-tenant database. The
+    grant-based reads were all scoped by then; this one has no grant clause to
+    have noticed was missing.
 
     Done tasks are excluded by default. The completion boundary is read from the
     status ``category`` rather than from ``completed_at``, so a project that
@@ -51,6 +64,7 @@ async def assigned_to_me(
     """
     email = actor(user).lower()
     clauses = [
+        "t.organization_id = CAST(:vis_org AS uuid)",
         "EXISTS (SELECT 1 FROM pm_task_assignees a "
         "        WHERE a.task_id = t.id AND lower(a.assignee) = :who)",
         "t.archived_at IS NULL",
@@ -65,8 +79,11 @@ async def assigned_to_me(
 
     db = await _get_db()
     try:
+        # A caller the directory does not know binds NULL and matches nothing,
+        # which is the same fail-closed shape every other read here has.
+        scope = {"who": email, "vis_org": await resolve_organization_id(db, email)}
         total = (await db.execute(
-            text(f"SELECT count(*) FROM pm_tasks t{where}"), {"who": email},
+            text(f"SELECT count(*) FROM pm_tasks t{where}"), scope,
         )).scalar() or 0
         rows = (await db.execute(
             text(
@@ -74,7 +91,7 @@ async def assigned_to_me(
                 f"ORDER BY t.due_at NULLS LAST, t.importance DESC NULLS LAST, "
                 f"t.created_at DESC LIMIT :limit OFFSET :offset"
             ),
-            {"who": email, "limit": page.limit, "offset": page.offset},
+            {**scope, "limit": page.limit, "offset": page.offset},
         )).fetchall()
         return ListResponse(
             rows=[row_to_dict(r, TaskModel) for r in rows], total=int(total),

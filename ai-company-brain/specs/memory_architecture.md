@@ -424,3 +424,17 @@ instance.
    (`acb_memory/session_cache.py`; `docs/multiplayer/memory-clearance.md` §7).
 
 Question 5 is a correctness issue, not a design preference — it was resolved during 3a′, as required.
+
+## Board record (2026-08-09) — moved from work_plan.md §2
+
+> Moved here in the 2026-08-09 consolidation (work_plan.md D18): board rows now
+> carry state + gates only. The narrative below is preserved verbatim from the
+> final long-form row; the dated corrections after it win where they conflict.
+
+### WS-9 — **Memory tiers 3b/3c/4** (budgeted file-tier header, provenance markers, correction UX, supersession)
+**State cell (as of the move):** 🟡 Docs
+**Narrative (verbatim):** 3a′ substrate shipped (migs 136–139). §6.7 correction UX is the highest-leverage UX item in the corpus. **Audited 2026-08-02 → NO-GO**: §9 gives acceptance for **3a′ only** (which is WS-10's, already shipped) — 3b/3c/4, the whole of WS-9, have none; §6.7 is experience prose with no endpoint, model or assertion; §6.5 ends "there are two honest paths… don't do both", an owner call presented as acceptance. Header still says `Draft / RFC · 2026-07-26` over a body stamped 2026-08-01 (R4). Paths are bare filenames whose line numbers have moved (`routes/memory.py` gate is now `_authorize_scope` :128-167; `_tool_injection.py:488-493` moved to `acb_skills/addendum.py` in WS-23 S3). **Verified substrate:** `MemoryClient` has search/add/get_all/delete and **no `update`**; the API has no PUT/PATCH; `/memory` already does list + semantic search + delete + clear-all (§5.5 understates it) but has **no edit, no provenance**, and hardcodes one of the **five** scope shapes (`<email>` · `prefs:` · `room:` · `agent:` · `org:global`). No provenance/supersession fields exist anywhere. **NOT owner-gated** — the gate logic is testable against a fake with Mem0 disabled (41 tests, 0.58s); the real trap is inverted: **this box's `.env` already has Mem0 enabled, and `tests/unit/test_memory_integration.py` HANGS (measured exit 124); assume `test_memory_e2e.py` does too — name test files, never `tests/unit/`.** **D4 constraint:** `orchestrator/agents.py:520-534` reads only the user scope, so correcting an `org:global` fact would show fixed in the UI and change nothing on that path — PR-1 must restrict to `<email>`/`prefs:`/`agent:` or say so. **Slice when specced (3c-0, AGENT-SAFE):** `PATCH /memory/{scope}/{memory_id}` reusing `_authorize_scope(write=True)` + the 404-not-403 membership probe at `memory.py:237-240`; `MemoryClient.update`; provenance in **Mem0's own metadata** (`corrected_by`/`corrected_at`/`supersedes`) — no new table; PATCH in the Next proxy; inline edit + compartment selector on `/memory`. **Scope creep to cut:** §6.1 instance-keying is WS-14's and the 3a′ remainder is WS-10's — this row should stop claiming both.
+
+**Corrections applied 2026-08-09:**
+- ownership settled 2026-08-09 — the 3a′ remainder (subject: compartments) is WS-10's S1
+- this spec owns 3b/3c/4 only.

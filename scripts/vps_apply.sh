@@ -1,3 +1,44 @@
+#!/usr/bin/env bash
+# WS-25 D1 — the deploy steps, as a versioned file.
+#
+# This file was lifted BYTE-IDENTICALLY out of `.github/workflows/deploy.yml`'s
+# `env.DEPLOY_SCRIPT` (437 lines, sha256 a779724d089319f6…). It is the single
+# copy both delivery paths run:
+#
+#   push path  `.github/workflows/deploy.yml` — `ssh 'bash -s' < this file`
+#   pull path  `scripts/vps_pull.sh`          — `git show <sha>:this file | bash`
+#
+# One file, so the two paths cannot drift. Drift between them would only ever
+# surface during an incident, which is the worst moment to discover it.
+#
+# ── The shebang is new, and it is the only thing that is ─────────────────────
+# The extraction left line 1 as `set -e`, because inside a YAML `env:` value fed
+# to `bash -s` there was nothing to declare a shell TO. That cost D1 half of its
+# stated payoff: with no shebang and no `shell` directive, shellcheck refuses to
+# analyse the file at all (SC2148, error) and exits 1 having checked nothing.
+# The line is inert on both delivery paths — both invoke `bash <file>` or pipe
+# into `bash -s`, where a `#!` is just a comment — so this buys the analysis for
+# no behaviour change whatsoever.
+#
+# The file is deliberately left NON-executable (0644), matching vps_pull.sh.
+# Nothing execs it by path; both callers name the interpreter. Marking it +x
+# would advertise a fourth way to start a deploy that neither path uses.
+#
+# ── Running it by hand during an incident ────────────────────────────────────
+#   cd /opt/acb/app && APP_DIR=/opt/acb/app bash scripts/vps_apply.sh
+#
+# ⚠️ but NOT from a checkout you are about to have rewritten. Step 0 below is
+# `git reset --hard origin/main` — it replaces THIS FILE while bash is still
+# reading it, and bash reads a script incrementally by byte offset. Measured,
+# all three outcomes, none of which raise an alarm you would notice:
+#   • git replaces by RENAME, so the open fd keeps the old inode: every step
+#     runs, but they are the OLD file's steps against the NEW tree. Exit 0.
+#   • an in-place rewrite to a SHORTER file: bash resumes past EOF and the
+#     remaining steps silently do not happen at all. Exit 0.
+#   • an in-place rewrite that merely SHIFTS bytes: bash resumes mid-token
+#     (`--quiet` → `iet: command not found`). Exit 127.
+# Copy it out first — `git show origin/main:scripts/vps_apply.sh > /tmp/a.sh`
+# — and run THAT. This is what vps_pull.sh does, and why.
 set -e
 APP_DIR="${APP_DIR:-/opt/acb/app}"
 cd "$APP_DIR"
@@ -17,6 +58,14 @@ fi
 echo "==> Skipping deprecated LiteLLM proxy cleanup (already removed)"
 
 echo "==> Ensuring memory-layer env vars (Neo4j disabled for low-memory VPS)"
+# ⚠️ Hardcoded, while APP_DIR above is overridable — so is WB_ENV below. Noticed
+# during WS-25 D1 and DELIBERATELY LEFT AS IS: on both delivery paths APP_DIR is
+# /opt/acb/app, so "$APP_DIR/.env" would be the identical string today and
+# changing it is a behaviour change, not a refactor. Named because D1's whole
+# point is that this file can now be hand-run: `APP_DIR=/some/other/checkout`
+# would git-reset one tree and then rewrite a DIFFERENT tree's .env, generating
+# secrets into the live box while you thought you were in a sandbox. Until this
+# is unified (owner's call), hand-run it only with APP_DIR=/opt/acb/app.
 ENV_FILE="/opt/acb/app/.env"
 for _var in MEM0_ENABLED GRAPHITI_ENABLED; do
   if ! grep -qE "^${_var}=" "$ENV_FILE" 2>/dev/null; then
@@ -84,7 +133,7 @@ docker compose -f infra/docker-compose.yml --profile core up -d --remove-orphans
 
 echo "==> Waiting for healthchecks (up to 90s)"
 deadline=$(( $(date +%s) + 90 ))
-while [ $(date +%s) -lt $deadline ]; do
+while [ "$(date +%s)" -lt "$deadline" ]; do
   unhealthy=$(docker ps --filter "label=com.docker.compose.project=acb" --format '{{.Names}}\t{{.Status}}' \
     | awk '$0 ~ /unhealthy|starting/ {print $1}')
   if [ -z "$unhealthy" ]; then break; fi

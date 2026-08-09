@@ -8,7 +8,7 @@
 > `apps/services/gateway/gateway/routes/whatsapp/`, migrations 102–111, 227 backend unit
 > tests; activation gated on env config (`WHATSAPP_ENRICHMENT`, `WHATSAPP_APP_SECRET`,
 > `WHATSAPP_PUBLIC_URL`, …) and Meta app review (Embedded Signup). §1–§10 are the design
-> record; §11 is the build log and current state.
+> record; §11 is the build log and current state. · sibling surface: `whatsapp_calls_note_taker.md` Surface C (calls + recording) SHIPPED 2026-08-02 on this stack *(cross-ref added 2026-08-09)*
 > *(Update 2026-08-01, doc-truth pass: header previously said "PLANNING — no code yet",
 > contradicting §11's own build log; verified against the repo.)*
 > **Mockups:** `mockups/whatsapp_message_manager.html` (7 screens + build notes, control-plane shell,

@@ -2,7 +2,7 @@
 
 > **Type:** Implementation Spec  
 > **Date:** 2026-06-05  
-> **Status:** Active — Phase 1 complete, Phase 2 (CopilotKit patterns) in progress  
+> **Status:** Active — Phase 1 complete, Phase 2 (CopilotKit patterns) in progress · **Header re-dated 2026-08-09:** §12.3 is superseded by `generative_ui_2.md` §2; the live remainder is §12 items **V, VII–XI** plus §11 **H** (dev console) and **J** (push-to-talk) — the 2026-08-01 doc-truth note below is authoritative; the body is retained as protocol reference per `work_plan.md` §5 item 3  
 > **Target:** `workbench/control_plane/src/` — chat tab and related components  
 > **Reference:** VS Code source — `chatThinkingContentPart.ts`, `chatProgressContentPart.ts`, `chatSubagentContentPart.ts`, `chatToolInputOutputContentPart.ts` (read in full); GitHub Copilot Chat extension; Claude Code  
 > **Source studied:** [microsoft/vscode](https://github.com/microsoft/vscode) `src/vs/workbench/contrib/chat/browser/widget/chatContentParts/`  

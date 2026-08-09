@@ -97,8 +97,11 @@ Control Plane (Next.js browser UI) and local development tools.
 
 ## Identity — the BFF is not optional, it is where identity comes from
 
-Contract: `ai-company-brain/specs/user_management_contract.md`. Two rules bind
-every page in this app.
+Contract: `ai-company-brain/specs/user_management_contract.md` (**eleven** rules
+since 2026-08-08). Two rules bind every page in this app — and a third arrives
+with WS-29: **R11, never take the acting tenant from input.** The tenant rides
+the authenticated session; a subdomain is a *lookup to be verified against the
+session*, never an assertion to be trusted. See `saas_multitenancy.md` §1.5.
 
 **Never point the browser at the gateway.** A top-level navigation to
 `api.commandcenter.fracktal.in` carries **no** Bearer and **no** `X-User-Email`

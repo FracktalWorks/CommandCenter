@@ -1,6 +1,6 @@
 # Competitive Hardening — Learnings from Hermes Agent & OpenClaw
 
-> **Status:** Planned (annealed into the backlog; no code yet) · **Created:** 2026-07-13
+> **Status:** Planned (annealed into the backlog **(2026-07-13; 'no code yet' is stale — BO-20a/20f built 2026-08-02, BO-20b slice 1 2026-08-03; per-item state lives in FOUNDATION_BUILDOUT_CHECKLIST.md)**) · **Created:** 2026-07-13
 > **Source:** [`/COMPETITIVE_COMPARISON.md`](../../COMPETITIVE_COMPARISON.md) — an evidence-based three-way
 > comparison of CommandCenter against the two most-visible self-hosted agent platforms of 2026:
 > **Hermes Agent** (Nous Research — self-improving personal autonomous agent) and **OpenClaw**

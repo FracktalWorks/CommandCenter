@@ -1,22 +1,26 @@
-"""Golden trajectory: per-run integration-credential scoping (B6 Phase-5 Tier 0).
+"""Golden trajectory: per-run integration-credential scoping (MT-0a).
 
-Locks the SECURITY invariant, not just the mechanics: a credential materialised
-into the shared process ``os.environ`` for run A must NOT still be readable when
-run B (a different agent / different integration) starts. This is the concrete
-"any agent can read any other integration's secret" hole the isolation work
-closes at Tier 0.
+Locks the SECURITY invariant, not just the mechanics: a credential resolved for
+run A must NOT be readable when run B (a different agent / different
+integration) starts. This began as B6 Phase-5 Tier 0, which scoped the shared
+``os.environ`` bridge with a restore token; MT-0a replaced that bridge with a
+per-task ContextVar binding in ``acb_skills.integrations``, because the
+process-global env could never close the concurrent-overlap window
+(saas_multitenancy.md §6.1).
 
-If a future edit reverts ``_inject_integrations_to_env`` to write-and-never-clear
-(or drops the teardown at any of the three run sites), the accumulation assertion
-here fails.
+If a future edit reverts the binding to a process-global store (or drops the
+release at any run-teardown site), the accumulation assertion here fails — and
+the os.environ assertions catch the specific regression of bridging through
+the process env again.
 
-See specs/permissions_sandbox_b6.md (Phase 5, Tier 0).
+See specs/saas_multitenancy.md (§6.1, MT-0a) and
+specs/permissions_sandbox_b6.md (Phase 5, Tier 0) for the history.
 """
 from __future__ import annotations
 
 import os
 
-import orchestrator.executor as ex
+import acb_skills.integrations as integrations
 
 
 def test_credentials_do_not_accumulate_across_runs(monkeypatch):
@@ -35,39 +39,44 @@ def test_credentials_do_not_accumulate_across_runs(monkeypatch):
     ]
 
     seen_before: set[str] = set()
-    for integrations, expected_vars in runs:
+    for creds, expected_vars in runs:
         # No prior run's secret is visible as this run begins.
         for var in seen_before:
-            assert var not in os.environ, (
-                f"{var} from a prior run leaked into a later run's env"
+            assert integrations.credential(var) == "", (
+                f"{var} from a prior run leaked into a later run"
             )
 
-        token = ex._inject_integrations_to_env(integrations)
-        # This run's own creds are present during the run.
+        token = integrations.bind_run_credentials(creds)
+        # This run's own creds are readable during the run...
         for var in expected_vars:
-            assert var in os.environ
+            assert integrations.credential(var)
+            # ...without ever touching the process-global environment.
+            assert var not in os.environ, (
+                f"{var} was bridged through os.environ — the MT-0a regression"
+            )
         seen_before.update(expected_vars)
 
         # Run teardown (the finally / AsyncExitStack callback in the executor).
-        ex._restore_integration_env(token)
+        integrations.release_run_credentials(token)
 
         # Immediately after teardown, none of this run's creds remain.
         for var in expected_vars:
-            assert var not in os.environ
+            assert integrations.credential(var) == ""
 
 
 def test_operator_env_survives_the_run_lifecycle(monkeypatch):
-    """A gateway-.env-provided secret is never clobbered nor deleted by scoping."""
+    """A gateway-.env-provided secret wins over, and outlives, any run binding."""
     monkeypatch.setenv("CLICKUP_API_TOKEN", "operator-value")
     monkeypatch.delenv("CLICKUP_WORKSPACE_ID", raising=False)
 
-    token = ex._inject_integrations_to_env(
+    token = integrations.bind_run_credentials(
         {"clickup": {"api_token": "run-value", "workspace_id": "ws"}}
     )
-    # Operator's value wins throughout.
-    assert os.environ["CLICKUP_API_TOKEN"] == "operator-value"
+    # Operator's value wins throughout; the run-only var reads from the binding.
+    assert integrations.credential("CLICKUP_API_TOKEN") == "operator-value"
+    assert integrations.credential("CLICKUP_WORKSPACE_ID") == "ws"
 
-    ex._restore_integration_env(token)
-    # ...and still stands after teardown; only the run-scoped var is cleaned.
-    assert os.environ["CLICKUP_API_TOKEN"] == "operator-value"
-    assert "CLICKUP_WORKSPACE_ID" not in os.environ
+    integrations.release_run_credentials(token)
+    # ...and still stands after teardown; only the run-scoped var is gone.
+    assert integrations.credential("CLICKUP_API_TOKEN") == "operator-value"
+    assert integrations.credential("CLICKUP_WORKSPACE_ID") == ""

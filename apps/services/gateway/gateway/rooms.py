@@ -146,6 +146,33 @@ def _capabilities(role: str | None, *, visibility: str) -> tuple[bool, bool, boo
 # Resolution
 # ---------------------------------------------------------------------------
 
+#: Which of a room's group subjects actually contain the caller.
+#:
+#: Module-level rather than inline in `_load_room` so a hermetic test can assert
+#: on it without a database (`tenancy_and_visibility.md` §2 done-when 2 — the
+#: DB-backed room tests skip green with no Postgres, so the tenant predicate
+#: needs a string assertion that cannot skip).
+#:
+#: `g.organization_id = u.organization_id` is the tenant predicate. `org_group`
+#: slugs are unique only *within* an organization (`UNIQUE (organization_id,
+#: slug)`, `138_groups_and_session_participants.sql:49`), so joining on slug
+#: alone matched the identically-named group in every other tenant — a
+#: cross-organization match by construction once the tenant boundary is a row
+#: rather than a deployment (`saas_multitenancy.md` §1 D15, §6.5). The org is
+#: *derived* from `u`, the acting user's own row, so it cannot go stale the way
+#: a literal `slug = 'default'` would (`tenancy_and_visibility.md` §2
+#: done-when 1).
+MY_GROUPS_SQL = """
+    SELECT g.slug
+    FROM org_group g
+    JOIN org_group_member m ON m.group_id = g.id
+    JOIN app_user u ON u.id = m.user_id
+    WHERE u.email = :email
+      AND g.slug = ANY(:slugs)
+      AND g.organization_id = u.organization_id
+"""
+
+
 def _load_room(session_id: str, email: str) -> dict | None:
     """Read the session row and everything about this person's place in it.
 
@@ -188,12 +215,7 @@ def _load_room(session_id: str, email: str) -> dict | None:
         my_groups: set[str] = set()
         if group_slugs:
             rows = s.execute(
-                text(
-                    "SELECT g.slug FROM org_group g "
-                    "JOIN org_group_member m ON m.group_id = g.id "
-                    "JOIN app_user u ON u.id = m.user_id "
-                    "WHERE u.email = :email AND g.slug = ANY(:slugs)"
-                ),
+                text(MY_GROUPS_SQL),
                 {"email": email, "slugs": group_slugs},
             ).fetchall()
             my_groups = {r.slug for r in rows}
@@ -365,6 +387,13 @@ def resolve_room_access(session_id: str, email: str) -> RoomAccess:
 #: `org`), or the room is org-visible and they are an active member. Written as
 #: one EXISTS-per-way rather than a join so a session is never returned twice
 #: and the planner can use each subject index independently.
+#:
+#: The group arm carries the same tenant predicate as MY_GROUPS_SQL —
+#: `g.organization_id = u.organization_id`, derived from the caller's own
+#: `app_user` row. Without it the slug join admits a room shared with another
+#: tenant's identically-slugged group (`saas_multitenancy.md` §6.5). Kept as a
+#: predicate rather than an SQL `--` comment because callers concatenate this
+#: constant into larger statements (`routes/chat.py:98,230,296,735`).
 SESSION_VISIBLE_SQL = """
     (
         s.user_id = :uid
@@ -380,6 +409,7 @@ SESSION_VISIBLE_SQL = """
             WHERE p.session_id = s.id
               AND p.subject LIKE 'group:%'
               AND u.email = :uid
+              AND g.organization_id = u.organization_id
         )
         OR (
             EXISTS (

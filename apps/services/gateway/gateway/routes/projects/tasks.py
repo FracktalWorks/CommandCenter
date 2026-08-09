@@ -59,9 +59,14 @@ from gateway.routes.projects.core import (
 from gateway.routes.projects.custom_fields import apply_values, load_definitions
 from gateway.routes.projects.filters import (
     attach_assignees,
+    attach_relation_counts,
     build_task_filters,
 )
 from gateway.routes.projects.notifications import notify
+from gateway.routes.projects.relations import (
+    DIRECTED_TYPES,
+    assert_no_block_cycle,
+)
 from gateway.routes.projects.tags import apply_task_tags
 from pydantic import BaseModel
 from sqlalchemy import text
@@ -196,15 +201,14 @@ async def list_tasks(
             ),
             {**params, "limit": page.limit, "offset": page.offset},
         )).fetchall()
-        # Assignees on the LIST, not only on the single-task read. Without
-        # them the board cannot draw an owner or group by one, and fetching
-        # them per card is N+1 across an imported workspace of hundreds.
-        return ListResponse(
-            rows=await attach_assignees(
-                db, [row_to_dict(r, TaskModel) for r in rows],
-            ),
-            total=int(total),
-        )
+        # Assignees, subtask progress and blocked-ness on the LIST, not only on
+        # the single-task read. Without them a card cannot draw an owner, a
+        # progress count or a blocked flag — and fetching any of the three per
+        # card is N+1 across an imported workspace of hundreds.
+        page_rows = [row_to_dict(r, TaskModel) for r in rows]
+        await attach_assignees(db, page_rows)
+        await attach_relation_counts(db, page_rows)
+        return ListResponse(rows=page_rows, total=int(total))
     finally:
         await db.close()
 
@@ -618,6 +622,12 @@ async def create_link(
         # Both ends must be visible: a link is readable from either side, so
         # accepting an unreadable target would disclose that it exists.
         await load_visible_task(db, vis, str(payload.target_task_id))
+        # WS-27p — the same guard `assert_no_task_cycle` has always put on
+        # `parent_task_id`, finally on the edge that can actually deadlock:
+        # A blocks B blocks C blocks A is a loop no human can resolve by
+        # finishing something, and every walk over it runs forever.
+        if payload.link_type in DIRECTED_TYPES:
+            await assert_no_block_cycle(db, task_id, str(payload.target_task_id))
         row = (await db.execute(
             text(
                 "INSERT INTO pm_task_links "

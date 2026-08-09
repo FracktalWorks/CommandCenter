@@ -1,184 +1,115 @@
 # AGENTS.md — Planning Folder Navigation Guide
 
-> **For AI agents:** Read this file first. It tells you what this project is, what has been built, and which file to read for each concern.
-> **Organisation:** Fracktal Works · **Project:** CommandCenter · **Last updated:** 2026-07-29
+> **For AI agents:** Read this file first. It tells you what this project is and which file to read for each concern. **For what is built and what to do next, this file deliberately owns nothing:** `work_plan.md` §2 is the dispatch board; each owning spec's status header is the completion record (rule R4). A status table that lived here went stale and lied — it was retired on 2026-08-09 (work_plan.md §5 residual 1).
+> **Organisation:** Fracktal Works · **Project:** CommandCenter · **Last updated:** 2026-08-09
 
 ---
 
 ## What CommandCenter Is
 
-CommandCenter is a **headless, self-mutating agent orchestration platform** for running a company.
+CommandCenter is a **headless, self-mutating agent orchestration platform** for running a company — and, since 2026-08-08, **a product being prepared for sale to other companies** (WS-29, decision D15: tenant = `organization_id` row isolated by Postgres RLS; a deployment is a placement, not a tenant boundary; see `specs/saas_multitenancy.md`).
 
-When a company event fires (webhook from ClickUp/Zoho/Odoo, cron schedule, or ambient signal), it:
-1. Resolves the target specialist agent via a persistent local clone of that agent's GitHub repo.
-2. Runs `git pull --ff-only` (< 0.5 s) to pick up any merged changes.
-3. Injects credentials from the Integration Registry into the MAF orchestration context (via `mcp_servers=` config in `GitHubCopilotAgent`).
-4. Executes the agent task (skills run as MAF tools or MCP servers inside `GitHubCopilotAgent`, with `HandoffBuilder` routing between specialist agents).
-5. On failure: spawns an isolated Copilot SDK mutation container (`acb-mutation-runner`), applies a tested code fix to the live clone immediately, opens a GitHub PR as audit record.
+When a company event fires (webhook from ClickUp/Zoho, cron schedule, or ambient signal), it:
+1. Resolves the target specialist agent (persistent local clone or in-repo `apps/agents/*`).
+2. Runs `git pull --ff-only` to pick up merged changes.
+3. Injects credentials from the Integration Registry into the MAF orchestration context.
+4. Executes the agent task (skills as MAF tools or MCP servers, `HandoffBuilder` routing).
+5. On failure: spawns an isolated Copilot SDK mutation container, applies a tested fix, opens a GitHub PR as audit record.
 
-Operators interact via a thin **Control Plane** (Next.js browser UI) with chat Q&A, HITL approvals, and observability. There is no in-app agent/skill editor — all authoring happens in VS Code + Git.
+Operators interact via a thin **Control Plane** (Next.js) with chat Q&A, HITL approvals, and observability. There is no in-app agent/skill editor — all authoring happens in VS Code + Git.
 
----
+## Where state lives (read in this order)
 
-## What Has Already Been Built (as of 2026-06-20)
+1. **Root `AGENTS.md`** — global constraints (11, including D15 tenancy rules) and the DOX contract.
+2. **`work_plan.md`** — the dispatch board: WS-0…WS-29 rows (§2), the agent-ready spec contract + standing rules R1–R5 (§1), decisions D1–D18 (§3), single-owner registry (§4), remediation record (§5), owner-gate registry (§6). **For ordering and ownership it wins over every spec, including `project_plan.md` §6.**
+3. **The owning spec** for your concern — see the index below. Its status header is authoritative for that feature's state.
+4. `FOUNDATION_BUILDOUT_CHECKLIST.md` (repo root) — foundation items BO-1…BO-23.
 
-| Component | Status | Location |
-|---|---|---|
-| Core FastAPI gateway | ✅ Done | `apps/gateway/` |
-| Ingestion workers (ClickUp, Zoho) | ✅ Done | `apps/ingestion/` |
-| Entity graph (Postgres + pgvector) | ✅ Done | `infra/postgres/01_schema.sql` |
-| Reconciler agent | ✅ Done | `apps/reconciler/` |
-| Orchestrator (MAF `HandoffBuilder` + native workflow engine) | ✅ Done | `apps/orchestrator/` — LangGraph fully removed. DTS deferred to Phase 2; HITL via Action Broker (Postgres `approval_queue`). See ADR-026 in `system_architecture.md`, WBS 0.7. |
-| Persistent clone cache + bot git identity | ✅ Done | `packages/acb_skills/acb_skills/loader.py` |
-| Self-mutation node + Copilot SDK mutation container | ✅ Done | `apps/orchestrator/orchestrator/mutation.py`, `apps/orchestrator/mutation_runner.py`, `apps/orchestrator/Dockerfile.mutation` |
-| Interactive operator chat (MAF AG-UI endpoint) | ✅ Done | `apps/gateway/gateway/main.py` — `add_agent_framework_fastapi_endpoint(app, agent, "/copilot/chat")`. The old `copilot_chat.py` SSE path and the Copilot SDK chat dispatch (`runtime: copilot`) have been **removed**. Copilot SDK is now mutation-container only. |
-| Control Plane shell (Next.js, chat, SSO) | ✅ Done | `workbench/control_plane/` |
-| Control Plane rich chat UI (SSE streaming, markdown, syntax highlight, tool-call blocks) | ✅ Done | `workbench/control_plane/src/components/MarkdownMessage.tsx`, `useAgentChat.ts`, `AgentChat.tsx`, `api/agent/chat/route.ts` |
-| Control Plane model picker + agent switcher + stop-generation button | ✅ Done | `AgentChat.tsx` — VS Code Copilot-style UX |
-| LLM routing + tiered models | ✅ Done | **In-process litellm SDK** via the gateway `/v1` endpoint (`apps/gateway/gateway/routes/v1_compat.py`, `packages/acb_llm/`). No proxy process; `infra/litellm/config.yaml` is vestigial (tier rows only, → BO-16). |
-| GitHub Copilot model routes (`copilot/*`) | ✅ Done | Resolved in-process by `acb_llm` / the Copilot-SDK tier — not via a proxy config |
-| Skills monorepo + loader | ✅ Done | `skills/`, `packages/acb_skills/` |
-| Self-mutation GitHub PR automation | 🔲 Next | Phase 1 (WBS 1.3) |
-| Eval CI gate on agent/skill PRs | 🔲 Next | Phase 1 (WBS 1.4) |
-| **Dynamic multi-agent orchestration (MAF `as_tool()` registry)** | ✅ Done | `apps/orchestrator/orchestrator/agents.py` — every registered agent auto-exposed as a MAF tool at startup; LLM routes by description alone; zero hard-coded routing tables |
-| **`delegate_to_agent` + `spawn_copilot_agent` tools** | ✅ Done | Orchestrator tools: delegate to any named specialist; spawn Copilot SDK container for creation/mutation tasks from chat |
-| **Agent auto-repair (incompatibility → direct commit)** | ✅ Done | `AgentLoadError` triggers Copilot SDK sandbox with researcher+editor pattern; generates `agents.py` and commits directly — no PR |
-| **Proactive skill sync (auto-wire new scripts)** | ✅ Done | `packages/acb_skills/acb_skills/loader.py` — after every pull, scans `skills/*/scripts/` for new scripts, injects tool wrappers, commits+pushes |
-| **Agent add/remove via Control Plane UI** | ✅ Done | `workbench/control_plane/src/app/agents/` — paste GitHub URL, auto-fetches `config.json`, registers; dynamic agents persisted in `agents.json` |
-| **Integration configure/test UI** | ✅ Done | `workbench/control_plane/src/app/integrations/` — live test against real APIs; writes to root `.env`; hot-reload |
-| **LLM settings UI (tier picker, Gemini/OpenAI key save)** | ✅ Done | `workbench/control_plane/src/app/settings/models/` — per-tier model assignment; provider key save; LiteLLM health |
-| **AG-UI → SSE translation (chat properly streams tool calls)** | ✅ Done | `workbench/control_plane/src/app/api/agent/chat/route.ts` — translates AG-UI events to delta/tool_start/tool_end for the UI hook |
-| **Memory: Mem0 episodic + Graphiti bi-temporal KG** | ✅ Done | M2.8 — pgvector backend, Neo4j `--profile memory`, `/memory/*` API, injected into orchestrator + Copilot agents. See [`reference.md`](reference.md) §3 |
-| **Fire-and-forget chat + live stream reconnection** | ✅ Done | Redis Streams + Postgres; agent continues after tab close, resumes live on reopen. See [`specs/archive/stream_reconnection.md`](specs/archive/stream_reconnection.md) |
-| **Chat session history (auto-title + last-turn preview)** | ✅ Done | M2.6 — `chat_sessions.title`/`last_preview`; session list UI |
-| **Integration OAuth framework (authorize→callback→refresh)** | ✅ Done | M2.6 — `routes/oauth.py`, HMAC-signed state, zoho-crm/clickup/google |
-| **VS Code Copilot tools in chat (HITL Q, errors, repo memory, history, GitHub search, images)** | 🔄 Mostly done | See [`specs/archive/vscode_tool_integration.md`](specs/archive/vscode_tool_integration.md) |
-| **Email app — multi-account client (Gmail/Outlook/IMAP) + AI assistant** | 🔄 In progress | M2.9 — `workbench/control_plane/src/app/email/`, gateway `routes/email/` (layered pkg), `apps/services/email_ingestion/`. Consolidated plan + roadmap: [`specs/email_app_master_plan.md`](specs/email_app_master_plan.md) |
-| **App Workshop / Custom Apps — chat-built small software deployed in-platform** | 🔄 Phase 0–3b + T2 built | RFC + mockups: `docs/app-workshop/`. Gateway `routes/apps/` (lifecycle/files/publish+conformance-scan/runtime incl. budgeted `ai/complete`, sharing+consent, manifest `actions`), migration `114_custom_apps.sql`, `agent-app-builder` + executor `allow_session_workspace` binding, workbench `/build/apps` (gallery · Workshop · run page · `window.cc` bridge), granted apps registered as orchestrator agent tools (`orchestrator/app_tools.py`), live per-app token tracking in `/observability`. **T2 (real React apps)** built: `agent-app-builder/build/build_t2.mjs` (esbuild against a shared, deploy-provisioned react/react-dom/esbuild vendor cache — zero per-app `npm install`), manifest `entry`/`tier` already-existing dynamic resolution now covers `dist/bundle.html`. **T3 (server-side backend compute) scoped, not built** — gated behind BO-7 (platform-wide sandbox hardening, still ✖/absent); RFC's already-decided T3 substrate is Deno subprocesses, not containers. Platform contract is binding (§4.0): CommandCenter is the only backbone |
-| **Task Manager app — GTD-philosophy client + `task-manager` agent (PM-agnostic: any tool via API or MCP)** | 🔄 capture/clarify live end-to-end | Frontend slices 1–2.5 + the capture/clarify **backend**: migration `48_task_manager_gtd.sql`, gateway `routes/tasks/` (20 endpoints), provider interface layer + **ClickUp connector** (multi-workspace `task_accounts`, encrypted tokens), `apps/skill-task-gtd/` + rewritten `apps/agent-task-manager/`, frontend wired live with mock fallback; **org-knowledge layer live** (`gtd_people` from agent-project-manager HR data → capability-aware delegation, §6.1). Resume: Slice 3 (Engage) · `/tasks/sync` pull. See [`specs/task_manager_app.md`](specs/task_manager_app.md) §9.1 |
-| **Org access control — multi-user members, roles, per-user access** | ✅ Phase 1 done (→ multiplayer) | `infra/postgres/130_org_access_control.sql`, `packages/acb_auth/` (permissions.py + access.py + `require_permission`), gateway `routes/admin/` + `/auth/me`, workbench `/settings/members` + `/settings/roles` + nav/route gating. Spec: [`specs/org_access_control.md`](specs/org_access_control.md). Extended since: gateway-wide feature enforcement, per-member integration credentials + org-memory gate, service-identity/LLM-key split, signed agent webhook, default-deny authentication (closes BO-2). **Remaining scope — modules/teams, session sharing, entity-graph RLS — is handed off to the multiplayer agent collaboration workstream; see the spec's §10 handoff contract.** True agent isolation remains BO-7 |
-| **Workflows app — visual automation builder + Module Studio + Copilot** | 🔄 Slices 1+2 built | Migration `132_workflows.sql`, gateway `routes/workflows/` (engine: graph compile → MAF `WorkflowBuilder`; manual/webhook/cron triggers; conversational module generator + AST validator + subprocess runner), workbench `/workflows` (React Flow editor, Module Studio, run console/history). Spec: [`specs/workflows_app.md`](specs/workflows_app.md) · RFC: `docs/workflow-editor/` · ADR-028 |
-| `agent-sales` + `skill-zoho-ingest` | 🔲 Phase 2 | Phase 2 (WBS 2.2) |
-| `agent-triage` + `skill-gmail-capture` | 🔲 Phase 2 | Phase 2 (WBS 2.3) |
-| Meeting bot (Vexa + WhisperX) | 🔲 Phase 3 | Phase 3 (WBS 3.1) |
-| WhatsApp ingest + push | 🔲 Phase 3 | Phase 3 (WBS 3.3) |
-| Action Broker (approval-gated writes) | 🔲 Phase 4 | Phase 4 (WBS 4.1) |
-| Odoo ingestor + strategy agent | 🔲 Phase 5 | Phase 5 (WBS 5.1/5.2) |
-
-**M1 milestone (Core Engine live) — PASSED 2026-05-25.**
-Real cross-system cited Q&A over live Fracktal data confirmed. 22/22 tests green.
-
-**M2 milestone (Self-Mutation + Multi-Agent) — PASSED 2026-06-12.**
-`Self_Mutation_Node` + Copilot SDK mutation container, dynamic multi-agent (`as_tool()` registry), `spawn_copilot_agent` + `delegate_to_agent`, agent auto-repair, and the inline eval gate are all ✅ done. Remaining Phase-1 cleanup: GitHub PR automation (WBS 1.3) and BYOK-forced metering (WBS 1.7).
-
-**Since M2 (all ✅):** M2.5 unified Copilot SDK Tier 1.5 streaming (CopilotKit removed) · M2.6 foundation hardening (chat history, cloud sandbox, integration OAuth, AG-UI generative events) · M2.7 universal tool injection · M2.8 Mem0 + Graphiti memory.
-**M2.9 (🔄 in progress):** email app — multi-account client + AI assistant; Outlook end-to-end fixed (PR #4).
-
-**Dynamic multi-agent orchestration — DONE.**
-Every registered agent (static + GitHub-registered) is exposed as a MAF `FunctionTool` via `agent.as_tool()` at gateway startup. LLM routes to the right specialist by description alone — no hard-coded routing table. WorkflowBuilder available for explicit sequential/fan-out pipelines.
+Milestone history, kept to one line: M1 core engine 2026-05-25 · M2 self-mutation + multi-agent 2026-06-12 · M2.5–M2.9 (streaming, hardening, tool injection, memory, email) through 2026-07 · foundation audit + app buildout 2026-07/08 · WS-29 multi-tenancy started 2026-08-08.
 
 ---
 
 ## File Index — What to Read for Each Concern
 
-The planning folder was consolidated on 2026-06-20 (15 files → 5 + `specs/`).
-
 | Concern | File |
 |---|---|
-| **Requirements + roadmap + WBS** (what / when / how much — single source) | [`project_plan.md`](project_plan.md) |
-| **System design: containers, data model, ADRs** | [`system_architecture.md`](system_architecture.md) |
-| **How to build a compatible agent repo** | [`agent_repo_compatibility.md`](agent_repo_compatibility.md) |
-| **Library notes: MAF, Copilot SDK, memory** | [`reference.md`](reference.md) |
-| **Per-feature specs** | [`specs/`](specs/) — see the status index below |
+| **What order, who owns it, what's gated** (single source) | [`work_plan.md`](work_plan.md) |
+| **Requirements + long-horizon roadmap** (sequencing yields to work_plan) | [`project_plan.md`](project_plan.md) |
+| **System design: containers, data model, ADRs** (⚠️ stale-warning in header) | [`system_architecture.md`](system_architecture.md) |
+| **How to maintain an existing external agent repo** (⚠️ superseded premise) | [`agent_repo_compatibility.md`](agent_repo_compatibility.md) |
+| **Library notes: MAF, Copilot SDK, memory** (⚠️ stale-warning in header) | [`reference.md`](reference.md) |
+| **Workspace / artifact model for agents** | [`agents-workspaces-artifacts.md`](agents-workspaces-artifacts.md) |
+| **Per-feature specs** | [`specs/`](specs/) — index below |
 
 ### Per-feature specs (`specs/`)
 
-Status: 🟢 live/shipped · 🔄 in progress · 🔲 planned/not started. *(Index reconciled against code 2026-07-13.)*
+Status: 🟢 live/shipped · 🔄 in progress · 🔲 planned/not started. *(Index completed 2026-08-09 — 16 missing rows added; statuses are one-line pointers, the spec's own header wins.)*
 
-**Only forward-looking / living specs are listed here.** 13 shipped-or-historical specs were moved to
-[`specs/archive/`](specs/archive/README.md) (each verified live in code, with residual open work carried
-forward). Foundation status of record is `FOUNDATION_BUILDOUT_CHECKLIST.md` (BO-*) — the specs below defer
-to it and to `competitive_hardening_2026-07.md` (CH-*) rather than re-describe those gaps.
+**Only forward-looking / living specs are listed.** Shipped-or-historical specs live in [`specs/archive/`](specs/archive/README.md). Foundation status of record is `FOUNDATION_BUILDOUT_CHECKLIST.md` (BO-*).
 
 | Spec | Concern | Status |
 |---|---|---|
-| [`core_module_map.md`](specs/core_module_map.md) | **Living architecture hub** — orchestrator module→file map, the parent of the (now-archived) core-loop/context zoom-ins | 🟢 living reference |
-| [`competitive_hardening_2026-07.md`](specs/competitive_hardening_2026-07.md) | **Competitive hardening** — Hermes/OpenClaw learnings (`CH-*`) annealed onto BO-1/5/7/12/14 + new BO-20/BO-21; Phase-5 Annealer = self-improving-skills home. Source `/COMPETITIVE_COMPARISON.md` | 🔲 planned (annealed, no code) |
-| [`multiplayer_prior_art_qm_2026-08.md`](specs/multiplayer_prior_art_qm_2026-08.md) | **Multiplayer prior art** — `yc-software/qm` learnings (`QM-*`) annealed onto WS-10 (steer before floor control; no ambient credentials in a room) and WS-23 (skills index, bodies on demand). Records that an outside team reproduced our least-cleared-viewer rule independently | 🔲 reference-only (annealed, no code; owns no status) |
-| [`harness_hardening_2026-07.md`](specs/harness_hardening_2026-07.md) | **Harness gap queue** (HH-1..8) vs awesome-harness-engineering | 🔄 HH-1/4/5 shipped; HH-2/HH-3 mechanism-only, **not enforced** (audit M5/H9); HH-6/7 deferred |
-| [`permissions_sandbox_b6.md`](specs/permissions_sandbox_b6.md) | Permission policy + sandbox design | 🔄 policy layer shipped but audit gate is a name-only **no-op (M5)**; sandbox not started → **BO-7 / BO-14** |
-| [`observability_e2.md`](specs/observability_e2.md) | Observability — activity feed, cost, agent office | 🔄 Redis activity/cost feed **shipped**; distributed/OTel tracing **dead** → **BO-5** |
-| [`chat_ux.md`](specs/chat_ux.md) | **Chat master** — thinking/progress/tool rendering (absorbed the two archived chat audits) | 🔄 Phase 1 shipped; §12 AG-UI event backlog open |
-| [`email_app_master_plan.md`](specs/email_app_master_plan.md) | **Email master** — consolidated state + prioritized completion roadmap (absorbed the inventory, parity plan, tool plan; evidence in `specs/archive/email_feature_review_2026-07.md` — archived 2026-08-01) | 🔄 Phase 1 "stop the lying" open; #113 sweep armistice done |
-| [`task_manager_app.md`](specs/task_manager_app.md) | **Task Manager (GTD)** — client + `task-manager` agent + provider layer | 🔄 capture/clarify/organize + provider **sync-pull** + Engage "Now" live; **Waiting-For live 2026-08-02** (grouped view + overdue/stale flags; `gtd_waiting.expected_by` = an explicit promise only — NULL ⇒ the overdue line reads the item's live `due_at`, never a derived copy); open: follow-up nudges (owner-gated), Action-Broker-gated push, Weekly Review, Horizons |
-| [`task_manager_harness_2026-07.md`](specs/task_manager_harness_2026-07.md) | Task-manager × harness engineering (app-layer sibling) | 🔄 Tier 1 shipped (2026-07-03); Tier 2 planned |
-| [`project_management_app.md`](specs/project_management_app.md) | **Projects app (WS-27)** — native org-level project management in the People Center, sliced into every Center as (app + scope): departments→projects→subprojects→tasks→subtasks (`pm_*`, Paca-shape two-self-FK hierarchy), grant-based scoping on the shipped `email\|group:<slug>\|org` vocabulary, per-view fractional ordering, single activity spine; ClickUp two-way coexistence sync (three-way field merge, broker-gated push — **blocked on BO-1a/BO-1b**) then cutover + retirement; personal `/tasks` mirror via an internal provider; `pm.*` events feed `/workflows` and assign-to-`agent:<name>` dispatches real runs. **Read §8 D-PM-8/9/10 (owner-answered 2026-08-06) before building:** no portfolio layer (grants are the only grouping axis) · agent edits to ClickUp-linked tasks are treated exactly like human edits, and D-PM-9's Cost paragraph names what that does and does not guarantee · Spaces map to Centers explicitly from agent-proposed suggestions, an agent may propose a mapping and must never apply one, and an unmapped Space still imports in full | 🟢 **a + b + d + e BUILT 2026-08-06** (schema + grant read model; ClickUp importer + mapping plan; `/projects` UI + Center projections; the personal lens). ⚠️ **D-PM-6 was REVISED 2026-08-06** — one task store, not a mirror: read it before touching `/tasks`. **Not deployed, and neither import endpoint has been run**; c gated on BO-1a/BO-1b; f, g, h open |
-| [`people_center_app.md`](specs/people_center_app.md) | **People Center (WS-28)** — the directory, person page, org chart, capability search and seats matrix, plus the four seams where People meets Projects. Owns **surfaces, not facts** — every fact is cited to its owning spec. Read §2 first: there are **two people stores on purpose** (`app_user` = can they sign in; `gtd_people` = who are they and what can they do), the directory must include people with no login, and migration 49's key shape (UNIQUE on `name`, nothing on `email`) makes the join ambiguous until WS-28a fixes it | 🔲 spec'd 2026-08-06, nothing built |
-| [`paca_pm_research_2026-08.md`](specs/paca_pm_research_2026-08.md) | **Paca PM-platform research** — `Paca-AI/paca` v0.11.0 deep dive (Apache-2.0; patterns, no code): hierarchy/statuses/ordering/views data model, trigger→condition→action automation graph, assignment→agent dispatch chain, MCP tool-design lessons, with a 14-row adopt/adapt/refuse table annealed into WS-27 | 🟢 research complete (reference-only, owns no work) |
-| [`llm_caching_memory.md`](specs/llm_caching_memory.md) | Prompt caching (ADR-008) + session memory | 🔄 caching **shipped & wired**; session-memory shipped but **inert by default** (→ BO-21); Phase 7 open |
-| [`mcp_plugin_integration.md`](specs/mcp_plugin_integration.md) | MCP servers vs Claude plugins vs REST | 🔄 MCP half **built** (`_inject_mcp_servers`); plugin store not started |
-| [`tenancy_and_visibility.md`](specs/tenancy_and_visibility.md) | **Tenancy + visibility — the architecture of record for who can see what.** Records two owner calls of 2026-08-03: (a) **the tenant boundary is THE DEPLOYMENT** — one deployment per tenant, row-level org isolation explicitly NOT built, `organization_id` stays a label not a mechanism; (b) the **visibility model** private → Center → org plus ad-hoc cross-Center groups by invite, mapped onto the shipped `email \| group:<slug> \| org` subject vocabulary. Also answers "what makes a project a team's project" (an explicit `group:` grant), carries the per-surface gap table for going app by app, and names what is out of scope (row-level tenancy, org switcher, multi-org users). **Read before designing any sharing or scoping on a new surface** | 🟢 architecture of record (owner-answered 2026-08-03) |
-| [`backup_and_restore.md`](specs/backup_and_restore.md) | **Backup & restore (BO-23)** — the measured recovery position (Hostinger VM images only: weekly, 2 retained, newest 5 days old, ~58 min, whole-machine granularity), plus `scripts/backup_db.sh` / `scripts/restore_db.sh` and the runbook. `apply_migrations.sh` now **fails closed** without a pre-migration dump. ✅ **Scheduling and the first restore both closed 2026-08-05**: `acb-backup.timer` installed and enabled (nightly 02:30 UTC, `Persistent=true`), and the deep verify has now actually run — `Result=success`, `live=228 restored=228`, `restore verified`. ⚠️ Running it for real immediately caught a bug the timer would have hidden: the verify log went to `/tmp`, and `fs.protected_regular=2` forbids **even root** from opening an existing file there owned by another user, so every nightly run would have exited 1 with the dump itself perfectly fine (fixed to `$DEST`, PR #359). **`BACKUP_REMOTE` is DEFERRED by owner decision 2026-08-05** (§4.2) — accepted risk: backups survive a bad migration or a dropped table, but **not** losing the disk, box or provider account, where recovery falls back to the weekly two-deep Hostinger VM image (§1). The script warns on every run by design; **do not silence the warning to make it green** | ◐ scheduled + restore-verified 2026-08-05; off-box copy deferred by decision |
-| [`deploy_delivery_path.md`](specs/deploy_delivery_path.md) | **Deploy delivery path (WS-25)** — how a commit on `main` becomes running code on the VPS, and why it currently does not. ⚠️ **Read the §0 correction first:** this spec's original claim that five PRs were stranded "including the OAuth authorize fix" was **wrong** — #354/#355/#356 are live, because one successful deploy `git reset --hard`s to `origin/main` and lands everything merged up to that instant. Only #357 + #358 are stranded, and they are documentation plus one script: **zero production impact to date**, and the remediation needs no deploy at all. Measured: GitHub's runners cannot reach the box **on any port** (`Connection timed out` *and* `workbench=000000`), while the box was idle, unrebooted, and answering the operator in 240 ms — and reaches GitHub outbound in 29 ms. **Inbound broken, outbound fine**, which is the input to every option. ⚠️ Read §3 before proposing a pull-based fix: `DEPLOY_SCRIPT` is a 435-line script living only in `deploy.yml`'s `env:`, so the naive version duplicates it and creates two deploy paths that drift; and a box running the script *from the checkout* has it `git reset` out from under bash mid-read. §6 is the hand-driven stopgap, whose preconditions (a *tested* restore, a live backup timer) are true as of 2026-08-05 09:29. **Blocks `GATEWAY_INTERNAL_TOKEN` rotation** — the prescribed method is a redeploy | 🔴 BROKEN (measured 2026-08-05); all acceptance OWNER-GATE |
-| [`user_management_contract.md`](specs/user_management_contract.md) | **⭐ READ THIS BEFORE BUILDING OR MODIFYING ANY APP.** The binding contract for identity, membership and authorization — the four-hop identity chain, the member lifecycle and every door between its states, the permission vocabulary and the one rule about extending it, and **ten rules each learned by breaking it** (never navigate the browser at the gateway; never add a route to `PUBLIC_ROUTES` to make it reachable; never take the acting identity from a query parameter; the `/admin` floor is per-route; 404 never 403; keyword-only projections; what a destructive route owes; report the cascade; hiding a control is a courtesy; case-insensitive both sides). **It owns RULES, not FACTS** — every fact is cited to its owning spec, and anchors are symbols rather than line numbers because this corpus has repeatedly shipped stale ones. §5 is the trap list with the incident that found each; §6 is what is NOT closed | 🟢 Binding (2026-08-05) |
-| [`colleague_onboarding.md`](specs/colleague_onboarding.md) | **Colleague onboarding (WS-24)** — the readiness gate before member #2 (four blocking items, AGENT-SAFE vs OWNER-GATE, each with a done-when), the invite → role → Center-group → verify runbook against the real endpoints, and **THE CAPABILITY MATRIX**: what a colleague on each role can actually see, per app, every cell carrying the `file:line` that settles it (and `UNVERIFIED` where it could not be established). Executable half: `scripts/onboarding_preflight.py` — **agent-safe to write, `--mode local` is an agent's only mode.** Read §3.0 before quoting any role's grants: they come from **two** migrations, and `data:org:read` grants nothing (D14). §6 is the provisioning gap (N6): an unprovisioned sign-in used to be logged and discarded, so nobody could see who was locked out — **N6a built + repaired twice 2026-08-04** (migration 143 `access_request`, `resolve_access(record_request=)`, `/admin/members/requests`, a Requests tab). Read §6 *Repair round 2* before quoting done-when 7: it holds the **approve matrix** (what approving does about an address that already has an `app_user` row — refuse for `suspended`/`removed`, leave an `active` member's roles alone, provision only `invited`/absent) and supersedes dw7's "approving twice is not an error". **Merging it is OWNER-GATE** because the deploy replays migrations | 🔴 NOT READY — G4 CLOSED, **3 blockers open** (Caddy strip, `GATEWAY_INTERNAL_TOKEN`, BO-23 backups) |
-| [`org_access_control.md`](specs/org_access_control.md) | **Org access control / multi-tenant user management** — members, roles, per-user allow/deny overrides, feature + agent gating, per-member integration credentials, default-deny auth. **§10 is the handoff contract for the multiplayer agent collaboration workstream — read it before designing multiplayer** | 🟢 Phase 1 shipped; remaining scope (modules/teams, session sharing, transcript + memory exposure) **transferred to multiplayer collaboration** |
-| [`multi_user_organization_research.md`](specs/multi_user_organization_research.md) | Multi-user / org account research — identity, roles, tenancy, memory + credential scoping, SaaS multi-tenancy | 🔄 §4 identity/roles now implemented via `org_access_control.md`; §5 modules, §7 memory scoping, §8 credential scoping remain research. ⚠️ **§9 entity-graph RLS and §17 SaaS tenancy are SUPERSEDED for planning purposes by `tenancy_and_visibility.md` §1 + §6** (2026-08-03 owner call: one deployment per tenant; row-level org isolation explicitly not built). Read them as research into a path that was considered and declined, not as queued work |
-| [`chat_agent_framework_review_2026-07.md`](specs/chat_agent_framework_review_2026-07.md) | **Chat + agent framework review** — dual-runtime verdict (MAF framework, Copilot as coding engine), orchestration/memory/artifact/HITL/co-authoring gaps, prioritized plan | 🟢 review complete |
-| [`single_agent_chat_bug_audit_2026-07.md`](specs/single_agent_chat_bug_audit_2026-07.md) | **Single-agent chat bug audit** — past issues verified fixed; 7 confirmed live bugs (Tier-1 loop-trip crash, Copilot retry duplication, unbounded resumed-session context, relay truncation/ack holes) + fix plan | 🟢 audit complete |
-| [`generative_ui_2.md`](specs/generative_ui_2.md) | **Generative UI 2.0** — immersive HITL UI: surface(panel)/hitl(blocking) on emit_generative_ui, 11-template library (recipe/flight/train/form/optionPicker…), side-panel genUI tabs, scenario→element map | 🔄 Phase 1 shipped |
-| [`agent_coding_skill.md`](specs/agent_coding_skill.md) | **Agent coding skill** — Copilot SDK as a capability for MAF agents: `code_task` (bounded coding session, manifest-first `agent-data/SCRIPTS.md` contract) + `run_script` (zero-LLM reuse); blob-store-durable scripts, workspace jail + secret-scrubbed subprocess env | 🟢 Phase 1 shipped |
-| [`drawio_integration.md`](specs/drawio_integration.md) | **draw.io** — architecture, tickets ST-DRW-01…13 (master) | 🔲 proposed — **genuinely unbuilt** |
-| [`drawio_diagram_svc_contract.md`](specs/drawio_diagram_svc_contract.md) | draw.io — `diagram-svc` wire contract (sub-doc of the master) | 🔲 proposed — unbuilt |
-| [`note_taker_app.md`](specs/note_taker_app.md) | **AI Note Taker (`/notes`)** — browser record (mic + Chromium tab audio) → pluggable STT (`acb_stt`: BYOK cloud + self-host faster-whisper/WhisperX + open diarization) → grounded notes via `acb_llm` template compiler → HITL action-items→`/tasks`, recap→`/email`, share→`/chat`; activates the dormant `meeting`/`action_item` tables | 🔄 slice 0 built (migration 94, `acb_stt`, gateway `routes/notes/`, upload→transcribe→segments UI); slice 1 (recorder + SSE + notes generation) next |
-| [`note_taker_research_2026-07.md`](specs/note_taker_research_2026-07.md) | Note Taker — research appendix (sub-doc): Meetily deep dive, 18-project landscape survey, mid-2026 ASR/diarization SOTA, browser-capture constraints, license watch-list | 🟢 research complete |
-| [`whatsapp_calls_note_taker.md`](specs/whatsapp_calls_note_taker.md) | **WhatsApp calls → Note Taker** — feasibility study + UX design for note-taking on WhatsApp voice calls: the four capture surfaces (Cloud API Business Calling · WhatsApp Web · whatsmeow+meowcaller · device upload), why group calls are impossible officially and only reachable via the unofficial bridge, the "notetaker is a contact you add to the call" UX, and the consent model | ✅ **Surface C shipped + deployed 2026-08-02** — dialer, chat Call button, two-way browser audio, server-side recording + playback, readiness diagnostics (§12). Transcription not yet wired; Phase A (official Cloud API 1:1) still gated on Meta enabling calling for the WABA |
-| [`workflows_app.md`](specs/workflows_app.md) | **Workflows app (`/workflows`)** — visual automation builder: DB-persisted graphs compiled to MAF Workflows, webhook/schedule/manual triggers, Module Studio (conversational pure-transform code modules), served node catalog. Engineering RFC: `docs/workflow-editor/README.md`. Policy: ADR-028 | 🔄 Slices 1+2 built (migration 132, gateway `routes/workflows/` incl. copilot + event triggers + approval pause/resume via the Action Broker inbox, `/workflows` editor) |
-| [`department_centers.md`](specs/department_centers.md) | **Department Centers** — one platform, many projections: nomenclature (Center/module/group/Workshop), nav IA (Personal Center / Centers / Studio / Admin), `center.*` feature gating, and the Phase B–E work plan (groups admin UI → scoped slices → dashboards/Company Center → AI budgets). Registry: `workbench/control_plane/src/lib/centers.ts` | 🔄 Phase A shipped (nav scaffold, `/centers/<slug>` landings, migration 140); Phase B (groups admin UI) shipped pending review. **Phase C is now four lettered bullets with per-item acceptance and gate labels (2026-08-03): C1 tasks team slice 🟢 AGENT-SAFE (grant table = D13, no `role` column; a caller-reachable `POST/DELETE /tasks/projects/{id}/grants` is a done-when, not an implied one) · C2 shared mailboxes 🟢 AGENT-SAFE for the doc action only, build blocked — no owner in fact · C3 team-instanced agents 🟢 narrow, and its migration is pre-provisioning with columns intentionally unread (the roster it pointed at names seven agents that do not exist) · C4 per-Center approvals 🔴 OWNER-GATE.** Read C3's two trap blockquotes before touching any agent's `instancing` |
-| [`skills_registry.md`](specs/skills_registry.md) | **Skills registry + per-agent skill toggles (WS-23)** — code-declared skill families with measured token cost, Integrations → Skills catalog tab, per-agent enable/disable stored in `agent_skill_setting` (intersection-only, core floor non-toggleable), tools addendum generated from the enabled set | 🔄 S1+S2+S3-generation shipped pending review 2026-08-01; remaining: owner-gated `SKILLS_FAIL_CLOSED` flip (ships OFF) |
-| [`skills_scope_out.md`](specs/skills_scope_out.md) | **Skills scope-out (WS-23 S3)** — evidence-based general-vs-specialised classification of the injected skill families: per-agent recommendation table, the GENERAL `DEFAULT_PROFILE` (core/memory/workflows/apps), SPECIALISED families (history→orchestrator, coding→apis-config), flip checklist + measured token costs | 🔲 proposal for owner review 2026-08-01; the fail-closed flip is owner-gated and OFF |
-| [`../work_plan.md`](work_plan.md) | **Work Plan of Record — the dispatch board.** Single sequencing doc for independent-agent dispatch: WS-0..22 workstreams with gates, the agent-ready spec contract (7 rules + R1–R4), decisions D1–D9 resolving cross-doc conflicts, the single-owner registry for duplicated work, the doc-remediation backlog, and the owner-gate registry. **Read before dispatching any agent on spec'd work; for ordering/ownership it wins over every spec** | 🟢 active (2026-07-31 audit); WS-0 Tier-1 doc fixes are the first dispatch |
+| [`saas_multitenancy.md`](specs/saas_multitenancy.md) | **⭐ SaaS multi-tenancy (WS-29)** — architecture of record for selling CommandCenter: tenancy = `organization_id` + RLS at the connection seam (D15), modules/entitlements, AI credit resale, billing; §6 blockers; §11 tickets MT-0…MT-5 | 🟢 architecture of record (2026-08-08); Phase 0 built; H1 scratch-verified 2026-08-09, prod apply = PR #404 |
+| [`saas_multitenancy_handover.md`](specs/saas_multitenancy_handover.md) | **⭐ WS-29 execution runbook** — H1→H8 with gates; §0 paste-ready brief; H2 (561 call sites) is the long pole; H2-before-H3 is non-negotiable | 🟢 in execution — H1 scratch gate passed 2026-08-09 |
+| [`saas_multitenancy_implementation.md`](specs/saas_multitenancy_implementation.md) | Multi-tenancy build shapes: RLS migration template, `tenant_session()` seam, ratchets, control-plane DDL, runbooks, ten-trap table | 🟢 binding build reference (2026-08-08) |
+| [`tenancy_and_visibility.md`](specs/tenancy_and_visibility.md) | **Visibility architecture of record (§2–§5)**: private → Center → org ladder, `group:` project grants, per-surface gap table. ⛔ §1/§6 tenancy half superseded 2026-08-08 by D15 | 🟢 for visibility; ⛔ §1+§6 superseded |
+| [`user_management_contract.md`](specs/user_management_contract.md) | **⭐ Read before building/modifying ANY app** — identity chain, lifecycle, permission vocabulary, eleven binding rules (R11 = tenant never from input) | 🟢 binding (2026-08-05; R11 added 2026-08-08) |
+| [`org_access_control.md`](specs/org_access_control.md) | Intra-org access model: members, roles, overrides, feature gating, default-deny auth (⚠️ header notes the per-deployment framing predates D15) | 🟢 Phase 1 shipped; tenancy axis reopened as WS-29 MT-1a/H6 |
+| [`colleague_onboarding.md`](specs/colleague_onboarding.md) | **WS-24** — readiness gate before member #2, invite runbook, role×app capability matrix, `scripts/onboarding_preflight.py` | 🔴 2 gates + 1 decision open (G1 Caddy · G2 token · N5); G3 backups closed 2026-08-07 |
+| [`multi_user_organization_research.md`](specs/multi_user_organization_research.md) | Multi-user/org research. §17 is background to WS-29; **§17.3's header-based tenant resolution is REJECTED by name** (R11) | 🔄 research; input to `saas_multitenancy.md` |
+| [`crm_app.md`](specs/crm_app.md) | **CRM app (WS-26)** — native CRM + Zoho retirement; sync engine, agent tools (read + confirm-gated write), reports | 🟢 a–g merged + deployed; D5 autolead PR #403 open; h/i/e open |
+| [`project_management_app.md`](specs/project_management_app.md) | **Projects app (WS-27)** — native PM + ClickUp retirement; `pm_*` hierarchy, grant-scoped views, automation, one task store (D-PM-6) | 🟢 a–n merged; c/g/h gated; §11.12 open defect |
+| [`people_center_app.md`](specs/people_center_app.md) | **People Center (WS-28)** — directory, org chart, capability search, seats; two people stores on purpose | 🟢 a+b+b-write built; c–e dispatchable; f owner-gate |
+| [`task_manager_app.md`](specs/task_manager_app.md) | **Task Manager (GTD)** — capture/clarify/organize/engage + provider sync (WS-18) | 🔄 Waiting-For built pending review; Weekly Review needs its JSON contract |
+| [`task_manager_harness_2026-07.md`](specs/task_manager_harness_2026-07.md) | Task-manager × harness engineering | 🔄 Tier 1 shipped 2026-07-03; Tier 2 planned |
+| [`task_manager_hr_planning_and_memory.md`](specs/task_manager_hr_planning_and_memory.md) | HR/people data + capability layer (WS-27/WS-28 read it, never rebuild it) | 🟢 design of record (2026-07-16) |
+| [`email_app_master_plan.md`](specs/email_app_master_plan.md) | **Email master** — consolidated state + completion roadmap (WS-17) | 🔄 live daily-driver; 3 owner calls pending; 2nd mailbox connected 2026-08-05 |
+| [`calendar_focus_os.md`](specs/calendar_focus_os.md) | **Calendar / Focus OS** — §9 canonical acceptance for F2/F3; §5 canonical `gtd_time_blocks` (WS-21) | 🔄 F0+F1 shipped; F2 = four slices |
+| [`calendar_timeboxing.md`](specs/calendar_timeboxing.md) | Calendar timeboxing P0–P4; §13 canonical for P4 external sync | 🟢 P0–P3 shipped; P4 owner-gated (OAuth creds) |
+| [`calendar_ai_review.md`](specs/calendar_ai_review.md) | Calendar AI review record (cited by migrations 92/97/100) | 🟢 review record, triaged |
+| [`calendar_ux_review.md`](specs/calendar_ux_review.md) | Calendar UX audit; sole home of block-reminders item | 🟢 audit record |
+| [`note_taker_app.md`](specs/note_taker_app.md) | **AI Note Taker (`/notes`)** — record → STT → grounded notes → HITL actions (WS-19) | 🔄 slices 0–2 built + bot Phase 1; share-to-chat open |
+| [`note_taker_research_2026-07.md`](specs/note_taker_research_2026-07.md) | Note Taker research appendix | 🟢 research complete |
+| [`meeting_bot_platform_plan.md`](specs/meeting_bot_platform_plan.md) | Meeting-bot joining layer (RTMS, Attendee ELv2 — ⚠️ resale re-evaluation flagged 2026-08-09) | 🟢 plan of record (2026-07-30) |
+| [`live_meeting_copilot.md`](specs/live_meeting_copilot.md) | Live meeting copilot | 🔄 Phases A–D built (~2026-07-28); E planned |
+| [`whatsapp_message_manager.md`](specs/whatsapp_message_manager.md) | **WhatsApp manager** — W0–W14 (WS-20 activation) | ✅ built; activation owner-gated (Meta review) |
+| [`whatsapp_calls_note_taker.md`](specs/whatsapp_calls_note_taker.md) | WhatsApp calls → Note Taker (four capture surfaces) | ✅ Surface C shipped 2026-08-02 |
+| [`workflows_app.md`](specs/workflows_app.md) | **Workflows app** — graphs → MAF, triggers, Module Studio (WS-11; D6 winner) | 🔄 Slices 1+2 built; Slice 3 = 8.3a/b/c |
+| [`department_centers.md`](specs/department_centers.md) | **Department Centers** — Centers as projections, nomenclature (R3), Phase B–E plan (WS-13…16) | 🔄 Phase A+B built; C re-audit flag on C1 |
+| [`agent_architecture.md`](specs/agent_architecture.md) | **Agent architecture A0→C** (WS-8) — single runtime, manifests, declarative builder; §12.1 read-first (unwired substrate) | 🔄 A0 half done; §12.2 = tickets |
+| [`agent_file_and_memory_framework.md`](specs/agent_file_and_memory_framework.md) | Agent file + memory framework (canonical contract) | 🟢 Parts 1–2 built |
+| [`agent_persistence_implementation.md`](specs/agent_persistence_implementation.md) | Agent persistence (blob store) implementation | 🟢 live (PR #60 merged) |
+| [`agent_coding_skill.md`](specs/agent_coding_skill.md) | `code_task` + `run_script` — Copilot SDK as MAF capability | 🟢 Phase 1 shipped |
+| [`agent_platform_hardening_2026-07.md`](specs/agent_platform_hardening_2026-07.md) | Platform hardening audit; §1.2 = isolation-ladder table of record (⚠️ §1.5 T2 parking re-scoped by D16) | 🔄 review record |
+| [`permissions_sandbox_b6.md`](specs/permissions_sandbox_b6.md) | Permission policy + sandbox (WS-3; P5-a…d) | 🔄 P5-a/b.1 shipped; T2 parked → pooled-cutover precondition (D16) |
+| [`memory_architecture.md`](specs/memory_architecture.md) | Memory tiers (WS-9: 3b/3c/4; 3a′ remainder is WS-10's) | 🔄 3a′ substrate shipped |
+| [`llm_caching_memory.md`](specs/llm_caching_memory.md) | Prompt caching + session memory | 🔄 caching shipped; session memory inert (BO-21) |
+| [`multi_agent_orchestration.md`](specs/multi_agent_orchestration.md) | Framework uplift — **Phase 4 only** lives (D6; WS-12) | 🔄 0 dispatchable PRs (owner target choice) |
+| [`skills_registry.md`](specs/skills_registry.md) | **Skills registry + per-agent toggles** (WS-23) | 🔄 S1–S4 built pending review; flips owner-gated |
+| [`skills_scope_out.md`](specs/skills_scope_out.md) | Skills scope-out: general vs specialised, flip checklist | 🔲 proposal for owner review |
+| [`groups_sessions_authority.md`](specs/groups_sessions_authority.md) | Groups, sessions, intersection authority | 🟢 steps 1–4 shipped |
+| [`mcp_plugin_integration.md`](specs/mcp_plugin_integration.md) | MCP servers vs plugins vs REST | 🔄 Phase A shipped (MAF-side gap = WS-8c) |
+| [`observability_e2.md`](specs/observability_e2.md) | Observability §7 (WS-6a–i) | 🔄 6a+6c built; 6b/d/e held NO-GO |
+| [`backup_and_restore.md`](specs/backup_and_restore.md) | **Backup & restore (BO-23)** — scripts, timer, restore runbook | 🟢 scheduled + restore-verified; off-box copy deferred by owner |
+| [`deploy_delivery_path.md`](specs/deploy_delivery_path.md) | **Deploy delivery (WS-25)** — commit → box | 🟡 recovered 2026-08-06/07 UTC; tip health-verify failure open |
+| [`harness_hardening_2026-07.md`](specs/harness_hardening_2026-07.md) | Harness gap queue (HH-1..8) | 🔄 HH-1/4/5 shipped; 6/7 deferred |
+| [`competitive_hardening_2026-07.md`](specs/competitive_hardening_2026-07.md) | Hermes/OpenClaw learnings (CH-*) | 🔄 annealed; BO-20 items building |
+| [`multiplayer_prior_art_qm_2026-08.md`](specs/multiplayer_prior_art_qm_2026-08.md) | `qm` prior art (QM-*) | 🟢 reference-only |
+| [`paca_pm_research_2026-08.md`](specs/paca_pm_research_2026-08.md) | Paca PM research | 🟢 reference-only |
+| [`chat_ux.md`](specs/chat_ux.md) | Chat master — §12 VII–XI live remainder | 🔄 Phase 1 shipped; §12.3 superseded |
+| [`chat_agent_framework_review_2026-07.md`](specs/chat_agent_framework_review_2026-07.md) | Chat + framework review | 🟢 review complete |
+| [`single_agent_chat_bug_audit_2026-07.md`](specs/single_agent_chat_bug_audit_2026-07.md) | Single-agent chat bug audit | 🟢 audit complete |
+| [`generative_ui_2.md`](specs/generative_ui_2.md) | Generative UI 2.0 (HITL templates) | 🔄 Phase 1 shipped |
+| [`core_module_map.md`](specs/core_module_map.md) | Living architecture hub (orchestrator module map) | 🟢 living reference |
+| [`drawio_integration.md`](specs/drawio_integration.md) | draw.io master (ST-DRW-01…13) | 🔲 unbuilt; needs an owner (WS-22) |
+| [`drawio_diagram_svc_contract.md`](specs/drawio_diagram_svc_contract.md) | draw.io wire contract | 🔲 unbuilt |
+| [`../work_plan.md`](work_plan.md) | **Work Plan of Record — the dispatch board.** WS-0…WS-29 with gates; contract + R1–R5; decisions D1–D18; single-owner registry; owner-gate registry. **Read before dispatching any agent; for ordering/ownership it wins over every spec** | 🟢 active; consolidation pass 2026-08-09 |
 
 ---
 
 ## Non-Negotiable Constraints (AI Agents Must Respect These)
 
-| # | Constraint |
-|---|---|
-| 1 | **No in-app agent/skill *code* editing.** All code authoring is VS Code + Git. The Workflows app is the sanctioned carve-out (ADR-028): workflows are DB-persisted *configuration* orchestrating code-authored agents, compiled to MAF Workflows — never generated agent code, never a second runtime. |
-| 2 | **No credentials in agent or skill repos.** `config.json` declares integration names; Core Integration Registry holds the actual secrets. |
-| 3 | **Self-mutation max_mutation_attempts = 1.** One PR per failure event, no exceptions. |
-| 4 | **No autonomous writes** to ClickUp/Zoho/Odoo until Action Broker + authority tiers are live (Phase 4). |
-| 5 | **Git is the single source of truth** for all agent artefacts. All changes flow through PRs with eval gates. |
-| 6 | **MAF (Microsoft Agent Framework) is the sole agent execution runtime** — for all event-driven, webhook-triggered, multi-agent workflows, AND interactive operator chat (via AG-UI endpoint). The Copilot SDK is used only for self-mutation containers (`acb-mutation-runner`). No LangGraph. No deepagents. No n8n. No `copilot_chat.py` SSE path. |
-| 7 | **No Theia / browser IDE.** That scope was explicitly cut. |
-| 8 | **Source systems are authoritative.** CommandCenter is a read-mostly mirror with approval-gated writes. |
-
----
-
-## Architecture Note: Single MAF Runtime (interactive + background unified)
-
-CommandCenter uses **one execution runtime: MAF**. Interactive chat (via AG-UI endpoint) and background event-driven agents use the same MAF agents. The GitHub Copilot SDK is used only inside mutation containers.
-
-| | MAF (unified runtime — background + interactive chat) | Copilot SDK (mutation container only) |
-|---|---|---|
-| **Triggered by** | Webhooks, cron, ambient events; interactive chat (AG-UI) | Self-mutation errors only (`Self_Mutation_Node` spawns container) |
-| **Entry point** | `POST /agent/run`, `POST /agent/webhook/{source}`, `POST /copilot/chat` (AG-UI) | Spawned via `docker run --rm -d` by `Self_Mutation_Node` |
-| **Agent definition** | `agents.py` + `config.json` in agent repo — exports `build_agents() → list[Agent]` | `AGENTS.md` in mounted repo clone + `mutation_runner.py` prompt |
-| **Credentials** | Integration Registry → `mcp_servers=` config in `GitHubCopilotAgent` | BYOK via LiteLLM env var in container; no Integration Registry access |
-| **LiteLLM path** | Always (all model calls + MAF LiteLLM client) | Yes (BYOK mode forced) |
-| **Durable state** | MAF native workflow engine (in-process asyncio, Phase 0); DurableTask (Phase 2) — HITL via Action Broker (Postgres `approval_queue`) | None (container self-destroys after run) |
-| **Multi-agent** | `HandoffBuilder` (triage→specialist), `ConcurrentBuilder` (fan-out), `GroupChatBuilder` | N/A |
-
-### Resolved / Current State
-
-1. **AG-UI wiring (WBS 0.6)** — ✅ Done. `add_agent_framework_fastapi_endpoint(app, agent, "/copilot/chat")` is wired in gateway startup (`apps/gateway/gateway/main.py`). (CopilotKit was removed in M2.5; the Control Plane chat now consumes AG-UI over SSE via `api/agent/chat/route.ts`.)
-
-2. **Webhook → MAF dispatch (WBS 0.7)** — ✅ Done. `agent.py` dispatches webhook events to the MAF executor (`orchestrator.executor.run_agent`). The old Copilot-runtime dispatch arm (`runtime: copilot`) has been removed.
-
-3. **Observability** — the `langfuse` Python package is not installed and no OTLP exporter is wired; a Langfuse **container** exists in `infra/docker-compose.yml` but is **opt-in behind `--profile obs` and dormant**. Real telemetry today is the bespoke Redis activity/cost feed (`acb_common/activity.py`). Standing up distributed tracing is tracked as **BO-5** (audit H9).
-
-4. **Self_Mutation_Node** — implemented as a standalone async module (`apps/orchestrator/orchestrator/mutation.py`); no LangGraph. Formalising it as a MAF workflow step is pending (WBS 1.1).
+The authoritative list is **root `AGENTS.md` → Global Constraints (1–11)** — read it there; this index does not duplicate it. Headlines only: no in-app code editing (Workflows app is the sanctioned config-only exception) · no credentials in agent/skill repos · self-mutation = 1 attempt, monorepo targeting is MT-0b-gated · no autonomous source-system writes outside the Action Broker path · git is the source of truth · MAF is the sole agent runtime (Copilot SDK = chat tier + mutation sandbox only) · no Theia · source systems authoritative · new execution features default to MAF · auth by construction + the eleven `user_management_contract.md` rules · **multi-tenancy is `organization_id` + RLS (D15), R5 binds every PR tenant-ready, and no agent ever gets a raw-SQL tool or a database connection**.
 
 ---
 
@@ -186,31 +117,29 @@ CommandCenter uses **one execution runtime: MAF**. Interactive chat (via AG-UI e
 
 | Term | Meaning |
 |---|---|
-| **Core Engine** | The CommandCenter FastAPI server + MAF workflow engine + Dynamic Agent Loader. Lives in `CommandCenter-Core`. |
-| **Dynamic Agent Loader** | Python module that `git pull`s the target agent repo and `importlib`-imports `agents.py` at runtime, calling `build_agents()` to get MAF `Agent` instances. See `packages/acb_skills/acb_skills/loader.py`. |
-| **Agent repo** | A GitHub repo named `agent-<name>` containing `config.json`, `agents.py`, `instructions.md`. No credentials, no skill implementations. `agents.py` exports `build_agents() → list[Agent]` where each `Agent` is a MAF `GitHubCopilotAgent` (or other MAF provider) with tools and MCP server config declared. |
-| **Skill repo** | A GitHub repo named `skill-<name>`, a pip-installable Python package with one well-typed entry function. Surfaced to agents either as a Python tool function or as an MCP server. |
-| **Integration Registry** | Core's encrypted Postgres store of all integration credentials. Admin-managed via Control Plane. |
-| **AgentContext** | The MAF orchestration context; agents read credentials from MCP server config resolved from the Integration Registry. Replaces the former LangGraph `state["integrations"]` pattern. |
-| **Self_Mutation_Node** | Implemented as a standalone async module (`apps/orchestrator/orchestrator/mutation.py`); no LangGraph. Formalisation as a MAF workflow step is pending (WBS 1.1). Spawns an isolated Copilot SDK mutation container (`acb-mutation-runner` Docker image), reads failure telemetry, applies a code fix to the live clone, and opens a GitHub PR. The container receives the mutation prompt and LiteLLM BYOK credentials via env vars; the agent repo is mounted at `/workspace/repo`. |
-| **Hot-patch model** | Fix is applied to the live persistent clone immediately (recovery in minutes). The PR is the audit record + rollback trigger (close = auto rollback). |
-| **Control Plane** | Next.js browser UI at `workbench/control_plane/`. Provides chat and HITL approval queue. Not an editor. |
-| **Action Broker** | The *intended* single write path to source systems (ClickUp/Zoho/Odoo), enforcing per-action authority tiers. Lives at `apps/action_broker/`. **Current reality:** the authority-tier decision core exists but ships with **zero handlers and is not yet wired into the write path** — real ClickUp/email writes bypass it today. Wiring it is **BO-1** (P0). |
-| **Reconciler** | Nightly agent that diffs entity graph vs source systems and escalates drift. Lives at `apps/reconciler/`. |
-| **HITL** | Human-in-the-loop. Approval requests delivered via Control Plane or email/WhatsApp when operator is not at the UI. |
-| **authority tier** | read / suggest / suggest+apply / autonomous — the allowed scope of an agent's action on a specific resource type. |
-| **Annealer** | Phase 5 sub-agent that mines successful run patterns, proposes new reusable skills as PRs, and manages shadow → canary → full rollout. **Reference implementation:** Hermes Agent's "Curator" (auto-authors + prunes skills on a cycle) — see CH-7 in [`specs/competitive_hardening_2026-07.md`](specs/competitive_hardening_2026-07.md). Our differentiator is that skill proposals go through the human PR/approval gate; self-improvement *plus* enterprise HITL is something neither Hermes nor OpenClaw offers. |
+| **Core Engine** | The CommandCenter FastAPI gateway + MAF workflow engine + Dynamic Agent Loader. |
+| **Dynamic Agent Loader** | `packages/acb_skills/acb_skills/loader.py` — pulls/imports `agents.py` at runtime, calling `build_agents()`. |
+| **Agent repo** | `agent-<name>` repo (or `apps/agents/*`): `config.json`, `agents.py`, `instructions.md`. No credentials, no skill implementations. |
+| **Skill repo** | `skill-<name>` pip-installable package with one well-typed entry function, surfaced as a tool or MCP server. |
+| **Integration Registry** | Encrypted Postgres store of integration credentials, admin-managed. Per-org from migration 158 (MT-0d). |
+| **Self_Mutation_Node** | `apps/orchestrator/orchestrator/mutation.py` — spawns the isolated mutation container, applies a tested fix, opens a PR. Monorepo targeting is gated by MT-0b (`organization.first_party`). |
+| **Hot-patch model** | Fix applied to the live clone immediately; the PR is audit record + rollback trigger. |
+| **Control Plane** | Next.js UI at `workbench/control_plane/`. Chat + HITL approvals. Not an editor. |
+| **Action Broker** | The single write path to source systems (`apps/action_broker/`), enforcing authority tiers. **Live since 2026-07-13**: handlers register at six sites (ClickUp, WhatsApp, workflow, app-publish, `crm.zoho_*`); `ACTION_BROKER_ENFORCE` ships OFF (audit-and-chokepoint posture) — the flip is owner-gated behind BO-1a+BO-1b (work_plan.md WS-1). |
+| **Reconciler** | Nightly drift-diff agent at `apps/reconciler/`. |
+| **HITL** | Human-in-the-loop approvals via Control Plane (or email/WhatsApp). |
+| **authority tier** | read / suggest / suggest+apply / autonomous — allowed scope of an agent's action on a resource type. |
+| **Tenant (D15)** | An `organization_id` row isolated by FORCE ROW LEVEL SECURITY bound at the connection seam. A deployment is a *placement* (priced tier), never the boundary. |
+| **Center** | An `org_group` projection of the one platform inside a tenant — never a tenant, never a separate deployment (`department_centers.md`). |
+| **Annealer** | Phase-5 skill-mining sub-agent concept (CH-7 reference: Hermes "Curator"); proposals go through the human PR gate. |
 
 ---
 
 ## Current Phase
 
-Phases 0, 1, 1.5, 1.6 are complete and **M2 is closed**. A **foundation architecture audit (2026-07)** is now the active workstream — it found the platform's documented guarantees are materially ahead of what the code enforces, and its P0 items gate the feature roadmap. **Two backlogs, read both:**
-- **Foundation hardening (do first):** [`/FOUNDATION_BUILDOUT_CHECKLIST.md`](../FOUNDATION_BUILDOUT_CHECKLIST.md) — `BO-1..21` (+ `CH-*` in `specs/competitive_hardening_2026-07.md`, `HH-*` in `specs/harness_hardening_2026-07.md`).
-- **Feature roadmap:** [`project_plan.md`](project_plan.md) §6 — M2.9 email → M3 agent ecosystem → M4 capture → M5 write authority → M6 intelligence.
+**The dispatch board (`work_plan.md` §2) is the only current-state authority.** As of 2026-08-09:
 
-**Immediate priorities (P0 foundation first):**
-- **BO-8** rotate/purge committed secrets · **BO-2** enforce auth (never-reject → require) · **BO-1** wire the Action Broker into the write path (non-negotiable #4 is currently false) · **BO-3** mutation governance residuals.
-- **SEC-1 / R-06** — lock down public Postgres/Redis (5432/6379) on the VPS (bind `127.0.0.1`).
-- Then P1: **BO-7** sandbox, **BO-5** observability+cost, **BO-20** event-bus consumer + job queue, **BO-6** migrations.
-- Feature track (in parallel where unblocked): M2.9 email residuals; Phase 2 Zoho/Gmail ingestion (2.1/2.2) + entity resolution (2.3); Phase 1 cleanup (PR automation 1.3, BYOK metering 1.7).
+- **WS-29 multi-tenancy** is in execution: Phase 0 built; H1 (migrations 157–159) scratch-verified with the prod apply riding **PR #404** (owner's merge); H2 — converting 561 session call sites — is the long pole and dispatches after the H1 gate. MT-2/MT-3 pricing inputs were answered 2026-08-09 (D18).
+- **App workstreams run in parallel under R5** (tenant-ready by construction — owner call D18): CRM (WS-26) a–g live with autolead PR #403 open; Projects (WS-27) a–n merged; People (WS-28) a+b live; Email/Tasks/Calendar/Notes/WhatsApp per their rows.
+- **Foundation**: broker enforce flip waits on BO-1a/1b; secrets purge+rotation (WS-2/BO-8) remains the standing P0; backups scheduled + restore-verified (BO-23); deploys recovered 2026-08-06/07 UTC with one open health-verify failure at tip (WS-25).
+- **Owner-gated queue** (work_plan.md §6): PR #404 merge (H1), G1/G2 onboarding gates, enforcement flips, and the WS-26e/WS-27g cutovers.

@@ -61,18 +61,23 @@ def _gateway_url() -> str:
 
 
 def _current_user_email() -> str:
-    """The user the agent is acting for. Primary source is the memory ContextVar
-    the executor sets; the Copilot SDK runs tool callbacks in a context that can
-    drop ContextVars, so fall back to ACB_AGENT_USER_EMAIL (set by the gateway
-    per run). Without either, gateway calls are unscoped."""
+    """The user the agent is acting for: the per-run ContextVar the executor
+    binds, and nothing else.
+
+    There was an ``ACB_AGENT_USER_EMAIL`` fallback here, justified by "the
+    Copilot SDK runs tool callbacks in a context that can drop ContextVars". It
+    was one slot in a shared async process that no run ever cleared, so what it
+    supplied to a run with no identity was the LAST run's user — and to a
+    concurrent run, whichever tenant assigned it most recently. Under
+    one-organization-per-user that email IS the tenant. Resolving to ``""``
+    instead makes :func:`_headers` refuse, which is the right answer rather than
+    merely the safe one: a run nobody is attributed to has nothing to do, not
+    everything."""
     try:
         from acb_skills.memory_tools import _get_memory_user_id  # noqa: PLC0415
-        user = _get_memory_user_id() or ""
-        if user:
-            return user
+        return _get_memory_user_id() or ""
     except Exception:  # noqa: BLE001
-        pass
-    return os.environ.get("ACB_AGENT_USER_EMAIL", "")
+        return ""
 
 
 def _internal_token() -> str:
@@ -113,8 +118,8 @@ def _headers() -> dict[str, str]:
     if not user:
         raise RuntimeError(
             "No acting user for this run, so there is nobody to act as — "
-            "refusing to call the gateway as the platform itself. The run "
-            "should set ACB_AGENT_USER_EMAIL."
+            "refusing to call the gateway as the platform itself. Dispatch "
+            "the run with user_email in its payload."
         )
     return {
         "Authorization": f"Bearer {_internal_token()}",

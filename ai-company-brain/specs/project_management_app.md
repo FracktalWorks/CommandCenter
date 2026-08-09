@@ -367,6 +367,18 @@ upsert per drop (the board's cross-column drag patches whatever field `column_by
 
 ---
 
+### 5.x The standalone app groups by Center (D22 amendment, 2026-08-10)
+
+`department_centers.md` §5's dual-access rule names this app its first consumer:
+the top-level `/projects` surface's primary grouping is **by Center** — the
+caller sees each Center they hold access to (D12 membership or `group:` grant),
+containing that Center's projects and tasks; org-tier holders see all Centers in
+the same layout; a Center the caller cannot access never renders as a group
+header. This is an IA requirement on the portfolio/list views, not a new
+permission model — visibility resolves through the same grants as everything
+else. Carry into the acceptance of whichever remaining letter first touches the
+portfolio/grouping views.
+
 ## 6. Integrations — bind, don't rebuild
 
 ### 6.1 Personal tasks (`/tasks`) — the org↔personal seam this spec exists for
@@ -693,6 +705,120 @@ eval lock, and the owner performs one confirmation step per import run. **Scope 
 supersedes the earlier "pilot Space vs all Spaces" framing — scope is now a per-Space
 decision the plan step surfaces, so both a pilot and a full import are the same code path.
 
+**D-PM-11 — The timeline shows a chosen SCOPE, not every task.**
+`DECISION (agent-proposed 2026-08-08, owner delegated the choice back — "go ahead with the
+decision that you think would be best to make the product as useful as possible").`
+**ANSWERED: (b), with (c) underneath.** A Gantt of 400 rows is a
+wall nobody reads, so something has to decide which tasks earn a bar. Three candidates, and
+they are not equivalent:
+
+* **(a) A task TYPE, the Paca answer.** Paca's Timeline pre-filters to the `Epic` system type
+  and its view settings let you add others back. Clean, and it costs us a convention we do
+  not have: `pm_task_types` is per-root data with no reserved names, so "Epic" would either
+  become a seeded row every project inherits or a name-match, and a name-match is a rule that
+  silently stops working the day somebody renames a type.
+* **(b) Hierarchy DEPTH.** Top-level tasks get bars; subtasks roll up into the parent's bar
+  and expand on click. Needs no new vocabulary — `parent_task_id` already says it — and it
+  matches how the tree is already drawn everywhere else in this app.
+* **(c) Whatever the current filters select.** No new concept at all: the timeline is the
+  board's filters in a third shape, which is the rule §11.16 already holds for the calendar.
+  Honest, and it puts the wall back the moment somebody clears the filters.
+
+**Chosen: (b), with (c) underneath it** — depth decides the default and the filter bar
+still narrows, so the two compose instead of competing. **Rejected:** (a) as the primary,
+because inventing a reserved type name to make a chart legible is a data-model change in
+service of a rendering problem, and D-PM-2 put types in the hands of each project on purpose.
+**Cost:** a subtask's dates have to roll up into the parent's bar, which means the parent's
+bar is sometimes derived rather than stored, and "why does this bar not match the dates I
+typed" becomes a question the UI has to answer on the bar itself.
+
+**D-PM-12 — Does a dependency CONSTRAIN the schedule, or only describe it?**
+`DECISION (owner-delegated 2026-08-08).` The owner was given the three options and their
+costs, and answered *"go ahead with the decision that you think would be best to make the
+product as useful as possible"* — so the agent's recommendation was taken as the decision
+rather than the question being left open. **ANSWERED: (c) — constrain, but only warn.**
+Recorded this way, and not as an agent proposal, because the delegation was explicit and
+the reasoning below is what it was delegated on.
+
+This is the one that changes what the data means, which is why it is not agent-proposed.
+Jira and ClickUp both offer to **push** a dependent task's dates when you move its blocker.
+Adopting that turns `pm_task_links` from a description into a constraint:
+
+* **(a) Describe only.** Drawing an arrow records the dependency and moves nothing. This is
+  the straight extension of WS-27p, which states the position explicitly — *"blocked-ness is
+  DERIVED and SHOWN, never enforced"* — on the argument that dependencies in a real workspace
+  are frequently approximate, and a tool that will not let somebody finish work they have
+  finished is a tool they route around. **Cost:** the chart will show arrows pointing
+  backwards in time, because nothing stops a blocker being due after the task it blocks.
+  Users read that as the feature being broken.
+* **(b) Constrain, and auto-push.** Moving a blocker drags its dependents forward. What
+  people expect from Jira. **Cost, and it is not small:** one drag becomes an unbounded
+  cascade of writes across a project — every one of them a real `PATCH` with a
+  `field_change` activity and a revert (§3.8), so a single gesture can produce fifty timeline
+  rows and fifty notifications. It also directly contradicts WS-27p's stated position, so
+  taking it means striking that paragraph rather than quietly living beside it.
+* **(c) Constrain, but only warn.** The arrow goes red and the panel says "this starts before
+  its blocker finishes"; nothing is written. Keeps WS-27p's position intact, kills the
+  backwards-arrow complaint, and adds no cascade. **Cost:** somebody still has to do the
+  rescheduling by hand, which is exactly the work (b) automates.
+
+**Chosen: (c).** It is the only one of the three that neither contradicts a decision already
+made nor lets one gesture write fifty rows, and it can become (b) later behind an explicit
+per-project setting — whereas (b) cannot become (c) without taking a behaviour away from
+people who have started relying on it. **WS-27p's position therefore stands unamended:**
+blocked-ness is derived and shown, never enforced, and a schedule conflict is now shown the
+same way — a red arrow and a sentence, with nothing written.
+
+**What "useful as possible" actually argued for, since that was the brief.** The reflex
+answer is (b), because auto-push is the feature Jira advertises. But the useful half of a
+dependency is *knowing* — being told, at the moment you move something, that two tasks now
+disagree. (b) delivers that and then also silently rewrites other people's dates, which is
+where it stops being useful: the cascade lands in the timeline (§3.8) as fifty
+`field_change` rows and fifty notifications with no single act to point at, and the first
+time somebody's carefully-negotiated date moves without them touching it, they stop trusting
+the dates. (c) keeps the information and drops the part that costs trust. **What it does not
+do** is reschedule for you, and if that turns out to be the thing actually wanted, (b) is
+still reachable — as an opt-in per project, with the cascade bounded and previewed before it
+writes, which is a better version of (b) than the one that would have shipped today.
+
+**D-PM-13 — Project docs live in the KNOWLEDGE BASE; PM links to them, never owns them.**
+`DECISION (owner-answered 2026-08-09).` The Plane research (§11.19,
+`plane_pm_research_2026-08.md` §6 Q2) surfaced that free-form project documentation was
+owned by nobody: this spec assigned it to Notes, and `note_taker_app.md` §1.2 declines it.
+The owner's answer, verbatim: *"we have separately a knowledge base, so somehow the PM tool
+has to fit in with the knowledge base and be able to do that. Now everybody who creates a
+knowledge base will own it, and if it's shared with multiple people or shared across the
+team, then depending on the user access, they have access to the knowledge base document."*
+
+What that binds, stated as the integration contract:
+
+1. **PM never grows a docs surface.** Plane's Pages stays refused (P-30); the §5 non-goal
+   is now permanent, not provisional. A "project doc" is a knowledge-base document that a
+   project or task **links to**.
+2. **The KB's access model is: creator owns; shared to people or a team; visibility follows
+   the share.** That is grant-vocabulary shaped — the same `email | group:<slug> | org`
+   subjects `pm_project_grants` already uses (D12) are the natural encoding of "shared with
+   multiple people or across the team", and the KB should reuse that vocabulary rather than
+   mint a second one.
+3. **Two keys, never one.** Linking a KB document to a task does NOT widen the document's
+   audience: a viewer sees the link's title/existence only if they satisfy the *document's*
+   grants, independently of satisfying the task's. The converse also holds — a doc reader
+   doesn't gain the task. R5 applies on both sides (a non-granted viewer gets 404, never a
+   locked-item stub). This is the same two-door lesson S2-8 taught about assignees.
+4. **The PM-side shape, when the KB exists as a store:** a `pm_task_links`-style reference
+   row (task/project → KB doc id) rendered beside attachments in the panel, with the KB's
+   own grant check resolving at read time — never a copied snapshot of the doc, which would
+   silently fork access. Until the KB store lands, this decision blocks nothing in the
+   beyond-parity queue; it exists so no ticket accidentally builds doc storage inside PM.
+
+**D-PM-14 — Public read-only boards: DEFERRED.**
+`DECISION (owner-answered 2026-08-09).` *"For now, let's leave out public read-only boards.
+We will revisit it when needed."* Not built, not scheduled. The risk analysis to start from
+when revisited is `plane_pm_research_2026-08.md` §6 Q1 — the anchor-capability-URL shape, a
+physically separate route module with read-only models, no member-roster endpoint, per-board
+kill switch, and the RLS-bypass point that must be resolved before `SET LOCAL app.tenant_id`.
+Until then the gateway's posture is unchanged: no anonymous tenant-data read routes exist.
+
 ---
 
 ## 9. Tickets
@@ -888,6 +1014,166 @@ owner-scoped predicates and the `gtd_*` task tables are gone. See §7.5.
 parity sign-off, sync flips, consumer repoint, token revocation, constraint-8 amendment —
 each registered in `work_plan.md` §6).
 
+**WS-27t — the timeline, and dependencies you can draw.** ✅ **BUILT 2026-08-08.**
+Was 🟡 blocked on D-PM-12; the owner delegated the choice back on 2026-08-08 and it is
+answered as **(c) constrain-and-warn**, with D-PM-11 as **(b) hierarchy depth**. Both are
+recorded in §8 with the alternatives they beat.
+
+*Asked for directly, 2026-08-08:* **"a timeline view that can also make tasks and subtasks
+dependent on each other, with wiring them to each other, similar to how it works on Jira and
+ClickUp."** Two things, and the second is the one that matters — a Gantt chart with no
+dependency gesture is decoration, which is precisely why Gantt was a non-goal until now.
+
+**The data is already built.** This is a rendering-and-gesture ticket, not a schema one:
+
+| Needed | Status |
+|---|---|
+| `start_date` (DATE) + `due_at` (timestamptz) on every task | ✅ migration 146, surfaced at WS-27q |
+| `pm_task_links` with `blocks`, `CHECK(source <> target)` | ✅ WS-27a |
+| Cycle refusal on `blocks` (`assert_no_block_cycle`, `MAX_DEPTH`-bounded) | ✅ WS-27p |
+| Both-direction read with `direction` on each link | ✅ WS-27p `GET /tasks/{id}/relations` |
+| Blocked-count and subtask progress per row, in one aggregate | ✅ WS-27s `attach_relation_counts` |
+| Interval-overlap window query, timezone-safe | ✅ WS-27q `OVERLAPS` |
+| Move a task's dates through the ordinary write path | ✅ WS-27q `rescheduleTo` → `PATCH /tasks/{id}` |
+
+**What is genuinely new is three things.** (1) Bar geometry on a continuous date axis instead
+of a day grid. (2) `GET /projects/timeline`, or an argument for why the calendar endpoint
+serves both — it very nearly does, and the honest difference is that a timeline wants the
+LINKS for every row in the window, which is one more aggregate of exactly the shape
+`attach_relation_counts` already is. (3) The arrow gesture, which is the only part with no
+precedent anywhere in this tree.
+
+**Paca has the chart and not the wiring.** `apps/web/src/components/projects/interactions/
+roadmap-view.tsx` (438 lines, Apache-2.0) is a real Gantt and worth taking the geometry from:
+a sticky 280px task column beside a scrolling canvas, `PX_PER_DAY = 28`, month header cells
+computed by walking `Date(y, m+1, 1)`, a today line, a range auto-fitted to the data with
+seven days of padding either side, single-date tasks drawn as a one-day bar, and — the rule
+this app would have arrived at anyway — **an undated task listed on the left with no bar**,
+which is the same honesty §11.16 enforces with its `undated` count. It draws **no dependency
+arrows at all** (zero matches for arrow/svg/path/depend) and is **entirely read-only** (zero
+for drag/resize). So Paca answers "how do I lay out bars"; for the wiring, Jira and ClickUp
+are the reference and the interaction is ours to design.
+
+**Two decisions gate it.** **D-PM-11** — what earns a bar (agent-proposes hierarchy depth,
+owner may overrule). **D-PM-12** — whether an arrow constrains the schedule or only describes
+it (**owner-answer required**; the agent recommends *warn, do not push*, because auto-push
+contradicts WS-27p's stated position and turns one drag into an unbounded cascade of real
+`PATCH`es, each carrying a `field_change` activity and a notification).
+
+**Done when:** (1) a timeline view renders every task in a window as a bar from `start_date`
+to `due_at`, with undated tasks listed and unbarred; (2) `blocks` links are drawn as arrows
+between bars, in the direction WS-27p already stores; (3) dragging from one bar to another
+creates a `blocks` link through the existing endpoint, and a drag that would close a cycle is
+refused with `assert_no_block_cycle`'s existing message rather than a new one; (4) whatever
+D-PM-12 decides is implemented and its rejected alternatives are recorded; (5) the board's
+filters apply, and the parameter-coverage test §11.16 added is extended to the new endpoint
+so a filter cannot be dropped silently; (6) the geometry is pure and tested — including
+across at least three timezones, the WS-27q lesson.
+
+**Not in scope:** resizing a bar by dragging its edge (a second gesture with its own
+half-day/rounding questions), critical-path computation, and baselines. Each is a separate
+decision, and none of them is what was asked for.
+
+---
+
+### 9.1 The beyond-parity queue (minted 2026-08-09 from the Plane research, §11.19)
+
+Six tickets, in recommended build order. Each verdict traces to
+`plane_pm_research_2026-08.md` (P-numbers); ⚠️ **the AGPL wall in that doc's header binds
+every one of these** — shapes re-derived in our idiom, never translated. All of them inherit
+the standing protocol: hermetic tests against the fake, mutation-tested guards, a live
+Postgres run, and R1 (migration numbers resolved at build time — every number below is a
+description, not an assignment).
+
+**WS-27u — intake/triage: the front door.** 🟢 AGENT-SAFE *(P-1)*.
+A captured task is real from birth, parked out of sight until a human rules on it.
+Done when: (1) a migration adds a `pm_intake` join table (`task_id` unique, `status ∈
+pending|accepted|declined|duplicate|snoozed`, `snoozed_until`, `duplicate_of_task_id`,
+`source`, `source_ref`, `organization_id` per D-MT-3) and a `triage` value in the
+status-category vocabulary; (2) the **default list exclusion is one predicate in
+`core.py`** beside the visibility clause — tasks whose status category is `triage` appear
+in no board/list/calendar/timeline/search surface unless `include_triage` is passed, and
+the §11.16 parameter-coverage test is extended so no surface can drop it silently;
+(3) `POST /projects/intake` creates task+wrapper in one transaction; accept flips status
+in place (never copies), decline archives with the wrapper as provenance, duplicate sets
+`duplicate_of_task_id` and archives, snooze hides from the queue until `snoozed_until`;
+(4) all four actions write `pm_activities` rows and the wrapper survives them — provenance
+is permanent; (5) a triage rail in the UI lists pending items with the four actions;
+(6) visibility: the intake queue is scoped by the same project grants as the tasks it
+wraps — R5 applies. **Not in scope:** routing rules (auto-accept, agent screening) —
+those are `/workflows` nodes per D6, added when email capture (§6.5) lands.
+
+**WS-27v — watchers, and mentions that behave.** 🟢 AGENT-SAFE *(P-2, P-20 part)*.
+Done when: (1) migration adds `pm_task_watchers(task_id, watcher, organization_id)`,
+unique per pair; (2) commenting, editing, assigning, or being mentioned auto-subscribes
+(idempotent), and explicit watch/unwatch endpoints exist; (3) the notification audience
+becomes watchers ∪ assignees, still filtered by the recipient's actual visibility
+(`resolve_visibility_for` stays the gate — Plane's membership-only check is the
+counterexample, not the model); (4) **mention diffing**: editing a comment or description
+notifies only *newly added* mentions — proven by a hermetic test that edits a comment
+twice; (5) the actor of a change is never notified of it (existing rule, re-asserted over
+the new audience); (6) the unread endpoint returns `{total, mentions}` separately and the
+bell shows the mention count distinctly. **Not in scope:** notification snooze/archive.
+
+**WS-27w — read-path and history hardening.** 🟢 AGENT-SAFE *(P-3, P-5, P-6, P-7, P-21)*.
+A basket of small corrections, each independently shippable:
+(1) **archive guard** — archiving a task whose status category is not done/cancelled is
+422, with the category named in the message; (2) **activity meta rule** — `field_change`
+entries for FK-valued fields carry `{field, old_id, new_id, old_label, new_label}`, and a
+structural test over `record_activity` call sites enforces it; (3) **description-edit
+coalescing** — a same-actor consecutive description/comment-body edit updates the prior
+activity row's timestamp instead of appending; (4) **semantic sorts** — sorting by status
+orders by category rank then position, never alphabetically; every entry in `TASK_SORTS`
+ends with a deterministic `(created_at, id)` tiebreaker, asserted structurally; (5)
+**picker exclusions** — search accepts `exclude_relatives_of=<task_id>` (self, ancestors,
+descendants, already-related both directions) so pickers cannot offer what the write will
+422; write-time guards stay; (6) **human task IDs** — the per-root number every task
+already has renders on cards and panel with a copy-deep-link affordance.
+
+**WS-27x — the spreadsheet layout, and the shown-fields contract.** 🟢 AGENT-SAFE
+*(P-10, P-12)*. Two pieces, one ticket, because the column set IS the contract.
+Done when: (1) a per-view `shown_fields` list joins the saved-view config (`toConfig`/
+`fromConfig` round trip extended, tested); (2) every chip `TaskMeta` renders gates on it —
+`taskCard.ts` stays the single fact-derivation layer, this is the visibility layer on top;
+(3) a Table layout renders one row per task with columns = shown fields, inline editors
+per cell driving the existing `PATCH` path (status, assignee, dates, importance, custom
+fields), per-column header sort mapping to existing `TASK_SORTS`, sub-tasks expanding
+indented in-table; (4) a quick-add row sits at the bottom (shares WS-27y's machinery);
+(5) keyboard: arrows move the cell cursor, Enter edits, Esc cancels; (6) DESIGN_SYSTEM
+throughout — no raw colours, `Icon`/`Button`/`Input` primitives, theme suite green.
+
+**WS-27y — board and list interaction upgrades.** 🟢 AGENT-SAFE *(P-11, P-13, P-17, P-18)*.
+Done when: (1) **sub-grouping** — board accepts a second grouping axis rendered as
+swimlanes (group columns × sub-group rows), per-lane collapse persisted with the view,
+empty lanes hidden unless asked; (2) **group-context quick-add** — every list group,
+board column/lane, and calendar day offers an inline title-only add **pre-filled with
+that group's value** (status, assignee, date…), Enter submits and resets for the next;
+(3) **drop feedback** — dragging where a drop is disallowed overlays the target with the
+*reason*; after any drop or quick-add the moved card scrolls into view and flashes;
+(4) **keyboard cursor** — ArrowUp/Down moves an active-row cursor, Shift+Arrow extends
+the existing selection from it, Enter opens the panel; feeds `BulkBar` unchanged.
+
+**WS-27z — lifecycle policy: auto-archive and auto-close.** 🟡 *(P-4; the sweeper touches
+real data on a schedule — enable per project, default off)*.
+Done when: (1) migration adds `archive_after_months` and `close_after_months` (nullable
+INT, NULL=off) to root `pm_projects`, plus a `timezone` column (P-28) so "a month
+untouched" has a defensible midnight; (2) the sweeper is a **`/workflows` scheduled
+workflow** (D6 — never a PM-app cron) that archives closed-category tasks untouched
+beyond the window and closes stale open ones to the project's default closing status;
+(3) every automated change writes an activity row flagged `automation: true` and renders
+distinctly in the timeline; (4) tasks in `triage` (WS-27u) are exempt; (5) the manual
+archive guard (WS-27w item 1) ships first — this ticket depends on it.
+
+**Deferred small basket** *(no ticket yet — pull individually when adjacent code is
+touched)*: peek size escalation + Esc-returns-focus (P-14), Save/**Update view** dirty
+affordances (P-15), palette action registry + go-sequences (P-16), calendar week layout +
+per-day quick-add/overflow (P-19), filtered-list CSV export (P-26), delta-sync feed +
+satellite `updated_at` bump (P-27), `is_epic` flag + per-user view state + session
+`user_id` denorm (P-28 rest). Banked for their trigger events: sprints (P-23, when
+sprints are wanted), webhook-out checklist (P-24, when `/workflows` grows the node),
+email digest outbox (P-25, when PM emails). Owner-decided: docs = knowledge base
+(D-PM-13); public boards deferred (D-PM-14).
+
 ---
 
 ## 10. Verification
@@ -945,14 +1231,25 @@ interesting it is to build.
 | 4 | ~~**Custom fields**~~ | — | **WS-27l ✅ BUILT 2026-08-07** |
 | 5 | ~~**Tags**~~ | — | **WS-27m ✅ BUILT 2026-08-07** |
 | 6 | ~~**Bulk edit / multi-select**~~ | — | **WS-27n ✅ BUILT 2026-08-07 · unblocks g** |
-| 7 | **Recurring tasks** | Every operations cadence is recurring. Without it those live in someone's head or in ClickUp | **WS-27o** |
-| 8 | **Dependency and subtask UI** — `pm_task_links` and `parent_task_id` both exist, unreachable from the board | Data with no surface is a promise the product does not keep | **WS-27p** |
-| 9 | **Calendar / timeline view** | The third view ClickUp users actually use, after list and board | **WS-27q** |
-| 10 | **Global task search** | `?q=` exists on the list endpoint; there is no search surface | **WS-27r** |
+| 7 | ~~**Recurring tasks**~~ | — | **WS-27o ✅ BUILT 2026-08-07** |
+| 8 | ~~**Dependency and subtask UI**~~ | — | **WS-27p ✅ BUILT 2026-08-07** |
+| 9a | ~~**Calendar view**~~ | — | **WS-27q ✅ BUILT 2026-08-08** |
+| 9b | **Timeline view** (Gantt bars on a date axis) | The calendar answers *what is due when*; it cannot answer *what runs alongside what*, which is the question a multi-month project asks | **WS-27t** |
+| 10 | ~~**Global task search**~~ | — | **WS-27r ✅ BUILT 2026-08-08** |
+| 11 | ~~**The card looks nothing like /tasks'**~~ | — | **WS-27s ✅ BUILT 2026-08-07** |
+| 12 | **Dependencies cannot be drawn** | `blocks` exists and is cycle-guarded, but wiring one means a dropdown and a task number in a panel — Jira and ClickUp make it a drag between two bars | **WS-27t** |
 
-**Deliberately NOT on this list:** sprints (a stated non-goal, §1), time tracking and
-checklists (Paca moved both out of core into plugins — the growth path is subtraction), and
-Gantt. If any is wanted, it is a decision to record, not an omission to fix.
+**Deliberately NOT on this list:** sprints (a stated non-goal, §1), and time tracking and
+checklists (Paca moved both out of core into plugins — the growth path is subtraction). If
+any is wanted, it is a decision to record, not an omission to fix.
+
+~~and Gantt~~ — **REVERSED 2026-08-08, owner-asked.** Kept struck rather than deleted
+because the reversal is the interesting part: the original note treated Gantt as decoration,
+which is true of the *chart* and false of the thing the owner actually asked for — a surface
+where a dependency is DRAWN rather than typed. `pm_task_links` has been cycle-guarded since
+WS-27p and reachable only through a dropdown and a task number; the chart is the gesture's
+excuse to exist. Recorded as it should have been: a decision, in **D-PM-11** and
+**D-PM-12**, with a ticket (**WS-27t**) that does not start until D-PM-12 is answered.
 
 ### 11.3 Sequencing, and the one dependency that matters
 
@@ -1479,3 +1776,494 @@ tests failed for a reason with nothing to do with the code under test. The probe
 matched first and the audience branch keys off `assignee AS who`, which only its own query
 has. A fake that dispatches on substrings needs its fingerprints to be *specific*, not merely
 present.
+
+### 11.13 WS-27o — recurring tasks (built 2026-08-07)
+
+*"Every operations cadence is recurring. Without it those live in someone's head or in
+ClickUp."*
+
+Migration `160_projects_recurrence.sql`, `routes/projects/recurrence.py`, `lib/recurrence.ts`
+and a repeat row in the task panel. 45 hermetic + 27 vitest cases, 31 mutants red, 39 checks
+against a real Postgres.
+
+**No scheduler — and that is forced rather than chosen.** §5's non-goals: *"A second
+automation engine. ADR-028/D6: `/workflows` is the only engine; WS-27 contributes events and
+node types to it."* A recurrence worker here would be exactly that second engine. So the
+successor is created **when a task closes**: `apply_status_transition` already owns that
+moment, which means a task finished from the board, from My work, from an automation or from a
+bulk edit all recur identically. A second call site would be a fifth way to finish a task that
+forgets to.
+
+**What that costs, stated rather than discovered.** A series only advances when somebody
+finishes the current one. A monthly report nobody closes does not pile up twelve copies —
+which is right — but a daily stand-up nobody ticks does not appear tomorrow, which is the
+honest limitation. Materialising ahead of time is already reachable through the engine that
+owns scheduling (a cron trigger plus the `pm_task` node WS-27f added), so nothing here has to
+be undone to get it.
+
+**The anchor is per rule, because the two answers mean different things.** `due` keeps the
+schedule — "stock count on the 1st" stays on the 1st however late the last one was closed, so
+the series does not drift. `completed` measures the interval from when the work was actually
+done — "water the plants every 3 days" restarts when you water them. Neither is a sensible
+global default. A `due` anchor also **catches up**: a monthly task closed six weeks late would
+otherwise produce a successor already overdue the moment it appeared, which teaches people the
+date is meaningless. The missed occurrences are *skipped rather than backfilled* — nobody
+wants four copies of a stand-up they did not attend.
+
+**The date arithmetic is where this is either right or quietly wrong for a year**, so it is
+pure and each case is one assertion:
+
+* **January 31st, monthly.** The day is clamped at *computation* time and stored as asked.
+  Storing the clamped value instead would permanently demote the rule to the 28th after its
+  first February.
+* **February 29th, yearly.** The same shape, once every four years.
+* **"Every other Monday and Thursday."** Within a week the rule takes the next allowed day;
+  only when the week runs out does it jump `interval` weeks. A naive `+14 days` alternates
+  between the two days instead of giving both days of every second week.
+* **A stand-up at 09:00** stays at 09:00.
+
+**Closing a task twice must not spawn twice.** A task can cross into `done` more than once —
+close it, reopen it to add a note, close it again — and every crossing reaches the same seam.
+`recurrence_spawned_at` is the guard, and it is never cleared: reopening undoes `completed_at`,
+but it does not un-emit a successor that already exists and may already have been worked on.
+
+**Stopping a series keeps the work.** Deleting the rule detaches the tasks it produced rather
+than deleting them: they are real work, some of it finished, and a "stop repeating this"
+button that swept away three months of completed reports would be the last time anybody
+pressed it.
+
+**Two bugs the live run caught, and reading could not.**
+
+1. **The weekly CHECK passed the very row it existed to reject.**
+   `CHECK (freq <> 'weekly' OR array_length(weekdays, 1) >= 1)` looks correct and is not:
+   `array_length('{}', 1)` returns **NULL**, `NULL >= 1` is NULL, and a CHECK constraint only
+   *fails* on FALSE. A weekly rule with no weekdays inserted happily. `coalesce(…, 0)` fixes
+   it, and a test now asserts the coalesce is present because the hermetic suite has no
+   database to try the expression on.
+2. **`_next_number` and `_default_status` were reimplementations**, and one of them invented a
+   column (`last_number`; the real one is `last_value`). Both were replaced by `core`'s own
+   `next_task_number` and `load_default_status` — the same mistake WS-27n had just been careful
+   to avoid, made two tickets later in the same package.
+
+**A third, caught by its own test:** `int(rule.get("interval") or 1)` turns an explicit `0`
+into "every 1" — a typo that looks exactly like a save, and one the database's CHECK would
+then have refused as a 500 rather than a 422. Absent now means "every 1"; zero means the
+sender made a mistake.
+
+**In the browser, the sentence is the feature.** A form of five controls is a shape; *"Every 2
+weeks on Mon, Thu, keeping to the schedule"* is something somebody can check before committing
+to it — shown live rather than on save, because picking the wrong anchor is invisible until a
+cadence has drifted for three months. The occurrence limit reads as what is **left**, not the
+cap, and switching frequency clears the fields the new one does not use so a stale
+`day_of_month` cannot reappear.
+
+### 11.14 WS-27p — dependencies and subtasks, made reachable (built 2026-08-07)
+
+*"`pm_task_links` and `parent_task_id` both exist, unreachable from the board. Data with no
+surface is a promise the product does not keep."*
+
+`routes/projects/relations.py` (`GET /projects/tasks/{id}/relations`), `lib/relations.ts` and
+a relations block in the task panel. 21 hermetic + 16 vitest cases, 11 mutants red, 19 checks
+against a real Postgres. **No migration** — the tables have been right since 146.
+
+**Both halves were unreachable, and for different reasons.** Links could be *created* and
+*deleted* since WS-27a but never **listed**: `get_task` returns a `links` **count** and nothing
+else, so no client could draw one. Subtasks could be created from the panel but never listed
+either — `?parent_task_id=` has existed on the list endpoint since WS-27a and nothing called
+it. What was missing was a way to read them, and one rule nobody had written down.
+
+**That rule: `blocks` may not form a cycle.** `assert_no_task_cycle` has guarded
+`parent_task_id` since WS-27a, and the identical hazard sat unguarded on links the whole time.
+A blocks B blocks C blocks A is a deadlock no human can resolve by finishing something, and
+every walk over it runs forever. `assert_no_block_cycle` closes it, bounded by the same
+`MAX_DEPTH` its sibling uses, and it **tracks what it has seen** — data can already contain a
+loop, since every link created before the guard existed went in unchecked, and the walk has to
+terminate over one rather than spin.
+
+**Only `blocks` is guarded.** A cycle in `relates_to` or `duplicates` is redundant, not
+harmful, and refusing one would be a rule with no failure to prevent.
+
+**Blocked-ness is DERIVED and SHOWN, never enforced.** A task is blocked when something that
+blocks it is still open, so a blocker reaching `done` makes the section go quiet — that is how
+you learn you can start. Refusing to *close* a blocked task is the obvious next step and is
+deliberately not taken: dependencies in a real workspace are frequently approximate, and a
+tool that will not let somebody finish work they have finished is a tool they route around —
+after which the links stop being maintained and the feature is worse than absent.
+
+**Visibility is applied to the CHILDREN, not inherited from the parent.** A subtask can be
+moved into a project the reader cannot see, and listing it because its parent is readable
+would disclose a title from behind a grant. The live run asserts a subtask in an ungranted
+project is absent *and* that its title does not appear.
+
+**One endpoint, both directions.** `blocks` outgoing means "this holds those up"; incoming
+means "this is waiting". A client given one side would have to ask twice and would still not
+know which was which — so each link carries a `direction`, and the browser's `populated()`
+turns that into headings, with **Blocked by first** because it is the only section that
+changes what somebody should do next. Empty sections are dropped: six empty headings on every
+task is how a panel becomes something people scroll past.
+
+**Progress counts the status CATEGORY**, not `completed_at`, for the same reason everything
+else in this app does: a project can name its finished lane "Shipped" or "Signed off", and
+`cancelled` counts as resolved even though nothing was completed. It reads as "1 of 3" rather
+than a percentage — 33% is a worse answer than "1 of 3" to the question people are asking.
+
+### 11.15 WS-27s — the shared task card (built 2026-08-07)
+
+Not on the parity backlog, and asked for directly: *"the UI, kanban, task cards etc can be
+taken from the tasks app right? so that the experience seems familiar?"*
+
+**Familiar, yes. Taken, no — and the difference is the whole ticket.** `/tasks`'s `TaskCard`
+is 395 lines bound to `useTaskStore` and to `GtdItem`'s own fields — `energy`, `deepWork`,
+`disposition`, `nextAction` — none of which `pm_tasks` has or should grow. Worse, D-PM-6 has
+`gtd_items` retiring at WS-27h, so a straight port would take the Projects board down with
+it. What moved instead is the **vocabulary**: `@/lib/taskCard` holds how a duration reads,
+what an avatar's letters are, what counts as overdue, and which chips a task earns;
+`@/components/TaskMeta` is the one file that turns a tone name into a colour. Both apps draw
+from those, and neither knows about the other's store.
+
+**A card can only show what the LIST endpoint returns, and it was returning almost nothing.**
+`pm_task_links` and `parent_task_id` have been readable since WS-27p — *one task at a time*.
+A board draws them on every card at once, so this ticket is mostly a backend one: two
+aggregates over the page's ids (`attach_relation_counts`), filling `subtasks {done,total}`
+and `blocked_by_count` on every row. Per card it would be N+1 across an imported workspace of
+hundreds, and at the three-task scale of any test the two look identical.
+
+**A finished blocker does not block, and the count says so in SQL.** The same rule WS-27p's
+`blocked_by_open` makes, moved into the aggregate rather than applied after: a card still
+marked blocked after its dependency shipped is a card people learn to ignore, and one round
+trip per card to find out is the N+1 again. Archived subtasks leave the denominator for the
+matching reason — counted, "2/3" could never reach 3/3.
+
+**A zero earns no chip.** Most tasks have no subtasks, no tags and no blockers; drawing "0"
+for each turns the meta row into noise and pushes the chips that mean something off the edge
+of a 288px column. Chip order is fixed — blocked, due, progress, then the quiet counts — so
+the row can be scanned rather than read.
+
+**Overdue is past due AND still open**, and it changes the *icon* as well as the tone, so the
+signal survives a reader who cannot tell muted from destructive. `/tasks` was checking only
+the date, which painted every completed task with a past due date red forever; sharing the
+function fixed that side too, and it is the one behaviour change this ticket makes outside
+Projects.
+
+**What the card honestly does not claim.** No attachment count and no estimate: attachments
+are counted on the single-task read (WS-27i) and there is no estimate column at all. A
+plausible zero would be the card asserting something the endpoint never told it.
+
+The hermetic fake needed teaching, as it did for WS-27n — and the lesson recorded there
+applied again: every clause in the two roll-ups is mirrored **only when the statement carries
+it**, and which end of a `blocks` link is the blocked one is read off the SQL rather than
+assumed. A mirror that filters unconditionally agrees with itself no matter what the route
+stops emitting, which is how a deleted WHERE clause survives a green suite.
+
+### 11.16 WS-27q — the calendar (built 2026-08-08)
+
+**Backlog row 9 was named "Calendar / timeline view" and this built the calendar half only.**
+Recorded here because closing the whole row was wrong: a month grid of day cells answers *what
+is due when*, and a timeline of bars on a continuous axis answers *what runs alongside what*.
+They are different questions, the second is the one a multi-month project asks, and the row is
+now split — 9a closed, **9b open as WS-27t**.
+
+The first view that **cannot be a page**.
+
+**`/projects/tasks` is paginated, which is right for a list and catastrophic for a
+calendar.** A month with ninety tasks read at `page_size=50` draws forty of them and leaves
+the other days looking EMPTY. A short page announces itself — "page 2 of 3"; a short month
+does not, and nobody investigates a quiet week. So `GET /projects/calendar?from=&to=` takes a
+WINDOW, returns everything in it, and when the cap is reached says `truncated` rather than
+handing back a plausible-looking month.
+
+**`start_date` has existed since migration 146 and no surface had ever shown it.** The same
+complaint §11.14 makes about links, and the reason a calendar is the view that needed
+building: a task is a BAR from its start to its due date, not a dot on one day.
+
+**Overlap, not equality.** A task that starts Monday and is due Friday belongs on Wednesday's
+cell. `due_at BETWEEN :from AND :to` — the implementation everyone writes first — puts it on
+Friday alone, which is exactly the week somebody looks at Wednesday and concludes they are
+free. The clause is `coalesce(start_date, due_at) < :to AND coalesce(due_at, start_date) >=
+:from`, so a task with one date is a point and a task with both is a bar.
+
+**A task with NEITHER date falls out through NULL**, which is correct and invisible — so
+`undated` counts them with the SAME filters and the view says "12 unscheduled". Dropping them
+silently is how a calendar comes to look like the whole workspace while showing a third of it.
+
+**The window is read in UTC and the client asks for a day of slack.** A `start_date` is a
+floating calendar date and a `due_at` is an instant; no single frame makes both exact, since a
+`due_at` of 23:00Z sits on the next day in IST and the previous one in PST. Rather than
+pretend, the server OVER-selects and the browser — the only party that knows the viewer's
+timezone — does the placement. `start_date` is anchored with `AT TIME ZONE 'UTC'` rather than
+`CAST(… AS timestamptz)`, which would silently read the connection's `TimeZone`: a session
+setting no caller controls and no test would notice changing. A live run with the session set
+to `America/Los_Angeles` pins that.
+
+**Filters carry across the switch, and one is deliberately excluded.** Board and calendar are
+the same question in different shapes, so a filtered board that shows everything on the
+calendar reads as the FILTER breaking. `due_before` stays out because it bounds the same
+column as the window and the loser of a contradiction leaves no trace; `overdue` looks like
+its twin and is not — "already late" is a fact about the status as much as the date. Since
+FastAPI **ignores an unknown query parameter**, a dropped filter is not an error but a silent
+behaviour change, so a test asserts the calendar's parameter set covers the list's minus a
+named, reasoned exclusion list.
+
+**No second write path.** Dragging a card is `PATCH /tasks/{id}` — the same validation, the
+same `field_change` activity, the same revert. A `POST /calendar/move` is how two paths start
+disagreeing about what is allowed.
+
+**Dragging a bar moves the WHOLE bar, and keeps the time of day.** The span is an estimate
+somebody made; a drag that silently shortens it to one day destroys information the user did
+not offer to change. Writing only the dropped date — the version every calendar implements
+first — leaves the other end behind and inverts the interval the moment you drag left. "Due
+Friday at 5" dragged to Monday is due Monday at 5.
+
+**`new Date("2026-08-07")` is midnight UTC**, which is the 6th anywhere west of Greenwich, and
+routing a `start_date` through it is the single most common way a calendar loses a day. The
+grid works in `YYYY-MM-DD` keys throughout. That claim is only *behaviourally* testable west
+of Greenwich — in UTC and everywhere east, the buggy version happens to give the same answer —
+so the suite runs in four timezones AND pins the rule structurally, because CI runs in one.
+
+**Building it found a hole in the test fake.** `overdue`'s date half (`due_at < now()`) had
+never been mirrored, so every `overdue` test since WS-27k was really asserting only the
+status half and would have passed with the date comparison deleted. Teaching the fake `<
+now()` killed that mutant on the list endpoint as well as the calendar.
+
+### 11.17 WS-27t — the timeline, and dependencies you can draw (built 2026-08-08)
+
+Asked for directly: *"a timeline view that can also make tasks and subtasks dependent on each
+other, with wiring them to each other, similar to how it works on Jira and ClickUp."* Two
+things, and the second is the one that matters — **a Gantt chart with no dependency gesture is
+decoration**, which is exactly why Gantt was a non-goal until this was asked for.
+
+**Almost none of this was schema work.** Dates, links, the cycle guard, the both-direction
+read, blocked counts and the interval-overlap window all shipped in WS-27a/p/q/s. The whole
+ticket is one aggregate, some geometry, and a gesture.
+
+**The window is the resource, so there is no `/projects/timeline`.** `GET /projects/calendar`
+grew `include_links`, and calendar and timeline are two renderings of one question — the same
+rule §11.8 states for list and board, extended a third time. A second endpoint would be a
+second filter surface to keep in step.
+
+**An arrow needs two bars, so an edge is returned only when BOTH ends are in the window.**
+The edge to an off-window blocker is not lost, it is undrawable: `blocked_by_count` already
+badges the visible bar, which is the honest rendering of *"something you cannot see is holding
+this up"*. Only `blocks` is drawn — `relates_to` and `duplicates` have no direction that means
+anything to a schedule (WS-27p's `DIRECTED_TYPES`), and an arrow would claim a sequence nobody
+asserted.
+
+#### D-PM-11 — hierarchy depth decides what earns a bar
+
+Top-level tasks get rows; subtasks fold in and expand on a chevron. **A parent with no dates
+of its own borrows its children's span**, marked `derived` and drawn dashed, because otherwise
+the default view is blank for exactly the projects that use subtasks properly. **A subtask
+whose parent is off-window is promoted to its own row** rather than hidden — hiding it is how
+a filtered timeline silently drops work.
+
+Paca's Timeline pre-filters to a reserved `Epic` type instead. Rejected: `pm_task_types` is
+per-project data with no reserved names (D-PM-2), so "Epic" would have to become either a
+seeded row every project inherits or a name-match that stops working the day somebody renames
+a type. `parent_task_id` already means depth and cannot be renamed.
+
+#### D-PM-12 — an arrow WARNS; it never reschedules
+
+The owner was given the three options and delegated the choice back. Chosen: **constrain, but
+only warn**. A `blocks` edge whose blocker's END falls after the blocked task's START is drawn
+in the danger tone with a sentence that says *nothing has been rescheduled*.
+
+**Why not Jira's auto-push,** which was the reflex answer: the useful half of a dependency is
+*knowing* — being told, the moment you move something, that two tasks now disagree. Auto-push
+delivers that and then also silently rewrites other people's dates, which is where it stops
+being useful. The cascade lands in the activity spine (§3.8) as dozens of `field_change` rows
+and dozens of notifications with no single act to point at, and the first time somebody's
+negotiated date moves without them touching it, they stop trusting the dates. It also
+contradicts WS-27p's written position — blocked-ness is **derived and shown, never enforced**
+— which now stands unamended. (b) remains reachable later as an opt-in per project, with the
+cascade bounded and previewed before it writes; that is a better version of it than the one
+that would have shipped today.
+
+Three sub-rules, each one a way the warning could have become noise:
+
+* **equal dates are not a conflict.** A blocker due the 10th and a task starting the 10th is
+  the normal way people schedule a handover. Flagging it fires on half a healthy plan, after
+  which nobody reads the warning at all.
+* **a missing date on either end is not a conflict.** It is unknowable, and a warning that
+  fires on absent data teaches people it means nothing.
+* **a finished blocker never conflicts.** WS-27p's rule applied to the warning exactly as it
+  applies to the badge.
+
+**One rule, two surfaces.** `conflicts()` is pure and lives in `lib/timeline.ts`; the timeline
+colours its arrows with it and `RelationsBlock` writes its sentence with it — which is why
+`GET /tasks/{id}/relations` grew `start_date` and `due_at`. Two implementations of *"does this
+start before its blocker finishes"* would eventually disagree, and the one that got it wrong
+would be the surface nobody was looking at.
+
+**The cycle check is NOT duplicated in the browser.** `canLink` refuses only self-links and
+exact duplicates; `a→b` when `b→a` exists is allowed through so `assert_no_block_cycle`
+refuses it with its own message. A second bounded graph walk in the client is the one that
+drifts, and a drag creates a link through the same `POST /tasks/{id}/links` the panel's
+dropdown uses — same guard, same activity, same permission.
+
+**Paca gave the layout and nothing else.** `roadmap-view.tsx` (438 lines, Apache-2.0):
+sticky task column, fixed pixels-per-day, month cells walked with `Date(y, m+1, 1)`, a today
+line, a data-fitted range with padding, an undated task listed and unbarred. It draws **no
+dependency arrows** and is **entirely read-only**, so everything from the handle onwards is
+ours.
+
+**Two rounding traps, and only one is catchable in CI's timezone.** `dayPx` rounds its
+millisecond division because a range that straddles a DST transition is 23 or 25 hours across
+it, and an unrounded quotient lands a fraction of a day off for every day after — permanently.
+The behavioural test only fails in a zone that *has* daylight saving, so the rule is pinned
+structurally too, the same treatment `new Date("2026-08-07")` gets. A bar also covers its
+**last** day rather than stopping at that day's left edge; the alternative makes every span
+one day short and a one-day task a zero-width line.
+
+**Found while building:** the fake's mirror of the new edge query hard-coded which column was
+the blocker, so a mutant that swapped the SQL's two aliases — every arrow drawn backwards —
+passed the whole suite. It now reads the roles and the membership tests off the statement, and
+both mutants die behaviourally.
+
+### 11.18 WS-27r — the search surface, and the LIKE defect under it (built 2026-08-08)
+
+The last row of the parity backlog. *"`?q=` exists on the list endpoint; there is no search
+surface."* Both halves turned out to be true, and the second one was worse than advertised.
+
+**`_` and `%` were live wildcards on every search anybody had done.** `build_task_filters`
+bound `%{q}%` raw, so `_` — LIKE's single-character wildcard — meant `task_id` also matched
+`taskXid` and `task-id`, and `50%` quietly meant `50`. In a workspace where people search for
+identifiers all day that is a steady drip of hits nobody asked for, and it reads as fuzzy
+matching rather than as a bug. `like_escape` fixes it **on the shared builder**, so the board
+and every saved view get the fix, not only the new endpoint — fixing only the new code would
+have left the bug exactly where people meet it.
+
+**Why a second endpoint, having twice argued against one.** The list answers *"which tasks
+match these filters, in this order, on this page"*; search answers *"what did you mean"*.
+It **ranks** — and the list's ordering is a column allowlist (`TASK_SORTS`) that deliberately
+cannot express relevance, so a `sort=relevance` would be a sort key that only works when `q`
+is present, a worse contract than a separate route. It is **capped, not paged**: nobody pages
+through search results, they retype, and page 2 of a relevance ordering is where relevance has
+run out. And it **names the project**, which the list does not because its caller already has
+the tree. What decides *what a caller may see* is still shared — same
+`task_visibility_clause`, same archived rule — so search can never surface what the list would
+hide. That is the part that must not be duplicated; the rest is a different question.
+
+**Ranking happens in SQL, before the `LIMIT`.** Ranked afterwards over a capped set, the best
+answer is only present if it was already inside the arbitrary fifty rows the database happened
+to return — a defect that presents as "search is bad at long queries". Four tiers: the exact
+task number, a title PREFIX, a title match, then description-only; ties break on recency, then
+id, so a repeated search does not reshuffle.
+
+**`#42` is a task number.** People quote them, and a search box that returns every task whose
+description mentions 42 has ignored what was typed. Bounded to eighteen digits — `task_number`
+is a BIGINT, and an unbounded `int()` on user input is a parse nobody asked for.
+
+**A short query is empty, not a 422.** A search box types one character on the way to three,
+and an error flashing on every keystroke is noise the user cannot act on. Below the minimum it
+costs no database round trip at all.
+
+**Comments are deliberately not searched.** The largest text in the system and the least
+likely to be what somebody is hunting by name; a comment hit would also have to render as its
+task, which makes ranking across the two incomparable. Recorded so the absence reads as a
+decision rather than an oversight.
+
+#### The palette
+
+`⌘K` from anywhere in Projects, not a search page: the question is *"where is that task"*,
+asked while doing something else, usually about a project the person is not looking at. A page
+makes finding something a place you navigate **to**, which is one navigation more than the
+problem has.
+
+Four rules that only break under real typing speed on a real connection, so all four are
+pure functions in `lib/search.ts` rather than something to click at:
+
+* **"No results" may be claimed only once, and never while a request is in flight.** Shown
+  during the gap it flashes between every keystroke and its answer — the commonest bug in
+  hand-rolled search UIs, and it reads as the search being broken rather than slow. The
+  previous results stay on screen while the next load runs, so the list does not blank and
+  re-fill under the cursor.
+* **A stale response must not win.** "par" and "parser" are two requests with no ordering
+  guarantee; a slow "par" landing last replaces the right answers with old ones and the list
+  changes without a keystroke. The endpoint echoes `query` back, so the guard needs no request
+  ids.
+* **The arrows belong to the palette, unless a modifier is held.** Left to the browser they
+  move the text caret to the start or end of the query — two effects from one key. But
+  `Cmd+Left` is "go to line start", and stealing it breaks editing inside the palette's own
+  box.
+* **The highlight needle is escaped before it becomes a regex.** Searching `(draft)` would
+  otherwise throw a syntax error and blank the palette — the browser-side twin of the very
+  LIKE defect this ticket fixed on the server.
+
+**Found by the live run, invisible to all 43 hermetic tests:** `:number IS NOT NULL` names no
+column, so Postgres has nothing to infer the parameter's type from and asyncpg answers
+`AmbiguousParameterError: could not determine data type of parameter $1` — the query never
+runs. A Python fake has no type system to be ambiguous about. Fixed with an explicit
+`CAST(:number AS bigint)` and pinned structurally, because that is the only level at which a
+hermetic suite can hold it.
+
+**The fake learned to read LIKE properly.** `like_to_regex` translates `%`, `_` and the
+backslash escape rather than doing a substring match — a mirror that treated the pattern as a
+literal would have agreed with both the escaped and the unescaped implementation, and the
+whole defect would have been invisible to the suite that exists to catch it.
+
+### 11.19 Plane research — the beyond-parity queue (research 2026-08-09)
+
+*"I want you to learn and study this project as well and add it as another reference in
+addition to Paca … come back with findings about what we can actually lift from it to make
+our system fully featured and better, both in terms of backend as well as UI/UX."*
+
+Second reference studied: `makeplane/plane` v1.4.1. Full findings, evidence, and the
+consolidated verdict table live in **`specs/plane_pm_research_2026-08.md`** (reference-only,
+owns no work — same posture as the Paca doc). ⚠️ **Plane is AGPL-3.0**: patterns and
+interaction designs only, never code — categorically stricter than Paca's Apache-2.0, and
+the research doc's license wall is binding on every ticket below.
+
+**What the research changed here:**
+
+1. **Twelve of our shipped decisions are now validated against a second production
+   codebase** (research doc §2): per-view ordering, the trigger-enforced tenant key, the
+   atomic counter, cycle guards (Plane has none), the single visibility predicate,
+   404-never-403, validate-then-apply bulk, page-batched aggregates, 422-over-fallback
+   (theirs arrived after two CVEs), statuses-as-data + priority-as-enum, single-writer
+   `completed_at`, agent-as-member. None of these should be re-litigated against a future
+   reference without reading that table first.
+
+2. **The beyond-parity ticket queue.** §11.2's ClickUp-parity backlog is CLOSED; the next
+   backlog is Plane-informed, tabled as P-1…P-31 in the research doc §8. The high-value
+   head of the queue, in recommended build order:
+   - **Intake/triage** (P-1) — wrapper row + `triage` status category excluded from default
+     lists + accept-in-place; the front door §6.5's email capture and agent-created tasks
+     have been missing. Pairs with `/workflows` for routing (D6: states in PM, automation
+     in the engine).
+   - **Watchers + mention diffing** (P-2) — `pm_task_watchers`, auto-subscribe on touch,
+     edits notify only *new* mentions.
+   - **Archive guard** (P-3, one predicate, do immediately) — refuse manual archive unless
+     the status category is done/cancelled; an archived open task silently exits every
+     default list.
+   - **Spreadsheet layout + kanban sub-grouping + display-properties contract + group-context
+     quick-add** (P-10…P-13) — the four UI gaps with the highest daily-use value.
+   - **Auto-archive policy** (P-4) — `archive_in`/`close_in` on root projects; sweeper is a
+     `/workflows` scheduled workflow, never a PM cron.
+   - Activity meta id+label rule and description-edit coalescing (P-5); semantic sort ranks
+     + deterministic tiebreaker (P-6); picker exclusions in search (P-7); human task IDs
+     surfaced with copy-link (P-21).
+
+3. **Two owner questions minted — and answered the same day** (research doc §6): **Q1**
+   public read-only boards → **deferred, D-PM-14** ("revisit when needed"); **Q2** who owns
+   free-form project docs → **the knowledge base, D-PM-13** — PM links to creator-owned,
+   grant-shared KB documents and never grows a docs surface of its own.
+
+4. **A non-goal reversed in part**: §5 refuses "a docs surface" and "sprints" — both stand,
+   but the sprints refusal now carries Plane's reference design (join-table membership,
+   snapshot-on-close, carry-forward — research doc §3.7) so the eventual build starts from
+   a settled shape rather than a blank page.
+
+## Board record (2026-08-09) — moved from work_plan.md §2
+
+> Moved here in the 2026-08-09 consolidation (work_plan.md D18): board rows now
+> carry state + gates only. The narrative below is preserved verbatim from the
+> final long-form row; the dated corrections after it win where they conflict.
+
+### WS-27 — **Projects app — native project management + ClickUp retirement** *(minted 2026-08-05)*
+**State cell (as of the move):** ✅ **a + b + d + e + i BUILT 2026-08-06 · j + k + l + m + n BUILT 2026-08-07** · 🟢 f dispatchable · 🟡 c gated · 🟡 h sequenced
+**Narrative (verbatim):** Research pass 2026-08-05: `Paca-AI/paca` v0.11.0 (Apache-2.0 — **patterns adopted, no code translated**; findings + the adopt/adapt/refuse table live in `specs/paca_pm_research_2026-08.md`, reference-only), plus a full-tree ClickUp sweep. **ClickUp today is TWO independent systems** — the Phase-0 graph mirror (read-only, shallow) *and* the per-user Tasks-app connector with a **live broker-gated write path** — so leaving ClickUp is coexistence-sync-then-invert, **not** WS-26's import-and-retire; the constraint-8 inversion is staged and recorded in spec §7. Spine: Paca's two-self-FK hierarchy (departments→projects→subprojects→tasks→subtasks as `pm_projects` + `pm_tasks`, types-as-data with the Epic-root rule), statuses-as-data with a semantic `category` (D-CRM-2 convergence), per-view fractional ordering (`pm_view_task_positions` — what lets People-Center and Center-slice boards order the same task differently), and a single activity spine. **First data-scoped app:** `pm_project_grants` on the shipped `email|group:<slug>|org` vocabulary (D12; sibling of C1's D13, which is unchanged), 404-not-403, and the full-portfolio view gives D14's zero-consumer `data:org:read` its **first consumer**. **Three owner answers recorded 2026-08-06 as D-PM-8/9/10, and two of them changed the build:** **D-PM-8** no portfolio/program layer — grants are the only grouping axis, a cross-department project simply carries several (a `pm_programs` table stays purely additive if wanted later); **D-PM-9** agent edits to ClickUp-linked tasks are treated **exactly like human edits** (*the agent proposed queueing agent-originated pushes for approval and was overruled*) — so during coexistence a mistaken agent edit reaches the live workspace with no human in between while `ACTION_BROKER_ENFORCE` is off; bounded by attribution (`agent:<name>`), timeline-reversibility, and the fact that the enforce flip converts the whole class to queue-on-approval. Read D-PM-9's Cost paragraph before building WS-27f; **D-PM-10** ClickUp Spaces map to Centers **explicitly**, from agent-proposed suggestions (assignee-overlap → name match → EVAL-LOCKED content classification), owner-confirmed, applied as `group:<slug>` grants — and an **unmapped Space still imports in full with no group grant**, staying reachable in `/projects` for `data:org:read` holders and its assignees. This supersedes the "pilot vs all Spaces" framing: scope is now a per-Space decision the plan step surfaces, so a pilot and a full import are one code path. Tickets: **a** schema + `feature:projects` both sides + core API on the `gateway/db.py` seam — **BUILT 2026-08-06** (mig `146_projects.sql`, `routes/projects/` with zero `create_async_engine` calls, 115 hermetic cases + 5 mutants measured red; **not deployed — the migration has not been applied anywhere**) · **b** ClickUp org importer **+ the Space→Center mapping plan** — **BUILT 2026-08-06** (`routes/projects/mapping.py` + `import_clickup.py`; `POST /projects/import/clickup/plan` proposes and writes nothing, `POST /projects/import/clickup` applies the confirmed mapping; 25 hermetic cases, 4 mutants red incl. *applying the suggestion instead of the confirmed mapping*; **neither endpoint has been run — prod execution stays OWNER-GATE, §6**) · **c** two-way coexistence sync — three-way field merge, conflicts logged to the timeline (🟡 **blocked on WS-1's BO-1a + BO-1b, named prerequisites**; enabling push is OWNER-GATE) · **d** UI + Center (app + scope) projections, no forks — **BUILT 2026-08-06** (`src/app/projects/` tree + board + list + task panel + timeline, BFF proxy, nav/access registration, all six Centers linking at the SAME `/projects` path and differing only by `?center=`; 34 vitest cases incl. a registration fence, 6 mutants red) · **authoring landed 2026-08-06** — d shipped a UI that could read and drag but never **create**, so a member could only work with rows a ClickUp import had put there: new department / subproject (from the node, where the parent already is), new task (status not sent — the API picks the project's default), subtask from the panel, and **assignees as chips where an agent and a person share one field** (`lib/assignees.ts`, 17 vitest cases, 7 mutants red). That last one is where D-PM-4 stops being a schema note and is the precondition for WS-27f's dispatch being reachable at all · **e** the personal lens — **BUILT 2026-08-06** and **its shape changed**: `D-PM-6` was revised (owner-directed — *"the personal task manager should be a proper extension … a cohesive whole"*) from a mirror into **one store**. `pm_tasks` is THE task table; private work is a personal project (`pm_projects.personal_owner`); the GTD overlay is **per-member** (`pm_task_personal`, mig `147_projects_personal.sql`) so two assignees can hold different dispositions. Assignment is no longer a sync — the inbox row IS the project row, and completing it there moves the shared status. 31 hermetic cases, 6 mutants red. **Its surface landed the same day** — "My work" above the project tree in the SAME app (`components/MyWork.tsx` + `lib/mywork.ts`, 17 vitest cases, 7 mutants red): capture-first, four work lanes that render even when empty, untriaged counted in the header (the Weekly Review's question, answerable only because dispositions are derived not stored), and a completion checkbox that moves the **shared** status. e had shipped API-only, so the cohesion the revision bought was true in the schema and invisible to a member. One repair it forced: `TaskPanel` read the *selected* project's statuses, wrong for a task opened from My work — now resolved from the task's own root project. **Cost accepted: `gtd_items` becomes legacy and WS-27h retires it** · **f** automation + agent dispatch — **BUILT 2026-08-06** (`routes/projects/automation.py` + `agent_dispatch.py`, the `pm_task` node type in `workflows/engine/`, `PM_EVENT_TOPICS` served by the catalog; 34 hermetic cases, 10 mutants red). Both halves of `workflows_app.md` §13 — **U1** the task-mutation node and **U7** dispatch. The engine imports a transport-free SERVICE, not a route, so an automation's edit is indistinguishable in validation from a human PATCH and lands the same timeline row; **status is named, never keyed** (a graph pinned to one project's status UUID could only automate that project); a `pm_task` node is deliberately **not** write-class (the approval gate is for outward writes — now pinned by a test rather than true by accident); and "already in target state" is asserted to issue **no UPDATE at all**, because `update_row` stamps `updated_at` and a redundant write is invisible in a diff while making a task look freshly touched. Assignment dispatches from an event SINK beside the workflows dispatcher, so a broken agent cannot fail the act of assigning somebody a task, and the handoff activity is committed BEFORE the run starts. **Engine defect found and fixed:** `resolve_value` keeps an unresolvable `{{ref}}` as-is at run time by design and `{{trigger.missing}}` passes the publish gate because its *root* is legal — the literal would have reached Postgres as a would-be uuid and returned "Task not found", pointing the maker at the wrong thing · **i** attachments — **BUILT 2026-08-06** (mig `150_projects_attachments.sql`; 25 cases, 10 mutants red): one file store (`gtd_attachments` reused, upload rules imported) with a thin `pm_task_attachments` join that carries the ACCESS decision, so a file is readable by whoever can see the task rather than only its uploader; no attach-by-id endpoint exists, because naming an arbitrary attachment id would let a caller attach somebody else's private capture to their own task and read it back. **Caught before shipping:** the projects BFF proxy re-serialised every POST as JSON, so a multipart upload would have reached the gateway with NO FILE while still answering 201 · **j–r** the rest of the ClickUp-parity gap, measured against the built tree and sequenced in spec §11 (attachments, notifications/@mentions, filters+saved views, custom fields, tags, bulk edit, recurring, dependency UI, calendar, search) — all 🟢, and **n (bulk edit) gates g — and n is now BUILT (2026-08-07), so that dependency is SATISFIED**: an import that cannot be re-triaged in bulk is one somebody abandons halfway, leaving two live systems, which is the state the retirement exists to end. g itself stays 🔴 OWNER-GATE for its own reasons (§6); this changes the prerequisite, not the gate · **g** cutover + retirement inventory (both ClickUp systems) + token revoke + the root-`AGENTS.md` constraint-8 amendment (🔴 OWNER-GATE end-to-end) · **h** `gtd_items` retirement — the cost D-PM-6's revision accepted: union read, row migration into `pm_tasks` + `pm_task_personal`, then `items.py`'s 27 owner-scoped predicates retire with the table they scope (🟡 after e; the data move is 🔴 OWNER-GATE — it rewrites the owner's live task store).. **j BUILT 2026-08-07** (mig `152_projects_notifications.sql`, `routes/projects/notifications.py`, the header bell + mention picker; 39 hermetic + 27 vitest cases, 10 mutants red): closes §11.2's second gap — *"assignment is silent"*. **Three rules decide who hears**, each the whole reason for a rule: never the actor (a bell that pings you about your own click gets muted, and a muted bell notifies nobody about anything); never an agent (they are handed work by the WS-27f dispatch sink, so a row addressed to one sits unread forever inflating a badge nobody can clear — enforced in Python AND by a CHECK); and **never somebody who cannot open it**, which is the security property: the notification carries the task's TITLE, so delivering one outside the grant closure leaks it and lands them on a 404. That third rule needed `resolve_visibility_for`, which answers for a THIRD PARTY — `resolve_visibility` reads a `UserContext` and the recipient of a mention has no request in flight — by reading the tables `/auth/me` reads and handing them to the **real** `build_access`, so wildcards and allow/deny overrides resolve identically on both paths. Notifications are written **inside the transaction**, not emitted on the bus: `emit` swallows failures by construction so a broken workflow can never fail a task edit, which is right for agent dispatch and wrong here. A mention is an **address, not a name**, because 148 dropped `UNIQUE(name)` — `@Priya` has no answer. **Two bugs found on the way in, both shipping at the time:** every project-task file upload was answering **422** (`ACTIVITY_TYPES` never learned 150's `attachment`; all 25 attachment tests passed because they monkeypatch `record_activity` — the seam under test was mocked out), fixed with two tests that READ the migrations; and `/projects?task=<id>` did nothing, though the People Center has linked there since WS-28b. **WS-27b's UI BUILT 2026-08-07** (`components/ImportClickUp.tsx`, `lib/importPlan.ts`; 18 vitest cases, 3 mutants red): the importer shipped with WS-27b and was **unreachable from the product** — the empty state named "import a ClickUp workspace" and no control anywhere did it, so a new install stayed empty and the only route to real data was curl. Three steps, only the last of which writes: Preview (`/plan`, reads the tenant) → Dry run (`dry_run:true`, exercises the flattening) → Import. **The mapping stays the owner's act (D-PM-10)** and the UI is built so it stays one: the suggestion is pre-filled and shown beside its confidence IN WORDS ("a guess — check it", not `0.45`, because a bare number invites acceptance without looking), and a CONFIRMED mapping always beats a fresh suggestion so a re-run never silently re-maps a Space somebody already ruled on. Unmapped Spaces are a notice rather than a blocker, matching the importer. ⚠️ The gate is unchanged and is now exactly one click: building this was agent-safe, pressing Import is the owner's act, and no agent has run either endpoint against production. **The Tasks-app mirror path BUILT 2026-08-07** (`routes/projects/import_tasks.py`, `POST /import/from-tasks`; 43 hermetic cases, 7 mutants red) — owner-directed: *"just show up all the data that is there in the Tasks app inside the Projects app"*. A SECOND importer rather than a flag: the ClickUp one needs a live token, spends LLM budget and demands a Center mapping BEFORE anything is written, which is backwards for "show me my work today". This reads `gtd_projects`/`gtd_items` — the mirror already on the box — so no API call, no token, no model spend, and it works when the connector is stale. One named department, with the real ClickUp shape beneath it — **Space → Folder → List** rebuilt as projects, each carrying its own `clickup_id`/`clickup_kind`, so promoting a Space node is how the department split happens later. **Verified against a real Postgres** (full migration set + seeded mirror), which found THREE defects the hermetic suite could not: `gtd_projects.space_id` is LOCAL-only so the Space was always NULL; `pm_projects` has no `clickup_snapshot` column, so the first real click would have 500'd (this shipped in #393 and was fixed before anybody pressed it); and the preview under-counted 4 vs 7 because container nodes were only tallied on the write path. The root IS org-granted (same act as `create_node`, narrower than bulk-granting a tenant). Pinned: nothing outside `pm_*` is written; only `source <> 'LOCAL'` rows are read (a personal capture must not be published to a shared board); the provider's own status names are kept; an orphaned task is COUNTED, not dropped. **Mutation found a real gap**: deleting `dry_run` from the write guards left every test green, because on a FIRST dry run `root_id is None` blocks the write anyway — on a SECOND one the department exists and `dry_run` is the only protection. That is the realistic case (preview → import → preview again) and it now has its own test. **k BUILT 2026-08-07** (`routes/projects/filters.py`, `lib/grouping.ts`, `components/FilterBar.tsx`; 34 hermetic + 24 vitest cases, 13 mutants red, and 23 checks against a REAL Postgres) — closes §11.2's third gap, the one whose name was the sentence *"my open bugs in Ops, grouped by assignee"*. **ONE filter builder serves both the list endpoint and saved views**, because a saved view is nothing but a stored set of these filters and two implementations would drift — a *saved* view showing a different set than the same filters typed by hand is the one thing it may not do, so a test compares the two outputs directly. **Every filter is a WHERE clause**: paging happens in SQL, so a filter applied in Python after `LIMIT` returns short pages, and *"page 2 is empty but there are 40 more"* is a bug people work around for months instead of reporting. **`overdue` means past due AND still open** — a finished task with a past due date is done, and permanent red is how a board teaches people to ignore red. **An unknown category is a 422 naming the five real ones**, not an empty board a client reads as "this project is empty". Unknown config **keys** are DROPPED while a bad **value** falls back, because those are different failures: a view is a preference written by an older client, so refusing one over an unrecognised key would make every deploy a migration of everybody's saved views, whereas rendering still has to produce something. On the board, **a task with two assignees appears in BOTH columns** (it is both people's work; picking one hides it from the other, so the header counts tasks not group sizes), **empty status lanes are kept** while every other grouping drops empties (a missing "In progress" column reads as "no such state", not "nothing in progress"), and **dragging is offered only when the columns are statuses** — a drop writes the field the columns represent, and status is the one that is a plain PATCH, so a card that can be dragged into a column which cannot accept it and snaps back is worse than an honestly static column. `toConfig` is deliberately NOT `toQuery`: a query string carries only text so `toQuery` writes `"true"`, and `fromConfig` refuses a string where a toggle belongs, so a view built from query shape would come back with every toggle silently cleared. The project's **order-bearing board is withheld from the chips** — `tree.py` seeds one `board` view per project and it owns every `pm_view_task_positions` row, so offering its ✕ would offer to delete every hand-arranged position; saved views sit at position 300 above the seeded pair and `orderBearingView` is one function used by both the drag handler and the delete guard. **A FIFTH live bug, found the same way as the previous four:** `due_before` was `CAST(:due_before AS timestamptz)` with the raw query-string value — asyncpg infers the parameter's type FROM that cast and then refuses to encode a `str`, so the query never reached Postgres and **`?due_before=…` answered 500** while the hermetic fake, which agrees with whatever SQL it is handed, stayed green. `parse_when` parses on this side and binds a real `datetime`; garbage is a 422 that says what was expected; a naive value is read as UTC rather than inheriting the connection's TimeZone. Two tests — one on the bound value's TYPE, one refusing any `CAST(:param AS timestamp…)` anywhere in the builder — so the next `after=` filter written the obvious way fails in CI instead of in front of a member. **l BUILT 2026-08-07** (mig `155_projects_custom_fields.sql`, `routes/projects/custom_fields.py`, `lib/customFields.ts` + the panel block and the Fields dialog; 47 hermetic + 36 vitest cases, 23 mutants red, 35 checks against a REAL Postgres) — ClickUp's signature feature, and the shape §5's non-goals already recorded as the additive path: **definitions in a table, values denormalised onto the task as JSONB keyed by `field_key`**. NOT a row per (task, field): that is the textbook EAV answer and costs a join per field on every board paint — five fields across two hundred imported tasks is a thousand rows to gather and re-pivot, per render — whereas the JSONB column arrives with the task for free. **The cost is stated rather than discovered**: a value is not referentially tied to its definition, so the DATABASE cannot stop a key no definition owns from being written, and that guarantee moves into Python. Hence the validation IS the feature: an unknown key is a **422 not a silent drop** (a typo that no-ops looks exactly like a save); a patch **MERGES** (a client that knows three of five fields must not wipe the other two — and an older client, or an automation written before a field existed, is precisely that client); an explicit **null CLEARS the key** rather than storing a null, because it is the only way to express "unset this" and a stored null makes "never filled in" and "deliberately emptied" one value in every filter; and **`true` is not the number 1** — `isinstance(True, int)` is True in Python, so the coercers are one-per-type in a dispatch dict specifically so the boolean check can never drift below the number one. **The deliberate departure from Paca:** its research notes record "deleting a definition does not clean task data" as an accepted cost; it is NOT accepted here, because a key left in the JSONB is invisible — no definition means no column, no form row, no filter — until somebody recreates the name and every old value resurfaces carrying the new meaning. The cleared count is reported (R7/R8). Two things a definition may not change once values exist, both because the stored values would stop meaning what they say: **`field_key` is never editable** (it is the identity every value is filed under) and **`field_type` is a 409 naming the count** (text→select cannot re-interpret what is already written); dropping a select option some task holds is refused the same way, adding one is free, and the UI shows the derived key while the name is still being typed since that is the last moment anybody can change it. **Custom fields are REVERTIBLE, which is what makes them first-class:** `patch_task` folds a custom edit into the SAME `field_change` activity under `custom.<key>` rather than inventing an activity type — `record_activity` refuses a type the CHECK does not list, the trap that made every attachment upload answer 422 — and revert restores by **merging onto what the task holds NOW**, never writing back the whole object, since another field may have been edited since and replacing the blob would silently undo that too. **A bug the ticket's own tests caught before it shipped:** `changedValues` compared a form's boolean against a `null` baseline, so a task with an unanswered checkbox sent `open:false` on EVERY save and posted a timeline entry for an edit nobody made — a checkbox has no "unset" state to render, so `false` is its baseline. **And a fence that was quietly a subset check:** `test_projects_routes` asserted a LIST of mounted paths, which catches the module somebody remembered to add a path for; it now also reads the package directory and asserts every module declaring a `@router` route is imported by `__init__.py` — the C1 trap where a missing import mounts nothing while every direct-call test still passes. Verified by deleting the import and watching it fail. **m BUILT 2026-08-07** (mig `156_projects_tags.sql`, `routes/projects/tags.py`, `lib/tags.ts` + the panel picker, the filter row, a `tag` board axis and the Tags dialog; 31 hermetic + 37 vitest cases, 16 mutants red, 30 checks against a REAL Postgres) — the row the research notes left open ON PURPOSE: `paca_pm_research_2026-08.md` row 13 REFUSED Paca's model (*"a bare jsonb string array on tasks. No registry, no colors, no rename/merge — the weakest part of Paca's model"*) and §5 shipped `pm_tasks.tags TEXT[]` in its place with a registry named as additive later. **The array STAYS** — a join table would add a row per tag per task and a join to every board paint, to buy referential integrity this app enforces in one place, whereas the array arrives with the task and its GIN index (146) already answers "tagged X". What the registry buys: **one spelling per tag** (identity is case-INSENSITIVE via a unique index over `lower(name)` so two racing requests cannot create both, display is case-PRESERVING, and the task's array stores the REGISTRY's form — which is what makes "filter by bug finds all of it" true rather than aspirational, and what lets a rename be one statement); **rename**; **merge**; and a **colour**. **Applying an unregistered tag REGISTERS it** — refusing would make tagging a two-step errand (leave the task, create the tag, come back), which is how tagging gets abandoned, and an abandoned tag set is worse than a messy one. **The cost is stated: every typo becomes a tag** — which is exactly why merge is here and is not optional, and why the picker SHOWS the moment of creation rather than minting silently. **A rename onto an existing name is a 409, not a silent merge**: different operations, different outcomes, and one of them destroys a tag — quietly doing the destructive one because the names collided is what stops people using a rename button. **A task carrying BOTH tags ends a merge with the target ONCE** — the case that is easy to get wrong, and getting it wrong leaves a duplicate that renders twice and survives the next merge too; `merged_tags` is pure so that case is asserted directly, and the rewrite runs over affected rows in Python rather than as an `array_replace`, which would leave the duplicate. **TWO tag filters** because both questions get asked and neither answers the other: `tags` is ANY (`&&`) and `tags_all` is ALL (`@>`); collapsing them would silently pick a meaning, and with three tags the answers differ by almost everything. On the board a task with three tags appears in three columns, the same honesty as two assignees appearing in both theirs. **The migration backfills AND rewrites data, deliberately and narrowly:** `tags` has been on `pm_tasks` since 146 and the import path writes them, so an empty registry beside a tagged corpus means the first rename finds nothing; the winning display form is **the spelling people actually use** (most frequent, ties broken deterministically — `min()` alone would canonicalise 400 "Bug" to a single stray "BUG"), and task arrays are then made to agree, only ever swapping one CASING of a tag for another, with the count reported in a NOTICE. **A bug the live run caught in that block:** the canonicalisation used the implicit-comma `FROM pm_tasks t, unnest(t.tags) ... LEFT JOIN` form, where the LEFT JOIN binds only to `unnest(...)` and `t` is not in scope for its ON clause — the migration aborted with "invalid reference to FROM-clause entry for table t". Rewritten as `CROSS JOIN LATERAL … WITH ORDINALITY`, which also fixed a second problem the first version would have shipped: `array_agg(DISTINCT ...)` sorts by its own expression, so every task's tag list would have come back alphabetised. **n BUILT 2026-08-07** (`routes/projects/bulk.py` → `POST /projects/tasks/bulk`, `lib/selection.ts`, `components/BulkBar.tsx` + checkboxes on board and list; 35 hermetic + 32 vitest cases, 16 mutants red, 34 checks against a REAL Postgres; **no migration**) — **the ticket §11.3 names as gating g, so that prerequisite is now satisfied.** It **reuses `automation.apply_task_patch` rather than growing a second writer**: that service exists because WS-27f needed an edit indistinguishable in validation from a human PATCH, and a bulk endpoint with its own field handling would be a third opinion about what a task edit is. Tags go through the same registry the panel uses, because the registry cannot be true if bulk is a second door into the array. **Status is named, never keyed — load-bearing here rather than stylistic**: a selection spans projects and a status id belongs to one root, so `status_id` for fifty tasks across three projects puts two thirds of them in a lane that is not theirs; it is a 422 with its OWN message, because it is the mistake somebody makes by copying a single-task PATCH body and "unknown field" would not explain why the thing that works on one task is refused on fifty. **Assignees and tags are ADD/REMOVE, never SET** — "assign these to Priya" means ALSO Priya, and a replace wipes every individual assignment the fifty tasks already carried; the destructive spelling is absent rather than discouraged. **Shape validated once, outcomes per task**, because those are different failures: an unsettable field is the same mistake for all fifty (422 before any write), while a status name present in one project and absent from another is a fact about THAT task — failing the batch for it makes a mixed selection unusable, which is precisely the selection somebody makes after an import. **An invisible task is SKIPPED, not an error** (R5: per-id reporting says exactly what a per-id 404 says, and aborting would let a caller probe for existence). **One transaction** — a re-triage that half happened is harder to recover from than one that did not, because nobody can tell which half. **Re-asserting a value is not a change** (`moved_people` is pure so the claim is asserted directly): fifty tasks already Priya's would each gain a timeline entry saying nothing, and a count nobody can trust is worse than no count. **ONE notification per person per batch, not one per task** — being handed fifty tasks should ring once and say fifty; fifty bells is a bell people turn off, which is WS-27j's own argument applied to the case that would have broken it. In the browser the selection is **pruned whenever the filter changes** (select forty, narrow to three, press Done must not act on thirty-seven nobody can see), a shift-click ranges over the board's ON-SCREEN order, a two-assignee card drawn in two columns counts once, and the outcome line names every category including the boring ones. **AND IT UNCOVERED A SHIPPED WS-27j BUG** (spec §11.12): `notifications.deliverable` probed only `project_clause('t.root_project_id')` while `core.task_visibility_clause` — whose docstring warns a second implementation "would drift the moment one is edited alone" — carries TWO ways in. So (1) anybody assigned work in a project they hold no grant on was judged undeliverable: they could OPEN the task, the assignment notified nobody, and the response told the assigner they could not see it — the silent assignment WS-27j exists to end, still open for the most common case in a grant-scoped app; and (2) scoping to `root_project_id` ALSO missed a grant made on a SUBPROJECT — the old test asserted that scoping on the argument that "probing `project_id` would miss a grant made on an ancestor", which is BACKWARDS, as a real-Postgres run showed: the closure is recursive and expands DOWNWARD. Fixed to use the shared clause; the test that encoded the wrong reasoning now records why it was wrong. **A fake collision the fix exposed:** `FakeDB` matched the rule-3 probe by substring, and the new clause embeds both `pm_task_assignees` and the closure's `UNION` — exactly the AUDIENCE branch's fingerprint — so `deliverable` got a list of assignees where it expected a visibility answer and four tests failed for a reason unrelated to the code under test. A fake that dispatches on substrings needs fingerprints that are SPECIFIC, not merely present
+
+**Corrections applied 2026-08-09:**
+- a/b/d/e/f/i/j/k/l/m/n are MERGED TO MAIN (#390, #393, #394, #398 + fixes) — the 'BUILT (branch)' wording was stale
+- the state cell's 'f dispatchable' contradicted the body's 'f BUILT 2026-08-06' — f is built and merged
+- the WS-27j notifications.deliverable clause bug (probes project_clause instead of core.task_visibility_clause) is an OPEN defect recorded at spec §11.12, found by n's tests.

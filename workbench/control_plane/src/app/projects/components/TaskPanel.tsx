@@ -8,6 +8,7 @@
  * a comment in the same stream, which is the point of the shared spine.
  */
 import Icon from "@/components/Icon";
+import Button from "@/components/ui/Button";
 import { useEffect, useRef, useState } from "react";
 
 import Button from "@/components/ui/Button";
@@ -23,6 +24,7 @@ import {
   projectsApi,
   watchersApi,
 } from "../lib/api";
+import { taskDeepLink, taskRef } from "../lib/card";
 import { CustomFieldValues } from "./CustomFieldValues";
 import { TagPicker } from "./TagPicker";
 import { RepeatEditor } from "./RepeatEditor";
@@ -120,6 +122,8 @@ export function TaskPanel({
   const [relationsKey, setRelationsKey] = useState(0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // WS-27w item 6 — the copy-deep-link affordance's "it worked" flash.
+  const [copied, setCopied] = useState(false);
   const [files, setFiles] = useState<AttachmentRow[]>([]);
   // WS-27v — null until the read lands, so the toggle never renders a state
   // it is only guessing at.
@@ -303,6 +307,26 @@ export function TaskPanel({
     }
   }
 
+  /**
+   * Copy a URL that reopens this panel — `/projects?task=<id>`, the deep-link
+   * shape the page already reads (WS-28b). The icon flips to a check briefly,
+   * because a copy with no acknowledgement gets clicked three times.
+   */
+  async function copyDeepLink() {
+    try {
+      await navigator.clipboard.writeText(
+        taskDeepLink(task, window.location.origin),
+      );
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // Clipboard can be unavailable (permissions, insecure context). The
+      // link is not lost — opening the task by deep link shows it in the
+      // address bar — so this fails quietly rather than turning a copy
+      // button into an error banner.
+    }
+  }
+
   /** Insert `@address` at the caret, so nobody has to type the token by hand. */
   function mention(who: string) {
     const box = commentBox.current;
@@ -321,9 +345,17 @@ export function TaskPanel({
     <aside className="flex h-full w-full max-w-md flex-col border-l border-border bg-card">
       <header className="flex items-start justify-between gap-2 border-b border-border p-3">
         <div className="min-w-0">
-          <p className="text-xs text-muted-foreground">
-            {task.task_number ? `#${task.task_number}` : "Task"}
-          </p>
+          <div className="flex items-center gap-0.5">
+            <p className="text-xs text-muted-foreground">{taskRef(task) ?? "Task"}</p>
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              icon={copied ? "Check" : "Link"}
+              aria-label="Copy a link to this task"
+              title="Copy a link that opens this task"
+              onClick={() => void copyDeepLink()}
+            />
+          </div>
           <h2 className="truncate text-sm font-medium text-foreground">{task.title}</h2>
         </div>
         <div className="flex shrink-0 items-center gap-0.5">

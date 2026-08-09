@@ -41,7 +41,7 @@ from gateway.routes.projects.core import (
     apply_status_transition,
     coerce_write_values,
     diff_changes,
-    record_activity,
+    record_field_change,
     require_row,
     update_row,
 )
@@ -154,9 +154,12 @@ async def apply_task_patch(
             diffs = diff_changes(task, after, _TRACKED)
             changed = [str(d["field"]) for d in diffs]
             if diffs:
-                await record_activity(
-                    db, activity_type="field_change", created_by=actor,
-                    task_id=task_id, meta={"changes": diffs},
+                # The ONE field_change door (WS-27w): an automation's edit gets
+                # the same label resolution and description coalescing a human
+                # PATCH gets — a workflow that rewrites a description every run
+                # must not write a timeline row every run.
+                await record_field_change(
+                    db, created_by=actor, task_id=task_id, changes=diffs,
                 )
 
     status_name: str | None = None

@@ -24,6 +24,7 @@ from typing import Any
 from acb_auth import UserContext, get_current_user
 from fastapi import Depends, HTTPException
 from gateway.routes.projects.core import (
+    CLOSING_CATEGORIES,
     DIRECTIONS,
     TASK_SORTS,
     TASK_SOURCES,
@@ -46,7 +47,10 @@ from gateway.routes.projects.core import (
     load_visible_project,
     load_visible_task,
     next_task_number,
+    now,
     record_activity,
+    record_field_change,
+    require_row,
     require_status_in_project,
     resolve_visibility,
     root_project_id,
@@ -198,10 +202,14 @@ async def list_tasks(
         total = (await db.execute(
             text(f"SELECT count(*) FROM pm_tasks t{where}"), params,
         )).scalar() or 0
+        # `column` is an allowlisted template with `{dir}` slots; the direction
+        # is one of OUR two words, never caller text. Every entry ends with the
+        # `(created_at, id)` tiebreaker (core.SORT_TIEBREAK), so the order is
+        # total and a tie cannot straddle a page boundary.
         rows = (await db.execute(
             text(
                 f"SELECT t.* FROM pm_tasks t{where} "
-                f"ORDER BY {column} {order} NULLS LAST, t.id {order} "
+                f"ORDER BY {column.format(dir=order)} "
                 f"LIMIT :limit OFFSET :offset"
             ),
             {**params, "limit": page.limit, "offset": page.offset},
@@ -374,9 +382,11 @@ async def patch_task(
                 for key, moved in sorted(custom_changes.items())
             )
             if changes:
-                await record_activity(
-                    db, activity_type="field_change", created_by=actor(user),
-                    task_id=task_id, meta={"changes": changes},
+                # Through the ONE field_change door (WS-27w): FK ids gain their
+                # labels at write time, and a same-actor consecutive
+                # description edit coalesces into the prior row.
+                await record_field_change(
+                    db, created_by=actor(user), task_id=task_id, changes=changes,
                 )
         moved = None
         if new_status is not None and str(new_status) != str(before.status_id):
@@ -534,6 +544,91 @@ async def delete_task(
             "subtasks_promoted": int(promoted),
         },
     )
+
+
+# ── Archive (WS-27w item 1) ─────────────────────────────────────────────────
+
+@router.post("/tasks/{task_id}/archive")
+async def archive_task(
+    task_id: str, user: UserContext = Depends(get_current_user),
+) -> dict:
+    """Archive one task — allowed only once it is CLOSED.
+
+    An archived task exits every default list, board, calendar and search
+    surface at once, so archiving an open task is a trap, not a feature (P-3):
+    the work disappears while still owed, and nobody gardening a board can see
+    where it went. The guard is written on the status CATEGORY, and as "not in
+    (done, cancelled)" rather than as a list of open categories — a category
+    added later (WS-27u's `triage`) is refused by default instead of becoming
+    silently archivable. The refusal names the actual category, because "cannot
+    archive" without the why sends people hunting through lanes.
+
+    WS-27z's sweeper depends on this guard shipping first.
+    """
+    db = await _get_db()
+    try:
+        vis = await resolve_visibility(db, user)
+        task = await load_visible_task(db, vis, task_id)
+        status = await require_row(
+            db, "pm_task_statuses", str(task.status_id), "Status",
+        )
+        category = str(getattr(status, "category", "") or "")
+        if category not in CLOSING_CATEGORIES:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"Cannot archive an open task: its status category is "
+                    f"'{category}'. Move it to a done or cancelled status "
+                    f"first."
+                ),
+            )
+        if getattr(task, "archived_at", None) is not None:
+            # Already archived — idempotent, the double-click answer.
+            return row_to_dict(task, TaskModel)
+        row = await update_row(db, "pm_tasks", task_id, {"archived_at": now()})
+        await record_activity(
+            db, activity_type="system", created_by=actor(user),
+            task_id=task_id, body="Task archived",
+        )
+        await db.commit()
+        result = row_to_dict(row, TaskModel)
+    finally:
+        await db.close()
+
+    await emit("pm.task.archived", {"task_id": task_id})
+    return result
+
+
+@router.post("/tasks/{task_id}/unarchive")
+async def unarchive_task(
+    task_id: str, user: UserContext = Depends(get_current_user),
+) -> dict:
+    """Bring an archived task back onto its board.
+
+    No category guard in this direction — restoring puts work back where
+    people can see it, which is never the trap the archive guard exists to
+    prevent. Without this endpoint an archive would be one-way: nothing else
+    writes ``archived_at``, and the PATCH surface deliberately does not accept
+    it.
+    """
+    db = await _get_db()
+    try:
+        vis = await resolve_visibility(db, user)
+        task = await load_visible_task(db, vis, task_id)
+        if getattr(task, "archived_at", None) is None:
+            return row_to_dict(task, TaskModel)
+        row = await update_row(db, "pm_tasks", task_id, {"archived_at": None})
+        await record_activity(
+            db, activity_type="system", created_by=actor(user),
+            task_id=task_id, body="Task restored from the archive",
+        )
+        await db.commit()
+        result = row_to_dict(row, TaskModel)
+    finally:
+        await db.close()
+
+    await emit("pm.task.unarchived", {"task_id": task_id})
+    return result
 
 
 # ── Assignees ───────────────────────────────────────────────────────────────

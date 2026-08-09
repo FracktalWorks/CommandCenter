@@ -42,6 +42,7 @@ from gateway.routes.projects.core import (
     insert_row,
     load_visible_project,
     record_activity,
+    record_field_change,
     require_organization,
     resolve_visibility,
     root_project_id,
@@ -284,9 +285,13 @@ async def patch_node(
         after = await update_row(db, "pm_projects", project_id, values)
         changes = diff_changes(before, after, _TRACKED_PROJECT_FIELDS)
         if changes:
-            await record_activity(
-                db, activity_type="field_change", created_by=actor(user),
-                project_id=project_id, meta={"changes": changes},
+            # The ONE field_change door (WS-27w) — none of the tracked project
+            # fields is FK-valued today, but the door is what keeps that claim
+            # checked rather than remembered, and a project-description edit
+            # session coalesces like a task's.
+            await record_field_change(
+                db, created_by=actor(user), project_id=project_id,
+                changes=changes,
             )
         await db.commit()
         result = row_to_dict(after, ProjectModel)

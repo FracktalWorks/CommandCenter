@@ -1,10 +1,10 @@
 """The tenant boundary, as a ratchet (WS-29).
 
-⚠️ **113 of CommandCenter's 146 tables still carry no tenant key.** That is not
+⚠️ **114 of CommandCenter's 147 tables still carry no tenant key.** That is not
 a bug list — it is the honest state of a system built for one organisation. The
 bug would be adding the 147th.
 
-**137 → 123 → 113.** WS-29a keyed all 17 `pm_*` tables (migration 161) while
+**137 → 123 → 113 → 114.** (+1 2026-08-10: `crm_auto_lead_cursors`, mig 163 — per-mailbox cursor, tenant derived through `email_accounts`; see its baseline entry.) WS-29a keyed all 17 `pm_*` tables (migration 161) while
 they were still empty enough to make it a one-line default rather than a
 backfill. Then `main`'s MT-0d keyed `provider_keys`, `model_config`,
 `mcp_servers` and `plugins`, and MT-1a introduced a control plane that is
@@ -104,7 +104,7 @@ EXPECTED_SCOPED = {
     "pm_tasks", "pm_view_task_positions", "pm_views",
 }
 
-#: ⚠️ FROZEN at 113. Every table predating the multi-tenant decision that is
+#: ⚠️ FROZEN at 114 (113 + the mig-163 mailbox cursor). Every table predating the multi-tenant decision that is
 #: neither exempt (a deliberate cross-tenant table — see the generator's
 #: `EXEMPT`) nor blocked (a name collision — see `HOMONYM_BLOCKED`).
 #:
@@ -139,6 +139,12 @@ BASELINE_UNSCOPED = {
     # ordinary debt: they are BLOCKED in `gen_tenant_migration.HOMONYM_BLOCKED`
     # until the column is renamed, because a generator that scopes by name
     # would corrupt a business column.
+    # crm_auto_lead_cursors (migration 163): per-MAILBOX cursor state, one row
+    # per email_accounts id with an ON DELETE CASCADE FK — its tenant derives
+    # transitively through email_accounts (org-scoped by the generated RLS
+    # set), and a direct organization_id would be a second copy of a derivable
+    # fact that the purge cascade already treats as mailbox-owned.
+    "crm_auto_lead_cursors",
     "crm_deal_contacts", "crm_deal_statuses", "crm_lead_statuses",
     "crm_leads", "crm_lost_reasons", "crm_organizations",
     "crm_status_changes", "crm_sync_cursors", "crm_zoho_tombstones",
@@ -389,6 +395,6 @@ def test_the_expected_scoped_set_is_real_not_aspirational() -> None:
 
 
 def test_the_frozen_count_matches_the_baseline() -> None:
-    """The docstring quotes 113. A baseline whose stated size and real size
+    """The docstring quotes 114. A baseline whose stated size and real size
     disagree is a baseline nobody trusts."""
-    assert len(BASELINE_UNSCOPED) == 113
+    assert len(BASELINE_UNSCOPED) == 114

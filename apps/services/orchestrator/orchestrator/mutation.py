@@ -56,6 +56,12 @@ _MUTATION_ATTEMPTS: dict[str, int] = {}
 _MUTATION_ATTEMPTS_MAX_KEYS = 10_000  # crude unbounded-growth guard (rare path)
 
 
+def _mutation_limit_reached(run_id: str, explicit_prior: int = 0) -> bool:
+    """Pure peek at the per-run tally — no increment, no side effects."""
+    prior = max(int(explicit_prior or 0), _MUTATION_ATTEMPTS.get(run_id, 0))
+    return prior >= MAX_MUTATION_ATTEMPTS
+
+
 def _register_mutation_attempt(run_id: str, explicit_prior: int = 0) -> tuple[bool, int]:
     """Enforce MAX_MUTATION_ATTEMPTS for *run_id*. Pure except for the counter.
 
@@ -306,8 +312,31 @@ async def attempt_self_mutation(
     Returns:
         A :class:`MutationResult` describing what happened.
     """
-    # MT-0b — FIRST, before the attempt tally, the sandbox, git, or anything
-    # that could reach the network. A tenant's failure must cost nothing.
+    # An at-the-limit run is refused by a pure in-memory peek BEFORE anything
+    # else — no database round-trip, no attempt consumed, and the refusal
+    # reason names the limit rather than whatever the first-party gate would
+    # have said.
+    if _mutation_limit_reached(run_id, mutation_attempts):
+        reason = (
+            f"max_mutation_attempts={MAX_MUTATION_ATTEMPTS} already reached. "
+            "A human must merge the pending PR before the live system can retry."
+        )
+        _log.info(
+            "mutation.skipped",
+            agent=agent_name,
+            run_id=run_id,
+            reason=reason,
+        )
+        return MutationResult(
+            agent_name=agent_name,
+            run_id=run_id,
+            attempted=False,
+            skipped_reason=reason,
+        )
+
+    # MT-0b — before the tally is consumed, the sandbox, git, or anything that
+    # could reach the network. A tenant's failure must cost nothing, including
+    # the run's one attempt when this gate itself fails transiently.
     _permitted, _deny_reason = await _self_mutation_permitted(organization_id)
     if not _permitted:
         _log.info(
@@ -323,6 +352,8 @@ async def attempt_self_mutation(
 
     _allowed, _attempt_no = _register_mutation_attempt(run_id, mutation_attempts)
     if not _allowed:
+        # Lost a race with a concurrent re-entry for the same run between the
+        # peek above and this registration.
         reason = (
             f"max_mutation_attempts={MAX_MUTATION_ATTEMPTS} already reached. "
             "A human must merge the pending PR before the live system can retry."

@@ -10,8 +10,10 @@ import { describe, expect, it } from "vitest";
 
 import type { StatusRow, TaskRow } from "./api";
 import {
+  type BoardLanes,
   EMPTY_FILTERS,
   GROUP_OPTIONS,
+  NO_LANES,
   UNSET,
   fromConfig,
   groupTasks,
@@ -169,6 +171,7 @@ describe("saved view config", () => {
     expect(fromConfig(toConfig(filters, "assignee"))).toEqual({
       filters,
       groupBy: "assignee",
+      lanes: NO_LANES,
     });
   });
 
@@ -221,6 +224,77 @@ describe("saved view config", () => {
   });
 });
 
+describe("swimlane state in a saved view (WS-27y)", () => {
+  const lanes: BoardLanes = {
+    subGroupBy: "assignee",
+    collapsedLanes: ["zoe@x.co", UNSET],
+    showEmptyLanes: true,
+  };
+
+  it("round-trips the sub-axis, the folded lanes and the empty-lane toggle", () => {
+    expect(fromConfig(toConfig(EMPTY_FILTERS, "status", lanes))).toEqual({
+      filters: EMPTY_FILTERS,
+      groupBy: "status",
+      lanes,
+    });
+  });
+
+  it("stores nothing for a flat board, so lane-less views stay byte-identical", () => {
+    expect(toConfig(EMPTY_FILTERS, "status", NO_LANES)).toEqual(
+      toConfig(EMPTY_FILTERS, "status")
+    );
+    expect(toConfig(EMPTY_FILTERS, "status")).toEqual({
+      filters: {},
+      group_by: "status",
+    });
+  });
+
+  it("keeps collapsed lanes a JSON array, not a CSV", () => {
+    // Lane keys are addresses and sentinels; an address containing a comma is
+    // unlikely, but the config is JSON and a list should stay a list.
+    const config = toConfig(EMPTY_FILTERS, "status", lanes);
+    expect(config.collapsed_lanes).toEqual(["zoe@x.co", UNSET]);
+  });
+
+  it("normalises a sub-axis equal to the main axis to none", () => {
+    // A board laned by its own columns is nonsense a hand-edited config could
+    // still say; every consumer sees the normalised truth.
+    const got = fromConfig({ group_by: "status", sub_group_by: "status" });
+    expect(got.lanes.subGroupBy).toBe("none");
+    // ...and toConfig refuses to write it in the first place.
+    expect(
+      toConfig(EMPTY_FILTERS, "status", { ...lanes, subGroupBy: "status" })
+    ).not.toHaveProperty("sub_group_by");
+  });
+
+  it("drops junk lane state from a hand-edited config", () => {
+    const got = fromConfig({
+      sub_group_by: "phase",
+      collapsed_lanes: [7, null, "real"],
+      show_empty_lanes: "true",
+    });
+    expect(got.lanes.subGroupBy).toBe("none");
+    expect(got.lanes.collapsedLanes).toEqual(["real"]);
+    // A string is not a decision somebody made in the UI (same rule as
+    // overdue).
+    expect(got.lanes.showEmptyLanes).toBe(false);
+  });
+
+  it("reads an old config with no lane keys as a flat board", () => {
+    expect(fromConfig({ filters: {}, group_by: "status" }).lanes).toEqual(NO_LANES);
+  });
+
+  it("does not persist collapse state without its axis", () => {
+    const config = toConfig(EMPTY_FILTERS, "status", {
+      ...NO_LANES,
+      collapsedLanes: ["ghost"],
+    });
+    // A collapsed-lane list without the axis it belonged to is keys from a
+    // board that no longer exists.
+    expect(config).not.toHaveProperty("collapsed_lanes");
+  });
+});
+
 describe("groupTasks by tag (WS-27m)", () => {
   it("puts a task with three tags in all three columns", () => {
     // Same reason as two assignees: it genuinely belongs to each, and picking
@@ -270,7 +344,11 @@ describe("tag filters in the query", () => {
 
   it("round-trips through a saved view", () => {
     const filters = { ...EMPTY_FILTERS, tags: ["bug", "ops"] };
-    expect(fromConfig(toConfig(filters, "tag"))).toEqual({ filters, groupBy: "tag" });
+    expect(fromConfig(toConfig(filters, "tag"))).toEqual({
+      filters,
+      groupBy: "tag",
+      lanes: NO_LANES,
+    });
   });
 
   it("survives a config that stored tags as an array instead of CSV", () => {

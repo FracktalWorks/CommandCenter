@@ -60,6 +60,9 @@ interface Props {
   onFilters: (next: Filters) => void;
   groupBy: GroupBy;
   onGroupBy: (next: GroupBy) => void;
+  /** WS-27y — the board's second axis, drawn as swimlanes. `"none"` = flat. */
+  subGroupBy: GroupBy;
+  onSubGroupBy: (next: GroupBy) => void;
   /** The signed-in member's address, for the "Mine" toggle. Empty while loading. */
   me: string;
   /** WS-27m — the project's registered tags, for the tag row. */
@@ -78,6 +81,8 @@ export function FilterBar({
   onFilters,
   groupBy,
   onGroupBy,
+  subGroupBy,
+  onSubGroupBy,
   me,
   tags,
   views,
@@ -176,6 +181,27 @@ export function FilterBar({
             {GROUP_OPTIONS.map((option) => (
               <option key={option} value={option}>
                 {GROUP_LABELS[option]}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        {/* WS-27y — the board's second axis. The main axis is withheld from
+            the options: a board laned by its own columns means nothing, and
+            `fromConfig` would normalise it away anyway. */}
+        <label className="flex items-center gap-1 text-xs text-muted-foreground">
+          Lanes
+          <select
+            aria-label="Sub-group by (swimlanes)"
+            className={SELECT}
+            value={subGroupBy === groupBy ? "none" : subGroupBy}
+            onChange={(e) => onSubGroupBy(e.target.value as GroupBy)}
+          >
+            {GROUP_OPTIONS.filter(
+              (option) => option === "none" || option !== groupBy
+            ).map((option) => (
+              <option key={option} value={option}>
+                {option === "none" ? "No lanes" : GROUP_LABELS[option]}
               </option>
             ))}
           </select>
@@ -289,9 +315,11 @@ export function FilterBar({
             variant="text"
             size="sm"
             icon="Bookmark"
-            disabled={!isFiltered(filters) && groupBy === "status"}
+            disabled={
+              !isFiltered(filters) && groupBy === "status" && subGroupBy === "none"
+            }
             title={
-              !isFiltered(filters) && groupBy === "status"
+              !isFiltered(filters) && groupBy === "status" && subGroupBy === "none"
                 ? "Filter or regroup the board first — an unfiltered view is the board"
                 : "Save these filters as a view"
             }

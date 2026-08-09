@@ -20,6 +20,7 @@ import { TaskMeta } from "@/components/TaskMeta";
 import Button from "@/components/ui/Button";
 
 import type { TaskRow } from "../lib/api";
+import { projectsApi } from "../lib/api";
 import {
   type MonthGrid,
   isOutsideMonth,
@@ -28,6 +29,9 @@ import {
   rescheduleTo,
 } from "../lib/calendar";
 import { cardChips } from "../lib/card";
+import { quickAddPrefill } from "../lib/quickAdd";
+import { QuickAdd } from "./QuickAdd";
+import { useFlash } from "./useFlash";
 
 const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
@@ -39,6 +43,9 @@ interface Props {
   /** The window hit the server's cap; some tasks are missing. */
   truncated: boolean;
   today?: string;
+  /** WS-27y — where a day's quick-added task is created (the selected node). */
+  projectId: string;
+  onCreated: (task: TaskRow) => void;
   onSelect: (task: TaskRow) => void;
   onMove: (task: TaskRow, patch: Record<string, string | null>) => void;
   onStep: (months: number) => void;
@@ -51,12 +58,28 @@ export function CalendarView({
   undated,
   truncated,
   today,
+  projectId,
+  onCreated,
   onSelect,
   onMove,
   onStep,
   onToday,
 }: Props) {
   const byDay = placeTasks(tasks, grid);
+  const { flash, attach } = useFlash();
+
+  /** WS-27y — a title typed into a day creates a task DUE that day, through
+   *  the same axis→payload mapping every other quick-add uses. */
+  async function quickAdd(title: string, day: string) {
+    const plan = quickAddPrefill("day", day);
+    const created = await projectsApi.createTask({
+      project_id: projectId,
+      title,
+      ...plan.create,
+    });
+    flash(created.id);
+    onCreated(created);
+  }
 
   return (
     <div className="flex flex-col gap-2 p-3">
@@ -117,7 +140,12 @@ export function CalendarView({
                 // so a task dropped back on its own day writes nothing rather
                 // than posting an activity saying it moved to where it was.
                 const patch = rescheduleTo(task, day);
-                if (patch) onMove(task, patch as Record<string, string | null>);
+                if (patch) {
+                  // The landing flash finds the card after the month reloads
+                  // and re-keys it under its new day (WS-27y).
+                  flash(task.id);
+                  onMove(task, patch as Record<string, string | null>);
+                }
               }}
               className={`min-h-24 bg-card p-1 ${outside ? "opacity-50" : ""}`}
             >
@@ -134,7 +162,7 @@ export function CalendarView({
               </div>
               <ul className="mt-1 space-y-1">
                 {(byDay.get(day) ?? []).map((task) => (
-                  <li key={`${day}:${task.id}`}>
+                  <li key={`${day}:${task.id}`} ref={attach(task.id)} className="rounded">
                     <button
                       type="button"
                       draggable
@@ -154,6 +182,13 @@ export function CalendarView({
                   </li>
                 ))}
               </ul>
+              {/* WS-27y — a title typed here is due THIS day. */}
+              <QuickAdd
+                compact
+                label={`Add a task due ${day}`}
+                onAdd={(title) => quickAdd(title, day)}
+                className="mt-1"
+              />
             </div>
           );
         })}

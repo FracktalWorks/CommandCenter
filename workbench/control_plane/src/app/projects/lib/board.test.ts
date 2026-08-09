@@ -9,12 +9,16 @@ import { describe, expect, it } from "vitest";
 import {
   POSITION_MAX,
   SAVED_VIEW_POSITION,
+  buildCellDropPatch,
   buildColumnDropUpdate,
+  currentAxisKey,
+  dropRefusal,
   orderBearingView,
   planDrop,
   positionBetween,
   sortForView,
 } from "./board";
+import { UNSET } from "./grouping";
 
 describe("positionBetween", () => {
   it("halves the gap between two neighbours", () => {
@@ -117,6 +121,109 @@ describe("buildColumnDropUpdate", () => {
     // The drop still reorders within the column; it simply moves no field.
     expect(buildColumnDropUpdate("assignee", "someone")).toBeNull();
     expect(buildColumnDropUpdate(undefined, null)).toBeNull();
+  });
+
+  it("patches importance as an integer, and the UNSET lane as null (WS-27y)", () => {
+    // The gateway's TaskIn declares `importance: int`; "2" would 422, and
+    // Number(UNSET) would be NaN.
+    expect(buildColumnDropUpdate("importance", "2")).toEqual({ importance: 2 });
+    expect(buildColumnDropUpdate("importance", "0")).toEqual({ importance: 0 });
+    expect(buildColumnDropUpdate("importance", UNSET)).toEqual({ importance: null });
+  });
+});
+
+describe("dropRefusal (WS-27y)", () => {
+  it("allows the single-valued plain-PATCH axes", () => {
+    expect(dropRefusal("status")).toBeNull();
+    expect(dropRefusal("importance")).toBeNull();
+    expect(dropRefusal("none")).toBeNull();
+    expect(dropRefusal(undefined)).toBeNull();
+  });
+
+  it("refuses many-valued axes, and says why", () => {
+    expect(dropRefusal("assignee")).toMatch(/many-valued/i);
+    expect(dropRefusal("tag")).toMatch(/many-valued/i);
+  });
+
+  it("refuses a project move with the grant boundary named", () => {
+    expect(dropRefusal("project")).toMatch(/grant boundary/i);
+  });
+
+  it("refuses a lane cell when EITHER axis is unwritable", () => {
+    // Writing half of what the cell means would file the card somewhere it
+    // is not.
+    expect(dropRefusal("status", "assignee")).toMatch(/many-valued/i);
+    expect(dropRefusal("assignee", "status")).toMatch(/many-valued/i);
+    expect(dropRefusal("status", "importance")).toBeNull();
+  });
+
+  it("refuses an axis it has never heard of, naming it", () => {
+    expect(dropRefusal("phase")).toMatch(/phase/);
+  });
+
+  it("refuses to move an archived task at all", () => {
+    expect(dropRefusal("status", null, { id: "t", archived_at: "2026-08-01" })).toMatch(
+      /archived/i
+    );
+  });
+});
+
+describe("currentAxisKey", () => {
+  const task = {
+    status_id: "s-1",
+    project_id: "p-1",
+    importance: 0,
+  };
+
+  it("reads the bucket a task sits in per axis", () => {
+    expect(currentAxisKey(task, "status")).toBe("s-1");
+    expect(currentAxisKey(task, "project")).toBe("p-1");
+  });
+
+  it("keeps importance 0 a real bucket and missing importance UNSET", () => {
+    expect(currentAxisKey(task, "importance")).toBe("0");
+    expect(currentAxisKey({ importance: null }, "importance")).toBe(UNSET);
+    expect(currentAxisKey({}, "importance")).toBe(UNSET);
+  });
+
+  it("has no single answer for many-valued or unknown axes", () => {
+    expect(currentAxisKey(task, "assignee")).toBeNull();
+    expect(currentAxisKey(task, undefined)).toBeNull();
+  });
+});
+
+describe("buildCellDropPatch (WS-27y)", () => {
+  const task = { status_id: "s-todo", importance: null };
+
+  it("sets BOTH axes when a card lands in a foreign cell", () => {
+    expect(
+      buildCellDropPatch(task, "status", "s-doing", "importance", "2")
+    ).toEqual({ status_id: "s-doing", importance: 2 });
+  });
+
+  it("patches only the axis that actually moved", () => {
+    // Dropped elsewhere in its own column: the lane changed, status did not —
+    // patching status anyway would write an activity row about a non-move.
+    expect(buildCellDropPatch(task, "status", "s-todo", "importance", "1")).toEqual({
+      importance: 1,
+    });
+  });
+
+  it("patches nothing for a drop into the cell it came from", () => {
+    expect(buildCellDropPatch(task, "status", "s-todo", "importance", UNSET)).toBeNull();
+  });
+
+  it("works without a lane axis — the flat board's column drop", () => {
+    expect(buildCellDropPatch(task, "status", "s-doing")).toEqual({
+      status_id: "s-doing",
+    });
+    expect(buildCellDropPatch(task, "status", "s-todo")).toBeNull();
+  });
+
+  it("clears priority when dropped into the no-priority lane", () => {
+    expect(
+      buildCellDropPatch({ status_id: "s-todo", importance: 2 }, "status", "s-todo", "importance", UNSET)
+    ).toEqual({ importance: null });
   });
 });
 

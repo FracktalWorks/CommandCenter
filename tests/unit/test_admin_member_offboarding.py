@@ -337,10 +337,20 @@ async def test_purging_yourself_is_refused_by_the_same_guard(db: _FakeDB) -> Non
 
 async def test_re_activating_your_own_row_is_not_a_lockout(db: _FakeDB) -> None:
     """dw2 — `active` is the one status that gives access rather than taking
-    it, so the guard has no business refusing it."""
-    from gateway.routes.admin.members import MemberPatch, update_member
+    it, so the guard has no business refusing it.
 
-    db.users["u-owner"]["status"] = "suspended"
+    ⚠️ **This test used to suspend the caller's own row first, and that world is
+    now unreachable.** Since WS-29e the route derives the caller's tenant from
+    their own ACTIVE directory row (``projects.core.resolve_organization_id``),
+    so a suspended caller is refused by :func:`_common.get_org_id` before the
+    self-guard is consulted — which merely makes explicit what
+    ``EffectiveAccess.is_active`` already decided: a suspended member holds no
+    permissions and never passes ``require_admin_user`` in the first place, so
+    they could never have issued this PATCH in production either. What is left
+    is the claim the test was actually written to make, and it is unchanged:
+    ``status="active"`` on your own row is not a lockout and is not refused.
+    """
+    from gateway.routes.admin.members import MemberPatch, update_member
 
     entry = await update_member(
         "owner@fracktal.in", MemberPatch(status="active"), admin=OWNER,
@@ -479,17 +489,35 @@ async def test_a_caller_with_no_address_of_their_own_matches_nobody(
 
     A caller whose identity header never arrived has ``email == ""``; comparing
     two blanks would refuse (or, on a row with no address, refuse everything)
-    for a reason that has nothing to do with self-off-boarding. The permission
-    gate is what stops an anonymous caller here, not this guard.
+    for a reason that has nothing to do with self-off-boarding. That claim is
+    about :func:`_common.assert_not_self_lockout` alone and is asserted against
+    the function directly, because since WS-29e the ROUTE no longer reaches it:
+    an identity-less caller has no tenant to derive, so ``get_org_id`` refuses
+    first. Both halves are checked here — the guard's rule, and the fact that
+    the route now refuses earlier and writes nothing.
     """
+    from gateway.routes.admin._common import assert_not_self_lockout
     from gateway.routes.admin.members import MemberPatch, update_member
 
-    entry = await update_member(
-        "priya@fracktal.in", MemberPatch(status="suspended"),
-        admin=_caller(""),
+    # The guard itself: two blanks are not a match.
+    assert_not_self_lockout(
+        _caller(""), {"email": ""}, status="suspended",
+    )
+    assert_not_self_lockout(
+        _caller(""), {"email": "priya@fracktal.in"}, status="suspended",
     )
 
-    assert entry.status == "suspended"
+    # And the route, which no longer gets that far. R3: identity comes from the
+    # authenticated context, and an absent one resolves to no organization
+    # rather than to the deployment's.
+    with pytest.raises(HTTPException) as exc:
+        await update_member(
+            "priya@fracktal.in", MemberPatch(status="suspended"),
+            admin=_caller(""),
+        )
+    assert exc.value.status_code == 403
+    assert db.users["u-priya"]["status"] == "active"
+    _nothing_was_written(db)
 
 
 # ════════════════════════════════════════════════════════════════════════════

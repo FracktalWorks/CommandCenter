@@ -19,6 +19,14 @@ A fake that re-implemented the predicate in Python and applied it regardless
 would pass against an unscoped route — which is the whole defect class this
 package exists to avoid.
 
+⚠️ **The tenant predicate is mirrored the same way** (WS-29b). Three shapes all
+say ``organization_id`` — the grant closure's own arm, the ``data:org:read``
+subquery, and the outer ``AND`` composed above both — and each is applied only
+when the statement carries THAT shape. A mirror that scoped everything by the
+caller's organization regardless would agree with a route that dropped its
+tenant clause, which is the leak ``specs/multi_tenancy.md`` §6 calls the most
+dangerous line in the retrofit.
+
 Its blind spots, stated so nobody reads a green suite as more than it is:
 
 * **Foreign keys and therefore cascades.** Deleting a ``pm_projects`` row leaves
@@ -72,13 +80,139 @@ _LITERAL_EQ = re.compile(r"\b(?:\w+\.)?(\w+)\s*=\s*'([^']*)'")
 _IS_NULL = re.compile(r"\b(?:\w+\.)?(\w+)\s+IS\s+(NOT\s+)?NULL", re.I)
 #: ``<col> ILIKE :q``
 _ILIKE = re.compile(r"(?:\w+\.)?(\w+)\s+ILIKE\s+:(\w+)", re.I)
+#: ``<col> < now()`` — the date half of the `overdue` filter. Unmirrored until
+#: WS-27q, which meant every `overdue` test was really only asserting the
+#: status half and would have passed with the date comparison deleted.
+_NOW_LT = re.compile(r"\b(?:\w+\.)?(\w+)\s*<\s*now\(\)", re.I)
+#: WS-27q's calendar window: ``coalesce(<a>, <b>) < :window_to``. The captured
+#: expression is what says WHICH interval endpoint the comparison is about, so
+#: the mirror reads the SQL's coalesce order rather than assuming one.
+_WINDOW_CMP = re.compile(
+    r"coalesce\(([^()]*(?:\([^()]*\)[^()]*)*)\)\s*(<|>=)\s*:(window_to|window_from)",
+    re.I | re.S,
+)
+#: WS-27t: ``l.source_task_id AS blocker`` — which END plays which ROLE. Read
+#: rather than assumed, because swapping the two aliases points every arrow the
+#: wrong way and a mirror that hard-codes the roles cannot see it.
+_ALIASED_END = re.compile(
+    r"l\.(source_task_id|target_task_id)\s+AS\s+(blocker|blocked)\b", re.I
+)
+#: WS-27t: which end is required to be inside the window.
+_END_IN_WINDOW = re.compile(
+    r"l\.(source_task_id|target_task_id)\s*=\s*ANY\(CAST\(:ids", re.I
+)
 #: The column a subquery restricts: ``t.project_id IN ( WITH RECURSIVE …``
 _IN_SUBQUERY = re.compile(
     r"(?:\w+\.)?(\w+)\s+IN\s*\(\s*WITH\s+RECURSIVE\s+(\w+)", re.I
 )
 
+# ── The tenant predicate (WS-29b) ───────────────────────────────────────────
+#
+# Three shapes, and they must be told apart because all three say
+# `organization_id`. Reading any of them as another is how a mirror agrees with
+# a route that scoped the wrong table.
+
+#: ``core._TENANT_PROJECTS_SQL`` — the unrestricted (`data:org:read`) clause,
+#: which is the whole portfolio OF ONE ORGANIZATION.
+_TENANT_PROJECTS = re.compile(
+    r"SELECT id FROM pm_projects WHERE organization_id\s*=\s*CAST\(:vis_org", re.I
+)
+#: The column that subquery restricts: ``t.root_project_id IN ( SELECT id FROM…``
+_IN_TENANT_SUBQUERY = re.compile(
+    r"(?:\w+\.)?(\w+)\s+IN\s*\(\s*SELECT id FROM pm_projects WHERE organization_id",
+    re.I,
+)
+#: The grant closure's own tenant arm — ⚠️ the line that makes `subject = 'org'`
+#: mean "everybody **in this organization**".
+_CLOSURE_IS_TENANTED = re.compile(
+    r"g\.organization_id\s*=\s*CAST\(:vis_org", re.I
+)
+#: ⚠️ And the closure's RECURSIVE step, read SEPARATELY from its seed step.
+#: They are two predicates on two tables and a mirror that inferred one from
+#: the other cannot see a mutant that deletes just the second — which is
+#: exactly what happened, and this is the fix.
+_DESCENT_IS_TENANTED = re.compile(
+    r"p\.organization_id\s*=\s*CAST\(:vis_org", re.I
+)
+#: ``<alias>.organization_id = CAST(:vis_org AS uuid)`` — the tenant composed
+#: ABOVE the grant closure, and the whole of the unrestricted task clause.
+_ROW_TENANT = re.compile(
+    r"\w+\.organization_id\s*=\s*CAST\(:vis_org\s+AS\s+uuid\)", re.I
+)
+#: The closure body, removed before looking for ``_ROW_TENANT`` — it contains
+#: `g.organization_id`, and mistaking that for the outer AND would filter the
+#: statement's own table by a predicate that is about the grant rows.
+_CLOSURE_BODY = re.compile(
+    r"WITH RECURSIVE granted AS.*?SELECT id FROM granted", re.I | re.S
+)
+
+#: The one organization this fake models. `organization` has exactly one seeded
+#: row in the real schema (`slug='default'`), and every test that is not ABOUT
+#: tenancy is written against that deployment.
+DEFAULT_ORGANIZATION = "00000000-0000-4000-8000-0000000000aa"
+
+#: Migration 161's trigger table, mirrored: ``table → (parent table, FK column)``.
+#:
+#: The DATABASE derives a child's `organization_id` from its parent on write, so
+#: 43 INSERT sites in 16 modules did not have to grow a tenant argument. That
+#: derivation has to happen here too, or every one of those inserts would land a
+#: NULL and every scoped read of it would come back empty — which looks exactly
+#: like the scoping working.
+#:
+#: Only the first parent is listed. The real trigger also declares SECOND
+#: attachments (`pm_tasks.root_project_id`, `pm_task_links.target_task_id`,
+#: `pm_view_task_positions.task_id`) whose job is to REFUSE a row straddling two
+#: organizations. Those are a database constraint, and constraints are this
+#: fake's stated blind spot — they are proved against a real Postgres.
+_ORGANIZATION_PARENT: dict[str, tuple[str, str]] = {
+    "pm_projects": ("pm_projects", "parent_project_id"),
+    "pm_project_grants": ("pm_projects", "project_id"),
+    "pm_task_statuses": ("pm_projects", "project_id"),
+    "pm_task_types": ("pm_projects", "project_id"),
+    "pm_task_counters": ("pm_projects", "project_id"),
+    "pm_custom_fields": ("pm_projects", "project_id"),
+    "pm_tags": ("pm_projects", "project_id"),
+    "pm_recurrences": ("pm_projects", "project_id"),
+    "pm_views": ("pm_projects", "project_id"),
+    "pm_tasks": ("pm_projects", "project_id"),
+    "pm_activities": ("pm_tasks", "task_id"),
+    "pm_task_assignees": ("pm_tasks", "task_id"),
+    "pm_task_links": ("pm_tasks", "source_task_id"),
+    "pm_task_attachments": ("pm_tasks", "task_id"),
+    "pm_task_personal": ("pm_tasks", "task_id"),
+    "pm_notifications": ("pm_tasks", "task_id"),
+    "pm_view_task_positions": ("pm_views", "view_id"),
+}
+
 
 _SUBQUERY_RE = re.compile(r"\b(SELECT|WITH)\b", re.I)
+
+
+def like_to_regex(pattern: str) -> re.Pattern[str]:
+    """A SQL LIKE pattern → the regex it means, honouring the backslash escape.
+
+    Written properly rather than as a `%`-strip-and-substring, because WS-27r's
+    whole defect was that `_` and `%` are METACHARACTERS: a fake that treated
+    the pattern as a literal substring would agree with both the escaped and
+    the unescaped implementation, and the bug this exists to catch would be
+    invisible here.
+    """
+    out = ["(?is)^"]
+    escaped = False
+    for char in pattern:
+        if escaped:
+            out.append(re.escape(char))
+            escaped = False
+        elif char == "\\":
+            escaped = True
+        elif char == "%":
+            out.append(".*")
+        elif char == "_":
+            out.append(".")
+        else:
+            out.append(re.escape(char))
+    out.append("$")
+    return re.compile("".join(out))
 
 
 def _strip_subqueries(where: str) -> tuple[str, list[str]]:
@@ -245,6 +379,11 @@ class FakeProjectsDB:
     """An in-memory ``pm_*`` schema that answers the package's statements."""
 
     def __init__(self) -> None:
+        #: The tenant every seeded `pm_*` row belongs to, and the answer this
+        #: fake gives when a route asks the directory which organization the
+        #: caller is in. Set it to ``None`` to model somebody with no
+        #: ``app_user`` row; seed real ``app_user`` rows to model two tenants.
+        self.organization_id: str | None = DEFAULT_ORGANIZATION
         self.tables: dict[str, list[dict[str, Any]]] = {}
         self.statements: list[str] = []
         #: ``(statement, params)`` in order — how a test proves a write happened
@@ -260,6 +399,13 @@ class FakeProjectsDB:
             **_DEFAULTS.get(table, {}),
             **columns,
         }
+        # WS-29a — every `pm_*` table carries the tenant key (D-MT-3), so a
+        # seeded row that lacked one would be invisible to every scoped read and
+        # would make the whole suite red for the wrong reason. Derived from the
+        # parent exactly as the database does. An explicit `organization_id=`
+        # still wins: that is how the two-tenant tests place a row.
+        if table.startswith("pm_") and row.get("organization_id") is None:
+            row["organization_id"] = self.derive_organization(table, row)
         if table in _TIMESTAMPED:
             row.setdefault("created_at", _now() - timedelta(days=1))
             row.setdefault("updated_at", _now() - timedelta(days=1))
@@ -268,6 +414,27 @@ class FakeProjectsDB:
 
     def rows(self, table: str) -> list[dict[str, Any]]:
         return self.tables.get(table, [])
+
+    def derive_organization(self, table: str, row: dict[str, Any]) -> str | None:
+        """One row's tenant, the way migration 161's trigger derives it.
+
+        The parent's value, or — for a ROOT project, which has no parent — this
+        fake's own organization, standing in for the value the application is
+        required to supply. ``pm_activities`` is the one row that may hang off
+        either a task or a project, so its second parent is tried too.
+        """
+        parent = _ORGANIZATION_PARENT.get(table)
+        candidates = [parent] if parent else []
+        if table == "pm_activities":
+            candidates.append(("pm_projects", "project_id"))
+        for parent_table, column in candidates:
+            parent_id = row.get(column)
+            if parent_id is None:
+                continue
+            for candidate in self.rows(parent_table):
+                if str(candidate.get("id")) == str(parent_id):
+                    return candidate.get("organization_id")
+        return self.organization_id
 
     def statements_touching(self, needle: str) -> list[str]:
         return [s for s in self.statements if needle in s]
@@ -345,6 +512,24 @@ class FakeProjectsDB:
         args = dict(params or {})
         self.statements.append(statement)
         self.calls.append((statement, args))
+        # WS-29b's tenant lookup: `X-User-Email` → `app_user.organization_id`.
+        # Answered from seeded `app_user` rows when a test has them — the
+        # two-tenant tests do — and otherwise from this fake's single
+        # organization, which is the deployment every other test is written
+        # against. `self.organization_id = None` models a caller the directory
+        # does not know, who then sees nothing because `column = NULL` is NULL.
+        if "au.organization_id AS organization_id" in statement:
+            who = str(args.get("email") or "").lower()
+            for row in self.rows("app_user"):
+                if str(row.get("email") or "").lower() == who:
+                    return _Result([SimpleNamespace(
+                        organization_id=row.get("organization_id"),
+                    )])
+            if self.rows("app_user") or self.organization_id is None:
+                return _Result([])
+            return _Result([SimpleNamespace(
+                organization_id=self.organization_id,
+            )])
         # WS-27k's assignee roll-up: one aggregate for a whole page of tasks,
         # rather than a query per card. Taught to the fake explicitly because
         # `GROUP BY` + `array_agg` is not a shape the generic WHERE reader can
@@ -361,6 +546,28 @@ class FakeProjectsDB:
                 SimpleNamespace(task_id=task_id, people=sorted(people))
                 for task_id, people in grouped.items()
             ])
+        # The two card-badge roll-ups, taught for the same reason as the
+        # assignee one above: `GROUP BY` is not a shape the generic WHERE
+        # reader can parse. Both fingerprints name a statement-specific ALIAS
+        # rather than a table, because `pm_tasks` and `pm_task_links` each
+        # appear in several statements and a fingerprint that is merely
+        # *present* in the target is how the WS-27n audience-clause collision
+        # happened.
+        if "AS parent," in statement and "GROUP BY" in statement:
+            return _Result(self._subtask_counts(statement, args))
+        if "AS blocked," in statement and "GROUP BY" in statement:
+            return _Result(self._blocker_counts(statement, args))
+        # WS-27t's drawable edges. Fingerprinted on `AS blocker,` — the count
+        # aggregate above uses `AS blocked,` and this one uses BOTH, so the
+        # order of these two branches is load-bearing and the more specific
+        # fingerprint has to be tested first.
+        if "AS blocker," in statement:
+            return _Result(self._window_links(statement, args))
+        # WS-27r's ranked search. Three joins and a CASE — a shape the generic
+        # WHERE reader cannot parse, and one where `:number IS NOT NULL` would
+        # be mistaken for a column predicate and drop every row.
+        if "END AS rank" in statement:
+            return _Result(self._search_hits(statement, args))
         head = statement.split(None, 1)[0].upper()
         table = self._table(statement)
         if head == "INSERT":
@@ -376,6 +583,194 @@ class FakeProjectsDB:
         if match is None:  # pragma: no cover — every statement names a table
             raise AssertionError(f"fake could not find a table in: {sql}")
         return match.group(1)
+
+    # page roll-ups ------------------------------------------------------
+    def _categories(self) -> dict[str, str]:
+        return {
+            str(s["id"]): str(s.get("category") or "")
+            for s in self.rows("pm_task_statuses")
+        }
+
+    def _subtask_counts(self, statement: str, args: dict) -> list[Any]:
+        """``{parent, total, done}`` per parent, over the page's ids.
+
+        Every clause is applied ONLY when the statement carries it, the
+        ``_select`` convention: a mirror that filters unconditionally agrees
+        with itself no matter what the route stops emitting, which is how a
+        deleted WHERE clause survives a green suite.
+        """
+        wanted = {str(i) for i in (args.get("ids") or [])}
+        closed = set(args.get("closed") or [])
+        skips_archived = "t.archived_at IS NULL" in statement
+        counts_closed = "FILTER (WHERE s.category = ANY(:closed))" in statement
+        categories = self._categories()
+        grouped: dict[str, list[str]] = {}
+        for task in self.rows("pm_tasks"):
+            parent = str(task.get("parent_task_id") or "")
+            if parent not in wanted:
+                continue
+            if skips_archived and task.get("archived_at") is not None:
+                continue
+            grouped.setdefault(parent, []).append(
+                categories.get(str(task.get("status_id")), "")
+            )
+        return [
+            SimpleNamespace(
+                parent=parent,
+                total=len(found),
+                done=(
+                    sum(1 for c in found if c in closed)
+                    if counts_closed else len(found)
+                ),
+            )
+            for parent, found in grouped.items()
+        ]
+
+    def _search_hits(self, statement: str, args: dict) -> list[Any]:
+        """WS-27r's ranked hits.
+
+        Every clause honoured only when the statement carries it — including
+        the visibility closure, so a search that loses it stops being scoped
+        here too and the leak test goes red.
+        """
+        projects = {str(p["id"]): p for p in self.rows("pm_projects")}
+        statuses = {str(x["id"]): x for x in self.rows("pm_task_statuses")}
+        term = like_to_regex(str(args.get("term") or ""))
+        prefix = like_to_regex(str(args.get("prefix") or ""))
+        number = args.get("number")
+        scoped = "pm_project_grants" in statement
+        visible = self.visible_project_ids(
+            str(args.get("vis_email") or ""), list(args.get("vis_groups") or []),
+            organization_id=(
+                str(args.get("vis_org"))
+                if _CLOSURE_IS_TENANTED.search(statement) else None
+            ),
+            descendant_organization_id=(
+                str(args.get("vis_org"))
+                if _DESCENT_IS_TENANTED.search(statement) else None
+            ),
+        )
+        skips_archived = "t.archived_at IS NULL" in statement
+        # Same rule as everywhere else: the tenant is applied only when the
+        # statement carries it. Search reaches every task in the app, so this is
+        # the read where losing it costs the most.
+        tenanted = bool(_ROW_TENANT.search(_CLOSURE_BODY.sub("", statement)))
+        org = str(args.get("vis_org"))
+        tenant_only = bool(_TENANT_PROJECTS.search(statement))
+
+        found: list[Any] = []
+        for task in self.rows("pm_tasks"):
+            if tenanted and str(task.get("organization_id")) != org:
+                continue
+            if tenant_only and str(task.get("project_id")) not in self.tenant_project_ids(org):
+                continue
+            if scoped and str(task.get("project_id")) not in visible:
+                continue
+            if skips_archived and task.get("archived_at") is not None:
+                continue
+            title = str(task.get("title") or "")
+            body = str(task.get("description") or "")
+            numbered = number is not None and task.get("task_number") == number
+            if not (term.match(title) or term.match(body) or numbered):
+                continue
+            rank = (
+                0 if numbered
+                else 1 if prefix.match(title)
+                else 2 if term.match(title)
+                else 3
+            )
+            project = projects.get(str(task.get("project_id")), {})
+            status = statuses.get(str(task.get("status_id")), {})
+            found.append(SimpleNamespace(
+                **task,
+                project_name=project.get("name"),
+                status_name=status.get("name"),
+                category=status.get("category"),
+                rank=rank,
+            ))
+
+        # The tie-break is read off the statement, not assumed: `rank` alone
+        # leaves ties in seeding order, which would agree with any tie-break
+        # the route chose — including none.
+        recent_first = "t.updated_at DESC" in statement
+        found.sort(key=lambda r: str(r.id))
+        if recent_first:
+            found.sort(key=lambda r: _sortable(r.updated_at), reverse=True)
+        found.sort(key=lambda r: r.rank)
+        cap = int(args.get("cap") or len(found))
+        return found[:cap]
+
+    def _window_links(self, statement: str, args: dict) -> list[Any]:
+        """The `blocks` edges with BOTH ends inside the page's ids.
+
+        **Which column is the blocker and which columns are membership-tested
+        are both read off the statement**, never assumed. Assuming them was a
+        real mirror gap found by mutation: hard-coding `blocker=source` let a
+        mutant swap the SQL's two aliases — an arrow drawn the wrong way round,
+        the chart asserting the opposite sequence — with every test still green,
+        and counting the membership tests rather than naming their columns let a
+        mutant check the wrong end.
+        """
+        wanted = {str(i) for i in (args.get("ids") or [])}
+        only_blocks = "l.link_type = 'blocks'" in statement
+        roles = {role: column for column, role in _ALIASED_END.findall(statement)}
+        checked = set(_END_IN_WINDOW.findall(statement))
+        out: list[Any] = []
+        for link in self.rows("pm_task_links"):
+            if only_blocks and link.get("link_type") != "blocks":
+                continue
+            ends = {
+                column: str(link.get(column) or "")
+                for column in ("source_task_id", "target_task_id")
+            }
+            if any(ends[column] not in wanted for column in checked):
+                continue
+            out.append(SimpleNamespace(
+                id=link.get("id"),
+                blocker=ends.get(roles.get("blocker", ""), ""),
+                blocked=ends.get(roles.get("blocked", ""), ""),
+            ))
+        return sorted(out, key=lambda r: str(r.id))
+
+    def _blocker_counts(self, statement: str, args: dict) -> list[Any]:
+        """``{blocked, blockers}`` counting only blockers that are still OPEN.
+
+        Which end of the link is the blocked one is read off the statement
+        rather than assumed, so reversing the SQL's direction reverses this
+        mirror's answer instead of being invisible to it.
+        """
+        wanted = {str(i) for i in (args.get("ids") or [])}
+        closed = set(args.get("closed") or [])
+        blocked_col = (
+            "target_task_id" if "l.target_task_id AS blocked" in statement
+            else "source_task_id"
+        )
+        blocker_col = (
+            "source_task_id" if "t.id = l.source_task_id" in statement
+            else "target_task_id"
+        )
+        only_blocks = "l.link_type = 'blocks'" in statement
+        skips_closed = "NOT (s.category = ANY(:closed))" in statement
+        categories = self._categories()
+        tasks = {str(t["id"]): t for t in self.rows("pm_tasks")}
+        counted: dict[str, int] = {}
+        for link in self.rows("pm_task_links"):
+            blocked = str(link.get(blocked_col) or "")
+            if blocked not in wanted:
+                continue
+            if only_blocks and link.get("link_type") != "blocks":
+                continue
+            blocker = tasks.get(str(link.get(blocker_col) or ""))
+            if blocker is None:
+                continue
+            category = categories.get(str(blocker.get("status_id")), "")
+            if skips_closed and category in closed:
+                continue
+            counted[blocked] = counted.get(blocked, 0) + 1
+        return [
+            SimpleNamespace(blocked=blocked, blockers=count)
+            for blocked, count in counted.items()
+        ]
 
     # verbs --------------------------------------------------------------
     def _insert(self, statement: str, table: str, args: dict) -> _Result:
@@ -423,6 +818,11 @@ class FakeProjectsDB:
                     return _Result([SimpleNamespace(**row)])
 
         row = {"id": str(uuid4()), **_DEFAULTS.get(table, {}), **values}
+        # Migration 161's `pm_organization_from_parent` trigger, mirrored: a
+        # child row inserted without a tenant INHERITS its parent's rather than
+        # being refused, which is what lets 43 INSERT sites stay unedited.
+        if table.startswith("pm_") and row.get("organization_id") is None:
+            row["organization_id"] = self.derive_organization(table, row)
         if table in _TIMESTAMPED:
             row.setdefault("created_at", _now())
             row.setdefault("updated_at", _now())
@@ -501,17 +901,37 @@ class FakeProjectsDB:
         return _Result([SimpleNamespace(**r) for r in matched])
 
     # visibility ---------------------------------------------------------
-    def visible_project_ids(self, email: str, groups: list[str]) -> set[str]:
+    def visible_project_ids(
+        self, email: str, groups: list[str],
+        organization_id: str | None = None,
+        descendant_organization_id: str | None = None,
+    ) -> set[str]:
         """The grant closure: directly granted projects, plus their descendants.
 
         Deliberately computed the same way the SQL does — seeds, then descend —
         rather than by walking each project's ancestry, so a subtree granted
         without its parent resolves identically in both.
+
+        ⚠️ ``organization_id=None`` means the STATEMENT carried no tenant arm,
+        not "any tenant is fine". The caller reads that off the SQL, so a route
+        (or the closure itself) that loses its tenant filter stops being scoped
+        here too and the cross-tenant test goes red. Defaulting it to the fake's
+        own organization would have made the leak invisible.
+
+        ⚠️ The SEED step and the DESCENT step are told apart, and they are two
+        separate arguments for that reason. Inferring the second from the first
+        let a mutant delete the recursive term's tenant filter and survive a
+        green suite — the descent is the arm that would matter most if the
+        database's parent-consistency trigger were ever dropped.
         """
         wanted = {str(g).lower() for g in groups}
         seeds = {
             str(g.get("project_id")) for g in self.rows("pm_project_grants")
             if (
+                organization_id is None
+                or str(g.get("organization_id")) == organization_id
+            )
+            and (
                 g.get("subject") == "org"
                 or str(g.get("subject") or "").lower() == (email or "").lower()
                 or str(g.get("subject") or "").lower() in wanted
@@ -523,10 +943,22 @@ class FakeProjectsDB:
             changed = False
             for project in self.rows("pm_projects"):
                 parent = project.get("parent_project_id")
+                if descendant_organization_id is not None and (
+                    str(project.get("organization_id"))
+                    != descendant_organization_id
+                ):
+                    continue
                 if parent is not None and str(parent) in out and str(project["id"]) not in out:
                     out.add(str(project["id"]))
                     changed = True
         return out
+
+    def tenant_project_ids(self, organization_id: str | None) -> set[str]:
+        """Every project in one organization — the `data:org:read` answer."""
+        return {
+            str(p["id"]) for p in self.rows("pm_projects")
+            if str(p.get("organization_id")) == str(organization_id)
+        }
 
     def _subtree_ids(self, root_id: str) -> set[str]:
         out = {str(root_id)}
@@ -568,10 +1000,19 @@ class FakeProjectsDB:
         # module's docstring warns about, caught by mutation rather than review.
         wants_assigned = "lower(a.assignee) = :who" in statement
         wants_personal = "lower(proj.personal_owner) = :who" in statement
+        # ⚠️ WS-29b's tenant, composed above both arms. Read off the statement
+        # like everything else here: the inbox has no GRANT clause by design, so
+        # this line is the ONLY thing standing between it and another
+        # organization's task, and a mirror that applied it unconditionally
+        # could not tell whether the route still emits it.
+        tenanted = "t.organization_id = CAST(:vis_org AS uuid)" in statement
+        org = str(args.get("vis_org"))
 
         out: list[Any] = []
         for task in self.rows("pm_tasks"):
             if task.get("archived_at") is not None:
+                continue
+            if tenanted and str(task.get("organization_id")) != org:
                 continue
             assignees = self._assignees_of(task["id"])
             reached = (wants_assigned and who in assignees) or (
@@ -647,13 +1088,47 @@ class FakeProjectsDB:
     ) -> tuple[list[dict], bool]:
         seen = False
 
+        # ⚠️ The tenant, composed ABOVE the grant closure (WS-29b). Read from
+        # the statement with the closure's own body removed first, because that
+        # body ALSO says `organization_id` and the two predicates are about
+        # different tables.
+        #
+        # This is what scopes `load_visible_task`'s assignee escape hatch and
+        # the whole of the unrestricted (`data:org:read`) task clause. Delete
+        # either from the route and this stops applying, which is the point.
+        if _ROW_TENANT.search(_CLOSURE_BODY.sub("", where)):
+            seen = True
+            org = str(args.get("vis_org"))
+            rows = [r for r in rows if str(r.get("organization_id")) == org]
+
+        # `data:org:read` — every project in ONE organization, grants ignored.
+        if any(_TENANT_PROJECTS.search(b) for b in blocks):
+            seen = True
+            column_match = _IN_TENANT_SUBQUERY.search(where)
+            column = column_match.group(1) if column_match else "id"
+            tenant = self.tenant_project_ids(args.get("vis_org"))
+            rows = [r for r in rows if str(r.get(column)) in tenant]
+
         # The grant closure — applied ONLY when the statement actually carries
         # the subquery. A route that loses its visibility clause therefore stops
         # being filtered here, and its 404 test fails.
         if any("pm_project_grants" in b for b in blocks):
             seen = True
+            # ⚠️ And whether the CLOSURE is tenant-scoped is read off the
+            # closure's own text, not assumed. `subject = 'org'` means
+            # "everybody"; only `g.organization_id = :vis_org` makes it mean
+            # "everybody in this organization". Assuming it were always there
+            # is exactly how the leak §6 names would pass a green suite.
             visible = self.visible_project_ids(
                 str(args.get("vis_email") or ""), list(args.get("vis_groups") or []),
+                organization_id=(
+                    str(args.get("vis_org"))
+                    if _CLOSURE_IS_TENANTED.search(where) else None
+                ),
+                descendant_organization_id=(
+                    str(args.get("vis_org"))
+                    if _DESCENT_IS_TENANTED.search(where) else None
+                ),
             )
             column_match = _IN_SUBQUERY.search(where)
             column = column_match.group(1) if column_match else "id"
@@ -729,6 +1204,26 @@ class FakeProjectsDB:
         if re.search(r"\bAND\s+is_default\b", top, re.I):
             seen = True
             rows = [r for r in rows if r.get("is_default")]
+        for column in _NOW_LT.findall(top):
+            seen = True
+            rows = [
+                r for r in rows
+                if r.get(column) is not None and _as_datetime(r[column]) < _now()
+            ]
+        # WS-27q's calendar window. Applied ONLY when the statement carries the
+        # bound, and each comparison is evaluated against the interval endpoint
+        # the SQL's own `coalesce` order names — so swapping that order, which
+        # is the mutation that turns "overlaps" back into "due inside", changes
+        # this mirror's answer instead of being invisible to it.
+        window = _WINDOW_CMP.findall(top)
+        if window:
+            seen = True
+            for expr, operator, bound in window:
+                edge = _as_datetime(args[bound])
+                rows = [
+                    r for r in rows
+                    if _compare_window(_coalesced(r, expr), operator, edge)
+                ]
         if re.search(r"\bTRUE\b", top, re.I):
             # The unrestricted (`data:org:read`) form of the visibility clause.
             # It is a readable clause that filters nothing, which is different
@@ -766,6 +1261,34 @@ def _as_datetime(value: Any) -> datetime:
         return value if value.tzinfo else value.replace(tzinfo=UTC)
     parsed = datetime.fromisoformat(str(value))
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+
+
+def _coalesced(row: dict, expression: str) -> datetime | None:
+    """What one ``coalesce(...)`` from the window clause evaluates to.
+
+    The argument ORDER is read off the SQL rather than assumed, because that
+    order is the whole rule: `coalesce(start_date, due_at)` is the interval's
+    start and `coalesce(due_at, start_date)` is its end, and a mirror that
+    hard-coded either would agree with a route that swapped them.
+    """
+    for part in expression.split(","):
+        column = "start_date" if "start_date" in part else "due_at"
+        value = row.get(column)
+        if value is not None:
+            return _as_datetime(value)
+    return None
+
+
+def _compare_window(value: datetime | None, operator: str, edge: datetime) -> bool:
+    """One window comparison, with SQL's NULL semantics.
+
+    A task with neither date has no interval, so both comparisons are NULL and
+    the row is not matched — the behaviour the endpoint relies on to keep
+    undated tasks off the calendar without a clause anybody can see.
+    """
+    if value is None:
+        return False
+    return value < edge if operator == "<" else value >= edge
 
 
 def _sortable(value: Any) -> Any:

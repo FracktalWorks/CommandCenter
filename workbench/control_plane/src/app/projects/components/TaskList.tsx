@@ -13,8 +13,11 @@
  * board and list must not change which tasks are on screen or how they are
  * gathered, which is why both take the output of one `groupTasks` call.
  */
+import { AvatarStack, TaskMeta } from "@/components/TaskMeta";
+
 import type { StatusRow, TaskRow } from "../lib/api";
 import { sortForView } from "../lib/board";
+import { cardChips } from "../lib/card";
 import { type GroupBy, type TaskGroup, personLabel } from "../lib/grouping";
 
 interface Props {
@@ -65,7 +68,12 @@ export function TaskList({
             <th className="px-3 py-2 font-medium">Title</th>
             <th className="px-3 py-2 font-medium">Status</th>
             <th className="px-3 py-2 font-medium">Assignees</th>
-            <th className="px-3 py-2 font-medium">Due</th>
+            {/* Was "Due", showing a bare locale date. The shared chip row
+                (WS-27s) carries the due date *and* says when it is overdue,
+                what is blocking, and how far a checklist has got — the same
+                strip the board card draws, so the two views describe a task
+                identically. Renamed because it is no longer only the date. */}
+            <th className="px-3 py-2 font-medium">Details</th>
           </tr>
         </thead>
         {groups.map((group) => {
@@ -128,12 +136,14 @@ export function TaskList({
                       {status?.name ?? "—"}
                     </td>
                     <td className="px-3 py-2 text-muted-foreground">
-                      {task.assignees?.length
-                        ? task.assignees.map(personLabel).join(", ")
-                        : "—"}
+                      {task.assignees?.length ? (
+                        <AvatarStack people={task.assignees} label={personLabel} />
+                      ) : (
+                        "—"
+                      )}
                     </td>
                     <td className="px-3 py-2 text-muted-foreground">
-                      {task.due_at ? new Date(task.due_at).toLocaleDateString() : "—"}
+                      <TaskMeta chips={cardChips(task)} />
                     </td>
                   </tr>
                 );

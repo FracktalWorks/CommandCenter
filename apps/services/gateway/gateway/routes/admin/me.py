@@ -108,7 +108,13 @@ async def get_me(user: UserContext = Depends(get_current_user)) -> dict[str, Any
     try:
         db = await get_db()
         async with db:
-            org_id = await get_org_id(db)
+            # The CALLER's organization, not the deployment's. This line used to
+            # report the `default` org's slug and display name to every
+            # signed-in member of every tenant, so the frontend's "which org am
+            # I in" — `access.organization` in `lib/access.ts`, rendered on the
+            # Members header — was wrong for all but one
+            # (`multi_tenancy_leak_audit.md` S1-1).
+            org_id = await get_org_id(db, user)
             from sqlalchemy import text  # noqa: PLC0415
 
             row = (

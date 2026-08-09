@@ -57,6 +57,7 @@ from gateway.routes.projects.core import (
     insert_row,
     next_task_number,
     record_activity,
+    require_organization_of,
     router,
 )
 from pydantic import BaseModel
@@ -216,19 +217,27 @@ class _Tally:
 
 async def _root_department(
     db: Any, name: str, created_by: str, tally: _Tally, dry_run: bool,
+    *, organization_id: str,
 ) -> str | None:
     """Find or create the one department. Returns its id, or None on a dry run.
 
     Matched by NAME among import-sourced roots, so a second run lands in the
     same department instead of stacking a duplicate beside it.
+
+    ⚠️ The match is scoped to the importer's OWN organization (WS-29b). Names
+    are free text and "Company" is the default here, so without the tenant
+    predicate the second organization to run this import would have found the
+    first one's department and poured its entire ClickUp mirror into it — a
+    cross-tenant WRITE, which no read-side predicate would have caught.
     """
     row = (await db.execute(
         text(
             "SELECT id FROM pm_projects "
-            "WHERE parent_project_id IS NULL AND lower(name) = :name "
+            "WHERE organization_id = CAST(:org AS uuid) "
+            "  AND parent_project_id IS NULL AND lower(name) = :name "
             "ORDER BY created_at LIMIT 1"
         ),
-        {"name": name.strip().lower()},
+        {"name": name.strip().lower(), "org": organization_id},
     )).fetchone()
     if row is not None:
         tally.projects_existing += 1
@@ -242,6 +251,10 @@ async def _root_department(
     created = await insert_row(db, "pm_projects", {
         "name": name.strip(), "created_by": created_by, "source": "import",
         "description": "Imported from the Tasks app's ClickUp mirror.",
+        # A ROOT project, so nothing upstream supplies the tenant and the
+        # trigger has no parent to derive it from. Every node beneath this one
+        # inherits it (migration 161).
+        "organization_id": organization_id,
     })
     project_id = str(created.id)
     await _seed_root(db, project_id, created_by)
@@ -366,8 +379,10 @@ async def import_from_tasks(
 
     db = await _get_db()
     try:
+        organization_id = await require_organization_of(db, who.lower())
         root_id = await _root_department(
             db, department, who, tally, payload.dry_run,
+            organization_id=organization_id,
         )
 
         account_clause = ""
@@ -396,9 +411,21 @@ async def import_from_tasks(
         for row in lists:
             name = (getattr(row, "name", None) or "Untitled list").strip()
             clickup_id = str(row.provider_ref)
+            # ⚠️ Tenant-scoped (WS-29b), even though `clickup_id` is globally
+            # UNIQUE. Resolving another organization's project as "already
+            # present" would have mirrored this whole list into their tree. The
+            # global UNIQUE means the follow-on insert then FAILS for a second
+            # organization importing the same workspace — loudly, and that is
+            # the better of the two wrong answers until the constraint is
+            # widened to `(organization_id, clickup_id)`; migration 161 §6
+            # records why that is not done here.
             existing = (await db.execute(
-                text("SELECT id FROM pm_projects WHERE clickup_id = :cid"),
-                {"cid": clickup_id},
+                text(
+                    "SELECT id FROM pm_projects "
+                    "WHERE clickup_id = :cid "
+                    "  AND organization_id = CAST(:org AS uuid)"
+                ),
+                {"cid": clickup_id, "org": organization_id},
             )).fetchone()
             if existing is not None:
                 tally.projects_existing += 1

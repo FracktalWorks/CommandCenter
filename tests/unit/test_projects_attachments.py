@@ -79,6 +79,18 @@ class FakeDB:
     def sql_touching(self, needle: str) -> list[str]:
         return [s for s in self.statements if needle in s]
 
+    def params_touching(self, needle: str) -> list[dict]:
+        """The bound values beside :meth:`sql_touching`'s statements.
+
+        A clause naming `:vis_org` proves the SQL asks for a tenant; only the
+        parameter proves it asks for the CALLER's.
+        """
+        return [
+            args for statement, args in zip(self.statements, self.params,
+                                            strict=True)
+            if needle in statement
+        ]
+
 
 class UploadStub:
     def __init__(self, filename: str, content: bytes, content_type: str = "image/png"):
@@ -168,18 +180,36 @@ def test_serving_asks_whether_the_caller_can_see_a_task_it_hangs_off(db):
     assert "user_id" not in sql
 
 
-def test_an_unrestricted_viewer_gets_no_scoping_predicate(db, monkeypatch):
+def test_an_unrestricted_viewer_is_scoped_to_their_own_organization(db, monkeypatch):
+    """⚠️ WS-29b. This test used to assert the opposite — that a
+    ``data:org:read`` holder got NO predicate at all — and that was correct
+    while the deployment had one organization.
+
+    What broke if it stayed that way: the route skipped the clause entirely for
+    an unrestricted caller, so the first `data:org:read` holder to exist
+    alongside a second tenant could fetch any organization's uploaded file by
+    guessing an attachment id. The grant closure is gone for this caller, by
+    design; the TENANT never is.
+    """
     async def _resolve(_db, _user):
         from gateway.routes.projects.core import Visibility
 
-        return Visibility(unrestricted=True, email="", groups=())
+        return Visibility(
+            unrestricted=True, email="", groups=(), organization_id="org-a",
+        )
 
     monkeypatch.setattr(pm_attachments, "resolve_visibility", _resolve)
     db.serve_row = None
     with pytest.raises(HTTPException):
         run(pm_attachments.serve_attachment("a1", "x.png", user=user()))
     sql = db.sql_touching("FROM pm_task_attachments ta JOIN pm_tasks t")[-1]
-    assert "root_project_id IN" not in sql
+    # Still no GRANT closure — that is what `unrestricted` buys.
+    assert "pm_project_grants" not in sql
+    # But the tenant is there, and it is bound.
+    assert "t.root_project_id IN" in sql
+    assert "organization_id = CAST(:vis_org AS uuid)" in sql
+    params = db.params_touching("FROM pm_task_attachments ta JOIN pm_tasks t")[-1]
+    assert params["vis_org"] == "org-a"
 
 
 def test_an_attachment_on_no_visible_task_is_a_404_not_a_403(db):
@@ -370,7 +400,13 @@ def test_the_upload_rules_are_imported_not_reimplemented():
 def sql() -> str:
     hits = [
         p for p in (REPO / "infra" / "postgres").glob("*.sql")
-        if "pm_task_attachments" in p.read_text(encoding="utf-8")
+        # By the CREATE, not by a mention: migration 161 (the tenant key) names
+        # every `pm_*` table, and a fixture that matched on the name alone would
+        # start finding two files and fail for a reason that is not about
+        # attachments at all.
+        if "CREATE TABLE IF NOT EXISTS pm_task_attachments" in p.read_text(
+            encoding="utf-8",
+        )
     ]
     assert len(hits) == 1, hits
     raw = hits[0].read_text(encoding="utf-8")

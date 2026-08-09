@@ -416,9 +416,9 @@ async def approve_access_request(
     db = await get_db()
     async with db:
         request = await _load_request(db, email, allowed_statuses=("pending",))
-        org_id = await get_org_id(db)
+        org_id = await get_org_id(db, admin)
 
-        existing = await find_member(db, request["email"])
+        existing = await find_member(db, org_id, request["email"])
         disposition = _disposition_for(existing)   # 409s on suspended/removed
 
         detail = ""

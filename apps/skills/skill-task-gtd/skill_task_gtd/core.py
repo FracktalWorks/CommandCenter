@@ -72,16 +72,18 @@ def _gateway_url() -> str:
 
 
 def _current_user_email() -> str:
-    """The user this agent run acts for (ContextVar first, env fallback —
-    the exact recipe agent-email-assistant uses)."""
+    """The user this run acts for: the per-run ContextVar the executor binds,
+    and nothing else — the exact recipe agent-email-assistant uses.
+
+    The ``ACB_AGENT_USER_EMAIL`` fallback that used to sit here was one slot in
+    a shared async process that no run ever cleared, so it handed a run with no
+    identity the LAST run's user. Resolving to ``""`` makes :func:`_headers`
+    refuse instead."""
     try:
         from acb_skills.memory_tools import _get_memory_user_id
-        user = _get_memory_user_id() or ""
-        if user:
-            return user
+        return _get_memory_user_id() or ""
     except Exception:
-        pass
-    return os.environ.get("ACB_AGENT_USER_EMAIL", "")
+        return ""
 
 
 def _internal_token() -> str:
@@ -117,8 +119,8 @@ def _headers() -> dict[str, str]:
     if not user:
         raise RuntimeError(
             "No acting user for this run, so there is nobody to act as — "
-            "refusing to call the gateway as the platform itself. The run "
-            "should set ACB_AGENT_USER_EMAIL."
+            "refusing to call the gateway as the platform itself. Dispatch "
+            "the run with user_email in its payload."
         )
     return {
         "Authorization": f"Bearer {_internal_token()}",

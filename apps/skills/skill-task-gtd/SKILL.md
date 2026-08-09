@@ -22,5 +22,7 @@ connected workspace stages the item (`sync_state='pending'`); the **user**
 pushes it from the UI. The Action Broker takes over gating in Phase 4.
 
 Env: `GATEWAY_URL` (default `http://localhost:8080`), internal token via
-settings/`LITELLM_MASTER_KEY`; acting user via ContextVar or
-`ACB_AGENT_USER_EMAIL`.
+settings/`LITELLM_MASTER_KEY`. The acting user comes from the per-run
+ContextVar the executor binds from the run payload's `user_email`, and from
+nowhere else — the old `ACB_AGENT_USER_EMAIL` env fallback was a process-global
+that no run cleared, so it handed an unattributed run the previous user.

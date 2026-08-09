@@ -96,11 +96,72 @@ _DENORMALISE_NOTE = (
     "both a performance cliff and a correctness hole when the parent is gone"
 )
 
+#: ⚠️ Tables that ALREADY have a column called ``organization_id`` meaning
+#: something else entirely. **These are not exempt and they are not scoped —
+#: they are BLOCKED**, and the difference matters:
+#:
+#: ``crm_contacts.organization_id`` is the customer COMPANY a contact works at
+#: (``REFERENCES crm_organizations``), not the tenant that owns the row. The
+#: generator's phases are name-based, so left alone they would emit, for each:
+#:
+#:   phase 1  ADD COLUMN IF NOT EXISTS  -> silent no-op, the column exists
+#:   phase 2  UPDATE ... WHERE organization_id IS NULL
+#:                                      -> writes a TENANT id into a column whose
+#:                                         FK points at ``crm_organizations``;
+#:                                         aborts on that FK, mid-window
+#:   phase 3  ADD CONSTRAINT ... REFERENCES organization(id)
+#:                                      -> a second, contradictory FK on one
+#:                                         column; fails on every existing value
+#:
+#: — i.e. the failure lands in the maintenance window, after phase 1 has run,
+#: which is the worst moment to learn about it. Refusing at GENERATION time is
+#: the whole point of this map.
+#:
+#: **These three tables therefore carry NO tenant isolation**, and they hold
+#: customer CRM data. That is a real hole, not a resolved item. Closing it needs
+#: an owner call this branch does not make: rename the CRM column
+#: (``organization_id`` -> ``crm_organization_id``, touching every CRM route and
+#: query), or give the tenant key a different name on these three tables alone
+#: and accept that the column name means two things across the schema. Recorded
+#: in ``specs/multi_tenancy_leak_audit.md``.
+HOMONYM_BLOCKED: dict[str, str] = {
+    "crm_contacts":   "organization_id = the customer company (144_crm.sql:74)",
+    "crm_deals":      "organization_id = the customer company (144_crm.sql:197)",
+    "crm_activities": "organization_id = the customer company (144_crm.sql:289)",
+}
+
 _CREATE_RE = re.compile(
     r"CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?"
     r"(?:public\.)?[\"']?([a-z_][a-z0-9_]*)[\"']?",
     re.IGNORECASE,
 )
+
+#: A column literally named ``organization_id`` together with its FK target. The
+#: name alone is not evidence of tenancy — matching on it is what let the homonym
+#: through in the first place.
+_ORG_COL_RE = re.compile(
+    r"^\s*organization_id\s+[A-Za-z]+[^,]*?REFERENCES\s+([a-z_][a-z0-9_]*)",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def discover_homonyms() -> dict[str, str]:
+    """Tables whose ``organization_id`` references something OTHER than
+    ``organization`` — derived from the migrations, never from a list.
+
+    Derived on purpose: a hand-maintained list is exactly what
+    :data:`HOMONYM_BLOCKED` is for, and a list checking itself proves nothing.
+    This finds them; the map is the sign-off; :func:`main` refuses when the two
+    disagree.
+    """
+    found: dict[str, str] = {}
+    for path in sorted(_MIGRATIONS.glob("[0-9]*_*.sql")):
+        parts = _CREATE_RE.split(path.read_text(encoding="utf-8"))
+        for name, body in zip(parts[1::2], parts[2::2], strict=True):
+            match = _ORG_COL_RE.search(body.split(";")[0])
+            if match and match.group(1).lower() != "organization":
+                found[name.lower()] = match.group(1).lower()
+    return found
 
 
 def discover_tables() -> list[str]:
@@ -110,6 +171,26 @@ def discover_tables() -> list[str]:
         for match in _CREATE_RE.finditer(path.read_text(encoding="utf-8")):
             names.add(match.group(1).lower())
     return sorted(names)
+
+
+def _blocked_note() -> str:
+    """The BLOCKED tables, in every generated file.
+
+    In the header rather than a side document because the person reading these
+    files is mid-window with a psql prompt open, and "which tables did this NOT
+    cover" is the question they have no other way to answer.
+    """
+    if not HOMONYM_BLOCKED:
+        return ""
+    lines = [
+        "--",
+        "-- ⚠️ NOT COVERED BY THIS FILE — `organization_id` already means something",
+        "-- else on these tables, so scoping them by that name would corrupt a",
+        "-- business column. They carry NO tenant isolation until the column is",
+        "-- renamed (owner call; see gen_tenant_migration.HOMONYM_BLOCKED):",
+    ]
+    lines += [f"--   {t:<18} {why}" for t, why in sorted(HOMONYM_BLOCKED.items())]
+    return "\n".join(lines) + "\n"
 
 
 def _header(phase: str, why: str, tables: int) -> str:
@@ -122,7 +203,7 @@ def _header(phase: str, why: str, tables: int) -> str:
 -- {why}
 --
 -- Tables in this phase: {tables}
---
+{_blocked_note()}--
 -- ⚠️ NOT a numbered migration. `apply_migrations.sh` does not replay this
 -- directory. Promoting it is a deliberate act taken against a database in a
 -- maintenance window — see the module docstring of the generator for the
@@ -228,7 +309,36 @@ def main() -> int:
     args = ap.parse_args()
 
     all_tables = discover_tables()
-    scoped = [t for t in all_tables if t not in EXEMPT]
+
+    # ── The homonym gate, BEFORE anything is generated ──────────────────────
+    #
+    # Detection is derived from the migrations; HOMONYM_BLOCKED is the human
+    # sign-off. Refusing when they disagree is the only part that protects a
+    # table added next month, because that is the case where nobody remembers.
+    homonyms = discover_homonyms()
+    undeclared = sorted(set(homonyms) - set(HOMONYM_BLOCKED))
+    if undeclared:
+        print("\n⚠️ REFUSING TO GENERATE. These tables have an `organization_id` "
+              "that references something other than `organization`:")
+        for t in undeclared:
+            print(f"      {t:<24} organization_id -> {homonyms[t]}")
+        print("\nScoping them by column name would write a tenant id into a "
+              "business column and abort phase 2 mid-window. Either rename the "
+              "column, or declare the table in HOMONYM_BLOCKED with its reason.")
+        return 1
+    stale = sorted(set(HOMONYM_BLOCKED) - set(homonyms))
+    if stale:
+        print("\n⚠️ REFUSING TO GENERATE. These are declared in HOMONYM_BLOCKED "
+              "but no longer have a conflicting `organization_id`:")
+        for t in stale:
+            print(f"      {t}")
+        print("\nIf the column was renamed, the table can now be scoped — drop "
+              "it from HOMONYM_BLOCKED so it rejoins the generated phases.")
+        return 1
+
+    blocked = [t for t in all_tables if t in HOMONYM_BLOCKED]
+    scoped = [t for t in all_tables
+              if t not in EXEMPT and t not in HOMONYM_BLOCKED]
     exempted = [t for t in all_tables if t in EXEMPT]
 
     print(f"discovered {len(all_tables)} tables in infra/postgres/[0-9]*.sql")
@@ -236,6 +346,9 @@ def main() -> int:
     print(f"  exempt        : {len(exempted)}")
     for t in exempted:
         print(f"      {t:<24} {EXEMPT[t]}")
+    print(f"  ⚠️ BLOCKED    : {len(blocked)} — no isolation, name collision")
+    for t in blocked:
+        print(f"      {t:<24} {HOMONYM_BLOCKED[t]}")
     unknown = sorted(set(EXEMPT) - set(all_tables))
     if unknown:
         print("\n  ⚠️ exempt names that match no discovered table "

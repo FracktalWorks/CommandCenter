@@ -322,11 +322,19 @@ def test_the_visibility_probe_uses_the_SAME_predicate_the_read_path_uses(monkeyp
 
 def test_an_org_read_holder_is_unrestricted_even_by_wildcard():
     """The owner holds `*`. Re-deriving the match in SQL is how two answers to
-    "may they see this" start disagreeing, so the REAL matcher decides."""
+    "may they see this" start disagreeing, so the REAL matcher decides.
+
+    ⚠️ Unrestricted stops at the tenant (WS-29b). The clause used to be the
+    literal ``TRUE``; a notification's "can they open the task it names" check
+    would then have said yes about another organization's task.
+    """
     db = FakeDB(permissions={"owner@fracktal.in": [("*", "allow", True)]})
     vis = run(pm_core.resolve_visibility_for(db, "owner@fracktal.in"))
     assert vis.unrestricted is True
-    assert vis.project_clause("t.root_project_id") == "TRUE"
+    clause = vis.project_clause("t.root_project_id")
+    assert clause != "TRUE"
+    assert "pm_project_grants" not in clause
+    assert "organization_id = CAST(:vis_org AS uuid)" in clause
 
 
 def test_a_deny_override_beats_the_role_grant():

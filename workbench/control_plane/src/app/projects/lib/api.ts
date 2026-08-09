@@ -1,3 +1,5 @@
+import type { Rule as RecurrenceRule } from "./recurrence";
+
 /**
  * Projects · the browser's client for /api/projects/*.
  *
@@ -28,6 +30,14 @@ export interface TaskRow {
   title: string;
   description?: string | null;
   importance?: number | null;
+  estimate_mins?: number | null;
+  /**
+   * WS-27q — a floating calendar date (`DATE`, not an instant), which is why
+   * it is never routed through `new Date()`: that would read it as midnight
+   * UTC and move it a day west of Greenwich. A column that has existed since
+   * migration 146 and had no surface until the calendar.
+   */
+  start_date?: string | null;
   due_at?: string | null;
   completed_at?: string | null;
   tags?: string[];
@@ -41,6 +51,14 @@ export interface TaskRow {
    * unset rather than that the values have not loaded.
    */
   custom_fields?: Record<string, unknown>;
+  /**
+   * WS-27s — the two counts a card draws, aggregated for the whole page rather
+   * than fetched per row. Always present on the list endpoint; optional here
+   * because the same type describes a row from `getTask`, where the panel reads
+   * the full relations block instead.
+   */
+  subtasks?: { done: number; total: number };
+  blocked_by_count?: number;
 }
 
 export interface StatusRow {
@@ -172,6 +190,52 @@ export const projectsApi = {
     return call<{ rows: TaskRow[]; total: number }>(`tasks?${qs.toString()}`);
   },
 
+  /**
+   * WS-27q — every task whose schedule overlaps a window.
+   *
+   * Deliberately NOT `tasks` with a date filter: that endpoint is paginated,
+   * and a month read at `page_size=50` draws forty of its ninety tasks and
+   * leaves the rest of the days looking empty. `truncated` is the endpoint
+   * telling us when the cap was reached, so the view can say so rather than
+   * present a plausible-looking short month.
+   */
+  calendar: (params: Record<string, string | number | boolean | undefined>) => {
+    const qs = new URLSearchParams();
+    for (const [key, value] of Object.entries(params)) {
+      if (value !== undefined && value !== "") qs.set(key, String(value));
+    }
+    return call<{
+      from: string;
+      to: string;
+      rows: TaskRow[];
+      /**
+       * WS-27t — the `blocks` edges with BOTH ends in the window, so an arrow
+       * always has two bars to join. Empty unless `include_links`, and always
+       * present: a missing key and an empty list read the same to a careless
+       * client.
+       */
+      links: { id: string; blocker_id: string; blocked_id: string }[];
+      truncated: boolean;
+      cap: number;
+      undated: number;
+    }>(`calendar?${qs.toString()}`);
+  },
+
+  /**
+   * WS-27r — ranked hits across every project the caller can see.
+   *
+   * Not `tasks?q=`: that endpoint is paginated and its ordering is a column
+   * allowlist, neither of which a search box wants. `query` is echoed back so
+   * a slow response to an earlier keystroke can be recognised and dropped.
+   */
+  search: (q: string) =>
+    call<{
+      rows: import("./search").Hit[];
+      total: number;
+      truncated: boolean;
+      query: string;
+    }>(`search?q=${encodeURIComponent(q)}`),
+
   task: (taskId: string) => call<TaskRow>(`tasks/${taskId}`),
 
   timeline: (taskId: string) =>
@@ -200,6 +264,45 @@ export const projectsApi = {
       method: "POST",
       body: JSON.stringify({ body }),
     }),
+
+  /**
+   * WS-27p — subtasks and links in both directions, plus derived blocked-ness.
+   *
+   * ONE call rather than three: the panel needs all of it at once, and three
+   * round trips to fill one block is three chances to paint a half-drawn
+   * dependency section.
+   */
+  relations: (taskId: string) =>
+    call<import("./relations").Relations>(`tasks/${taskId}/relations`),
+
+  createLink: (taskId: string, targetTaskId: string, linkType: string) =>
+    call<{ id: string }>(`tasks/${taskId}/links`, {
+      method: "POST",
+      body: JSON.stringify({ target_task_id: targetTaskId, link_type: linkType }),
+    }),
+
+  deleteLink: (taskId: string, linkId: string) =>
+    call<{ deleted: string }>(`tasks/${taskId}/links/${linkId}`, {
+      method: "DELETE",
+    }),
+
+  /** WS-27o — this task's repeat rule, or `{rule: null}`. */
+  recurrence: (taskId: string) =>
+    call<{ rule: RecurrenceRule | null }>(`tasks/${taskId}/recurrence`),
+
+  /** Set or replace it. A task has at most one rule, so this is a PUT. */
+  setRecurrence: (taskId: string, payload: Record<string, unknown>) =>
+    call<{ rule: RecurrenceRule }>(`tasks/${taskId}/recurrence`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
+
+  /** Stop the series. Everything it already created stays. */
+  clearRecurrence: (taskId: string) =>
+    call<{ cleared: boolean; cascaded?: { tasks_detached: number } }>(
+      `tasks/${taskId}/recurrence`,
+      { method: "DELETE" }
+    ),
 
   /**
    * WS-27n — one edit applied to many tasks.

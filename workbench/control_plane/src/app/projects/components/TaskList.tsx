@@ -17,7 +17,7 @@ import { AvatarStack, TaskMeta } from "@/components/TaskMeta";
 
 import type { StatusRow, TaskRow } from "../lib/api";
 import { sortForView } from "../lib/board";
-import { cardChips } from "../lib/card";
+import { cardChips, taskRef } from "../lib/card";
 import { type GroupBy, type TaskGroup, personLabel } from "../lib/grouping";
 
 interface Props {
@@ -123,7 +123,7 @@ export function TaskList({
                       </td>
                     ) : null}
                     <td className="px-3 py-2 text-muted-foreground">
-                      {task.task_number ?? "—"}
+                      {taskRef(task) ?? "—"}
                     </td>
                     <td className="px-3 py-2 text-foreground">
                       <span

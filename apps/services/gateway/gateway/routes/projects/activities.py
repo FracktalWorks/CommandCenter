@@ -31,6 +31,7 @@ from gateway.routes.projects.core import (
     load_visible_task,
     now,
     record_activity,
+    record_field_change,
     resolve_visibility,
     router,
     row_to_dict,
@@ -323,20 +324,20 @@ async def revert_change(
             )
 
         await update_row(db, "pm_tasks", str(task.id), restore)
-        await record_activity(
-            db, activity_type="field_change", created_by=actor(user),
-            task_id=str(task.id),
-            meta={
-                "changes": [
-                    {"field": f, "old": c.get("new"), "new": c.get("old")}
-                    for c in changes for f in [c.get("field")]
-                    if f in restore or (
-                        custom_restored is not None
-                        and str(f or "").startswith(_CUSTOM_PREFIX)
-                    )
-                ],
-                "reverted_activity_id": activity_id,
-            },
+        # The ONE field_change door (WS-27w). `extra_meta` marks this as a
+        # revert, which also exempts it from description coalescing — undoing
+        # an edit must never be folded into the edit it undoes.
+        await record_field_change(
+            db, created_by=actor(user), task_id=str(task.id),
+            changes=[
+                {"field": f, "old": c.get("new"), "new": c.get("old")}
+                for c in changes for f in [c.get("field")]
+                if f in restore or (
+                    custom_restored is not None
+                    and str(f or "").startswith(_CUSTOM_PREFIX)
+                )
+            ],
+            extra_meta={"reverted_activity_id": activity_id},
         )
         await db.commit()
         task_id = str(task.id)

@@ -23,7 +23,7 @@ import { useMemo, useState } from "react";
 
 import type { TaskRow } from "../lib/api";
 import { buildColumnDropUpdate, planDrop, sortForView } from "../lib/board";
-import { cardChips } from "../lib/card";
+import { cardChips, taskRef } from "../lib/card";
 import { type GroupBy, type TaskGroup, personLabel } from "../lib/grouping";
 
 interface Props {
@@ -139,7 +139,7 @@ export function TaskBoard({
                       so a task looks like the same kind of thing in both. */}
                   <TaskMeta chips={cardChips(task)} className="mt-1.5" />
                   <span className="mt-1.5 flex items-center justify-between gap-2 text-[10px] text-muted-foreground">
-                    <span>{task.task_number ? `#${task.task_number}` : ""}</span>
+                    <span>{taskRef(task)}</span>
                     <AvatarStack people={task.assignees} label={personLabel} />
                   </span>
                 </button>

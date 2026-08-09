@@ -10,7 +10,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { TaskRow } from "./api";
-import { cardChips, taskFacts } from "./card";
+import { cardChips, taskDeepLink, taskFacts, taskRef } from "./card";
 
 const NOW = Date.parse("2026-08-07T12:00:00Z");
 const hours = (n: number) => new Date(NOW + n * 3_600_000).toISOString();
@@ -96,5 +96,33 @@ describe("cardChips", () => {
       NOW,
     );
     expect(chips.map((c) => c.tone)).toEqual(["muted"]);
+  });
+});
+
+describe("taskRef", () => {
+  // WS-27w item 6 — one formatter, three surfaces (board, list, panel).
+  it("formats the per-root number as the id people quote", () => {
+    expect(taskRef(row({ task_number: 42 }))).toBe("#42");
+  });
+
+  it("is null — never '#undefined' — when the number is absent", () => {
+    // Each surface keeps its own honest fallback; the formatter must not
+    // invent one, or an imported task without a number renders as a lie.
+    expect(taskRef(row())).toBeNull();
+    expect(taskRef(row({ task_number: null }))).toBeNull();
+  });
+});
+
+describe("taskDeepLink", () => {
+  it("builds the ?task= link the board already reads", () => {
+    // The same shape NotificationBell emits (WS-28b): a third spelling would
+    // be a copied link that opens nothing.
+    expect(taskDeepLink(row(), "https://cc.example")).toBe(
+      "https://cc.example/projects?task=t1",
+    );
+  });
+
+  it("is origin-relative when no origin is given, and encodes the id", () => {
+    expect(taskDeepLink({ id: "a b" })).toBe("/projects?task=a%20b");
   });
 });

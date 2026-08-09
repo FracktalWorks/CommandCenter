@@ -74,6 +74,11 @@ _UUID_EQ = re.compile(r"(?:\w+\.)?(\w+)\s*=\s*CAST\(:(\w+)\s+AS\s+uuid\)", re.I)
 _LOWER_EQ = re.compile(r"lower\((?:\w+\.)?(\w+)\)\s*=\s*:(\w+)", re.I)
 #: ``<col> = :param`` — never inside a lower() or a CAST.
 _PLAIN_EQ = re.compile(r"(?<!lower\()\b(?:\w+\.)?(\w+)\s*=\s*:(\w+)\b")
+#: ``<col> = ANY(CAST(:param AS uuid[]))`` — a bounded id-set membership test
+#: (WS-27w's relatives walk and picker exclusion).
+_ANY_UUID = re.compile(
+    r"(?:\w+\.)?(\w+)\s*=\s*ANY\(CAST\(:(\w+)\s+AS\s+uuid\[\]\)\)", re.I
+)
 #: ``<col> = 'literal'``
 _LITERAL_EQ = re.compile(r"\b(?:\w+\.)?(\w+)\s*=\s*'([^']*)'")
 #: ``<col> IS [NOT] NULL``
@@ -657,9 +662,18 @@ class FakeProjectsDB:
         tenanted = bool(_ROW_TENANT.search(_CLOSURE_BODY.sub("", statement)))
         org = str(args.get("vis_org"))
         tenant_only = bool(_TENANT_PROJECTS.search(statement))
+        # WS-27w's picker exclusion — applied ONLY when the statement carries
+        # the clause, so a search that drops it stops excluding here too and
+        # the four-class test goes red.
+        excluded = (
+            {str(i) for i in (args.get("excluded") or [])}
+            if "NOT (t.id = ANY" in statement else set()
+        )
 
         found: list[Any] = []
         for task in self.rows("pm_tasks"):
+            if str(task.get("id")) in excluded:
+                continue
             if tenanted and str(task.get("organization_id")) != org:
                 continue
             if tenant_only and str(task.get("project_id")) not in self.tenant_project_ids(org):
@@ -1184,6 +1198,10 @@ class FakeProjectsDB:
             seen = True
             want = str(args.get(param) or "").lower()
             rows = [r for r in rows if str(r.get(column) or "").lower() == want]
+        for column, param in _ANY_UUID.findall(top):
+            seen = True
+            wanted_ids = {str(v) for v in (args.get(param) or [])}
+            rows = [r for r in rows if str(r.get(column)) in wanted_ids]
         for column, param in _PLAIN_EQ.findall(top):
             seen = True
             rows = [r for r in rows if r.get(column) == args.get(param)]
@@ -1232,6 +1250,32 @@ class FakeProjectsDB:
         return rows, seen
 
     def _ordered(self, statement: str, rows: list[dict]) -> list[dict]:
+        # WS-27w's semantic status sort: category rank, then lane position,
+        # then the `(created_at, id)` tiebreaker. The RANK ORDER is read off
+        # the statement's own ARRAY literal rather than assumed, so a route
+        # that reordered — or alphabetised — the vocabulary changes this
+        # mirror's answer instead of being invisible to it.
+        if "array_position" in statement and "s.category" in statement:
+            literal = re.search(r"ARRAY\[([^\]]*)\]", statement)
+            rank = [
+                v.strip().strip("'")
+                for v in (literal.group(1).split(",") if literal else [])
+            ]
+            reverse = bool(re.search(r"t\.id\s+DESC", statement, re.I))
+            uses_position = "s.position" in statement
+            statuses = {str(s["id"]): s for s in self.rows("pm_task_statuses")}
+
+            def status_key(row: dict) -> tuple:
+                status = statuses.get(str(row.get("status_id")), {})
+                category = str(status.get("category") or "")
+                return (
+                    rank.index(category) if category in rank else len(rank),
+                    _sortable(status.get("position")) if uses_position else 0,
+                    _sortable(row.get("created_at")),
+                    str(row.get("id")),
+                )
+
+            return sorted(rows, key=status_key, reverse=reverse)
         order = _ORDER_RE.search(statement)
         if order is None:
             return rows

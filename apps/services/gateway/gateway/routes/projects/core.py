@@ -286,16 +286,43 @@ class Page:
         return (self.page - 1) * self.page_size
 
 
-#: Wire sort key → the column it may order by. This dict IS the allowlist:
-#: anything not a key here is a 422, never a silent fall back to the default.
+#: The deterministic tail EVERY sort ends with (WS-27w item 4, P-6). Without
+#: it two tasks that tie on the sort key have no total order, and a tie
+#: straddling a page boundary appears on both pages — or neither — depending
+#: on the plan. ``{dir}`` is the direction slot the endpoint formats in.
+SORT_TIEBREAK = "t.created_at {dir}, t.id {dir}"
+
+#: :data:`STATUS_CATEGORIES` in lifecycle order, as a SQL array literal for the
+#: semantic status sort. Built from the tuple rather than written twice, so the
+#: rank can never drift from the vocabulary the CHECK mirrors.
+_CATEGORY_RANK_ARRAY = "ARRAY[" + ", ".join(f"'{c}'" for c in STATUS_CATEGORIES) + "]"
+
+#: Wire sort key → the ORDER BY fragment it may use, with ``{dir}`` as the
+#: direction slot. This dict IS the allowlist: anything not a key here is a
+#: 422, never a silent fall back to the default.
+#:
+#: Two rules, both pinned structurally (``test_projects_hardening``):
+#:
+#: * ``status`` is SEMANTIC — category rank in lifecycle order, then the lane's
+#:   own board position, never the status NAME (P-6). Alphabetical status sort
+#:   puts "Backlog" before "Done" only by accident of language, and every lane
+#:   rename reshuffles the list.
+#: * every entry ends with :data:`SORT_TIEBREAK`, so the order is total and
+#:   pagination never straddles a tie.
 TASK_SORTS: dict[str, str] = {
-    "created_at": "t.created_at",
-    "updated_at": "t.updated_at",
-    "due_at": "t.due_at",
-    "importance": "t.importance",
-    "title": "t.title",
-    "task_number": "t.task_number",
-    "completed_at": "t.completed_at",
+    "created_at": SORT_TIEBREAK,
+    "updated_at": f"t.updated_at {{dir}} NULLS LAST, {SORT_TIEBREAK}",
+    "due_at": f"t.due_at {{dir}} NULLS LAST, {SORT_TIEBREAK}",
+    "importance": f"t.importance {{dir}} NULLS LAST, {SORT_TIEBREAK}",
+    "title": f"t.title {{dir}}, {SORT_TIEBREAK}",
+    "task_number": f"t.task_number {{dir}} NULLS LAST, {SORT_TIEBREAK}",
+    "completed_at": f"t.completed_at {{dir}} NULLS LAST, {SORT_TIEBREAK}",
+    "status": (
+        f"(SELECT array_position({_CATEGORY_RANK_ARRAY}, s.category)"
+        f" FROM pm_task_statuses s WHERE s.id = t.status_id) {{dir}} NULLS LAST, "
+        f"(SELECT s.position FROM pm_task_statuses s WHERE s.id = t.status_id)"
+        f" {{dir}} NULLS LAST, {SORT_TIEBREAK}"
+    ),
 }
 
 DIRECTIONS: dict[str, str] = {"asc": "ASC", "desc": "DESC"}
@@ -1161,6 +1188,167 @@ def diff_changes(before: Any, after: Any, fields: tuple[str, ...]) -> list[dict]
         if old != new:
             changes.append({"field": name, "old": old, "new": new})
     return changes
+
+
+#: FK-valued fields a ``field_change`` may record, and where each one's human
+#: label lives: field → (table, label column). WS-27w item 2 (P-5): a change
+#: entry that stores only the UUID renders as a UUID the moment the row it
+#: points at is renamed or deleted, so labels are resolved AT WRITE TIME and
+#: stored beside the ids — history survives a lane rename without a join.
+#:
+#: ``status_id`` is here even though a status move is a TRANSITION with its own
+#: activity type: a future call site that diffs it anyway must still resolve
+#: labels rather than store bare ids.
+FK_LABEL_FIELDS: dict[str, tuple[str, str]] = {
+    "status_id": ("pm_task_statuses", "name"),
+    "type_id": ("pm_task_types", "name"),
+    "parent_task_id": ("pm_tasks", "title"),
+    "project_id": ("pm_projects", "name"),
+    "parent_project_id": ("pm_projects", "name"),
+}
+
+#: Fields whose consecutive same-actor edits COALESCE into the prior activity
+#: row instead of appending (WS-27w item 3, P-5): an autosaving editor
+#: otherwise writes dozens of rows for one editing session, and a timeline
+#: that is 40 lines of "edited description" buries the one change that
+#: mattered.
+COALESCED_FIELDS: frozenset[str] = frozenset({"description"})
+
+
+async def _label_of(db: Any, table: str, column: str, row_id: Any) -> Any:
+    """One FK target's display label — ``None`` for a cleared or deleted end."""
+    if row_id is None:
+        return None
+    row = await load_row(db, table, str(row_id))
+    return None if row is None else wire(getattr(row, column, None))
+
+
+async def resolve_fk_labels(db: Any, changes: list[dict]) -> list[dict]:
+    """Rewrite FK-valued diff entries to the five-key shape the timeline owes.
+
+    ``{field, old, new}`` stays for plain values; an entry whose field is in
+    :data:`FK_LABEL_FIELDS` becomes ``{field, old_id, new_id, old_label,
+    new_label}`` with the labels read NOW, while the referenced rows still
+    exist. Every ``field_change`` write goes through
+    :func:`record_field_change` and therefore through here — the structural
+    test in ``test_projects_hardening`` is what keeps that sentence true.
+    """
+    out: list[dict] = []
+    for change in changes:
+        source = FK_LABEL_FIELDS.get(str(change.get("field") or ""))
+        if source is None:
+            out.append(change)
+            continue
+        table, column = source
+        old_id, new_id = change.get("old"), change.get("new")
+        out.append({
+            "field": change.get("field"),
+            "old_id": old_id,
+            "new_id": new_id,
+            "old_label": await _label_of(db, table, column, old_id),
+            "new_label": await _label_of(db, table, column, new_id),
+        })
+    return out
+
+
+async def _coalescible_prior(
+    db: Any, *, created_by: str, changes: list[dict],
+    task_id: str | None, project_id: str | None,
+) -> Any | None:
+    """The activity row this edit folds into, or ``None`` to append normally.
+
+    Consecutive means exactly what WS-27w says: the IMMEDIATELY previous
+    activity row for this task (or project) is the same actor editing the same
+    lone field. Anything in between — a comment, an assignment, another
+    field's change, somebody else's edit — breaks the run, because the
+    timeline must still show that those happened in that order.
+
+    A prior row whose meta carries anything beside ``changes`` (a revert's
+    ``reverted_activity_id``) is a statement of its own and is never coalesced
+    into or over.
+    """
+    if len(changes) != 1 or str(changes[0].get("field") or "") not in COALESCED_FIELDS:
+        return None
+    if task_id is not None:
+        clause, target = "task_id = CAST(:target AS uuid)", task_id
+    elif project_id is not None:
+        clause, target = "project_id = CAST(:target AS uuid)", project_id
+    else:
+        return None
+    row = (await db.execute(
+        text(
+            f"SELECT * FROM pm_activities WHERE {clause} "
+            "AND deleted_at IS NULL "
+            "ORDER BY created_at DESC, id DESC LIMIT 1"
+        ),
+        {"target": str(target)},
+    )).fetchone()
+    if row is None or getattr(row, "type", None) != "field_change":
+        return None
+    prior_actor = str(getattr(row, "created_by", "") or "").strip().lower()
+    if prior_actor != (created_by or "").strip().lower():
+        return None
+    meta = from_jsonb(getattr(row, "meta", None))
+    if not isinstance(meta, dict) or set(meta) != {"changes"}:
+        return None
+    prior = [c for c in (meta.get("changes") or []) if isinstance(c, dict)]
+    if len(prior) != 1 or str(prior[0].get("field") or "") != str(changes[0]["field"]):
+        return None
+    return row
+
+
+async def record_field_change(
+    db: Any,
+    *,
+    created_by: str,
+    changes: list[dict],
+    task_id: str | None = None,
+    project_id: str | None = None,
+    extra_meta: dict[str, Any] | None = None,
+) -> Any:
+    """Write one ``field_change`` activity — THE one door (WS-27w items 2+3).
+
+    Every caller that records a field change comes through here, and the
+    structural test walks the package's ``record_activity`` call sites to
+    refuse any that do not. That single-door shape is what the two rules hang
+    off:
+
+    1. **labels at write time** — :func:`resolve_fk_labels` runs on every
+       write, so an FK-valued change can never reach the table as a bare pair
+       of UUIDs;
+    2. **description coalescing** — a same-actor consecutive edit of a
+       :data:`COALESCED_FIELDS` field UPDATES the prior row (its span of
+       ``old`` → latest ``new``, and its timestamp) instead of appending.
+
+    ``extra_meta`` rides beside ``changes`` in the meta object; a write that
+    carries any (a revert naming ``reverted_activity_id``) is always appended,
+    never coalesced — it is an assertion about history, not an edit in a run.
+    """
+    resolved = await resolve_fk_labels(db, changes)
+    if extra_meta is None:
+        prior = await _coalescible_prior(
+            db, created_by=created_by, changes=resolved,
+            task_id=task_id, project_id=project_id,
+        )
+        if prior is not None:
+            prior_meta = from_jsonb(getattr(prior, "meta", None)) or {}
+            first = (prior_meta.get("changes") or [{}])[0]
+            merged = {**resolved[0], "old": first.get("old")}
+            # `created_at` is bumped too, not only `updated_at`: the coalesced
+            # row now records the LATEST edit, the timeline orders on
+            # `created_at`, and the row is already the task's newest — so the
+            # bump keeps it truthful without reordering anything.
+            return await update_row(db, "pm_activities", str(prior.id), {
+                "meta": {"changes": [merged]},
+                "created_at": now(),
+            })
+    meta: dict[str, Any] = {"changes": resolved}
+    if extra_meta:
+        meta.update(extra_meta)
+    return await record_activity(
+        db, activity_type="field_change", created_by=created_by,
+        task_id=task_id, project_id=project_id, meta=meta,
+    )
 
 
 # ── Events (§6.3) ───────────────────────────────────────────────────────────

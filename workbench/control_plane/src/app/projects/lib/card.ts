@@ -31,3 +31,27 @@ export function taskFacts(task: TaskRow): TaskFacts {
 export function cardChips(task: TaskRow, nowMs?: number): MetaChip[] {
   return taskMeta(taskFacts(task), nowMs);
 }
+
+/**
+ * WS-27w item 6 — the human task id, formatted in ONE place.
+ *
+ * `#42` everywhere a number exists; `null` (not `"#undefined"`, not `"—"`)
+ * when it does not, so each surface keeps its own honest fallback. The board,
+ * the list and the panel all read this — three inline `#${…}` templates is
+ * how one of them ends up rendering `#null` after an import.
+ */
+export function taskRef(task: Pick<TaskRow, "task_number">): string | null {
+  return task.task_number == null ? null : `#${task.task_number}`;
+}
+
+/**
+ * The URL the copy-link affordance puts on the clipboard.
+ *
+ * `/projects?task=<id>` is the deep-link shape the board already reads
+ * (WS-28b) and the notification bell already emits — a third spelling would
+ * be a link that opens nothing. `origin` is passed in rather than read from
+ * `window` here, so the formatting stays pure and testable.
+ */
+export function taskDeepLink(task: Pick<TaskRow, "id">, origin = ""): string {
+  return `${origin}/projects?task=${encodeURIComponent(task.id)}`;
+}

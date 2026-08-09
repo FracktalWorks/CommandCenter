@@ -5,7 +5,7 @@
 -- Why:  spec §11.2 item 2, the second ClickUp-parity gap: "assignment is
 --       silent. A tool nobody hears from is a tool nobody opens, and the whole
 --       assignment→agent chain assumes somebody noticed."
---       Spec: ai-company-brain/specs/project_management_app.md §11.
+--       Spec: project-docs/specs/project_management_app.md §11.
 -- Depends on: 146_projects.sql (pm_tasks, pm_activities), 150 (which last
 --       edited the activity CHECK).
 --

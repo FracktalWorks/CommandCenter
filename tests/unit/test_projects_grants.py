@@ -1,6 +1,6 @@
 """Projects · the grant read model — who can see what, and what they get told.
 
-Spec: ``ai-company-brain/specs/project_management_app.md`` §3.2, §4, §8 D-PM-3 ·
+Spec: ``project-docs/specs/project_management_app.md`` §3.2, §4, §8 D-PM-3 ·
 ticket WS-27a done-when 4.
 
 This is the security fence for the whole app. Unlike the CRM — where D-CRM-3

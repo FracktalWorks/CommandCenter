@@ -1,6 +1,6 @@
 """Projects · mapping — proposing a Center for each ClickUp Space.
 
-Spec: ``ai-company-brain/specs/project_management_app.md`` §7.1 · **D-PM-10**
+Spec: ``project-docs/specs/project_management_app.md`` §7.1 · **D-PM-10**
 (owner-answered 2026-08-06) · ticket WS-27b done-whens 1-3.
 
 The owner's rule, and the reason this module is separate from the importer it

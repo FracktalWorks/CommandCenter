@@ -1,7 +1,7 @@
 -- ============================================================================
 -- 134_workflows_automation_health.sql — why a workflow stopped, and since when
 -- ============================================================================
--- Mitigates risk R2 of ai-company-brain/specs/workflows_app.md ("silent
+-- Mitigates risk R2 of project-docs/specs/workflows_app.md ("silent
 -- automation drift"): a published workflow keeps firing on its schedule /
 -- webhook / event binding long after the business around it changed. The
 -- named mitigation is "disabled-on-repeated-failure policy with notification";

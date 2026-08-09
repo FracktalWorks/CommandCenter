@@ -7,7 +7,7 @@
 --       `/tasks/people` API, because the People Center is a different audience:
 --       a manager who needs the org chart and the assignee picker should not
 --       have to be given the personal GTD task manager to get them.
---       Spec: ai-company-brain/specs/people_center_app.md §6.
+--       Spec: project-docs/specs/people_center_app.md §6.
 --       Registration is FIVE places and this is one of them — the others are
 --       `acb_auth.permissions.FEATURES`, `nav.ts`, `access.ts` and
 --       `centers.ts`; a both-ways test fails if this row and FEATURES disagree.

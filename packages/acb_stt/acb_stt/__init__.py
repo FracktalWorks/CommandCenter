@@ -6,7 +6,7 @@ transcription is routed through ``litellm.atranscription`` — no bespoke HTTP
 client, no separate key resolution. Swap the ``tier-stt`` model (Groq/OpenAI
 whisper, Deepgram, or the future self-host faster-whisper endpoint) without
 touching app code.
-Spec: ai-company-brain/specs/note_taker_app.md §3.4.
+Spec: project-docs/specs/note_taker_app.md §3.4.
 """
 from acb_stt.assemblyai_provider import AssemblyAISTT
 from acb_stt.base import SttProvider

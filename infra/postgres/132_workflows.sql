@@ -1,7 +1,7 @@
 -- ============================================================================
 -- 132_workflows.sql — Workflows app data model (visual automation builder)
 -- ============================================================================
--- Spec: ai-company-brain/specs/workflows_app.md §4
+-- Spec: project-docs/specs/workflows_app.md §4
 -- RFC:  docs/workflow-editor/README.md §4 (edit-model vs run-model split)
 --
 --   workflows           the editable definition (edit-model): React-Flow JSON

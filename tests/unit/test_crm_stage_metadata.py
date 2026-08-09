@@ -1,6 +1,6 @@
 """CRM · the stage-metadata repair — WS-26f f1 + f4.
 
-Spec: ``ai-company-brain/specs/crm_app.md`` §5.1 (system 1) · ticket WS-26f
+Spec: ``project-docs/specs/crm_app.md`` §5.1 (system 1) · ticket WS-26f
 done-when 1-4 · decisions D-CRM-10 and D-CRM-11.
 
 Hermetic: no Postgres, no network, no Zoho. The route function is called

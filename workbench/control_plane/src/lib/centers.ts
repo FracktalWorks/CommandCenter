@@ -12,7 +12,7 @@
 // to a real surface today (sometimes unscoped — noted per item); `planned`
 // items are the buildout backlog, visible so the destination is legible.
 //
-// Spec trail: ai-company-brain/specs/org_access_control.md §5 (modules are
+// Spec trail: project-docs/specs/org_access_control.md §5 (modules are
 // Phase 2), groups_sessions_authority.md §1 (org_group is the primitive),
 // docs/multiplayer/agent-kinds.md §6 (team-instanced agents per department).
 

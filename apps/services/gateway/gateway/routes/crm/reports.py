@@ -1,6 +1,6 @@
 """CRM · reports — forecast, funnel, win/loss and the owner leaderboard.
 
-Spec: ``ai-company-brain/specs/crm_app.md`` §5.1 system 2 · ticket WS-26g.
+Spec: ``project-docs/specs/crm_app.md`` §5.1 system 2 · ticket WS-26g.
 
     GET /crm/reports/pipeline    per open/ongoing stage: count, ₹, ₹ weighted
     GET /crm/reports/funnel      per stage: entered, conversion-forward %,

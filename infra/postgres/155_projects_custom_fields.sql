@@ -1,6 +1,6 @@
 -- 155_projects_custom_fields.sql — WS-27l
 --
--- Spec: ai-company-brain/specs/project_management_app.md §11.2 item 4, §11.9.
+-- Spec: project-docs/specs/project_management_app.md §11.2 item 4, §11.9.
 --
 -- ClickUp's signature feature, and the fourth row of the parity backlog. The
 -- shape is the one recorded as the additive path back in §5's non-goals:

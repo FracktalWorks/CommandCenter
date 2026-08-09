@@ -1,6 +1,6 @@
 """WS-27j — notifications and @mentions.
 
-Spec: `ai-company-brain/specs/project_management_app.md` §11.2 item 2.
+Spec: `project-docs/specs/project_management_app.md` §11.2 item 2.
 
 The complaint this closes is one sentence: *"assignment is silent."* So the
 claims worth testing are the ones that decide whether a person hears about

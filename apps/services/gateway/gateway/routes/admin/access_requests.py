@@ -1,6 +1,6 @@
 """Sign-in requests — the queue of people knocking at a door nobody opened.
 
-Spec: ``ai-company-brain/specs/colleague_onboarding.md`` §6 (WS-24 / N6a).
+Spec: ``project-docs/specs/colleague_onboarding.md`` §6 (WS-24 / N6a).
 
 ``/admin/members`` is push-only: the only way an ``app_user`` row was ever
 created is an admin typing an address into Invite. Somebody arriving at the

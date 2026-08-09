@@ -271,7 +271,7 @@ curl -s -H "Authorization: Bearer $MEETING_BOT_TOKEN" \
   **Zoom's Meeting SDK now explicitly forbids notetaker bots** and its web
   client is CAPTCHA-walled, so for Zoom the sanctioned routes are RTMS (for
   meetings you host) or a managed provider. See
-  `ai-company-brain/specs/meeting_bot_platform_plan.md`.
+  `project-docs/specs/meeting_bot_platform_plan.md`.
 - **Joining unattended requires a signed-in bot account.** Anonymous joining is
   not a degraded mode, it is a blocked one — see the wall section above.
 - **Browser automation is inherently brittle.** Meet's DOM is not a public API;

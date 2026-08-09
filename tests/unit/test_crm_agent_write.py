@@ -1,6 +1,6 @@
 """The CRM assistant's four write tools (WS-26d-write).
 
-Spec: ``ai-company-brain/specs/crm_app.md`` §9 ``### WS-26d-write``. The
+Spec: ``project-docs/specs/crm_app.md`` §9 ``### WS-26d-write``. The
 whole-surface properties — registration, the verb allowlist, the path fence,
 risk annotations across all eight tools — live in ``test_crm_agent.py``; what is
 asserted HERE is what each write tool *does*.

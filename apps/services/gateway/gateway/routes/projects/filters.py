@@ -1,6 +1,6 @@
 """Projects · the task-list filter vocabulary (WS-27k).
 
-Spec: ``ai-company-brain/specs/project_management_app.md`` §11.2 item 3.
+Spec: ``project-docs/specs/project_management_app.md`` §11.2 item 3.
 
 *"My open bugs in Ops, grouped by assignee"* is a daily question the board had
 no way to answer. This is the filter half; grouping is presentation and lives in

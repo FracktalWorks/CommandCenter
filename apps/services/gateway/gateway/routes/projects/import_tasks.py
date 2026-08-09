@@ -1,6 +1,6 @@
 """Projects · import the ClickUp mirror the Tasks app already holds.
 
-Spec: ``ai-company-brain/specs/project_management_app.md`` §7.1 · WS-27b.
+Spec: ``project-docs/specs/project_management_app.md`` §7.1 · WS-27b.
 
     POST /projects/import/from-tasks   → one department, everything under it
 

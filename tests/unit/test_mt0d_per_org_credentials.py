@@ -22,7 +22,7 @@ which stops resolving the moment a second exists — so every one of the ~20
 existing call sites keeps working today and **fails closed** rather than leaking
 when MT-1 lands.
 
-Spec: ``ai-company-brain/specs/saas_multitenancy.md`` §6.3 / MT-0d · WS-29.
+Spec: ``project-docs/specs/saas_multitenancy.md`` §6.3 / MT-0d · WS-29.
 """
 from __future__ import annotations
 

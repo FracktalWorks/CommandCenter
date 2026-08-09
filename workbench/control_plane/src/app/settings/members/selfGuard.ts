@@ -1,6 +1,6 @@
 // ── Who is the viewer looking at, and what may they do to them ────────────
 //
-// Spec: ai-company-brain/specs/colleague_onboarding.md §2 Step 5 (N7).
+// Spec: project-docs/specs/colleague_onboarding.md §2 Step 5 (N7).
 //
 // Nothing here is a boundary. It is a courtesy — the same one `lib/access.ts`
 // describes: hiding a control stops an owner clicking a button that would

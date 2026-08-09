@@ -1,6 +1,6 @@
 """Projects · the search surface (WS-27r).
 
-Spec: ``ai-company-brain/specs/project_management_app.md`` §11.2 item 10, §11.18.
+Spec: ``project-docs/specs/project_management_app.md`` §11.2 item 10, §11.18.
 
     GET /projects/search?q=parser   → ranked tasks, across every visible project
 

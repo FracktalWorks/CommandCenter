@@ -1,6 +1,6 @@
 """MT-1b — every application table is tenant-scoped, or exempt with a reason.
 
-Spec: ``ai-company-brain/specs/saas_multitenancy.md`` §1.3 / MT-1b · WS-29 · D15.
+Spec: ``project-docs/specs/saas_multitenancy.md`` §1.3 / MT-1b · WS-29 · D15.
 
 The point of a generated migration is that nobody hand-writes 143 policies and
 omits ``FORCE`` on one of them. The point of *this* file is the other half: that

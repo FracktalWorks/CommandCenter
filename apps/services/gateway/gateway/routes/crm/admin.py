@@ -1,6 +1,6 @@
 """CRM · admin — managing the pipeline itself: statuses and lost reasons.
 
-Spec: ``ai-company-brain/specs/crm_app.md`` §3.6, §3.10, §4 (``admin.py`` row).
+Spec: ``project-docs/specs/crm_app.md`` §3.6, §3.10, §4 (``admin.py`` row).
 
     GET/POST          /crm/statuses/{lead|deal}
     PATCH/DELETE      /crm/statuses/{lead|deal}/{status_id}

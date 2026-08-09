@@ -1,6 +1,6 @@
 """The one builder every declarative agent runs on.
 
-Spec: ``ai-company-brain/specs/agent_architecture.md`` §1, §6.1.
+Spec: ``project-docs/specs/agent_architecture.md`` §1, §6.1.
 
 Four of six first-party agents are 24-136 lines of boilerplate a manifest
 expresses exactly: read ``instructions.md``, import a named set of skill tools,

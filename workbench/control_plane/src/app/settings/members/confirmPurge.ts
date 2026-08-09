@@ -1,6 +1,6 @@
 // ── The type-to-confirm rule for a permanent deletion ─────────────────────
 //
-// Spec: ai-company-brain/specs/colleague_onboarding.md §2 Step 5 (N8),
+// Spec: project-docs/specs/colleague_onboarding.md §2 Step 5 (N8),
 // done-when 6 — "the confirmation names both halves and requires the address
 // to be typed".
 //

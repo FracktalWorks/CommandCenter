@@ -1,6 +1,6 @@
 """Is the WhatsApp Business Calling API enabled on our number?
 
-Hard gate for Phase A of ai-company-brain/specs/whatsapp_calls_note_taker.md:
+Hard gate for Phase A of project-docs/specs/whatsapp_calls_note_taker.md:
 we can't build a WhatsApp note taker on the official path until Meta has
 switched calling on for the WABA. Rollout is gated per-number, so this is a
 question only the live API can answer.

@@ -1,5 +1,5 @@
 // Waiting-For math — the pure predicates behind the "who / what / since-when"
-// list (spec: ai-company-brain/specs/task_manager_app.md §1 line 46, §6).
+// list (spec: project-docs/specs/task_manager_app.md §1 line 46, §6).
 // No React, no store: just Date arithmetic over an already-loaded GtdItem, so
 // the view and its unit tests read the same rules. Same shape as
 // lib/ordering.ts and lib/scheduling.ts.

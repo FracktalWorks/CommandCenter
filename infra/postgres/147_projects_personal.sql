@@ -1,7 +1,7 @@
 -- ============================================================================
 -- 147_projects_personal.sql — the personal lens, on the SAME task store.
 --
--- What: spec ai-company-brain/specs/project_management_app.md §3.11–§3.12 and
+-- What: spec project-docs/specs/project_management_app.md §3.11–§3.12 and
 --   §6.1 (WS-27e). Two additions to migration 146's spine:
 --     * pm_projects.personal_owner — a project that belongs to one member
 --     * pm_task_personal           — that member's GTD overlay on a task

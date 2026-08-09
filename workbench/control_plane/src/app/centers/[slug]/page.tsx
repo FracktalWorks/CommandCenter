@@ -9,7 +9,7 @@
 //
 // This page is presentation scaffolding. Real scoping (a Center showing only
 // its team's tasks, mailbox, agents) arrives with access-control Phase 2
-// (modules over org_group) — see ai-company-brain/specs/org_access_control.md §5.
+// (modules over org_group) — see project-docs/specs/org_access_control.md §5.
 
 import Link from "next/link";
 import { useParams } from "next/navigation";

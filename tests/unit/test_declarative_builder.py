@@ -1,6 +1,6 @@
 """The generic declarative builder — equivalence with the hand-written factories.
 
-Spec: ``ai-company-brain/specs/agent_architecture.md`` §1, §6.1.
+Spec: ``project-docs/specs/agent_architecture.md`` §1, §6.1.
 
 The claim being tested is the whole argument for declarative agents: that a
 hand-written ``agents.py`` for a tools-plus-instructions agent produces nothing

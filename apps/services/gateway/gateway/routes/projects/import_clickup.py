@@ -1,6 +1,6 @@
 """Projects · ClickUp import — plan, then apply.
 
-Spec: ``ai-company-brain/specs/project_management_app.md`` §7.1 · **D-PM-10** ·
+Spec: ``project-docs/specs/project_management_app.md`` §7.1 · **D-PM-10** ·
 ticket WS-27b.
 
     POST /projects/import/clickup/plan     → proposes a Center per Space, WRITES NOTHING

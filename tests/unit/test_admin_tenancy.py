@@ -1,7 +1,7 @@
 """The admin plane · the TENANT boundary — what one organization's admin
 cannot reach in another (WS-29e).
 
-Spec: ``ai-company-brain/specs/multi_tenancy_leak_audit.md`` S1-1 and
+Spec: ``project-docs/specs/multi_tenancy_leak_audit.md`` S1-1 and
 ``multi_tenancy.md`` §3 (D-MT-1 (a)).
 
 ``test_projects_tenancy.py`` fences the READ path: one company's portfolio

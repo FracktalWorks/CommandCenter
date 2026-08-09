@@ -1,6 +1,6 @@
 """CRM route package — the gateway `/crm` API (native CRM, Zoho's successor).
 
-Spec: ``ai-company-brain/specs/crm_app.md`` (WS-26a builds §3 + §4).
+Spec: ``project-docs/specs/crm_app.md`` (WS-26a builds §3 + §4).
 
 Same layout as ``routes/tasks`` and ``routes/notes``: ``core`` is the leaf and
 the feature modules register their routes on the shared ``router`` as an import

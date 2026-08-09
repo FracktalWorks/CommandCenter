@@ -13,7 +13,7 @@ on:
     # code could look green all the way up the stack. Run on every PR instead.
     paths-ignore:
       - "**.md"
-      - "ai-company-brain/**"
+      - "project-docs/**"
 
 permissions:
   contents: read
@@ -54,7 +54,7 @@ jobs:
       # ~1.3k-finding style backlog + C901 complexity hotspots). This is the
       # ratchet dashboard — the number should trend down; rules graduate to the
       # blocking gate above as each class is cleaned. Ratchet plan + backlog:
-      # ai-company-brain/specs/dev_velocity_tooling_2026-07.md
+      # project-docs/specs/dev_velocity_tooling_2026-07.md
       - name: Ruff full report (style backlog dashboard, non-blocking)
         continue-on-error: true
         run: uv run ruff check . || echo "style backlog above (non-blocking — see ratchet plan)"

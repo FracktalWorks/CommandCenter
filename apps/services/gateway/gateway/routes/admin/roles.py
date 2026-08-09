@@ -1,6 +1,6 @@
 """Org administration — role definitions and the feature catalog.
 
-Spec: ``ai-company-brain/specs/org_access_control.md`` §3.2–§3.3.
+Spec: ``project-docs/specs/org_access_control.md`` §3.2–§3.3.
 
 Roles are the reusable half of the model: a bundle of permission patterns with
 a name. Per-user overrides (``members.py``) are the exception half. Reaching

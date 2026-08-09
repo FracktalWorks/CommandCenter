@@ -1,6 +1,6 @@
 -- 160_projects_recurrence.sql — WS-27o
 --
--- Spec: ai-company-brain/specs/project_management_app.md §11.2 item 7, §11.13.
+-- Spec: project-docs/specs/project_management_app.md §11.2 item 7, §11.13.
 --
 -- "Every operations cadence is recurring. Without it those live in someone's
 -- head or in ClickUp."

@@ -1,6 +1,6 @@
 -- 141_seed_center_groups.sql — the six departmental groups (Centers Phase B)
 --
--- Spec: ai-company-brain/specs/department_centers.md §1 + §3 Phase B;
+-- Spec: project-docs/specs/department_centers.md §1 + §3 Phase B;
 --       groups_sessions_authority.md §1 (org_group is the primitive).
 --
 -- Group slug = center slug, 1:1 — the naming rule in department_centers.md §1:

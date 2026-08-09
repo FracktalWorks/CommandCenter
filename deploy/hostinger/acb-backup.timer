@@ -1,6 +1,6 @@
 [Unit]
 Description=Nightly CommandCenter database backup
-Documentation=file:///opt/acb/app/ai-company-brain/specs/backup_and_restore.md
+Documentation=file:///opt/acb/app/project-docs/specs/backup_and_restore.md
 
 [Timer]
 # 02:30 UTC — clear of the 05:00 UTC Monday codebase-health job, so a long

@@ -1,7 +1,7 @@
 /**
  * Projects · the project tree, and the Center slice.
  *
- * Spec: `ai-company-brain/specs/project_management_app.md` §5 · D-PM-2.
+ * Spec: `project-docs/specs/project_management_app.md` §5 · D-PM-2.
  *
  * Pure functions. The `?center=` filter in particular is asserted here rather
  * than in a component, because its correctness claim is a *security* one and

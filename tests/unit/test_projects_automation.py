@@ -1,7 +1,7 @@
 """WS-27f — the automation write seam and agent dispatch.
 
-Spec: `ai-company-brain/specs/project_management_app.md` §6.3/§6.4 ·
-`ai-company-brain/specs/workflows_app.md` §13 U1 and U7.
+Spec: `project-docs/specs/project_management_app.md` §6.3/§6.4 ·
+`project-docs/specs/workflows_app.md` §13 U1 and U7.
 
 Two halves, and they are deliberately independent:
 

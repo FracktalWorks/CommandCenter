@@ -1,6 +1,6 @@
 """Projects · custom fields — definitions, and the values they police (WS-27l).
 
-Spec: ``ai-company-brain/specs/project_management_app.md`` §11.2 item 4, §11.9.
+Spec: ``project-docs/specs/project_management_app.md`` §11.2 item 4, §11.9.
 
     GET    /projects/nodes/{project_id}/fields
     POST   /projects/nodes/{project_id}/fields

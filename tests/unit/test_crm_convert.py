@@ -1,6 +1,6 @@
 """CRM · lead → deal conversion (§3.7) — dedup, provenance, and the 409.
 
-Spec: ``ai-company-brain/specs/crm_app.md`` §3.7 · WS-26a done-when 5.
+Spec: ``project-docs/specs/crm_app.md`` §3.7 · WS-26a done-when 5.
 
 Conversion is the one place this app decides that two records are the same
 person or the same company. Each of those decisions has exactly one rule and

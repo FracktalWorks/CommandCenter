@@ -503,7 +503,7 @@ def _build_telemetry(
     compat_guide: str = ""
     if incompatibility:
         for candidate in Path(__file__).parents:
-            guide = candidate / "ai-company-brain" / "agent_repo_compatibility.md"
+            guide = candidate / "project-docs" / "agent_repo_compatibility.md"
             if guide.exists():
                 compat_guide = guide.read_text(encoding="utf-8", errors="replace")
                 break

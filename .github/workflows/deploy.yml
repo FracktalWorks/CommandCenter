@@ -32,14 +32,14 @@ on:
     # WS-25: `paths-ignore` was REMOVED here, deliberately, and it cost a few
     # minutes of CI per docs commit to do it.
     #
-    # It used to skip this whole workflow for `**.md`, `ai-company-brain/**`,
+    # It used to skip this whole workflow for `**.md`, `project-docs/**`,
     # `skills/**` and `workbench/e2e/**`. That was a sound optimisation while
     # delivery was push-based and documentation did not need to reach the box.
     # It is wrong now, for two reasons:
     #   1. `publish-release` lives in this workflow, and a workflow-level path
     #      filter skips the JOBS too — so a docs-only merge would never move
     #      `release`, and the box would never converge on it. Agents running ON
-    #      the box read AGENTS.md and ai-company-brain/specs; stale copies there
+    #      the box read AGENTS.md and project-docs/specs; stale copies there
     #      are the exact failure this workstream exists to remove.
     #   2. It made the stranding invisible. #357 was documentation-only, so no
     #      run was ever queued for it — "no failed run" read as "nothing to do"

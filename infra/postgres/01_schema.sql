@@ -1,5 +1,5 @@
 -- AI Company Brain — Phase-0 graph schema v0 (WBS 0.2).
--- Aligned with ai-company-brain/system_architecture.md §4.
+-- Aligned with project-docs/system_architecture.md §4.
 
 -- 1. Required extensions ----------------------------------------------------
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";

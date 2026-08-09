@@ -3,7 +3,7 @@
 The leaf module: it imports nothing from its siblings. It owns the shared
 ``router``, the entity registry, the Pydantic models, the row→model mapper, the
 list contract, and the small set of SQL helpers every feature module builds on.
-Spec: ``ai-company-brain/specs/crm_app.md`` sections 3 and 4 (WS-26a).
+Spec: ``project-docs/specs/crm_app.md`` sections 3 and 4 (WS-26a).
 
 Two things here are load-bearing and worth stating once:
 

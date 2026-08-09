@@ -1,7 +1,7 @@
 /**
  * People · the app is registered in every place that must know about it.
  *
- * Spec: `ai-company-brain/specs/people_center_app.md` §6 · ticket WS-28b.
+ * Spec: `project-docs/specs/people_center_app.md` §6 · ticket WS-28b.
  *
  * The failure this exists to catch is the one migration 140 shipped for real:
  * a surface seeded in one place and missing from another is **unreachable,

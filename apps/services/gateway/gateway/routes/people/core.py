@@ -1,6 +1,6 @@
 """People Center · the router, the gate, and the seams it borrows.
 
-Spec: ``ai-company-brain/specs/people_center_app.md`` §3, §6 · ticket WS-28b.
+Spec: ``project-docs/specs/people_center_app.md`` §3, §6 · ticket WS-28b.
 
 **Two permissions, and they answer different questions.**
 ``feature:people`` decides whether the directory is reachable at all;

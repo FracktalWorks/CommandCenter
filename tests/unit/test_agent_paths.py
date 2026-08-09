@@ -1,6 +1,6 @@
 """Agent code and per-tenant state resolve to separate directories.
 
-Spec: ai-company-brain/specs/agent_architecture.md §2
+Spec: project-docs/specs/agent_architecture.md §2
 
 Two properties carry the whole design:
 

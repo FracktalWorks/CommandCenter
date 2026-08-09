@@ -2,7 +2,7 @@
 -- MT-1b · phase 3/4 constraints — GENERATED, DO NOT EDIT BY HAND
 -- ============================================================================
 -- Regenerate with: uv run python scripts/gen_tenant_migration.py
--- Spec: ai-company-brain/specs/saas_multitenancy.md §1.3 · MT-1b · WS-29 · D15
+-- Spec: project-docs/specs/saas_multitenancy.md §1.3 · MT-1b · WS-29 · D15
 --
 -- SET NOT NULL + FK + index. ⚠️ THIS IS THE ACCESS EXCLUSIVE PHASE — it scans each table. Apply in a window, table by table if necessary, and never behind a long-running transaction (see the generator docstring: that is the exact shape of the 14h44m outage).
 --

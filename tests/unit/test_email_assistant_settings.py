@@ -1,7 +1,7 @@
 """Unit tests for the email Assistant settings model.
 
 Guards the serialization contract the Settings UI and the `/assistant/settings`
-endpoints depend on. See ai-company-brain/specs/email_inbox_zero_parity_plan.md.
+endpoints depend on. See project-docs/specs/email_inbox_zero_parity_plan.md.
 """
 from __future__ import annotations
 

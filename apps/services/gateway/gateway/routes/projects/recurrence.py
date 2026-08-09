@@ -1,6 +1,6 @@
 """Projects · recurring tasks (WS-27o).
 
-Spec: ``ai-company-brain/specs/project_management_app.md`` §11.2 item 7, §11.13.
+Spec: ``project-docs/specs/project_management_app.md`` §11.2 item 7, §11.13.
 
     GET    /projects/tasks/{task_id}/recurrence
     PUT    /projects/tasks/{task_id}/recurrence     → set or replace the rule

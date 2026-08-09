@@ -1,6 +1,6 @@
 """CRM · auto_lead — an unknown inbound sender becomes a lead (WS-26d-autolead).
 
-Spec: ``ai-company-brain/specs/crm_app.md`` §9 ``WS-26d-autolead`` · D-CRM-9 ·
+Spec: ``project-docs/specs/crm_app.md`` §9 ``WS-26d-autolead`` · D-CRM-9 ·
 D-CRM-12. Migration: ``crm_auto_lead_cursors``.
 
 **This module registers no routes.** Like ``broker_handlers``, it is deliberately

@@ -10,7 +10,7 @@
  *
  * This is the media seam for the note taker — every call's audio is recorded to
  * a WAV on the bridge, which is what the transcription pipeline will consume.
- * See ai-company-brain/specs/whatsapp_calls_note_taker.md.
+ * See project-docs/specs/whatsapp_calls_note_taker.md.
  */
 
 import Button from "@/components/ui/Button";

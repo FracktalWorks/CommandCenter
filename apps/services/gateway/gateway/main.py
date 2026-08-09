@@ -545,7 +545,7 @@ _docs_enabled = docs_enabled(get_settings().acb_env)
 app = FastAPI(
     title="AI Company Brain — Gateway",
     version="0.0.1",
-    description="Pull queries, push notifications, approvals. See ai-company-brain/system_architecture.md §3.",
+    description="Pull queries, push notifications, approvals. See project-docs/system_architecture.md §3.",
     lifespan=lifespan,
     dependencies=[require_authenticated(public=PUBLIC_ROUTES)],
     docs_url="/docs" if _docs_enabled else None,
@@ -996,7 +996,7 @@ except Exception:  # pragma: no cover
     pass
 
 try:
-    # WS-26 — native CRM (spec: ai-company-brain/specs/crm_app.md). Leads,
+    # WS-26 — native CRM (spec: project-docs/specs/crm_app.md). Leads,
     # deals, contacts, organizations, the pipeline and one activity timeline.
     from gateway.routes.crm import router as _crm_router
 
@@ -1006,7 +1006,7 @@ except Exception:  # pragma: no cover
 
 try:
     # WS-27 — native project management (spec:
-    # ai-company-brain/specs/project_management_app.md). Departments, projects,
+    # project-docs/specs/project_management_app.md). Departments, projects,
     # subprojects, tasks and subtasks, grant-scoped into every Center.
     from gateway.routes.projects import router as _projects_router
 
@@ -1016,7 +1016,7 @@ except Exception:  # pragma: no cover
 
 try:
     # WS-28 — the People Center's directory (spec:
-    # ai-company-brain/specs/people_center_app.md). Its own feature gate, but
+    # project-docs/specs/people_center_app.md). Its own feature gate, but
     # the HR projection is imported from routes/tasks, never re-implemented.
     from gateway.routes.people import router as _people_router
 
@@ -1126,7 +1126,7 @@ except Exception:  # pragma: no cover
     pass
 
 try:
-    # Workflows app (ai-company-brain/specs/workflows_app.md) — visual
+    # Workflows app (project-docs/specs/workflows_app.md) — visual
     # automation builder: workflow CRUD/publish/runs, Module Studio, the node
     # catalog, and the inbound webhook trigger (prefix /workflows).
     from gateway.routes.workflows import router as _workflows_router
@@ -1158,7 +1158,7 @@ except Exception:  # pragma: no cover
     pass
 
 try:
-    # Org access control (ai-company-brain/specs/org_access_control.md) —
+    # Org access control (project-docs/specs/org_access_control.md) —
     # member roster + lifecycle, roles, per-user overrides (prefix /admin),
     # plus /auth/me, which every signed-in member calls to resolve their own
     # feature and agent access.

@@ -1,6 +1,6 @@
 // ── Org access control — client-side types and helpers ───────────────────
 //
-// Spec: ai-company-brain/specs/org_access_control.md
+// Spec: project-docs/specs/org_access_control.md
 //
 // The gateway resolves permissions and returns *outcomes* — a list of allowed
 // feature slugs and runnable agent names. This module deliberately does NOT

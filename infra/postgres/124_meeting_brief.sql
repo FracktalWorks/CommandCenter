@@ -14,7 +14,7 @@
 --   costs real tokens BEFORE the meeting produces a word. A quick internal
 --   standup shouldn't trigger a CRM sweep, so it's off unless asked for.
 -- Depends on: 95_note_taker.sql (meeting), 120_live_session.sql. ADDITIVE.
--- Spec: ai-company-brain/specs/live_meeting_copilot.md §5 (business context).
+-- Spec: project-docs/specs/live_meeting_copilot.md §5 (business context).
 
 ALTER TABLE meeting
     ADD COLUMN IF NOT EXISTS copilot_brief TEXT;

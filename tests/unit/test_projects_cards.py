@@ -1,6 +1,6 @@
 """WS-27s — the badges a card needs, on the LIST endpoint.
 
-Spec: ``ai-company-brain/specs/project_management_app.md`` §11.15.
+Spec: ``project-docs/specs/project_management_app.md`` §11.15.
 
 A Projects card should read like a Tasks card. Most of what makes those cards
 legible is data Projects already stores and never sends to the board: how many

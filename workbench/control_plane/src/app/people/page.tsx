@@ -3,7 +3,7 @@
 /**
  * People Center · the directory (§3.1) and the person page (§3.2).
  *
- * Spec: `ai-company-brain/specs/people_center_app.md` · ticket WS-28b.
+ * Spec: `project-docs/specs/people_center_app.md` · ticket WS-28b.
  *
  * ONE app, like Projects. The People Center links here; so does the Projects
  * assignee picker (WS-28e) once it lands. A person findable in one is findable

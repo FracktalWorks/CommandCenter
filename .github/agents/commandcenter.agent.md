@@ -49,7 +49,7 @@ Read root `AGENTS.md` for the full list.  Key ones:
 - Agent loader: `packages/acb_skills/acb_skills/loader.py`
 - Gateway routes: `apps/gateway/gateway/routes/`
 - Chat frontend: `workbench/control_plane/src/`
-- System design: `ai-company-brain/`
+- System design: `project-docs/`
 
 ## Available Dev Skills (`.github/skills/`)
 

@@ -1,7 +1,7 @@
 /**
  * Projects · the app is registered in every place that must know about it.
  *
- * Spec: `ai-company-brain/specs/project_management_app.md` §5 · ticket WS-27d
+ * Spec: `project-docs/specs/project_management_app.md` §5 · ticket WS-27d
  * done-whens 3 and 4.
  *
  * The failure this exists to catch is the one `department_centers.md` §2

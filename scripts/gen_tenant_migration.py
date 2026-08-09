@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Generate the MT-1b tenancy migration — org_id + FORCE RLS on every table.
 
-Spec: ``ai-company-brain/specs/saas_multitenancy.md`` §1.3 / MT-1b ·
+Spec: ``project-docs/specs/saas_multitenancy.md`` §1.3 / MT-1b ·
 shapes in ``saas_multitenancy_implementation.md`` §1 · board WS-29 · D15.
 
 WHY A GENERATOR AND NOT A HAND-WRITTEN MIGRATION
@@ -198,7 +198,7 @@ def _header(phase: str, why: str, tables: int) -> str:
 -- MT-1b · phase {phase} — GENERATED, DO NOT EDIT BY HAND
 -- ============================================================================
 -- Regenerate with: uv run python scripts/gen_tenant_migration.py
--- Spec: ai-company-brain/specs/saas_multitenancy.md §1.3 · MT-1b · WS-29 · D15
+-- Spec: project-docs/specs/saas_multitenancy.md §1.3 · MT-1b · WS-29 · D15
 --
 -- {why}
 --

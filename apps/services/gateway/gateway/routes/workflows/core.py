@@ -1,4 +1,4 @@
-"""Workflows routes — shared kernel (spec: ai-company-brain/specs/workflows_app.md).
+"""Workflows routes — shared kernel (spec: project-docs/specs/workflows_app.md).
 
 The shared ``router``, DB infrastructure, and the small helpers every feature
 module uses. Mirrors ``routes/apps/_common.py`` / ``routes/tasks/core.py``

@@ -1,6 +1,6 @@
 """CRM · records, activities and admin — the list contract and the write paths.
 
-Spec: ``ai-company-brain/specs/crm_app.md`` §3.8, §4 · ticket WS-26a done-when
+Spec: ``project-docs/specs/crm_app.md`` §3.8, §4 · ticket WS-26a done-when
 4 and 6.
 
 Hermetic: no Postgres, no network, no TestClient. Route functions are called

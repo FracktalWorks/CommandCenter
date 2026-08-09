@@ -3,7 +3,7 @@
 Spec: ``docs/multiplayer/README.md`` §3.3 (the destructive race), §4.6 (steer is
 "a new applier, not new infrastructure" on the existing ``cc:control:`` bus),
 §5.2 (the correctness fix), and
-``ai-company-brain/specs/multiplayer_prior_art_qm_2026-08.md`` §QM-1 (the
+``project-docs/specs/multiplayer_prior_art_qm_2026-08.md`` §QM-1 (the
 external reference design this mirrors in shape, not in code).
 
 The problem this solves, restated from §3.3: a second ``POST /agent/run/stream``

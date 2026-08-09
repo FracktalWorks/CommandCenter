@@ -1,6 +1,6 @@
 """WS-27l — custom fields.
 
-Spec: `ai-company-brain/specs/project_management_app.md` §11.2 item 4, §11.9.
+Spec: `project-docs/specs/project_management_app.md` §11.2 item 4, §11.9.
 
 Definitions are rows; values are JSONB on the task keyed by `field_key`. The
 denormalisation is Paca's and is deliberate (migration 155 says why), and it

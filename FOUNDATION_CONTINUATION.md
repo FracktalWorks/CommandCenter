@@ -1,6 +1,6 @@
 # Foundation Audit — Continuation & Handoff Guide
 
-> ⚠️ **Historical session log.** 'LATEST STATUS' below is the state as of **2026-07-13** and is NOT maintained; its `origin/main` pin is weeks stale. For current state read `ai-company-brain/work_plan.md` §2; for foundation items `FOUNDATION_BUILDOUT_CHECKLIST.md`. *(Banner added 2026-08-09.)*
+> ⚠️ **Historical session log.** 'LATEST STATUS' below is the state as of **2026-07-13** and is NOT maintained; its `origin/main` pin is weeks stale. For current state read `project-docs/work_plan.md` §2; for foundation items `FOUNDATION_BUILDOUT_CHECKLIST.md`. *(Banner added 2026-08-09.)*
 
 **Purpose:** everything still needed to finish the foundational audit + fixing, written so it can be picked up on a machine **with Postgres access**. Read this alongside `FOUNDATION_AUDIT_REPORT.md` (findings) and `FOUNDATION_BUILDOUT_CHECKLIST.md` (item tracker). This doc is the *executable* plan — concrete files, DDL, code sketches, test approach, and verification commands.
 

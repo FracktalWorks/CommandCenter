@@ -1,6 +1,6 @@
 """WS-28b — the People Center's directory and person page.
 
-Spec: `ai-company-brain/specs/people_center_app.md` §3.1, §3.2, §5.2, §6.
+Spec: `project-docs/specs/people_center_app.md` §3.1, §3.2, §5.2, §6.
 
 The claims worth testing are about the *shape of the answer*, because this
 app's whole permission story is a projection rather than a refusal:

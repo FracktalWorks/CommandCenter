@@ -83,6 +83,18 @@ NODE_TYPE_META = [
         ),
     },
     {
+        "type": "pm_lifecycle",
+        "category": "action",
+        "label": "Lifecycle sweep (Projects)",
+        "description": (
+            "Archive long-closed tasks and close stale ones, per each root "
+            "project's lifecycle policy (archive/close months and timezone "
+            "live on the project — projects with no policy are untouched). "
+            "Config-free; pair it with a schedule trigger. An internal "
+            "write: no approval node required."
+        ),
+    },
+    {
         "type": "output",
         "category": "output",
         "label": "Output",

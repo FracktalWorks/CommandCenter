@@ -48,6 +48,11 @@ NODE_TYPES = frozenset(
         # Registry and carry the write-class approval gate, which a task moving
         # to Done must not need.
         "pm_task",
+        # WS-27z — the Projects lifecycle sweep. Internal like `pm_task`, and
+        # deliberately CONFIG-FREE: the whole policy (windows, timezone,
+        # which projects) lives in `pm_projects` columns, so there is nothing
+        # here for `_validate_node_config` to require.
+        "pm_lifecycle",
     }
 )
 

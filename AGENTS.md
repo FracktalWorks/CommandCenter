@@ -78,7 +78,7 @@ Remove stale or contradictory text immediately.
 Organisation: Fracktal Works
 Project: CommandCenter v2 -- Headless, self-mutating agent orchestration platform
 Runtime: MAF (Microsoft Agent Framework) native, plus the GitHub Copilot SDK as a second runtime for interactive coworker chat + the self-mutation sandbox. No LangGraph. No deepagents. No n8n.
-Last updated: 2026-07-13
+Last updated: 2026-08-09
 
 ## Purpose
 
@@ -113,7 +113,12 @@ Copilot SDK sandboxes.
     the build: **never introduce a second scoping doctrine** (tenant isolation is
     `organization_id`; visibility inside a tenant stays `email | group:<slug> | org`), and
     **never give an agent a raw-SQL tool or a database connection** — §0.9.3 makes that a
-    condition on the whole tenancy decision, not a nicety.
+    condition on the whole tenancy decision, not a nicety. Board rule **R5**
+    (`ai-company-brain/work_plan.md` §1, owner-directed 2026-08-09) binds every PR
+    tenant-ready by construction while WS-29 is in flight: new persisted tables satisfy
+    the tenant-coverage gate (or are exempted with a reason), no new database-connection
+    or Redis sites outside the seam/wrapper, and session acquisition stays on the seam
+    idiom so the H2 conversion remains mechanical.
 
 ## Global Conventions
 

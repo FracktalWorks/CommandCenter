@@ -177,6 +177,7 @@ _ORGANIZATION_PARENT: dict[str, tuple[str, str]] = {
     "pm_tasks": ("pm_projects", "project_id"),
     "pm_activities": ("pm_tasks", "task_id"),
     "pm_task_assignees": ("pm_tasks", "task_id"),
+    "pm_task_watchers": ("pm_tasks", "task_id"),
     "pm_task_links": ("pm_tasks", "source_task_id"),
     "pm_task_attachments": ("pm_tasks", "task_id"),
     "pm_task_personal": ("pm_tasks", "task_id"),
@@ -355,6 +356,7 @@ _DEFAULTS: dict[str, dict[str, Any]] = {
         "clickup_synced_at": None, "task_number": 1,
     },
     "pm_task_assignees": {},
+    "pm_task_watchers": {"created_by": None},
     "pm_task_links": {},
     "pm_activities": {"body": None, "meta": None, "task_id": None,
                       "project_id": None, "deleted_at": None},
@@ -568,6 +570,27 @@ class FakeProjectsDB:
         # be mistaken for a column predicate and drop every row.
         if "END AS rank" in statement:
             return _Result(self._search_hits(statement, args))
+        # WS-27v's audience: watchers ∪ assignees, a UNION the generic WHERE
+        # reader cannot parse (it would filter watcher rows by the SECOND
+        # SELECT's predicates too). Each arm is honoured ONLY when the
+        # statement carries it — the `_select` convention — so an audience that
+        # loses either arm loses it here as well and the fan-out test goes red.
+        if "AS who" in statement and "pm_task_watchers" in statement:
+            wanted = str(args.get("tid"))
+            people: set[str] = set()
+            if "watcher AS who" in statement:
+                people |= {
+                    str(r.get("watcher"))
+                    for r in self.rows("pm_task_watchers")
+                    if str(r.get("task_id")) == wanted
+                }
+            if "assignee AS who" in statement:
+                people |= {
+                    str(r.get("assignee"))
+                    for r in self.rows("pm_task_assignees")
+                    if str(r.get("task_id")) == wanted
+                }
+            return _Result([SimpleNamespace(who=w) for w in sorted(people)])
         head = statement.split(None, 1)[0].upper()
         table = self._table(statement)
         if head == "INSERT":

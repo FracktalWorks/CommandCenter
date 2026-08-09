@@ -62,7 +62,12 @@ from gateway.routes.projects.filters import (
     attach_relation_counts,
     build_task_filters,
 )
-from gateway.routes.projects.notifications import notify
+from gateway.routes.projects.notifications import (
+    excerpt_of,
+    new_mentions,
+    notify,
+)
+from gateway.routes.projects.watchers import ensure_watchers
 from gateway.routes.projects.relations import (
     DIRECTED_TYPES,
     assert_no_block_cycle,
@@ -286,6 +291,10 @@ async def create_task(
             db, activity_type="system", created_by=actor(user),
             task_id=task_id, body="Task created",
         )
+        # WS-27v — the creator watches their own task, which is what keeps the
+        # WS-27j author-hears-about-comments behaviour once the audience is
+        # watchers ∪ assignees (migration 165 seeds the same for older tasks).
+        await ensure_watchers(db, task_id, [actor(user)], by=actor(user))
         await db.commit()
         result = row_to_dict(row, TaskModel)
     finally:
@@ -375,6 +384,28 @@ async def patch_task(
                 db, after, str(new_status), created_by=actor(user),
             )
             after = moved["row"]
+
+        if values or moved is not None:
+            # WS-27v — editing a task subscribes the editor (idempotent). Only
+            # when something actually changed: a no-op PATCH is not a touch.
+            await ensure_watchers(db, task_id, [actor(user)], by=actor(user))
+        if "description" in values:
+            # WS-27v — mention DIFFING on the description, same rule as a
+            # comment edit: only the addresses this edit ADDED are notified, so
+            # rewording a description that already names two colleagues pings
+            # neither, and the newly delivered mentions become watchers.
+            # Watchers at large deliberately hear nothing about a description
+            # edit — the diffed mentions are the whole fan-out.
+            added = new_mentions(
+                getattr(before, "description", None), values["description"],
+            )
+            mentioned = await notify(
+                db, recipients=added, kind="mention", task_id=task_id,
+                actor_id=actor(user), excerpt=excerpt_of(values["description"]),
+            )
+            await ensure_watchers(
+                db, task_id, mentioned["notified"], by=actor(user),
+            )
 
         await db.commit()
         result = row_to_dict(after, TaskModel)
@@ -579,6 +610,12 @@ async def set_assignees(
             db, recipients=sorted(added), kind="assigned",
             task_id=task_id, actor_id=actor(user),
         )
+        # WS-27v — a newly added assignee becomes a watcher. Idempotent, and
+        # only `added` for the same reason the event carries added: a re-assert
+        # is not a touch. Agents are dropped inside the helper (they are
+        # dispatched, never subscribed), and the rows survive a later
+        # unassignment — having held the work is a reason to keep hearing.
+        await ensure_watchers(db, task_id, sorted(added), by=actor(user))
         await db.commit()
     finally:
         await db.close()

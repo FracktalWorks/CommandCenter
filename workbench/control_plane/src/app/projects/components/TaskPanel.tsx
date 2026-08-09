@@ -10,6 +10,8 @@
 import Icon from "@/components/Icon";
 import { useEffect, useRef, useState } from "react";
 
+import Button from "@/components/ui/Button";
+
 import {
   type ActivityRow,
   type AttachmentRow,
@@ -19,6 +21,7 @@ import {
   type TaskRow,
   attachmentsApi,
   projectsApi,
+  watchersApi,
 } from "../lib/api";
 import { CustomFieldValues } from "./CustomFieldValues";
 import { TagPicker } from "./TagPicker";
@@ -118,6 +121,9 @@ export function TaskPanel({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [files, setFiles] = useState<AttachmentRow[]>([]);
+  // WS-27v — null until the read lands, so the toggle never renders a state
+  // it is only guessing at.
+  const [watching, setWatching] = useState<boolean | null>(null);
   const assignees = task.assignees ?? [];
   // Agents are excluded: an agent cannot receive a notification (migration
   // 152's CHECK), so offering to mention one would promise nothing.
@@ -139,10 +145,30 @@ export function TaskPanel({
       // Attachments failing must not blank the panel: the timeline and the
       // status control are the reason somebody opened it.
       .catch(() => undefined);
+    setWatching(null);
+    watchersApi
+      .get(task.id)
+      .then((res) => {
+        if (live) setWatching(res.watching);
+      })
+      // Same posture as attachments: no toggle beats a blank panel.
+      .catch(() => undefined);
     return () => {
       live = false;
     };
   }, [task.id]);
+
+  async function toggleWatch() {
+    if (watching === null) return;
+    // Optimistic — both writes are idempotent, so a failure just reverts.
+    const next = !watching;
+    setWatching(next);
+    try {
+      await (next ? watchersApi.watch(task.id) : watchersApi.unwatch(task.id));
+    } catch {
+      setWatching(!next);
+    }
+  }
 
   async function uploadFiles(picked: FileList | null) {
     if (!picked || picked.length === 0) return;
@@ -300,14 +326,33 @@ export function TaskPanel({
           </p>
           <h2 className="truncate text-sm font-medium text-foreground">{task.title}</h2>
         </div>
-        <button
-          type="button"
-          onClick={onClose}
-          aria-label="Close task"
-          className="rounded p-1 text-muted-foreground hover:bg-muted"
-        >
-          <Icon name="X" className="h-4 w-4" />
-        </button>
+        <div className="flex shrink-0 items-center gap-0.5">
+          {/* WS-27v — watch/unwatch. Watching means the bell hears about this
+              task; assignees hear regardless, so unwatching never silences
+              work you hold. Hidden (not disabled) until the state is known. */}
+          {watching !== null ? (
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              icon={watching ? "BellOff" : "Bell"}
+              aria-label={watching ? "Stop watching this task" : "Watch this task"}
+              title={
+                watching
+                  ? "Watching — click to stop being notified about this task"
+                  : "Watch — get notified about this task"
+              }
+              onClick={() => void toggleWatch()}
+            />
+          ) : null}
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close task"
+            className="rounded p-1 text-muted-foreground hover:bg-muted"
+          >
+            <Icon name="X" className="h-4 w-4" />
+          </button>
+        </div>
       </header>
 
       <div className="space-y-3 border-b border-border p-3 text-sm">

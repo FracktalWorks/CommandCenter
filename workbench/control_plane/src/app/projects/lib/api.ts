@@ -531,10 +531,14 @@ export interface NotificationRow {
  * request shape that reads somebody else's bell.
  */
 export const notificationsApi = {
+  // `unread` split since WS-27v: mentions are the subset whose reason is a
+  // mention, drawn distinctly on the bell.
   list: (unreadOnly = false) =>
-    call<{ rows: NotificationRow[]; total: number; unread: number }>(
-      `notifications${unreadOnly ? "?unread_only=true" : ""}`
-    ),
+    call<{
+      rows: NotificationRow[];
+      total: number;
+      unread: { total: number; mentions: number };
+    }>(`notifications${unreadOnly ? "?unread_only=true" : ""}`),
 
   markRead: (ids: string[]) =>
     call<{ marked: number }>("notifications/read", {
@@ -546,6 +550,30 @@ export const notificationsApi = {
     call<{ marked: number }>("notifications/read", {
       method: "POST",
       body: JSON.stringify({ all: true }),
+    }),
+};
+
+/**
+ * Watchers (WS-27v).
+ *
+ * The watcher is always the session's identity — no parameter, same contract
+ * as the bell above: there is no request shape that subscribes somebody else.
+ * Both writes are idempotent, so the toggle can be optimistic.
+ */
+export const watchersApi = {
+  get: (taskId: string) =>
+    call<{ watchers: string[]; watching: boolean }>(
+      `tasks/${taskId}/watchers`
+    ),
+
+  watch: (taskId: string) =>
+    call<{ task_id: string; watching: boolean }>(`tasks/${taskId}/watch`, {
+      method: "PUT",
+    }),
+
+  unwatch: (taskId: string) =>
+    call<{ task_id: string; watching: boolean }>(`tasks/${taskId}/watch`, {
+      method: "DELETE",
     }),
 };
 

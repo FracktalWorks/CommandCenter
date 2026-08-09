@@ -39,9 +39,11 @@ from gateway.routes.projects.core import (
 from gateway.routes.projects.notifications import (
     excerpt_of,
     mention_targets,
+    new_mentions,
     notify,
     task_audience,
 )
+from gateway.routes.projects.watchers import ensure_watchers
 from pydantic import BaseModel
 from sqlalchemy import text
 
@@ -128,16 +130,26 @@ async def add_comment(
             db, activity_type="comment", created_by=actor(user),
             task_id=task_id, body=body,
         )
+        # WS-27v — commenting subscribes the commenter, BEFORE the audience is
+        # read so their row exists for the next event too. Harmless for this
+        # one: `notify` never addresses the actor (rule 1).
+        await ensure_watchers(db, task_id, [actor(user)], by=actor(user))
         # WS-27j. Two audiences, and the order matters: a person who is BOTH
-        # mentioned and an assignee should get the mention, because "you were
-        # named" is a stronger claim on their attention than "the task you hold
-        # got a comment". `notifiable` dedupes within a call, so the assignee
-        # pass is handed only whoever the mention pass did not take.
+        # mentioned and a watcher/assignee should get the mention, because "you
+        # were named" is a stronger claim on their attention than "the task you
+        # follow got a comment". `notifiable` dedupes within a call, so the
+        # audience pass is handed only whoever the mention pass did not take.
         mentioned = mention_targets(body)
         snippet = excerpt_of(body)
         mention_result = await notify(
             db, recipients=mentioned, kind="mention", task_id=task_id,
             actor_id=actor(user), activity_id=str(row.id), excerpt=snippet,
+        )
+        # Being @mentioned subscribes you — but only the DELIVERED mentions:
+        # a person who cannot open the task must not be silently enrolled in a
+        # stream of its titles they could never have asked for.
+        await ensure_watchers(
+            db, task_id, mention_result["notified"], by=actor(user),
         )
         rest = [
             who for who in await task_audience(db, task_id)
@@ -206,8 +218,35 @@ async def edit_comment(
         vis = await resolve_visibility(db, user)
         await load_visible_task(db, vis, str(comment.task_id))
         row = await update_row(db, "pm_activities", activity_id, {"body": body})
+        task_id = str(comment.task_id)
+        # WS-27v — mention DIFFING: only the addresses this edit ADDED are
+        # notified. The old body is the one loaded above, before the update, so
+        # fixing a typo next to `@priya@…` re-pings nobody, while appending
+        # `@ravi@…` reaches exactly Ravi. Editing your own comment is a touch,
+        # so the editor (re-)subscribes too — idempotently, since they already
+        # subscribed when they commented.
+        added = new_mentions(getattr(comment, "body", None), body)
+        mention_result = await notify(
+            db, recipients=added, kind="mention", task_id=task_id,
+            actor_id=actor(user), activity_id=activity_id,
+            excerpt=excerpt_of(body),
+        )
+        await ensure_watchers(
+            db, task_id, [actor(user), *mention_result["notified"]],
+            by=actor(user),
+        )
+        if mention_result["notified"]:
+            # On the timeline, as add_comment does: why a colleague turned up
+            # must be readable by everyone, not only in one person's bell.
+            await record_activity(
+                db, activity_type="mention", created_by=actor(user),
+                task_id=task_id,
+                meta={"mentioned": mention_result["notified"]},
+            )
         await db.commit()
-        return row_to_dict(row, ActivityModel)
+        result = row_to_dict(row, ActivityModel)
+        result["not_notified"] = mention_result["skipped"]
+        return result
     finally:
         await db.close()
 

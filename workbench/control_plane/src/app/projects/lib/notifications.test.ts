@@ -13,6 +13,7 @@ import type { NotificationRow } from "./api";
 import {
   BADGE_MAX,
   actorLabel,
+  afterRead,
   badge,
   describe,
   insertMention,
@@ -22,6 +23,7 @@ import {
   order,
   taskLabel,
   unreadIds,
+  unreadSplit,
 } from "./notifications";
 
 const row = (over: Partial<NotificationRow> = {}): NotificationRow => ({
@@ -54,6 +56,66 @@ suite("badge", () => {
 
   it("gestures past the cap instead of overflowing the dot", () => {
     expect(badge(BADGE_MAX + 1)).toBe(`${BADGE_MAX}+`);
+  });
+});
+
+suite("unreadSplit", () => {
+  it("passes a well-formed split through", () => {
+    expect(unreadSplit({ total: 5, mentions: 2 })).toEqual({
+      total: 5,
+      mentions: 2,
+    });
+  });
+
+  it("tolerates the pre-WS-27v bare number", () => {
+    // A stale gateway behind a fresh UI is a deploy-window reality; a bell
+    // that crashes during it notifies nobody about anything.
+    expect(unreadSplit(7)).toEqual({ total: 7, mentions: 0 });
+  });
+
+  it("clamps mentions to total — a subset cannot outgrow its set", () => {
+    expect(unreadSplit({ total: 1, mentions: 9 })).toEqual({
+      total: 1,
+      mentions: 1,
+    });
+  });
+
+  it("zeroes nonsense instead of drawing it", () => {
+    expect(unreadSplit(null)).toEqual({ total: 0, mentions: 0 });
+    expect(unreadSplit({ total: -3, mentions: NaN })).toEqual({
+      total: 0,
+      mentions: 0,
+    });
+  });
+});
+
+suite("afterRead", () => {
+  it("shrinks both counts when the row read was a mention", () => {
+    expect(afterRead({ total: 3, mentions: 2 }, "mention")).toEqual({
+      total: 2,
+      mentions: 1,
+    });
+  });
+
+  it("shrinks only the total for any other kind", () => {
+    expect(afterRead({ total: 3, mentions: 2 }, "comment")).toEqual({
+      total: 2,
+      mentions: 2,
+    });
+  });
+
+  it("never goes negative on a double-click", () => {
+    expect(afterRead({ total: 0, mentions: 0 }, "mention")).toEqual({
+      total: 0,
+      mentions: 0,
+    });
+  });
+
+  it("keeps mentions a subset even from an inconsistent input", () => {
+    expect(afterRead({ total: 1, mentions: 1 }, "comment")).toEqual({
+      total: 0,
+      mentions: 0,
+    });
   });
 });
 

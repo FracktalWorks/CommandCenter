@@ -8,6 +8,10 @@
 > deprioritised sub-project** under the internal-tool threat model (owner decision
 > 2026-08-03) · **P5-d not started.** The two dispatchable slices are **WS-3a**
 > (§P5-a.2) and **WS-3b** (§P5-b.2). Board row: `work_plan.md` §2 WS-3.
+> *[Update 2026-08-09 — D16: the parking survives, the trigger changed. P5-c/T2
+> is now a precondition of the pooled cutover (`saas_multitenancy.md` §5.1,
+> MT-0c-2); the internal-tool premise expires with the first external tenant.
+> Acceptance remains unwritten by design until the owner un-parks.]*
 > **Module:** B6 (core_module_map.md).
 >
 > **Isolation ladder (R2).** This doc's Phase-5 build order is lettered **P5-a/b/c/d**.
@@ -507,6 +511,10 @@ An agent asked to "finish P5-b" builds **P5-b.2 only** and refuses this by name.
 
 ### P5-c — Generalize the container to a live, streaming run sandbox — 🔲 **PARKED SUB-PROJECT** (owner decision 2026-08-03) · **OWNER-GATE to un-park**
 
+> ⚠️ **Read the D16 update at the end of this box first (2026-08-09):** the parking
+> survives but the premise below is dated and the un-park trigger changed — it is the
+> **pooled cutover**, not "a second organisation".
+>
 > **Why this is parked, not cancelled.** Command Center is an **internal Fracktal
 > tool**. The team uses it; there are no external tenants and no customer-authored
 > agents. So the isolation ladder has to hold up to **trusted colleagues, not
@@ -529,6 +537,11 @@ An agent asked to "finish P5-b" builds **P5-b.2 only** and refuses this by name.
 > from scratch — the 2026-07-04 estimates below are a year stale by then.
 > Un-parking it is an **owner decision**. An agent asked to "finish the isolation
 > ladder" builds WS-3a and WS-3b and refuses P5-c by name.
+>
+> *[Update 2026-08-09 — D16: the parking survives, the trigger changed. P5-c/T2
+> is now a precondition of the pooled cutover (`saas_multitenancy.md` §5.1,
+> MT-0c-2); the internal-tool premise expires with the first external tenant.
+> Acceptance remains unwritten by design until the owner un-parks.]*
 >
 > **Do not confuse P5-c with what shipped.** `copilot_sandbox.py` containerizes
 > the **`copilot` CLI binary** and is wired at two call sites behind a scope
@@ -565,6 +578,7 @@ objection). Layer intent-level authorization over allow-everything.
 > not "partially" default-deny an in-process run to make progress — that is
 > precisely the false assurance the paragraph above warns about, and against
 > colleagues rather than attackers it buys nothing while breaking real work.
+> *[See the D16 update note at §P5-c — trigger re-scoped 2026-08-09.]*
 >
 > The one piece of P5-d that is separable is the **near-term handler's mode**,
 > which already exists: prod runs `AGENT_PERMISSION_MODE` in `audit` and moving
@@ -587,6 +601,7 @@ buying* when the trust boundary moves — a second org, or authorship outside
 Fracktal. Against colleagues, **B is the right resting grade**, and the module
 map's "container isolation for normal runs" item should be read as *"open, and
 deliberately parked"* rather than *"open, in progress"*.
+*[See the D16 update note at §P5-c — trigger re-scoped 2026-08-09.]*
 
 ## Status (Phase 5)
 - 2026-07-04 — Design from the B6 Phase-5 recon (mutation-container primitive +
@@ -632,7 +647,8 @@ deliberately parked"* rather than *"open, in progress"*.
   5. **Wrote acceptance for exactly two slices**, WS-3a (§P5-a.2) and WS-3b
      (§P5-b.2). Both AGENT-SAFE, both dispatchable, neither needing a container.
   6. **Parked P5-c and P5-d** under the owner's 2026-08-03 internal-tool threat
-     model, with the un-parking condition stated. Neither gets acceptance.
+     model, with the un-parking condition stated. Neither gets acceptance. *[See
+     the D16 update note at §P5-c — trigger re-scoped 2026-08-09.]*
   7. **Struck WS-3's claim on `tool_scope` deny** — that is built and
      owner-gated under **WS-23** (`_tool_injection.py:101-117` + `:214-224`,
      spec `skills_scope_out.md` §4), not this row.
@@ -642,3 +658,19 @@ deliberately parked"* rather than *"open, in progress"*.
   `FOUNDATION_BUILDOUT_CHECKLIST.md` §BO‑7 correction (its stale
   `loader.py:1247` / `:1095` anchors, and its CH‑1 note recommending a flag set
   that has already been adopted).
+
+## Board record (2026-08-09) — moved from work_plan.md §2
+
+> Moved here in the 2026-08-09 consolidation (work_plan.md D18): board rows now
+> carry state + gates only. The narrative below is preserved verbatim from the
+> final long-form row; the dated corrections after it win where they conflict.
+
+### WS-3 — **Isolation ladder** (BO-7 / HH-6 — T0/T1/T2 per `agent_platform_hardening_2026-07.md` §1.2)
+
+**State cell (as of the move):** 🟢 **WS-3a** (record + refuse, §P5-a.2) · 🟢 **WS-3b** (rootfs + network posture, §P5-b.2)
+
+**Narrative (verbatim):** P5-a (per-run credential scoping, 2026-07-04) + P5-b.1 (cap/resource ceilings, 2026-07-27) shipped. **T2 / P5-c PARKED** under the internal-tool threat model (owner decision 2026-08-03, D10) — the ladder must hold against trusted colleagues, not hostile users; **un-parking is OWNER-GATE**, and no acceptance should be written for P5-c until it happens. P5-d is blocked behind it. **Two claims struck from the old title:** `tool_scope` deny belongs to **WS-23** (shipped there), and "T2 for non-first-party agents" named a distinction the code does not carry — no `first_party` field exists on any manifest, config or column; the phrase occurs only in comments and one test helper. **OWNER-GATE:** the `AGENT_PERMISSION_MODE` enforcement flip · P5-b.3's scoped gateway key (unbuilt *and* undesigned) · the new `ISOLATION_TIER_ENFORCE` flip WS-3a introduces.
+
+**Corrections applied 2026-08-09:**
+- T2/P5-c parking re-framed by D16 (2026-08-08): the un-park trigger is now "precondition of the §5.1 pooled cutover (customer 8–12)" per `saas_multitenancy.md` — not "a second org on this platform, or agent authorship from outside Fracktal". Acceptance still must not be written until the owner un-parks.
+- MT-0b's migration 157 adds `organization.first_party`, retiring the row's "no `first_party` field exists" note.

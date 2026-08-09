@@ -3,7 +3,7 @@
 **Status:** Part 1 (native-MAF mutation → monorepo PR) and Part 2 (files/memory →
 Postgres blob store) built 2026-07-15. This doc is the canonical contract for how
 agent code, files, and memory persist — and the required reading before we build
-the in-platform **agent-building workbench** or any new MAF agent (here or on a future second tenant deployment).
+the in-platform **agent-building workbench** or any new MAF agent (here or on a future second tenant deployment *(2026-08-09, under D15: another organization, not another deployment)*).
 
 **Companions:** `agent_persistence_implementation.md` (the engineering reference — every
 function, table, and seam; **read this before changing how persistence works**),
@@ -213,11 +213,12 @@ than VS Code + Git), it MUST preserve every invariant here. Considerations:
 
 ---
 
-## 6. Second-tenant portability + the production mutation gap
+## 6. Second-tenant portability + the production mutation gap *(phrasing predates D15 — read 'second tenant' as 'another organization', whose isolation is rows + RLS, not a deployment; a dedicated deployment survives only as a priced placement)*
 
 **Portability:** the blob store, three-folder contract, and memory scopes are all
 keyed on `agent_name` with no CommandCenter-specific coupling, so MAF agents built
-on a second tenant deployment use the identical mechanism. When we stand up
+on a second tenant deployment *(2026-08-09, under D15: another organization, not another
+deployment)* use the identical mechanism. When we stand up
 agents there, they must adopt this framework verbatim — same tables, same tools,
 same folders. Do not fork the storage model per platform.
 
@@ -226,7 +227,8 @@ agent's approved self-mutation opens a PR against the **shared CommandCenter
 monorepo**. That is fine only while all agents are first-party and Command Center is
 WIP. For multi-tenant / customer agents this is unacceptable — third
 parties must never push to the shared monorepo. This must be replaced (per-tenant
-repo, or a tenant-scoped store the loader reads at runtime) before production. Full
+repo, or a tenant-scoped store the loader reads at runtime) before production
+*(ticketed as MT-0b, built 2026-08-08 pending review)*. Full
 detail: `docs/DESIGN_LIMITATION_native_maf_mutation.md`.
 
 ---
@@ -240,7 +242,8 @@ detail: `docs/DESIGN_LIMITATION_native_maf_mutation.md`.
 - [ ] Code changes flow to git via a reviewed PR — never the blob store.
 - [ ] `agent_name` is unique and stable (it's the storage + memory + mutation key).
 - [ ] For workbench / multi-tenant work: the mutation target is tenant-isolated
-      (NOT the shared monorepo) before any multi-tenant deployment.
+      (NOT the shared monorepo) before any multi-tenant deployment. *(ticketed as
+      MT-0b, built 2026-08-08 pending review)*
 
 ---
 

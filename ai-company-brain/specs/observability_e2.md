@@ -1255,3 +1255,15 @@ reads "distributed/OTel tracing **dead** → **BO-5**") plus
   shape as `by_agent`. This is the *live* rollup only (45-day TTL, no per-call
   row): **WS-6d is unchanged and still open.**
   +8 tests (89 in the §7 verification set incl. `test_instance_wiring.py`).
+
+## Board record (2026-08-09) — moved from work_plan.md §2
+
+> Moved here in the 2026-08-09 consolidation (work_plan.md D18): board rows now
+> carry state + gates only. The narrative below is preserved verbatim from the
+> final long-form row; the dated corrections after it win where they conflict.
+
+### WS-6 — **Observability wiring + attribution** (BO-5 + decision D1)
+**State cell (as of the move):** 🟡 partial
+**Narrative (verbatim):** **Docs gate CLEARED** (PR #319 added the numbered §7 with nine lettered tickets WS-6a–i, per-item done-whens and gate labels). **Re-audited 2026-08-02 → GO-NARROWED to WS-6a+WS-6c only.** ✅ **BUILT 2026-08-02, pending review:** D1's attribution stamp exists as a substrate — `instance` joins `_RUN_CONTEXT_KEYS`/`bind_run_context`, resolved once in `run_agent_stream` via a **second additive bind** after `load_agent` (the early bind stays: it is what correlates a failure *during* load; moving it would trade 5 fields for 1), and `_emit_usage` carries the full (run, member, agent, instance) tuple with **zero call-site changes** — it arrives by inheritance via `activity._INHERIT`. Shared agents produce an **absent key, never `''`** (double-guarded + pinned). `refresh_run_presence()` patches `cc:activity:live:{run_id}` after the late bind, so `/observability/active` + `/roster` carry it; interim `by_instance` cost dimension added to the Redis rollup. **Nothing durable is written yet** — logs + Redis feed only. **🔴 WS-6b/6d/6e HELD, still NO-GO:** WS-6b's security amendment names *no workable mechanism* — `bind_run_context` has one call site (`executor.py`), contextvars do not cross the HTTP hop to `v1_compat`, and `agent_run` rows are written at the run *boundary* so a mid-run join finds nothing. **The only mechanism the code supports at request time is the presence key `cc:activity:live:{run_id}`**, which for the orchestrator path carries a server-established `user`; §7 must name it (or name another) before WS-6b dispatches. WS-6e has no token source (`build_run_trace_row` is pure over events+folded) so it sequences *after* WS-6b, not independently; WS-6d additionally waits on the retention/PII answer (Q3). **Two recorded asymmetries** — the `phase="start"` event predates the bind, and **a delegated sub-run inherits the caller's partition** while its blobs key to `''`, so WS-6d must not treat `instance` as a foreign key onto `agent_blob.instance`. **OWNER-GATE:** WS-6f/g/h/i (Langfuse keys, `--profile obs`, `OTEL_EXPORTER_OTLP_ENDPOINT`, `LLM_USAGE_AUDIT`, the MAF telemetry kill switch) — all now listed in §6.
+
+**Corrections applied 2026-08-09:** current as moved.

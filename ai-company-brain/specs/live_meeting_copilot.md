@@ -1,6 +1,6 @@
 # Live Meeting Copilot — architecture plan
 
-**Status:** Phases A-D BUILT (presence, console, passive copilot, business context, agenda + standing instructions). Phase E (speaking into the call) still planned.
+**Status:** Phases A-D BUILT (presence, console, passive copilot, business context, agenda + standing instructions). Phase E (speaking into the call) still planned. *(status undated when found; last git-touch 2026-07-28 — treat as of that date; not re-verified since. Dated 2026-08-09.)*
 **Builds on:** `note_taker_app.md` §3.13 (meeting bot + live-transcript bus),
 the browser recorder + live captions, `acb_llm` tiers, the agent/skills/connector
 layer, and the notes auth/scoping.

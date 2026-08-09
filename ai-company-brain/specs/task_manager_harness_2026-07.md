@@ -1,5 +1,7 @@
 # Task Manager × Harness Engineering (2026-07-03)
 
+> **Status:** Tier 1 shipped 2026-07-03 · Tier 2 planned, no board row (WS-18 owns task-manager work) · not verified against code since 2026-07-03. *(Header added 2026-08-09.)*
+
 > **What this is.** The task-manager app reviewed against the practice areas in
 > [awesome-harness-engineering](https://github.com/ai-boost/awesome-harness-engineering),
 > as a companion to the platform-level [`core_module_map.md`](core_module_map.md)

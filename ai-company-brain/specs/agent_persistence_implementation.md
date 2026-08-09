@@ -1,6 +1,6 @@
 # Agent Persistence — Implementation Reference (how it's built, so you can change it)
 
-**Status:** built 2026-07-15 (Part 2). Live once PR #60 merges to `main` (migrations
+**Status:** built 2026-07-15 (Part 2). **Live** (PR #60 merged; header corrected 2026-08-09) (migrations
 70 + 71 auto-apply on deploy). This is the **engineering companion** to
 `agent_file_and_memory_framework.md` — that doc is the *contract* (what agents must
 do); this doc is the *implementation* (every function, table, and seam), so we can

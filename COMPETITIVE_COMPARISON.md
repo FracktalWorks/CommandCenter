@@ -84,7 +84,7 @@ Legend: ✅ real / mature · ◑ partial or default-off · ⚠️ designed-but-n
 | Cost tracking | ◑ was silently $0 (now reports unknown) | ✅ per-turn cost + `/usage`/`/insights` | ◑ |
 | Self-mutation / self-heal | ◑ Copilot Docker sandbox patches broken repos (partial reach) | ◑ skills self-heal during use | ✖ |
 | Audit log | ✅ append-only (but sync on async loop) | ◑ structured logs | ◑ |
-| Multi-tenancy / org RBAC | ⚠️ designed; auth "never rejects" today | ✖ single-user by design | ✖ single-user by design |
+| Multi-tenancy / org RBAC | ⚠️ in build: default-deny auth SHIPPED (BO-2 closed); row-level multi-tenancy in flight as WS-29 (D15 — organization_id + RLS; H1 scratch-verified 2026-08-09) | ✖ single-user by design | ✖ single-user by design |
 
 ---
 

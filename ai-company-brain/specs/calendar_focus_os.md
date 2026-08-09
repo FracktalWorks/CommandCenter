@@ -725,3 +725,17 @@ filter); `test_email_calendar_context.py` = the email-side calendar context;
   between focus_os and timeboxing is clean (§5 here is canonical for
   `gtd_time_blocks`; `calendar_timeboxing.md` §13 is canonical for P4); the other
   two docs are unregistered.
+
+## Board record (2026-08-09) — moved from work_plan.md §2
+
+> Moved here in the 2026-08-09 consolidation (work_plan.md D18): board rows now
+> carry state + gates only. The narrative below is preserved verbatim from the
+> final long-form row; the dated corrections after it win where they conflict.
+
+### WS-21 — **Calendar F2/F3** (`gtd_time_blocks`, email windows, mobile timeline, external sync)
+**State cell (as of the move):** 🟡 partial
+**Narrative (verbatim):** **Re-audited 2026-08-03 → GO-NARROWED.** P3 roll-over was already shipped (released-to-unscheduled, mig 78 + `start_auto_rollover`). ~~"ideal week"~~ **struck — substantially shipped** (mig 98 + settings round-trip + editor + grid render + packer honouring + 2 unit tests); only the unused-focus-window / template-adherence gap remains (§9.6). **Breaks-in-the-packer SHIPPED 2026-07-23** (`80722e17`, mig **97**) as *packer geometry* — a widened buffer plus lunch protection, **a gap, not a `kind='break'` row**, which is exactly why F2 survives (§5 residual 4, now closed). **The 2026-08-01 acceptance was satisfiable by doing nothing** — 2 of its 3 `gtd_time_blocks` clauses were already green against shipped code; they are deleted and replaced with four that all fail today. **`gtd_time_blocks` is 4 slices, not 1 PR** (§9.1 S1–S4): the "non-breaking `TimeBlock[]` swap" claim was **FALSE** — the measured blast radius is 17 TS files + 3 gateway modules + `apps/skills/skill-task-gtd/` + `apps/agents/agent-task-manager/`. **Focus Shield is AGENT-SAFE, not owner-gated** (§9.5) — it needs a design, not a credential; do not dispatch on §4.1 prose alone. **Top-5 outcomes (Horizons) — DO NOT DISPATCH:** it collides with WS-18; §4 assigns it here, and WS-18's title keeps it struck. **Verify by naming test files — never `pytest tests/unit -k calendar`**: `-k` still collects the whole directory, and whole-directory collection hangs on the Windows box. **Dispatchable today:** §9.1 S1 · the ritual-stamp localStorage residue (§9.1 done-when 4, independently shippable) · §9.6 · §9.7. **OWNER-GATE:** external sync (§9.11 / timeboxing §13 P4) needs Google Calendar and/or Microsoft Graph OAuth client credentials provisioned on the VPS.
+
+**Corrections applied 2026-08-09:**
+- current as moved
+- Horizons ownership: WS-21 owns it per §4 of the board, still DO-NOT-DISPATCH (no acceptance).

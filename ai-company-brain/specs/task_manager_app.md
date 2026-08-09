@@ -1071,3 +1071,17 @@ wall-clock budget). Also this session: `web_search` is now SerpAPI-first
 - [ ] **Delegate & Monitor**: delegate a task to a teammate, see it on Waiting For, get an overdue flag, and get an agent-drafted follow-up nudge.
 - [ ] Assistant answers "what's my next action?", "what am I waiting on?", and "what's overdue across the team?" with citations to the PM tool.
 ```
+
+## Board record (2026-08-09) — moved from work_plan.md §2
+
+> Moved here in the 2026-08-09 consolidation (work_plan.md D18): board rows now
+> carry state + gates only. The narrative below is preserved verbatim from the
+> final long-form row; the dated corrections after it win where they conflict.
+
+### WS-18 — **Tasks Phase 3** (Weekly Review, Waiting-For, ~~Horizons~~)
+**State cell (as of the move):** 🟡 partial
+**Narrative (verbatim):** **Audited 2026-08-02 → GO-NARROWED, and point 3 splits per view — the first row in four cycles to clear it.** ✅ **Waiting-For *surfacing* BUILT 2026-08-02, pending review** (`lib/waiting.ts` pure predicates + `WaitingForView.tsx` grouped by person + `ITEM_SELECT`/`GtdItemModel` now project the write-only mig-48 columns `expected_by`/`last_nudged_at`; **no migration — the substrate all shipped in mig 48**). Delegate now defaults `expected_by` from the item's own `due_at` (the in-app delegate path wrote NULL, so the headline §12 journey produced no flag at all). Fixed en route: a frozen `MOCK_NOW` (4 copies) that made the shipped overdue badge wrong by 33 days and growing, plus `mockData.ts`'s orphaned anchor. **🔴 Weekly Review = NO-GO** (§9.2 is a bare checkbox; `gtd_reviews.summary` is untyped JSONB — define the JSON contract + a per-movement done-when first). **🔴 Horizons = NO-GO and MIS-ASSIGNED** — no acceptance criterion exists anywhere, `gtd_horizons` has no link column to items/projects, and **the spec puts it in Phase 4, not 3**; strike it from this row's title or move it in the spec. **~~Open~~ CLOSED 2026-08-02 (follow-up):** `expected_by` now means exactly one thing — **an explicit human promise**. NULL ⇒ no promise was made, so the overdue line is the item's own `due_at` read **live** (nothing copied, nothing to go stale); non-NULL ⇒ a promise that stands independent of `due_at`. All four insert sites stopped deriving a copy (each was writing the item's own due date under another name), so the column is now written by exactly one path: `PATCH /tasks/items/{id}` with `expected_by` (ISO sets, `""` clears), which updates the open `gtd_waiting` row under a re-stated ownership `EXISTS`. Client judges `expectedBy ?? dueAt`. **No migration, no backfill** — rows delegated before this change keep their snapshot and stay judged on it; clearing one is a normal edit. **OWNER-GATE:** nudge drafting/sending (real-account email sends), delegation write-back to ClickUp (blocked on BO-1). **Drift found:** `gtd_reviews`/`gtd_horizons` have existed since mig 48 with zero gateway references — do NOT write a new migration for them; and the spec's `POST /tasks/projects/plan` was fiction (real: `POST /tasks/plan` + `/plan/apply`, shipped — only the ProjectPlanner UI is missing). **EVAL-LOCKED:** `propose()`/`propose_with_llm()` in `routes/tasks/ai.py`.
+
+**Corrections applied 2026-08-09:**
+- current as moved
+- coordinate any gtd_* schema work with WS-27h's retirement plan (D-PM-6 one-store).

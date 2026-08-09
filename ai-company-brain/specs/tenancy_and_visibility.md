@@ -130,10 +130,10 @@ org B. Verified samples, so a reader can judge the class:
 | 3 | `routes/admin/members.py:170-178` | invite is `INSERT … ON CONFLICT (email) DO UPDATE SET organization_id = EXCLUDED.organization_id` — under two orgs this is an account-takeover primitive |
 | 4 | `gateway/rooms.py:201-211` | the `in_org` check is `SELECT 1 FROM app_user WHERE email = :email AND COALESCE(status, 'active') = 'active'` (SQL at `:205-208`) — no org filter. *(Corrected 2026-08-03: the old citation `:184-190` and its `status='active'` quote were both wrong — `:184-190` is the `group_slugs` comprehension plus the head of the `my_groups` query, and the real predicate is `COALESCE`-wrapped.)* |
 | 5 | `gateway/rooms.py:384-393` | `SESSION_VISIBLE_SQL`'s `org`-participant arm — an `EXISTS` on a `subject = 'org'` row `AND` an `EXISTS` on an active `app_user`, same shape, same absence. The adjacent `s.visibility = 'org'` arm at `:394-400` has it too. *(Corrected 2026-08-03 from `:346-356`, which is the tail of `resolve_room_access`'s return — `is_shared`, `members`, `visibility` — and not SQL at all.)* |
-| 6 | `acb_auth/access.py:338-340` | `_ORG_MEMBER_SQL` is `SELECT email FROM app_user WHERE status = 'active'` — the `org` subject expands to *every* active user on the box |
+| 6 | `acb_auth/access.py:338-340` | `_ORG_MEMBER_SQL` is `SELECT email FROM app_user WHERE status = 'active'` — the `org` subject expands to *every* active user on the box *[Anchor stale: measured 2026-08-08 at access.py:400 / access.py:522 — re-derive with grep; see saas_multitenancy.md §6.4.]* |
 | 7 | `infra/postgres/130_org_access_control.sql:180` | role seeding does `SELECT id INTO org_id FROM organization WHERE slug = 'default'` (same in `131:` and `133:`) |
 | 8 | `acb_auth/access.py:439-458` | `_BOOTSTRAP_OWNER_SQL` hardcodes `slug = 'default'` |
-| 9 | `acb_auth/access.py:460-464` | `_HAS_OWNER_SQL` is `SELECT 1 FROM user_role ur JOIN org_role r … r.slug='owner' LIMIT 1` — **no org filter**, so once *any* owner exists anywhere, `ensure_owner_bootstrap()` is a permanent no-op and a second org's users have no inviter |
+| 9 | `acb_auth/access.py:460-464` | `_HAS_OWNER_SQL` is `SELECT 1 FROM user_role ur JOIN org_role r … r.slug='owner' LIMIT 1` — **no org filter**, so once *any* owner exists anywhere, `ensure_owner_bootstrap()` is a permanent no-op and a second org's users have no inviter *[Anchor stale: measured 2026-08-08 at access.py:400 / access.py:522 — re-derive with grep; see saas_multitenancy.md §6.4.]* |
 | 10 | every app-data table | `gtd_items`, `email_*`, `meeting`, `apps`, `workflows`, `chat_session`, `agent_blob`, `mem` carry no org column at all — the bulk of the surface |
 
 Under one deployment per tenant, **sites 1, 2, 3, 4, 5, 6, 7, 8, 10 cannot fire** —
@@ -200,7 +200,9 @@ retiring that constraint.
 *within* an organization — `UNIQUE (organization_id, slug)`
 (`138_groups_and_session_participants.sql:49`) — so a slug-only join is a
 cross-organization match by construction. Under §1 there is one org today, so
-nothing leaks today. They are on this list for two reasons: they are three
+nothing leaks today. *[2026-08-09: premise retired by D15 — with a second
+organization these three joins leak across tenants, which is why WS-29 absorbed
+TV-1 as MT-1i. The done-whens below stand verbatim.]* They are on this list for two reasons: they are three
 one-line predicates now and an archaeology project later, and **two of the three
 sit inside the session-authority intersection**, which is the single most
 consequential access computation in the codebase (`groups_sessions_authority.md`
@@ -387,7 +389,9 @@ mistaken for an oversight):**
   DESC` (`crud.py:91`) with no owner predicate, and delete is `DELETE FROM workflows
   WHERE id = :id` (`:346`). Anyone holding `feature:workflows` sees and can delete
   every workflow. That is fine for an internal tool with one org; it is the first
-  thing that must change if a Center wants a private automation.
+  thing that must change if a Center wants a private automation. *[2026-08-09:
+  under D15/WS-29 this is now scheduled work, not an accepted posture — see
+  saas_multitenancy.md §2 (entitlements) and MT-1b.]*
 - **Memory `org:global`** — org-wide by definition.
 
 **A new surface must declare its tier.** This is the doctrine that stops each new

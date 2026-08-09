@@ -1654,7 +1654,14 @@ replays from `02_` upward, and a failure there fails the deploy.
 
 > **Built:** `acb_common.db.tenant_session()` (SET LOCAL inside an explicit transaction, fails
 > closed when unbound) · the `create_engine` ratchet · the new `psycopg.connect` ratchet.
-> **NOT built:** converting the ~200 `get_db()` call sites, and the Mem0 decision (§0.1 path 8).
+> **NOT built:** the call-site conversion, and the Mem0 decision (§0.1 path 8).
+>
+> ⚠️ **The conversion surface is 561 sites across 138 files, not the "~200" this spec said
+> until 2026-08-08.** The undercount happened because the dominant idiom is the *aliased*
+> import — `from gateway.db import get_db as _get_db`, then `await _get_db()` (441 of the
+> 561) — so a grep for `get_db()` alone misses four fifths of it. Measured:
+> `grep -rhoE "await _?get_db\(\)" --include=*.py apps packages | wc -l`. **This makes the
+> conversion, not the RLS migration, the long pole of MT-1** — see the handover runbook §2.
 **Owner:** §0.1 — **read its table before starting; the inventory is the ticket**
 
 **Done when:**

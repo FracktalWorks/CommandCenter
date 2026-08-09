@@ -1020,7 +1020,7 @@ at that CALL SITE, before the CRM step is entered, so the OFF state issues no CR
 query; both the runtime regression and an AST assertion that the gate is
 lexically outside the step live in `tests/unit/test_crm_auto_lead.py`. ⚠️ Three
 things an owner should know before flipping: **(1)** the first ON-state run per
-mailbox only ACTIVATES the cursor (`crm_auto_lead_cursors`, migration 158 — 157 is
+mailbox only ACTIVATES the cursor (`crm_auto_lead_cursors`, migration 163 — renumbered at merge; 157 is
 held by open PR #399) and mints nothing — mail that arrived before that instant is
 history by construction, which is what stops a deep resync minting a year of leads;
 **(2)** the same is true after the flag is turned OFF and back ON, or after the

@@ -995,7 +995,7 @@ unknown sender becomes a lead on its own.
 | D2 | **WS-26d-email** | The "this is not a toy" moment. Disjoint files from D1 (`activities.py`/`Timeline.tsx` vs. importer/admin/settings). | ∥ with D1 |
 | D3 | **WS-26g** — ✅ **BUILT 2026-08-07** (branch `ws-26g-reports`, no migration) | The forecast number. **After D1** — f2 and the reports tab both extend the `page.tsx`/`urlState.ts` tab grammar, and two parallel PRs there is a needless conflict. | after D1 |
 | D4 | **WS-26d-write** ✅ **BUILT 2026-08-08** | The AI-creates-a-lead demo beat. Lives in `apps/agents/agent-crm/` — collides with nothing above. No migration. | ∥ with any |
-| D5 | **WS-26d-autolead** — ✅ **BUILT 2026-08-08, flag OFF, NOT flipped, NOT deployed** (migration 158) | Built whenever; the **flip is OWNER-GATE** and pushes real leads into Zoho (D-CRM-9) — demo it only if the owner wants that story told live. | ∥ with any |
+| D5 | **WS-26d-autolead** — ✅ **BUILT 2026-08-08, flag OFF, NOT flipped, NOT deployed** (migration **163** — renumbered from 158 after #404/#399 took 157-162) | Built whenever; the **flip is OWNER-GATE** and pushes real leads into Zoho (D-CRM-9) — demo it only if the owner wants that story told live. | ∥ with any |
 
 **Deferred until after the demo, deliberately — not demoted:** WS-26h (discipline),
 WS-26i (data management), WS-26e (cutover). No demo viewer sees them; they lose nothing
@@ -1446,7 +1446,7 @@ Frontend: extend the existing CRM vitest for the third `kind`.
 *(Closes B4.)*
 
 > **As built** (branch `ws-26d-autolead`, migration **158**
-> `158_crm_auto_lead_cursor.sql` — the number taken from the directory at
+> `163_crm_auto_lead_cursor.sql` *(renumbered from 158 at merge — the migration-renumber trap, again)* — the number taken from the directory at
 > build time per R1, and `test_crm_auto_lead.py` finds the file by CONTENT,
 > so a renumber in review breaks nothing). **The flag is `False` everywhere and nothing has been
 > deployed**: with `CRM_AUTO_LEAD` off this branch changes no runtime
@@ -1553,7 +1553,7 @@ Frontend: extend the existing CRM vitest for the third `kind`.
 >    and it becomes `lead_name` — a column every CRM list, board card and Zoho
 >    push then carries.
 >
-> **What an owner still has to do, in order:** merge → deploy (migration 158
+> **What an owner still has to do, in order:** merge → deploy (migration 163
 > applies automatically) → flip `CRM_AUTO_LEAD` (§6 (b)). The first ON-state
 > run on each mailbox activates the cursor and mints nothing; leads start
 > appearing from mail that arrives after that moment. The same is true after

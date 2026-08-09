@@ -1,4 +1,4 @@
--- 158_crm_auto_lead_cursor.sql — WS-26d-autolead
+-- 163_crm_auto_lead_cursor.sql — renumbered from 158 (taken by per_org_credentials, PR #404) after #399 took 160-162 — WS-26d-autolead
 --
 -- ⚠️ Numbered 158, not 157: open PR #399 (`157_projects_recurrence.sql`) holds
 --    157. Two migrations sharing a number replay in filename order against the

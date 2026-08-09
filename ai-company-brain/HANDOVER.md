@@ -59,6 +59,13 @@ dependencies, and a ⌘K search palette.
 
 **WS-29 (multi-tenancy) — started, and deliberately not finished.** See §3.
 
+**Plane research (2026-08-09)** — second PM reference beside Paca:
+`specs/plane_pm_research_2026-08.md`. ⚠️ AGPL-3.0 — patterns only, NEVER code (stricter
+than Paca's Apache-2.0). The beyond-parity ticket queue (P-1…P-31) is in that doc §8 and
+spec §11.19; the head of the queue is intake/triage, watchers, the archive guard, and the
+spreadsheet view. The clone at `/workspace/makeplane/plane` is ephemeral to that sandbox —
+re-clone shallow if you need to re-verify a citation.
+
 ### ⚠️ 1.1 The first thing to do, before any ticket
 
 **Two migrations exist on this branch and are on no real database:**

@@ -2051,6 +2051,59 @@ hermetic suite can hold it.
 backslash escape rather than doing a substring match — a mirror that treated the pattern as a
 literal would have agreed with both the escaped and the unescaped implementation, and the
 whole defect would have been invisible to the suite that exists to catch it.
+
+### 11.19 Plane research — the beyond-parity queue (research 2026-08-09)
+
+*"I want you to learn and study this project as well and add it as another reference in
+addition to Paca … come back with findings about what we can actually lift from it to make
+our system fully featured and better, both in terms of backend as well as UI/UX."*
+
+Second reference studied: `makeplane/plane` v1.4.1. Full findings, evidence, and the
+consolidated verdict table live in **`specs/plane_pm_research_2026-08.md`** (reference-only,
+owns no work — same posture as the Paca doc). ⚠️ **Plane is AGPL-3.0**: patterns and
+interaction designs only, never code — categorically stricter than Paca's Apache-2.0, and
+the research doc's license wall is binding on every ticket below.
+
+**What the research changed here:**
+
+1. **Twelve of our shipped decisions are now validated against a second production
+   codebase** (research doc §2): per-view ordering, the trigger-enforced tenant key, the
+   atomic counter, cycle guards (Plane has none), the single visibility predicate,
+   404-never-403, validate-then-apply bulk, page-batched aggregates, 422-over-fallback
+   (theirs arrived after two CVEs), statuses-as-data + priority-as-enum, single-writer
+   `completed_at`, agent-as-member. None of these should be re-litigated against a future
+   reference without reading that table first.
+
+2. **The beyond-parity ticket queue.** §11.2's ClickUp-parity backlog is CLOSED; the next
+   backlog is Plane-informed, tabled as P-1…P-31 in the research doc §8. The high-value
+   head of the queue, in recommended build order:
+   - **Intake/triage** (P-1) — wrapper row + `triage` status category excluded from default
+     lists + accept-in-place; the front door §6.5's email capture and agent-created tasks
+     have been missing. Pairs with `/workflows` for routing (D6: states in PM, automation
+     in the engine).
+   - **Watchers + mention diffing** (P-2) — `pm_task_watchers`, auto-subscribe on touch,
+     edits notify only *new* mentions.
+   - **Archive guard** (P-3, one predicate, do immediately) — refuse manual archive unless
+     the status category is done/cancelled; an archived open task silently exits every
+     default list.
+   - **Spreadsheet layout + kanban sub-grouping + display-properties contract + group-context
+     quick-add** (P-10…P-13) — the four UI gaps with the highest daily-use value.
+   - **Auto-archive policy** (P-4) — `archive_in`/`close_in` on root projects; sweeper is a
+     `/workflows` scheduled workflow, never a PM cron.
+   - Activity meta id+label rule and description-edit coalescing (P-5); semantic sort ranks
+     + deterministic tiebreaker (P-6); picker exclusions in search (P-7); human task IDs
+     surfaced with copy-link (P-21).
+
+3. **Two owner questions minted, deliberately undecided** (research doc §6): **Q1** public
+   read-only boards (would be the first anonymous tenant-data *read* route — default NO;
+   full risk analysis recorded), **Q2** who owns free-form project docs (PM assigns to
+   Notes; Notes declines; the gap is now recorded instead of silently unowned).
+
+4. **A non-goal reversed in part**: §5 refuses "a docs surface" and "sprints" — both stand,
+   but the sprints refusal now carries Plane's reference design (join-table membership,
+   snapshot-on-close, carry-forward — research doc §3.7) so the eventual build starts from
+   a settled shape rather than a blank page.
+
 ## Board record (2026-08-09) — moved from work_plan.md §2
 
 > Moved here in the 2026-08-09 consolidation (work_plan.md D18): board rows now

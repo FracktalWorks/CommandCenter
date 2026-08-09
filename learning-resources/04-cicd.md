@@ -26,7 +26,7 @@ Four jobs, chained with `needs:` so each waits for the previous. The trigger:
 on:
   push:
     branches: [main]
-    paths-ignore: ["**.md", "ai-company-brain/**", "skills/**", "workbench/e2e/**"]
+    paths-ignore: ["**.md", "project-docs/**", "skills/**", "workbench/e2e/**"]
   workflow_dispatch:            # manual run, with an emergency skip_tests toggle
 ```
 

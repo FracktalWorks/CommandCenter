@@ -1,7 +1,7 @@
 -- ============================================================================
 -- 161_projects_tenancy.sql — the tenant key on all 17 `pm_*` tables (WS-29a).
 --
--- Spec: ai-company-brain/specs/multi_tenancy.md §3 (D-MT-1, D-MT-3) and §5.
+-- Spec: project-docs/specs/multi_tenancy.md §3 (D-MT-1, D-MT-3) and §5.
 --
 -- WHY NOW, AND ONLY NOW. §2 is blunt about it: `POST /projects/import/clickup`
 -- is the next thing WS-27 wants, and it writes hundreds of rows into these 17

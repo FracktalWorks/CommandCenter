@@ -1,6 +1,6 @@
 """CRM · pipeline — status transitions, the lost gate, and the kanban board.
 
-Spec: ``ai-company-brain/specs/crm_app.md`` §3.6, §3.9, §4 · WS-26a done-when 4.
+Spec: ``project-docs/specs/crm_app.md`` §3.6, §3.9, §4 · WS-26a done-when 4.
 
 The headline claim under test: **a status transition has three effects, always.**
 A ``PATCH`` that writes only the new ``status_id`` looks correct in the UI and

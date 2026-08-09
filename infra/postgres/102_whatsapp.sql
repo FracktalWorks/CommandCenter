@@ -9,7 +9,7 @@
 -- *channel* shape all along.
 --
 -- Official Meta WhatsApp Business Cloud API only (coexistence). No unofficial
--- linked-device transport (see ai-company-brain/specs/whatsapp_message_manager.md
+-- linked-device transport (see project-docs/specs/whatsapp_message_manager.md
 -- §3). Credentials for the WABA / phone-number-id / system-user token are stored
 -- as an AES-256-GCM encrypted JSONB blob, encrypted at the application layer, the
 -- same as email_accounts.credentials_encrypted.

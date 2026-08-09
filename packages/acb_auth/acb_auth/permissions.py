@@ -6,7 +6,7 @@ permission, and how grants + per-user overrides combine into a yes/no. The
 DB-backed side lives in :mod:`acb_auth.access`; the request-time side in
 :mod:`acb_auth.deps`.
 
-Spec: ``ai-company-brain/specs/org_access_control.md`` §3.3–§3.4.
+Spec: ``project-docs/specs/org_access_control.md`` §3.3–§3.4.
 
 Grammar
 -------

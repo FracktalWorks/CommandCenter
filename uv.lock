@@ -28,7 +28,7 @@ members = [
     "agent-orchestrator",
     "agent-task-manager",
     "agent-whatsapp-assistant",
-    "ai-company-brain",
+    "project-docs",
     "email-ingestion",
     "gateway",
     "ingestion",
@@ -432,7 +432,7 @@ requires-dist = [
 ]
 
 [[package]]
-name = "ai-company-brain"
+name = "project-docs"
 version = "0.0.1"
 source = { virtual = "." }
 dependencies = [

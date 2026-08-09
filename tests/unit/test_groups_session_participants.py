@@ -1,6 +1,6 @@
 """Groups and session participants (migration 138).
 
-Spec: ai-company-brain/specs/groups_sessions_authority.md §1–§2
+Spec: project-docs/specs/groups_sessions_authority.md §1–§2
 
 What matters and is asserted against a live database:
 

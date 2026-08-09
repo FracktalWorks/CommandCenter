@@ -1,6 +1,6 @@
 """Projects · the calendar window (WS-27q).
 
-Spec: ``ai-company-brain/specs/project_management_app.md`` §11.2 item 9, §11.16.
+Spec: ``project-docs/specs/project_management_app.md`` §11.2 item 9, §11.16.
 
     GET /projects/calendar?from=2026-08-01&to=2026-09-01   → every task in view
 

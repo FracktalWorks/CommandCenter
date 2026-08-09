@@ -1,6 +1,6 @@
 """Org access control — enforcement at the gateway route layer.
 
-Spec: ``ai-company-brain/specs/org_access_control.md`` §5, seam 1.
+Spec: ``project-docs/specs/org_access_control.md`` §5, seam 1.
 
 ``test_org_access_control.py`` covers the permission *model*. This file covers
 the thing the model is for: that a member denied a feature is actually refused

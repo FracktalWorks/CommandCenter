@@ -26,7 +26,7 @@ import { DelegatePopup } from "./components/DelegatePopup";
 // Task Manager (GTD) — 4-panel shell, mirroring the email app's layout
 // philosophy: Lists/Contexts · Item list (+ capture) · Item detail · Assistant.
 // UI-first: runs entirely on mock data (lib/mockData.ts); the gateway `/tasks`
-// API is wired later. See ai-company-brain/specs/task_manager_app.md.
+// API is wired later. See project-docs/specs/task_manager_app.md.
 export default function TasksPage() {
   const { isMobile } = useViewMode();
   const { open: openDrawer, close: closeDrawer } = useMobileDrawer();

@@ -5,7 +5,7 @@ and turns an email into an :class:`~acb_auth.permissions.EffectiveAccess`.
 Pure matching logic lives in :mod:`acb_auth.permissions`; this module is the
 I/O half.
 
-Spec: ``ai-company-brain/specs/org_access_control.md`` §5.
+Spec: ``project-docs/specs/org_access_control.md`` §5.
 
 Why resolve per request instead of stuffing permissions in the session JWT: a
 JWT outlives an access change. "I revoked WhatsApp an hour ago and they still
@@ -213,7 +213,7 @@ _ACCESS_REQUEST_UPSERT_SQL = """
 async def _record_signin_request(email: str, display_name: str = "") -> None:
     """File an unprovisioned sign-in in ``access_request``. Best-effort.
 
-    Spec: ``ai-company-brain/specs/colleague_onboarding.md`` §6 (N6a).
+    Spec: ``project-docs/specs/colleague_onboarding.md`` §6 (N6a).
 
     **Never raises, never changes the caller's answer.** The queue is a
     convenience for the owner; the refusal above it is the security answer, and

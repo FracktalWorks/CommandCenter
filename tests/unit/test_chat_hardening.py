@@ -1,7 +1,7 @@
 """Regression tests — chat-stack hardening batches 1-2.
 
 Batch 1: review P0-1/2/4/5, P1-8.  Batch 2: P0-7/8, P1-4.
-See ai-company-brain/specs/chat_implementation_review_2026-07.md.
+See project-docs/specs/chat_implementation_review_2026-07.md.
 """
 from __future__ import annotations
 

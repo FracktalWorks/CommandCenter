@@ -20,7 +20,7 @@
 --   stops being used.
 --
 -- Depends on: 95_note_taker.sql (meeting). ADDITIVE + idempotent.
--- Spec: ai-company-brain/specs/live_meeting_copilot.md §6 (bidirectional).
+-- Spec: project-docs/specs/live_meeting_copilot.md §6 (bidirectional).
 
 ALTER TABLE meeting
     ADD COLUMN IF NOT EXISTS agenda JSONB NOT NULL DEFAULT '[]'::JSONB;

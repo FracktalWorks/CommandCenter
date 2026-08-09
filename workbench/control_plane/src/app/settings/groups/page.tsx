@@ -3,7 +3,7 @@
 /**
  * Settings → Teams — the org's groups (Centers Phase B).
  *
- * Spec: ai-company-brain/specs/department_centers.md §3 Phase B;
+ * Spec: project-docs/specs/department_centers.md §3 Phase B;
  *       groups_sessions_authority.md §1/§6.
  *
  * "Team" is the human word; the primitive is `org_group`, and for the six

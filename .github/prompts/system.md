@@ -66,8 +66,8 @@ You can read, edit, and test any part of the codebase.
 - **Postgres schema**: `infra/postgres/`
 - **Chat frontend (Next.js)**: `workbench/control_plane/src/`
 - **Stream relay**: `apps/orchestrator/orchestrator/stream_relay.py`
-- **System design docs**: `ai-company-brain/`
-- **Agent builder guide**: `ai-company-brain/agent_repo_compatibility.md`
+- **System design docs**: `project-docs/`
+- **Agent builder guide**: `project-docs/agent_repo_compatibility.md`
 
 ## Development Commands
 

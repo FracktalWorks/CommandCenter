@@ -1,6 +1,6 @@
 """The projects migration, read as text — idempotency and the shape §3 specifies.
 
-Spec: ``ai-company-brain/specs/project_management_app.md`` §3 · WS-27a done-when 1.
+Spec: ``project-docs/specs/project_management_app.md`` §3 · WS-27a done-when 1.
 
 **Why static.** ``infra/postgres/README.md`` requires every ``02+`` migration to
 be idempotent, because ``apply_migrations.sh`` replays the whole ladder on every
@@ -335,7 +335,7 @@ def test_every_activity_type_the_routes_write_is_in_the_vocabulary() -> None:
 # explains itself at length and an assertion its own prose can satisfy is not an
 # assertion.
 #
-# Spec: ai-company-brain/specs/multi_tenancy.md §3 (D-MT-1 (a), D-MT-3).
+# Spec: project-docs/specs/multi_tenancy.md §3 (D-MT-1 (a), D-MT-3).
 
 #: Every table §3 specifies, plus the six added by 147/150/152/155/156/160.
 #: Listed rather than derived, so a table quietly dropped from the tenant

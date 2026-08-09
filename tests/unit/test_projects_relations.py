@@ -1,6 +1,6 @@
 """WS-27p — dependencies and subtasks, made reachable.
 
-Spec: `ai-company-brain/specs/project_management_app.md` §11.2 item 8, §11.14.
+Spec: `project-docs/specs/project_management_app.md` §11.2 item 8, §11.14.
 
 *"`pm_task_links` and `parent_task_id` both exist, unreachable from the board.
 Data with no surface is a promise the product does not keep."*

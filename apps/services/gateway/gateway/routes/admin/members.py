@@ -1,6 +1,6 @@
 """Org administration — member roster, lifecycle, roles, and per-user access.
 
-Spec: ``ai-company-brain/specs/org_access_control.md`` §6.
+Spec: ``project-docs/specs/org_access_control.md`` §6.
 
 The interesting endpoint here is ``GET /admin/members/{email}/access``: it
 returns not just *what* the member can reach but *why* — which role granted it,

@@ -3,7 +3,7 @@
 /**
  * Settings → Roles — the permission bundles members are assigned.
  *
- * Spec: ai-company-brain/specs/org_access_control.md §3.2.
+ * Spec: project-docs/specs/org_access_control.md §3.2.
  *
  * The five system roles are read-only: they are the floor the bootstrap path
  * depends on, and an org whose `admin` role has been edited into uselessness

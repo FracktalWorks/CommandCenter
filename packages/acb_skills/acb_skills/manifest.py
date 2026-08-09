@@ -1,6 +1,6 @@
 """Agent manifest — the single declaration an agent is derived from.
 
-Spec: ``ai-company-brain/specs/agent_architecture.md``.
+Spec: ``project-docs/specs/agent_architecture.md``.
 
 Today an agent's behaviour is spread across ``config.json`` (tool scope, skills,
 integrations), ``agents.py`` (runtime, model, permission handler) and hardcoded

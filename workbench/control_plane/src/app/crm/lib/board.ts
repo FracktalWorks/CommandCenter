@@ -4,7 +4,7 @@
 // be tested against fixtures without a DOM: lane assembly, lane headers, and
 // the request a drag issues.
 //
-// Spec: ai-company-brain/specs/crm_app.md §5 surface 1.
+// Spec: project-docs/specs/crm_app.md §5 surface 1.
 
 import type { Deal, Pipeline, PipelineLane, Status, StatusType } from "./types";
 

@@ -1,6 +1,6 @@
 """The orchestrator is reachable through the named-agent path.
 
-Spec: ``ai-company-brain/specs/agent_architecture.md`` §11.1.1.
+Spec: ``project-docs/specs/agent_architecture.md`` §11.1.1.
 
 ``apps/agents/agent-orchestrator/`` was written to "eliminate the separate
 ``/copilot/chat`` endpoint path in main.py and the ``isOrchestrator`` branching

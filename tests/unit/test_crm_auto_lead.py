@@ -1,6 +1,6 @@
 """CRM · auto-lead from inbound email (WS-26d-autolead).
 
-Spec: ``ai-company-brain/specs/crm_app.md`` §9 ``WS-26d-autolead`` —
+Spec: ``project-docs/specs/crm_app.md`` §9 ``WS-26d-autolead`` —
 done-when 1-7, each named in a test below · D-CRM-9 · D-CRM-12.
 
 **What this file is defending.** With ``CRM_AUTO_LEAD`` on, a scheduler hook

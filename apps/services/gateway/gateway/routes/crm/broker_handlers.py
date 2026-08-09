@@ -1,6 +1,6 @@
 """CRM · broker_handlers — the Action-Broker gate every Zoho push goes through.
 
-Spec: ``ai-company-brain/specs/crm_app.md`` D-CRM-8 · §7.1 · ticket WS-26b
+Spec: ``project-docs/specs/crm_app.md`` D-CRM-8 · §7.1 · ticket WS-26b
 done-when 1 and 5. Modelled 1:1 on the tasks app's ClickUp path —
 ``routes/tasks/providers.py::_broker_gate`` (the gate) plus
 ``routes/tasks/broker_handlers.py`` (the persistent handlers registered from

@@ -1,6 +1,6 @@
 """People Center · the directory and the person page (WS-28b).
 
-Spec: ``ai-company-brain/specs/people_center_app.md`` §3.1, §3.2, §5.2.
+Spec: ``project-docs/specs/people_center_app.md`` §3.1, §3.2, §5.2.
 
 Three reads. Every one of them answers the same two questions in the same
 order — *may this caller reach the surface at all* (``feature:people``, on the

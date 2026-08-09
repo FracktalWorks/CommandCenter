@@ -2,7 +2,7 @@
 
 // WhatsApp Message Manager — W0 read-only surface.
 //
-// The calm v3 IA (ai-company-brain/specs/mockups/whatsapp_message_manager.html):
+// The calm v3 IA (project-docs/specs/mockups/whatsapp_message_manager.html):
 // one organizing spine (triage streams in the nav), quiet near-textual rows, a
 // two-pane list→thread view. No stat wall, no chip cloud, no resident row
 // buttons — capability arrives in later phases as streams / settings / drawers,

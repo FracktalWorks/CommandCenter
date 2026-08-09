@@ -1,6 +1,6 @@
 """The agent file store partitions by instance (migration 136).
 
-Spec: ai-company-brain/specs/memory_architecture.md §5.3, §6.1
+Spec: project-docs/specs/memory_architecture.md §5.3, §6.1
 
 Before 117, ``agent_blob`` was keyed by ``(agent_name, path)`` — one
 ``agent-data/NOTES.md`` per agent, shared by every user of it, returned whole by

@@ -7,7 +7,7 @@
 #   Full  (with observability): docker compose --profile core --profile obs up -d
 #
 # AGE (Apache property-graph) is deferred to Phase 2 — Phase 0 only needs
-# pgvector + relational tables. See ai-company-brain/system_architecture.md §4.
+# pgvector + relational tables. See project-docs/system_architecture.md §4.
 
 name: acb
 

@@ -4,8 +4,8 @@
  * Settings → Members — the organization roster, and the queue of people
  * trying to get into it.
  *
- * Spec: ai-company-brain/specs/org_access_control.md §6;
- *       ai-company-brain/specs/colleague_onboarding.md §6 (the Requests tab).
+ * Spec: project-docs/specs/org_access_control.md §6;
+ *       project-docs/specs/colleague_onboarding.md §6 (the Requests tab).
  *
  * Invite, suspend, change roles, and drill into one person's access. The
  * per-person editor is where the interesting work happens (./[email]); this

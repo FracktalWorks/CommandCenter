@@ -1,7 +1,7 @@
 /**
  * Projects · the assignee vocabulary, client side.
  *
- * Spec: `ai-company-brain/specs/project_management_app.md` §3.7 · **D-PM-4**.
+ * Spec: `project-docs/specs/project_management_app.md` §3.7 · **D-PM-4**.
  *
  * An assignee is an **email or `agent:<name>`** — one vocabulary for both
  * species. That is what makes handing work to an agent the same action as

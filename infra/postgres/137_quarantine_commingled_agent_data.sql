@@ -1,8 +1,8 @@
 -- ============================================================================
 -- 139_quarantine_commingled_agent_data.sql — retire pre-instance file content
 -- ============================================================================
--- Spec: ai-company-brain/specs/memory_architecture.md §5.3
---       ai-company-brain/specs/agent_platform_hardening_2026-07.md H4
+-- Spec: project-docs/specs/memory_architecture.md §5.3
+--       project-docs/specs/agent_platform_hardening_2026-07.md H4
 --       docs/multiplayer/agent-kinds.md §6
 --
 -- WHY

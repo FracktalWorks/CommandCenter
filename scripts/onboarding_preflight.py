@@ -9,7 +9,7 @@ re-derived by hand in conversation more than once. This script is the durable
 version of that derivation: run it on the box, read the table, fix what is red,
 and only then invite anybody.
 
-The owning spec is ``ai-company-brain/specs/colleague_onboarding.md`` §1 (the
+The owning spec is ``project-docs/specs/colleague_onboarding.md`` §1 (the
 readiness gate). This file is the executable half of that section — if a
 criterion moves there, move it here in the same change.
 
@@ -742,7 +742,7 @@ _RUNBOOK_CANDIDATES = (
     "deploy/hostinger/RESTORE.md",
     "deploy/hostinger/BACKUP-RESTORE.md",
     "deploy/hostinger/BACKUP_RESTORE.md",
-    "ai-company-brain/specs/backup_and_restore.md",
+    "project-docs/specs/backup_and_restore.md",
     "docs/runbooks/restore.md",
 )
 
@@ -1210,7 +1210,7 @@ def check_centers_reachable(db: Psql) -> Check:
             "Add each missing slug to the FEATURES tuple in "
             "packages/acb_auth/acb_auth/permissions.py, in the migration's "
             "sort_order. Registering a Center takes five edits, not one — see "
-            "ai-company-brain/specs/department_centers.md §2 for the "
+            "project-docs/specs/department_centers.md §2 for the "
             "checklist. tests/unit/test_org_access_control.py pins both "
             "directions."
         )
@@ -1370,7 +1370,7 @@ def render(checks: list[Check], box: bool) -> str:
     lines = [
         "",
         "COLLEAGUE ONBOARDING PREFLIGHT (WS-24)",
-        "spec: ai-company-brain/specs/colleague_onboarding.md §1",
+        "spec: project-docs/specs/colleague_onboarding.md §1",
         f"mode: {'BOX — full check' if box else 'LOCAL — box-only checks are SKIPped, see below'}",
         "",
     ]

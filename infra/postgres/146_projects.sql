@@ -3,7 +3,7 @@
 --                    projects, subprojects, tasks, subtasks, grants,
 --                    statuses-as-data, one activity timeline, per-view order.
 --
--- What: spec ai-company-brain/specs/project_management_app.md §3.1–§3.10
+-- What: spec project-docs/specs/project_management_app.md §3.1–§3.10
 --   (WS-27a). Paca's shape — the whole hierarchy is TWO self-referencing
 --   foreign keys (pm_projects.parent_project_id, pm_tasks.parent_task_id) and
 --   task types are rows, not levels. There is deliberately no department table,

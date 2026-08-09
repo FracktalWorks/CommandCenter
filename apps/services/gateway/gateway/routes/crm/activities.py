@@ -1,6 +1,6 @@
 """CRM · activities — the timeline: notes, calls, meetings, follow-up tasks.
 
-Spec: ``ai-company-brain/specs/crm_app.md`` §3.8, §4 (``activities.py`` row).
+Spec: ``project-docs/specs/crm_app.md`` §3.8, §4 (``activities.py`` row).
 
     GET    /crm/<entity>/{id}/timeline     activities + status changes, merged
     POST   /crm/<entity>/{id}/activities   log a note / call / meeting / task

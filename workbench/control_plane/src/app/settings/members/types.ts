@@ -1,5 +1,5 @@
 // Wire types for the org administration API (gateway routes/admin/*).
-// Spec: ai-company-brain/specs/org_access_control.md §6.
+// Spec: project-docs/specs/org_access_control.md §6.
 
 export type Member = {
   email: string;

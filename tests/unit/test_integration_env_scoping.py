@@ -27,7 +27,7 @@ What these tests lock:
 - an operator-provided value still wins (unchanged precedence);
 - only the run's own integrations are visible (scope).
 
-See ``ai-company-brain/specs/saas_multitenancy.md`` §6.1 and MT-0a, and
+See ``project-docs/specs/saas_multitenancy.md`` §6.1 and MT-0a, and
 ``saas_multitenancy_implementation.md`` §6.
 """
 from __future__ import annotations

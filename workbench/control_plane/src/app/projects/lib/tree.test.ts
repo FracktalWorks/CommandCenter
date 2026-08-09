@@ -1,7 +1,7 @@
 /**
  * Projects · the tree and the Center slice.
  *
- * Spec: `ai-company-brain/specs/project_management_app.md` §5 · ticket WS-27d
+ * Spec: `project-docs/specs/project_management_app.md` §5 · ticket WS-27d
  * done-when 4 — including the one claim that must not be misread as a security
  * boundary.
  */

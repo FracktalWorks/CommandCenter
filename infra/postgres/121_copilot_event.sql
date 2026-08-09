@@ -13,7 +13,7 @@
 -- Note: `token_cost` lets a session's spend be reconstructed per event, which is
 --   what makes the per-meeting budget guardrail auditable rather than a black box.
 -- Depends on: 120_live_session.sql (live_session). ADDITIVE + idempotent.
--- Spec: ai-company-brain/specs/live_meeting_copilot.md §10, §13 (Phase B).
+-- Spec: project-docs/specs/live_meeting_copilot.md §10, §13 (Phase B).
 
 CREATE TABLE IF NOT EXISTS copilot_event (
     id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),

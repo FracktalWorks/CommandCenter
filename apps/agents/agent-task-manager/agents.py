@@ -1,6 +1,6 @@
 """agent-task-manager — the GTD Task Manager agent.
 
-The agent behind the /tasks app (spec: ai-company-brain/specs/
+The agent behind the /tasks app (spec: project-docs/specs/
 task_manager_app.md §3.1): captures thoughts, clarifies the inbox through
 the GTD decision tree, organizes items toward LOCAL or a connected PM
 workspace (ClickUp first), and answers status/progress/workload questions.

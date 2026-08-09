@@ -7,7 +7,7 @@ plus the inbound seam the bridge pushes call state to.
 Why only personal numbers: Meta's Cloud API Calling product is 1:1-only and has
 to be enabled per-number by Meta, and our WABA route has no media leg yet. The
 whatsmeow bridge + meowcaller path works today and is the only one that can do
-group calls at all. See ai-company-brain/specs/whatsapp_calls_note_taker.md.
+group calls at all. See project-docs/specs/whatsapp_calls_note_taker.md.
 
     POST /whatsapp/calls          {account_id, to | group_id | targets}
     POST /whatsapp/calls/hangup   {account_id, call_id}

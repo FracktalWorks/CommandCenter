@@ -3,7 +3,7 @@
 /**
  * Projects · the filter bar and saved-view chips (WS-27k).
  *
- * Spec: `ai-company-brain/specs/project_management_app.md` §11.2 item 3.
+ * Spec: `project-docs/specs/project_management_app.md` §11.2 item 3.
  *
  * *"My open bugs in Ops, grouped by assignee"* — this is where that sentence
  * gets typed. Filters go to the server (`routes/projects/filters.py` turns them

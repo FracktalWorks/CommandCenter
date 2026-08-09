@@ -1,4 +1,4 @@
-// Workflows app — shared types (spec: ai-company-brain/specs/workflows_app.md).
+// Workflows app — shared types (spec: project-docs/specs/workflows_app.md).
 // The graph shapes mirror the gateway's edit-model (React-Flow-native JSON
 // persisted verbatim — docs/workflow-editor/README.md §4).
 

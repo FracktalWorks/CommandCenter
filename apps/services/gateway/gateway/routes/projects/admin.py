@@ -1,6 +1,6 @@
 """Projects · admin — task statuses and task types, per root project.
 
-Spec: ``ai-company-brain/specs/project_management_app.md`` §4 (``admin.py`` row).
+Spec: ``project-docs/specs/project_management_app.md`` §4 (``admin.py`` row).
 
     GET    /projects/nodes/{project_id}/statuses
     POST   /projects/nodes/{project_id}/statuses

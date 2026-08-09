@@ -1,5 +1,5 @@
 -- 94_note_taker.sql — AI Note Taker app: recordings, transcript segments,
--- notes, and pipeline runs (spec: ai-company-brain/specs/note_taker_app.md §3.6).
+-- notes, and pipeline runs (spec: project-docs/specs/note_taker_app.md §3.6).
 --
 -- What: activates the dormant meeting/action_item tables from 01_schema.sql as
 --   the store for the /notes app. `meeting` gains title/status/summary fields

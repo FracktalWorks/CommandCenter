@@ -1,6 +1,6 @@
 """CRM · the email→CRM timeline join (WS-26d-email).
 
-Spec: ``ai-company-brain/specs/crm_app.md`` §9 "WS-26d-email" · done-when 1-6.
+Spec: ``project-docs/specs/crm_app.md`` §9 "WS-26d-email" · done-when 1-6.
 
 **The rule this file exists to defend.** The CRM is org-visible to every
 ``feature:crm`` holder (D-CRM-3) while a mailbox is owner-scoped, so an

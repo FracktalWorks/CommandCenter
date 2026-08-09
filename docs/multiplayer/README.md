@@ -47,9 +47,9 @@
 > `'driver'`. Whether the baton still earns its place *on top of steer* is an
 > **owner re-decision** (§8 Phase 2), not queued work. The authoritative build
 > state for the access primitives is
-> [`groups_sessions_authority.md`](../../ai-company-brain/specs/groups_sessions_authority.md) §6;
+> [`groups_sessions_authority.md`](../../project-docs/specs/groups_sessions_authority.md) §6;
 > the dispatch state for what remains is
-> [`work_plan.md`](../../ai-company-brain/work_plan.md) §2, WS-10.
+> [`work_plan.md`](../../project-docs/work_plan.md) §2, WS-10.
 >
 > **Shipped migrations:** **136** (`agent_blob` instance key), **137**
 > (quarantine of commingled agent data), **138** (`org_group`,
@@ -80,7 +80,7 @@ Interactive mockups live alongside this doc:
 
 **Companion docs:**
 
-- [`../../ai-company-brain/specs/agent_platform_hardening_2026-07.md`](../../ai-company-brain/specs/agent_platform_hardening_2026-07.md)
+- [`../../project-docs/specs/agent_platform_hardening_2026-07.md`](../../project-docs/specs/agent_platform_hardening_2026-07.md)
   — **adversarial review of everything below.** 20 findings, the container-isolation
   decision, and the ordered fix list. Two of them change this document's design rather than
   its implementation: participant input must be **user-role** (steer is otherwise a
@@ -88,7 +88,7 @@ Interactive mockups live alongside this doc:
   produced them** so replay can be filtered by label, not only by join cursor — otherwise the
   model launders restricted content into a transcript that later joiners can read.
 
-- [`../../ai-company-brain/specs/groups_sessions_authority.md`](../../ai-company-brain/specs/groups_sessions_authority.md)
+- [`../../project-docs/specs/groups_sessions_authority.md`](../../project-docs/specs/groups_sessions_authority.md)
   — **the binding decisions (2026-07-29).** Org access control Phase 1 shipped (resolved
   principals, `EffectiveAccess`, default-deny, agent-run gating) and handed the rest to this
   workstream. That spec fixes the three shared primitives: `org_group` (one group model for
@@ -99,7 +99,7 @@ Interactive mockups live alongside this doc:
   one-per-person (coach, email) and which are one-brain-for-a-team (sales assistant).
   Read this first: instancing decides what a memory compartment even is, and whether an
   agent's sessions may become rooms at all.
-- [`../../ai-company-brain/specs/multiplayer_prior_art_qm_2026-08.md`](../../ai-company-brain/specs/multiplayer_prior_art_qm_2026-08.md)
+- [`../../project-docs/specs/multiplayer_prior_art_qm_2026-08.md`](../../project-docs/specs/multiplayer_prior_art_qm_2026-08.md)
   — **prior art: `yc-software/qm`, read 2026-08-01.** An outside team reached this document's
   intersection rule independently and applied it to three resources. Three of its findings change
   what is written below rather than confirming it: **steer should be built before floor control**
@@ -108,11 +108,11 @@ Interactive mockups live alongside this doc:
   and QM-3 belongs to **WS-2 / WS-1**, not to this workstream), and participant **tenure windows
   should narrow the model's context**, not only each viewer's replay (§6.5 — QM-5, an undone
   design comparison). **Reference-only**: it owns no work item and no status
-  ([`work_plan.md`](../../ai-company-brain/work_plan.md) §4).
+  ([`work_plan.md`](../../project-docs/work_plan.md) §4).
 - [`memory-clearance.md`](memory-clearance.md) — how memory is partitioned across sessions
   *and* across people, and how the agent decides which parts it may use on a given call.
   Supersedes §6.3 below.
-- [`../../ai-company-brain/specs/memory_architecture.md`](../../ai-company-brain/specs/memory_architecture.md)
+- [`../../project-docs/specs/memory_architecture.md`](../../project-docs/specs/memory_architecture.md)
   — the memory system as a whole: seven stores unified into six tiers, how a fact persists
   and gets corrected, and the always-on **file tier** (`agent-data/`), which is shared across
   all users of an agent today and matters more than the vector tier because it is injected
@@ -180,7 +180,7 @@ This is the plumbing referred to in the framing. It is genuinely most of the pro
 | **Authoritative run-end persistence** | `gateway/chat_fold.py:410` `persist_final_assistant_message` | The transcript is folded and written server-side at the run boundary, independent of any browser. A room's history does not depend on a participant staying connected. |
 | **Identity at the edge** | `packages/acb_auth/acb_auth/deps.py` — `UserContext(email, role)`, internal-bearer-verified SSO headers | Every request already carries a verified actor. Membership checks have something to check against. |
 | **Cost & activity feed** | `packages/acb_common` Redis activity/cost feed; live token tracking (Custom Apps) | Per-participant cost attribution in a room is a re-key, not a new system. |
-| **Org/RBAC design already researched** | `ai-company-brain/specs/multi_user_organization_research.md` | Orgs, memberships, permission vocabulary, agent visibility, memory scoping. **This RFC is the session-level layer on top of it**, and deliberately does not re-litigate the org model. |
+| **Org/RBAC design already researched** | `project-docs/specs/multi_user_organization_research.md` | Orgs, memberships, permission vocabulary, agent visibility, memory scoping. **This RFC is the session-level layer on top of it**, and deliberately does not re-litigate the org model. |
 
 **Relationship to the org research doc.** That doc answers *"who can access which agents and
 data across the company"* — a static, org-shaped question. This doc answers *"how do several
@@ -325,9 +325,9 @@ Why this and not a new abstraction:
 
 > **Superseded in part (2026-07-29):** the participant table, visibility values, and
 > authority model below were drafted before org access control Phase 1 shipped and handed
-> off ([`org_access_control.md` §10](../../ai-company-brain/specs/org_access_control.md)).
+> off ([`org_access_control.md` §10](../../project-docs/specs/org_access_control.md)).
 > The binding decisions now live in
-> [`groups_sessions_authority.md`](../../ai-company-brain/specs/groups_sessions_authority.md):
+> [`groups_sessions_authority.md`](../../project-docs/specs/groups_sessions_authority.md):
 > the table is `chat_session_participant(subject, role ∈ owner|member|viewer)` with the
 > `app_grants` subject vocabulary (email / `group:<slug>` / `org`), visibility is
 > `private|people|org` mirroring `apps.visibility`, and — most importantly — there is **no
@@ -442,7 +442,7 @@ PATCH  /chat/sessions/{id}/room                 visibility, floor_mode, context_
 >
 > **The `/members` half of this section is not this workstream's to build.**
 > Group membership — the `group:<slug>` subjects a room shares to — is owned by
-> **WS-13 / Centers B** ([`work_plan.md`](../../ai-company-brain/work_plan.md)
+> **WS-13 / Centers B** ([`work_plan.md`](../../project-docs/work_plan.md)
 > §4): `routes/admin/groups.py` + `/settings/groups`, shipped 2026-08-01.
 > Rooms consume groups (`gateway/rooms.py` expands `group:<slug>` at read
 > time); they do not administer them.
@@ -535,7 +535,7 @@ makes the destructive race impossible rather than merely unlikely.
 > must not be able to reach `mark_active(reset=True)` and delete a transcript they don't own), and
 > the carve-out that a human message arriving during an *automation* turn should start its own run
 > rather than steer into a cron. Detail:
-> [`multiplayer_prior_art_qm_2026-08.md` §QM-1](../../ai-company-brain/specs/multiplayer_prior_art_qm_2026-08.md).
+> [`multiplayer_prior_art_qm_2026-08.md` §QM-1](../../project-docs/specs/multiplayer_prior_art_qm_2026-08.md).
 
 ### 5.2 The Phase 0 correctness fix that unlocks all of this
 
@@ -553,7 +553,7 @@ This one change converts a silent data-loss bug into an explicit product choice,
 worth shipping on its own even if multiplayer stops here.
 
 > **Update 2026-08-01 (built).** Shipped, and with the sequence inverted per
-> [`multiplayer_prior_art_qm_2026-08.md`](../../ai-company-brain/specs/multiplayer_prior_art_qm_2026-08.md)
+> [`multiplayer_prior_art_qm_2026-08.md`](../../project-docs/specs/multiplayer_prior_art_qm_2026-08.md)
 > §QM-1: **steer first, floor control re-decided afterwards.** What landed:
 >
 > - **The supersede rule, stated once: *you may supersede a run you own, and no
@@ -673,7 +673,7 @@ Per-participant cost attribution rides the existing activity/cost feed: stamp
 `participant_email` alongside `thread_id` on each run's token record, and the room header can
 show "1.2M tokens · Vijay 61% · Sanjay 39%".
 
-> **Not this workstream's to build** ([`work_plan.md`](../../ai-company-brain/work_plan.md)
+> **Not this workstream's to build** ([`work_plan.md`](../../project-docs/work_plan.md)
 > §4 single-owner registry):
 >
 > - **Cost attribution** — the `(run_id, member_email, agent, instance)` stamp at the
@@ -690,7 +690,7 @@ show "1.2M tokens · Vijay 61% · Sanjay 39%".
 
 > **Update 2026-08-01 (doc-truth pass):** the shipped role vocabulary is
 > **`owner` | `member` | `viewer`**
-> ([`groups_sessions_authority.md`](../../ai-company-brain/specs/groups_sessions_authority.md) §2),
+> ([`groups_sessions_authority.md`](../../project-docs/specs/groups_sessions_authority.md) §2),
 > not the `observer` / `contributor` / `owner` triple used below. Read
 > "observer" as `viewer` and "contributor" as `member`.
 
@@ -845,7 +845,7 @@ Rules:
 > itself — *"There is NO acting_identity column, deliberately: a shared run acts at the
 > INTERSECTION of all participants' access (spec §3), never as one member."* §4.3 was
 > superseded on 2026-07-29 by
-> [`groups_sessions_authority.md`](../../ai-company-brain/specs/groups_sessions_authority.md).
+> [`groups_sessions_authority.md`](../../project-docs/specs/groups_sessions_authority.md).
 > Any doc (including the prior-art map and the work-plan board) that reads *"rather than one
 > `acting_identity`"* is describing a road not taken.
 >
@@ -867,7 +867,7 @@ Rules:
 > (WS-2) instead of sitting beside them. Their documented residual applies to us too: a credential
 > materialized into a sandbox is plaintext to any process there, and a stated *purpose* is an audit
 > field, not enforced authorization. Detail:
-> [`multiplayer_prior_art_qm_2026-08.md` §QM-3](../../ai-company-brain/specs/multiplayer_prior_art_qm_2026-08.md).
+> [`multiplayer_prior_art_qm_2026-08.md` §QM-3](../../project-docs/specs/multiplayer_prior_art_qm_2026-08.md).
 >
 > **Gate: not this workstream's.** Per-credential room grants are net-new work with no
 > acceptance criteria in any doc, and the prior-art map routes QM-3 to **WS-2** (OWNER-GATE
@@ -895,7 +895,7 @@ Total transparency is not the goal; *shared context with private edges* is.
   > narrows what the agent itself may re-read, not just what that person sees. That is the same
   > outcome [`memory-clearance.md`](memory-clearance.md) §5.4 reaches by queueing joins to run
   > boundaries, by a simpler mechanism — worth comparing before building either.
-  > [`multiplayer_prior_art_qm_2026-08.md` §QM-5](../../ai-company-brain/specs/multiplayer_prior_art_qm_2026-08.md).
+  > [`multiplayer_prior_art_qm_2026-08.md` §QM-5](../../project-docs/specs/multiplayer_prior_art_qm_2026-08.md).
   >
   > **The gap is real; the design is not done. NOT DISPATCHABLE.** Verified 2026-08-02:
   > the viewer half is built and correct (mig 138 `:97-98` → `gateway/rooms.py:277-282`,
@@ -973,7 +973,7 @@ confidential-deal case safe, and it is detailed in
 >   done-when is testable.
 > - **OWNER-GATE** — an agent must **refuse** it and say which gate. Two items
 >   in this document are owner gates and are registered by name in
->   [`work_plan.md`](../../ai-company-brain/work_plan.md) §6: the **floor-control
+>   [`work_plan.md`](../../project-docs/work_plan.md) §6: the **floor-control
 >   re-decision** (Phase 2) and the **`prefs`/`user` backfill *apply*** (Phase 3,
 >   [`memory-clearance.md`](memory-clearance.md) §8 Q1).
 > - **✅ built** — no label needed; the item is history.
@@ -1002,7 +1002,7 @@ confidential-deal case safe, and it is detailed in
   while `MEM0_ENABLED` / `GRAPHITI_ENABLED` are false — check the deployed `.env` for urgency.
   The **file tier** finding is not gated by either flag: `agent-data/` is shared across all
   users of an agent whenever an agent uses `save_note` / `recall_notes`
-  ([`memory_architecture.md`](../../ai-company-brain/specs/memory_architecture.md) §5.3).
+  ([`memory_architecture.md`](../../project-docs/specs/memory_architecture.md) §5.3).
   Its instance key lands with the compartment work in Phase 3a, not Phase 0 — but it is the
   finding to weigh first, because it is the tier that is injected rather than retrieved.
 - **Acceptance:** two clients on one thread; the second cannot cancel or erase the first's
@@ -1055,7 +1055,7 @@ confidential-deal case safe, and it is detailed in
 
 > **Update 2026-08-01 (re-scoped and partly built).** The order of this phase is
 > inverted per
-> [`multiplayer_prior_art_qm_2026-08.md`](../../ai-company-brain/specs/multiplayer_prior_art_qm_2026-08.md)
+> [`multiplayer_prior_art_qm_2026-08.md`](../../project-docs/specs/multiplayer_prior_art_qm_2026-08.md)
 > §QM-1: **steer was built first**, and whether the five floor modes still earn
 > their place is now a measurement rather than a plan. Steering dissolves most of
 > the problem the baton was invented for — a second person's message lands in the

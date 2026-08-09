@@ -1,6 +1,6 @@
 """Org access control — permission model and guard behaviour.
 
-Spec: ai-company-brain/specs/org_access_control.md
+Spec: project-docs/specs/org_access_control.md
 
 These cover the pure resolution layer (acb_auth.permissions) and the FastAPI
 guards, which is where a mistake is silent: a permission that matches nothing

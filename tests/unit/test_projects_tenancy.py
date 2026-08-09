@@ -1,6 +1,6 @@
 """Projects · the TENANT boundary — what one organization cannot see (WS-29b).
 
-Spec: ``ai-company-brain/specs/multi_tenancy.md`` §3 (D-MT-1 (a), D-MT-3) and
+Spec: ``project-docs/specs/multi_tenancy.md`` §3 (D-MT-1 (a), D-MT-3) and
 §6. Schema: migration 161.
 
 ``test_projects_grants.py`` is the fence between two *departments of one

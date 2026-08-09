@@ -1,6 +1,6 @@
 """CRM · deal contacts — who on the customer's side this deal runs through.
 
-Spec: ``ai-company-brain/specs/crm_app.md`` §3.5, §9 WS-26c done-when 2.
+Spec: ``project-docs/specs/crm_app.md`` §3.5, §9 WS-26c done-when 2.
 
     GET    /crm/deals/{id}/contacts
     POST   /crm/deals/{id}/contacts               {contact_id, role?, is_primary?}

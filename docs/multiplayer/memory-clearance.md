@@ -8,7 +8,7 @@ adversarially reviewed and repaired twice** — line numbers move; re-verify at 
 **Verification commands:** [§9](#9-verification) · **Owner:** vjvarada
 **Companion to:** [`README.md`](README.md) (the multiplayer room model) ·
 [`agent-kinds.md`](agent-kinds.md) (personal vs shared agents) ·
-[`../../ai-company-brain/specs/multi_user_organization_research.md`](../../ai-company-brain/specs/multi_user_organization_research.md) (org/RBAC)
+[`../../project-docs/specs/multi_user_organization_research.md`](../../project-docs/specs/multi_user_organization_research.md) (org/RBAC)
 
 > **What the three passes corrected, so the anchors below can be trusted for the reason they
 > should be — that they were wrong before and were caught.**
@@ -263,7 +263,7 @@ Falcon" in a system prompt is a request. Not passing the scope key is a boundary
 > **Now grounded in shipped machinery (2026-07-29):** this same rule was independently
 > chosen for *permissions* — a shared run's authority is
 > `EffectiveAccess.intersect()` folded over all participants
-> ([`groups_sessions_authority.md`](../../ai-company-brain/specs/groups_sessions_authority.md) §3,
+> ([`groups_sessions_authority.md`](../../project-docs/specs/groups_sessions_authority.md) §3,
 > primitive in `packages/acb_auth/acb_auth/permissions.py`). Memory clearance and run
 > authority are the same shape applied to two resources: what may be *read into* the run,
 > and what the run may *do*. One rule, two enforcement points — credentials via
@@ -278,7 +278,7 @@ Falcon" in a system prompt is a request. Not passing the scope key is a boundary
 > over-engineering of ours — it is what the problem forces. Second, egress is a third enforcement
 > point we do not use: we intersect what a run may *read* and what it may *do*, not where it may
 > *connect*. Noted against WS-1/WS-3 in
-> [`multiplayer_prior_art_qm_2026-08.md` §QM-0](../../ai-company-brain/specs/multiplayer_prior_art_qm_2026-08.md).
+> [`multiplayer_prior_art_qm_2026-08.md` §QM-0](../../project-docs/specs/multiplayer_prior_art_qm_2026-08.md).
 
 ### 3.4 The write rule
 
@@ -319,7 +319,7 @@ do is file a fact somewhere too narrow — recoverable, and visible in the inspe
 | Memory *tools* write scope | ✅ built — **this row is done** | `routes/agent.py:1785` already calls `_set_memory_user_id(_clearance.write)`, so `remember` / `save_memory` file into the room's compartment in a room and the caller's when solo. The rename to `_set_memory_write_scope` was cosmetic and was not done; the behaviour it described is in place. |
 | Authorize the memory API | ✅ built | The gate is `_authorize_scope` at `routes/memory.py:128-167`, with one helper per shape (`_authorize_org` `:73`, `_authorize_room` `:82`, `_authorize_prefs` `:95`, `_authorize_agent` `:103`, `_authorize_person` `:112`). It is applied at **five** routes, not four: `:187` list, `:200` search, `:214` delete, `:244` add, `:266` status. **Not `:59,71,84,97`.** An unrecognised shape raises 404 (`:167`) — which is why `subject:` is a 404 today. |
 | Graphiti grouping | not built | `add_episode(group_id=<scope_key>)` — `packages/acb_memory/acb_memory/graphiti_client.py:187`. Latent while `GRAPHITI_ENABLED` is false. |
-| **Instance-key the file tier** | ✅ built (migration **136**) | `agent_blob` PK `(agent_name, path)` → `(agent_name, instance, path)`, with migration 137 quarantining commingled rows — [`memory_architecture.md`](../../ai-company-brain/specs/memory_architecture.md) §6.1. |
+| **Instance-key the file tier** | ✅ built (migration **136**) | `agent_blob` PK `(agent_name, path)` → `(agent_name, instance, path)`, with migration 137 quarantining commingled rows — [`memory_architecture.md`](../../project-docs/specs/memory_architecture.md) §6.1. |
 
 The read path is the only one with a cost change: N compartment searches instead of one.
 Bounded by clearance size (typically 4–6), parallelisable, and absorbed across turns by the
@@ -343,7 +343,7 @@ Do not copy this pattern into new code — R5.]*
 It needs the same instance key and the same write rule as the compartments, and the two must
 land in the same phase — partitioning the vector tier while leaving the file tier shared fixes
 the smaller half of the problem. Full design:
-[`memory_architecture.md`](../../ai-company-brain/specs/memory_architecture.md).
+[`memory_architecture.md`](../../project-docs/specs/memory_architecture.md).
 
 ---
 
@@ -526,7 +526,7 @@ wants before adding someone to a room.
 ## 7. Phasing
 
 Slots into the room plan in [`README.md`](README.md) §8. Dispatch state lives in
-[`work_plan.md`](../../ai-company-brain/work_plan.md) §2, **WS-10**.
+[`work_plan.md`](../../project-docs/work_plan.md) §2, **WS-10**.
 
 **Gate labels** (`work_plan.md` §1 contract item 7): **AGENT-SAFE** = an independent agent
 may build it; **OWNER-GATE** = an agent must refuse it and name the gate.

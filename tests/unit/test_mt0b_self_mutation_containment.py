@@ -15,7 +15,7 @@ The governing property is **fail closed**: every path that cannot *prove* the
 org is first-party must refuse. Availability of self-mutation is worth far less
 than the guarantee that a customer's agent never pushes to our repository.
 
-Spec: ``ai-company-brain/specs/saas_multitenancy.md`` §6.2 / MT-0b · WS-29.
+Spec: ``project-docs/specs/saas_multitenancy.md`` §6.2 / MT-0b · WS-29.
 """
 from __future__ import annotations
 

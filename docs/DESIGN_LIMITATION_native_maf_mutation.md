@@ -58,7 +58,7 @@ evaluate when we get there (not yet decided):
    lane.
 
 The tenancy model **was settled on 2026-08-08** (D15: organization_id + RLS,
-deployment = placement — `ai-company-brain/specs/saas_multitenancy.md` §1), and
+deployment = placement — `project-docs/specs/saas_multitenancy.md` §1), and
 this limitation is ticketed as **MT-0b (WS-29)**: a config gate defaulting to
 disabled, **BUILT 2026-08-08 pending review** (migration 157 adds
 `organization.first_party`; mutation refuses non-first-party targets). This note

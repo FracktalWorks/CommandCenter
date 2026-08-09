@@ -5,7 +5,7 @@ Two guard styles coexist:
 * ``require_role(UserRole.EXECUTIVE)`` — the original coarse gate. Unchanged.
 * ``require_permission("feature:whatsapp")`` — org access control: DB-backed
   roles plus per-user allow/deny overrides. See
-  ``ai-company-brain/specs/org_access_control.md``.
+  ``project-docs/specs/org_access_control.md``.
 """
 from acb_auth.access import ensure_owner_bootstrap
 from acb_auth.access import invalidate as invalidate_access

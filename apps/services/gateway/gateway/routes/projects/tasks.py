@@ -1,6 +1,6 @@
 """Projects · tasks — task CRUD, the list contract, assignees and links.
 
-Spec: ``ai-company-brain/specs/project_management_app.md`` §4 (``tasks.py`` row).
+Spec: ``project-docs/specs/project_management_app.md`` §4 (``tasks.py`` row).
 
     GET    /projects/tasks                       → {rows, total}
     POST   /projects/tasks

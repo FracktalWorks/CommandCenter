@@ -1,6 +1,6 @@
 """CRM · records — CRUD and the shared list contract for the four entities.
 
-Spec: ``ai-company-brain/specs/crm_app.md`` §4 (``records.py`` row).
+Spec: ``project-docs/specs/crm_app.md`` §4 (``records.py`` row).
 
     GET    /crm/{leads,deals,contacts,organizations}          → {rows, total}
     POST   /crm/{leads,deals,contacts,organizations}

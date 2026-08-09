@@ -1,7 +1,7 @@
 """Steer — routing, the no-double-post marker, durable replay, carve-outs.
 
 Covers ``docs/multiplayer/README.md`` §4.6 and
-``ai-company-brain/specs/multiplayer_prior_art_qm_2026-08.md`` §QM-1.
+``project-docs/specs/multiplayer_prior_art_qm_2026-08.md`` §QM-1.
 
 The four outcomes are tested against the PURE function rather than through the
 route, because the whole reason ``route_turn`` has no I/O is so the rule can be

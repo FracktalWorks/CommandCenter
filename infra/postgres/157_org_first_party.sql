@@ -1,7 +1,7 @@
 -- ============================================================================
 -- 157_org_first_party.sql — MT-0b: self-mutation is first-party-only
 -- ============================================================================
--- Spec: ai-company-brain/specs/saas_multitenancy.md §6.2 / MT-0b · board WS-29.
+-- Spec: project-docs/specs/saas_multitenancy.md §6.2 / MT-0b · board WS-29.
 --
 -- Root AGENTS.md non-negotiable 3 has said this since it was written:
 --

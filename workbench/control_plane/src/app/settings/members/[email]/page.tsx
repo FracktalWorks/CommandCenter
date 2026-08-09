@@ -3,7 +3,7 @@
 /**
  * Settings → Members → one person's access.
  *
- * Spec: ai-company-brain/specs/org_access_control.md §6.
+ * Spec: project-docs/specs/org_access_control.md §6.
  *
  * The screen the whole feature exists for: give someone a role, then add or
  * remove individual pieces on top of it. Every row shows three things — the

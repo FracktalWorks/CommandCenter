@@ -1,7 +1,7 @@
 /**
  * People Center · presentation logic for the directory and person page.
  *
- * Spec: `ai-company-brain/specs/people_center_app.md` §3.1, §3.2, §5.2.
+ * Spec: `project-docs/specs/people_center_app.md` §3.1, §3.2, §5.2.
  *
  * Pure functions only. The server already decided which rows come back and
  * whether the HR half is filled in; this decides how they read. Keeping the

@@ -1,6 +1,6 @@
 """Org access control — per-user integration credentials and org memory.
 
-Spec: ``ai-company-brain/specs/org_access_control.md`` §5 seam 3.
+Spec: ``project-docs/specs/org_access_control.md`` §5 seam 3.
 
 Two things are being protected here, and they fail in opposite directions:
 

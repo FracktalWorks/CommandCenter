@@ -1,6 +1,6 @@
 """Reasoning-depth (``think_mode``) on the named-agent path.
 
-Spec: ``ai-company-brain/specs/agent_architecture.md`` §11.1.1.
+Spec: ``project-docs/specs/agent_architecture.md`` §11.1.1.
 
 ``think_mode`` was honoured only on ``/copilot/chat``, so the chat UI's thinking
 toggle silently did nothing for every named agent — even though ``route.ts`` has

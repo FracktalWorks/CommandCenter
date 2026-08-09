@@ -1,7 +1,7 @@
 -- ============================================================================
 -- 131_integration_memory_permissions.sql — per-user integration + org memory
 -- ============================================================================
--- Phase 3 (partial) of ai-company-brain/specs/org_access_control.md: extends
+-- Phase 3 (partial) of project-docs/specs/org_access_control.md: extends
 -- the seeded roles with two permission families that migration 130 did not
 -- have vocabulary for.
 --

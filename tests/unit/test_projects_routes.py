@@ -1,6 +1,6 @@
 """Projects · routes — the write paths, the hierarchy rules and the wiring.
 
-Spec: ``ai-company-brain/specs/project_management_app.md`` §3, §4 · ticket
+Spec: ``project-docs/specs/project_management_app.md`` §3, §4 · ticket
 WS-27a done-whens 3, 5 and 6.
 
 Hermetic: no Postgres, no network, no TestClient. Route functions are called

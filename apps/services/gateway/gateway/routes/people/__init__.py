@@ -1,6 +1,6 @@
 """People Center · the directory as its own app.
 
-Spec: ``ai-company-brain/specs/people_center_app.md`` §3, §6 · ticket WS-28b.
+Spec: ``project-docs/specs/people_center_app.md`` §3, §6 · ticket WS-28b.
 
     GET /people                 → the directory, searchable and filterable
     GET /people/{id}            → one person, with the login badge

@@ -1,6 +1,6 @@
 """Projects · notifications — somebody hears about it (WS-27j).
 
-Spec: ``ai-company-brain/specs/project_management_app.md`` §11.2 item 2.
+Spec: ``project-docs/specs/project_management_app.md`` §11.2 item 2.
 
     GET  /projects/notifications          → {rows, total, unread}
     POST /projects/notifications/read     → mark some, or all, read

@@ -1,6 +1,6 @@
 """The **only** Zoho CRM write surface in this repository.
 
-Spec: ``ai-company-brain/specs/crm_app.md`` §7.1 · D-CRM-7 · D-CRM-8 ·
+Spec: ``project-docs/specs/crm_app.md`` §7.1 · D-CRM-7 · D-CRM-8 ·
 ticket WS-26b done-when 1.
 
 Until 2026-08-05 there was no Zoho write path anywhere in the tree — the

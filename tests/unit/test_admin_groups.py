@@ -1,6 +1,6 @@
 """Groups admin API (Centers Phase B — work_plan.md WS-13).
 
-Spec: ai-company-brain/specs/department_centers.md §3 Phase B;
+Spec: project-docs/specs/department_centers.md §3 Phase B;
       groups_sessions_authority.md §1/§6 (org_group is the primitive, the
       admin surface was the flagged gap).
 

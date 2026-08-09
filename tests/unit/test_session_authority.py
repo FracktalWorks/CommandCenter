@@ -1,6 +1,6 @@
 """A shared run acts at the intersection of its participants' access.
 
-Spec: ai-company-brain/specs/groups_sessions_authority.md §3
+Spec: project-docs/specs/groups_sessions_authority.md §3
       (answers org_access_control.md §10.2 collision 3)
 
 The properties that carry the rule, asserted against a live database where

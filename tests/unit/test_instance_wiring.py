@@ -1,7 +1,7 @@
 """The instance key flows run path → disk → store, and back through the gateway.
 
-Spec: ai-company-brain/specs/memory_architecture.md §5.3
-      ai-company-brain/specs/agent_architecture.md §2
+Spec: project-docs/specs/memory_architecture.md §5.3
+      project-docs/specs/agent_architecture.md §2
 
 This is the flip that makes instancing real: migrations 132/133 partitioned
 the store, ``agent_paths`` split the disk, and this wiring makes every seam

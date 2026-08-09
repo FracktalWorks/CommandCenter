@@ -1,6 +1,6 @@
 """WS-27n — bulk edit.
 
-Spec: `ai-company-brain/specs/project_management_app.md` §11.2 item 6, §11.11.
+Spec: `project-docs/specs/project_management_app.md` §11.2 item 6, §11.11.
 
 **This ticket gates WS-27g.** §11.3: the cutover imports a real workspace, and
 an import that cannot be re-triaged in bulk is one somebody abandons halfway,

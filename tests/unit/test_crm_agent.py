@@ -1,6 +1,6 @@
 """The CRM assistant agent (WS-26d) — registration, routes, verb + path fences.
 
-Spec: ``ai-company-brain/specs/crm_app.md`` §6 (Agent, Phase D) + §9 WS-26d.
+Spec: ``project-docs/specs/crm_app.md`` §6 (Agent, Phase D) + §9 WS-26d.
 The write tools' own behaviour — confirm-before-write, fail-closed, payload
 shapes — lives in ``test_crm_agent_write.py``; what is asserted HERE is the
 whole-surface properties, which is why every one of them enumerates ``_TOOLS``

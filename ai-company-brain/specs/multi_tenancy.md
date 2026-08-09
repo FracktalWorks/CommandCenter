@@ -93,8 +93,11 @@ tables.
 
 ## 2. What this means for the ClickUp import — read this first
 
-🔴 **Do not run `POST /projects/import/clickup` against production until the `pm_*` tenant key
-lands.** This is the one place where the multi-tenant plan collides with work already queued.
+~~🔴 **Do not run `POST /projects/import/clickup` against production until the `pm_*` tenant
+key lands.**~~ — **SATISFIED 2026-08-08 by migration 158**, which keyed all seventeen tables.
+Kept rather than deleted because the reasoning is what generalises, and because **one condition
+replaced it: migration 158 has to be applied to the target database first.** It is on no real
+box yet — the deploy path is broken (WS-25), so nothing on this branch has shipped.
 
 The import is an owner gate (`work_plan.md` §6 (a)) and is the next thing WS-27 wants. Running
 it now writes a real ClickUp workspace — hundreds of tasks, their activities, attachments and
@@ -203,11 +206,11 @@ between now and then is another backfill.
 
 | | Ticket | Depends on |
 |---|---|---|
-| 1 | **WS-29a** — answer D-MT-1; `organization_id` on the 17 `pm_*` tables while they are still empty | D-MT-1 |
-| 2 | **WS-29b** — the tenant predicate in `_VISIBLE_PROJECTS_SQL` + `Visibility`; the `subject='org'` literal becomes org-relative | WS-29a |
+| 1 | ~~**WS-29a**~~ ✅ **BUILT** — migration 158. ⚠️ The tables were *nearly* empty, not empty; it backfills | ~~D-MT-1~~ ✅ (a) |
+| 2 | ~~**WS-29b**~~ ✅ **BUILT** — plus three leaks it exposed, incl. `/assigned-to-me` having no visibility clause at all | ~~WS-29a~~ ✅ |
 | 3 | **WS-29c** — RLS policies and the connection-level GUC, behind a flag, off | D-MT-2 |
 | 4 | **WS-29d** — the remaining 120 tables, by family, largest blast radius first | WS-29c |
-| — | **WS-27g's ClickUp import** | **after WS-29a** |
+| — | **WS-27g's ClickUp import** | ~~after WS-29a~~ ✅ **unblocked** — but apply 158 to the target DB first |
 
 **WS-29a is the only urgent one**, and only because of the import. The rest can proceed at
 whatever pace the product needs.

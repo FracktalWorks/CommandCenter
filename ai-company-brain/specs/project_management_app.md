@@ -769,6 +769,43 @@ do** is reschedule for you, and if that turns out to be the thing actually wante
 still reachable — as an opt-in per project, with the cascade bounded and previewed before it
 writes, which is a better version of (b) than the one that would have shipped today.
 
+**D-PM-13 — Project docs live in the KNOWLEDGE BASE; PM links to them, never owns them.**
+`DECISION (owner-answered 2026-08-09).` The Plane research (§11.19,
+`plane_pm_research_2026-08.md` §6 Q2) surfaced that free-form project documentation was
+owned by nobody: this spec assigned it to Notes, and `note_taker_app.md` §1.2 declines it.
+The owner's answer, verbatim: *"we have separately a knowledge base, so somehow the PM tool
+has to fit in with the knowledge base and be able to do that. Now everybody who creates a
+knowledge base will own it, and if it's shared with multiple people or shared across the
+team, then depending on the user access, they have access to the knowledge base document."*
+
+What that binds, stated as the integration contract:
+
+1. **PM never grows a docs surface.** Plane's Pages stays refused (P-30); the §5 non-goal
+   is now permanent, not provisional. A "project doc" is a knowledge-base document that a
+   project or task **links to**.
+2. **The KB's access model is: creator owns; shared to people or a team; visibility follows
+   the share.** That is grant-vocabulary shaped — the same `email | group:<slug> | org`
+   subjects `pm_project_grants` already uses (D12) are the natural encoding of "shared with
+   multiple people or across the team", and the KB should reuse that vocabulary rather than
+   mint a second one.
+3. **Two keys, never one.** Linking a KB document to a task does NOT widen the document's
+   audience: a viewer sees the link's title/existence only if they satisfy the *document's*
+   grants, independently of satisfying the task's. The converse also holds — a doc reader
+   doesn't gain the task. R5 applies on both sides (a non-granted viewer gets 404, never a
+   locked-item stub). This is the same two-door lesson S2-8 taught about assignees.
+4. **The PM-side shape, when the KB exists as a store:** a `pm_task_links`-style reference
+   row (task/project → KB doc id) rendered beside attachments in the panel, with the KB's
+   own grant check resolving at read time — never a copied snapshot of the doc, which would
+   silently fork access. Until the KB store lands, this decision blocks nothing in the
+   beyond-parity queue; it exists so no ticket accidentally builds doc storage inside PM.
+
+**D-PM-14 — Public read-only boards: DEFERRED.**
+`DECISION (owner-answered 2026-08-09).` *"For now, let's leave out public read-only boards.
+We will revisit it when needed."* Not built, not scheduled. The risk analysis to start from
+when revisited is `plane_pm_research_2026-08.md` §6 Q1 — the anchor-capability-URL shape, a
+physically separate route module with read-only models, no member-roster endpoint, per-board
+kill switch, and the RLS-bypass point that must be resolved before `SET LOCAL app.tenant_id`.
+Until then the gateway's posture is unchanged: no anonymous tenant-data read routes exist.
 
 ---
 
@@ -2094,10 +2131,10 @@ the research doc's license wall is binding on every ticket below.
      + deterministic tiebreaker (P-6); picker exclusions in search (P-7); human task IDs
      surfaced with copy-link (P-21).
 
-3. **Two owner questions minted, deliberately undecided** (research doc §6): **Q1** public
-   read-only boards (would be the first anonymous tenant-data *read* route — default NO;
-   full risk analysis recorded), **Q2** who owns free-form project docs (PM assigns to
-   Notes; Notes declines; the gap is now recorded instead of silently unowned).
+3. **Two owner questions minted — and answered the same day** (research doc §6): **Q1**
+   public read-only boards → **deferred, D-PM-14** ("revisit when needed"); **Q2** who owns
+   free-form project docs → **the knowledge base, D-PM-13** — PM links to creator-owned,
+   grant-shared KB documents and never grows a docs surface of its own.
 
 4. **A non-goal reversed in part**: §5 refuses "a docs surface" and "sprints" — both stand,
    but the sprints refusal now carries Plane's reference design (join-table membership,

@@ -289,7 +289,11 @@ Verdicts here anneal into the UI work queue; each is an interaction spec, not a 
 - **Stickies**: personal scratch notes are out of Projects scope; a project-less task
   already covers it.
 
-## 6. Two questions this research raises for the owner (not decided here)
+## 6. Two questions this research raised — ⚠️ BOTH ANSWERED 2026-08-09 (same day)
+
+> Answers recorded as **D-PM-13** (docs → knowledge base; PM links, never owns; two-key
+> access) and **D-PM-14** (public boards deferred) in `project_management_app.md` §8.
+> The analyses below are kept as the record each answer was given against.
 
 **Q1 — Public read-only boards.** Plane publishes any container under a capability URL
 (`anchor = uuid4().hex`, per-board kill switch, physically separate view tree +
@@ -302,14 +306,22 @@ anchor→org **before** `SET LOCAL app.tenant_id` — one deliberate, auditable 
 ever built: dedicated `routes/pm_public/` module with its own read-only models (never a
 flag on member endpoints), no member-roster endpoint (Plane exposes member names/avatars
 to anyone with the anchor — refuse that), per-board disable, rate limits, and a
-leak-audit entry. The honest alternative is invite-as-restricted-guest. **Owner call;
-default is NOT to build it.**
+leak-audit entry. The honest alternative is invite-as-restricted-guest.
+**ANSWERED — D-PM-14: deferred.** *"For now, let's leave out public read-only boards. We
+will revisit it when needed."* This paragraph is the starting point for that revisit.
 
 **Q2 — Who owns project docs?** Plane's Pages (wiki with hierarchy, project attachment,
 versions, an embed/backlink log) is their second-biggest surface. Our PM spec assigns
 docs to Notes; `note_taker_app.md` §1.2 declares itself *not* a general document editor.
-So **nobody currently owns free-form project documentation** — the gap is real and now
-recorded in both specs' non-goals rather than silently unowned.
+So nobody owned free-form project documentation — until this question was put to the
+owner. **ANSWERED — D-PM-13:** there is a separate **knowledge base**; PM *fits in with*
+it rather than owning docs. KB documents are creator-owned, shared to people or a team,
+and visibility follows the share — grant-vocabulary shaped, so the KB should reuse
+`email | group:<slug> | org` rather than mint a second vocabulary. PM's integration is a
+reference row (task/project → doc), two-key access (the link never widens the doc's
+audience, nor the doc the task's), R5 on both sides. Plane's Pages model remains useful
+purely as the checklist of what the *KB* itself will eventually want: hierarchy,
+project attachment, versions, an embed/backlink log.
 
 A third, smaller: Plane's `guest_view_all_features=false` mode (guests see only tasks
 they created) suggests a **restricted grant level** for contractors/clients — worth
@@ -361,6 +373,6 @@ role.
 | P-26 | Export job pattern (token, presigned, expiry sweep) | **ADOPT (small)** | filtered-list CSV |
 | P-27 | Delta-sync feed + satellite `updated_at` bump | **ADAPT (agents/mobile)** | list variant |
 | P-28 | `is_epic` flag; project `timezone`; per-user view state; session `user_id` denorm | **ADOPT piecemeal** | small columns |
-| P-29 | Public boards | **OWNER CALL (default no)** | §6 Q1 |
-| P-30 | Pages/wiki | **REFUSE; ownership gap recorded** | §6 Q2 |
+| P-29 | Public boards | **DEFERRED (D-PM-14, owner 2026-08-09)** | §6 Q1 |
+| P-30 | Pages/wiki | **REFUSE — docs live in the knowledge base (D-PM-13)** | §6 Q2 |
 | P-31 | Modules; estimate systems; collab stack; pervasive soft-delete; stickies; their importer | **REFUSE** | §5 |

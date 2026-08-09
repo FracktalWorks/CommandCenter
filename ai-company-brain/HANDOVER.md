@@ -63,8 +63,11 @@ dependencies, and a ⌘K search palette.
 `specs/plane_pm_research_2026-08.md`. ⚠️ AGPL-3.0 — patterns only, NEVER code (stricter
 than Paca's Apache-2.0). The beyond-parity ticket queue (P-1…P-31) is in that doc §8 and
 spec §11.19; the head of the queue is intake/triage, watchers, the archive guard, and the
-spreadsheet view. The clone at `/workspace/makeplane/plane` is ephemeral to that sandbox —
-re-clone shallow if you need to re-verify a citation.
+spreadsheet view. Its two owner questions are ANSWERED: **D-PM-13** — project docs live in
+the separate knowledge base (creator-owned, shared by grant; PM links with two-key access,
+never owns or snapshots docs); **D-PM-14** — public read-only boards deferred. The clone at
+`/workspace/makeplane/plane` is ephemeral to that sandbox — re-clone shallow if you need to
+re-verify a citation.
 
 ### ⚠️ 1.1 The first thing to do, before any ticket
 

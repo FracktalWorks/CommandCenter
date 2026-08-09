@@ -37,6 +37,7 @@ import { ProjectTree } from "./components/ProjectTree";
 import { CalendarView } from "./components/CalendarView";
 import { SearchPalette } from "./components/SearchPalette";
 import { TimelineView } from "./components/TimelineView";
+import { TableView } from "./components/TableView";
 import { TaskBoard } from "./components/TaskBoard";
 import { TaskList } from "./components/TaskList";
 import { TaskPanel } from "./components/TaskPanel";
@@ -56,7 +57,9 @@ import {
   toConfig,
   toQuery,
 } from "./lib/grouping";
+import { DEFAULT_SHOWN } from "./lib/shownFields";
 import { toggleLane } from "./lib/swimlanes";
+import { type TableSort, sortQuery } from "./lib/table";
 import {
   allSelected as everySelected,
   buildRequest,
@@ -69,7 +72,7 @@ import {
 import { fetchAccess } from "@/lib/access";
 import { filterByCenter, flatten } from "./lib/tree";
 
-type ViewMode = "board" | "list" | "calendar" | "timeline";
+type ViewMode = "board" | "list" | "table" | "calendar" | "timeline";
 
 /** An empty calendar window — the shape before anything has been fetched, and
  *  the shape after a failure, so the view never renders a stale month. */
@@ -120,6 +123,11 @@ function ProjectsWorkspace() {
   const [groupBy, setGroupBy] = useState<GroupBy>("status");
   // WS-27y — the board's second axis plus its lane state; saved with a view.
   const [lanes, setLanes] = useState<BoardLanes>(NO_LANES);
+  // WS-27x — the view's shown fields (table columns AND the chip gate), saved
+  // with a view; and the table's header sort, which travels to the server as
+  // the existing `sort`/`direction` parameters (`TASK_SORTS` keys).
+  const [shownFields, setShownFields] = useState<string[]>([...DEFAULT_SHOWN]);
+  const [tableSort, setTableSort] = useState<TableSort | null>(null);
   const [views, setViews] = useState<ViewRow[]>([]);
   const [activeViewId, setActiveViewId] = useState<string | null>(null);
   const [me, setMe] = useState("");
@@ -236,6 +244,9 @@ function ProjectsWorkspace() {
             include_subtree: true,
             page_size: 100,
             ...toQuery(filters),
+            // WS-27x — the table's header sort; {} when none, so every other
+            // surface keeps the endpoint's default ordering.
+            ...sortQuery(tableSort),
           }),
         ]);
         setStatuses(statusRes.rows);
@@ -246,7 +257,7 @@ function ProjectsWorkspace() {
         setTasks([]);
       }
     },
-    [filters]
+    [filters, tableSort]
   );
 
   useEffect(() => {
@@ -414,12 +425,16 @@ function ProjectsWorkspace() {
   }
 
   function applyView(view: ViewRow) {
-    const { filters: next, groupBy: nextGroup, lanes: nextLanes } = fromConfig(
-      view.config
-    );
+    const {
+      filters: next,
+      groupBy: nextGroup,
+      lanes: nextLanes,
+      shownFields: nextShown,
+    } = fromConfig(view.config);
     setFilters(next);
     setGroupBy(nextGroup);
     setLanes(nextLanes);
+    setShownFields(nextShown);
     setActiveViewId(view.id);
   }
 
@@ -429,7 +444,7 @@ function ProjectsWorkspace() {
       const created = await projectsApi.createView(selected.id, {
         name,
         view_type: mode,
-        config: toConfig(filters, groupBy, lanes),
+        config: toConfig(filters, groupBy, lanes, shownFields),
         // Above the seeded pair, so the drag handler keeps writing its order
         // into the project's original board rather than into a saved filter.
         position: SAVED_VIEW_POSITION + views.length,
@@ -454,6 +469,12 @@ function ProjectsWorkspace() {
   function changeFilters(next: Filters) {
     setFilters(next);
     // Editing after applying a view means the board is no longer that view.
+    setActiveViewId(null);
+  }
+
+  // WS-27x — same rule for the shown-fields set: it is part of a view.
+  function changeShownFields(next: string[]) {
+    setShownFields(next);
     setActiveViewId(null);
   }
 
@@ -768,7 +789,7 @@ function ProjectsWorkspace() {
             <NotificationBell onOpenTask={openTaskById} />
           </div>
           <div className={`flex shrink-0 gap-1 ${mine ? "hidden" : ""}`}>
-            {(["board", "list", "calendar", "timeline"] as ViewMode[]).map((m) => (
+            {(["board", "list", "table", "calendar", "timeline"] as ViewMode[]).map((m) => (
               <button
                 key={m}
                 type="button"
@@ -819,6 +840,9 @@ function ProjectsWorkspace() {
             }}
             me={me}
             tags={tags}
+            shownFields={shownFields}
+            onShownFields={changeShownFields}
+            fields={fields}
             // The project's order-bearing board is withheld from the chips
             // entirely: it is not a saved filter, and offering its ✕ would
             // offer to delete every hand-arranged position on the project.
@@ -889,6 +913,7 @@ function ProjectsWorkspace() {
               undated={month.undated}
               truncated={month.truncated}
               today={dayKey(new Date())}
+              shownFields={shownFields}
               onSelect={(task) => void openWithStatuses(task)}
               onLink={(blockerId, blockedId) => void linkTasks(blockerId, blockedId)}
               onRefuse={(reason) => setError(reason)}
@@ -901,11 +926,30 @@ function ProjectsWorkspace() {
               truncated={month.truncated}
               today={dayKey(new Date())}
               projectId={selected.id}
+              shownFields={shownFields}
               onCreated={() => void loadMonth()}
               onSelect={(task) => void openWithStatuses(task)}
               onMove={(task, patch) => void moveTask(task, patch)}
               onStep={(months) => setMonthAnchor(shiftMonth(grid, months))}
               onToday={() => setMonthAnchor(new Date())}
+            />
+          ) : mode === "table" ? (
+            <TableView
+              groups={groups}
+              groupBy={groupBy}
+              statuses={statuses}
+              fields={fields}
+              shownFields={shownFields}
+              sort={tableSort}
+              onSort={setTableSort}
+              projectId={selected.id}
+              onCreated={() => void loadProject(selected)}
+              onSaved={(fresh) =>
+                setTasks((current) =>
+                  current.map((t) => (t.id === fresh.id ? { ...t, ...fresh } : t))
+                )
+              }
+              onSelect={(task) => void openWithStatuses(task)}
             />
           ) : mode === "board" ? (
             <TaskBoard
@@ -924,6 +968,7 @@ function ProjectsWorkspace() {
               statuses={statuses}
               projectName={projectName}
               projectId={selected.id}
+              shownFields={shownFields}
               onCreated={() => void loadProject(selected)}
               selected={picked}
               onToggle={toggleSelection}
@@ -937,6 +982,7 @@ function ProjectsWorkspace() {
               groupBy={groupBy}
               statuses={statuses}
               projectId={selected.id}
+              shownFields={shownFields}
               onCreated={() => void loadProject(selected)}
               selected={picked}
               onToggle={toggleSelection}

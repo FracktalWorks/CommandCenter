@@ -28,7 +28,7 @@ import {
   placeTasks,
   rescheduleTo,
 } from "../lib/calendar";
-import { cardChips } from "../lib/card";
+import { visibleChips } from "../lib/card";
 import { quickAddPrefill } from "../lib/quickAdd";
 import { QuickAdd } from "./QuickAdd";
 import { useFlash } from "./useFlash";
@@ -44,6 +44,8 @@ interface Props {
   truncated: boolean;
   today?: string;
   /** WS-27y — where a day's quick-added task is created (the selected node). */
+  /** WS-27x — the view's shown fields; chips a hidden field earned are not drawn. */
+  shownFields: readonly string[];
   projectId: string;
   onCreated: (task: TaskRow) => void;
   onSelect: (task: TaskRow) => void;
@@ -59,6 +61,7 @@ export function CalendarView({
   truncated,
   today,
   projectId,
+  shownFields,
   onCreated,
   onSelect,
   onMove,
@@ -177,7 +180,7 @@ export function CalendarView({
                       >
                         {task.title}
                       </span>
-                      <TaskMeta chips={cardChips(task)} />
+                      <TaskMeta chips={visibleChips(task, shownFields)} />
                     </button>
                   </li>
                 ))}

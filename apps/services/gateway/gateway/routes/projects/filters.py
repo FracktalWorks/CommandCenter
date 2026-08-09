@@ -241,6 +241,21 @@ GROUP_BY: tuple[str, ...] = (
     "status", "assignee", "project", "importance", "tag", "none",
 )
 
+#: WS-27x — the field keys a view's `shown_fields` may name. Mirrors the
+#: client vocabulary (`lib/shownFields.ts`), which is the single source the
+#: table's columns and the chip gate read; this tuple is the server's copy so
+#: a stored view cannot accumulate junk keys.
+SHOWN_FIELDS: tuple[str, ...] = (
+    "status", "assignees", "start_date", "due_at", "importance",
+    "subtasks", "blocked", "tags", "attachments", "estimate", "created_at",
+)
+
+#: A project's custom fields ride the same list as ``custom.<field_key>`` —
+#: the spelling ``patch_task`` already files a custom edit under. Checked by
+#: SHAPE rather than against the registry: this function is pure, and a view
+#: must survive its field being deleted after the save.
+_CUSTOM_FIELD_PREFIX = "custom."
+
 
 def normalise_view_config(config: Any) -> dict[str, Any]:
     """A stored view's config, reduced to what the board can actually apply.
@@ -282,6 +297,26 @@ def normalise_view_config(config: Any) -> dict[str, Any]:
                 out["collapsed_lanes"] = kept
         if config.get("show_empty_lanes") is True:
             out["show_empty_lanes"] = True
+    # WS-27x — the shown-fields set. The client's rules mirrored exactly
+    # (`shownFields.sanitizeShownFields`): a list of known field keys, with
+    # unknown and non-string entries dropped and duplicates collapsed to the
+    # first appearance. ABSENT (or not a list) stays absent — the default set
+    # is the client's to apply, and writing it here would freeze today's
+    # default into every stored view. An explicitly stored empty list is KEPT:
+    # "every column hidden" is a choice, not the default.
+    shown = config.get("shown_fields")
+    if isinstance(shown, list):
+        kept_fields: list[str] = []
+        for key in shown:
+            if not isinstance(key, str) or key in kept_fields:
+                continue
+            known = key in SHOWN_FIELDS or (
+                key.startswith(_CUSTOM_FIELD_PREFIX)
+                and len(key) > len(_CUSTOM_FIELD_PREFIX)
+            )
+            if known:
+                kept_fields.append(key)
+        out["shown_fields"] = kept_fields
     return out
 
 

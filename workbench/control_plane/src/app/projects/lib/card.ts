@@ -33,6 +33,46 @@ export function cardChips(task: TaskRow, nowMs?: number): MetaChip[] {
 }
 
 /**
+ * WS-27x — which shown-field key each chip kind renders under.
+ *
+ * The VISIBILITY layer over `taskMeta`'s fact layer: `taskCard.ts` stays the
+ * one place that decides which chips a task has *earned*, and this mapping is
+ * the one place that decides which of them the view's `shown_fields` lets
+ * through. Keys are `lib/shownFields.ts`'s vocabulary — the same source the
+ * table's columns read, so hiding a field silences its chip on every surface
+ * at once.
+ *
+ * Exported so a test can assert every chip `taskMeta` can emit is mapped —
+ * an unmapped chip kind would silently bypass the gate.
+ */
+export const CHIP_FIELD: Record<string, string> = {
+  blocked: "blocked",
+  due: "due_at",
+  subtasks: "subtasks",
+  tags: "tags",
+  attachments: "attachments",
+  estimate: "estimate",
+};
+
+/**
+ * The chips one row has earned AND the view chose to show.
+ *
+ * A chip whose field is not shown produces nothing — not a dimmed chip, not a
+ * placeholder — because "this view does not surface due dates" and "this task
+ * has no due date" must read identically, exactly as `taskMeta`'s
+ * a-zero-earns-no-chip rule already treats absence.
+ */
+export function visibleChips(
+  task: TaskRow,
+  shownFields: readonly string[],
+  nowMs?: number
+): MetaChip[] {
+  return cardChips(task, nowMs).filter((chip) =>
+    shownFields.includes(CHIP_FIELD[chip.key] ?? chip.key)
+  );
+}
+
+/**
  * WS-27w item 6 — the human task id, formatted in ONE place.
  *
  * `#42` everywhere a number exists; `null` (not `"#undefined"`, not `"—"`)

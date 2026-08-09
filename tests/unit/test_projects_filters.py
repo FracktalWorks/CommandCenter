@@ -351,6 +351,54 @@ def test_a_lane_less_view_stores_no_lane_keys_at_all():
     }
 
 
+def test_shown_fields_survive_normalisation_with_junk_dropped():
+    """WS-27x — the shown-fields set rides the view config. Unknown keys and
+    non-strings are hand-edits (or a newer client's vocabulary) and are
+    dropped; the rest must come back intact or every save round-trip would
+    strip somebody's column choices."""
+    got = normalise_view_config({
+        "group_by": "status",
+        "shown_fields": ["status", "phase", 7, None, "due_at", "assignees"],
+    })
+    assert got["shown_fields"] == ["status", "due_at", "assignees"]
+
+
+def test_every_advertised_shown_field_survives_normalisation():
+    from gateway.routes.projects.filters import SHOWN_FIELDS
+
+    got = normalise_view_config({"shown_fields": list(SHOWN_FIELDS)})
+    assert got["shown_fields"] == list(SHOWN_FIELDS)
+
+
+def test_custom_field_keys_pass_by_shape_and_a_bare_prefix_does_not():
+    """`custom.<key>` names a project field the pure normaliser cannot look
+    up, so it is checked by shape — and `custom.` alone names nothing."""
+    got = normalise_view_config({
+        "shown_fields": ["custom.budget", "custom.", "customer"],
+    })
+    assert got["shown_fields"] == ["custom.budget"]
+
+
+def test_a_duplicate_shown_field_is_kept_once():
+    got = normalise_view_config({"shown_fields": ["status", "status", "tags"]})
+    assert got["shown_fields"] == ["status", "tags"]
+
+
+def test_an_absent_or_junk_shown_fields_stays_absent():
+    """Absent means "the client's default set". Writing a default HERE would
+    freeze today's default into every stored view, so the key is simply not
+    emitted — mirroring how a lane-less view stores no lane keys."""
+    assert "shown_fields" not in normalise_view_config({"group_by": "status"})
+    for junk in ("status,tags", {"status": True}, 7, None, True):
+        assert "shown_fields" not in normalise_view_config({"shown_fields": junk})
+
+
+def test_an_explicitly_empty_shown_fields_list_is_kept():
+    """Hiding every column is a choice, not the default — collapsing `[]`
+    into "absent" would un-hide a deliberate choice on the next apply."""
+    assert normalise_view_config({"shown_fields": []})["shown_fields"] == []
+
+
 def test_a_saved_view_and_the_same_filters_typed_by_hand_are_one_query():
     """The whole reason the builder is shared. If these ever diverge, a saved
     view shows a different set of tasks than the filters it claims to hold."""

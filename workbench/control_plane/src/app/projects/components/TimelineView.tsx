@@ -28,7 +28,7 @@ import Button from "@/components/ui/Button";
 import { useMemo, useState } from "react";
 
 import type { TaskRow } from "../lib/api";
-import { cardChips } from "../lib/card";
+import { visibleChips } from "../lib/card";
 import { dayKey, shiftDay } from "../lib/calendar";
 import {
   type Edge,
@@ -52,6 +52,8 @@ interface Props {
   links: Edge[];
   undated: number;
   truncated: boolean;
+  /** WS-27x — the view's shown fields; chips a hidden field earned are not drawn. */
+  shownFields: readonly string[];
   today?: string;
   onSelect: (task: TaskRow) => void;
   onLink: (blockerId: string, blockedId: string) => void;
@@ -64,6 +66,7 @@ export function TimelineView({
   undated,
   truncated,
   today,
+  shownFields,
   onSelect,
   onLink,
   onRefuse,
@@ -340,7 +343,7 @@ export function TimelineView({
                             />
                           ) : null}
                           <span className="truncate">{row.task.title}</span>
-                          <TaskMeta chips={cardChips(row.task)} />
+                          <TaskMeta chips={visibleChips(row.task, shownFields)} />
                         </button>
                         {/* The link handle. Only on a real bar: a derived one
                             has no dates of its own, so a dependency drawn from

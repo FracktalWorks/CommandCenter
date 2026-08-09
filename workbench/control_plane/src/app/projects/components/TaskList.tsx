@@ -23,7 +23,7 @@ import { useMemo, useState } from "react";
 import type { StatusRow, TaskRow } from "../lib/api";
 import { projectsApi } from "../lib/api";
 import { sortForView } from "../lib/board";
-import { cardChips, taskRef } from "../lib/card";
+import { taskRef, visibleChips } from "../lib/card";
 import { clampCursor, stepCursor } from "../lib/cursor";
 import { type GroupBy, type TaskGroup, personLabel } from "../lib/grouping";
 import { quickAddPrefill } from "../lib/quickAdd";
@@ -38,6 +38,8 @@ interface Props {
   statuses: StatusRow[];
   /** WS-27y — where a quick-added task is created (the selected node). */
   projectId: string;
+  /** WS-27x — the view's shown fields; chips a hidden field earned are not drawn. */
+  shownFields: readonly string[];
   onCreated: (task: TaskRow) => void;
   /** WS-27n — ids currently multi-selected. */
   selected?: ReadonlySet<string>;
@@ -54,6 +56,7 @@ export function TaskList({
   groupBy,
   statuses,
   projectId,
+  shownFields,
   onCreated,
   selected,
   onToggle,
@@ -251,7 +254,7 @@ export function TaskList({
                     )}
                   </td>
                   <td className="px-3 py-2 text-muted-foreground">
-                    <TaskMeta chips={cardChips(task)} />
+                    <TaskMeta chips={visibleChips(task, shownFields)} />
                   </td>
                 </tr>
               );

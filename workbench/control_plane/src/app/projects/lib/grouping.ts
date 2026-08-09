@@ -12,6 +12,11 @@
  */
 
 import type { StatusRow, TaskRow } from "./api";
+import {
+  DEFAULT_SHOWN,
+  sameFieldSet,
+  sanitizeShownFields,
+} from "./shownFields";
 
 export type GroupBy =
   | "status"
@@ -109,6 +114,8 @@ export function fromConfig(config: unknown): {
   filters: Filters;
   groupBy: GroupBy;
   lanes: BoardLanes;
+  /** WS-27x — the fields this view shows. Defaulted when nothing was stored. */
+  shownFields: string[];
 } {
   const raw = (config ?? {}) as Record<string, unknown>;
   const stored = (raw.filters ?? {}) as Record<string, unknown>;
@@ -148,6 +155,11 @@ export function fromConfig(config: unknown): {
         : [],
       showEmptyLanes: raw.show_empty_lanes === true,
     },
+    // WS-27x — a set of known field keys (`shownFields.sanitizeShownFields`
+    // owns the discipline: unknown/non-string dropped, duplicates collapsed).
+    // ABSENT means the default set; an explicitly stored `[]` means every
+    // column hidden — collapsing the two would un-hide a deliberate choice.
+    shownFields: sanitizeShownFields(raw.shown_fields) ?? [...DEFAULT_SHOWN],
   };
 }
 
@@ -163,7 +175,8 @@ export function fromConfig(config: unknown): {
 export function toConfig(
   filters: Filters,
   groupBy: GroupBy,
-  lanes: BoardLanes = NO_LANES
+  lanes: BoardLanes = NO_LANES,
+  shownFields: readonly string[] = DEFAULT_SHOWN
 ): Record<string, unknown> {
   const stored: Record<string, unknown> = {};
   if (filters.q.trim()) stored.q = filters.q.trim();
@@ -182,6 +195,15 @@ export function toConfig(
     config.sub_group_by = lanes.subGroupBy;
     if (lanes.collapsedLanes.length) config.collapsed_lanes = lanes.collapsedLanes;
     if (lanes.showEmptyLanes) config.show_empty_lanes = true;
+  }
+  // WS-27x — stored only when it differs from the default SET, so a view that
+  // never touched its columns stays byte-identical to one saved before
+  // shown-fields existed. Set comparison, not sequence: order is presentation
+  // the vocabulary owns (`table.tableColumns`), and a toggle-off-toggle-on
+  // must not dirty a config it did not change. An empty list IS stored —
+  // "every column hidden" is a choice, not the default.
+  if (!sameFieldSet(shownFields, DEFAULT_SHOWN)) {
+    config.shown_fields = sanitizeShownFields([...shownFields]) ?? [];
   }
   return config;
 }

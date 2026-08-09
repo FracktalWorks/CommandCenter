@@ -36,7 +36,7 @@ import {
   planDrop,
   sortForView,
 } from "../lib/board";
-import { cardChips, taskRef } from "../lib/card";
+import { taskRef, visibleChips } from "../lib/card";
 import { clampCursor, stepCursor } from "../lib/cursor";
 import {
   type BoardLanes,
@@ -68,6 +68,8 @@ interface Props {
   projectName?: (id: string) => string;
   /** Where a quick-added task is created (the selected node). */
   projectId: string;
+  /** WS-27x — the view's shown fields; chips a hidden field earned are not drawn. */
+  shownFields: readonly string[];
   onCreated: (task: TaskRow) => void;
   /** WS-27n — ids currently multi-selected. Empty when nobody is bulk editing. */
   selected?: ReadonlySet<string>;
@@ -91,6 +93,7 @@ export function TaskBoard({
   statuses,
   projectName,
   projectId,
+  shownFields,
   onCreated,
   selected,
   onToggle,
@@ -325,7 +328,7 @@ export function TaskBoard({
         {/* The chip row and the owner strip are the shared card vocabulary
             (WS-27s) — the same components /tasks draws, so a task looks like
             the same kind of thing in both. */}
-        <TaskMeta chips={cardChips(task)} className="mt-1.5" />
+        <TaskMeta chips={visibleChips(task, shownFields)} className="mt-1.5" />
         <span className="mt-1.5 flex items-center justify-between gap-2 text-[10px] text-muted-foreground">
           <span>{taskRef(task)}</span>
           <AvatarStack people={task.assignees} label={personLabel} />

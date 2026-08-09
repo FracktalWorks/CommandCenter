@@ -22,6 +22,7 @@ import {
   toConfig,
   toQuery,
 } from "./grouping";
+import { DEFAULT_SHOWN } from "./shownFields";
 
 const status = (id: string, name: string, position: number): StatusRow => ({
   id,
@@ -172,6 +173,7 @@ describe("saved view config", () => {
       filters,
       groupBy: "assignee",
       lanes: NO_LANES,
+      shownFields: [...DEFAULT_SHOWN],
     });
   });
 
@@ -236,6 +238,7 @@ describe("swimlane state in a saved view (WS-27y)", () => {
       filters: EMPTY_FILTERS,
       groupBy: "status",
       lanes,
+      shownFields: [...DEFAULT_SHOWN],
     });
   });
 
@@ -295,6 +298,64 @@ describe("swimlane state in a saved view (WS-27y)", () => {
   });
 });
 
+describe("shown fields in a saved view (WS-27x)", () => {
+  it("round-trips a non-default set", () => {
+    const shown = ["status", "tags", "custom.budget"];
+    expect(fromConfig(toConfig(EMPTY_FILTERS, "status", NO_LANES, shown))).toEqual({
+      filters: EMPTY_FILTERS,
+      groupBy: "status",
+      lanes: NO_LANES,
+      shownFields: shown,
+    });
+  });
+
+  it("stores nothing for the default set, so untouched views stay byte-identical", () => {
+    // Same rule as lane state: a view saved before shown-fields existed and
+    // one saved after with untouched columns must be the same bytes.
+    expect(toConfig(EMPTY_FILTERS, "status", NO_LANES, [...DEFAULT_SHOWN])).toEqual(
+      toConfig(EMPTY_FILTERS, "status")
+    );
+  });
+
+  it("compares against the default as a SET, not a sequence", () => {
+    // Toggling a field off and back on reorders the list; that is not a
+    // change somebody made to the view.
+    const reordered = [...DEFAULT_SHOWN].reverse();
+    expect(toConfig(EMPTY_FILTERS, "status", NO_LANES, reordered)).not.toHaveProperty(
+      "shown_fields"
+    );
+  });
+
+  it("stores an explicitly emptied set — hiding everything is a choice", () => {
+    const config = toConfig(EMPTY_FILTERS, "status", NO_LANES, []);
+    expect(config.shown_fields).toEqual([]);
+    expect(fromConfig(config).shownFields).toEqual([]);
+  });
+
+  it("reads an old config with no shown_fields as the default set", () => {
+    expect(fromConfig({ filters: {}, group_by: "status" }).shownFields).toEqual([
+      ...DEFAULT_SHOWN,
+    ]);
+  });
+
+  it("drops junk keys from a hand-edited config", () => {
+    // Same discipline the server applies (`normalise_view_config`): unknown
+    // and non-string keys dropped, duplicates collapsed, `custom.` alone
+    // names nothing.
+    expect(
+      fromConfig({
+        shown_fields: ["status", "phase", 7, "custom.", "custom.budget", "status"],
+      }).shownFields
+    ).toEqual(["status", "custom.budget"]);
+  });
+
+  it("reads a non-list shown_fields as absent, never as hidden-everything", () => {
+    expect(fromConfig({ shown_fields: "status,tags" }).shownFields).toEqual([
+      ...DEFAULT_SHOWN,
+    ]);
+  });
+});
+
 describe("groupTasks by tag (WS-27m)", () => {
   it("puts a task with three tags in all three columns", () => {
     // Same reason as two assignees: it genuinely belongs to each, and picking
@@ -348,6 +409,7 @@ describe("tag filters in the query", () => {
       filters,
       groupBy: "tag",
       lanes: NO_LANES,
+      shownFields: [...DEFAULT_SHOWN],
     });
   });
 

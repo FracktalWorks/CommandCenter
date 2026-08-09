@@ -9,8 +9,18 @@
 
 import { describe, expect, it } from "vitest";
 
+import { taskMeta } from "@/lib/taskCard";
+
 import type { TaskRow } from "./api";
-import { cardChips, taskDeepLink, taskFacts, taskRef } from "./card";
+import {
+  CHIP_FIELD,
+  cardChips,
+  taskDeepLink,
+  taskFacts,
+  taskRef,
+  visibleChips,
+} from "./card";
+import { DEFAULT_SHOWN } from "./shownFields";
 
 const NOW = Date.parse("2026-08-07T12:00:00Z");
 const hours = (n: number) => new Date(NOW + n * 3_600_000).toISOString();
@@ -96,6 +106,65 @@ describe("cardChips", () => {
       NOW,
     );
     expect(chips.map((c) => c.tone)).toEqual(["muted"]);
+  });
+});
+
+describe("visibleChips — the shown-fields gate (WS-27x)", () => {
+  // A row that earns every chip the list endpoint can produce.
+  const loaded = row({
+    due_at: hours(-2),
+    subtasks: { done: 1, total: 3 },
+    blocked_by_count: 1,
+    tags: ["ops"],
+  });
+
+  it("draws every earned chip under the default shown set", () => {
+    // The gate is a VISIBILITY layer: with the defaults it must change
+    // nothing about what a card drew before shown-fields existed.
+    expect(visibleChips(loaded, DEFAULT_SHOWN, NOW)).toEqual(
+      cardChips(loaded, NOW),
+    );
+  });
+
+  it("silences exactly the chip whose field was hidden", () => {
+    const shown = DEFAULT_SHOWN.filter((key) => key !== "due_at");
+    expect(visibleChips(loaded, shown, NOW).map((c) => c.key)).toEqual([
+      "blocked",
+      "subtasks",
+      "tags",
+    ]);
+  });
+
+  it("produces no chips at all when every field is hidden", () => {
+    // "This view surfaces nothing" and "this task earned nothing" must read
+    // identically — no placeholder, no dimmed chip.
+    expect(visibleChips(loaded, [], NOW)).toEqual([]);
+  });
+
+  it("keeps the fact layer intact — gating filters, never re-derives", () => {
+    const [chip] = visibleChips(loaded, ["blocked"], NOW);
+    expect(chip).toEqual(cardChips(loaded, NOW)[0]);
+  });
+
+  it("maps every chip kind taskMeta can emit onto a field key", () => {
+    // An unmapped chip kind would bypass the gate silently. Derived from
+    // `taskMeta` itself over fully-loaded facts, so a chip added there
+    // without a mapping here fails loudly.
+    const everyChip = taskMeta(
+      {
+        dueAt: hours(-2),
+        subtasks: { done: 1, total: 2 },
+        blockedByCount: 1,
+        tagCount: 1,
+        attachmentCount: 1,
+        estimateMins: 30,
+      },
+      NOW,
+    ).map((c) => c.key);
+    expect(everyChip.length).toBeGreaterThanOrEqual(6);
+    for (const key of everyChip) {
+      expect(CHIP_FIELD[key], `chip '${key}' has no shown-field mapping`).toBeDefined();
+    }
   });
 });
 

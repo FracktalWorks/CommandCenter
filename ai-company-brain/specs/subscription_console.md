@@ -37,12 +37,17 @@ console).
 ## 2. The surfaces (each is an acceptance unit)
 
 ### SC-1 — Read views *(after MT-2 tables + MT-3 ledger exist)*
-- **SC-1a Modules panel.** Every `module_catalog` row with the org's entitlement
-  state (`active | trial(expiry) | locked`), price, and seats purchased vs
-  assigned. Locked modules render as upsell cards (the §2.4 rule 1 lever), never
-  hidden. **Done when:** a two-org fixture shows org A its own entitlements and
-  never org B's; a locked module renders its card with a request-CTA; the panel is
-  driven entirely by `/auth/me`'s `modules` + one `GET /billing/summary` call.
+- **SC-1a Plans & modules panel.** The four D20 tiers rendered as the primary
+  purchase framing (per-user counts on each tier), with the a-la-carte
+  `module_catalog` rows beneath; each shows the org's entitlement state
+  (`active | trial(expiry) | locked`), price, and seats purchased vs assigned.
+  Locked modules render as upsell cards (the §2.4 rule 1 lever), never hidden.
+  When a user's stacked a-la-carte seats cost more than the covering tier, the
+  panel surfaces the swap as a savings prompt (§2.4a rule 2). **Done when:** a
+  two-org fixture shows org A its own entitlements and never org B's; a locked
+  module renders its card with a request-CTA; the savings prompt is pinned by a
+  test case where a-la-carte sum > tier price; the panel is driven entirely by
+  `/auth/me`'s `modules` + one `GET /billing/summary` call.
 - **SC-1b Credit monitor.** Balance (credits + ₹), burn this cycle, per-module
   burn chart from `usage_rollup`, the 80% alert state, BYOK orgs see consumption
   with "not billed — your key" labelling (§3.4). **Done when:** the displayed
@@ -53,7 +58,9 @@ console).
   path.
 
 ### SC-2 — Seat writes *(the D19.3 rules, verbatim)*
-`POST /billing/seats` assign/unassign. **Hard cap:** assignment beyond
+`POST /billing/seats` assign/unassign — for both plan seats (a plan seat expands
+to its module seats with `source='plan'`, §2.4a rule 1) and a-la-carte module
+seats (`source='alacarte'`). **Hard cap:** assignment beyond
 `seats_purchased` returns a 409 with a buy-more payload — never auto-upgrades.
 Core seats are **not managed here**: membership is the Core seat (D19.3), so the
 member admin surface is the only place Core count changes. **Done when:** the

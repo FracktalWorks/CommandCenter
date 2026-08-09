@@ -190,7 +190,7 @@ owning specs are the archive; this file owns ordering, gates and states only.
 
 ---
 
-## 3. Decisions recorded (D1–D14: 2026-07-31→08-04 · D15/D16: 2026-08-08 · D17–D19: 2026-08-09)
+## 3. Decisions recorded (D1–D14: 2026-07-31→08-04 · D15/D16: 2026-08-08 · D17–D20: 2026-08-09)
 
 Resolutions for the cross-doc conflicts the audit surfaced. D1–D8, **D13**, **D14**,
 **D16** and **D17** are **proposed defaults, adopted unless the owner objects**
@@ -199,6 +199,25 @@ calls, taken and dated. ⚠️ Two entries below are superseded and kept as reco
 **D11** (re-taken by D15) and **D10 part 1's planning premise** (re-scoped by
 D15/D16) — read their banners before citing either.
 
+- **D20 — Plan tiers: four bundles beside the a-la-carte list.** *(owner-directed
+  2026-08-09 — "bundle modules into three to four plan tiers"; the specific
+  packaging is `agent-proposed, owner may overrule`.)* Tiers are **per-user
+  assignable plans** (Microsoft-365 style: a user holds one plan, a-la-carte
+  module seats stack on top), so they reuse D19.3's seat machinery — a plan seat
+  expands to its module seats; no org-level plan concept exists. The ladder,
+  chosen for clean ₹600 steps and standard bundle discounts:
+  **Core ₹600** (the D19 base alone) · **Team ₹1,200** = Core + Projects +
+  Meetings + Workflows (₹1,500 a-la-carte, 20% off — "run your team's work") ·
+  **Business ₹1,800** = Team + CRM + Email + WhatsApp (₹2,400 a-la-carte, 25%
+  off — the customer-facing layer, the expected default landing tier) ·
+  **Complete ₹2,400** = Business + Finance + Builder (₹3,200 a-la-carte, 25%
+  off — the Zoho-One-style everything play). Schema consequence for MT-2:
+  `plan_catalog(slug, module_slugs[], price_per_seat_month)` beside
+  `module_catalog`; `user_module_seat` gains a `source ∈ (plan, alacarte)` so
+  unbundling is computable. **Included-monthly-credits per tier is deliberately
+  NOT decided** — launch default is none (credits sold separately); bundling
+  credits into tiers is an owner knob left open. Recorded in
+  `saas_multitenancy.md` §2.4a; console impact in `subscription_console.md`.
 - **D19 — Twelve owner calls taken 2026-08-09** *(the subscription/pricing
   clarification round, answered question-by-question in session; supersedes D18's
   SKU list and §2.4's module table wherever they disagreed — cite D19 for the SKU

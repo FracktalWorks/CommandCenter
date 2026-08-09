@@ -994,6 +994,40 @@ they disagreed).** (`FEATURES` at `packages/acb_auth/acb_auth/permissions.py:73`
 
 *(The former standalone `people` module row folded into `core` — D19.1.)*
 
+### 2.4a Plan tiers — four bundles beside the a-la-carte list (D20, 2026-08-09)
+
+The a-la-carte list above stays fully purchasable; **tiers are the packaged way to
+buy it** (owner-directed; packaging agent-proposed, owner may overrule — work_plan.md
+§3 D20). A tier is a **per-user assignable plan**: a user holds exactly one plan, and
+a-la-carte module seats stack on top (Microsoft-365 licensing shape). A plan seat
+**expands to its constituent module seats**, so entitlement enforcement (§2.3), the
+seat rules (§4.2/D19.3) and the console all keep working on modules — tiers are a
+pricing object, not a second enforcement path.
+
+| Tier | ₹/user/mo | Modules | Vs a-la-carte | Positioning |
+|---|---|---|---|---|
+| **Core** | 600 | the D19 base alone | — | Entry; every member holds at least this (D19.3) |
+| **Team** | 1,200 | Core + Projects + Meetings + Workflows | ₹1,500 → 20% off | Run your team's internal work |
+| **Business** | 1,800 | Team + CRM + Email + WhatsApp | ₹2,400 → 25% off | The customer-facing layer; expected default landing tier |
+| **Complete** | 2,400 | Business + Finance + Builder | ₹3,200 → 25% off | The everything play (the Zoho One analogy §2.4 rule 1 cites) |
+
+Rules:
+
+1. **Schema (MT-2):** `plan_catalog(slug TEXT PRIMARY KEY, module_slugs TEXT[],
+   price_per_seat_month NUMERIC, currency TEXT DEFAULT 'INR')` beside
+   `module_catalog`; `user_module_seat` gains `source ∈ ('plan','alacarte')` so a
+   plan change can recompute exactly the seats it granted and unbundling stays
+   computable. No org-level plan column — mixed plan levels inside one org are
+   legal (three Complete power users, twenty Core members).
+2. **Pricing floor:** a tier is always ≤ the sum of its modules, and upgrading a
+   user from stacked a-la-carte seats to the covering tier must never cost more —
+   the console should surface that swap as a savings prompt (upsell lever).
+3. **Included monthly credits per tier: deliberately NOT decided.** Launch default
+   is none — credits sell separately (§3.2). Bundling credits into tiers is an
+   owner knob left open; do not invent values for it.
+4. The ₹600-per-step ladder is a sales artifact — keep it when repricing unless
+   the owner says otherwise.
+
 **Adding a module must stay a data change.** A new SKU is a `module_catalog` row plus a
 `feature_catalog` row plus a `FEATURES` tuple entry — never a code path per customer. Note
 today's trap, documented in the `FEATURES` docstring at `permissions.py:65-72`: a slug

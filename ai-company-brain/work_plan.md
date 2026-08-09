@@ -216,6 +216,13 @@ D15/D16) — read their banners before citing either.
   separate SKUs** — `crm_app.md` gains them as future phases. The admin/IT
   plane (Appearance, Membership/roles, Live activity, Integrations, Approvals,
   Agent Registry, AI credits) is Core capability surface, not a Center.
+  **Amended 2026-08-10 (owner): dual access paths** — every cross-cutting app is
+  also a standalone top-level app whose primary grouping is **by Center**: the
+  caller sees the Centers they hold access to, each containing its slice (e.g.
+  Projects opens to Center groups, each with its projects and tasks). Both paths
+  resolve through the same D12 grants — the app view is the union of the
+  caller's Center slices, never a second permission model
+  (`department_centers.md` §5).
 - **D21 — The future module roster is named.** *(owner-directed 2026-08-09;
   roadmap `agent-drafted, owner may amend`.)* Five directions beyond the D19
   catalog, recorded in **`specs/future_modules_roadmap.md`** so future specs

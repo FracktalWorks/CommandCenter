@@ -607,6 +607,25 @@ projections, never separate deployments"):
    Support module; **R&D and Operations launch slices-only** (unique apps
    deferred until a real workflow demands them — Operations' §2 sketch stays
    future scope).
+**Dual access paths for cross-cutting apps (owner, 2026-08-10 — D22 amendment).**
+Projects, Workflows, App Builder, Agent Builder, Agent Chat, Dashboards and
+Knowledge Base are reachable **two ways, same data, same grants**:
+
+- **Via a Center** — the app pre-scoped to that Center's slice (what §1 already
+  defines: a Center item is app + scope).
+- **As a standalone app** — the app's own top-level surface, whose primary
+  information architecture is **grouped by Center**: the user sees every Center
+  they hold access to (membership or explicit `group:` grant, per D12), and
+  under each, that Center's data — e.g. opening Projects shows the Centers as
+  the first-level grouping, each containing its projects and tasks. Leadership
+  with org-tier access sees all Centers in the same layout.
+
+The rule that keeps this honest: **both paths resolve visibility through the
+same D12 grants** — the standalone app view is a union of the caller's Center
+slices, never a separate permission model, and a Center the caller cannot access
+never renders as a group header. First consumers when their tickets dispatch:
+WS-27's portfolio/grouping views (Projects) and WS-15's dashboards.
+
 3. **Company Center — kept (D22), the leadership surface.** WS-15's mandate:
    company-wide dashboards (multiple, configurable — the D21 colour), org-level
    rollups. Cross-cutting apps additionally offer leaders an all-slices filter

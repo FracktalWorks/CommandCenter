@@ -21,6 +21,7 @@ submodule so every test stays hermetic and fast). What is locked:
 """
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -74,6 +75,12 @@ class _Rows:
     def first(self) -> dict[str, Any] | None:
         return self._rows[0] if self._rows else None
 
+    def fetchone(self) -> Any:
+        """`resolve_organization_id` reads the tenant by ATTRIBUTE, not by key."""
+        if not self._rows:
+            return None
+        return SimpleNamespace(**self._rows[0])
+
     def all(self) -> list[dict[str, Any]]:
         return self._rows
 
@@ -100,12 +107,14 @@ class _FakeDB:
         self.committed = 0
 
     # helpers -----------------------------------------------------------
-    def seed_user(self, uid: str, email: str, name: str = "") -> None:
+    def seed_user(self, uid: str, email: str, name: str = "",
+                  organization_id: str = ORG) -> None:
         self.users[uid] = {
             "id": uid, "email": email, "display_name": name,
             "avatar_url": "", "status": "active", "legacy_role": "employee",
             "invited_by": "", "invited_at": None, "joined_at": None,
             "last_login_at": None, "last_active_at": None, "created_at": None,
+            "organization_id": organization_id,
         }
 
     def seed_group(self, gid: str, slug: str, name: str | None = None,
@@ -136,14 +145,35 @@ class _FakeDB:
         s = " ".join(str(sql).split())
         p = params or {}
 
-        if "FROM organization WHERE slug" in s:
-            return _Rows([{"id": ORG}])
+        # The caller's tenant (WS-29e / S1-1). There is no `FROM organization
+        # WHERE slug` branch any more: `get_org_id` no longer asks that
+        # question, and a fake that kept answering it would keep agreeing that
+        # the deployment's organization and the caller's are the same row.
+        if "FROM app_user au" in s and "organization_id" in s:
+            row = next(
+                (u for u in self.users.values()
+                 if u["email"].lower() == p["email"]
+                 and u["status"] == "active"), None,
+            )
+            return _Rows([{"organization_id": row["organization_id"]}]
+                         if row and row["organization_id"] else [])
+
+        if "FROM organization LIMIT 1" in s:
+            return _Rows([{"one": 1}])
 
         if "FROM app_user WHERE lower(email)" in s:
             row = next(
                 (u for u in self.users.values()
                  if u["email"].lower() == p["email"]), None,
             )
+            # `find_member`'s tenant predicate, read from the statement so
+            # dropping it changes the answer rather than being shrugged at.
+            if (
+                row is not None
+                and "organization_id = CAST(:org AS uuid)" in s
+                and row["organization_id"] != p.get("org")
+            ):
+                row = None
             return _Rows([row] if row else [])
 
         if "SELECT 1 FROM org_group " in s:
@@ -238,6 +268,12 @@ def db(monkeypatch: pytest.MonkeyPatch) -> _FakeDB:
         ),
     )
     monkeypatch.setattr(groups, "record_admin_change", lambda *a, **k: None)
+    # The acting admins need directory rows of their own: since WS-29e the
+    # routes derive the tenant from the CALLER (R3), so an admin the directory
+    # does not know has no organization and is refused 403 before any group is
+    # touched. `test_admin_tenancy.py` is where that refusal is asserted.
+    fake.seed_user("u-full-admin", FULL_ADMIN.email or "", "Admin")
+    fake.seed_user("u-roster-admin", ROSTER_ADMIN.email or "", "Roster")
     return fake
 
 

@@ -41,6 +41,7 @@ from gateway.routes.projects.core import (
     actor,
     insert_row,
     record_activity,
+    require_organization_of,
     router,
 )
 from gateway.routes.projects.mapping import (
@@ -302,6 +303,7 @@ async def import_clickup(
                 detail=f"Unknown Center(s): {unknown}. One of: {list(centers)}.",
             )
 
+        organization_id = await require_organization_of(db, actor(user).lower())
         summary = _Summary()
         for fact in facts.values():
             await _import_space(
@@ -310,6 +312,7 @@ async def import_clickup(
                 created_by=actor(user),
                 summary=summary,
                 dry_run=payload.dry_run,
+                organization_id=organization_id,
             )
         if payload.dry_run:
             # Nothing is committed, and the caller is told so in the response
@@ -360,17 +363,28 @@ class _Summary:
 async def _upsert_project(
     db: Any, *, name: str, clickup_id: str, kind: str,
     parent_id: str | None, created_by: str, summary: _Summary,
-    dry_run: bool,
+    dry_run: bool, organization_id: str,
 ) -> str | None:
     """One ClickUp container → one ``pm_projects`` row, idempotently.
 
     Keyed on ``clickup_id``, so a re-import updates the name in place instead of
     creating a second project — the property that makes this re-runnable during
     coexistence (§7.1).
+
+    ⚠️ The key is ``(clickup_id, organization_id)`` here, not ``clickup_id``
+    alone (WS-29b). Without the tenant arm the second organization to import a
+    workspace would ADOPT the first one's projects and then UPDATE their names
+    — a cross-tenant write that no read predicate sees. `clickup_id` is still
+    globally UNIQUE in the schema, so that organization's import now fails on
+    the constraint instead; migration 161 §6 records why widening it is a
+    separate ticket.
     """
     existing = (await db.execute(
-        text("SELECT id FROM pm_projects WHERE clickup_id = :cid"),
-        {"cid": clickup_id},
+        text(
+            "SELECT id FROM pm_projects "
+            "WHERE clickup_id = :cid AND organization_id = CAST(:org AS uuid)"
+        ),
+        {"cid": clickup_id, "org": organization_id},
     )).fetchone()
     if existing is not None:
         summary.projects_existing += 1
@@ -394,6 +408,10 @@ async def _upsert_project(
         "clickup_kind": kind,
         "source": "import",
         "created_by": created_by,
+        # A Space is a ROOT project, so the trigger has no parent to derive
+        # from. Folders and lists carry it too, and migration 161's trigger then
+        # REFUSES the row if it disagrees with the parent it was grafted onto.
+        "organization_id": organization_id,
     })
     return str(row.id)
 
@@ -401,11 +419,13 @@ async def _upsert_project(
 async def _import_space(
     db: Any, provider: Any, workspace_id: str, fact: _SpaceFacts, *,
     center: str | None, created_by: str, summary: _Summary, dry_run: bool,
+    organization_id: str,
 ) -> None:
     """One Space → a root project, its statuses, its containers and its tasks."""
     root_id = await _upsert_project(
         db, name=fact.name, clickup_id=fact.space_id, kind="space",
         parent_id=None, created_by=created_by, summary=summary, dry_run=dry_run,
+        organization_id=organization_id,
     )
 
     # The grant IS the mapping: granting the root to `group:<slug>` is the whole
@@ -439,6 +459,7 @@ async def _import_space(
             db, name=folder.get("name") or "Untitled folder",
             clickup_id=folder_id, kind="folder", parent_id=root_id,
             created_by=created_by, summary=summary, dry_run=dry_run,
+            organization_id=organization_id,
         )
 
     list_parents: dict[str, str | None] = {}
@@ -449,6 +470,7 @@ async def _import_space(
                 db, name=entry.get("name") or "Untitled list",
                 clickup_id=list_id, kind="list", parent_id=root_id,
                 created_by=created_by, summary=summary, dry_run=dry_run,
+                organization_id=organization_id,
             )
     for folder in fact.folders:
         parent = container_ids.get(str(folder.get("id") or ""))
@@ -459,6 +481,7 @@ async def _import_space(
                     db, name=entry.get("name") or "Untitled list",
                     clickup_id=list_id, kind="list", parent_id=parent,
                     created_by=created_by, summary=summary, dry_run=dry_run,
+                    organization_id=organization_id,
                 )
 
     if dry_run or root_id is None:

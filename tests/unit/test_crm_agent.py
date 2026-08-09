@@ -276,7 +276,12 @@ async def test_a_run_with_nobody_to_act_as_refuses_rather_than_calling(
     calls = _fake_gateway(monkeypatch, _responder, user="")
     with pytest.raises(RuntimeError) as exc:
         await _INVOCATIONS[tool]()
-    assert "ACB_AGENT_USER_EMAIL" in str(exc.value)
+    # Not "ACB_AGENT_USER_EMAIL" any more: S1-4 deleted that fallback, because
+    # one process-global slot that no run ever cleared handed a run with no
+    # identity the LAST run's user — and under one-org-per-user that email IS
+    # the tenant. `_current_user_email` now resolves to "" and `_headers`
+    # refuses, so the message is about the missing actor, not the missing var.
+    assert "nobody to act as" in str(exc.value)
     assert calls == [], "the gateway was called despite having nobody to act as"
 
 

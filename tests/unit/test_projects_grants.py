@@ -68,6 +68,10 @@ def _no_groups(monkeypatch: pytest.MonkeyPatch, *groups: str) -> None:
             return vis
         return pm_core.Visibility(
             unrestricted=False, email=vis.email, groups=tuple(groups),
+            # Carried through, not re-derived. Dropping it here would hand every
+            # test in this file a tenant-less caller who can see nothing, which
+            # looks exactly like the scoping working.
+            organization_id=vis.organization_id,
         )
 
     for module in MODULES:

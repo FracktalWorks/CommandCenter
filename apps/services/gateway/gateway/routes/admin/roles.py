@@ -109,7 +109,7 @@ async def list_roles(
 ) -> list[RoleEntry]:
     db = await get_db()
     async with db:
-        org_id = await get_org_id(db)
+        org_id = await get_org_id(db, admin)
         rows = (
             await db.execute(
                 text(
@@ -154,7 +154,7 @@ async def create_role(
 
     db = await get_db()
     async with db:
-        org_id = await get_org_id(db)
+        org_id = await get_org_id(db, admin)
         existing = (
             await db.execute(
                 text(
@@ -231,7 +231,7 @@ async def update_role(
 ) -> RoleEntry:
     db = await get_db()
     async with db:
-        org_id = await get_org_id(db)
+        org_id = await get_org_id(db, admin)
         role = await get_role(db, org_id, slug)
         if role["is_system"]:
             raise HTTPException(
@@ -297,7 +297,7 @@ async def delete_role(
 ) -> dict[str, str]:
     db = await get_db()
     async with db:
-        org_id = await get_org_id(db)
+        org_id = await get_org_id(db, admin)
         role = await get_role(db, org_id, slug)
         if role["is_system"]:
             raise HTTPException(

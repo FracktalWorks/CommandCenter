@@ -56,19 +56,93 @@ _memory_agent_name: contextvars.ContextVar[str] = contextvars.ContextVar(
 )
 
 
+# True once somebody on THIS context has deliberately named the acting user —
+# a request handler resolving it from the session, or a run binding it from its
+# payload. It is what separates "this run legitimately inherits the identity its
+# caller resolved" (a sub-agent inside a parent run) from "this run found a
+# leftover identity lying around" (a scheduler, a workflow node, the next run on
+# a reused task). The second must NOT inherit: see :func:`_bind_memory_user_id`.
+_memory_user_named: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "_memory_user_named", default=False
+)
+
+#: What :func:`_bind_memory_user_id` hands back to :func:`_unbind_memory_user_id`.
+MemoryUserBinding = tuple["contextvars.Token[str]", "contextvars.Token[bool]"]
+
+
 def _set_memory_user_id(user_id: str) -> None:
     """Set the current user ID for memory tool operations.
 
     Called by the gateway route handler before dispatching an agent run.
     The memory tools (remember, save_memory, save_episode) read this
     context var to determine whose memory to operate on.
+
+    A non-empty *user_id* also marks this context as having deliberately named
+    its acting user, so a nested run whose payload names nobody inherits it
+    rather than refusing. An empty one names nobody and marks nothing.
     """
     _memory_user_id.set(user_id or "")
+    if user_id:
+        _memory_user_named.set(True)
 
 
 def _get_memory_user_id() -> str:
     """Return the current user ID, or empty string if not set."""
     return _memory_user_id.get()
+
+
+def _bind_memory_user_id(user_id: str) -> MemoryUserBinding:
+    """Bind the acting user for exactly one agent run; return a reset token.
+
+    Unlike :func:`_set_memory_user_id` this is **unconditional**, and that is
+    the whole point. The previous shape was::
+
+        if _mu:
+            _set_memory_user_id(_mu)
+            os.environ["ACB_AGENT_USER_EMAIL"] = _mu   # never cleared
+
+    — so a run whose payload named nobody kept whatever the last run left, in a
+    ContextVar the caller's task still held and in a process-global env var every
+    concurrent run shared. An agent then called the gateway with somebody else's
+    address in ``X-User-Email``. Binding the empty string instead means a run
+    that cannot name its user has nobody to act as, and the tool clients refuse.
+
+    The one inheritance that IS legitimate is a sub-agent: ``call_agent`` and the
+    sub-agent batch path dispatch ``{"message": ..., "mode": "sub_task"}`` with no
+    user, from inside a parent run that already bound one on this same context.
+    That case is admitted by :data:`_memory_user_named` — which is set by the
+    binding and reset with it, so it is true only while a real enclosing scope is
+    open, never because a previous run finished and left it behind.
+
+    Pair every call with :func:`_unbind_memory_user_id` in a ``finally``.
+    """
+    resolved = user_id or ""
+    if not resolved and _memory_user_named.get():
+        # Inside a scope that named its user: inherit it (sub-agent delegation).
+        resolved = _memory_user_id.get()
+    return (_memory_user_id.set(resolved), _memory_user_named.set(bool(resolved)))
+
+
+def _unbind_memory_user_id(binding: MemoryUserBinding | None) -> None:
+    """Release a :func:`_bind_memory_user_id` scope. Never raises.
+
+    ``Token.reset`` demands the context it was created in, and the streaming
+    executor's teardown does not always run in it — MAF's own telemetry hook hit
+    exactly that (see ``executor._disable_agent_telemetry_once``). A failed reset
+    must not leave the identity standing for the next run, so the fallback is to
+    clear the binding outright, which fails closed rather than open.
+    """
+    if binding is None:
+        return
+    user_token, named_token = binding
+    try:
+        _memory_user_id.reset(user_token)
+    except (ValueError, RuntimeError):
+        _memory_user_id.set("")
+    try:
+        _memory_user_named.reset(named_token)
+    except (ValueError, RuntimeError):
+        _memory_user_named.set(False)
 
 
 def _set_memory_agent_name(agent_name: str) -> None:

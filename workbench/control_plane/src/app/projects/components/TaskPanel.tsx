@@ -22,6 +22,8 @@ import {
 } from "../lib/api";
 import { CustomFieldValues } from "./CustomFieldValues";
 import { TagPicker } from "./TagPicker";
+import { RepeatEditor } from "./RepeatEditor";
+import { RelationsBlock } from "./RelationsBlock";
 import { changeLabel } from "../lib/customFields";
 import {
   assigneeLabel,
@@ -52,6 +54,12 @@ interface Props {
   fields?: FieldRow[];
   /** WS-27m — the project's registered tags, for the picker's suggestions. */
   tags?: TagRow[];
+  /**
+   * WS-27p — open another task by id, for a subtask or a linked task. The page
+   * owns it because opening one has to resolve ITS project's statuses, which is
+   * a decision the panel does not have the tree to make.
+   */
+  onOpenTask?: (taskId: string) => void;
 }
 
 function describe(activity: ActivityRow, defs: FieldRow[] = []): string {
@@ -96,6 +104,7 @@ export function TaskPanel({
   onTaskAdded,
   fields = [],
   tags = [],
+  onOpenTask,
 }: Props) {
   const [timeline, setTimeline] = useState<ActivityRow[]>([]);
   const [comment, setComment] = useState("");
@@ -103,6 +112,9 @@ export function TaskPanel({
   const commentBox = useRef<HTMLTextAreaElement | null>(null);
   const [assignee, setAssignee] = useState("");
   const [subtask, setSubtask] = useState("");
+  // Bumped when this panel adds a subtask, so the relations block re-reads
+  // rather than showing a list that is one item short.
+  const [relationsKey, setRelationsKey] = useState(0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [files, setFiles] = useState<AttachmentRow[]>([]);
@@ -236,6 +248,7 @@ export function TaskPanel({
       setSubtask("");
       await reload();
       onTaskAdded?.();
+      setRelationsKey((k) => k + 1);
     } catch (err) {
       setError(String((err as Error).message));
     } finally {
@@ -388,6 +401,18 @@ export function TaskPanel({
             })();
           }}
         />
+        {/* Both halves existed in the schema since WS-27a with no surface:
+            links could be created and deleted but never listed, and subtasks
+            could be created but never shown. */}
+        {onOpenTask ? (
+          <RelationsBlock
+            taskId={task.id}
+            task={task}
+            refreshKey={relationsKey}
+            onOpenTask={onOpenTask}
+          />
+        ) : null}
+        <RepeatEditor taskId={task.id} />
         <CustomFieldValues task={task} fields={fields} onChanged={onChanged} />
         <div>
           <span className="text-xs text-muted-foreground">Files</span>

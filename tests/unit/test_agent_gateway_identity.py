@@ -66,7 +66,12 @@ def test_a_run_with_nobody_to_act_as_refuses_rather_than_acting_as_the_platform(
     with pytest.raises(RuntimeError) as exc:
         mod._headers()
     # The message is relayed to the agent verbatim, so it has to say what to do.
-    assert "ACB_AGENT_USER_EMAIL" in str(exc.value)
+    # It names the run payload, not ACB_AGENT_USER_EMAIL: that env var WAS the
+    # remedy the message advertised, and it was also S1-4 — one process-global
+    # slot no run cleared, so following the advice handed the next unattributed
+    # run this user. See tests/unit/test_agent_run_identity.py.
+    assert "nobody to act as" in str(exc.value)
+    assert "user_email" in str(exc.value)
 
 
 @pytest.mark.parametrize(("label", "path"), CLIENTS, ids=[c[0] for c in CLIENTS])

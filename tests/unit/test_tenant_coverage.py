@@ -18,6 +18,14 @@ Two layers, because they fail at different times:
   the column, ``FORCE`` and a policy. Catches a migration that was written but
   never applied.
 
+⚠️ **Both layers here match on the column NAME.** Neither asks what an existing
+``organization_id`` references, and three CRM tables have one that points at
+``crm_organizations`` — a customer company, not the tenant. That is why
+``gen_tenant_migration.HOMONYM_BLOCKED`` exists, and why the partition
+assertions ("every table is in exactly one bucket") live in
+``test_tenancy_boundary.py``, which matches the foreign key's target. This file
+does not make that check, despite what the paragraph above sounds like.
+
 ⚠️ **The exemption map IS the security review.** Adding a name to
 ``gen_tenant_migration.EXEMPT`` takes a table out of tenant isolation. It is the
 only legitimate way out — and therefore the only way an illegitimate one gets in.

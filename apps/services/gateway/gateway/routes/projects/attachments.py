@@ -199,9 +199,13 @@ async def serve_attachment(
         vis = await resolve_visibility(db, user)
         params: dict[str, Any] = {"aid": attachment_id}
         clauses = ["ta.attachment_id = CAST(:aid AS uuid)"]
-        if not vis.unrestricted:
-            clauses.append(vis.project_clause("t.root_project_id"))
-            params.update(vis.params)
+        # ⚠️ Unconditional since WS-29b. The `if not vis.unrestricted` that
+        # guarded this was correct while the unrestricted clause was the literal
+        # `TRUE` — skipping a predicate that filters nothing costs nothing. It
+        # is now the TENANT, so skipping it served every organization's files to
+        # any `data:org:read` holder.
+        clauses.append(vis.project_clause("t.root_project_id"))
+        params.update(vis.params)
         row = (await db.execute(
             text(
                 "SELECT a.name, a.mime, a.path "

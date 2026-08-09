@@ -6,7 +6,15 @@
 --
 -- Nullable ADD COLUMN. No table scan, no lock of consequence. Safe to apply on a live system.
 --
--- Tables in this phase: 135
+-- Tables in this phase: 133
+--
+-- ⚠️ NOT COVERED BY THIS FILE — `organization_id` already means something
+-- else on these tables, so scoping them by that name would corrupt a
+-- business column. They carry NO tenant isolation until the column is
+-- renamed (owner call; see gen_tenant_migration.HOMONYM_BLOCKED):
+--   crm_activities     organization_id = the customer company (144_crm.sql:289)
+--   crm_contacts       organization_id = the customer company (144_crm.sql:74)
+--   crm_deals          organization_id = the customer company (144_crm.sql:197)
 --
 -- ⚠️ NOT a numbered migration. `apply_migrations.sh` does not replay this
 -- directory. Promoting it is a deliberate act taken against a database in a
@@ -107,23 +115,11 @@ ALTER TABLE copilot_event
     ADD COLUMN IF NOT EXISTS organization_id UUID
     DEFAULT current_setting('app.tenant_id', true)::uuid;
 
-ALTER TABLE crm_activities
-    ADD COLUMN IF NOT EXISTS organization_id UUID
-    DEFAULT current_setting('app.tenant_id', true)::uuid;
-
-ALTER TABLE crm_contacts
-    ADD COLUMN IF NOT EXISTS organization_id UUID
-    DEFAULT current_setting('app.tenant_id', true)::uuid;
-
 ALTER TABLE crm_deal_contacts
     ADD COLUMN IF NOT EXISTS organization_id UUID
     DEFAULT current_setting('app.tenant_id', true)::uuid;
 
 ALTER TABLE crm_deal_statuses
-    ADD COLUMN IF NOT EXISTS organization_id UUID
-    DEFAULT current_setting('app.tenant_id', true)::uuid;
-
-ALTER TABLE crm_deals
     ADD COLUMN IF NOT EXISTS organization_id UUID
     DEFAULT current_setting('app.tenant_id', true)::uuid;
 
@@ -388,6 +384,10 @@ ALTER TABLE pm_project_grants
     DEFAULT current_setting('app.tenant_id', true)::uuid;
 
 ALTER TABLE pm_projects
+    ADD COLUMN IF NOT EXISTS organization_id UUID
+    DEFAULT current_setting('app.tenant_id', true)::uuid;
+
+ALTER TABLE pm_recurrences
     ADD COLUMN IF NOT EXISTS organization_id UUID
     DEFAULT current_setting('app.tenant_id', true)::uuid;
 

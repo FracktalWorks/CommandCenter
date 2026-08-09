@@ -34,10 +34,16 @@ import { ImportClickUp } from "./components/ImportClickUp";
 import { MyWork } from "./components/MyWork";
 import { NotificationBell } from "./components/NotificationBell";
 import { ProjectTree } from "./components/ProjectTree";
+import { CalendarView } from "./components/CalendarView";
+import { SearchPalette } from "./components/SearchPalette";
+import { TimelineView } from "./components/TimelineView";
 import { TaskBoard } from "./components/TaskBoard";
 import { TaskList } from "./components/TaskList";
 import { TaskPanel } from "./components/TaskPanel";
 import { SAVED_VIEW_POSITION, orderBearingView, type planDrop } from "./lib/board";
+import { calendarWindow, dayKey, monthGrid, shiftMonth } from "./lib/calendar";
+import { isOpenShortcut } from "./lib/search";
+import type { Edge } from "./lib/timeline";
 import {
   EMPTY_FILTERS,
   type Filters,
@@ -59,7 +65,16 @@ import {
 import { fetchAccess } from "@/lib/access";
 import { filterByCenter, flatten } from "./lib/tree";
 
-type ViewMode = "board" | "list";
+type ViewMode = "board" | "list" | "calendar" | "timeline";
+
+/** An empty calendar window — the shape before anything has been fetched, and
+ *  the shape after a failure, so the view never renders a stale month. */
+const NO_MONTH = {
+  rows: [] as TaskRow[],
+  links: [] as Edge[],
+  undated: 0,
+  truncated: false,
+};
 
 function ProjectsWorkspace() {
   const searchParams = useSearchParams();
@@ -117,10 +132,33 @@ function ProjectsWorkspace() {
 
   // WS-27n — multi-select. `anchor` is the last card clicked without shift,
   // which is what a shift-click measures its range from.
+  // WS-27q — the calendar is a WINDOW, not the paged task list, so it holds
+  // its own rows. Sharing `tasks` would mean either paginating the calendar
+  // (a month with silently missing days) or unpaginating the board.
+  // WS-27r — the search palette. Held at the page rather than in a view,
+  // because the whole point is that it works from wherever you already are.
+  const [searching, setSearching] = useState(false);
+
+  const [monthAnchor, setMonthAnchor] = useState<Date>(() => new Date());
+  const [month, setMonth] = useState(NO_MONTH);
+
   const [picked, setPicked] = useState<ReadonlySet<string>>(new Set());
   const [anchor, setAnchor] = useState<string | null>(null);
   const [bulkBusy, setBulkBusy] = useState(false);
   const [bulkNotice, setBulkNotice] = useState<string | null>(null);
+
+  useEffect(() => {
+    // ⌘K from anywhere in Projects. `preventDefault` because the browser's own
+    // ⌘K is the address bar's search on some, and losing the app to it is a
+    // shortcut that works once.
+    function onKey(event: KeyboardEvent) {
+      if (!isOpenShortcut(event)) return;
+      event.preventDefault();
+      setSearching(true);
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   useEffect(() => {
     // Only for the "Mine" toggle. `fetchAccess` never throws, and an empty
@@ -208,6 +246,48 @@ function ProjectsWorkspace() {
   useEffect(() => {
     if (selected) void loadProject(selected);
   }, [selected, loadProject]);
+
+  // WS-27q — the calendar's own fetch, because it reads a WINDOW rather than a
+  // page. `grid` is derived so the effect re-runs when the month steps, and
+  // `calendarWindow` adds the day of slack the endpoint's UTC reading needs.
+  const grid = useMemo(() => monthGrid(monthAnchor), [monthAnchor]);
+
+  const loadMonth = useCallback(async () => {
+    if (!selected) {
+      setMonth(NO_MONTH);
+      return;
+    }
+    const { from, to } = calendarWindow(grid);
+    try {
+      const res = await projectsApi.calendar({
+        project_id: selected.id,
+        include_subtree: true,
+        from,
+        to,
+        // WS-27t — only the timeline draws arrows, and the calendar would pay
+        // for a query it never reads.
+        include_links: mode === "timeline",
+        ...toQuery(filters),
+      });
+      setMonth({
+        rows: res.rows,
+        links: res.links,
+        undated: res.undated,
+        truncated: res.truncated,
+      });
+    } catch (err) {
+      setError(String((err as Error).message));
+      // Cleared rather than left as it was: a stale month drawn under a new
+      // heading is a calendar confidently showing the wrong dates.
+      setMonth(NO_MONTH);
+    }
+  }, [selected, grid, filters, mode]);
+
+  useEffect(() => {
+    // Both date views read the same window endpoint — the WINDOW is the
+    // resource, and calendar and timeline are two renderings of it.
+    if (mode === "calendar" || mode === "timeline") void loadMonth();
+  }, [mode, loadMonth]);
 
   useEffect(() => {
     if (!selected) {
@@ -463,6 +543,55 @@ function ProjectsWorkspace() {
     }
   }
 
+  /**
+   * WS-27q — a task dragged to another day.
+   *
+   * A plain `PATCH`, deliberately: the same validation, the same
+   * `field_change` activity and the same revert as an edit typed into the
+   * panel. A dedicated "move" endpoint would be a second write path, which is
+   * how two paths start disagreeing about what is allowed.
+   *
+   * Optimistic like the board's drop, and for the same reason — a drag that
+   * waits for a round trip feels broken even when it is correct. `rescheduleTo`
+   * has already refused a no-op, so this never posts an activity saying a task
+   * moved to where it already was.
+   */
+  /**
+   * WS-27t — a dependency drawn on the timeline.
+   *
+   * The SAME endpoint the task panel's dropdown posts to, so the cycle guard,
+   * the activity row and the permission check are one implementation. The
+   * refusal shown is the gateway's own message — `assert_no_block_cycle`
+   * explains a loop better than anything this component could invent, and a
+   * second wording would be a second rule to keep in step.
+   *
+   * **Nothing is rescheduled (D-PM-12).** Creating the link may make the arrow
+   * red; that is the whole intended effect.
+   */
+  async function linkTasks(blockerId: string, blockedId: string) {
+    try {
+      await projectsApi.createLink(blockerId, blockedId, "blocks");
+    } catch (err) {
+      setError(String((err as Error).message));
+    }
+    await loadMonth();
+  }
+
+  async function moveTask(task: TaskRow, patch: Record<string, string | null>) {
+    setMonth((current) => ({
+      ...current,
+      rows: current.rows.map((t) => (t.id === task.id ? { ...t, ...patch } : t)),
+    }));
+    try {
+      await projectsApi.patchTask(task.id, patch);
+    } catch (err) {
+      setError(String((err as Error).message));
+    }
+    // Reloaded either way: on success to pick up anything the server derived,
+    // on failure to replace the optimistic move with the truth.
+    await loadMonth();
+  }
+
   async function handleDrop(
     task: TaskRow,
     writes: ReturnType<typeof planDrop>,
@@ -610,10 +739,19 @@ function ProjectsWorkspace() {
                 Tags
               </Button>
             ) : null}
+            <Button
+              variant="ghost"
+              size="sm"
+              icon="Search"
+              onClick={() => setSearching(true)}
+              title="Search every project (⌘K)"
+            >
+              Search
+            </Button>
             <NotificationBell onOpenTask={openTaskById} />
           </div>
           <div className={`flex shrink-0 gap-1 ${mine ? "hidden" : ""}`}>
-            {(["board", "list"] as ViewMode[]).map((m) => (
+            {(["board", "list", "calendar", "timeline"] as ViewMode[]).map((m) => (
               <button
                 key={m}
                 type="button"
@@ -697,6 +835,29 @@ function ProjectsWorkspace() {
             <p className="p-6 text-sm text-muted-foreground">
               Nothing here yet. Projects appear once a department is granted to you.
             </p>
+          ) : mode === "timeline" ? (
+            <TimelineView
+              tasks={month.rows}
+              links={month.links}
+              undated={month.undated}
+              truncated={month.truncated}
+              today={dayKey(new Date())}
+              onSelect={(task) => void openWithStatuses(task)}
+              onLink={(blockerId, blockedId) => void linkTasks(blockerId, blockedId)}
+              onRefuse={(reason) => setError(reason)}
+            />
+          ) : mode === "calendar" ? (
+            <CalendarView
+              grid={grid}
+              tasks={month.rows}
+              undated={month.undated}
+              truncated={month.truncated}
+              today={dayKey(new Date())}
+              onSelect={(task) => void openWithStatuses(task)}
+              onMove={(task, patch) => void moveTask(task, patch)}
+              onStep={(months) => setMonthAnchor(shiftMonth(grid, months))}
+              onToday={() => setMonthAnchor(new Date())}
+            />
           ) : mode === "board" ? (
             <TaskBoard
               groups={groups}
@@ -725,12 +886,21 @@ function ProjectsWorkspace() {
         </div>
       </main>
 
+      <SearchPalette
+        open={searching}
+        onClose={() => setSearching(false)}
+        onOpenTask={(id) => void openTaskById(id)}
+      />
+
       {openTask ? (
         <TaskPanel
           task={openTask}
           statuses={panelStatuses}
           fields={fields}
           tags={tags}
+          // WS-27p — opening a subtask or a linked task resolves ITS project's
+          // statuses, which the panel has no tree to do.
+          onOpenTask={(id) => void openTaskById(id)}
           onClose={() => setOpenTask(null)}
           onTaskAdded={() => {
             if (selected) void loadProject(selected);

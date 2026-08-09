@@ -18,10 +18,12 @@
  * `planDrop`, which is one row in the normal case and the whole group on the
  * first drag into an unordered column.
  */
+import { AvatarStack, TaskMeta } from "@/components/TaskMeta";
 import { useMemo, useState } from "react";
 
 import type { TaskRow } from "../lib/api";
 import { buildColumnDropUpdate, planDrop, sortForView } from "../lib/board";
+import { cardChips } from "../lib/card";
 import { type GroupBy, type TaskGroup, personLabel } from "../lib/grouping";
 
 interface Props {
@@ -125,14 +127,20 @@ export function TaskBoard({
                     selected?.has(task.id) ? "border-primary" : "border-border"
                   }`}
                 >
-                  <span className="block truncate text-foreground">{task.title}</span>
-                  <span className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
-                    {task.task_number ? <span>#{task.task_number}</span> : null}
-                    {task.assignees?.length ? (
-                      <span className="truncate">
-                        {task.assignees.map(personLabel).join(", ")}
-                      </span>
-                    ) : null}
+                  <span
+                    className={`block truncate text-foreground ${
+                      task.completed_at ? "line-through opacity-60" : ""
+                    }`}
+                  >
+                    {task.title}
+                  </span>
+                  {/* The chip row and the owner strip are the shared card
+                      vocabulary (WS-27s) — the same components /tasks draws,
+                      so a task looks like the same kind of thing in both. */}
+                  <TaskMeta chips={cardChips(task)} className="mt-1.5" />
+                  <span className="mt-1.5 flex items-center justify-between gap-2 text-[10px] text-muted-foreground">
+                    <span>{task.task_number ? `#${task.task_number}` : ""}</span>
+                    <AvatarStack people={task.assignees} label={personLabel} />
                   </span>
                 </button>
               </li>

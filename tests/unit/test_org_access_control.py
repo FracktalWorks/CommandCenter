@@ -14,9 +14,6 @@ import re
 from pathlib import Path
 
 import pytest
-from fastapi import Depends, FastAPI
-from fastapi.testclient import TestClient
-
 from acb_auth import (
     ASSIGNABLE_SYSTEM_ROLES,
     CAPABILITIES,
@@ -37,7 +34,8 @@ from acb_auth import (
     validate_permission,
 )
 from acb_auth.access import SERVICE_ACCESS, legacy_access
-
+from fastapi import Depends, FastAPI
+from fastapi.testclient import TestClient
 
 # ── Matching ────────────────────────────────────────────────────────────────
 
@@ -639,6 +637,67 @@ def test_service_principal_runs_any_agent() -> None:
     assert user.has_permission(agent_run_permission("anything"))
 
 
+# ── Migration 159 — one address is one person, case-insensitively ───────────
+#
+# WS-29/D-MT-1. `multi_tenancy.md` §1.1 rested the whole tenant model on
+# `app_user.email` being unique, and it is — BYTE-EXACT, while every lookup in
+# this codebase matches `lower(email)` (R10). A live run proved the gap real:
+# `Casey@Alpha.Example` and `casey@alpha.example` are two rows, and under
+# D-MT-1 they can sit in two organizations, which makes a person's tenant
+# whichever row the planner returns.
+
+_MIGRATION_159 = Path("infra/postgres/162_app_user_email_case.sql")
+
+
+def test_the_unique_index_is_on_lower_email_not_the_raw_column() -> None:
+    """⚠️ The claim the tenant model rests on. A `UNIQUE (email)` here agrees
+    with itself and disagrees with every query in the codebase."""
+    sql = _MIGRATION_159.read_text(encoding="utf-8")
+    assert "CREATE UNIQUE INDEX IF NOT EXISTS app_user_email_lower_key" in sql
+    assert "ON app_user (lower(email))" in sql
+
+
+def test_the_byte_exact_constraint_is_retired_not_left_beside_it() -> None:
+    """Two unique indexes on one column state two different things about the
+    same fact, and the weaker one is what somebody later 'fixes' a violation
+    against."""
+    sql = _MIGRATION_159.read_text(encoding="utf-8")
+    assert "DROP CONSTRAINT IF EXISTS app_user_email_key" in sql
+    # Order is load-bearing: the replacement must exist before the original is
+    # dropped, or there is a window with no uniqueness at all.
+    assert sql.index("CREATE UNIQUE INDEX") < sql.index("DROP CONSTRAINT")
+
+
+def test_the_migration_is_idempotent_like_every_other() -> None:
+    sql = _MIGRATION_159.read_text(encoding="utf-8")
+    assert "IF NOT EXISTS" in sql
+    assert "IF EXISTS" in sql
+
+
+def test_it_does_not_rewrite_anybody_s_stored_address() -> None:
+    """⚠️ `created_by`, `assignee`, `subject` and `updated_by` are bare address
+    strings across a dozen tables (D-PM-4) and none of them are foreign keys, so
+    a normalising UPDATE here would silently orphan them."""
+    sql = _MIGRATION_159.read_text(encoding="utf-8")
+    assert "UPDATE app_user" not in sql
+    assert "SET email" not in sql
+
+
+def test_it_is_not_CONCURRENTLY_which_cannot_run_in_a_transaction() -> None:
+    """`CREATE INDEX CONCURRENTLY` inside `BEGIN` is an error, and this file is
+    one transaction on purpose.
+
+    Comments are stripped before the check: the migration *explains* why it is
+    not concurrent, and a structural test that trips on the prose justifying
+    the very rule it enforces is a test somebody deletes. (The same trap caught
+    `lib/timeline.ts` earlier in this session, for the same reason.)
+    """
+    statements = "\n".join(
+        line for line in _MIGRATION_159.read_text(encoding="utf-8").splitlines()
+        if not line.lstrip().startswith("--")
+    )
+    assert "CONCURRENTLY" not in statements
+    assert statements.count("BEGIN;") == 1 and statements.count("COMMIT;") == 1
 # ── Tenant predicate on the org_group joins (MT-1i) ─────────────────────────
 #
 # saas_multitenancy.md §6.4/§6.5 + tenancy_and_visibility.md §2. Decision D15

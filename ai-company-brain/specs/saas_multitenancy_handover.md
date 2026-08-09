@@ -424,10 +424,12 @@ Carried here so they are not lost in the parent spec:
   the **§5.1 pooled cutover** (customer 8–12), not of Phase 0. **An agent must refuse to
   build it and say so.**
 - **MT-2 … MT-5** (entitlements, AI credits, billing). ~~Blocked on owner inputs~~
-  **⚠️ STALE — every owner input is now ANSWERED** (D18 2026-08-09, refined and
-  completed by **D19** the same day: SKU list + prices in §2.4's table of record,
-  the credit unit + metering scope in §3.2, seat rules in §4.2, Razorpay-only
-  payments, India-only residency). What still blocks dispatch is **engineering
+  **⚠️ STALE — every owner input is now ANSWERED** (D18 2026-08-09 → D19 → final
+  shape **D23 2026-08-10**: Center packages are the sales object — **§2.4b is the
+  pricing shape of record**, §2.4's table is the internal atom ledger; credit unit
+  + metering scope in §3.2, seat rules in §4.2, Razorpay-only payments, India-only
+  residency. ⚠️ D23 also adds MT-2 schema this handover predates: `center_package`,
+  `plan_catalog`, and `user_module_seat.source` — see `_implementation.md` §4). What still blocks dispatch is **engineering
   paperwork, not decisions**: the seven-point ticket contract (per-item done-whens
   + verification commands) has not been written onto §2/§3/§4. An implementer
   reading this section must NOT refuse MT-2/MT-3 on "missing owner inputs" — that

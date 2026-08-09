@@ -592,21 +592,31 @@ the delta between them is registration work by §2's checklist.
 projections, never separate deployments"):
 
 1. **Personal Center — per-user, NOT a department.** Each member's private
-   workspace (D12's `private` tier): my Email, my WhatsApp, my Meetings, my
-   Tasks (and Calendar, which travels with tasks/meetings — Core module). No
-   `org_group`, no membership grant, no admin act — it exists for every member
-   automatically. ⚠️ Engineering consequence: §2's five-place registration
-   checklist assumes a group-backed Center; Personal needs a registry entry
-   whose scope is the caller, not a group — design that variant when Personal
-   registers, do not force a fake group.
+   workspace (D12's `private` tier). *(Reconciled with D23 pricing,
+   2026-08-10:)* the **surface** exists for every member automatically — no
+   `org_group`, no membership grant — and always shows its **Core apps** (my
+   Tasks, my Calendar, basic AI chat, personal dashboard); its **comms apps —
+   Email, WhatsApp, Meetings — light up only with the optional Personal Center
+   package (₹600/user, D23.1)**, rendering as locked/upsell otherwise per the
+   §2.4 degradation contract. ⚠️ Engineering consequence: §2's five-place
+   registration checklist assumes a group-backed Center; Personal needs a
+   registry entry whose scope is the caller, not a group — design that variant
+   when Personal registers, do not force a fake group.
 2. **Department Centers — seven:** Sales · Marketing · Finance · **R&D (new,
    D22)** · People · Operations · **Support (new, D22)**. Each an `org_group` +
-   `center.*` slug per §1. Every department Center carries the **cross-cutting
-   apps sliced to its team** — Projects, Workflows, App Builder, Agent Builder,
-   Agent Chat, Dashboards, Knowledge Base (the D21 slicing doctrine: D12 tiers +
-   visibility-declared-at-creation). Unique apps per Center: Sales = the CRM
-   module surfaces **including products, price books, brochures/product info
-   and the proposal generator — all part of the CRM ₹300 module, not separate
+   `center.*` slug per §1, **sold as a Center package (D23, 2026-08-10: ₹600
+   app-bearing / ₹300 slices-only — `saas_multitenancy.md` §2.4b)**. Every
+   department Center carries the cross-cutting apps sliced to its team, in two
+   commercial classes *(D23 correction)*: the **base slices — Projects,
+   Knowledge Base, Dashboards — ride inside every Center package**;
+   **Workflows (₹300) and Builder (App + Agent, ₹500) are separately-purchased
+   org-wide add-ons** that light up in all the Centers of a user who holds
+   them — a package alone does NOT include them; basic Agent Chat is Core. (The
+   D21 slicing doctrine — D12 tiers + visibility-declared-at-creation — governs
+   all of them.) Unique apps per Center: Sales = the CRM
+   surfaces **including products, price books, brochures/product info
+   and the proposal generator — all inside the Sales Center package (₹600; CRM
+   is the internal atom, D23), never separate
    SKUs (D22)**; Marketing = the future Marketing module (social/ads/website —
    `future_modules_roadmap.md` §2); Finance = the Finance module; People = the
    People directory surfaces (Core) + HR expansions; Support = the future
@@ -615,7 +625,9 @@ projections, never separate deployments"):
    future scope).
 **Dual access paths for cross-cutting apps (owner, 2026-08-10 — D22 amendment).**
 Projects, Workflows, App Builder, Agent Builder, Agent Chat, Dashboards and
-Knowledge Base are reachable **two ways, same data, same grants**:
+Knowledge Base are reachable **two ways, same data, same grants** *(holding the
+app is the prerequisite either way — base slices come with any Center package,
+Workflows/Builder with the org-wide add-on, basic Agent Chat with Core; D23)*:
 
 - **Via a Center** — the app pre-scoped to that Center's slice (what §1 already
   defines: a Center item is app + scope).

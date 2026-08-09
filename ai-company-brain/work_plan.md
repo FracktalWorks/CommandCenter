@@ -163,17 +163,17 @@ owning specs are the archive; this file owns ordering, gates and states only.
 | WS-13 | **Centers B — groups become real** | 🟡 review | `department_centers.md` Phase B | Groups admin UI + six-group seed built 2026-08-01, **pending owner review**; `center.*` feature vocabulary shipped 2026-08-03. ~~People directory read view open~~ **closed by WS-28b** (2026-08-06). ~~"nav renders with no access filter" / "catalog-read was rejected"~~ **inverted by merged #389** (`747b65af` — the catalog, not a code mirror, decides). Residue: the owner review itself. (swept 2026-08-09) |
 | WS-14 | **Centers C — scoping deepens** | 🟢 with ⚠️ | `department_centers.md` §3 C1–C4 | D12 answered the blocker (a project belongs to a team by an explicit `group:<slug>` grant). **C1 tasks team slice: ⚠️ RE-AUDIT before dispatch (flag added 2026-08-09)** — WS-27e's owner-directed one-store revision (D-PM-6: `pm_tasks` is THE task table; WS-27h retires `gtd_items`) may moot D13's `gtd_*`-local grant table; whichever way it lands, the subject grammar must not fork (§4, D13). C2 shared mailboxes: doc-action only, ownerless in fact (§4) · C3 team-instanced agents: narrow, columns intentionally unread · 🔴 C4 per-Center approvals decision (§6). (2026-08-03 · flag 2026-08-09) |
 | WS-14a | **Tenancy TV-1 — the three `org_group` slug-only joins** *(minted 2026-08-03)* | ✅ absorbed | `specs/tenancy_and_visibility.md` §2 → **WS-29 MT-1i** | **Absorbed by WS-29 as MT-1i (2026-08-08) — do not dispatch from this row.** Code shipped on the WS-29 branch. Severity re-framed: under D15 the three joins **leak across tenants**, not merely misbehave within one. The open criterion — the two-org DB-backed fixture run `passed`, never `skipped` (§2 done-when 3) — travels with MT-1i. (2026-08-09) |
-| WS-15 | **Centers D — dashboards + Company Center** | 🟡 WS-13 review | `department_centers.md` Phase D | Center dashboards, personal dashboard, weekly digest workflows (double as `workflows_app.md` G1 metric), D4 org-memory fix. Blocked only on WS-13's owner review now that WS-28b shipped the directory. ⚠️ D21/D22 scope colour recorded in Phase D: configurable per-department, multiple leadership rollups, Center-grouped standalone app. |
+| WS-15 | **Centers D — dashboards + Company Center** | 🟡 WS-13 review | `department_centers.md` Phase D | Center dashboards, personal dashboard, weekly digest workflows (double as `workflows_app.md` G1 metric), D4 org-memory fix. Blocked only on WS-13's owner review now that WS-28b shipped the directory. ⚠️ D21/D22/D23 scope colour recorded in Phase D: configurable per-department, multiple leadership rollups, Center-grouped standalone app; Dashboards is a package-included base slice, never an upsell line (D23). |
 | WS-16 | **Centers E — AI budgets** | 🟡 WS-6 | `department_centers.md` Phase E | Per-member caps at the LLM choke points (D2, D8). The chain is real: needs WS-6's **durable** attribution, which is HELD at WS-6b — do not dispatch expecting Redis-only records to suffice. ⚠️ MT-3's credit gate (D18 pricing) lands on the same choke points — design once, serve both. |
 
 ### Multi-tenancy (SaaS) — `saas_multitenancy.md`
 
 | WS | Workstream | State | Owning spec · record | Gates · next (verified) |
 |---|---|---|---|---|
-| WS-29 | **Multi-tenancy — turning CommandCenter into a product sold to other companies** | ◐ H1 scratch-done | **`specs/saas_multitenancy.md`** (architecture; §11 tickets) · ⭐ **`specs/saas_multitenancy_handover.md`** (H1→H8 runbook — hand THIS to the executing agent) · `specs/saas_multitenancy_implementation.md` (shapes) · board record 2026-08-09 in the parent spec | **Phase 0 ✅** (MT-0a · 0b · 0c-1 · 0d, pending review) · **H1 ✅ scratch-verified 2026-08-09**: 157/158/159 applied + idempotent re-run on a full-ladder (00→156) replica with a backfill-exercising seed; every runbook verify query correct; baseline 213 passed / 2 skipped. **Prod apply = owner's merge of PR #404**; verify by the three `- 15N_*.sql ... ok` deploy-log lines, never job conclusion. · MT-1: 1a schema ✅ (identity cutover = H6, open) · 1b generated ✅ · 1c seam + ratchets ✅ — **561 call sites across 138 files unconverted = H2, the long pole** · 1e wrapper ✅ (~58 key sites unconverted = H5) · 1i ✅ (two-org DB fixture owed) · **MT-2/MT-3/MT-4 owner inputs ALL ANSWERED 2026-08-09 (D18 refined by D19 → §8)** — SKU table of record in §2.4, credit unit in §3.2, seat rules in §4.2, Razorpay-only (D19.5), India-only residency (D19.6); spec detailing may start on all three, and the customer console is WS-30 (`specs/subscription_console.md`) · 🔴 MT-0c-2 parked (D16; §6 first blockquote) · §5.1 cutover trigger **ADOPTED 2026-08-09**: ≥8 customers, or deploy overhead > ~1 day/month, or the first version-skew incident — owner checks monthly. **Next: owner merges #404 → H1 GATE passes → dispatch H2.** (2026-08-09) |
+| WS-29 | **Multi-tenancy — turning CommandCenter into a product sold to other companies** | ◐ H1 scratch-done | **`specs/saas_multitenancy.md`** (architecture; §11 tickets) · ⭐ **`specs/saas_multitenancy_handover.md`** (H1→H8 runbook — hand THIS to the executing agent) · `specs/saas_multitenancy_implementation.md` (shapes) · board record 2026-08-09 in the parent spec | **Phase 0 ✅** (MT-0a · 0b · 0c-1 · 0d, pending review) · **H1 ✅ scratch-verified 2026-08-09**: 157/158/159 applied + idempotent re-run on a full-ladder (00→156) replica with a backfill-exercising seed; every runbook verify query correct; baseline 213 passed / 2 skipped. **Prod apply = owner's merge of PR #404**; verify by the three `- 15N_*.sql ... ok` deploy-log lines, never job conclusion. · MT-1: 1a schema ✅ (identity cutover = H6, open) · 1b generated ✅ · 1c seam + ratchets ✅ — **561 call sites across 138 files unconverted = H2, the long pole** · 1e wrapper ✅ (~58 key sites unconverted = H5) · 1i ✅ (two-org DB fixture owed) · **MT-2/MT-3/MT-4 owner inputs ALL ANSWERED — final pricing shape D23 2026-08-10 (§2.4b Center packages; D18/D19's module-first answers superseded)** — credit unit §3.2, seat rules §4.2, Razorpay-only, India-only residency; MT-2's scope now includes `center_package` + `plan_catalog` + seat `source` + the one-assignment act; spec detailing may start on all three; the customer console is WS-30; ⚠️ §8 item 5 = OPEN customer-framing questions · 🔴 MT-0c-2 parked (D16; §6 first blockquote) · §5.1 cutover trigger **ADOPTED 2026-08-09**: ≥8 customers, or deploy overhead > ~1 day/month, or the first version-skew incident — owner checks monthly. **Next: owner merges #404 → H1 GATE passes → dispatch H2.** (2026-08-09) |
 
 | — | **Future modules roadmap** (KB · Marketing · Support · dashboards-colour · Builder/Workflows slicing rule) *(named 2026-08-09, D21)* | 🔴 not dispatchable | `specs/future_modules_roadmap.md` | No WS rows until each earns a §1-contract spec; Dashboards colour lands in WS-15's acceptance; the Builder/Workflows visibility-tier-at-creation rule binds reviews now (D12). |
-| WS-30 | **Subscription Console — customer-facing billing surface** *(minted 2026-08-09)* | 🔴 MT-2 first | **`specs/subscription_console.md`** | Manage-only at launch (D19.4): modules panel · credit monitor · seat writes under D19.3's hard cap · change-request flow (fulfilment 🔴 OWNER-GATE during silo phase). Sequencing: MT-2 tables → SC-1 → SC-2/SC-3 → SC-4 with MT-4. Every business input is answered (D19); the blocker is MT-2's substrate, then writing MT-2/MT-3's seven-point ticket contracts. (2026-08-09) |
+| WS-30 | **Subscription Console — customer-facing billing surface** *(minted 2026-08-09)* | 🔴 MT-2 first | **`specs/subscription_console.md`** | Manage-only at launch: **Centers & add-ons panel · users × Centers seat grid (D23)** · credit monitor · seat writes under D19.3's hard cap · change-request flow (fulfilment 🔴 OWNER-GATE during silo phase). Sequencing: MT-2 tables → SC-1 → SC-2/SC-3 → SC-4 with MT-4. Business inputs answered (D19 + **D23**); blockers: MT-2's substrate, the MT-2/MT-3 ticket contracts, and ⚠️ §8 item 5's open customer-framing calls before final purchase-flow copy. (2026-08-10) |
 
 ### Apps
 
@@ -252,8 +252,9 @@ D15/D16) — read their banners before citing either.
   scoped to their teams, unique apps deferred) · **Company Center kept** as the
   leadership surface (WS-15; multiple configurable rollups per D21, in-app
   all-slices filters as explicit org-tier grants). **Sales' products, price
-  books, brochures and proposal generator are CRM-module features (₹300), not
-  separate SKUs** — `crm_app.md` gains them as future phases. The admin/IT
+  books, brochures and proposal generator are CRM-module features — sold only
+  inside the Sales Center package (₹600, D23), never separate SKUs** —
+  `crm_app.md` gains them as future phases. The admin/IT
   plane (Appearance, Membership/roles, Live activity, Integrations, Approvals,
   Agent Registry, AI credits) is Core capability surface, not a Center.
   **Amended 2026-08-10 (owner): dual access paths** — every cross-cutting app is
@@ -276,9 +277,12 @@ D15/D16) — read their banners before citing either.
   *multiple* leadership rollups — carry into WS-15 acceptance) · **Builder +
   Workflows as cross-department substrate** (⚠️ NOT new — the slicing IS the D12
   doctrine; the one addition is a standing review rule: Builder apps and workflow
-  definitions declare a visibility tier at creation). SKU posture: future
-  modules default ₹300 a-la-carte, tier placement decided at spec time (D20
-  stays stable). Sequencing: nothing here precedes WS-29/WS-30 or in-flight
+  definitions declare a visibility tier at creation). SKU posture *(rewritten
+  2026-08-10 for D23 — no a-la-carte list, no D20 tiers)*: a future module joins
+  a Center package (Marketing → Marketing Center, Support → Support Center, KB →
+  the base slices in every package) or, exceptionally, becomes a new org-wide
+  add-on; the spec-time owner call is placement, not a price. Sequencing:
+  nothing here precedes WS-29/WS-30 or in-flight
   apps; expected order Dashboards → KB → Support → Marketing. Nothing in the
   roadmap is dispatchable until it earns an owning spec per §1 and a WS row.
 - **D20 — Plan tiers: four bundles beside the a-la-carte list.** *(⚠️ **Team and
@@ -349,7 +353,9 @@ D15/D16) — read their banners before citing either.
      is deliberately priced.
 - **D18 — Three owner calls taken 2026-08-09** *(via the consolidation session's
   question round; recorded here so none is re-litigated. ⚠️ Part 3's SKU list is
-  superseded by **D19** — cite D19 for module boundaries and prices).*
+  superseded by **D19**, and D19's module-first customer framing in turn by
+  **D23** — cite D23 for anything a customer buys; module boundaries survive as
+  internal atoms).*
   1. **Priority of record: parallel + ratchet.** App workstreams continue at full
      speed alongside WS-29; the price is **R5** (§1) — tenant-ready by
      construction, enforced by the shipped ratchet tests, so H2's 561-site

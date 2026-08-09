@@ -7,11 +7,15 @@ roster is written down, (b) each future module starts from what already exists
 rather than being invented parallel to it, and (c) MT-2's `module_catalog` knows
 rows are coming (adding one must stay a data change — `saas_multitenancy.md` §2.4).
 
-**SKU posture:** each future module is expected to join the a-la-carte list
-(default ₹300/user/month unless priced otherwise at spec time) and be slotted into
-the D20 tiers when its spec is written — tier recomposition is an owner call at
-that moment, not now. R5 (tenant-ready by construction) binds any of this work
-whenever it starts.
+**SKU posture (rewritten 2026-08-10 for D23 — there is no a-la-carte list and no
+D20 tiers):** a future module ships as an internal atom that **joins a Center
+package** — Marketing powers the Marketing Center package (₹600), Support powers
+the Support Center package (₹600), Knowledge Base joins the base cross-cutting
+slices riding in **every** package — or, exceptionally, sells as a new org-wide
+add-on (the Workflows/Builder shape). The owner call at spec time is *which
+package or class it belongs to*, not a price. Complete's wildcard row picks up
+every GA addition automatically (D20.5, kept by D23). R5 (tenant-ready by
+construction) binds any of this work whenever it starts.
 
 ---
 
@@ -68,9 +72,11 @@ Base; internal and external chatbots for self-serve troubleshooting.
 (second channel), the CRM's `crm_activities`/entity model (a ticket is an
 activity against a contact/org), agent chat + AgentChat surfaces (the chatbot),
 and the KB module above (deflection content). The **dependency on Knowledge Base
-is real** — AI resolution quality is bounded by the KB, so Support's spec should
-declare `requires: [knowledge-base]` in `module_catalog` or scope a degraded
-no-KB mode explicitly.
+is real** — AI resolution quality is bounded by the KB. *(D23 note: since KB
+rides in every Center package as a base slice, a Support Center package always
+carries it — the `requires` edge is satisfied by construction; what the Support
+spec still owes is scoping resolution quality against however much KB content
+the org has actually written.)*
 
 **Open questions:** ticket model (own tables vs CRM-activity extension); SLA
 machinery; the customer-DNS-pages story (CNAME provisioning, TLS — this
@@ -91,9 +97,9 @@ information from the owner's 2026-08-09 statement is scope colour, recorded here
 dashboards must be *configurable per department* (widget/data selection, not a
 fixed layout) and leadership aggregation may produce *multiple* company-wide
 dashboards, not one. Carry both into WS-15's acceptance when it dispatches.
-SKU-wise, base dashboards are `core` (D19: dashboard + observability are Core);
-whether *configurable* Center dashboards become an upsell is decided at WS-15
-spec time.
+SKU-wise (D23): the personal dashboard is `core`; **configurable Center
+dashboards are the Dashboards base slice inside every Center package** — not an
+independent upsell line.
 
 ## 5. Agents App Builder & Workflows as cross-department substrate — ⚠️ EXISTS; the slicing is doctrine
 
@@ -102,7 +108,9 @@ the organization; each department sees only its relevant slice; leadership sees
 all slices and the whole.
 
 **This is not a new module.** Builder (`build.apps`/`build.agents`, ₹500) and
-Workflows (₹300) are in the D19 catalog; Projects is a ₹300 add-on. "Each
+Workflows (₹300) sell as **org-wide add-ons** (D23) that light up in all a
+user's Centers; **Projects is never sold alone — it rides inside every Center
+package as a base slice**. "Each
 department sees only its slice" is exactly the D12 visibility doctrine (private →
 Center → org, `group:<slug>` grants) plus Centers-as-projections; "leadership
 sees all" is the org tier plus the admin capability set (mind D14: `manager`'s

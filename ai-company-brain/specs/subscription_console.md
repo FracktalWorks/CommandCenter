@@ -4,11 +4,16 @@
 2026-08-09 (repo-wide grep: zero hits for `module_catalog`, `org_module_entitlement`,
 `user_module_seat`, `ModuleGate`, `entitlement_mask` — MT-2's substrate does not
 exist yet, so nothing here is dispatchable before MT-2's tables land) ·
-**Owner:** WS-30 (this spec) · **Decisions:** D19 (work_plan.md §3) answers every
-business input this spec needs; none may be re-litigated here.
+**Owner:** WS-30 (this spec) · **Decisions:** **D23** (work_plan.md §3,
+2026-08-10 — Center packages are the governing pricing shape, carrying D19's
+credit/seat rules); none may be re-litigated here. ⚠️ `saas_multitenancy.md` §8
+item 5 holds four OPEN customer-facing framing questions (Workspace-seat
+default, slices-only posture, all-Centers seat, role presets) — **do not
+finalize purchase-flow copy or SC-1a's final framing before the owner rules.**
 
 **What this is.** The console a **customer's org admin** uses to manage their
-Command Center subscription: see what modules they own, assign seats, watch AI
+Command Center subscription: see what **Centers and add-ons** they own (modules
+are internal atoms, never the customer frame — D23), assign seats, watch AI
 credit burn, and request changes. It is the customer-side complement of the
 **Operator Console** (`saas_multitenancy.md` §4.1a, `/operator`, MT-4) — the two
 share tables and must never share routes: the Operator Console is staff-only and

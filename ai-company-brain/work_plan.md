@@ -172,6 +172,7 @@ owning specs are the archive; this file owns ordering, gates and states only.
 |---|---|---|---|---|
 | WS-29 | **Multi-tenancy — turning CommandCenter into a product sold to other companies** | ◐ H1 scratch-done | **`specs/saas_multitenancy.md`** (architecture; §11 tickets) · ⭐ **`specs/saas_multitenancy_handover.md`** (H1→H8 runbook — hand THIS to the executing agent) · `specs/saas_multitenancy_implementation.md` (shapes) · board record 2026-08-09 in the parent spec | **Phase 0 ✅** (MT-0a · 0b · 0c-1 · 0d, pending review) · **H1 ✅ scratch-verified 2026-08-09**: 157/158/159 applied + idempotent re-run on a full-ladder (00→156) replica with a backfill-exercising seed; every runbook verify query correct; baseline 213 passed / 2 skipped. **Prod apply = owner's merge of PR #404**; verify by the three `- 15N_*.sql ... ok` deploy-log lines, never job conclusion. · MT-1: 1a schema ✅ (identity cutover = H6, open) · 1b generated ✅ · 1c seam + ratchets ✅ — **561 call sites across 138 files unconverted = H2, the long pole** · 1e wrapper ✅ (~58 key sites unconverted = H5) · 1i ✅ (two-org DB fixture owed) · **MT-2/MT-3/MT-4 owner inputs ALL ANSWERED 2026-08-09 (D18 refined by D19 → §8)** — SKU table of record in §2.4, credit unit in §3.2, seat rules in §4.2, Razorpay-only (D19.5), India-only residency (D19.6); spec detailing may start on all three, and the customer console is WS-30 (`specs/subscription_console.md`) · 🔴 MT-0c-2 parked (D16; §6 first blockquote) · §5.1 cutover trigger **ADOPTED 2026-08-09**: ≥8 customers, or deploy overhead > ~1 day/month, or the first version-skew incident — owner checks monthly. **Next: owner merges #404 → H1 GATE passes → dispatch H2.** (2026-08-09) |
 
+| — | **Future modules roadmap** (KB · Marketing · Support · dashboards-colour · Builder/Workflows slicing rule) *(named 2026-08-09, D21)* | 🔴 not dispatchable | `specs/future_modules_roadmap.md` | No WS rows until each earns a §1-contract spec; Dashboards colour lands in WS-15's acceptance; the Builder/Workflows visibility-tier-at-creation rule binds reviews now (D12). |
 | WS-30 | **Subscription Console — customer-facing billing surface** *(minted 2026-08-09)* | 🔴 MT-2 first | **`specs/subscription_console.md`** | Manage-only at launch (D19.4): modules panel · credit monitor · seat writes under D19.3's hard cap · change-request flow (fulfilment 🔴 OWNER-GATE during silo phase). Sequencing: MT-2 tables → SC-1 → SC-2/SC-3 → SC-4 with MT-4. Every business input is answered (D19); the blocker is MT-2's substrate, then writing MT-2/MT-3's seven-point ticket contracts. (2026-08-09) |
 
 ### Apps
@@ -190,7 +191,7 @@ owning specs are the archive; this file owns ordering, gates and states only.
 
 ---
 
-## 3. Decisions recorded (D1–D14: 2026-07-31→08-04 · D15/D16: 2026-08-08 · D17–D20: 2026-08-09)
+## 3. Decisions recorded (D1–D14: 2026-07-31→08-04 · D15/D16: 2026-08-08 · D17–D21: 2026-08-09)
 
 Resolutions for the cross-doc conflicts the audit surfaced. D1–D8, **D13**, **D14**,
 **D16** and **D17** are **proposed defaults, adopted unless the owner objects**
@@ -199,6 +200,24 @@ calls, taken and dated. ⚠️ Two entries below are superseded and kept as reco
 **D11** (re-taken by D15) and **D10 part 1's planning premise** (re-scoped by
 D15/D16) — read their banners before citing either.
 
+- **D21 — The future module roster is named.** *(owner-directed 2026-08-09;
+  roadmap `agent-drafted, owner may amend`.)* Five directions beyond the D19
+  catalog, recorded in **`specs/future_modules_roadmap.md`** so future specs
+  start from what exists: **Knowledge Base** (graph-based org memory surface —
+  new; builds on Mem0/D17, the OFF-by-design Graphiti, notes, acb_graph) ·
+  **Marketing** (social + sites + ads insights — new; the Center exists, the
+  module does not) · **Customer Support & Success** (tickets + customer pages +
+  AI resolution — new; declares a real dependency on Knowledge Base) ·
+  **Department Dashboards** (⚠️ NOT new — this is WS-15's mandate; the owner's
+  statement adds scope colour: per-department *configurable* dashboards and
+  *multiple* leadership rollups — carry into WS-15 acceptance) · **Builder +
+  Workflows as cross-department substrate** (⚠️ NOT new — the slicing IS the D12
+  doctrine; the one addition is a standing review rule: Builder apps and workflow
+  definitions declare a visibility tier at creation). SKU posture: future
+  modules default ₹300 a-la-carte, tier placement decided at spec time (D20
+  stays stable). Sequencing: nothing here precedes WS-29/WS-30 or in-flight
+  apps; expected order Dashboards → KB → Support → Marketing. Nothing in the
+  roadmap is dispatchable until it earns an owning spec per §1 and a WS row.
 - **D20 — Plan tiers: four bundles beside the a-la-carte list.** *(owner-directed
   2026-08-09 — "bundle modules into three to four plan tiers"; the specific
   packaging is `agent-proposed, owner may overrule`.)* Tiers are **per-user

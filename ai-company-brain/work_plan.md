@@ -142,7 +142,7 @@ owning specs are the archive; this file owns ordering, gates and states only.
 | WS-5 | **CI gates real** (BO-17/BO-18) | 🟡 Docs | checklist §F · board record 2026-08-09 | Audited 2026-08-01 → NO-GO (§F has zero testable done-whens). ~~"main has no branch protection"~~ **struck 2026-08-09** — protection was ENABLED 2026-08-03 (exceptions row 1); the row had never been swept. Deploy still lints with non-blocking `ruff check .`. Ready slice: **BO-17a main-guard** (`correctness` on push-to-main, deliberately NOT in `needs:`) — AGENT-SAFE. 🔴 GitHub *settings* changes (required checks, `needs:` wiring, `skip_tests` removal). BO-18 → WS-2. (2026-08-01 · corrected 2026-08-09) |
 | WS-6 | **Observability wiring + attribution** (BO-5 + D1) | 🟡 partial | `observability_e2.md` §7 · board record 2026-08-09 | WS-6a + WS-6c BUILT 2026-08-02, pending review — attribution reaches **logs + Redis only, nothing durable**. WS-6b/6d/6e **HELD NO-GO**: no mechanism carries run identity across the HTTP hop to `/v1` (contextvars don't cross it; `agent_run` rows are written at run boundary); do not dispatch until §7 names one. 🔴 WS-6f–i activation flips (§6). (2026-08-02) |
 | WS-7 | **Memory activation + search** (BO-21 → BO-22) | 🔴 | checklist §C + `llm_caching_memory.md` | 🔴 OWNER-GATE `MEM0_ENABLED` / `GRAPHITI_ENABLED` prod flips (§6; cost + latent findings, `agent_platform_hardening` Part 5). `acb_search` (BO-22) after. ⚠️ WS-29 coda: Mem0 tenant binding is decided — **D17, conninfo option** — and the flip should land only with MT-1c's binding in place. |
-| WS-24 | **Colleague onboarding readiness** *(minted 2026-08-04)* | 🔴 2 gates + 1 decision | `specs/colleague_onboarding.md` · board record 2026-08-09 | Every AGENT-SAFE item BUILT + MERGED + DEPLOYED (N1–N8; G4 closed 2026-08-04). ~~G3 backups~~ **closed**: BO-23 timer verified scheduled 2026-08-07, restore rehearsed 2026-08-05. Remaining: **G1** Caddy identity-header strip (§6 WS-24 (a)) · **G2** `GATEWAY_INTERNAL_TOKEN` split from `LITELLM_MASTER_KEY` (§6 WS-24 (b); rotation is a redeploy and delivery works again — see WS-25) · **N5** owner decision: do the nine unscoped `routes/notes` modules block colleague #1? ~~ports-open claim~~ closed 2026-08-05 (§6 identity item 2). ⚠️ D14 coda: `data:org:read` now has a consumer path (WS-27d) — re-verify the capability matrix before member #2. (2026-08-05 · corrected 2026-08-09) |
+| WS-24 | **Colleague onboarding readiness** *(minted 2026-08-04)* | 🔴 2 gates + 1 decision | `specs/colleague_onboarding.md` · board record 2026-08-09 | Every AGENT-SAFE item BUILT + MERGED + DEPLOYED (N1–N8; G4 closed 2026-08-04). ~~G3 backups~~ **closed**: BO-23 timer verified scheduled 2026-08-07, restore rehearsed 2026-08-05. Remaining: **G1** Caddy identity-header strip (§6 WS-24 (a)) · **G2** `GATEWAY_INTERNAL_TOKEN` split from `LITELLM_MASTER_KEY` (§6 WS-24 (b); rotation is a redeploy and delivery works again — see WS-25) · ~~**N5** owner decision~~ **N5 ANSWERED 2026-08-10 (D25.5): NOT a blocker for colleague #1; the D12 grant-table treatment on the nine `routes/notes` modules is owed before colleague #2 or any external member** ~~ports-open claim~~ closed 2026-08-05 (§6 identity item 2). ⚠️ D14 coda: `data:org:read` now has a consumer path (WS-27d) — re-verify the capability matrix before member #2. (2026-08-05 · corrected 2026-08-09) |
 | WS-25 | **Deploy delivery path** *(minted 2026-08-05)* | 🟡 recovered — cause unverified | `specs/deploy_delivery_path.md` · board record 2026-08-09 | ~~🔴 BROKEN~~ **re-measured 2026-08-09**: deploys landing since 2026-08-06 (migs 144/145 applied on prod); six green runs on **2026-08-07 UTC** alone, the last = #400's log-verified deploy `31217978773` (2026-08-08 IST — `crm_app.md`'s dating; `c1eba71f` fixed the apply script git-resetting itself mid-read — the "six deploys reported success while shipping nothing" hole). Tip run (`b09093a8`, docs-only) failed **health-verify** ×3 rounds 21:21→22:16 UTC 2026-08-07 — box at `affe0647`, one docs-only commit behind, cause unresolved; re-measure before quoting either state. Still real: **D1** extract the 435-line `DEPLOY_SCRIPT` from `deploy.yml` env (two-stage bootstrap) · SHA-in-`/health` (highest-leverage verify fix) · failure visibility. ⚠️ D15 re-scope: delivery becomes placement-parameterised (`saas_multitenancy.md` §5.1 condition 3) — one pipeline, N targets, never per-customer scripts. 🔴 all execution owner-gated. (2026-08-09) |
 
 ### Platform
@@ -151,9 +151,9 @@ owning specs are the archive; this file owns ordering, gates and states only.
 |---|---|---|---|---|
 | WS-8 | **Agent architecture A0→C** | 🟡 | `agent_architecture.md` §12.2 (WS-8a…n) · board record 2026-08-09 | A0 `approve_all` half done 2026-07-26. ⚠️ **Read §12.1 before dispatching**: ~60% of Phases A+B exists as complete-but-unwired substrate (`manifest.py`, `declarative.py` — documented, tested, zero production callers); an uninformed implementer rebuilds it. **WS-8c** = the MAF-side MCP injection silent no-op (D7), AGENT-SAFE. WS-14 does **not** wait on Phase A (D3 amendment). (2026-08-03) |
 | WS-9 | **Memory tiers 3b/3c/4** | 🟡 Docs | `memory_architecture.md` §9 · board record 2026-08-09 | 3a′ substrate shipped (migs 136–139). **Ownership settled 2026-08-09: the 3a′ remainder (`subject:` compartments) is WS-10's S1; this row owns 3b/3c/4 only.** Audited NO-GO — §9 carries acceptance for 3a′ alone. Ready when specced: **3c-0** correction PATCH slice (AGENT-SAFE; shape in the record). Not owner-gated. ⚠️ never run `tests/unit/` as a directory here — `test_memory_integration.py` hangs. (2026-08-02) |
-| WS-10 | **Multiplayer remainder** — S1 `subject:` compartments · floor re-decision · backfill | 🟡 S1 | `docs/multiplayer/memory-clearance.md` §7/§7.1 · board record 2026-08-09 | Steer shipped; two verification/repair rounds closed 2026-08-02. The work: **S1 `subject:` compartments** (AGENT-SAFE once §7.1 accepted). 🔴 floor-control re-decision (§6 — an agent must refuse that part by name) · 🔴 `prefs`/`user` backfill **APPLY** (§6; classifier + dry-run report are AGENT-SAFE and the whole mandate). ⚠️ WS-29 coda: `org:global` scope is deployment-global today and must become tenant-scoped — coordinate S1 with MT-1c/D17; do not mint a sixth scope shape (`saas_multitenancy.md` §1.9). (2026-08-02) |
+| WS-10 | **Multiplayer remainder** — S1 `subject:` compartments · floor re-decision · backfill | 🟡 S1 | `docs/multiplayer/memory-clearance.md` §7/§7.1 · board record 2026-08-09 | Steer shipped; two verification/repair rounds closed 2026-08-02. The work: **S1 `subject:` compartments** (AGENT-SAFE once §7.1 accepted). ~~🔴 floor-control re-decision~~ **ANSWERED 2026-08-10 (D25.4): CUT — steer suffices; the floor-mode machinery is retired unbuilt** · 🔴 `prefs`/`user` backfill **APPLY** (§6; classifier + dry-run report are AGENT-SAFE and the whole mandate). ⚠️ WS-29 coda: `org:global` scope is deployment-global today and must become tenant-scoped — coordinate S1 with MT-1c/D17; do not mint a sixth scope shape (`saas_multitenancy.md` §1.9). (2026-08-02) |
 | WS-11 | **Workflows Slice 3** (gallery, fan-in/join, loops) | 🟢 | `workflows_app.md` §8.3 · board record 2026-08-09 | Slice 3 = **8.3a** gallery · **8.3b** fan-in/join · **8.3c** loops (owner-approved, D10.2; R1 governs the node *catalog*, not control flow). 8.3b/8.3c each must **invert a pinned test** (`test_fan_in_rejected_v1`, `test_cycle_rejected`) — leave either standing and the ticket closes green having built nothing. Template *content* is an owner input; the report-digest template belongs to WS-15. Slice 4 after BO-20b2 → c → (d, e) + 🔴 `INGESTION_CONSUMER` flip; its sandbox-dependent parts follow MT-0c-2's trigger (D16) — the old bare "BO-7" dependency is restated. (2026-08-03) |
-| WS-12 | **Framework uplift** | 🟡 Ph4 | `multi_agent_orchestration.md` **Phase 4 only** (D6) · board record 2026-08-09 | Ph0 shipped; Ph1 struck; Ph2–3 superseded (D6); Ph5 struck. One SDK major remains: `github-copilot-sdk 0.1.32 → 1.0.2` (`openai 2.38.0` already in-tree). **0 dispatchable PRs**: 🔴 Phase 4.0 target choice + 🔴 Phase 4.6 recorded human soak (§6). Phase 4.1 throwaway-venv resolution evidence is AGENT-SAFE and must never mutate `.venv`/`uv.lock`. (2026-08-03) |
+| WS-12 | **Framework uplift** | 🟡 Ph4 | `multi_agent_orchestration.md` **Phase 4 only** (D6) · board record 2026-08-09 | Ph0 shipped; Ph1 struck; Ph2–3 superseded (D6); Ph5 struck. One SDK major remains: `github-copilot-sdk 0.1.32 → 1.0.2` (`openai 2.38.0` already in-tree). ~~🔴 Phase 4.0 target choice~~ **ANSWERED 2026-08-10 (D25.6): minimal bump** — 4.1 evidence then the 4.x slices are dispatchable; 🔴 Phase 4.6 recorded human soak stands (§6). Phase 4.1 throwaway-venv resolution evidence is AGENT-SAFE and must never mutate `.venv`/`uv.lock`. (2026-08-10) |
 | WS-23 | **Skills registry + per-agent toggles** *(added 2026-08-01)* | 🟡 built | `specs/skills_registry.md` · board record 2026-08-09 | S1–S4 shipped pending review: registry + measured catalog, per-agent toggles (intersection-only, core floor non-toggleable), scope-out proposal, index diet (full surface 19,259 → 12,644 tokens). The ≤2k target is **unreachable by trimming** — §7.5 progressive disclosure is designed, costed, and deliberately unbuilt. 🔴 `SKILLS_FAIL_CLOSED`, `SKILLS_INDEX_ONLY` flips (§6). (2026-08-01) |
 
 ### Product — Centers (`department_centers.md` §3 · combined board record 2026-08-09 there)
@@ -161,7 +161,7 @@ owning specs are the archive; this file owns ordering, gates and states only.
 | WS | Workstream | State | Owning spec · record | Gates · next (verified) |
 |---|---|---|---|---|
 | WS-13 | **Centers B — groups become real** | 🟡 review | `department_centers.md` Phase B | Groups admin UI + six-group seed built 2026-08-01, **pending owner review**; `center.*` feature vocabulary shipped 2026-08-03. ~~People directory read view open~~ **closed by WS-28b** (2026-08-06). ~~"nav renders with no access filter" / "catalog-read was rejected"~~ **inverted by merged #389** (`747b65af` — the catalog, not a code mirror, decides). Residue: the owner review itself. (swept 2026-08-09) |
-| WS-14 | **Centers C — scoping deepens** | 🟢 with ⚠️ | `department_centers.md` §3 C1–C4 | D12 answered the blocker (a project belongs to a team by an explicit `group:<slug>` grant). **C1 tasks team slice: ⚠️ RE-AUDIT before dispatch (flag added 2026-08-09)** — WS-27e's owner-directed one-store revision (D-PM-6: `pm_tasks` is THE task table; WS-27h retires `gtd_items`) may moot D13's `gtd_*`-local grant table; whichever way it lands, the subject grammar must not fork (§4, D13). C2 shared mailboxes: doc-action only, ownerless in fact (§4) · C3 team-instanced agents: narrow, columns intentionally unread · 🔴 C4 per-Center approvals decision (§6). (2026-08-03 · flag 2026-08-09) |
+| WS-14 | **Centers C — scoping deepens** | 🟢 with ⚠️ | `department_centers.md` §3 C1–C4 | D12 answered the blocker (a project belongs to a team by an explicit `group:<slug>` grant). **C1 tasks team slice: ⚠️ RE-AUDIT before dispatch (flag added 2026-08-09)** — WS-27e's owner-directed one-store revision (D-PM-6: `pm_tasks` is THE task table; WS-27h retires `gtd_items`) may moot D13's `gtd_*`-local grant table; whichever way it lands, the subject grammar must not fork (§4, D13). C2 shared mailboxes: doc-action only, ownerless in fact (§4) · C3 team-instanced agents: narrow, columns intentionally unread · ~~🔴 C4~~ **C4 ANSWERED 2026-08-10 (D25.3): Center leads approve, fallback org admins — the "add the requesting-Center column" ticket is dispatchable**. (2026-08-10) |
 | WS-14a | **Tenancy TV-1 — the three `org_group` slug-only joins** *(minted 2026-08-03)* | ✅ absorbed | `specs/tenancy_and_visibility.md` §2 → **WS-29 MT-1i** | **Absorbed by WS-29 as MT-1i (2026-08-08) — do not dispatch from this row.** Code shipped on the WS-29 branch. Severity re-framed: under D15 the three joins **leak across tenants**, not merely misbehave within one. The open criterion — the two-org DB-backed fixture run `passed`, never `skipped` (§2 done-when 3) — travels with MT-1i. (2026-08-09) |
 | WS-15 | **Centers D — dashboards + Company Center** | 🟡 WS-13 review | `department_centers.md` Phase D | Center dashboards, personal dashboard, weekly digest workflows (double as `workflows_app.md` G1 metric), D4 org-memory fix. Blocked only on WS-13's owner review now that WS-28b shipped the directory. ⚠️ D21/D22/D23 scope colour recorded in Phase D: configurable per-department, multiple leadership rollups, Center-grouped standalone app; Dashboards is a package-included base slice, never an upsell line (D23). |
 | WS-16 | **Centers E — AI budgets** | 🟡 WS-6 | `department_centers.md` Phase E | Per-member caps at the LLM choke points (D2, D8). The chain is real: needs WS-6's **durable** attribution, which is HELD at WS-6b — do not dispatch expecting Redis-only records to suffice. ⚠️ MT-3's credit gate (D18 pricing) lands on the same choke points — design once, serve both. |
@@ -182,16 +182,16 @@ owning specs are the archive; this file owns ordering, gates and states only.
 | WS-17 | **Email completion** | 🔴 owner calls | `email_app_master_plan.md` | Three owner decisions pending (kill-list batch, schedule-send go, contact-merge identity) + user-parked semantic search. §7 Tier-1 hardening is 🟢 AGENT-SAFE and gates the second account — ⚠️ a second mailbox connected 2026-08-05; re-verify §7's single-account premise at dispatch. |
 | WS-18 | **Tasks Phase 3** (Weekly Review, Waiting-For, ~~Horizons~~) | 🟡 partial | `task_manager_app.md` · board record 2026-08-09 | Waiting-For surfacing BUILT 2026-08-02, pending review (explicit-promise semantics settled). 🔴 Weekly Review NO-GO until the `gtd_reviews.summary` JSON contract + per-movement done-whens are written. Horizons: **WS-21 owns it** (§4) — DO-NOT-DISPATCH stands. 🔴 nudge **sending** (shared gate, §6) · ClickUp write-back waits on BO-1. EVAL-LOCKED: `propose()`/`propose_with_llm()`. ⚠️ WS-27e one-store: coordinate any `gtd_*` schema work with WS-27h's retirement plan. (2026-08-02) |
 | WS-19 | **Notes + meeting bot** | 🟡 | `note_taker_app.md` + `meeting_bot_platform_plan.md` | Bot Phase 2 error codes 🟢 AGENT-SAFE. 🔴 bot Google account (§6) · share-to-chat needs a Slack integration that does not exist (scope call). ⚠️ D15 flag (2026-08-09): the bot plan's **ELv2 compliance argument reads "not a SaaS we resell"** (`meeting_bot_platform_plan.md`, Attendee is ELv2 not OSS) — re-evaluate before any external tenant uses bot features. |
-| WS-20 | **WhatsApp activation + remainder** | 🟡 owner | `whatsapp_message_manager.md` §11 | Search UI 🟢 AGENT-SAFE; OCR needs a vision-tier decision; Odoo/Zoho-bound items bind to `crm` `entity_ref` per WS-26d instead — the linker (nothing writes `wa_contacts.entity_ref`) is owed by whoever takes them. 🔴 Meta env/app review · `WHATSAPP_ENRICHMENT` flip (§6). (2026-08-01) |
+| WS-20 | **WhatsApp activation + remainder** | 🟡 owner | `whatsapp_message_manager.md` §11 | Search UI 🟢 AGENT-SAFE; ~~OCR needs a vision-tier decision~~ **OCR tier ANSWERED 2026-08-10 (D25.6): fast/cheap vision via LiteLLM — the OCR ticket is dispatchable**; Odoo/Zoho-bound items bind to `crm` `entity_ref` per WS-26d instead — the linker (nothing writes `wa_contacts.entity_ref`) is owed by whoever takes them. 🔴 Meta env/app review · `WHATSAPP_ENRICHMENT` flip (§6). (2026-08-01) |
 | WS-21 | **Calendar F2/F3** | 🟡 partial | `calendar_focus_os.md` §9 (+§5) + `calendar_timeboxing.md` §13 · board record 2026-08-09 | P3 roll-over + ideal-week + packer-breaks all shipped (struck from scope 2026-08-03). `gtd_time_blocks` is **four slices S1–S4** — the "one non-breaking PR" claim was false (17 TS files + 3 gateway modules + skill + agent). Focus Shield is AGENT-SAFE (needs a design, not a credential). Owns Horizons (§4) — DO-NOT-DISPATCH, no acceptance. 🔴 external-sync OAuth credentials (§6) · shared nudge-send gate (§6). Never `pytest tests/unit -k calendar` (collection hangs). (2026-08-03) |
-| WS-22 | **draw.io** | 🟡 owner | `drawio_integration.md` | All 13 tickets open, nothing built; best acceptance structure in the corpus; needs an owner and re-verified anchors (~6 weeks stale). ST-DRW-02 is a decision gate. |
+| WS-22 | **draw.io** | ⏸ PARKED | `drawio_integration.md` | **PARKED BY OWNER 2026-08-10 (D25.7)** — no agent time until a real need (proposal diagrams, KB visuals) pulls it back. The spec's acceptance structure keeps; anchors need re-verification at un-park. |
 | WS-26 | **CRM app — native CRM + Zoho retirement** *(minted 2026-08-05)* | ✅ a–g · D5 PR open | `specs/crm_app.md` · board record 2026-08-09 | a + b + c + d (read · email · write) **merged + deployed** (d-write log-verified via deploy `31217978773`, 2026-08-08); f + g **merged to main** (#391, #397 — the old "on branch, NOT run against prod" wording is struck; f's stage repair still needs its 🔴 `?apply=true` run, §6 WS-26 (d)). **D5 d-autolead BUILT, PR #403 OPEN** — owner: merge, then 🔴 `CRM_AUTO_LEAD` flip (§6 WS-26 (b); clamp-anchor design, never reset-to-now). Zoho sync loop **ENABLED by the owner 2026-08-06** (§6 WS-26 (a)) — every "ships OFF / never run" sentence about it is struck. Next: **h** stage entry-requirements + rot badges (after f2) · **i** merge/bulk/CSV/saved-views — spec-thin, audit-narrow first · **e** cutover + retirement 🔴 (§6 WS-26 (c)). ⚠️ D15 coda: built single-Zoho-tenant by design; per-org credentials (migration 158) + per-org sync flags arrive with MT-1/MT-2, and D-CRM-3's org-wide read becomes org-scoped **by RLS**, not by hand-written predicates. (2026-08-08) |
 | WS-27 | **Projects app — native PM + ClickUp retirement** *(minted 2026-08-05)* | ✅ a–n merged · c/g/h gated | `specs/project_management_app.md` · board record 2026-08-09 | a b d e f i j k l m n **merged to main** (#390, #393, #394, #398 + fixes — the board's "BUILT on branch" wording is struck). Open defect: **§11.12** — WS-27j's `notifications.deliverable` probes `project_clause` instead of `core.task_visibility_clause` (found by n's tests). 🟡 **c** two-way sync waits on WS-1's BO-1a + BO-1b; 🔴 push enable (§6 WS-27 (b)) · 🔴 **g** cutover + retirement incl. the root-`AGENTS.md` constraint-8 amendment — ships in the g PR, never before (§6 WS-27 (c)) · **h** `gtd_items` retirement after e; the data move is 🔴. Remaining letters: recurring, dependency UI, calendar view, search. ⚠️ granting `feature:projects`/`data:org:read` is §6 WS-27 (d) — D14's zero-consumer measurement is retired by this row. (2026-08-07) |
 | WS-28 | **People Center — directory, org chart, assignment seam** *(minted 2026-08-06)* | ✅ a+b+b-write | `specs/people_center_app.md` · board record 2026-08-09 | a (key shape, mig 148 + quarantine table) · b (directory + person page, mig 149, five-place registration) · b-write (create/edit UI restored; found three ways mig 148 had broken the write routes) — built 2026-08-06/07; **closes WS-13's directory item**. 🟢 c org chart · d capability search (**ranking EVAL-LOCKED**) · e Projects seams; 🔴 f seats/roles writes (§6 WS-24 (d) analogue). ⚠️ `schema.generated.sql` regeneration is **due**: stale since ~migration 113, and 148 reached prod ~2026-08-07 (after the #384 cast fix). (2026-08-07) |
 
 ---
 
-## 3. Decisions recorded (D1–D14: 2026-07-31→08-04 · D15/D16: 2026-08-08 · D17–D21: 2026-08-09 · D22/D23: 2026-08-10)
+## 3. Decisions recorded (D1–D14: 2026-07-31→08-04 · D15/D16: 2026-08-08 · D17–D21: 2026-08-09 · D22–D25: 2026-08-10)
 
 Resolutions for the cross-doc conflicts the audit surfaced. D1–D8, **D13**, **D14**,
 **D16** and **D17** are **proposed defaults, adopted unless the owner objects**
@@ -200,6 +200,50 @@ calls, taken and dated. ⚠️ Two entries below are superseded and kept as reco
 **D11** (re-taken by D15) and **D10 part 1's planning premise** (re-scoped by
 D15/D16) — read their banners before citing either.
 
+- **D25 — Seven standing gates answered in one round (owner, 2026-08-10).**
+  1. **Identity/IdP (MT-1a):** homegrown auth through the silo phase; an
+     external IdP (WorkOS/Clerk/Keycloak) becomes a precondition of the §5.1
+     pooled cutover **or** the first enterprise SSO ask, whichever first.
+  2. **Version skew (§1.4b): meaning B only** — one codebase, one schema,
+     always latest; orgs differ by per-org feature flags + release channel
+     (`org_feature_flag`). A/C/D are not supported and no spec may assume them.
+  3. **WS-14 C4 approvals routing:** **Center leads approve their Center's
+     actions** — approver role on the `org_group`, proposals carry a
+     requesting-Center column, fallback to org admins when unset. The
+     "answer Q2, then add a column" ticket is now dispatchable.
+  4. **WS-10 floor control: CUT.** Steer suffices; the five floor modes, turn
+     queue, observer lane, handoff-with-note and HITL floor-holder routing are
+     retired unbuilt. WS-10's remaining mandate is the S1 `subject:` slice
+     (+ the still-gated prefs/user backfill APPLY).
+  5. **WS-24 N5:** the nine unscoped `routes/notes` modules do **not** block
+     colleague #1; the D12 grant-table treatment is owed **before colleague #2
+     or any external member**. · **D14(ii) closed:** `manager` keeping the
+     `/admin` read surface is acceptable — department privacy protects work
+     content, not the org chart.
+  6. **WS-12 Phase 4.0: minimal bump** (SDK 0.1.32 → 1.0.2, breaking-fixes
+     only). Phase 4.1 evidence → 4.x now dispatchable; the 4.6 human soak
+     remains owner-gated. · **WS-20 OCR: fast/cheap vision tier** via LiteLLM;
+     per-call escalation later; Meta env/app review remains its own gate.
+  7. **WS-22 draw.io: ⏸ PARKED by owner** (officially; re-enters when a real
+     need pulls it). · **Guest access to Centers: deferred** until the first
+     real guest; the standing rule holds — no external sharing before that
+     design exists.
+- **D24 — The customer-framing round: §8 item 5 CLOSED (owner, 2026-08-10).**
+  1. **The ₹600 headline stays** — Core is the advertised base; the agent's
+     "Workspace ₹1,200 default" framing was considered and REJECTED.
+  2. **Slices-only Centers stay ₹300**, pitched as "a full team workspace"
+     (projects, knowledge, dashboards for that department), never as a filter.
+  3. **An all-Centers seat exists: ₹1,800/user** — every Center package, NO
+     add-ons (Builder/Workflows stack on top). The multi-hat relief.
+  4. **Complete reprices ₹3,600 → ₹3,000** — the all-Centers seat made ₹3,600
+     dominated (full stack = ₹3,200); Complete = Core + all Centers + both
+     add-ons at ₹3,000, keeping D20.5's all-GA + price-protection promise at
+     the new number. Ladder of record: 600 · 1,200 · 1,800 · 2,400
+     (Core + all-Centers) · 3,000 (Complete).
+  5. **Role presets ship in SC-2's launch scope** ("Sales rep", "Field staff",
+     "Founder" generate the users × Centers grid). Also standing: a
+     typical-month credit anchor on the pricing page; internal vocabulary
+     (atoms/slices/modules) never appears customer-facing.
 - **D23 — Pricing is CENTER-SHAPED: Center packages are the sales object,
   modules stay the billing atoms.** *(owner-directed 2026-08-10, four knobs
   answered in session; supersedes D19's module-first customer framing and
@@ -234,12 +278,13 @@ D15/D16) — read their banners before citing either.
      `plan_catalog`, and seat `source` gains `'center'`.
   4. **Bundles.** Team and Business (D20) are retired — Center packages replace
      them. **Complete recast** *(price agent-proposed, owner may overrule)*:
-     all Centers + both add-ons + Core, **₹3,600/user/month** (~32% off the
-     ₹5,300 full-stack value), keeping D20.5 verbatim — every GA Center and
+     all Centers + both add-ons + Core, ~~₹3,600~~ **₹3,000/user/month (amended
+     by D24.4 — the all-Centers seat made ₹3,600 dominated)**, keeping D20.5
+     verbatim — every GA Center and
      add-on, always, price-protected per contract term, wildcard row.
-  5. **Worked seats:** shop-floor member ₹600 · desk worker (Core + Personal)
-     ₹1,200 · sales rep (+ Sales) ₹1,800 · power user (+ Workflows + Builder)
-     ₹2,600 · everything ₹3,600.
+  5. **Worked seats (as amended by D24):** shop-floor member ₹600 · desk worker
+     (Core + Personal) ₹1,200 · sales rep (+ Sales) ₹1,800 · Core + all-Centers
+     seat ₹2,400 · everything (Complete) ₹3,000.
 - **D22 — The Center roster of record, and four architecture calls.**
   *(owner statement + question round, 2026-08-10; owning spec
   `department_centers.md` §5.)* The full shape: **Personal Center** (per-user
@@ -881,18 +926,17 @@ outbound message from a real account. Drafting and queueing are AGENT-SAFE;
 **sending is not**, and neither row may flip it independently ·
 creating the bot Google account + real-meeting joins · Meta app review ·
 real-account email sends / live-DB one-offs (`merge_ghost_messages --apply`) ·
-**the WS-10 floor-control re-decision** — whether the five `chat_session.floor_mode`s,
-the turn queue, the observer lane, handoff-with-a-note and HITL floor-holder
-routing still earn their place now that steer ships (`docs/multiplayer/README.md`
-§8 Phase 2: *"pending the owner's re-decision"*). No acceptance exists for it and
-none should be written until the owner decides; an agent asked to "finish
-multiplayer Phase 2" must refuse **this** part by name and may build only the
-S1 `subject:` slice ·
-**the per-Center approvals-routing decision (WS-14 C4)** — `org_access_control.md:405`
-Q2 (*"who is asked? … per-module approvers is a Phase 2 question"*) is a policy call
-about who may approve an outward write or a spend on another Center's behalf. Same
-shape as the floor-control gate below: **no acceptance exists for it and none should
-be written until the owner decides.** Registered 2026-08-03 because it read as a UI
+~~**the WS-10 floor-control re-decision**~~ — **DECIDED 2026-08-10 (D25.4): CUT.**
+The five `chat_session.floor_mode`s, turn queue, observer lane,
+handoff-with-a-note and HITL floor-holder routing are retired unbuilt; steer
+suffices. This gate is closed — an agent asked to "finish multiplayer Phase 2"
+builds the S1 `subject:` slice and treats the floor-mode design as
+historical ·
+~~**the per-Center approvals-routing decision (WS-14 C4)**~~ — **DECIDED
+2026-08-10 (D25.3): Center leads approve their Center's actions** (approver role
+on the `org_group`; proposals carry a requesting-Center column; fallback to org
+admins when unset). Acceptance may now be written; the ticket is "add the
+column, written by every proposer" per the measurement below. Registered 2026-08-03 because it read as a UI
 filter and was not one — `pending_actions` (`infra/postgres/66_pending_actions.sql:13-38`)
 carries no requesting-member, group or Center **column**, so the follow-on is "answer Q2,
 then add a column at the next free migration number". *(Corrected 2026-08-03: the

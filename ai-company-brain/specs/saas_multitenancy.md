@@ -4,7 +4,7 @@
 **Supersedes:** `tenancy_and_visibility.md` §1 and §6 · **Verified against code:** 2026-08-08,
 working tree at `b09093a` · **Updated 2026-08-10 (D23 pass): pricing is
 CENTER-SHAPED — §2.4b is the customer-facing shape of record** (Center packages
-₹600/₹300 + add-ons Builder ₹500/Workflows ₹300 + Complete ₹3,600; modules demoted
+₹600/₹300 + all-Centers seat ₹1,800 + add-ons Builder ₹500/Workflows ₹300 + Complete ₹3,000 (D24); modules demoted
 to internal billing atoms; D20's Team/Business retired; ₹10 credit model and D19.3
 seat rules carry over; §8 item 5 holds the OPEN customer-framing questions) ·
 *Prior update 2026-08-09* (consolidation pass): §8 items 1–2 first answered (D18,
@@ -1018,9 +1018,14 @@ statement in `work_plan.md` §3 D23; the schema/enforcement consequences here:
   optional per user; Sales = CRM incl. CPQ; Marketing; Finance; Support),
   slices-only ₹300 (R&D, Operations, People pre-HR) — each package bundling the
   Center's modules **plus its slice of Projects, Knowledge Base and Dashboards**
-  · **org-wide add-ons** Builder ₹500, Workflows ₹300 · Company Center free for
-  leadership · **Complete ₹3,600/user** = everything, keeping rule 5 below
-  (all-GA, price-protected, wildcard).
+  · **org-wide add-ons** Builder ₹500, Workflows ₹300 · **all-Centers seat
+  ₹1,800/user (D24.3)** = every Center package, no add-ons — the multi-hat
+  relief · Company Center free for
+  leadership · **Complete ₹3,000/user (D24.4; was ₹3,600)** = Core + all
+  Centers + both add-ons, keeping rule 5 below
+  (all-GA, price-protected, wildcard). **D24 customer-framing calls:** the ₹600
+  Core headline stays; slices-only Centers pitch as "team workspace"; role
+  presets in SC-2. Ladder of record: 600 · 1,200 · 1,800 · 2,400 · 3,000.
 - **Schema (MT-2):** `center_package(center_slug TEXT PRIMARY KEY, module_slugs
   TEXT[], price_per_seat_month NUMERIC, currency TEXT DEFAULT 'INR')` beside
   `plan_catalog`; `user_module_seat.source` gains `'center'`. **Assigning a
@@ -1048,7 +1053,7 @@ record only — never seed `plan_catalog` from it.)*
 | Core | 600 | the base | **Survives** — the mandatory member layer (D19.3) |
 | ~~Team~~ | ~~1,200~~ | ~~Core + Projects + Meetings + Workflows~~ | **RETIRED, never seeded** |
 | ~~Business~~ | ~~1,800~~ | ~~Team + CRM + Email + WhatsApp~~ | **RETIRED, never seeded** |
-| Complete | ~~2,400~~ → **3,600** | everything (wildcard) | **Survives recast** — all Centers + both add-ons + Core (§2.4b) |
+| Complete | ~~2,400~~ → ~~3,600~~ → **3,000 (D24.4)** | everything (wildcard) | **Survives recast** — all Centers + both add-ons + Core (§2.4b) |
 
 Rules (as amended by D23):
 
@@ -1067,8 +1072,8 @@ Rules (as amended by D23):
 3. **Included monthly credits per package/bundle: deliberately NOT decided.**
    Launch default is none — credits sell separately (§3.2). Bundling credits is
    an owner knob left open; do not invent values for it.
-4. The ladder of record is D23.5's worked seats (600 · 1,200 · 1,800 · 2,600 ·
-   3,600) — driven by package count, not tier steps.
+4. The ladder of record is D23.5's worked seats as amended by D24 (600 · 1,200 ·
+   1,800 · 2,400 · 3,000) — driven by package count, not tier steps.
 5. **Complete is defined contractually (owner, 2026-08-09 review round):
    Complete = every generally-available module, always.** New modules (the D21
    roster as they ship) appear for Complete subscribers automatically; the list
@@ -1301,7 +1306,7 @@ shared module is never billed twice). **The three rules are decided (owner,
    inviting a member bills a Core seat, removing them frees it, and there is no such
    thing as a zero-seat member. The invoice reads (D23): members × ₹600 Core +
    Σ(Center package seats × ₹600/₹300) + add-on seats (Builder ₹500, Workflows
-   ₹300) + Complete seats × ₹3,600.
+   ₹300) + all-Centers seats × ₹1,800 + Complete seats × ₹3,000 (D24).
 3. **Mid-cycle changes use the processor's standard prorated behaviour** (a day-20
    assignment bills ~⅓ of the month; unassignment credits the remainder). "Peak
    assigned seats in the period" was considered and rejected as punitive for brief
@@ -1528,20 +1533,16 @@ Recorded so they are not re-proposed, and so the reasoning survives:
    promise India-only at launch.** All customer data on India-region infrastructure;
    a second residency tier is a deliberate priced-placement decision later (D15's
    placement model). Constrains hosting choices to India regions from customer #1.
-5. **Customer-facing framing of D23 pricing — OPEN (raised 2026-08-10, agent
-   customer-lens review; owner has NOT decided).** Four proposed fixes, none
-   adopted: **(a)** market the ₹1,200 "Workspace seat" (Core + Personal) as the
-   default and the ₹600 Core-only seat as the "Lite" exception — same prices,
-   inverted framing, avoids the hidden-fee read of a ₹600 sticker that excludes
-   email; **(b)** decide the slices-only-Center posture against the
-   "charging for permissions" objection (₹300 for a Center with no unique apps);
-   **(c)** an "all-Centers seat" (~₹1,800, Centers only, add-ons separate) as
-   multi-hat relief between ₹1,800 single-Center seats and Complete ₹3,600;
-   **(d)** role presets at checkout ("Sales rep", "Field staff", "Founder") so
-   the users × Centers grid is generated, not hand-filled. Also owed on the
-   pricing page: a typical-month credit anchor and zero internal vocabulary
-   (slices/modules/atoms). **Do not build customer-facing pricing copy or the
-   SC-1a purchase flow's final framing until the owner rules on (a)–(d).**
+5. ~~**Customer-facing framing of D23 pricing.**~~ **ANSWERED 2026-08-10 (owner,
+   D24 — all four ruled):** **(a)** the ₹600 Core headline STAYS (the
+   "Workspace ₹1,200 default" reframing was rejected); **(b)** slices-only
+   Centers stay ₹300, pitched as "a full team workspace", never a filter;
+   **(c)** the **all-Centers seat exists at ₹1,800** (every Center, no add-ons)
+   — and it forced **Complete down to ₹3,000** (D24.4, arithmetic in the D24
+   record); **(d)** role presets ship in SC-2's launch scope. Still standing
+   from the review: the typical-month credit anchor on the pricing page, and
+   zero internal vocabulary customer-facing. Purchase-flow copy is now
+   buildable.
 6. ~~**Whether first customers get the pooled tier or hand-run silos.**~~
    **ANSWERED 2026-08-08** by the owner's seat-count input (10–50 users per customer):
    **silo customers 1–5, build Phase 1 in parallel, cut over at 8–12.** The reasoning,

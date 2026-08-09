@@ -4,12 +4,13 @@
 2026-08-09 (repo-wide grep: zero hits for `module_catalog`, `org_module_entitlement`,
 `user_module_seat`, `ModuleGate`, `entitlement_mask` — MT-2's substrate does not
 exist yet, so nothing here is dispatchable before MT-2's tables land) ·
-**Owner:** WS-30 (this spec) · **Decisions:** **D23** (work_plan.md §3,
+**Owner:** WS-30 (this spec) · **Decisions:** **D23 + D24** (work_plan.md §3,
 2026-08-10 — Center packages are the governing pricing shape, carrying D19's
-credit/seat rules); none may be re-litigated here. ⚠️ `saas_multitenancy.md` §8
-item 5 holds four OPEN customer-facing framing questions (Workspace-seat
-default, slices-only posture, all-Centers seat, role presets) — **do not
-finalize purchase-flow copy or SC-1a's final framing before the owner rules.**
+credit/seat rules; D24 closed every customer-framing question: ₹600 headline
+stays, all-Centers seat ₹1,800, Complete ₹3,000, role presets in SC-2). None may
+be re-litigated here; purchase-flow copy is buildable. Standing page rules: a
+typical-month credit anchor, and no internal vocabulary (atoms/slices/modules)
+customer-facing.
 
 **What this is.** The console a **customer's org admin** uses to manage their
 Command Center subscription: see what **Centers and add-ons** they own (modules
@@ -70,7 +71,13 @@ console).
 Centers grid** (D23): assigning a Center package is ONE act creating the billing
 seat + `org_group` membership + module entitlements + D12 slice grants
 (`source='center'`), and unassignment reverses all four. Add-ons are a per-user
-column (`source='alacarte'`); the Complete bundle expands as `source='plan'`.
+column (`source='alacarte'`); the **all-Centers seat (₹1,800, D24.3)** and the
+Complete bundle (₹3,000) expand as `source='plan'`. **Role presets are launch
+scope (D24.5):** named presets ("Sales rep", "Field staff", "Founder") generate
+a member's row in the grid, adjustable after — the first-purchase flow is
+"assign roles", never "fill a matrix". **Done when (presets):** applying a
+preset writes exactly its packages/add-ons in the one-assignment act;
+re-applying is idempotent; adjusting after never re-applies the preset.
 **Hard cap:** assignment beyond
 `seats_purchased` returns a 409 with a buy-more payload — never auto-upgrades.
 Core seats are **not managed here**: membership is the Core seat (D19.3), so the

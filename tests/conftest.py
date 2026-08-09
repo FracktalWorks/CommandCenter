@@ -1,7 +1,19 @@
 """Shared fixtures for the tests/ tree (CI runs `pytest tests/unit/`)."""
 from __future__ import annotations
 
+import os
+
 import pytest
+
+# Snapshot DATABASE_URL before any test module imports. `import litellm`
+# (reached through acb_llm by several test modules) calls load_dotenv() at
+# import time, which copies a dev machine's .env DATABASE_URL into os.environ
+# mid-collection — and the DB-gated tests in test_tenant_coverage.py would then
+# run against whatever that value names instead of skipping. Those gates must
+# answer to the environment pytest was LAUNCHED with, not to whichever module
+# happened to import first. conftest.py imports before every test module, so
+# this line runs ahead of any litellm import.
+os.environ.setdefault("_ACB_DATABASE_URL_AT_LAUNCH", os.environ.get("DATABASE_URL", ""))
 
 
 @pytest.fixture(autouse=True)

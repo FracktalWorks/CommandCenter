@@ -132,6 +132,14 @@ def test_generated_files_are_outside_the_replayed_sequence() -> None:
 # Database-level — skips without Postgres. NEVER report a skip as a pass.
 # ==========================================================================
 def _db_ready() -> bool:
+    # The launch-time snapshot (tests/conftest.py), not the live variable:
+    # litellm's import-time load_dotenv() can plant a dev .env's DATABASE_URL
+    # into os.environ mid-collection, which would point these tests at an
+    # unmigrated local database instead of skipping. Fall back to the live
+    # variable only when the snapshot was never taken (running outside pytest).
+    snap = os.environ.get("_ACB_DATABASE_URL_AT_LAUNCH")
+    if snap is not None:
+        return bool(snap)
     return bool(os.environ.get("DATABASE_URL"))
 
 

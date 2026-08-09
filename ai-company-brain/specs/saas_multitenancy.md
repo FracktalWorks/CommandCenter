@@ -451,7 +451,9 @@ single piece of work in this document, and §1.5 lists what it does *not* cover.
 > left standing, because the corrected version is what makes the recommendation honest.
 
 **What no longer holds — the infrastructure-cost argument.** A 25-user company on three
-modules at ~₹500/user/module is ~₹37,500/month (≈$450). A VPS able to run a full stack is
+add-on modules at D19 pricing (₹600 Core + 3 × ₹300 = ₹1,500/user) is ₹37,500/month
+(≈$450) *(the pre-D18 draft figure of ~₹500/user/module happened to produce the same
+total)*. A VPS able to run a full stack is
 ~$30–40/month — roughly **8% of revenue**. That is affordable. The original claim that
 *"the SMB tier does not exist under this model"* was priced for a customer a quarter this
 size and **is withdrawn.** At this ACV, dedicated infrastructure is not what breaks.
@@ -973,22 +975,24 @@ module must be **absent-but-legible**, never broken:
    sync still polls every five minutes and **still costs you provider spend for a customer
    who is not paying for it.**
 
-**Mapping today's features to sellable modules** (`FEATURES` at
-`packages/acb_auth/acb_auth/permissions.py:73`, `feature_catalog` seeded by migrations
-130 and 140):
+**Mapping today's features to sellable modules — THE SKU LIST OF RECORD (owner,
+2026-08-09, D19; supersedes both this table's previous shape and D18's list where
+they disagreed).** (`FEATURES` at `packages/acb_auth/acb_auth/permissions.py:73`,
+`feature_catalog` seeded by migrations 130 and 140):
 
-| Module | Features it unlocks | Note |
-|---|---|---|
-| `core` | chat, memory, dashboard, artifacts, settings | Always on |
-| `email` | email + `center.marketing` mail surfaces | Heaviest ingestion cost |
-| `whatsapp` | whatsapp | Per-number provider cost — price accordingly |
-| `crm` | crm, `center.sales` | |
-| `projects` | projects, tasks | |
-| `people` | people, `center.people` | |
-| `finance` | `center.finance` | Not yet built — the catalog row can exist before the module does |
-| `notes` | notes, meeting bot | Per-minute STT cost |
-| `automation` | workflows, approvals, observability | |
-| `builder` | build.apps, build.agents | Highest-risk module; gate hardest |
+| Module | ₹/user/mo | Features it unlocks | Note |
+|---|---|---|---|
+| `core` | **600** (every member) | chat, memory, dashboard, artifacts, settings, **tasks (personal lens)**, **calendar**, **people directory** (`people`, `center.people`), **approvals**, **observability** | Always on; every org member consumes a Core seat (D19.3). ⚠️ no `calendar` feature slug exists yet — mint one with MT-2 |
+| `email` | 300 | email + `center.marketing` mail surfaces | Heaviest ingestion cost; embeddings absorbed in price (D19.2) |
+| `whatsapp` | 300 | whatsapp | Per-number provider cost **absorbed in price** (D19.2) |
+| `crm` | 300 | crm, `center.sales` | |
+| `projects` | 300 | projects, `center.*` project surfaces | **One task store with Core** (D-PM-6): this SKU gates portfolios, project boards, dependencies, ClickUp import/sync, org-wide views — personal task management stays Core |
+| `finance` | 300 | `center.finance` | Not yet built — the catalog row can exist before the module does |
+| `meetings` *(was `notes`)* | 300 | notes, meeting bot | Per-minute STT **metered as credits** (D19.2). Customer-facing name: **Meetings** |
+| `workflows` *(was `automation`)* | 300 | workflows | Customer-facing name: **Workflows**. Approvals + observability moved to `core` (D19.1) |
+| `builder` | **500** | build.apps, build.agents | Highest-risk module; gate hardest; priced above the standard add-on for that reason |
+
+*(The former standalone `people` module row folded into `core` — D19.1.)*
 
 **Adding a module must stay a data change.** A new SKU is a `module_catalog` row plus a
 `feature_catalog` row plus a `FEATURES` tuple entry — never a code path per customer. Note
@@ -1090,6 +1094,26 @@ provider tokens:
 
 This is what OpenRouter, Cursor and Vercel's AI Gateway all do, and for these reasons.
 
+**The credit unit, defined (owner, 2026-08-09, D19.2 — this resolves the "flat ₹10
+vs cost × 2" ambiguity D18 carried):**
+
+- A **credit is the ₹10 purchase and display unit**. It is what customers buy and
+  what the balance shows. "AI action" is marketing shorthand for the credit — it is
+  **not** a flat per-call or per-gesture price.
+- Each model call draws credits **fractionally** at **provider cost × 2** through
+  the rate card: a cheap classification call might burn 0.2 credits, a long agent
+  run 15. The ~50% gross margin is a property of the multiplier, not of any flat
+  price.
+- The rate card is **denominated natively in INR** — hand-maintained per-model
+  prices, updated when providers reprice. There is **no FX machinery**;
+  `usage_event.provider_cost_usd` stays as a bookkeeping column, but nothing on the
+  billing path converts currency at runtime.
+- **Scope of metering:** LLM calls and **per-minute STT** (the Meetings module)
+  draw from the same credit balance via the same rate card. **Embeddings and
+  WhatsApp per-number provider fees are NOT metered** — they are absorbed into the
+  ₹300 module prices (they are roughly flat per-seat costs; metering background
+  ingest the customer never asked for reads badly).
+
 ### 3.3 Failure semantics — decide now, not at 2 a.m.
 
 **Soft-block with a grace overdraft.** At zero balance, LLM calls return a specific 402
@@ -1176,9 +1200,20 @@ trial → active → past_due (grace: warnings, still working)
 
 Per module: `quantity = COUNT(*) FROM user_module_seat WHERE module_slug = ?`, pushed to
 the processor as the subscription item quantity on assignment/unassignment, with
-proration. For mid-cycle changes, charge on **peak assigned seats in the period** or the
-processor's standard prorated behaviour — **pick one and state it in the contract.**
-Ambiguity here is the single most common source of B2B billing disputes.
+proration. **The three rules are decided (owner, 2026-08-09, D19.3):**
+
+1. **Hard cap.** Assigning beyond `seats_purchased` is **blocked** with a buy-more
+   prompt — a purchase is always an explicit act, never a side effect of assignment.
+   `seats_purchased` is therefore a real cap, not advisory.
+2. **Every member consumes a Core seat.** Membership IS the Core billing event:
+   inviting a member bills a Core seat, removing them frees it, and there is no such
+   thing as a zero-seat member. The invoice reads: members × ₹600 + per-module
+   assignments × add-on price.
+3. **Mid-cycle changes use the processor's standard prorated behaviour** (a day-20
+   assignment bills ~⅓ of the month; unassignment credits the remainder). "Peak
+   assigned seats in the period" was considered and rejected as punitive for brief
+   experiments. State the proration rule in the customer contract verbatim —
+   ambiguity here is the single most common source of B2B billing disputes.
 
 ### 4.3 Payment processor — and the India question
 
@@ -1376,18 +1411,28 @@ Recorded so they are not re-proposed, and so the reasoning survives:
    Workflows). Selected from agent-drafted options anchored on Zoho India pricing; the
    owner expects to revise against the first five silo customers (§11.2 item 3 said
    drafting-now-revising-later is correct). §2.4's module split becomes the SKU list's
-   starting shape — MT-2's entitlement catalog seeds from this.
+   starting shape — MT-2's entitlement catalog seeds from this. **⚠️ Refined 2026-08-09
+   by D19.1:** where this answer and §2.4's old table disagreed (Tasks, People,
+   Calendar, Builder/Finance pricing, Meetings/Workflows naming), **D19's reconciled
+   table in §2.4 is the SKU list of record.**
 2. ~~**Credit-to-rupee conversion and target gross margin on AI.**~~ **ANSWERED
    2026-08-09 (owner, D18): the credit unit is a ₹10 "AI action" at ~50% gross margin**
    — the `model_rate_card` prices each model call at provider cost × 2, denominated in
    credits, so buyers see actions, never tokens (§3's rate-card rule unchanged: sell
-   credits via the rate card, never provider tokens). Per-action costing lands with
-   MT-3's rate-card build.
-3. **Payment provider split.** Razorpay-for-India + Stripe-for-international is the
-   recommendation (§4.3); a single provider is simpler and worth considering if the initial
-   market is one geography.
-4. **Data residency commitments.** Whether to promise India-only data at launch. This is
-   cheap to promise now (one region) and expensive to add later.
+   credits via the rate card, never provider tokens). **⚠️ Refined 2026-08-09 by
+   D19.2 — the flat-₹10-vs-cost×2 ambiguity is resolved:** the credit is the ₹10
+   purchase/display unit, calls draw fractionally at cost × 2, the rate card is
+   INR-native, STT is metered, embeddings/WhatsApp fees are absorbed. Full statement
+   in §3.2.
+3. ~~**Payment provider split.**~~ **ANSWERED 2026-08-09 (owner, D19.5): Razorpay
+   only at launch**, behind the `payment_provider` seam (§4.3's seam design stands);
+   Stripe lands as a second implementation of the same seam when the first
+   international customer appears. This was the last input blocking MT-4 — **MT-4 is
+   now unblocked for spec detailing.**
+4. ~~**Data residency commitments.**~~ **ANSWERED 2026-08-09 (owner, D19.6):
+   promise India-only at launch.** All customer data on India-region infrastructure;
+   a second residency tier is a deliberate priced-placement decision later (D15's
+   placement model). Constrains hosting choices to India regions from customer #1.
 5. ~~**Whether first customers get the pooled tier or hand-run silos.**~~
    **ANSWERED 2026-08-08** by the owner's seat-count input (10–50 users per customer):
    **silo customers 1–5, build Phase 1 in parallel, cut over at 8–12.** The reasoning,

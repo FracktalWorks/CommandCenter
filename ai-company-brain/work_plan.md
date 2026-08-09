@@ -170,7 +170,9 @@ owning specs are the archive; this file owns ordering, gates and states only.
 
 | WS | Workstream | State | Owning spec · record | Gates · next (verified) |
 |---|---|---|---|---|
-| WS-29 | **Multi-tenancy — turning CommandCenter into a product sold to other companies** | ◐ H1 scratch-done | **`specs/saas_multitenancy.md`** (architecture; §11 tickets) · ⭐ **`specs/saas_multitenancy_handover.md`** (H1→H8 runbook — hand THIS to the executing agent) · `specs/saas_multitenancy_implementation.md` (shapes) · board record 2026-08-09 in the parent spec | **Phase 0 ✅** (MT-0a · 0b · 0c-1 · 0d, pending review) · **H1 ✅ scratch-verified 2026-08-09**: 157/158/159 applied + idempotent re-run on a full-ladder (00→156) replica with a backfill-exercising seed; every runbook verify query correct; baseline 213 passed / 2 skipped. **Prod apply = owner's merge of PR #404**; verify by the three `- 15N_*.sql ... ok` deploy-log lines, never job conclusion. · MT-1: 1a schema ✅ (identity cutover = H6, open) · 1b generated ✅ · 1c seam + ratchets ✅ — **561 call sites across 138 files unconverted = H2, the long pole** · 1e wrapper ✅ (~58 key sites unconverted = H5) · 1i ✅ (two-org DB fixture owed) · **MT-2/MT-3 owner inputs ANSWERED 2026-08-09 (D18 → §8)** — spec detailing may start; MT-4 still needs the payment-provider split (§8 item 3) · 🔴 MT-0c-2 parked (D16; §6 first blockquote) · §5.1 cutover trigger **ADOPTED 2026-08-09**: ≥8 customers, or deploy overhead > ~1 day/month, or the first version-skew incident — owner checks monthly. **Next: owner merges #404 → H1 GATE passes → dispatch H2.** (2026-08-09) |
+| WS-29 | **Multi-tenancy — turning CommandCenter into a product sold to other companies** | ◐ H1 scratch-done | **`specs/saas_multitenancy.md`** (architecture; §11 tickets) · ⭐ **`specs/saas_multitenancy_handover.md`** (H1→H8 runbook — hand THIS to the executing agent) · `specs/saas_multitenancy_implementation.md` (shapes) · board record 2026-08-09 in the parent spec | **Phase 0 ✅** (MT-0a · 0b · 0c-1 · 0d, pending review) · **H1 ✅ scratch-verified 2026-08-09**: 157/158/159 applied + idempotent re-run on a full-ladder (00→156) replica with a backfill-exercising seed; every runbook verify query correct; baseline 213 passed / 2 skipped. **Prod apply = owner's merge of PR #404**; verify by the three `- 15N_*.sql ... ok` deploy-log lines, never job conclusion. · MT-1: 1a schema ✅ (identity cutover = H6, open) · 1b generated ✅ · 1c seam + ratchets ✅ — **561 call sites across 138 files unconverted = H2, the long pole** · 1e wrapper ✅ (~58 key sites unconverted = H5) · 1i ✅ (two-org DB fixture owed) · **MT-2/MT-3/MT-4 owner inputs ALL ANSWERED 2026-08-09 (D18 refined by D19 → §8)** — SKU table of record in §2.4, credit unit in §3.2, seat rules in §4.2, Razorpay-only (D19.5), India-only residency (D19.6); spec detailing may start on all three, and the customer console is WS-30 (`specs/subscription_console.md`) · 🔴 MT-0c-2 parked (D16; §6 first blockquote) · §5.1 cutover trigger **ADOPTED 2026-08-09**: ≥8 customers, or deploy overhead > ~1 day/month, or the first version-skew incident — owner checks monthly. **Next: owner merges #404 → H1 GATE passes → dispatch H2.** (2026-08-09) |
+
+| WS-30 | **Subscription Console — customer-facing billing surface** *(minted 2026-08-09)* | 🔴 MT-2 first | **`specs/subscription_console.md`** | Manage-only at launch (D19.4): modules panel · credit monitor · seat writes under D19.3's hard cap · change-request flow (fulfilment 🔴 OWNER-GATE during silo phase). Sequencing: MT-2 tables → SC-1 → SC-2/SC-3 → SC-4 with MT-4. Every business input is answered (D19); the blocker is MT-2's substrate, then writing MT-2/MT-3's seven-point ticket contracts. (2026-08-09) |
 
 ### Apps
 
@@ -188,7 +190,7 @@ owning specs are the archive; this file owns ordering, gates and states only.
 
 ---
 
-## 3. Decisions recorded (D1–D14: 2026-07-31→08-04 · D15/D16: 2026-08-08 · D17/D18: 2026-08-09)
+## 3. Decisions recorded (D1–D14: 2026-07-31→08-04 · D15/D16: 2026-08-08 · D17–D19: 2026-08-09)
 
 Resolutions for the cross-doc conflicts the audit surfaced. D1–D8, **D13**, **D14**,
 **D16** and **D17** are **proposed defaults, adopted unless the owner objects**
@@ -197,8 +199,49 @@ calls, taken and dated. ⚠️ Two entries below are superseded and kept as reco
 **D11** (re-taken by D15) and **D10 part 1's planning premise** (re-scoped by
 D15/D16) — read their banners before citing either.
 
+- **D19 — Twelve owner calls taken 2026-08-09** *(the subscription/pricing
+  clarification round, answered question-by-question in session; supersedes D18's
+  SKU list and §2.4's module table wherever they disagreed — cite D19 for the SKU
+  model, D18 for the parallel-plus-ratchet and board-format calls).*
+  1. **SKU list of record.** **Core ₹600/user/month** = chat, memory, dashboard,
+     artifacts, settings, **tasks (personal lens)**, **calendar**, **people
+     directory**, **approvals**, **observability**. **Add-ons ₹300/user/month
+     each**: CRM, Projects, Email, Meetings (was `notes`), WhatsApp, Workflows
+     (was `automation`), **Finance**. **Builder ₹500/user/month.** Customer-facing
+     SKU names are Meetings and Workflows; internal slugs may stay. Consequence
+     for the one-store merge (D-PM-6/WS-27h): the Core/Projects boundary is drawn
+     on FEATURES over the single `pm_tasks` store — personal task management is
+     Core; portfolios, project boards, dependencies, ClickUp import/sync and
+     org-wide views are the paid Projects module. A `calendar` feature slug must
+     be minted (none exists today). The old paid `people` module row folds into
+     Core; approvals + observability leave the `automation` bundle for Core.
+  2. **The credit unit.** A **credit is the ₹10 purchase/display unit**; each
+     model call draws credits **fractionally** at provider cost × 2 via the rate
+     card (a cheap call ~0.2 credits, a large agent run ~15). Customers see a
+     credit balance, never tokens; "AI action" is marketing shorthand for the
+     credit, not a flat per-call price. **STT (Meetings) is metered as credits**
+     on the same rate card; **embeddings and WhatsApp per-number fees are
+     absorbed into module prices**. The rate card is **denominated natively in
+     INR** — hand-maintained per-model prices, no FX machinery.
+  3. **Seats.** **Hard cap**: assigning beyond `seats_purchased` is blocked with
+     a buy-more prompt — purchase is always an explicit act. **Every member
+     consumes a Core seat** (membership IS the Core billing event; no zero-seat
+     members). Mid-cycle changes use the **processor's standard proration**.
+  4. **The customer subscription console ships manage-only first.** Launch scope:
+     view modules/seats/credit balance and per-module burn, assign/unassign seats
+     within purchased caps, request module or seat changes (fulfilled manually
+     while invoicing is by hand, per §5's Phase-2 posture). Online
+     checkout/top-up arrives with MT-4. Owning spec:
+     `specs/subscription_console.md` (WS-30).
+  5. **Payments (§8 item 3 — closed): Razorpay only at launch**, behind the
+     `payment_provider` seam; Stripe lands as a second implementation of the same
+     seam when the first international customer appears.
+  6. **Data residency (§8 item 4 — closed): promise India-only at launch.** All
+     customer data on India-region infrastructure until a second residency tier
+     is deliberately priced.
 - **D18 — Three owner calls taken 2026-08-09** *(via the consolidation session's
-  question round; recorded here so none is re-litigated).*
+  question round; recorded here so none is re-litigated. ⚠️ Part 3's SKU list is
+  superseded by **D19** — cite D19 for module boundaries and prices).*
   1. **Priority of record: parallel + ratchet.** App workstreams continue at full
      speed alongside WS-29; the price is **R5** (§1) — tenant-ready by
      construction, enforced by the shipped ratchet tests, so H2's 561-site

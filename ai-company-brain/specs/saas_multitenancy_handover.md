@@ -423,10 +423,16 @@ Carried here so they are not lost in the parent spec:
   "trusted colleagues" threat model survives the silo phase; T2 becomes a precondition of
   the **§5.1 pooled cutover** (customer 8–12), not of Phase 0. **An agent must refuse to
   build it and say so.**
-- **MT-2 … MT-5** (entitlements, AI credits, billing). Blocked on owner inputs, not on
-  engineering: the SKU list and price points, the credit-to-rupee rate and target margin,
-  and the payment-provider split. §11's table names each. **Do not invent them** — the spec
-  contract forbids acceptance criteria an implementer cannot test.
+- **MT-2 … MT-5** (entitlements, AI credits, billing). ~~Blocked on owner inputs~~
+  **⚠️ STALE — every owner input is now ANSWERED** (D18 2026-08-09, refined and
+  completed by **D19** the same day: SKU list + prices in §2.4's table of record,
+  the credit unit + metering scope in §3.2, seat rules in §4.2, Razorpay-only
+  payments, India-only residency). What still blocks dispatch is **engineering
+  paperwork, not decisions**: the seven-point ticket contract (per-item done-whens
+  + verification commands) has not been written onto §2/§3/§4. An implementer
+  reading this section must NOT refuse MT-2/MT-3 on "missing owner inputs" — that
+  reason expired 2026-08-09. The customer-facing console is scoped separately in
+  `specs/subscription_console.md` (WS-30).
 
 ---
 

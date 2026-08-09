@@ -191,7 +191,7 @@ owning specs are the archive; this file owns ordering, gates and states only.
 
 ---
 
-## 3. Decisions recorded (D1–D14: 2026-07-31→08-04 · D15/D16: 2026-08-08 · D17–D21: 2026-08-09 · D22: 2026-08-10)
+## 3. Decisions recorded (D1–D14: 2026-07-31→08-04 · D15/D16: 2026-08-08 · D17–D21: 2026-08-09 · D22/D23: 2026-08-10)
 
 Resolutions for the cross-doc conflicts the audit surfaced. D1–D8, **D13**, **D14**,
 **D16** and **D17** are **proposed defaults, adopted unless the owner objects**
@@ -200,6 +200,46 @@ calls, taken and dated. ⚠️ Two entries below are superseded and kept as reco
 **D11** (re-taken by D15) and **D10 part 1's planning premise** (re-scoped by
 D15/D16) — read their banners before citing either.
 
+- **D23 — Pricing is CENTER-SHAPED: Center packages are the sales object,
+  modules stay the billing atoms.** *(owner-directed 2026-08-10, four knobs
+  answered in session; supersedes D19's module-first customer framing and
+  **D20's Team/Business tiers** — Complete survives, recast below. D19's credit
+  model (₹10 fractional unit), seat rules (hard cap · member = Core seat ·
+  processor proration) and Complete's price-protection promise (D20.5) all
+  carry over unchanged.)*
+  1. **Three layers.** **Core ₹600/member, mandatory** (basic AI chat — the
+     front door stays lit and burns credits — personal tasks, calendar, people
+     directory, personal dashboard, approvals, admin plane). **Center packages,
+     per user per Center**: each bundles the Center's own apps **plus that
+     Center's slice of the base cross-cutting set (Projects, Knowledge Base,
+     Dashboards)** — app-bearing Centers **₹600** (Personal = Email + WhatsApp +
+     Meetings, **optional per user, never mandatory**; Sales = CRM incl. CPQ;
+     Marketing; Finance; Support), slices-only Centers **₹300** (R&D,
+     Operations, People until its HR apps ship). **Org-wide add-ons, per user,
+     light up in all the user's Centers**: Builder (App + Agent, incl. custom
+     agents) **₹500** · Workflows **₹300** (deliberately an upsell — the
+     highest-leverage credit driver). **Company Center is free for leadership**
+     — a projection of data the org already bought.
+  2. **The unification that kills the admin complexity: one assignment act.**
+     Granting a user a Center package = the billing seat + the `org_group`
+     membership + the module entitlements + the D12 slice grants, one row;
+     unassignment reverses all of it. The console's seat surface becomes a
+     **users × Centers grid** (+ an add-ons column) — the customer's org chart
+     IS the invoice. WS-30's SC-2 inherits this shape.
+  3. **Union semantics.** A multi-Center user holds each shared module once
+     (never billed twice for a module) but pays per Center, because each
+     package buys a new *slice of team data*, not a re-purchase. Enforcement is
+     untouched: MT-2 modules at the seam + D12 grants; schema delta is one
+     `center_package(center_slug, module_slugs[], price)` catalog beside
+     `plan_catalog`, and seat `source` gains `'center'`.
+  4. **Bundles.** Team and Business (D20) are retired — Center packages replace
+     them. **Complete recast** *(price agent-proposed, owner may overrule)*:
+     all Centers + both add-ons + Core, **₹3,600/user/month** (~32% off the
+     ₹5,300 full-stack value), keeping D20.5 verbatim — every GA Center and
+     add-on, always, price-protected per contract term, wildcard row.
+  5. **Worked seats:** shop-floor member ₹600 · desk worker (Core + Personal)
+     ₹1,200 · sales rep (+ Sales) ₹1,800 · power user (+ Workflows + Builder)
+     ₹2,600 · everything ₹3,600.
 - **D22 — The Center roster of record, and four architecture calls.**
   *(owner statement + question round, 2026-08-10; owning spec
   `department_centers.md` §5.)* The full shape: **Personal Center** (per-user
@@ -241,7 +281,11 @@ D15/D16) — read their banners before citing either.
   stays stable). Sequencing: nothing here precedes WS-29/WS-30 or in-flight
   apps; expected order Dashboards → KB → Support → Marketing. Nothing in the
   roadmap is dispatchable until it earns an owning spec per §1 and a WS row.
-- **D20 — Plan tiers: four bundles beside the a-la-carte list.** *(owner-directed
+- **D20 — Plan tiers: four bundles beside the a-la-carte list.** *(⚠️ **Team and
+  Business SUPERSEDED by D23** (2026-08-10, Center packages); Complete survives
+  recast at ₹3,600 all-in — cite D23 for the pricing shape, this record for
+  Complete's all-GA + price-protection promise (part 5), which D23 keeps
+  verbatim. Original record: owner-directed
   2026-08-09 — "bundle modules into three to four plan tiers"; the specific
   packaging is `agent-proposed, owner may overrule`.)* Tiers are **per-user
   assignable plans** (Microsoft-365 style: a user holds one plan, a-la-carte

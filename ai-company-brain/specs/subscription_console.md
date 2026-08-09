@@ -37,10 +37,13 @@ console).
 ## 2. The surfaces (each is an acceptance unit)
 
 ### SC-1 — Read views *(after MT-2 tables + MT-3 ledger exist)*
-- **SC-1a Plans & modules panel.** The four D20 tiers rendered as the primary
-  purchase framing (per-user counts on each tier), with the a-la-carte
-  `module_catalog` rows beneath; each shows the org's entitlement state
-  (`active | trial(expiry) | locked`), price, and seats purchased vs assigned.
+- **SC-1a Centers & add-ons panel** *(re-shaped by D23, 2026-08-10)*. **Center
+  packages are the primary purchase framing** (per-user counts on each Center,
+  ₹600 app-bearing / ₹300 slices-only), with the org-wide add-ons (Builder,
+  Workflows) and the Complete bundle beside them; `module_catalog` rows are the
+  internal atoms and never the customer-facing frame. Each shows the org's
+  entitlement state (`active | trial(expiry) | locked`), price, and seats
+  purchased vs assigned.
   Locked modules render as upsell cards (the §2.4 rule 1 lever), never hidden.
   When a user's stacked a-la-carte seats cost more than the covering tier, the
   panel surfaces the swap as a savings prompt (§2.4a rule 2). **Done when:** a
@@ -58,9 +61,12 @@ console).
   path.
 
 ### SC-2 — Seat writes *(the D19.3 rules, verbatim)*
-`POST /billing/seats` assign/unassign — for both plan seats (a plan seat expands
-to its module seats with `source='plan'`, §2.4a rule 1) and a-la-carte module
-seats (`source='alacarte'`). **Hard cap:** assignment beyond
+`POST /billing/seats` assign/unassign — the primary surface is the **users ×
+Centers grid** (D23): assigning a Center package is ONE act creating the billing
+seat + `org_group` membership + module entitlements + D12 slice grants
+(`source='center'`), and unassignment reverses all four. Add-ons are a per-user
+column (`source='alacarte'`); the Complete bundle expands as `source='plan'`.
+**Hard cap:** assignment beyond
 `seats_purchased` returns a 409 with a buy-more payload — never auto-upgrades.
 Core seats are **not managed here**: membership is the Core seat (D19.3), so the
 member admin surface is the only place Core count changes. **Done when:** the

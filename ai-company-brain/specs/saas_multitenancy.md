@@ -994,7 +994,34 @@ they disagreed).** (`FEATURES` at `packages/acb_auth/acb_auth/permissions.py:73`
 
 *(The former standalone `people` module row folded into `core` — D19.1.)*
 
-### 2.4a Plan tiers — four bundles beside the a-la-carte list (D20, 2026-08-09)
+### 2.4b Center packages — the pricing shape of record (D23, 2026-08-10; supersedes 2.4a's Team/Business tiers)
+
+**The sales object is the Center; the module stays the billing atom.** Full
+statement in `work_plan.md` §3 D23; the schema/enforcement consequences here:
+
+- **Layers:** Core ₹600/member mandatory (basic AI chat, tasks, calendar,
+  directory, personal dashboard, approvals, admin plane) · **Center packages**
+  per user per Center — app-bearing ₹600 (Personal = Email+WhatsApp+Meetings,
+  optional per user; Sales = CRM incl. CPQ; Marketing; Finance; Support),
+  slices-only ₹300 (R&D, Operations, People pre-HR) — each package bundling the
+  Center's modules **plus its slice of Projects, Knowledge Base and Dashboards**
+  · **org-wide add-ons** Builder ₹500, Workflows ₹300 · Company Center free for
+  leadership · **Complete ₹3,600/user** = everything, keeping rule 5 below
+  (all-GA, price-protected, wildcard).
+- **Schema (MT-2):** `center_package(center_slug TEXT PRIMARY KEY, module_slugs
+  TEXT[], price_per_seat_month NUMERIC, currency TEXT DEFAULT 'INR')` beside
+  `plan_catalog`; `user_module_seat.source` gains `'center'`. **Assigning a
+  Center package is ONE act** that creates the billing seat, the `org_group`
+  membership, the module entitlements and the D12 slice grants — and
+  unassignment reverses all four. The entitlement seam (§2.3), degradation
+  contract (§2.4), 402-vs-403, hard cap and proration (§4.2) are all unchanged;
+  a user's module set is the **union** across their packages (never billed
+  twice for a module; billed per Center because each package is a new team-data
+  slice).
+- The tier machinery below (2.4a) survives only for `complete`; its Team and
+  Business rows are **retired, never seeded**.
+
+### 2.4a Plan tiers — ⚠️ Team/Business SUPERSEDED by 2.4b (D23); Complete survives recast (D20, 2026-08-09)
 
 The a-la-carte list above stays fully purchasable; **tiers are the packaged way to
 buy it** (owner-directed; packaging agent-proposed, owner may overrule — work_plan.md

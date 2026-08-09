@@ -1064,6 +1064,106 @@ decision, and none of them is what was asked for.
 
 ---
 
+### 9.1 The beyond-parity queue (minted 2026-08-09 from the Plane research, §11.19)
+
+Six tickets, in recommended build order. Each verdict traces to
+`plane_pm_research_2026-08.md` (P-numbers); ⚠️ **the AGPL wall in that doc's header binds
+every one of these** — shapes re-derived in our idiom, never translated. All of them inherit
+the standing protocol: hermetic tests against the fake, mutation-tested guards, a live
+Postgres run, and R1 (migration numbers resolved at build time — every number below is a
+description, not an assignment).
+
+**WS-27u — intake/triage: the front door.** 🟢 AGENT-SAFE *(P-1)*.
+A captured task is real from birth, parked out of sight until a human rules on it.
+Done when: (1) a migration adds a `pm_intake` join table (`task_id` unique, `status ∈
+pending|accepted|declined|duplicate|snoozed`, `snoozed_until`, `duplicate_of_task_id`,
+`source`, `source_ref`, `organization_id` per D-MT-3) and a `triage` value in the
+status-category vocabulary; (2) the **default list exclusion is one predicate in
+`core.py`** beside the visibility clause — tasks whose status category is `triage` appear
+in no board/list/calendar/timeline/search surface unless `include_triage` is passed, and
+the §11.16 parameter-coverage test is extended so no surface can drop it silently;
+(3) `POST /projects/intake` creates task+wrapper in one transaction; accept flips status
+in place (never copies), decline archives with the wrapper as provenance, duplicate sets
+`duplicate_of_task_id` and archives, snooze hides from the queue until `snoozed_until`;
+(4) all four actions write `pm_activities` rows and the wrapper survives them — provenance
+is permanent; (5) a triage rail in the UI lists pending items with the four actions;
+(6) visibility: the intake queue is scoped by the same project grants as the tasks it
+wraps — R5 applies. **Not in scope:** routing rules (auto-accept, agent screening) —
+those are `/workflows` nodes per D6, added when email capture (§6.5) lands.
+
+**WS-27v — watchers, and mentions that behave.** 🟢 AGENT-SAFE *(P-2, P-20 part)*.
+Done when: (1) migration adds `pm_task_watchers(task_id, watcher, organization_id)`,
+unique per pair; (2) commenting, editing, assigning, or being mentioned auto-subscribes
+(idempotent), and explicit watch/unwatch endpoints exist; (3) the notification audience
+becomes watchers ∪ assignees, still filtered by the recipient's actual visibility
+(`resolve_visibility_for` stays the gate — Plane's membership-only check is the
+counterexample, not the model); (4) **mention diffing**: editing a comment or description
+notifies only *newly added* mentions — proven by a hermetic test that edits a comment
+twice; (5) the actor of a change is never notified of it (existing rule, re-asserted over
+the new audience); (6) the unread endpoint returns `{total, mentions}` separately and the
+bell shows the mention count distinctly. **Not in scope:** notification snooze/archive.
+
+**WS-27w — read-path and history hardening.** 🟢 AGENT-SAFE *(P-3, P-5, P-6, P-7, P-21)*.
+A basket of small corrections, each independently shippable:
+(1) **archive guard** — archiving a task whose status category is not done/cancelled is
+422, with the category named in the message; (2) **activity meta rule** — `field_change`
+entries for FK-valued fields carry `{field, old_id, new_id, old_label, new_label}`, and a
+structural test over `record_activity` call sites enforces it; (3) **description-edit
+coalescing** — a same-actor consecutive description/comment-body edit updates the prior
+activity row's timestamp instead of appending; (4) **semantic sorts** — sorting by status
+orders by category rank then position, never alphabetically; every entry in `TASK_SORTS`
+ends with a deterministic `(created_at, id)` tiebreaker, asserted structurally; (5)
+**picker exclusions** — search accepts `exclude_relatives_of=<task_id>` (self, ancestors,
+descendants, already-related both directions) so pickers cannot offer what the write will
+422; write-time guards stay; (6) **human task IDs** — the per-root number every task
+already has renders on cards and panel with a copy-deep-link affordance.
+
+**WS-27x — the spreadsheet layout, and the shown-fields contract.** 🟢 AGENT-SAFE
+*(P-10, P-12)*. Two pieces, one ticket, because the column set IS the contract.
+Done when: (1) a per-view `shown_fields` list joins the saved-view config (`toConfig`/
+`fromConfig` round trip extended, tested); (2) every chip `TaskMeta` renders gates on it —
+`taskCard.ts` stays the single fact-derivation layer, this is the visibility layer on top;
+(3) a Table layout renders one row per task with columns = shown fields, inline editors
+per cell driving the existing `PATCH` path (status, assignee, dates, importance, custom
+fields), per-column header sort mapping to existing `TASK_SORTS`, sub-tasks expanding
+indented in-table; (4) a quick-add row sits at the bottom (shares WS-27y's machinery);
+(5) keyboard: arrows move the cell cursor, Enter edits, Esc cancels; (6) DESIGN_SYSTEM
+throughout — no raw colours, `Icon`/`Button`/`Input` primitives, theme suite green.
+
+**WS-27y — board and list interaction upgrades.** 🟢 AGENT-SAFE *(P-11, P-13, P-17, P-18)*.
+Done when: (1) **sub-grouping** — board accepts a second grouping axis rendered as
+swimlanes (group columns × sub-group rows), per-lane collapse persisted with the view,
+empty lanes hidden unless asked; (2) **group-context quick-add** — every list group,
+board column/lane, and calendar day offers an inline title-only add **pre-filled with
+that group's value** (status, assignee, date…), Enter submits and resets for the next;
+(3) **drop feedback** — dragging where a drop is disallowed overlays the target with the
+*reason*; after any drop or quick-add the moved card scrolls into view and flashes;
+(4) **keyboard cursor** — ArrowUp/Down moves an active-row cursor, Shift+Arrow extends
+the existing selection from it, Enter opens the panel; feeds `BulkBar` unchanged.
+
+**WS-27z — lifecycle policy: auto-archive and auto-close.** 🟡 *(P-4; the sweeper touches
+real data on a schedule — enable per project, default off)*.
+Done when: (1) migration adds `archive_after_months` and `close_after_months` (nullable
+INT, NULL=off) to root `pm_projects`, plus a `timezone` column (P-28) so "a month
+untouched" has a defensible midnight; (2) the sweeper is a **`/workflows` scheduled
+workflow** (D6 — never a PM-app cron) that archives closed-category tasks untouched
+beyond the window and closes stale open ones to the project's default closing status;
+(3) every automated change writes an activity row flagged `automation: true` and renders
+distinctly in the timeline; (4) tasks in `triage` (WS-27u) are exempt; (5) the manual
+archive guard (WS-27w item 1) ships first — this ticket depends on it.
+
+**Deferred small basket** *(no ticket yet — pull individually when adjacent code is
+touched)*: peek size escalation + Esc-returns-focus (P-14), Save/**Update view** dirty
+affordances (P-15), palette action registry + go-sequences (P-16), calendar week layout +
+per-day quick-add/overflow (P-19), filtered-list CSV export (P-26), delta-sync feed +
+satellite `updated_at` bump (P-27), `is_epic` flag + per-user view state + session
+`user_id` denorm (P-28 rest). Banked for their trigger events: sprints (P-23, when
+sprints are wanted), webhook-out checklist (P-24, when `/workflows` grows the node),
+email digest outbox (P-25, when PM emails). Owner-decided: docs = knowledge base
+(D-PM-13); public boards deferred (D-PM-14).
+
+---
+
 ## 10. Verification
 
 ⚠️ Never `uv run pytest tests/unit/` bare — whole-directory collection hangs on the

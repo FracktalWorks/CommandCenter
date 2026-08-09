@@ -3,8 +3,8 @@
 > **Product:** CommandCenter · **Concern:** second research appendix for the native
 > project-management app (WS-27), beside `paca_pm_research_2026-08.md` · **Created:**
 > 2026-08-09 · **Status:** 🟢 research complete — **reference-only, owns no work and no
-> status**; adaptation verdicts are annealed into `specs/project_management_app.md` §11.19,
-> which is the owning spec · **Owner:** vjvarada
+> status**; adaptation verdicts are annealed into `specs/project_management_app.md` §11.19 and
+> **minted as tickets WS-27u–z in its §9.1**, which is the owning spec · **Owner:** vjvarada
 >
 > **Research provenance (2026-08-09):**
 > - `makeplane/plane` @ `31853ab` (v1.4.1), shallow clone read at `/workspace/makeplane/plane`

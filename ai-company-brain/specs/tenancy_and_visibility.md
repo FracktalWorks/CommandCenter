@@ -1,6 +1,8 @@
 # Tenancy and visibility — who can see what
 
-**Status:** Architecture of record · owner-answered 2026-08-03 · **Date:** 2026-08-03 ·
+**Status:** Architecture of record for **visibility (§2–§5)**. ⚠️ **§1 and §6 (tenancy) were
+re-taken on 2026-08-08 — see [`saas_multitenancy.md`](saas_multitenancy.md) §1.** ·
+owner-answered 2026-08-03 · **Date:** 2026-08-03 ·
 **Verified against code:** 2026-08-03, **re-verified and corrected 2026-08-03** against
 `ws-14-doc-remediation` (parent `bebbd924`) · **Owner:** vjvarada
 
@@ -47,9 +49,44 @@ owner for "who can see what" (`work_plan.md` §4).
 
 ---
 
-## 1. DECISION — the tenant boundary is the deployment
+## 1. DECISION — the tenant boundary is the deployment ⚠️ **SUPERSEDED 2026-08-08**
 
-> ### `Tenant boundary = THE DEPLOYMENT.` *(owner-answered 2026-08-03)*
+> ### ⛔ **RE-TAKEN. Read `saas_multitenancy.md` §1 instead.** *(owner-requested 2026-08-08)*
+>
+> **The reason: the business model changed.** CommandCenter is being sold to external
+> customers, priced per module, per user, per month, plus metered AI. §1.4 of that
+> document shows that price point and one-VM-per-customer are arithmetically
+> incompatible, and §1.3 shows why the cost objection recorded in §1.2 below no longer
+> holds: because `packages/acb_common/acb_common/db.py` is a **single** engine and a
+> **single** `get_db()`, tenant scoping installs at one seam with Postgres RLS and
+> **zero existing queries change** — the "a `WHERE organization_id = ?` on 111 tables"
+> framing below was measured against an assumption, not against that seam.
+>
+> **The new decision:** *tenant = `organization_id`, enforced by Postgres RLS at the
+> connection seam; the deployment is a placement (region/tier), not a tenant boundary.*
+> A dedicated database or dedicated stack survives as a **priced enterprise tier**, which
+> is what §1.2's cost analysis below is now the pricing input for.
+>
+> **§6 of this document is superseded with it** — row-level tenancy, an org switcher and
+> multi-org users are now all in scope, per `saas_multitenancy.md` §1.5.
+>
+> **Everything else in this document survives unchanged and is still binding:** the
+> visibility ladder (§3), the project-grant decision (§4), and the per-surface gap table
+> (§5). Tenancy and visibility are different axes — tenancy is *which company*, visibility
+> is *who inside that company* — and `saas_multitenancy.md` §7.8 restates §3.2's
+> standing rule against a second scoping doctrine.
+>
+> ⚠️ **What un-mootedness costs.** §1.1 below concludes that leak sites 1–10 "cannot fire"
+> because there is one `organization` row. Under the new decision **that premise is gone**
+> and every one of them must be verified rather than assumed —
+> `saas_multitenancy.md` §6.4 and §6.5 carry that list, and §6.1/§6.2 add two hard
+> blockers (process-global credential injection; self-mutation writing to the shared
+> monorepo) that must be fixed **before a second tenant exists at all**.
+>
+> The text below is retained verbatim as the record of the decision that was taken on
+> 2026-08-03 and of why it was correct at the time. **Do not build against it.**
+
+> ### `Tenant boundary = THE DEPLOYMENT.` *(owner-answered 2026-08-03 · superseded 2026-08-08)*
 >
 > One deployment per tenant. If a second organization ever exists it gets its own
 > box, its own database, its own credential set. Row-level organization isolation
@@ -93,10 +130,10 @@ org B. Verified samples, so a reader can judge the class:
 | 3 | `routes/admin/members.py:170-178` | invite is `INSERT … ON CONFLICT (email) DO UPDATE SET organization_id = EXCLUDED.organization_id` — under two orgs this is an account-takeover primitive |
 | 4 | `gateway/rooms.py:201-211` | the `in_org` check is `SELECT 1 FROM app_user WHERE email = :email AND COALESCE(status, 'active') = 'active'` (SQL at `:205-208`) — no org filter. *(Corrected 2026-08-03: the old citation `:184-190` and its `status='active'` quote were both wrong — `:184-190` is the `group_slugs` comprehension plus the head of the `my_groups` query, and the real predicate is `COALESCE`-wrapped.)* |
 | 5 | `gateway/rooms.py:384-393` | `SESSION_VISIBLE_SQL`'s `org`-participant arm — an `EXISTS` on a `subject = 'org'` row `AND` an `EXISTS` on an active `app_user`, same shape, same absence. The adjacent `s.visibility = 'org'` arm at `:394-400` has it too. *(Corrected 2026-08-03 from `:346-356`, which is the tail of `resolve_room_access`'s return — `is_shared`, `members`, `visibility` — and not SQL at all.)* |
-| 6 | `acb_auth/access.py:338-340` | `_ORG_MEMBER_SQL` is `SELECT email FROM app_user WHERE status = 'active'` — the `org` subject expands to *every* active user on the box |
+| 6 | `acb_auth/access.py:338-340` | `_ORG_MEMBER_SQL` is `SELECT email FROM app_user WHERE status = 'active'` — the `org` subject expands to *every* active user on the box *[Anchor stale: measured 2026-08-08 at access.py:400 / access.py:522 — re-derive with grep; see saas_multitenancy.md §6.4.]* |
 | 7 | `infra/postgres/130_org_access_control.sql:180` | role seeding does `SELECT id INTO org_id FROM organization WHERE slug = 'default'` (same in `131:` and `133:`) |
 | 8 | `acb_auth/access.py:439-458` | `_BOOTSTRAP_OWNER_SQL` hardcodes `slug = 'default'` |
-| 9 | `acb_auth/access.py:460-464` | `_HAS_OWNER_SQL` is `SELECT 1 FROM user_role ur JOIN org_role r … r.slug='owner' LIMIT 1` — **no org filter**, so once *any* owner exists anywhere, `ensure_owner_bootstrap()` is a permanent no-op and a second org's users have no inviter |
+| 9 | `acb_auth/access.py:460-464` | `_HAS_OWNER_SQL` is `SELECT 1 FROM user_role ur JOIN org_role r … r.slug='owner' LIMIT 1` — **no org filter**, so once *any* owner exists anywhere, `ensure_owner_bootstrap()` is a permanent no-op and a second org's users have no inviter *[Anchor stale: measured 2026-08-08 at access.py:400 / access.py:522 — re-derive with grep; see saas_multitenancy.md §6.4.]* |
 | 10 | every app-data table | `gtd_items`, `email_*`, `meeting`, `apps`, `workflows`, `chat_session`, `agent_blob`, `mem` carry no org column at all — the bulk of the surface |
 
 Under one deployment per tenant, **sites 1, 2, 3, 4, 5, 6, 7, 8, 10 cannot fire** —
@@ -163,7 +200,9 @@ retiring that constraint.
 *within* an organization — `UNIQUE (organization_id, slug)`
 (`138_groups_and_session_participants.sql:49`) — so a slug-only join is a
 cross-organization match by construction. Under §1 there is one org today, so
-nothing leaks today. They are on this list for two reasons: they are three
+nothing leaks today. *[2026-08-09: premise retired by D15 — with a second
+organization these three joins leak across tenants, which is why WS-29 absorbed
+TV-1 as MT-1i. The done-whens below stand verbatim.]* They are on this list for two reasons: they are three
 one-line predicates now and an archaeology project later, and **two of the three
 sit inside the session-authority intersection**, which is the single most
 consequential access computation in the codebase (`groups_sessions_authority.md`
@@ -350,7 +389,9 @@ mistaken for an oversight):**
   DESC` (`crud.py:91`) with no owner predicate, and delete is `DELETE FROM workflows
   WHERE id = :id` (`:346`). Anyone holding `feature:workflows` sees and can delete
   every workflow. That is fine for an internal tool with one org; it is the first
-  thing that must change if a Center wants a private automation.
+  thing that must change if a Center wants a private automation. *[2026-08-09:
+  under D15/WS-29 this is now scheduled work, not an accepted posture — see
+  saas_multitenancy.md §2 (entitlements) and MT-1b.]*
 - **Memory `org:global`** — org-wide by definition.
 
 **A new surface must declare its tier.** This is the doctrine that stops each new
@@ -520,7 +561,20 @@ this conversion adds `group:` **only** and must leave `org` rejected.
 
 ---
 
-## 6. Explicitly out of scope
+## 6. Explicitly out of scope ⚠️ **SUPERSEDED 2026-08-08 — all four items are now IN scope**
+
+> ⛔ **Re-taken by `saas_multitenancy.md` §1** (owner-requested 2026-08-08), by exactly the
+> procedure the closing line of this section prescribes. Items 1–4 below are now queued
+> work, not prohibitions:
+>
+> | Was out of scope | Now |
+> |---|---|
+> | 1. Row-level multi-tenancy | **The mechanism.** `organization_id` + `FORCE ROW LEVEL SECURITY` on every table, bound at the `get_db()` seam with `SET LOCAL app.tenant_id` — `saas_multitenancy.md` §1.3 |
+> | 2. An org switcher | **Subdomain-resolved tenant**, bound to the authenticated session. Never a client-settable header — §1.5 |
+> | 3. Users belonging to multiple orgs | **Supported**, via a global `user_identity` + `org_membership` split; RLS is what makes it cheap — §1.5 |
+> | 4. Per-org credentials inside one deployment | **Required.** `provider_keys` becomes `(organization_id, provider)` — §6.3, and it is a *blocker*, not a nice-to-have |
+>
+> The text below is retained as the record of what was decided on 2026-08-03.
 
 Named so nobody builds them, and so a future audit does not re-file them as gaps:
 

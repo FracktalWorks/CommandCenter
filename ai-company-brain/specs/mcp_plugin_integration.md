@@ -1,7 +1,7 @@
 # MCP & Plugin Integration — Design Brainstorm
 
 > **Status:** Phase A SHIPPED · Phases B–C not started (was: Brainstorm / Design proposal)
-> **Date:** 2026-06-14
+> **Date:** 2026-06-14 · **Re-dated 2026-08-09:** Phase A shipped (D7) with the MAF-side injection gap ticketed as WS-8c (`agent_architecture.md` §12.2); Phases B/C remain research.
 > **Scope:** How Model Context Protocol (MCP) servers and Claude-style plugins
 > extend CommandCenter beyond the current REST API integration model.
 

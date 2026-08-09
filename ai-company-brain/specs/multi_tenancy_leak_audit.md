@@ -340,7 +340,7 @@ reason. `routes/projects/core.py` now:
 * deletes `load_visible_task`'s private copy of the two-armed predicate so the two cannot drift;
 * replaces the `unrestricted → "TRUE"` short-circuit with the tenant in both clause helpers.
 
-`infra/postgres/158_projects_tenancy.sql:63-79,322-338` carries all 17 `pm_*` columns to
+`infra/postgres/161_projects_tenancy.sql:63-79,322-338` carries all 17 `pm_*` columns to
 `NOT NULL`, with a `pm_organization_from_parent()` trigger (`:117`) so descendants inherit
 rather than each INSERT site remembering.
 
@@ -487,19 +487,72 @@ Consequences:
 
 1. `multi_tenancy.md` §1's table should read **3 scoped / 140 unscoped** at the moment it was
    written, not 6 / 137, and §1's list of "the six that are scoped" should drop the three CRM
-   entries. (With migration 158 applied the real figure becomes **20 scoped / 123 unscoped** —
+   entries. (With migration 161 applied the real figure becomes **20 scoped / 123 unscoped** —
    3 + the 17 `pm_*`. Both numbers should be restated together, or the correction will read as
    the retrofit's doing rather than as a miscount that predated it.)
-2. `tests/unit/test_tenancy_boundary.py:170-181` matches on the **column name only**
+2. ✅ **FIXED same day.** `tests/unit/test_tenancy_boundary.py` matched on the **column name only**
    (`re.search(r"\borganization_id\b", …)`), so any future table with an `organization_id`
    pointing anywhere at all passes the ratchet silently. The scan should resolve the FK target,
    or at minimum assert `REFERENCES organization` on the same line.
-3. `EXPECTED_SCOPED` (`:43-50`) asserts the three CRM tables are real tenant keys. They are not,
+3. ✅ **FIXED same day.** `EXPECTED_SCOPED` asserted the three CRM tables were real tenant keys. They are not,
    so the file currently claims coverage it does not have — the exact failure mode its own
    docstring at `:150-155` warns about.
 4. **The column name is taken.** Scoping `crm_contacts` to a tenant cannot reuse
    `organization_id`; it needs `tenant_id`, or the CRM's column has to be renamed to
    `account_id`/`company_id`. Decide this before WS-29d reaches the CRM family, not during.
+
+### 2.1 ⚠️ It bit MT-1b's generated migration (found 2026-08-09, on the merge)
+
+Consequence 4 stopped being advice when `main` merged PR #404. `scripts/gen_tenant_migration.py`
+emits its four phases for every discovered table not in `EXEMPT`, and the three CRM tables were
+not in `EXEMPT` — because nothing in that generator, or in `tests/unit/test_tenant_coverage.py`,
+ever looks at what an existing `organization_id` **references**. What it generated for them:
+
+```sql
+-- phase 1  no-op: the column exists (pointing at crm_organizations)
+ALTER TABLE crm_contacts ADD COLUMN IF NOT EXISTS organization_id UUID …;
+-- phase 2  writes a TENANT id into the customer-company column
+UPDATE crm_contacts SET organization_id = (SELECT id FROM organization WHERE slug = 'default')
+ WHERE organization_id IS NULL;
+-- phase 3  a second, contradictory FK on one column
+ALTER TABLE crm_contacts ADD CONSTRAINT crm_contacts_org_fk
+    FOREIGN KEY (organization_id) REFERENCES organization(id) ON DELETE CASCADE;
+```
+
+**Reproduced against a live Postgres 16** with the full ladder applied — two contacts, one at a
+company and one without, which is the ordinary shape of that table:
+
+```
+--- MT-1b phase 2, as the UNFIXED generator emitted it ---
+ERROR:  insert or update on table "crm_contacts" violates foreign key constraint
+        "crm_contacts_organization_id_fkey"
+DETAIL:  Key (organization_id)=(52eb2a2d-…-e40bbbc3e1ab) is not present in table
+         "crm_organizations".
+```
+
+Note what makes it invisible until then: on an **empty** `crm_contacts` the same two statements
+return `UPDATE 0` and `ALTER TABLE` and look completely healthy. It needs one real row to fail,
+which is exactly the condition the production database has and a test fixture does not.
+
+Phase 2 aborts on the existing `REFERENCES crm_organizations` FK; if it somehow did not, phase 3
+fails on every pre-existing value. Either way the failure lands **inside the maintenance
+window, after phase 1 has already run** — which is the worst moment to discover it, and the
+generator's own docstring is explicit that promoting these files is a hand act in a window.
+
+**Fixed on this branch, at generation time instead of apply time.** `discover_homonyms()`
+derives the conflicting tables from the migrations; `HOMONYM_BLOCKED` is the human sign-off
+carrying each reason; the generator **refuses to emit anything and exits 1** when the two
+disagree, and lists the blocked tables in every generated file's header for whoever is holding
+the psql prompt. `test_tenancy_boundary.py` asserts the same two invariants in CI, so a fourth
+homonym added next month is a red build rather than a failed apply.
+
+**What is NOT fixed, and is an owner call.** Those three tables now carry **no tenant
+isolation at all** — under D15's pooled RLS an unpoliced table is readable by every tenant, and
+these hold customer CRM records. Blocking them makes the gap visible and stops it corrupting a
+business column; it does not close it. Closing it is consequence 4 above, and it is a rename
+touching every CRM route and query. Deliberately **not** filed in `EXEMPT`: exempt means "needs
+no isolation", and saying that about customer contact data would turn a hole into a decision
+nobody revisits.
 
 ---
 
@@ -564,8 +617,8 @@ a single `INSERT … ON CONFLICT DO UPDATE … RETURNING` under the caller's tra
 (`routes/projects/core.py:832-846`) keyed on `root_project_id`. Numbers are **per root project**,
 so they are per-tenant for free once projects are; a wrong-tenant counter row is not reachable
 because the key is the project id, and cross-tenant collision is meaningless. **SAFE** — it
-needed no key of its own, and migration 158 gives it one anyway
-(`158_projects_tenancy.sql:67,326`), which is D-MT-3's uniformity argument and is the right
+needed no key of its own, and migration 161 gives it one anyway
+(`161_projects_tenancy.sql:67,326`), which is D-MT-3's uniformity argument and is the right
 call: an unindexable exception in a set of 17 is how the exception gets forgotten.
 
 **Email and WhatsApp.** Both scope on `user_id`, which is the email address —
@@ -611,7 +664,7 @@ pre-existing item, not a new finding, but multi-tenancy raises its severity from
 Stated plainly, so nobody reads silence as clearance.
 
 1. **~~The shape of the in-flight WS-29a/b change~~ — resolved.** I read the uncommitted
-   working tree (`routes/projects/core.py`, `attachments.py`, `infra/postgres/158_projects_tenancy.sql`)
+   working tree (`routes/projects/core.py`, `attachments.py`, `infra/postgres/161_projects_tenancy.sql`)
    and verified the predicate lands on `Visibility`, above the disjunction. S2-8 and the
    attachments caveat are rewritten accordingly. Everything else in §1 was read from files WS-29b
    does **not** touch: `automation.py`, `search.py`, `notifications.py`, `tasks.py`,

@@ -1,5 +1,5 @@
 -- ============================================================================
--- 158_projects_tenancy.sql — the tenant key on all 17 `pm_*` tables (WS-29a).
+-- 161_projects_tenancy.sql — the tenant key on all 17 `pm_*` tables (WS-29a).
 --
 -- Spec: ai-company-brain/specs/multi_tenancy.md §3 (D-MT-1, D-MT-3) and §5.
 --
@@ -20,10 +20,40 @@
 -- indexed, and "derivable" stops being true the moment a parent is nullable,
 -- which `pm_tasks.parent_task_id` (ON DELETE SET NULL) already is.
 --
--- D-MT-2 IS STILL OPEN, so this migration adds NO row-level security. The column
--- is shaped so RLS can be layered on later without touching it again: one plain
--- `UUID NOT NULL` per row, never a lookup, which is exactly what
--- `organization_id = current_setting('app.org')::uuid` wants.
+-- D-MT-2 was OPEN when this file was written, so it adds NO row-level security.
+-- The column is shaped so RLS can be layered on later without touching it
+-- again: one plain `UUID NOT NULL` per row, never a lookup.
+--
+-- ── ⚠️ D-MT-2 IS NOW ANSWERED, ON `main`, AND NOT BY ME (2026-08-09) ────────
+--
+-- A parallel workstream landed the answer in PR #404 while this branch was open:
+-- **D15 — pooled, enforced by RLS** against a `app.tenant_id` GUC that
+-- `acb_common.db.tenant_session()` sets (`SET LOCAL`, inside a transaction).
+-- `specs/saas_multitenancy.md` is canonical; `specs/multi_tenancy.md` in this
+-- branch is the earlier, narrower record and now defers to it.
+--
+-- MT-1b generated the same column for **135 tables** — these 17 included — into
+-- `infra/postgres/generated/{01_add_columns,02_backfill,03_constraints,04_policies}.sql`.
+--
+-- **This file still stands, and here is the seam.** That generated set is
+-- deliberately NOT a numbered migration: `apply_migrations.sh` does not replay
+-- it, and promoting it is an act taken by hand in a maintenance window (its
+-- generator's docstring names the 14h44m outage that makes that non-negotiable).
+-- Meanwhile `routes/projects/core.py` reads `pm_*.organization_id` on every
+-- request. A column the Projects app requires cannot wait on a maintenance
+-- window, so the numbered path is what puts it there.
+--
+-- The two compose, because both sides are `ADD COLUMN IF NOT EXISTS` — whichever
+-- runs second finds the column and no-ops. **One difference is worth stating
+-- rather than discovering:** the generated column carries
+-- `DEFAULT current_setting('app.tenant_id', true)::uuid` and this one carries no
+-- default. On a database where THIS migration ran first, the 17 `pm_*` tables
+-- therefore fill `organization_id` from the parent-consistency trigger below
+-- rather than from the session GUC. Both arrive at the same value under a bound
+-- session; the trigger additionally REFUSES a child whose org disagrees with its
+-- parent, which the GUC default cannot check. Nothing needs undoing when
+-- `04_policies.sql` is promoted — RLS layers on top of a column that is already
+-- NOT NULL and already correct.
 --
 -- ── The backfill, and what was actually in the tables ───────────────────────
 --
@@ -48,7 +78,7 @@
 -- tests/unit/test_projects_migration.py, which runs no database.
 --
 -- Depends on: 130_org_access_control.sql (organization), 146_projects.sql,
---             147, 150, 152, 155, 156, 157 (the other `pm_*` tables).
+--             147, 150, 152, 155, 156, 160 (the other `pm_*` tables).
 -- ============================================================================
 
 BEGIN;

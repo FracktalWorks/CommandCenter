@@ -25,7 +25,7 @@ where an outside team independently reproduced our most contested decision.
 **Read the age caveat first.** qm is three days old. "Shipped" here means *released*, not
 *battle-tested*. Its own `SECURITY.md` (`:26-33`) says QM "is **not** a hardened public or
 multi-tenant service boundary" and "assumes one organization of authenticated internal users" —
-the same posture we are in. Nothing below should be read as "they solved it in production."
+the same posture we are in *(posture dated: true until WS-29's first external tenant — D15)*. Nothing below should be read as "they solved it in production."
 
 ---
 

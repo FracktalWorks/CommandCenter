@@ -1,5 +1,27 @@
 # Multi-tenancy — isolating organizations in CommandCenter
 
+> ## ⚠️ SUPERSEDED FOR ARCHITECTURE (2026-08-09) — read `saas_multitenancy.md` first
+>
+> A parallel workstream landed the full design in **PR #404** while this branch was open, and
+> it is canonical: **`ai-company-brain/specs/saas_multitenancy.md`** (architecture, §11
+> tickets), plus `saas_multitenancy_handover.md` (the H1→H8 runbook) and
+> `saas_multitenancy_implementation.md` (shapes). Where the two disagree, that one wins.
+>
+> **What it answers that this document left open:** **D-MT-2 is decided — D15, pooled, enforced
+> by row-level security** against an `app.tenant_id` GUC that `acb_common.db.tenant_session()`
+> binds with `SET LOCAL` inside a transaction. §4's WS-29c row below (a flag-gated RLS
+> experiment) is therefore struck: it is MT-1b + MT-1c on `main`, already built.
+>
+> **What this document is still good for**, and why it is kept rather than deleted: it is the
+> *measured* record — the table counts, the two corrections marked ⚠️ below, and the reasoning
+> behind the `pm_*` key that migration 161 actually carries. `multi_tenancy_leak_audit.md`
+> beside it is likewise still live: its 14 findings are about paths a database predicate does
+> not close, and RLS does not close them either.
+>
+> **Ticket-ID collision, stated so nobody reconciles it twice.** Both workstreams minted
+> "WS-29". `work_plan.md`'s WS-29 row is the SaaS one. The tickets in §4 here (WS-29a…e) are
+> this branch's, and only **a** and **b** were built; the rest are superseded by MT-0/MT-1.
+
 > **Minted 2026-08-08** on the owner's notice that *"we are also going to be doing migrations
 > for a multi-tenant system so that multiple organizations can use the command center in an
 > isolated way."*
@@ -63,7 +85,7 @@ deployment is one organisation."* That comment is about to stop being true.
 `app_user.email` is **globally unique**, so a person belongs to exactly one organization.
 Whether that stays true is **D-MT-1**, and it is the decision the whole retrofit hangs off.
 
-> ⚠️ **CORRECTED 2026-08-08. This paragraph said "structurally", and until migration 159 that
+> ⚠️ **CORRECTED 2026-08-08. This paragraph said "structurally", and until migration 162 that
 > was not true.** `app_user_email_key` was `UNIQUE (email)` — **byte-exact** — while every
 > lookup in this codebase matches `lower(email)` (R10). The two disagreed, and a live run
 > proved the gap real: `Casey@Alpha.Example` and `casey@alpha.example` are two rows, and under
@@ -73,7 +95,7 @@ Whether that stays true is **D-MT-1**, and it is the decision the whole retrofit
 >
 > Found by WS-29's S1-1 live run, reproduced directly against Postgres, and closed twice: in
 > application code for the one write path that could reach it, and structurally by
-> **migration 159** (`UNIQUE (lower(email))`, replacing the byte-exact constraint). The
+> **migration 162** (`UNIQUE (lower(email))`, replacing the byte-exact constraint). The
 > decision stands — (a) is still the reversible direction — but its enforcement was
 > application-level while this document claimed it was structural. It is structural now.
 
@@ -94,9 +116,9 @@ tables.
 ## 2. What this means for the ClickUp import — read this first
 
 ~~🔴 **Do not run `POST /projects/import/clickup` against production until the `pm_*` tenant
-key lands.**~~ — **SATISFIED 2026-08-08 by migration 158**, which keyed all seventeen tables.
+key lands.**~~ — **SATISFIED 2026-08-08 by migration 161**, which keyed all seventeen tables.
 Kept rather than deleted because the reasoning is what generalises, and because **one condition
-replaced it: migration 158 has to be applied to the target database first.** It is on no real
+replaced it: migration 161 has to be applied to the target database first.** It is on no real
 box yet — the deploy path is broken (WS-25), so nothing on this branch has shipped.
 
 The import is an owner gate (`work_plan.md` §6 (a)) and is the next thing WS-27 wants. Running
@@ -206,11 +228,11 @@ between now and then is another backfill.
 
 | | Ticket | Depends on |
 |---|---|---|
-| 1 | ~~**WS-29a**~~ ✅ **BUILT** — migration 158. ⚠️ The tables were *nearly* empty, not empty; it backfills | ~~D-MT-1~~ ✅ (a) |
+| 1 | ~~**WS-29a**~~ ✅ **BUILT** — migration 161. ⚠️ The tables were *nearly* empty, not empty; it backfills | ~~D-MT-1~~ ✅ (a) |
 | 2 | ~~**WS-29b**~~ ✅ **BUILT** — plus three leaks it exposed, incl. `/assigned-to-me` having no visibility clause at all | ~~WS-29a~~ ✅ |
 | 3 | **WS-29c** — RLS policies and the connection-level GUC, behind a flag, off | D-MT-2 |
 | 4 | **WS-29d** — the remaining 120 tables, by family, largest blast radius first | WS-29c |
-| — | **WS-27g's ClickUp import** | ~~after WS-29a~~ ✅ **unblocked** — but apply 158 to the target DB first |
+| — | **WS-27g's ClickUp import** | ~~after WS-29a~~ ✅ **unblocked** — but apply 161 to the target DB first |
 
 **WS-29a is the only urgent one**, and only because of the import. The rest can proceed at
 whatever pace the product needs.

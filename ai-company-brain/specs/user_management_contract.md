@@ -2,7 +2,9 @@
 
 **Status:** 🟢 Binding · **Created:** 2026-08-05 · **Owner:** vjvarada ·
 **Board row:** WS-24 · **Verified against code:** 2026-08-05, on `main` @ `74082882`
-(deployed and running).
+(deployed and running). · **Amended 2026-08-08:** **R11** (never take the acting tenant
+from input) added with D15/WS-29; the rule count is now **eleven**, and the fact-owner
+table below splits tenancy from visibility because D11 was re-taken.
 
 > **This document owns RULES, not FACTS.** Every fact it states is owned by
 > another spec and is cited, never restated as though this were its home:
@@ -11,7 +13,9 @@
 > |---|---|
 > | The access model — roles, permissions, overrides, resolution | `org_access_control.md` |
 > | The readiness gate, the onboarding runbook, the role × app matrix | `colleague_onboarding.md` |
-> | The tenancy boundary and the visibility ladder (D11/D12) | `tenancy_and_visibility.md` |
+> | The **visibility ladder** inside a tenant (D12) | `tenancy_and_visibility.md` §3–§5 |
+> | The **tenancy boundary** (D15 — re-taken 2026-08-08; D11 is superseded) | `saas_multitenancy.md` §1 |
+> | Multi-tenancy build shapes — SQL, seams, ratchets, runbooks | `saas_multitenancy_implementation.md` |
 > | Centers as projections | `department_centers.md` |
 >
 > If this doc and an owner disagree, **the owner is right and this doc is
@@ -177,6 +181,29 @@ hide the button.
 **R10 — Case-insensitive on both sides, always.** An IdP that changes UPN
 casing between sessions must not silently switch a guard off or empty somebody's
 library.
+
+**R11 — Never take the acting TENANT from input.** *(Added 2026-08-08 with D15;
+this is R-identity's twin and was created by the same reasoning.)* The
+organization a request acts in comes from the **authenticated session** or from a
+**tenant-scoped API key**, and from nowhere else. Not an `X-Organization-Id`
+header, not a query parameter, not a body field, not a subdomain the server
+trusts without re-resolving it against the session.
+
+R3 says never take the acting *identity* from a query parameter; under D15 the
+tenant is the wider blast radius of the same mistake — an identity you can spoof
+gets you one person's data, a tenant you can spoof gets you a whole company's.
+`multi_user_organization_research.md` §17.3 proposes exactly this header, and
+`saas_multitenancy.md` §7 item 2 **rejects it by name** so a future reader does
+not implement the research.
+
+Two corollaries an implementer must not shave:
+
+- **A background job carries its tenant on its job record** and refuses to run
+  without one (`saas_multitenancy.md` MT-1d). A job with no request has no session
+  to inherit from, and a job that guesses leaks unbounded rather than one row.
+- **The subdomain is a lookup, not an assertion.** Resolve `<slug>` to an
+  organization, then verify the authenticated principal holds a membership in it.
+  A subdomain that is trusted on its own is a header with a friendlier name.
 
 ---
 

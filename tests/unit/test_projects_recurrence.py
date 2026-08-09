@@ -38,7 +38,7 @@ from gateway.routes.projects.recurrence import (
 )
 
 REPO = Path(__file__).resolve().parents[2]
-MIGRATION = REPO / "infra/postgres/157_projects_recurrence.sql"
+MIGRATION = REPO / "infra/postgres/160_projects_recurrence.sql"
 
 
 def sql_without_comments() -> str:
@@ -65,14 +65,14 @@ def nxt(r: dict, *, due=None, completed=None, now="2026-01-01T00:00:00") -> date
 def test_the_frequencies_are_the_ones_the_database_allows():
     match = re.search(r"freq\s+TEXT\s+NOT\s+NULL\s*CHECK\s*\(\s*freq\s+IN\s*\((.*?)\)\)",
                       sql_without_comments(), re.S | re.I)
-    assert match, "157 no longer constrains pm_recurrences.freq"
+    assert match, "160 no longer constrains pm_recurrences.freq"
     assert set(re.findall(r"'(\w+)'", match.group(1))) == set(FREQS)
 
 
 def test_the_anchors_are_the_ones_the_database_allows():
     match = re.search(r"anchor\s+TEXT[^,]*?CHECK\s*\(\s*anchor\s+IN\s*\((.*?)\)\)",
                       sql_without_comments(), re.S | re.I)
-    assert match, "157 no longer constrains pm_recurrences.anchor"
+    assert match, "160 no longer constrains pm_recurrences.anchor"
     assert set(re.findall(r"'(\w+)'", match.group(1))) == set(ANCHORS)
 
 
@@ -98,7 +98,7 @@ def test_the_weekly_check_survives_an_EMPTY_array_not_just_a_missing_one():
     match = re.search(
         r"CHECK \(freq <> 'weekly' OR ([^)]+\)[^)]*)\)", sql_without_comments(),
     )
-    assert match, "157 no longer guards a weekly rule's weekdays"
+    assert match, "160 no longer guards a weekly rule's weekdays"
     assert "coalesce(" in match.group(1), (
         "array_length of an empty array is NULL, so this CHECK passes the very "
         "row it exists to reject unless the NULL is coalesced"
@@ -118,7 +118,7 @@ def test_no_scheduler_table_was_added():
     would be the second one this spec forbids."""
     sql = sql_without_comments().lower()
     for forbidden in ("pm_recurrence_queue", "pm_scheduled", "next_run_at"):
-        assert forbidden not in sql, f"157 grew a scheduler ({forbidden})"
+        assert forbidden not in sql, f"160 grew a scheduler ({forbidden})"
 
 
 # ── Validation ──────────────────────────────────────────────────────────────

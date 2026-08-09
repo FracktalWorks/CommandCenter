@@ -1,4 +1,4 @@
--- 157_projects_recurrence.sql — WS-27o
+-- 160_projects_recurrence.sql — WS-27o
 --
 -- Spec: ai-company-brain/specs/project_management_app.md §11.2 item 7, §11.13.
 --

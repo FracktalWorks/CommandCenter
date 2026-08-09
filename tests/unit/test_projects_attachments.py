@@ -400,7 +400,7 @@ def test_the_upload_rules_are_imported_not_reimplemented():
 def sql() -> str:
     hits = [
         p for p in (REPO / "infra" / "postgres").glob("*.sql")
-        # By the CREATE, not by a mention: migration 158 (the tenant key) names
+        # By the CREATE, not by a mention: migration 161 (the tenant key) names
         # every `pm_*` table, and a fixture that matched on the name alone would
         # start finding two files and fail for a reason that is not about
         # attachments at all.

@@ -28,6 +28,11 @@
 >   The ladder must hold up to **trusted colleagues, not hostile users**, which
 >   moves T2 from "before the Agent Workshop opens" to a **deprioritised
 >   sub-project**. See §1.3 and §1.5.
+>   *[⚠️ Premise re-scoped 2026-08-08/09 (D15/D16, WS-29): still true as a fact —
+>   no external tenant exists yet — but no longer the planning posture;
+>   CommandCenter is being prepared for sale. T2 stays parked, with a NEW
+>   trigger: it is a precondition of the §5.1 pooled cutover
+>   (`saas_multitenancy.md`, MT-0c-2), not "a second org". See the §1.5 banner.]*
 
 **Reviews:**
 [`agent_architecture.md`](agent_architecture.md) ·
@@ -119,7 +124,9 @@ a trigger, so it is struck from the table above. To restore it, something must f
 to read: the minimum is an `AgentManifest` provenance field (e.g. `provenance:
 first_party | creator | external`) derived from the registration path and persisted on the
 agent registry row — **that is a design task with no owner and no acceptance today**, and
-under the internal-tool threat model (§1.5) it is not needed.
+under the internal-tool threat model (§1.5) it is not needed *(see §1.5's D16 update,
+2026-08-09 — MT-0b's `organization.first_party` (migration 157) is now the provenance
+field's first incarnation)*.
 
 ### 1.3 What to build, and when — *reconciled against code 2026-08-03*
 
@@ -149,7 +156,7 @@ hardening; there are now two (`mutation.py`, `copilot_sandbox.py`), both carryin
 caps/limits since 2026-07-27 and **neither** passing `--network` or `--read-only`.
 Acceptance is **WS-3b** in `permissions_sandbox_b6.md` §P5-b.
 
-**~~Before the Agent Workshop opens to non-engineers.~~ → deprioritised; see §1.5.**
+**~~Before the Agent Workshop opens to non-engineers.~~ → deprioritised; see §1.5** *(and its D16 update, 2026-08-09)*.
 The original trigger assumed the Workshop would put agent authorship in the hands of people
 outside the engineering team. Under the 2026-08-03 owner decision that is not the near-term
 shape of this product: the Workshop's users are **Fracktal colleagues**, and a colleague who
@@ -159,8 +166,12 @@ at that boundary.
 **Before multi-tenant (a second org on this platform).** This remains the real T2 trigger,
 and it is the *only* one left. The trust boundary genuinely moves from "our team" to
 "someone else entirely", and at that point `DESIGN_LIMITATION_native_maf_mutation.md` must
-also be closed — though the declarative model already removes it for the majority case. No
-second org is planned; **T2 is parked until one is** (§1.5). *(The original wording made T2
+also be closed — though the declarative model already removes it for the majority case
+*(closed as MT-0b, built 2026-08-08 pending review)*. ~~No
+second org is planned; **T2 is parked until one is** (§1.5).~~ *[Re-taken 2026-08-08/09:
+external orgs ARE planned (WS-29), and D16 narrows this trigger — silo tenants (customers
+1–5, one per box) do not require T2; the **§5.1 pooled cutover does**. See the §1.5
+banner.]* *(The original wording made T2
 mandatory for "every non-first-party agent regardless of tool surface" — kept as intent, but
 see §1.2: there is no field that says which agents those are, so this cannot be stated as
 acceptance until one exists.)*
@@ -181,6 +192,16 @@ So: **fix the capability model first, containerise second.** Containers are the 
 authority" — which is the failure mode this platform will actually hit.
 
 ### 1.5 T2 is a parked sub-project — the internal-tool threat model (owner decision, 2026-08-03)
+
+> ⚠️ **Update 2026-08-09 — the premise below expired, the parking survives (D15/D16).**
+> WS-29 (`saas_multitenancy.md`) retires "internal Fracktal tool, no external tenants"
+> as the planning posture: CommandCenter is being prepared for sale. **D16 re-takes the
+> un-park trigger**: T2 is now a **precondition of the §5.1 pooled cutover** (customer
+> 8–12) — the silo phase survives on this section's reasoning (one tenant per box means
+> an escaped agent reaches only data it already had), the pooled phase does not. The
+> section below is retained as the record of the 2026-08-03 decision; its "no second
+> org is planned" claims are historical. Acceptance still must not be written until the
+> owner un-parks — that rule is unchanged.
 
 **Do not delete the T2 material above; it is the right destination.** But it is not
 near-term work, and the reason is a threat-model correction rather than a change of mind
@@ -205,12 +226,15 @@ per-agent venv/image, warm pool — `permissions_sandbox_b6.md` §P5-c) keeps it
 loses its schedule. It has **no acceptance criteria and should not be given any** until one
 of these two things is true, at which point it is re-costed from scratch:
 
-1. A **second organisation** runs on this platform (real multi-tenancy), or
+1. A **second organisation** runs on this platform (real multi-tenancy) *(re-scoped by
+   D16, 2026-08-08: a silo tenant does not trigger it; the **pooled cutover** does —
+   `saas_multitenancy.md` §5.1 / MT-0c-2)*, or
 2. Agent authorship opens to someone **outside Fracktal** — a customer, a contractor with no
-   monorepo access, or a public Agent Workshop.
+   monorepo access, or a public Agent Workshop *(unchanged by D16)*.
 
 **OWNER-GATE:** un-parking T2 is an owner decision, not an agent's. An agent asked to
-"finish the isolation ladder" builds WS-3a and WS-3b and refuses T2 by name.
+"finish the isolation ladder" builds WS-3a and WS-3b and refuses T2 by name. *(Unchanged
+under D16 — `work_plan.md` §6's first blockquote is the registry entry.)*
 
 ---
 

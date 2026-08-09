@@ -1,4 +1,4 @@
--- 159 — one address is one person, case-insensitively (WS-29, D-MT-1).
+-- 162 — one address is one person, case-insensitively (WS-29, D-MT-1).
 --
 -- ⚠️ FOUND BY A LIVE RUN, and it contradicted a claim the multi-tenant design
 -- was resting on.

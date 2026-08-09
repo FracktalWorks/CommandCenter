@@ -155,7 +155,10 @@ streams; and there is **no calendar layer**, so every join is manual.
 
 Attendee has the best techniques *and* the most restrictive licence. Since
 CommandCenter is our internal tool (not a SaaS we resell), ELv2's use grant is
-satisfiable — but the safe engineering posture is: **treat Attendee as a
+satisfiable *[⚠️ 2026-08-09: this compliance argument rests on the retired D10
+premise — under WS-29 CommandCenter IS resold. Re-evaluate the ELv2 use-grant
+(Attendee is ELv2, not OSS) before the first external tenant uses meeting-bot
+features; flag carried in work_plan.md WS-19.]* — but the safe engineering posture is: **treat Attendee as a
 research paper.** The techniques below are architectural facts about Chrome and
 Meet, not Attendee's expression of them.
 
@@ -501,6 +504,8 @@ are scale plumbing for people running thousands of concurrent bots.
 ## 4b. Multi-tenancy: one notetaker identity per organization
 
 The single-tenant design has a global bot identity and a single browser profile.
+*(re-scope under WS-29: bot identity becomes per-org at MT-1+; this section
+describes the current internal deployment)*
 The moment two organizations (or two users in different orgs) use the notetaker,
 that global is the thing that breaks — and the *email is the least of it*.
 
@@ -552,7 +557,8 @@ Mirror the email app, which already solved per-account isolation:
 ### Sequencing note
 
 None of this is needed for one organization, and building it now would be
-speculative. But two things should happen *before* a second org is onboarded, or
+speculative. *(dated 2026-08-09: needed at the first external tenant — sequence
+with WS-29)* But two things should happen *before* a second org is onboarded, or
 they become data-migration problems instead of design choices: the identity must
 be **a row keyed by org from the start** (not an env var), and the profile path
 must be **derived from that row** (not a constant). Both are cheap now and

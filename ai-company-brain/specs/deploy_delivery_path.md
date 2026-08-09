@@ -1,9 +1,17 @@
 # Deploy delivery path — getting merged code onto the box
 
-**Status: 🔴 BROKEN — diagnosed and measured 2026-08-05, verified against code and
-against the running deployment on 2026-08-05.**
+**Status: 🟡 RECOVERED (re-measured 2026-08-09) — deploys landing again since
+2026-08-06 (migrations 144/145 applied on prod that day); six green runs on
+2026-08-07 UTC alone, the last being #400's log-verified deploy `31217978773`
+(2026-08-08 IST, which is how `crm_app.md` dates it). Open: the tip run
+(`b09093a8`, docs-only) failed health-verify ×3 rounds, 21:21→22:16 UTC
+2026-08-07 — box one docs-only commit behind, cause unresolved. Everything below
+this header is the 2026-08-05 diagnosis, kept as the record; re-measure before
+quoting it.**
 
-`main` is `d7d5c79b`; the box is `74082882` (#347).
+`main` is `d7d5c79b`; the box is `74082882` (#347). *(2026-08-05 measurement —
+stale: as of 2026-08-09 `main` is `b09093a8` and the box sits at `affe0647`; see
+the Board record below.)*
 
 > **⚠️ CORRECTED 2026-08-05, same day.** This spec first claimed five PRs were
 > stranded, "including #355, the OAuth authorize fix, which is why mailbox
@@ -19,9 +27,10 @@ against the running deployment on 2026-08-05.**
 > BFF OAuth route existing on disk dated 04:42.
 
 **Actually stranded: #357 and #358 — eight files, all documentation plus
-`scripts/backup_db.sh`. Zero executable app code, zero migrations.** So the broken
-delivery path has had **no production impact** to date. Its cost is entirely
-forward-looking: the next app change to merge will not ship, and nothing will say so.
+`scripts/backup_db.sh`. Zero executable app code, zero migrations.** So the ~~broken~~
+*(2026-08-05; recovered since — see header)* delivery path has had **no production
+impact** to date. Its cost was entirely forward-looking — and the forward-looking cost
+did not materialise: delivery recovered before any app change was stranded.
 
 This spec owns the *delivery path* only: how a commit on `main` becomes running code
 on the VPS. It does not own what the deploy script does once it runs
@@ -84,6 +93,9 @@ curl https://api.github.com -> 200 in 0.029s
 ```
 
 **Inbound is broken; outbound works.** Every option below follows from that one fact.
+*(2026-08-05 measurement. By 2026-08-07 UTC inbound was reaching the box again — six
+green runs — with one health-verify failure at tip; the fact this section rests on is
+dated, and options A–C remain worth building for the next outage, not this one.)*
 
 ### 2.1 Why the existing retry logic cannot save this
 
@@ -440,3 +452,20 @@ exits 1 saying so. That is the intended first-run state, not a fault.
 - `user_management_contract.md` — what #354/#355/#356 change, and why shipping them
   matters beyond "the board is out of date"
 - `colleague_onboarding.md` §2 — blocked at its final step until D4 lands
+
+## Board record (2026-08-09) — moved from work_plan.md §2
+
+> Moved here in the 2026-08-09 consolidation (work_plan.md D18): board rows now
+> carry state + gates only. The narrative below is preserved verbatim from the
+> final long-form row; the dated corrections after it win where they conflict.
+
+### WS-25 — **Deploy delivery path** — getting merged code onto the box *(minted 2026-08-05)*
+**State cell (as of the move):** 🔴 **BROKEN — but no production impact to date**
+**Narrative (verbatim):** **`main` is `d7d5c79b`; the box is `74082882` (#347).** ⚠️ **This row first claimed five PRs were stranded "including #355, the OAuth authorize fix" — CORRECTED the same day: #354, #355 and #356 are all LIVE.** The deploy does `git reset --hard origin/main`, so #347's successful 04:40 run carried everything merged before it, and those three merged by 01:18. **The error was reading box HEAD as if delivery were PR-by-PR — it is not: one successful deploy lands every commit merged up to that instant, so "the box is on PR n" says nothing about PR n+1, only about when the last success ran.** Verified per PR with `git log --grep` and by the BFF OAuth route on disk dated 04:42. **Actually stranded: #357 + #358 — eight files, all documentation plus `scripts/backup_db.sh`; zero executable app code, zero migrations, and nothing reads them at runtime**, so today's remediation is a `git fetch && git reset --hard origin/main` with **no deploy and no restart**, not the §6 stopgap. **The cost of this defect is therefore entirely forward-looking: the next app change to merge will not ship, and nothing will say so.** **Measured 2026-08-05:** deploy runs since 2026-08-04 alternate ~4-minute successes with **~54-minute failures** (the retry ladder running to exhaustion) — `ssh: connect to host ***: Connection timed out`, and `workbench=000000`, curl's no-response code, so the runner's **HTTPS** probe got nothing either. **The box was healthy the whole time:** across the 55-minute window 06:28–07:23 UTC `journalctl -u ssh` logged **four** lines — one operator key login and two immediately-closed scans — at load average 0.16, uptime 7 days, no reboot, while answering the operator's machine in 240 ms. No fail2ban (not installed), no iptables rules beyond UFW's own chains. **GitHub's packets do not arrive; the drop is upstream of the VPS and affects every port.** The asymmetry is the whole design input: the box reaches GitHub **outbound** fine (`git ls-remote` instant, `api.github.com` 200 in 29 ms). ⚠️ **`deploy.yml:546-559`'s existing retry logic cannot save this — it models the wrong failure.** It assumes the deploy *ran* and only the SSH teardown flaked, so it ignores the SSH exit code and verifies by health probe; sound for a teardown blip, useless when the session never establishes, and it converts a 4-minute no-op into a 54-minute one. ⚠️ **The structural obstacle, and why the obvious fix is a trap: `DEPLOY_SCRIPT` is a 435-line shell script defined as a workflow `env:` value (`deploy.yml:107-544`) and piped over SSH with `bash -s` — the box never holds a copy.** So a pull-based scheme must either duplicate 435 lines on the box, producing two deploy paths that silently drift (worse than the outage), or the script must first be extracted to a versioned file (**D1**) — which pays for itself anyway, since a script embedded in YAML cannot be shellchecked, hand-run during an incident, or diffed. **Second-order trap recorded in the spec §3:** the script's first act is `git fetch && git reset --hard origin/main`, so a box running it *from the checkout* has the file rewritten while bash is still reading it by byte offset; extraction must be two-stage — a small stable bootstrap that fetches, then `exec`s the fresh script. **Options in spec §4, recommendation A:** (A) a pull timer polling `git ls-remote`, depending only on the outbound path that is proven working, no daemon executing remote-authored jobs on the production host; (B) a self-hosted GitHub runner — far less bespoke code and keeps the Actions audit trail, but puts a job executor holding repo credentials on the prod box, acceptable only while the repo stays private and no forked PR can target it, a property that must then be *maintained*; (C) a Hostinger ticket, worth filing in parallel, worth waiting on for nothing. Under **both** A and B the health check can no longer prove external reachability — unavoidable today, since GitHub cannot reach the box to check. **D3 (failure is visible) is not optional:** this ran two days because the only signal was a red tick on a page nobody watches while the app stayed up and looked fine. **All four acceptance items are OWNER-GATE** (they change the deploy path and apply migrations forward-only). **§6 stopgap: the operator's own machine reaches the box, so the existing deploy can be driven by hand** — and the preconditions are already true as of 2026-08-05 09:29 (a verified restorable backup, `live=228 restored=228`, plus the nightly timer installed and enabled), which makes this the safest moment this deployment has had for it. **Blocks:** §6's `GATEWAY_INTERNAL_TOKEN` rotation, whose prescribed method *is* a redeploy — rotating before delivery works writes the new value into `.env` with no reconcile of `.env.local`, the exact lockout that item warns about; and `colleague_onboarding.md` §2's final step.
+
+**Corrections applied 2026-08-09:**
+- the 🔴 BROKEN state is superseded by re-measurement 2026-08-09: deploys landing since 2026-08-06 (migs 144/145 applied on prod), six green runs on 2026-08-07 UTC alone, the last = #400's log-verified deploy 31217978773 (2026-08-08 IST; c1eba71f fixed the apply script git-resetting itself mid-read)
+- the tip run (b09093a8, docs-only) failed health-verify ×3 rounds 21:21→22:16 UTC 2026-08-07 — box at affe0647, cause unresolved
+- the row's main/box SHA pointers are stale
+- D1 (extract DEPLOY_SCRIPT), SHA-in-/health and failure-visibility remain live
+- under D15 delivery must become placement-parameterised (saas_multitenancy.md §5.1 condition 3).

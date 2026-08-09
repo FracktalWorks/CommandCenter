@@ -720,7 +720,9 @@ so the shape is visible; nobody should be sent at them until they are ticketed t
 agent's KB lives) — that is a decision this spec does not record, not a build.
 
 **On Phase C's priority.** Command Center is an **internal Fracktal tool**: the team uses it,
-there are no external tenants. So the Agent Workshop's describe-to-create flow is about
+there are no external tenants. *[Premise dated 2026-08-09: true until the first external
+tenant — D15/WS-29; the Workshop's bounded-by-headcount value re-opens at MT-2.]* So the
+Agent Workshop's describe-to-create flow is about
 letting *colleagues* create agents, not about a public product surface. Its value is real but
 bounded by headcount, and it is the largest unspecced surface in this document (§12.2 WS-8n
 is a spec ticket, not a build ticket). **It should not outrank A0/A1/A/B**, all of which
@@ -1006,3 +1008,15 @@ instancing already ships from `config.json` via `AgentManifest.instance_key()` (
 
 Question 4 is worth answering early — if declarative agents don't need container isolation,
 the sandboxing roadmap shrinks to the two code agents plus the mutation sandbox.
+
+## Board record (2026-08-09) — moved from work_plan.md §2
+
+> Moved here in the 2026-08-09 consolidation (work_plan.md D18): board rows now
+> carry state + gates only. The narrative below is preserved verbatim from the
+> final long-form row; the dated corrections after it win where they conflict.
+
+### WS-8 — **Agent architecture A0→C** (single runtime, manifests + `agent_defs`, generic declarative builder, Agent Workshop describe-to-create)
+**State cell (as of the move):** 🟡
+**Narrative (verbatim):** A0's `approve_all` half done 2026-07-26. ~~"three states in one doc, see §5"~~ **repaired 2026-08-03** — §5 doc-remediation item 14 is closed (one A0 status; the F/G dependency split is written). **~60% of Phases A+B is unwired substrate — read §12.1 before dispatching anything from this row**, or an implementer will rebuild `manifest.py` / `declarative.py`, both of which are complete, documented and tested with zero production callers. ~~"Phase A unblocks D3's long-term form"~~ **struck — verified false in the direction that matters:** `config.json`-based instancing already ships via `AgentManifest.instance_key()` (`manifest.py:235`, live at `executor.py:917-937` and `routes/workspace.py:247-256`, with a `sharing` block on all six first-party agents), so **WS-14 is NOT waiting on WS-8 Phase A** (§12.5). D7's MAF-side MCP gap is now a ticket here — **WS-8c**.
+
+**Corrections applied 2026-08-09:** current as moved.

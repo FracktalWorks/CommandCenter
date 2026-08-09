@@ -327,7 +327,7 @@ def test_every_activity_type_the_routes_write_is_in_the_vocabulary() -> None:
     )
 
 
-# ── The tenant key (WS-29a, migration 158) ──────────────────────────────────
+# ── The tenant key (WS-29a, migration 161) ──────────────────────────────────
 #
 # Same rules as everything above, applied to the SECOND file that defines the
 # `pm_*` shape. Found by content for the same reason (R1 forbids pinning a
@@ -337,7 +337,7 @@ def test_every_activity_type_the_routes_write_is_in_the_vocabulary() -> None:
 #
 # Spec: ai-company-brain/specs/multi_tenancy.md §3 (D-MT-1 (a), D-MT-3).
 
-#: Every table §3 specifies, plus the six added by 147/150/152/155/156/157.
+#: Every table §3 specifies, plus the six added by 147/150/152/155/156/160.
 #: Listed rather than derived, so a table quietly dropped from the tenant
 #: migration fails here instead of shrinking the expectation with it.
 TENANT_SCOPED_TABLES: tuple[str, ...] = (

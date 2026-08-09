@@ -376,7 +376,7 @@ async def _upsert_project(
     workspace would ADOPT the first one's projects and then UPDATE their names
     — a cross-tenant write that no read predicate sees. `clickup_id` is still
     globally UNIQUE in the schema, so that organization's import now fails on
-    the constraint instead; migration 158 §6 records why widening it is a
+    the constraint instead; migration 161 §6 records why widening it is a
     separate ticket.
     """
     existing = (await db.execute(
@@ -409,7 +409,7 @@ async def _upsert_project(
         "source": "import",
         "created_by": created_by,
         # A Space is a ROOT project, so the trigger has no parent to derive
-        # from. Folders and lists carry it too, and migration 158's trigger then
+        # from. Folders and lists carry it too, and migration 161's trigger then
         # REFUSES the row if it disagrees with the parent it was grafted onto.
         "organization_id": organization_id,
     })

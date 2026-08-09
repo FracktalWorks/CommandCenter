@@ -271,7 +271,7 @@ Workflow: need a new capability → ``code_task``; repeat a known job → ``run_
 - **recall_notes(path, query?)** — Read back a notes file, optionally filtered by a search query.  Use to restore context from previous sessions.
 """),
     Section("history", ("query_history",), """### Conversation history
-- **query_history(query)** — Run a SELECT-only SQL query against the chat history database (tables: ``chat_session``, ``chat_message``).  Use to recall what was discussed in prior sessions, find past decisions, or resume work on a known thread.
+- **query_history(search?, thread_id?, agent_name?, since_days?, limit?)** — Recall past conversations by search criteria.  Use to remember what was discussed in prior sessions, find a decision that was made before, or resume work on a known thread.  Takes **search terms, not SQL** — e.g. ``query_history(search="pricing", since_days=30)``.
 """),
     Section("coding", ("github_search", "github_repo_search"), """### GitHub code search
 - **github_search(query, scope?, maxResults?)** — Lexical search across public GitHub repositories.  Supports ``language:python``, ``repo:owner/name``, ``path:src/`` filters.
@@ -383,7 +383,7 @@ COMPACT_SECTIONS: tuple[Section, ...] = (
         "save_note(path,fact), recall_notes(path,query?) — repo-scoped working memory"
     )),
     Section("history", ("query_history",), (
-        "query_history(sql) — SELECT-only query against chat history DB"
+        "query_history(search?,thread_id?,agent_name?,since_days?,limit?) — recall past conversations"
     )),
     Section("coding", ("github_search", "github_repo_search"), (
         "github_search(q,scope?,max?), github_repo_search(repo,q?) — code search"

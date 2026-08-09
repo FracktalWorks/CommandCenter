@@ -646,7 +646,7 @@ def test_service_principal_runs_any_agent() -> None:
 # D-MT-1 they can sit in two organizations, which makes a person's tenant
 # whichever row the planner returns.
 
-_MIGRATION_159 = Path("infra/postgres/159_app_user_email_case.sql")
+_MIGRATION_159 = Path("infra/postgres/162_app_user_email_case.sql")
 
 
 def test_the_unique_index_is_on_lower_email_not_the_raw_column() -> None:
@@ -698,3 +698,92 @@ def test_it_is_not_CONCURRENTLY_which_cannot_run_in_a_transaction() -> None:
     )
     assert "CONCURRENTLY" not in statements
     assert statements.count("BEGIN;") == 1 and statements.count("COMMIT;") == 1
+# ── Tenant predicate on the org_group joins (MT-1i) ─────────────────────────
+#
+# saas_multitenancy.md §6.4/§6.5 + tenancy_and_visibility.md §2. Decision D15
+# made the tenant boundary a ROW, so `org_group`'s slug — unique only per
+# `UNIQUE (organization_id, slug)` (138_groups_and_session_participants.sql:49)
+# — is a cross-organization match whenever it is joined on alone, and the two
+# org-wide expansions serve every user on the box.
+#
+# These assertions are on the SQL *strings* deliberately: tenancy_and_visibility.md
+# §2 done-when 2 notes the DB-backed tests for this area open with
+# `pytest.mark.skipif(not _db_ready(), …)` and so skip green with no Postgres,
+# which makes "verified red" unsatisfiable there. This file carries no such
+# guard, so these cannot skip.
+
+def _squash(sql: str) -> str:
+    """Whitespace-insensitive view of a query, so formatting is not the test."""
+    return re.sub(r"\s+", " ", sql)
+
+
+def test_my_groups_query_is_a_module_constant() -> None:
+    """done-when 2: anchor (a) must be reachable from a hermetic test.
+
+    It lived inline inside `_load_room`, where no string assertion could see it.
+    """
+    from gateway import rooms
+
+    assert isinstance(rooms.MY_GROUPS_SQL, str)
+    assert "org_group" in rooms.MY_GROUPS_SQL
+
+
+def _org_group_joins() -> list[tuple[str, str]]:
+    """The three queries that join `org_group`, by name, for the assertion below."""
+    from acb_auth.access import _GROUP_MEMBER_SQL
+    from gateway.rooms import MY_GROUPS_SQL, SESSION_VISIBLE_SQL
+
+    return [
+        ("gateway.rooms.MY_GROUPS_SQL", MY_GROUPS_SQL),
+        ("gateway.rooms.SESSION_VISIBLE_SQL", SESSION_VISIBLE_SQL),
+        ("acb_auth.access._GROUP_MEMBER_SQL", _GROUP_MEMBER_SQL),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("label", "sql"),
+    _org_group_joins(),
+    ids=[label for label, _ in _org_group_joins()],
+)
+def test_org_group_joins_carry_a_derived_org_predicate(
+    label: str, sql: str,
+) -> None:
+    """done-when 1: the group's org must be tied to the acting user's org.
+
+    A slug-only join matches the identically-slugged group in every other
+    tenant. The predicate must be *derived* from the row being authorised —
+    a literal `slug = 'default'` swaps one wrong constant for another.
+    """
+    sql = _squash(sql)
+    assert "org_group" in sql, label
+    assert "g.organization_id =" in sql, (
+        f"{label} joins org_group without tying g.organization_id to the "
+        f"acting user's organization: {sql}"
+    )
+    assert "'default'" not in sql, (
+        f"{label} hardcodes an org slug instead of deriving one: {sql}"
+    )
+
+
+def test_org_subject_does_not_expand_to_every_user_on_the_box() -> None:
+    """§6.4: `_ORG_MEMBER_SQL` had no org filter at all."""
+    from acb_auth import access
+
+    sql = _squash(access._ORG_MEMBER_SQL)
+    assert "organization_id" in sql, (
+        f"the `org` subject expands to every active user on the box: {sql}"
+    )
+
+
+def test_owner_bootstrap_guard_is_per_organization() -> None:
+    """§6.4 site 9: a lockout, not a leak — RLS does not fix it.
+
+    Unfiltered, one owner anywhere makes `ensure_owner_bootstrap()` a permanent
+    no-op, so an ownerless organization stays ownerless with no inviter.
+    """
+    from acb_auth import access
+
+    sql = _squash(access._HAS_OWNER_SQL)
+    assert "organization_id" in sql, (
+        f"_HAS_OWNER_SQL sees owners in every organization: {sql}"
+    )

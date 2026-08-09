@@ -151,7 +151,7 @@ _CLOSURE_BODY = re.compile(
 #: tenancy is written against that deployment.
 DEFAULT_ORGANIZATION = "00000000-0000-4000-8000-0000000000aa"
 
-#: Migration 158's trigger table, mirrored: ``table → (parent table, FK column)``.
+#: Migration 161's trigger table, mirrored: ``table → (parent table, FK column)``.
 #:
 #: The DATABASE derives a child's `organization_id` from its parent on write, so
 #: 43 INSERT sites in 16 modules did not have to grow a tenant argument. That
@@ -416,7 +416,7 @@ class FakeProjectsDB:
         return self.tables.get(table, [])
 
     def derive_organization(self, table: str, row: dict[str, Any]) -> str | None:
-        """One row's tenant, the way migration 158's trigger derives it.
+        """One row's tenant, the way migration 161's trigger derives it.
 
         The parent's value, or — for a ROOT project, which has no parent — this
         fake's own organization, standing in for the value the application is
@@ -818,7 +818,7 @@ class FakeProjectsDB:
                     return _Result([SimpleNamespace(**row)])
 
         row = {"id": str(uuid4()), **_DEFAULTS.get(table, {}), **values}
-        # Migration 158's `pm_organization_from_parent` trigger, mirrored: a
+        # Migration 161's `pm_organization_from_parent` trigger, mirrored: a
         # child row inserted without a tenant INHERITS its parent's rather than
         # being refused, which is what lets 43 INSERT sites stay unedited.
         if table.startswith("pm_") and row.get("organization_id") is None:

@@ -1,6 +1,10 @@
-"""The CRM assistant agent (WS-26d, read half) — registration, routes, read-only.
+"""The CRM assistant agent (WS-26d) — registration, routes, verb + path fences.
 
 Spec: ``ai-company-brain/specs/crm_app.md`` §6 (Agent, Phase D) + §9 WS-26d.
+The write tools' own behaviour — confirm-before-write, fail-closed, payload
+shapes — lives in ``test_crm_agent_write.py``; what is asserted HERE is the
+whole-surface properties, which is why every one of them enumerates ``_TOOLS``
+rather than a hand-typed list of tool names.
 
 Three properties carry this slice, and each has failed in this repo before:
 
@@ -15,12 +19,17 @@ Three properties carry this slice, and each has failed in this repo before:
    ``acb_auth/deps.py`` §1b reads a bearer with no ``X-User-Email`` as the
    platform acting as itself and grants SERVICE_ACCESS, so a run that cannot
    resolve its user must refuse rather than call. Asserted at the transport,
-   with a fake httpx client, so the real ``_headers()`` runs.
-3. **Read-only is a property of the transport, not a promise in a docstring.**
-   ``_ALLOWED_METHODS`` is checked in the one round-trip helper every tool goes
-   through, so the write half cannot arrive by accident. Asserted behaviourally
-   (a POST raises), structurally (no verb helper exists), and by observation
-   (every call the four tools actually make is a GET).
+   with a fake httpx client, so the real ``_headers()`` runs — **for all eight
+   tools**, because a write issued as the platform itself is the worse half of
+   that bug.
+3. **The verb allowlist is a property of the transport, not a promise in a
+   docstring.** WS-26d-write widened it from ``{"GET"}`` to
+   ``{"GET", "POST", "PATCH"}`` — and the check survived the widening, which is
+   the part worth testing: ``DELETE`` and ``PUT`` still raise inside the one
+   round-trip helper every tool goes through, so a tool added later cannot
+   remove or replace a record. Asserted behaviourally (a DELETE raises),
+   structurally (no ``_delete``/``_put`` helper exists for one to reach for),
+   and by observation (every call the eight tools actually make is in the set).
 
 Plus the WhatsApp half of the ticket: ``"crm"`` is a KNOWN entity-ref system so
 a hand-set ref parses — and **nothing more**. The ``crm`` context block stays
@@ -33,90 +42,35 @@ as an installed package. No gateway and no MAF runtime are started.
 from __future__ import annotations
 
 import ast
-import importlib.util
 import inspect
 import json
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 from uuid import uuid4
 
 import pytest
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-_AGENT_DIR = REPO_ROOT / "apps" / "agents" / "agent-crm"
+from tests.unit._crm_agent_fakes import (
+    AGENT_DIR as _AGENT_DIR,
+)
+from tests.unit._crm_agent_fakes import (
+    REPO_ROOT,
+    FakeClient,
+    FakeResponse,
+    agent_source,
+    approve,
+    fake_gateway,
+    load_agent_module,
+)
 
-
-def _load_agent():
-    spec = importlib.util.spec_from_file_location(
-        "crm_assistant_agent", _AGENT_DIR / "agents.py")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-_M = _load_agent()
+_M = load_agent_module()
 
 _ID = str(uuid4())
-
-
-# ── A fake gateway that records what was asked of it ─────────────────────────
-
-class _FakeResponse:
-    def __init__(self, payload: Any, status_code: int = 200) -> None:
-        self._payload = payload
-        self.status_code = status_code
-        self.text = ""
-        self.content = b"{}"
-
-    def json(self) -> Any:
-        return self._payload
-
-
-class _FakeClient:
-    """Stands in for ``httpx.AsyncClient`` inside the agent module.
-
-    Deliberately patched at the client rather than at ``_get``: the properties
-    under test are the headers and the verb, and both are produced by
-    ``_request``/``_headers``, which a ``_get`` stub would skip straight past.
-    """
-
-    def __init__(self, calls: list[dict], responder) -> None:
-        self._calls = calls
-        self._responder = responder
-
-    async def __aenter__(self) -> _FakeClient:
-        return self
-
-    async def __aexit__(self, *_exc: object) -> bool:
-        return False
-
-    async def request(self, method: str, url: str, **kwargs: Any) -> _FakeResponse:
-        path = url.split("/", 3)[-1]
-        call = {
-            "method": method,
-            "url": url,
-            "path": "/" + path if not path.startswith("/") else path,
-            "headers": kwargs.get("headers") or {},
-            "params": kwargs.get("params") or {},
-        }
-        self._calls.append(call)
-        payload = (
-            self._responder(call) if callable(self._responder) else self._responder
-        )
-        return _FakeResponse(payload)
+_STATUS_ID = str(uuid4())
 
 
 def _fake_gateway(monkeypatch, responder, *, user: str | None = "sales@fracktal.in"):
-    """Patch the module's httpx + acting user. Returns the recorded call list."""
-    calls: list[dict] = []
-    monkeypatch.setattr(
-        _M, "httpx",
-        SimpleNamespace(AsyncClient=lambda **_kw: _FakeClient(calls, responder)),
-    )
-    if user is not None:
-        monkeypatch.setattr(_M, "_current_user_email", lambda: user)
-    return calls
+    return fake_gateway(_M, monkeypatch, responder, user=user)
 
 
 # ── 1. Registration — both halves, or the agent never loads ──────────────────
@@ -200,7 +154,19 @@ def test_build_agents_constructs_one_native_maf_agent() -> None:
     assert getattr(agent, "_permission_handler", None) is None
     tools = (agent.default_options or {}).get("tools")
     assert tools, "built with no tools"
-    assert len(tools) == len(_M._TOOLS) == 4
+    assert len(tools) == len(_M._TOOLS) == 8
+
+
+def test_the_advertised_description_does_not_still_say_read_only() -> None:
+    """R4 — the description is what the orchestrator routes on, so a stale
+    "read-only" there does not just misinform a reader: it teaches the router
+    to send write requests somewhere else. Four artifacts claimed it; this pins
+    the two that live in the agent's own package."""
+    built = _M.build_agents()
+    config = json.loads((_AGENT_DIR / "config.json").read_text(encoding="utf-8"))
+    for text in (built[0].description or "", config["description"]):
+        assert "read-only" not in text.lower(), f"stale read-only claim: {text}"
+        assert "create" in text.lower()
 
 
 def test_all_tools_are_async_and_documented() -> None:
@@ -212,7 +178,10 @@ def test_all_tools_are_async_and_documented() -> None:
 
 def test_register_agent_tools_maps_names() -> None:
     reg = _M._register_agent_tools()
-    assert set(reg) == {"search_crm", "get_pipeline", "get_record", "get_timeline"}
+    assert set(reg) == {
+        "search_crm", "get_pipeline", "get_record", "get_timeline",
+        "create_lead", "update_deal_status", "log_activity", "convert_lead",
+    }
     assert reg["search_crm"] is _M.search_crm
 
 
@@ -220,27 +189,67 @@ def test_register_agent_tools_maps_names() -> None:
 
 _EMPTY_LIST = {"rows": [], "total": 0}
 
+#: The deal stage vocabulary ``update_deal_status`` resolves a NAME against.
+_STATUSES = [
+    {"id": _STATUS_ID, "name": "Negotiation", "type": "open", "probability": 60},
+]
+
 
 def _responder(call: dict) -> Any:
     """Minimal well-shaped payload per route, so formatting runs for real."""
     path = call["path"]
+    # Ordered before the generic ``/crm/<entity>/<id>`` arm below, which these
+    # two would otherwise match on segment count alone.
+    if path == "/crm/statuses/deal":
+        return _STATUSES
+    if path == "/crm/lost-reasons":
+        return []
+    if path.endswith("/convert"):
+        return {"lead": {"id": _ID}, "deal": {"id": _ID, "name": "Acme AMC"}}
+    if path.endswith("/activities"):
+        return {"id": _ID, "type": "note", "subject": "Logged"}
     if path.endswith("/timeline"):
         return {"entries": []}
     if path == "/crm/pipeline":
         return {"lanes": []}
     if path.count("/") == 3:  # /crm/<entity>/<id>
         return {"id": _ID, "name": "Acme", "lead_name": "Acme", "first_name": "A"}
+    if call["method"] == "POST":  # POST /crm/leads
+        return {"id": _ID, "lead_name": "Acme", "owner_email": "sales@fracktal.in"}
     return _EMPTY_LIST
 
 
+#: Every tool, with arguments that reach the wire — enumerated ONCE, because a
+#: whole-surface property asserted over a hand-typed subset is the failure mode
+#: this file already had: the read half's two "every tool" tests listed the
+#: four read tools by hand, so they would have stayed green while covering none
+#: of the write half.
+_INVOCATIONS: dict[str, Any] = {
+    "search_crm": lambda: _M.search_crm("acme"),
+    "get_pipeline": lambda: _M.get_pipeline(),
+    "get_record": lambda: _M.get_record("deals", _ID),
+    "get_timeline": lambda: _M.get_timeline("deals", _ID),
+    "create_lead": lambda: _M.create_lead("Acme Industries", email="a@acme.test"),
+    "update_deal_status": lambda: _M.update_deal_status(_ID, "Negotiation"),
+    "log_activity": lambda: _M.log_activity("deals", _ID, "note", "Called them"),
+    "convert_lead": lambda: _M.convert_lead(_ID, deal_name="Acme AMC"),
+}
+
+
+def test_the_invocation_table_covers_every_registered_tool() -> None:
+    """The fence on the fence. Add a tool and forget this table and the two
+    whole-surface properties below quietly stop covering it — which is exactly
+    what happened to the read half's hand-typed lists."""
+    assert set(_INVOCATIONS) == {fn.__name__ for fn in _M._TOOLS}
+
+
 async def _call_every_tool() -> None:
-    await _M.search_crm("acme")
-    await _M.get_pipeline()
-    await _M.get_record("deals", _ID)
-    await _M.get_timeline("deals", _ID)
+    for invoke in _INVOCATIONS.values():
+        await invoke()
 
 
 async def test_every_tool_sends_the_acting_user(monkeypatch) -> None:
+    approve(monkeypatch)
     calls = _fake_gateway(monkeypatch, _responder, user="sales@fracktal.in")
     await _call_every_tool()
     assert calls, "no gateway call was made at all"
@@ -251,72 +260,119 @@ async def test_every_tool_sends_the_acting_user(monkeypatch) -> None:
         assert call["headers"].get("Authorization", "").startswith("Bearer ")
 
 
-@pytest.mark.parametrize(
-    "invoke",
-    [
-        lambda: _M.search_crm("acme"),
-        lambda: _M.get_pipeline(),
-        lambda: _M.get_record("deals", _ID),
-        lambda: _M.get_timeline("deals", _ID),
-    ],
-    ids=["search_crm", "get_pipeline", "get_record", "get_timeline"],
-)
+@pytest.mark.parametrize("tool", sorted(_INVOCATIONS), ids=sorted(_INVOCATIONS))
 async def test_a_run_with_nobody_to_act_as_refuses_rather_than_calling(
-    invoke, monkeypatch,
+    tool: str, monkeypatch,
 ) -> None:
-    """Fails CLOSED: the bearer alone would be read as SERVICE_ACCESS."""
+    """Fails CLOSED: the bearer alone would be read as SERVICE_ACCESS.
+
+    Covers the WRITE tools too, with the confirmation APPROVED — so this is the
+    case where a human said yes and there is still nobody the write can be
+    attributed to. Approving is what makes it a real test: with the card
+    denied, three of the four would return "cancelled" without ever reaching
+    ``_headers()`` and the fence would be untested.
+    """
+    approve(monkeypatch)
     calls = _fake_gateway(monkeypatch, _responder, user="")
     with pytest.raises(RuntimeError) as exc:
-        await invoke()
+        await _INVOCATIONS[tool]()
+    # Not "ACB_AGENT_USER_EMAIL" any more: S1-4 deleted that fallback, because
+    # one process-global slot that no run ever cleared handed a run with no
+    # identity the LAST run's user — and under one-org-per-user that email IS
+    # the tenant. `_current_user_email` now resolves to "" and `_headers`
+    # refuses, so the message is about the missing actor, not the missing var.
     assert "nobody to act as" in str(exc.value)
     assert calls == [], "the gateway was called despite having nobody to act as"
 
 
-# ── 3. Read-only — behaviourally, structurally, and by observation ───────────
+# ── 3. The verb allowlist — behaviourally, structurally, by observation ──────
 
-def test_the_method_allowlist_is_get_only() -> None:
-    assert set(_M._ALLOWED_METHODS) == {"GET"}
+def test_the_method_allowlist_is_the_three_verbs_the_tools_use() -> None:
+    """WS-26d-write widened this by exactly two entries.
+
+    ``DELETE``/``PUT`` are absent on purpose: no tool here removes or replaces
+    a record, so the check that used to enforce "read-only" now enforces "never
+    destroys", and deleting it along with the read-only doctrine would have
+    thrown that away.
+    """
+    assert set(_M._ALLOWED_METHODS) == {"GET", "POST", "PATCH"}
 
 
-@pytest.mark.parametrize("verb", ["POST", "PATCH", "PUT", "DELETE"])
-async def test_a_mutating_verb_is_refused_before_the_request_is_built(
+@pytest.mark.parametrize("verb", ["PUT", "DELETE", "HEAD", "OPTIONS"])
+async def test_a_destroying_verb_is_refused_before_the_request_is_built(
     verb: str, monkeypatch,
 ) -> None:
     calls = _fake_gateway(monkeypatch, _responder)
-    with pytest.raises(RuntimeError, match="read-only"):
+    with pytest.raises(RuntimeError, match="does not issue"):
         await _M._request(verb, "/crm/leads", json={"lead_name": "x"})
     assert calls == [], f"{verb} reached the gateway"
 
 
-async def test_no_tool_issues_anything_but_a_get(monkeypatch) -> None:
-    """Observation, not assertion-by-inspection: run every tool, watch the wire."""
+async def test_no_tool_issues_a_verb_outside_the_allowlist(monkeypatch) -> None:
+    """Observation, not assertion-by-inspection: run every tool, watch the wire.
+
+    Both halves of the claim: nothing outside the allowlist is ever spoken, and
+    the four READ tools still speak nothing but GET — the widening must not
+    have quietly let a read tool start writing.
+    """
+    approve(monkeypatch)
     calls = _fake_gateway(monkeypatch, _responder)
     await _call_every_tool()
-    assert {c["method"] for c in calls} == {"GET"}
+    assert {c["method"] for c in calls} <= set(_M._ALLOWED_METHODS)
+    assert {c["method"] for c in calls} == {"GET", "POST", "PATCH"}
+
+    reads = _fake_gateway(monkeypatch, _responder)
+    for name in ("search_crm", "get_pipeline", "get_record", "get_timeline"):
+        await _INVOCATIONS[name]()
+    assert {c["method"] for c in reads} == {"GET"}
 
 
-def test_the_module_defines_no_write_verb_helper() -> None:
-    """Structural: the email/whatsapp template ships ``_post``/``_patch``/
-    ``_delete`` helpers. Their ABSENCE here is the read-only doctrine — a tool
-    cannot casually reach for one that does not exist."""
-    for helper in ("_post", "_patch", "_delete", "_put"):
+def test_the_module_defines_only_the_write_helpers_its_tools_use() -> None:
+    """Structural: ``_post`` and ``_patch`` now exist, and ``_delete``/``_put``
+    still do not. A helper nobody needs is a helper somebody finds — and the
+    absence is what makes "this agent cannot destroy a CRM record" a property
+    of the module rather than a claim about its current tool list."""
+    for helper in ("_post", "_patch"):
+        assert hasattr(_M, helper), f"{helper} is missing — the write half needs it"
+    for helper in ("_delete", "_put"):
         assert not hasattr(_M, helper), (
-            f"{helper} exists — the write half must arrive with its confirmation "
-            "gate, not as a helper somebody can call"
+            f"{helper} exists — no tool here removes or replaces a record, and "
+            "a helper for it is how the first one gets written"
         )
-    source = (_AGENT_DIR / "agents.py").read_text(encoding="utf-8")
-    for verb in ('"POST"', '"PATCH"', '"DELETE"', '"PUT"'):
+    source = agent_source()
+    for verb in ('"DELETE"', '"PUT"'):
         assert f"_request({verb}" not in source
 
 
-def test_the_tools_are_risk_annotated_read_only() -> None:
-    """Root AGENTS.md standing rule 1 — a new agent tool declares its risk."""
+def test_every_tool_declares_its_risk_and_the_write_half_declares_it_destructive(
+) -> None:
+    """Root AGENTS.md standing rule 1 — a new agent tool declares its risk.
+
+    Generalised rather than duplicated (WS-26d-write done-when 2): the read
+    tools are ``read_only``, the four write tools are ``destructive``, and the
+    two sets partition ``_TOOLS`` — so a ninth tool that declares neither, or
+    both, fails here rather than shipping unclassified.
+
+    ``destructive`` is what makes ``permission_policy.decide()`` return
+    ``tool_destructive_defer`` instead of approving the call outright — it
+    defers to the tool's OWN ``request_confirmation`` rather than double-gating
+    it. Annotation is not enforcement; it is what tells the policy layer that
+    enforcement lives in the tool.
+    """
     annotations = pytest.importorskip("acb_skills.tool_annotations")
+    writers = {"create_lead", "update_deal_status", "log_activity", "convert_lead"}
+    seen: set[str] = set()
     for fn in _M._TOOLS:
         hints = annotations.TOOL_ANNOTATIONS.get(fn.__name__)
         assert hints is not None, f"{fn.__name__} declares no risk annotation"
-        assert hints["read_only"] is True
-        assert hints["destructive"] is False
+        if fn.__name__ in writers:
+            assert hints["destructive"] is True, f"{fn.__name__} is not destructive"
+            assert hints["read_only"] is False
+            seen.add(fn.__name__)
+        else:
+            assert hints["read_only"] is True, f"{fn.__name__} is not read_only"
+            assert hints["destructive"] is False
+    assert seen == writers, f"a write tool is unannotated: {writers - seen}"
 
 
 # ── 4. The routes each tool actually hits ────────────────────────────────────
@@ -540,43 +596,69 @@ _TRAVERSALS = [
 ]
 
 
+#: Every tool that takes a record id, called with ONE — the id under test.
+#: The write tools are in here because a traversal in a write path is the same
+#: hole pointed at a bigger gun: it would carry the internal bearer to an
+#: arbitrary route with a body attached.
+_ID_TAKING_TOOLS: dict[str, Any] = {
+    "get_record": lambda rid: _M.get_record("deals", rid),
+    "get_timeline": lambda rid: _M.get_timeline("deals", rid),
+    "log_activity": lambda rid: _M.log_activity("deals", rid, "note", "Called"),
+    "update_deal_status": lambda rid: _M.update_deal_status(rid, "Negotiation"),
+    "convert_lead": lambda rid: _M.convert_lead(rid),
+}
+
+
 @pytest.mark.parametrize("payload", [p for p, _ in _TRAVERSALS])
-@pytest.mark.parametrize("tool", ["get_record", "get_timeline"])
+@pytest.mark.parametrize("tool", sorted(_ID_TAKING_TOOLS), ids=sorted(_ID_TAKING_TOOLS))
 async def test_a_traversal_id_is_refused_before_any_request_is_built(
     tool: str, payload: str, monkeypatch,
 ) -> None:
+    asked = approve(monkeypatch)
     calls = _fake_gateway(monkeypatch, _responder)
     with pytest.raises(RuntimeError, match="Invalid CRM record id"):
-        await getattr(_M, tool)("deals", payload)
+        await _ID_TAKING_TOOLS[tool](payload)
     assert calls == [], (
         f"{tool}({payload!r}) reached the gateway at "
         f"{[c['path'] for c in calls]} — the agent can read outside the CRM"
+    )
+    assert asked == [], (
+        f"{tool}({payload!r}) put a traversal in front of a human to approve — "
+        "a malformed id is refused by the guard, never delegated to a card"
     )
 
 
 @pytest.mark.parametrize(
     "bad", ["ACME-123", "", "   ", "12345", "deal-42", "null", "undefined"],
 )
-@pytest.mark.parametrize("tool", ["get_record", "get_timeline"])
+@pytest.mark.parametrize("tool", sorted(_ID_TAKING_TOOLS), ids=sorted(_ID_TAKING_TOOLS))
 async def test_a_non_uuid_id_is_refused_here_not_relayed_as_a_driver_500(
     tool: str, bad: str, monkeypatch,
 ) -> None:
     """Second-order win: all four tables key on ``CAST(:id AS uuid)``, so a
     hallucinated id used to come back as a 500 from the driver."""
+    approve(monkeypatch)
     calls = _fake_gateway(monkeypatch, _responder)
     with pytest.raises(RuntimeError, match="Invalid CRM record id"):
-        await getattr(_M, tool)("leads", bad)
+        await _ID_TAKING_TOOLS[tool](bad)
     assert calls == []
 
 
-@pytest.mark.parametrize("tool", ["get_record", "get_timeline"])
+@pytest.mark.parametrize("tool", sorted(_ID_TAKING_TOOLS), ids=sorted(_ID_TAKING_TOOLS))
 async def test_a_real_uuid_still_works(tool: str, monkeypatch) -> None:
     """The guard must not cost the legitimate call — the failure mode of a fence
     added under review is that it refuses everything and nobody notices."""
+    approve(monkeypatch)
     calls = _fake_gateway(monkeypatch, _responder)
-    await getattr(_M, tool)("deals", _ID)
-    assert len(calls) == 1
-    assert calls[0]["path"].startswith(f"/crm/deals/{_ID}")
+    await _ID_TAKING_TOOLS[tool](_ID)
+    assert calls, f"{tool} made no call at all with a valid id"
+    for call in calls:
+        assert call["path"].startswith("/crm/"), (
+            f"{tool} left the CRM: {call['path']}"
+        )
+    assert any(_ID in c["path"] for c in calls), (
+        f"{tool} never addressed the record it was given"
+    )
 
 
 @pytest.mark.parametrize(
@@ -599,40 +681,160 @@ def test_unhyphenated_and_uppercase_ids_normalise_too() -> None:
     assert _M._record_uuid(_ID.upper()) == _ID
 
 
+#: The only names a ``/crm`` path may interpolate: ``slug`` comes from
+#: ``_entity_slug`` and ``record`` from ``_record_uuid``, so binding to one of
+#: these two IS the claim that a validator produced the value.
+_VALIDATED_PATH_NAMES = frozenset({"slug", "record"})
+
+
+def _is_crm_literal(node: ast.AST) -> bool:
+    return (
+        isinstance(node, ast.Constant)
+        and isinstance(node.value, str)
+        and node.value.startswith("/crm")
+    )
+
+
+def _add_leaves(node: ast.AST) -> list[ast.AST]:
+    """Every operand of an ``a + b + c`` chain, flattened."""
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        return _add_leaves(node.left) + _add_leaves(node.right)
+    return [node]
+
+
+# One reader per string-building idiom. Split up rather than inlined into one
+# walk because the fence's own test parametrises over the idioms: "the fence
+# went blind to `.format`" should point at a function, not at a branch buried
+# in a loop.
+
+def _fstring_parts(node: ast.JoinedStr) -> list[ast.AST]:
+    """``f"/crm/{slug}/{record}"`` — the idiom the read half already scanned."""
+    if not any(_is_crm_literal(part) for part in node.values):
+        return []
+    return [p.value for p in node.values if isinstance(p, ast.FormattedValue)]
+
+
+def _format_parts(node: ast.Call) -> list[ast.AST]:
+    """``"/crm/{}/{}".format(entity, record_id)``."""
+    func = node.func
+    if not (
+        isinstance(func, ast.Attribute)
+        and func.attr == "format"
+        and _is_crm_literal(func.value)
+    ):
+        return []
+    return [*node.args, *(kw.value for kw in node.keywords)]
+
+
+def _binop_parts(node: ast.BinOp) -> list[ast.AST]:
+    """``"/crm/%s" % record_id``, and ``"/crm/" + entity + "/" + record_id``."""
+    if isinstance(node.op, ast.Mod) and _is_crm_literal(node.left):
+        right = node.right
+        return list(right.elts) if isinstance(right, ast.Tuple) else [right]
+    if isinstance(node.op, ast.Add):
+        leaves = _add_leaves(node)
+        if any(_is_crm_literal(leaf) for leaf in leaves):
+            return [leaf for leaf in leaves if not isinstance(leaf, ast.Constant)]
+    return []
+
+
+def _crm_interpolations(node: ast.AST) -> list[ast.AST]:
+    """The dynamic operands of a ``/crm`` string build, whichever idiom built it."""
+    if isinstance(node, ast.JoinedStr):
+        return _fstring_parts(node)
+    if isinstance(node, ast.Call):
+        return _format_parts(node)
+    if isinstance(node, ast.BinOp):
+        return _binop_parts(node)
+    return []
+
+
+def _crm_path_offenders(
+    source: str, validated: frozenset[str] = _VALIDATED_PATH_NAMES,
+) -> list[str]:
+    """Every ``/crm`` path this source builds out of something unvalidated.
+
+    **Four idioms, not one.** The read half scanned ``ast.JoinedStr`` only, so
+    the identical hole spelled ``"/crm/{}/{}".format(entity, record_id)`` —
+    or with ``%``, or with ``+`` — walked straight past it. That is the P2 the
+    re-review left open (WS-26d-write done-when 4), and it matters now rather
+    than in the abstract: the write tools are exactly where somebody assembling
+    a longer path reaches for ``.format``.
+
+    The fence is deliberately blunt. It does not try to decide whether an
+    expression is *safe*; it requires the value to arrive under one of two
+    names, so "is this validated?" is answered by where it came from rather
+    than by re-deriving the answer at every call site.
+    """
+    offenders: list[str] = []
+    for node in ast.walk(ast.parse(source)):
+        for expr in _crm_interpolations(node):
+            name = getattr(expr, "id", None)
+            if name not in validated:
+                offenders.append(
+                    f"line {getattr(node, 'lineno', '?')}: interpolates "
+                    f"{name or ast.dump(expr)!r}"
+                )
+    return offenders
+
+
 def test_the_path_guard_is_structural_not_a_docstring() -> None:
     """The fence in the same spirit as the ``_ALLOWED_METHODS`` one.
 
-    Every f-string that builds a ``/crm`` path may interpolate ONLY names that
-    can hold a validated value: ``slug`` (from ``_entity_slug``) and ``record``
-    (from ``_record_uuid``). A tool added later that drops a raw parameter —
-    ``record_id``, ``entity``, ``query`` — straight into the path fails here,
-    which is the exact mistake this commit is repairing.
+    Every ``/crm`` path the module builds may interpolate ONLY names that can
+    hold a validated value: ``slug`` (from ``_entity_slug``) and ``record``
+    (from ``_record_uuid``). A tool that drops a raw parameter — ``record_id``,
+    ``entity``, ``query`` — straight into the path fails here, whichever of the
+    four string-building idioms it used to do it.
     """
-    validated = {"slug", "record"}
-    source = (_AGENT_DIR / "agents.py").read_text(encoding="utf-8")
-    offenders: list[str] = []
-    for node in ast.walk(ast.parse(source)):
-        if not isinstance(node, ast.JoinedStr) or not node.values:
-            continue
-        head = node.values[0]
-        if not (isinstance(head, ast.Constant)
-                and isinstance(head.value, str)
-                and head.value.startswith("/crm")):
-            continue
-        for part in node.values:
-            if not isinstance(part, ast.FormattedValue):
-                continue
-            name = getattr(part.value, "id", None)
-            if name not in validated:
-                offenders.append(
-                    f"line {node.lineno}: interpolates "
-                    f"{name or ast.dump(part.value)!r}"
-                )
+    offenders = _crm_path_offenders(agent_source())
     assert offenders == [], (
         "a /crm path interpolates something no validator produced: "
         f"{offenders}. Route it through _entity_slug/_record_uuid and bind the "
         "result to `slug`/`record`."
     )
+
+
+#: One synthetic module per string-building idiom, in the unvalidated spelling
+#: and the validated one. This is what makes the fence itself testable: a fence
+#: only ever run against code that already passes cannot tell you it has gone
+#: blind, and going blind is precisely what the f-string-only version had done.
+_UNVALIDATED_PATHS: dict[str, str] = {
+    "fstring": 'x = f"/crm/{entity}/{record_id}/activities"\n',
+    "format": 'x = "/crm/{}/{}/activities".format(entity, record_id)\n',
+    "percent": 'x = "/crm/%s/%s/activities" % (entity, record_id)\n',
+    "concat": 'x = "/crm/" + entity + "/" + record_id + "/activities"\n',
+}
+_VALIDATED_PATHS: dict[str, str] = {
+    "fstring": 'x = f"/crm/{slug}/{record}/activities"\n',
+    "format": 'x = "/crm/{}/{}/activities".format(slug, record)\n',
+    "percent": 'x = "/crm/%s/%s/activities" % (slug, record)\n',
+    "concat": 'x = "/crm/" + slug + "/" + record + "/activities"\n',
+}
+
+
+@pytest.mark.parametrize("idiom", sorted(_UNVALIDATED_PATHS))
+def test_the_path_fence_sees_every_string_building_idiom(idiom: str) -> None:
+    """Done-when 4: the fence catches ``.format``/``%``/``+``, not just f-strings.
+
+    Both directions per idiom, because a fence that flags everything is as
+    useless as one that flags nothing — and the "flags everything" failure is
+    the one that gets a fence deleted rather than fixed.
+    """
+    assert _crm_path_offenders(_UNVALIDATED_PATHS[idiom]), (
+        f"the fence is blind to the {idiom} idiom — a /crm path built that way "
+        "from a raw parameter would ship unnoticed"
+    )
+    assert _crm_path_offenders(_VALIDATED_PATHS[idiom]) == [], (
+        f"the fence refuses a correctly-validated {idiom} path"
+    )
+
+
+def test_the_path_fence_ignores_strings_that_are_not_crm_paths() -> None:
+    """Scoping: an error message that interpolates a caller's word is prose,
+    not a path, and a fence that fires on it teaches nobody anything."""
+    assert _crm_path_offenders('x = f"Unknown record type {entity!r}"\n') == []
+    assert _crm_path_offenders('x = "/email/{}".format(message_id)\n') == []
 
 
 def test_an_unknown_entity_is_refused_not_defaulted() -> None:
@@ -652,20 +854,19 @@ async def test_an_unknown_entity_never_reaches_the_gateway(monkeypatch) -> None:
 async def test_a_gateway_refusal_is_relayed_not_swallowed(monkeypatch) -> None:
     """A 403 from the feature gate must surface as a refusal the agent can
     repeat, not as an empty result that reads like "there is no such deal"."""
-    calls: list[dict] = []
-
-    class _Denying(_FakeClient):
+    class _Denying(FakeClient):
         async def request(self, method: str, url: str, **kwargs: Any):
-            calls.append({"method": method, "url": url})
-            return _FakeResponse({"detail": "Feature 'crm' not enabled"}, 403)
+            self._calls.append({"method": method, "url": url})
+            return FakeResponse({"detail": "Feature 'crm' not enabled"}, 403)
 
-    monkeypatch.setattr(
-        _M, "httpx", SimpleNamespace(AsyncClient=lambda **_kw: _Denying(calls, None)))
-    monkeypatch.setattr(_M, "_current_user_email", lambda: "nobody@fracktal.in")
+    calls = fake_gateway(
+        _M, monkeypatch, None, user="nobody@fracktal.in", client_class=_Denying,
+    )
     with pytest.raises(RuntimeError) as exc:
         await _M.get_pipeline()
     assert "403" in str(exc.value)
     assert "Feature 'crm' not enabled" in str(exc.value)
+    assert len(calls) == 1
 
 
 # ── 5. WhatsApp: "crm" is parse-only, and the test says so ───────────────────

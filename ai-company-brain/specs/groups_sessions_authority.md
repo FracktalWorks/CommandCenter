@@ -74,7 +74,8 @@ chat_session_participant(session_id, subject, role ∈ (owner|member|viewer),
   understand (`org_access_control.md` §2 obs. 1).
 - **Backfill:** every existing session gets one `owner` row from
   `chat_session.user_id` where it holds an email; the literal `'default'`
-  (pre-auth single-tenant rows) backfills as owned by the org owner. Every
+  (pre-auth single-tenant rows) backfills as owned by the org owner
+  *(historical backfill description — fine; new code follows D15/R5)*. Every
   session stays `private`, so deploying this changes nobody's access.
 - `viewer` is in the schema because the share flow needs read-only invitees
   (see the transcript rule in §4) — but a viewer still **caps the room's

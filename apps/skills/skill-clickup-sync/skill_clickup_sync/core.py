@@ -8,8 +8,7 @@ context window (they will be shown to the LLM as tool results).
 """
 from __future__ import annotations
 
-import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import httpx
@@ -26,7 +25,13 @@ except Exception:  # pragma: no cover - platform package absent in isolation
 
 
 def _api_token() -> str:
-    tok = os.environ.get("CLICKUP_API_TOKEN", "")
+    # MT-0a: read the RUN's credential, not the process environment. This skill
+    # runs IN-PROCESS as a MAF tool, so `os.environ` here would return whatever
+    # a concurrent run had exported — the leak `saas_multitenancy.md` §6.1
+    # describes. `credential()` still lets an operator-provided value win.
+    from acb_skills.integrations import credential
+
+    tok = credential("CLICKUP_API_TOKEN")
     if not tok:
         raise RuntimeError("CLICKUP_API_TOKEN is not set")
     return tok
@@ -58,7 +63,7 @@ async def get_task_status(task_id: str) -> str:
     due = ""
     if due_raw:
         try:
-            dt = datetime.fromtimestamp(int(due_raw) / 1000, tz=timezone.utc)
+            dt = datetime.fromtimestamp(int(due_raw) / 1000, tz=UTC)
             due = f" · due {dt.strftime('%Y-%m-%d')}"
         except (TypeError, ValueError):
             pass
@@ -86,7 +91,9 @@ async def list_project_tasks(project_name: str, *, status_filter: str = "") -> s
     Returns:
         A plain-text task list for the agent context window.
     """
-    workspace_id = os.environ.get("CLICKUP_WORKSPACE_ID", "")
+    from acb_skills.integrations import credential  # MT-0a — see _api_token
+
+    workspace_id = credential("CLICKUP_WORKSPACE_ID")
     if not workspace_id:
         return "CLICKUP_WORKSPACE_ID is not configured — cannot list tasks."
 

@@ -1,7 +1,7 @@
 """Projects · the TENANT boundary — what one organization cannot see (WS-29b).
 
 Spec: ``ai-company-brain/specs/multi_tenancy.md`` §3 (D-MT-1 (a), D-MT-3) and
-§6. Schema: migration 158.
+§6. Schema: migration 161.
 
 ``test_projects_grants.py`` is the fence between two *departments of one
 company*. This is the fence between two *companies*, and it is a different
@@ -204,7 +204,7 @@ async def test_a_granted_subtree_stops_at_the_tenant(
 ) -> None:
     """The closure's RECURSIVE step carries the tenant too.
 
-    Migration 158's trigger already makes a cross-tenant parent impossible, so
+    Migration 161's trigger already makes a cross-tenant parent impossible, so
     this is the defence-in-depth arm: the closure must not be the thing that
     would leak if that trigger were ever dropped.
     """

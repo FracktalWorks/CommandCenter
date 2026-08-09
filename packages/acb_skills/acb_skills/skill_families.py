@@ -123,12 +123,12 @@ SKILL_FAMILIES: dict[str, dict[str, Any]] = {
     "history": {
         "label": "Conversation history",
         "summary": (
-            "Recall what was discussed in earlier sessions with a SELECT-only "
-            "SQL query over the chat history database."
+            "Recall what was discussed in earlier sessions by searching the "
+            "chat history."
         ),
         "description": (
-            "SELECT-only SQL over the chat history database — recall what "
-            "was discussed in prior sessions."
+            "Search past conversations by text, thread, agent or recency — "
+            "recall what was discussed in prior sessions."
         ),
         "tools": ("query_history",),
         "core": False,

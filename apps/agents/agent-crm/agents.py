@@ -1,31 +1,45 @@
-"""CRM Assistant Agent — the read half (WS-26d).
+"""CRM Assistant Agent — the read half + the write half (WS-26d).
 
-A MAF agent that answers questions about the native CRM in conversation: find a
-lead, read the pipeline, open a record, read what has happened to it. Every tool
-is a thin wrapper over the ``/crm/*`` gateway routes built by WS-26a/b/c, called
-with the acting user's identity, so the agent inherits their guarantees — the
-`feature:crm` gate, the status vocabulary, the org-wide visibility rule
-(D-CRM-3), and the ≤100 page cap enforced in the list kernel itself.
+A MAF agent that works the native CRM in conversation: find a lead, read the
+pipeline, open a record, read what has happened to it — and, since WS-26d-write,
+create a lead, move a deal, log what happened and convert a lead into a deal.
+Every tool is a thin wrapper over the ``/crm/*`` gateway routes built by
+WS-26a/b/c, called with the acting user's identity, so the agent inherits their
+guarantees — the `feature:crm` gate, the status vocabulary, the org-wide
+visibility rule (D-CRM-3), and the ≤100 page cap enforced in the list kernel
+itself.
 
-DOCTRINE — this version READS. There is deliberately no create, update, convert,
-log or delete tool: `_ALLOWED_METHODS` is ``{"GET"}`` and every gateway call goes
-through the one helper that checks it, so read-only is a property of the
-transport rather than a promise in a docstring. The write half (`create_lead`,
-`update_deal_status`, `log_activity`, `convert_lead` — each confirmation-gated
-fail-closed) is a later slice of WS-26d, blocked on the spec naming its
-confirm/risk mechanism.
+DOCTRINE — reads are free; **every write asks a human first, and fails CLOSED.**
+The four write tools each ``await request_confirmation`` before any mutating
+request is built, none of them passes ``non_interactive_default="approve"``, and
+so a run with no delivery channel for the card writes nothing at all
+(``acb_skills/ask_tools.py`` — HH-2, OWASP LLM06 excessive agency). Annotation is
+not enforcement: ``@_annotate_risk(destructive=True)`` makes the permission layer
+defer to that card (``permission_policy.py`` returns ``tool_destructive_defer``),
+it does not raise one. So: annotate *and* confirm.
 
-Two structural guards carry that doctrine, and both live in the request path
+Three structural guards carry the rest, and all three live in the request path
 rather than in the system prompt, because every argument here is LLM-filled from
 a context full of counterparty-authored CRM text: ``_ALLOWED_METHODS`` bounds
-the VERB, and ``_entity_slug`` + ``_record_uuid`` bound the PATH. Neither is a
-tidiness check — an unvalidated ``record_id`` is a path traversal, since httpx
-resolves ``..`` segments before the request goes out (see ``_record_uuid``).
+the VERB (``GET``/``POST``/``PATCH`` — never ``DELETE``, never ``PUT``, because
+no tool here removes or replaces a record), ``_entity_slug`` + ``_record_uuid``
+bound the PATH, and the tools take NAMES where a person speaks names — a stage,
+a lost reason — resolving them to ids against the CRM's own vocabulary instead
+of asking the model to hold a UUID. Neither is a tidiness check: an unvalidated
+``record_id`` is a path traversal, since httpx resolves ``..`` segments before
+the request goes out (see ``_record_uuid``).
+
+⚠️ **A write here can leave the building.** Per D-CRM-9 an agent-created row is
+born ``zoho_dirty`` exactly like a human's, so with ``CRM_ZOHO_SYNC`` enabled it
+queues for the live Zoho tenant. That is by design, and it is why the
+confirmation gate is the fail-closed kind rather than the reversible-action kind.
 
 The agent never touches Postgres. It has no engine, no session and no SQL: it
 asks the gateway, as the person whose run it is. That is what keeps one
 authorization rule — the route's — rather than two that can disagree. The path
-guards are what keep it pointed at the routes that rule was written for.
+guards are what keep it pointed at the routes that rule was written for. It also
+never speaks to Zoho: the credential belongs to the sync engine (D-CRM-7/8), and
+the outward hop is `sync_zoho`'s, broker-gated on its own terms.
 
 Registered as a MAF agent (name "crm-assistant"); build_agents() is the Dynamic
 Agent Loader entry point. Structure mirrors agent-email-assistant /
@@ -58,8 +72,10 @@ INSTRUCTIONS = (
     _INSTRUCTIONS_FILE.read_text(encoding="utf-8")
     if _INSTRUCTIONS_FILE.exists()
     else "You are the CRM Assistant. Answer questions about leads, deals, "
-    "contacts and organizations using the provided read-only tools. You cannot "
-    "modify CRM records in this version."
+    "contacts and organizations using the provided tools. You can also create "
+    "a lead, move a deal, log an activity and convert a lead — each of those "
+    "asks the person you are acting for to approve it first, and does nothing "
+    "if they decline. You cannot delete a CRM record."
 )
 
 
@@ -139,12 +155,17 @@ def _headers() -> dict[str, str]:
     }
 
 
-#: The verbs this agent may speak. Read-only is enforced HERE, at the single
-#: round-trip helper, rather than by everyone remembering not to write one: a
-#: tool added later that reaches for POST/PATCH/DELETE raises instead of
-#: mutating the CRM. Widening this set is the write half's decision to make
-#: explicitly, together with the confirmation gate that must come with it.
-_ALLOWED_METHODS: frozenset[str] = frozenset({"GET"})
+#: The verbs this agent may speak, enforced HERE at the single round-trip
+#: helper rather than by everyone remembering the rule.
+#:
+#: WS-26d-write widened this from ``{"GET"}`` — deliberately, and by exactly
+#: two entries, together with the confirmation gate the read half said had to
+#: come with them. ``DELETE`` and ``PUT`` are still absent and that absence is
+#: load-bearing, not an oversight: **no tool here removes or replaces a CRM
+#: record**, so a tool added later that reaches for one raises instead of
+#: destroying data — which is the whole reason this check survived the
+#: widening instead of being deleted along with the doctrine it used to carry.
+_ALLOWED_METHODS: frozenset[str] = frozenset({"GET", "POST", "PATCH"})
 
 
 def _raise_if_error(resp: httpx.Response, method: str, path: str) -> None:
@@ -171,13 +192,14 @@ async def _request(
     """Single gateway round-trip: URL + auth headers, fire, normalize errors.
 
     Refuses any verb outside :data:`_ALLOWED_METHODS` before the request is
-    built, so the read-only doctrine cannot be broken by a caller passing a
+    built, so the verb doctrine cannot be broken by a caller passing a
     different method — including one this module grows later.
     """
     if method.upper() not in _ALLOWED_METHODS:
         raise RuntimeError(
-            f"crm-assistant is read-only: refusing to issue {method.upper()} "
-            f"{path}. Modifying CRM records is not available in this version."
+            f"crm-assistant does not issue {method.upper()} {path}: its verbs "
+            f"are {sorted(_ALLOWED_METHODS)}. Deleting or replacing a CRM "
+            "record is not something this agent can do."
         )
     async with httpx.AsyncClient(timeout=timeout) as client:
         resp = await client.request(
@@ -189,6 +211,20 @@ async def _request(
 
 async def _get(path: str, params: dict[str, Any] | None = None) -> Any:
     return (await _request("GET", path, params=params or {})).json()
+
+
+# The two write verbs, and only the two. Each goes through ``_request``, so
+# widening :data:`_ALLOWED_METHODS` is still the only way a verb reaches the
+# wire — a helper that built its own client would be a second transport with a
+# second set of rules. There is deliberately no ``_delete``/``_put``: a helper
+# nobody needs is a helper somebody will find.
+
+async def _post(path: str, payload: dict[str, Any] | None = None) -> Any:
+    return (await _request("POST", path, json=payload or {})).json()
+
+
+async def _patch(path: str, payload: dict[str, Any]) -> Any:
+    return (await _request("PATCH", path, json=payload)).json()
 
 
 # ── The four record types ────────────────────────────────────────────────────
@@ -531,6 +567,394 @@ async def get_timeline(entity: str, record_id: str, limit: int = 20) -> str:
     return "\n".join(out)
 
 
+# ── Write tools (WS-26d-write) ───────────────────────────────────────────────
+#
+# Four rules, and every one of them is somebody's incident:
+#
+# 1. **Confirm first, fail closed.** Each tool awaits ``request_confirmation``
+#    before it builds a mutating request, and none of them passes
+#    ``non_interactive_default="approve"`` — that opt-out is reserved for
+#    reversible actions, and a CRM row that queues for the live Zoho tenant
+#    (D-CRM-9) is not one. A run with no channel to deliver the card therefore
+#    writes NOTHING, rather than writing unattended.
+# 2. **A tool never asks the model for a UUID it could look up.** The stage and
+#    the lost reason are given by NAME and resolved here against the CRM's own
+#    vocabulary, because "Negotiation" is what a person says and a UUID is what
+#    an LLM hallucinates. An unknown name comes back as the list of real ones —
+#    a refusal that teaches, not an opaque 422 relayed from the route.
+# 3. **A tool never invents vocabulary.** Resolution reads; it never creates a
+#    stage or a lost reason to make a request succeed.
+# 4. **Identity is never an argument.** ``create_lead`` takes no
+#    ``owner_email``: the route defaults it to the acting user server-side, so
+#    ownership is derived from who is running rather than from what the model
+#    typed — the same control class as ``_record_uuid``.
+#
+# Reads MAY precede the confirmation and do: a card that says "move deal
+# 8f3c-… to <a stage name we have not checked exists>" is not consent, it is a
+# rubber stamp. What must never precede it is a WRITE, which is what
+# ``test_crm_agent_write.py`` asserts per tool.
+
+#: What a person may log by hand. Mirrors ``activities.LOGGABLE_TYPES``:
+#: ``status_change`` and ``system`` are the platform's to write, and a
+#: hand-written one would be a funnel event with no transition behind it.
+_LOGGABLE_TYPES: tuple[str, ...] = ("note", "call", "meeting", "task")
+
+#: The line every confirmation card carries. D-CRM-9 is an owner decision that
+#: agent writes queue for Zoho exactly like human ones, so the person being
+#: asked to approve is told where this can end up — the flag's state is the
+#: gateway's business, but the possibility is theirs to weigh.
+_ZOHO_NOTE = (
+    "Note: CRM changes queue for the Zoho tenant when the sync is enabled "
+    "(D-CRM-9)."
+)
+
+
+#: ``request_confirmation`` truncates ``context`` at 4000 characters
+#: (``ask_tools.py``). Mirrored here so the truncation is OURS and visible,
+#: rather than the card silently losing whatever happened to be last.
+_CARD_CONTEXT_LIMIT = 4000
+
+_TRUNCATED = "… [truncated on this card; the full text is what gets written]"
+
+
+def _fields_block(payload: dict[str, Any]) -> str:
+    """The payload as the confirmation card's preformatted body.
+
+    Rendered from the payload actually about to be sent, never re-typed from
+    the arguments: a card that shows something other than what goes on the
+    wire is worse than no card, because it buys a signature for the wrong act.
+
+    ⚠️ **The fixed line goes FIRST, and the variable-length part is budgeted to
+    fit under it.** ``request_confirmation`` clips ``context`` at 4000
+    characters, so appending the Zoho note last meant a 4KB note body silently
+    dropped exactly the warning the person was owed — while the card also
+    stopped matching the wire, which is the failure this function's second
+    paragraph says is worse than showing no card at all. Truncation still
+    happens; it just happens where a reader can see it, and it says so.
+    """
+    body = "\n".join(f"{key}: {value}" for key, value in payload.items())
+    budget = _CARD_CONTEXT_LIMIT - len(_ZOHO_NOTE) - 1
+    if len(body) <= budget:
+        return f"{_ZOHO_NOTE}\n{body}"
+    keep = max(0, budget - len(_TRUNCATED) - 1)
+    return f"{_ZOHO_NOTE}\n{body[:keep]}\n{_TRUNCATED}"
+
+
+def _names(rows: Any, field: str) -> list[str]:
+    """Each row's human-facing name, verbatim — spacing and casing preserved."""
+    return [
+        str(row.get(field)).strip()
+        for row in rows or []
+        if isinstance(row, dict) and str(row.get(field) or "").strip()
+    ]
+
+
+def _matches_by_name(rows: Any, field: str, wanted: str) -> list[dict[str, Any]]:
+    """EVERY case-insensitive match for a vocabulary name — never just the first.
+
+    Case-insensitive because "negotiation" and "Negotiation" are the same lane
+    to everybody except a string comparison, and the model is repeating what
+    somebody said in chat rather than copying the settings grid.
+
+    ⚠️ **Returning a list rather than the first hit is the whole point.**
+    Postgres UNIQUE is case-SENSITIVE, so "Closed Won" and "Closed won" can
+    genuinely coexist — and the Zoho importer's ``ensure_status`` mints unseen
+    lanes by name, which is exactly how a case variant appears without anybody
+    deciding to create one. A first-match lookup would silently pick whichever
+    the query happened to order first and move the deal into a lane nobody
+    named. Two lanes with the same spoken name is a question for a human, not
+    a coin toss, so the caller refuses and lists them verbatim.
+    """
+    target = str(wanted or "").strip().lower()
+    if not target:
+        return []
+    return [
+        row for row in rows or []
+        if isinstance(row, dict)
+        and str(row.get(field) or "").strip().lower() == target
+    ]
+
+
+def _name_list(rows: Any, field: str) -> str:
+    """Every valid name, for a refusal that tells the caller what to say next."""
+    found = _names(rows, field)
+    return ", ".join(found) if found else "(none are configured)"
+
+
+def _quoted_names(rows: Any, field: str) -> str:
+    """Names with quotes around them — for an ambiguity refusal, where the
+    difference between two candidates may be nothing but casing or padding and
+    an unquoted list would read like the same word printed twice."""
+    return ", ".join(f"'{name}'" for name in _names(rows, field))
+
+
+@_annotate_risk(destructive=True, idempotent=False)
+async def create_lead(
+    lead_name: str,
+    email: str | None = None,
+    phone: str | None = None,
+    organization_name: str | None = None,
+    description: str | None = None,
+) -> str:
+    """Create a new lead in the CRM — a person or company somebody has just
+    heard from and wants tracked. Pass their name, and whatever else is known:
+    email, phone, the company they are from, and a description of what they
+    want.
+
+    The person you are acting for is asked to approve before anything is
+    created, and nothing is created if they decline. The new lead is OWNED by
+    them — you cannot create a lead on somebody else's behalf; if it should be
+    somebody else's, say so and let them reassign it in the CRM.
+
+    Use search_crm first: creating a second row for a lead the CRM already has
+    is the single most common way a CRM gets worse."""
+    name = str(lead_name or "").strip()
+    if not name:
+        return (
+            "A lead needs a name. Tell me who this is — a person, or the "
+            "company they are from — and I will create it."
+        )
+    # `source` is provenance, and "agent" is the truth about this row. It is
+    # one of the four values the CHECK constraint allows, so it is also the
+    # difference between a create and a 422.
+    payload: dict[str, Any] = {"lead_name": name, "source": "agent"}
+    for key, value in (
+        ("email", email),
+        ("phone", phone),
+        ("organization_name", organization_name),
+        ("description", description),
+    ):
+        cleaned = str(value or "").strip()
+        if cleaned:
+            payload[key] = cleaned
+
+    from acb_skills.ask_tools import request_confirmation
+    _where = f" at {payload['organization_name']}" if organization_name else ""
+    if not await request_confirmation(
+        title="Create this CRM lead?",
+        detail=f"{name}{_where}" + (f" · {payload['email']}" if email else ""),
+        context=_fields_block(payload),
+    ):
+        return f"Cancelled — no lead was created for {name}."
+    row = await _post("/crm/leads", payload)
+    created = row if isinstance(row, dict) else {}
+    return (
+        f"Created lead {created.get('lead_name') or name} "
+        f"(id={created.get('id')}), owned by "
+        f"{created.get('owner_email') or 'you'}."
+    )
+
+
+@_annotate_risk(destructive=True, idempotent=False)
+async def update_deal_status(
+    deal_id: str, stage: str, lost_reason: str | None = None,
+) -> str:
+    """Move a deal to a different pipeline stage. Give the stage by NAME, the
+    way it reads on the board ('Negotiation', 'Closed Won') — get_pipeline
+    lists them. If the stage is a lost one you must also pass lost_reason,
+    again by name; the CRM refuses a lost deal with no reason recorded, and
+    that rule is the point of the field rather than an obstacle to it.
+
+    The person you are acting for approves the move before it happens, and the
+    card names the deal and the stage it is going to. Moving a deal writes its
+    stage history — how long it sat where — so a wrong move is visible
+    afterwards rather than silent."""
+    record = _record_uuid(deal_id)
+    wanted = str(stage or "").strip()
+    if not wanted:
+        return (
+            "Which stage should this deal move to? Name it the way it reads "
+            "on the board — get_pipeline lists every stage in order."
+        )
+    # Read before asking: a confirmation card that names a deal nobody can
+    # open, or a stage that does not exist, is consent bought under a
+    # misdescription. Both of these are GETs — nothing has been written yet.
+    deal = await _get(f"/crm/deals/{record}")
+    statuses = await _get("/crm/statuses/deal")
+    found = _matches_by_name(statuses, "name", wanted)
+    if not found:
+        return (
+            f"There is no deal stage called '{wanted}', so nothing was moved. "
+            f"The stages are: {_name_list(statuses, 'name')}."
+        )
+    if len(found) > 1:
+        return (
+            f"'{wanted}' matches more than one deal stage — "
+            f"{_quoted_names(found, 'name')} — so nothing was moved. Ask which "
+            "one is meant, or have the duplicate renamed in the CRM's settings."
+        )
+    target = found[0]
+    lane = str(target.get("name") or wanted)
+    payload: dict[str, Any] = {"status_id": str(target.get("id") or "")}
+    if str(target.get("type") or "").strip().lower() == "lost":
+        # A lost-type stage needs a reason on the way IN (the route 422s
+        # without one), so resolve it here rather than relaying that error —
+        # and resolve it by name, against the reasons that exist. Inventing
+        # one, or creating one to make this call succeed, is never right: the
+        # list is a deliberate vocabulary somebody curated.
+        reasons = await _get("/crm/lost-reasons")
+        picked = _matches_by_name(reasons, "label", lost_reason or "")
+        if not picked:
+            said = str(lost_reason or "").strip()
+            return (
+                f"'{lane}' is a lost stage, so it needs a lost reason and "
+                + (f"'{said}' is not one of them. " if said else "none was given. ")
+                + "Nothing was moved. Valid reasons: "
+                + f"{_name_list(reasons, 'label')}."
+            )
+        if len(picked) > 1:
+            return (
+                f"'{lost_reason}' matches more than one lost reason — "
+                f"{_quoted_names(picked, 'label')} — so nothing was moved. Ask "
+                "which one is meant, or have the duplicate renamed."
+            )
+        payload["lost_reason_id"] = str(picked[0].get("id") or "")
+
+    title = _row_title("deals", deal if isinstance(deal, dict) else {})
+    from acb_skills.ask_tools import request_confirmation
+    if not await request_confirmation(
+        title=f"Move this deal to {lane}?",
+        detail=f"{title} → {lane}",
+        context=_fields_block({"deal": title, "stage": lane, **payload}),
+    ):
+        return f"Cancelled — {title} was not moved to {lane}."
+    await _patch(f"/crm/deals/{record}", payload)
+    return f"Moved {title} to {lane}."
+
+
+@_annotate_risk(destructive=True, idempotent=False)
+async def log_activity(
+    entity: str,
+    record_id: str,
+    activity_type: str,
+    subject: str,
+    body: str | None = None,
+) -> str:
+    """Record that something happened to a CRM record — a note, a call, a
+    meeting or a task. entity is 'leads', 'deals', 'contacts' or
+    'organizations' and record_id is its id (from search_crm or get_pipeline).
+    subject is the one line that will show on the timeline; body is the detail.
+
+    The person you are acting for approves before anything is written, and the
+    entry is attributed to them. Log what actually happened, in their words
+    where you have them — a timeline is read later by somebody deciding what to
+    do next, and an invented detail is worse there than a missing one."""
+    slug = _entity_slug(entity)
+    record = _record_uuid(record_id)
+    # Strip BEFORE defaulting, not after: `"  "` is an unstated type, not a
+    # type called "  ", and the two spellings must not disagree.
+    kind = str(activity_type or "").strip().lower() or "note"
+    if kind not in _LOGGABLE_TYPES:
+        return (
+            f"'{activity_type}' is not something you can log. One of: "
+            f"{', '.join(_LOGGABLE_TYPES)}. (Stage changes are written by the "
+            "pipeline itself — move the deal with update_deal_status instead.)"
+        )
+    line = str(subject or "").strip()
+    if not line:
+        return (
+            "An activity needs a subject — the one line that will show on the "
+            "timeline. Nothing was logged."
+        )
+    payload: dict[str, Any] = {"type": kind, "subject": line}
+    detail = str(body or "").strip()
+    if detail:
+        payload["body"] = detail
+
+    # Read the record before asking, for the same reason `update_deal_status`
+    # does — and here the reason is sharper, because this tool has no other
+    # variable on its card. `search_crm` routinely returns two deals whose
+    # names differ by a word, and if the model picks the wrong id the card is
+    # BYTE-IDENTICAL to the right one: same type, same subject, same body. The
+    # approver would have had nothing to check, and there is no delete tool to
+    # take the note back off the wrong record — which by D-CRM-9 is by then
+    # queued for the live Zoho tenant. One GET buys the one fact that makes
+    # this card checkable.
+    row = await _get(f"/crm/{slug}/{record}")
+    target = _row_title(slug, row if isinstance(row, dict) else {})
+
+    from acb_skills.ask_tools import request_confirmation
+    label = ENTITY_LABELS[slug].lower()
+    if not await request_confirmation(
+        title=f"Log this {kind} on {target}?",
+        detail=f"{target} ({label}) · {kind}: {line}",
+        context=_fields_block({label: target, **payload}),
+    ):
+        return f"Cancelled — nothing was logged on {target}: {line}"
+    await _post(f"/crm/{slug}/{record}/activities", payload)
+    return (
+        f"Logged {kind} on {target}: {line}"
+        + (" (with detail)" if detail else "")
+    )
+
+
+@_annotate_risk(destructive=True, idempotent=False)
+async def convert_lead(
+    lead_id: str,
+    deal_name: str | None = None,
+    amount: float | None = None,
+    expected_close_date: str | None = None,
+) -> str:
+    """Turn a qualified lead into a deal: the CRM creates the contact and the
+    organization from the lead's details (reusing existing ones where the email
+    or company name already matches) and opens a deal linked to both. Pass
+    deal_name, amount and expected_close_date (YYYY-MM-DD) if they are known.
+
+    This is a one-way step — the lead leaves the lead list and the live
+    conversation moves to the deal — so the person you are acting for approves
+    it first, and nothing happens if they decline.
+
+    A lead that has already been converted is not converted again: it keeps a
+    link to the deal it became, and that deal is where the conversation is."""
+    record = _record_uuid(lead_id)
+    # Read the lead before asking anybody to approve anything: the card should
+    # name the lead, and an already-converted lead is a refusal rather than a
+    # question. §8 B6 — "converted" keys on `converted_deal_id` and never on
+    # `converted_at`: deleting the deal SET-NULLs the link and the lead becomes
+    # convertible again, while the timestamp survives as history, so a
+    # timestamp check would strand that lead as un-convertible forever.
+    lead = await _get(f"/crm/leads/{record}")
+    row = lead if isinstance(lead, dict) else {}
+    title = _row_title("leads", row)
+    already = row.get("converted_deal_id")
+    if already:
+        return (
+            f"{title} has already been converted — the live conversation is on "
+            f"deal id={already}. Nothing was changed."
+        )
+    deal: dict[str, Any] = {}
+    if str(deal_name or "").strip():
+        deal["name"] = str(deal_name).strip()
+    if amount is not None and str(amount).strip():
+        deal["amount"] = float(amount)
+    if str(expected_close_date or "").strip():
+        deal["expected_close_date"] = str(expected_close_date).strip()
+    payload: dict[str, Any] = {"deal": deal} if deal else {}
+
+    from acb_skills.ask_tools import request_confirmation
+    if not await request_confirmation(
+        title="Convert this lead into a deal?",
+        detail=f"{title} → {deal.get('name') or title}",
+        context=_fields_block({"lead": title, **deal}),
+    ):
+        return f"Cancelled — {title} was not converted."
+    result = await _post(f"/crm/leads/{record}/convert", payload)
+    made = result if isinstance(result, dict) else {}
+    new_deal = made.get("deal") or {}
+    contact = made.get("contact") or {}
+    organization = made.get("organization") or {}
+    parts = [
+        f"Converted {title} into deal "
+        f"{new_deal.get('name') or deal.get('name') or title} "
+        f"(id={new_deal.get('id')})"
+    ]
+    if contact.get("id"):
+        parts.append(f"contact id={contact['id']}")
+    if organization.get("id"):
+        parts.append(f"organization id={organization['id']}")
+    return " · ".join(parts) + "."
+
+
 # ── MAF agent factory (Dynamic Agent Loader entry point) ─────────────────────
 
 _TOOLS = [
@@ -538,6 +962,10 @@ _TOOLS = [
     get_pipeline,
     get_record,
     get_timeline,
+    create_lead,
+    update_deal_status,
+    log_activity,
+    convert_lead,
 ]
 
 
@@ -590,11 +1018,15 @@ def build_agents() -> list[Any]:
             instructions=INSTRUCTIONS,
             name="crm-assistant",
             description=(
-                "Answers questions about the CRM — finds leads, deals, contacts "
-                "and organizations, reads the deal pipeline by stage with its "
-                "₹ totals, opens a record in full, and reads a record's history "
-                "of notes, calls, meetings and stage changes. Read-only: it "
-                "cannot create, edit, convert or delete CRM records."
+                "Works the CRM — finds leads, deals, contacts and "
+                "organizations, reads the deal pipeline by stage with its ₹ "
+                "totals, opens a record in full, and reads a record's history "
+                "of notes, calls, meetings and stage changes. It can also "
+                "create a lead, move a deal to another stage, log a note, "
+                "call, meeting or task, and convert a lead into a deal — every "
+                "one of those asks the person it is acting for to approve "
+                "first, and does nothing if nobody is there to ask. It never "
+                "deletes a CRM record."
             ),
             tools=list(_TOOLS),
         )

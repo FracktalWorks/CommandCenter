@@ -1,6 +1,6 @@
 # Multi-User / Organization Architecture Research
 
-> **Status:** Research & design proposal. **§4 (identity, membership, roles, permissions) is now IMPLEMENTED** — see [`org_access_control.md`](org_access_control.md), which also carries §8 credential scoping and part of §7 memory scoping. The rest (§5 modules, §9 entity-graph RLS, §16 data-heavy scoping, §17 SaaS) remains research, and the modules/session-sharing portion is owned by the **multiplayer agent collaboration** workstream — see that spec's §10 handoff contract before building from this document.  
+> **Status:** Research & design proposal. **§4 (identity, membership, roles, permissions) is now IMPLEMENTED** — see [`org_access_control.md`](org_access_control.md), which also carries §8 credential scoping and part of §7 memory scoping. The rest (§5 modules, §9 entity-graph RLS, §16 data-heavy scoping, §17 SaaS) remains research, and the modules/session-sharing portion is owned by the **multiplayer agent collaboration** workstream — see that spec's §10 handoff contract before building from this document. **2026-08-08/09:** §9 and §17 were un-superseded and are now **input to `saas_multitenancy.md` (D15, WS-29)** — the decision of record, which adopts §17.2's pooled-first recommendation and **rejects §17.3's header-based tenant resolution by name**. Read §17 as background; build only from saas_multitenancy.md.  
 > **Created:** 2026-07-07  
 > **Scope:** How CommandCenter evolves from a single-tenant "internal company brain" into a multi-user organization account where personal data stays private, shared resources are selectively visible, and an administrator controls settings, modules, and agents.  
 > **Companion docs:** [`project_plan.md`](../project_plan.md) · [`system_architecture.md`](../system_architecture.md) · [`learning-resources/05-auth-and-oauth.md`](../../learning-resources/05-auth-and-oauth.md) · [`specs/permissions_sandbox_b6.md`](permissions_sandbox_b6.md)
@@ -876,7 +876,7 @@ The gateway should reject any query that does not include an `organization_id` f
 
 ### 16.5 Row-level security (RLS) as a safety net
 
-Postgres RLS can enforce the above rules at the database layer. It is not a replacement for application filters (RLS can be bypassed by superusers and adds query-plan risk), but it is a valuable safety net.
+Postgres RLS can enforce the above rules at the database layer. It is not a replacement for application filters (RLS can be bypassed by superusers and adds query-plan risk), but it is a valuable safety net. *[D15 supersedes this caution: the adopted design runs the app as a non-superuser non-owner role (acb_app) with FORCE ROW LEVEL SECURITY, fails closed on an unset app.tenant_id, and rewrites zero queries — see saas_multitenancy.md §1.3/§1.8.]*
 
 Example policy for `email_messages`:
 
@@ -908,7 +908,7 @@ await db.execute(
 )
 ```
 
-Use RLS in **audit mode** first (`POLICY ... FOR SELECT USING (true)`) to measure performance impact before enforcing.
+Use RLS in **audit mode** first (`POLICY ... FOR SELECT USING (true)`) to measure performance impact before enforcing. *[D15 supersedes this caution: the adopted design runs the app as a non-superuser non-owner role (acb_app) with FORCE ROW LEVEL SECURITY, fails closed on an unset app.tenant_id, and rewrites zero queries — see saas_multitenancy.md §1.3/§1.8.]*
 
 ### 16.6 Sync architecture
 
@@ -1120,6 +1120,8 @@ Each tenant gets their own Postgres database or even their own Kubernetes namesp
 1. **Phase 1:** Shared DB + row-level isolation + RLS safety net.
 2. **Phase 2:** Offer schema-per-tenant as an enterprise option.
 3. **Phase 3:** Database-per-tenant for dedicated enterprise customers.
+
+> ⛔ **REJECTED MECHANISM (2026-08-08).** The header-based tenant resolution this section recommends — `X-Organization-Id` from the client — is **rejected by `saas_multitenancy.md` §7 item 2 and forbidden by `user_management_contract.md` R11**: the tenant comes from the authenticated session or a tenant-scoped API key, never from request input; the subdomain is a lookup, not an assertion. The code below is retained as research record only. **Do not implement it.**
 
 ### 17.3 Tenant-aware application architecture
 

@@ -12,7 +12,34 @@
 
 ## 1. Where the branch is
 
-**18 commits ahead of `main`, tree clean, everything pushed.** Open PR **#399**.
+**Tree clean, everything pushed.** Open PR **#399**.
+
+> ### ⚠️ 2026-08-09 — `main` moved, and this branch has been merged with it
+>
+> A parallel workstream landed the SaaS multi-tenancy programme (**PR #404**, MT-0a…MT-1i)
+> while this branch was open. `origin/main` was merged in rather than left to conflict, and
+> three things changed as a result. Read these before §1.1.
+>
+> **1. The migrations were renumbered.** `main` took 157/158/159, so this branch's became
+> **160** (`projects_recurrence`), **161** (`projects_tenancy`) and **162**
+> (`app_user_email_case`). Numbers in older commit messages and in `#399`'s body refer to the
+> pre-merge names. House rule R1 still applies to you: resolve the next free number at build
+> time, never from a document.
+>
+> **2. D-MT-2 is answered, and not by this branch.** `specs/saas_multitenancy.md` is canonical:
+> **D15 — pooled, enforced by RLS** against an `app.tenant_id` GUC bound by
+> `acb_common.db.tenant_session()`. `specs/multi_tenancy.md` here is now the *measured* record
+> only and says so at the top. Anything in §3 below that waited on D-MT-2 is either superseded
+> by MT-1b/MT-1c or needs re-reading against that spec first.
+>
+> **3. This branch found a defect in MT-1b, and gated it.** `gen_tenant_migration.py` scoped
+> tables by column *name*, and `crm_contacts` / `crm_deals` / `crm_activities` have an
+> `organization_id` that references `crm_organizations` — a customer company. Its phase 2 would
+> have written a tenant id into that column and aborted **inside the maintenance window**.
+> `discover_homonyms()` + `HOMONYM_BLOCKED` now refuse at generation time (exit 1), and
+> `test_tenancy_boundary.py` asserts it in CI. ⚠️ **Those three tables consequently carry no
+> tenant isolation at all** — that is an owner call (rename the CRM column), written up in
+> `specs/multi_tenancy_leak_audit.md` §2.1.
 
 | Verified on this branch | |
 |---|---|
@@ -36,9 +63,9 @@ dependencies, and a ⌘K search palette.
 
 **Two migrations exist on this branch and are on no real database:**
 
-- `infra/postgres/158_projects_tenancy.sql` — `organization_id NOT NULL` on all 17 `pm_*`
+- `infra/postgres/161_projects_tenancy.sql` — `organization_id NOT NULL` on all 17 `pm_*`
   tables, plus a parent-consistency trigger.
-- `infra/postgres/159_app_user_email_case.sql` — `UNIQUE (lower(email))` on `app_user`.
+- `infra/postgres/162_app_user_email_case.sql` — `UNIQUE (lower(email))` on `app_user`.
 
 Both are idempotent and both were applied twice against a live Postgres 16 here. **But this
 sandbox's database is not yours**, and `schema_migrations` (migration 153) is the ledger —
@@ -48,7 +75,7 @@ check it before assuming anything about what the box has:
 SELECT filename FROM schema_migrations ORDER BY filename DESC LIMIT 15;
 ```
 
-⚠️ **Migration 158 backfills to the organization with `slug='default'` and fails loudly if it
+⚠️ **Migration 161 backfills to the organization with `slug='default'` and fails loudly if it
 is absent.** That is deliberate — guessing a tenant is worse than stopping. If your database
 has no such row, migration 130 seeds it.
 
@@ -132,19 +159,21 @@ Two corollaries learned the hard way on this branch:
 Dependency order. Everything here is agent-safe to **build**; the owner gates in §4 are about
 *executing* against production.
 
-### WS-29c — enforce the boundary (blocked on D-MT-2)
+### ~~WS-29c — enforce the boundary~~ ✅ SUPERSEDED by MT-1b + MT-1c on `main`
 
-The column and the application predicate exist for `pm_*`. What enforces isolation for
-everything else is **D-MT-2, still open** (§4). The recommendation on record is Postgres RLS,
-because it is the only option where the *absence* of code is safe rather than a leak — and
-given 123 unscoped tables, absence of code is the failure mode this system actually has.
+This ticket's recommendation on record was Postgres RLS, because it is the only option where
+the *absence* of code is safe rather than a leak. **That is what D15 chose**, and `main`
+already carries it: `infra/postgres/generated/04_policies.sql` (ENABLE + FORCE + USING +
+WITH CHECK per table) and `acb_common.db.tenant_session()` for the binding half.
 
-**Do not start until D-MT-2 is answered.** Building the wrong enforcement is a rewrite.
+**Do not build this.** Read `specs/saas_multitenancy.md` §1.3 and the H1→H8 runbook in
+`saas_multitenancy_handover.md` instead. The one thing this branch adds on top is the homonym
+gate described in §1 — the three CRM tables that RLS must NOT be pointed at yet.
 
 ### WS-29d — the remaining 123 tables
 
 `tests/unit/test_tenancy_boundary.py` holds the frozen list and fails any **new** unscoped
-table. Work by family; the migration pattern is `158_projects_tenancy.sql` and it is worth
+table. Work by family; the migration pattern is `161_projects_tenancy.sql` and it is worth
 copying wholesale, including the trigger.
 
 ⚠️ **Before `crm_*`: the column name is already taken.** `crm_activities`, `crm_contacts` and
@@ -206,8 +235,14 @@ Registered in `work_plan.md` §6. Do not execute; propose and stop.
 
 **Open decisions:**
 
-- **D-MT-2 — where is isolation enforced?** RLS / application predicate / schema-per-tenant.
-  Options costed in `specs/multi_tenancy.md` §3. **Blocks WS-29c.**
+- ~~**D-MT-2 — where is isolation enforced?**~~ ✅ **ANSWERED 2026-08-09 on `main` as D15:
+  pooled, enforced by RLS.** Nothing here blocks on it any more.
+- ⚠️ **NEW — the CRM column name.** `crm_contacts` / `crm_deals` / `crm_activities` already use
+  `organization_id` for the *customer company*, so they cannot be tenant-scoped under that name
+  and are currently **outside RLS entirely**. Rename the CRM column
+  (`organization_id` → `crm_organization_id`, touching every CRM route and query), or give the
+  tenant key a different name on those three tables. Until then the hole is real and visible;
+  it is deliberately not filed as an exemption. See `multi_tenancy_leak_audit.md` §2.1.
 - **D-MT-3 — `organization_id` on the row, or through a parent?** Agent-proposed: on the row.
   Already implemented that way for `pm_*`.
 - **S1-2 — do LLM and integration credentials go per tenant?** `provider_keys.provider` is the
@@ -221,7 +256,7 @@ Registered in `work_plan.md` §6. Do not execute; propose and stop.
 **Execution gates:**
 
 - Running either ClickUp import endpoint against production, and confirming a Space→Center
-  mapping (D-PM-10). ⚠️ **The multi-tenant block on this is now LIFTED** — migration 158
+  mapping (D-PM-10). ⚠️ **The multi-tenant block on this is now LIFTED** — migration 161
   keyed the `pm_*` tables, which was the reason to wait.
 - Enabling the WS-27c outbound push (needs BO-1a + BO-1b).
 - The WS-27g cutover and ClickUp token revocation.
@@ -254,7 +289,7 @@ Registered in `work_plan.md` §6. Do not execute; propose and stop.
 - A `CHECK` **cannot read another table**; Postgres refuses the subquery. Cross-table invariants
   need a trigger.
 - `UNIQUE (email)` is **byte-exact**. If your code matches `lower(email)`, the two disagree and
-  one human becomes two rows. (Migration 159.)
+  one human becomes two rows. (Migration 162.)
 
 **LIKE / search**
 

@@ -253,7 +253,7 @@ async def _root_department(
         "description": "Imported from the Tasks app's ClickUp mirror.",
         # A ROOT project, so nothing upstream supplies the tenant and the
         # trigger has no parent to derive it from. Every node beneath this one
-        # inherits it (migration 158).
+        # inherits it (migration 161).
         "organization_id": organization_id,
     })
     project_id = str(created.id)
@@ -417,7 +417,7 @@ async def import_from_tasks(
             # global UNIQUE means the follow-on insert then FAILS for a second
             # organization importing the same workspace — loudly, and that is
             # the better of the two wrong answers until the constraint is
-            # widened to `(organization_id, clickup_id)`; migration 158 §6
+            # widened to `(organization_id, clickup_id)`; migration 161 §6
             # records why that is not done here.
             existing = (await db.execute(
                 text(

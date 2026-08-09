@@ -455,7 +455,7 @@ SELECT id FROM pm_projects WHERE organization_id = CAST(:vis_org AS uuid)
 #: `subject = 'org'` arm alone — leaving the email and group arms unscoped,
 #: which is the same leak wearing a subtler hat.
 #:
-#: The recursive step repeats the tenant filter. The trigger in migration 158
+#: The recursive step repeats the tenant filter. The trigger in migration 161
 #: already makes a cross-tenant parent impossible, so this is defence in depth:
 #: the closure must not be the thing that would leak if that trigger were ever
 #: dropped.
@@ -648,7 +648,7 @@ def require_organization(vis: Visibility) -> str:
 
     Only the creation of a ROOT ``pm_projects`` row reaches this. Everything
     else beneath a project inherits the tenant from its parent in the database
-    (migration 158's ``pm_organization_from_parent`` trigger), which is what
+    (migration 161's ``pm_organization_from_parent`` trigger), which is what
     keeps the tenant a single decision instead of a thing 43 INSERT sites each
     have to remember — D-MT-2 (b)'s named failure mode, and the one this system
     demonstrably has.

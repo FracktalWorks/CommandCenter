@@ -2,6 +2,7 @@
 
 > Consolidated reference for the runtime libraries and memory design CommandCenter depends on. Consult when implementing orchestration, Copilot agent wrappers, or memory wiring. For *why* decisions were made see [`system_architecture.md`](system_architecture.md) (ADRs); for *what/when* see [`project_plan.md`](project_plan.md).
 > Last verified 2026-06-04; versions updated 2026-06-10. (Rewritten 2026-06-20 from the former `ref_maf.md` / `ref_copilot_sdk.md` / `ref_memory_architecture.md`, whose source bytes were corrupted.)
+> ⚠️ **Stale-warning 2026-08-09:** last verified 2026-06-04 — pins may lag `uv.lock` (e.g. agent-framework-core 1.8.1 is live per multi_agent_orchestration.md). `uv.lock` is the source of truth for versions; re-verify any claim here before relying on it.
 
 **Contents:** [1. MAF](#1-microsoft-agent-framework-maf) · [2. GitHub Copilot SDK](#2-github-copilot-sdk) · [3. Memory architecture](#3-memory-architecture)
 

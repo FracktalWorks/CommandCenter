@@ -1,8 +1,8 @@
 # Organization Access Control — implementation spec
 
-> **Status:** 🟢 Phase 1 shipped. **Multi-tenant user management now hands off to the multiplayer agent collaboration workstream — see [§10](#10-handoff-multiplayer-agent-collaboration).** §10.4's requested spec exists: [`groups_sessions_authority.md`](groups_sessions_authority.md) decides the group primitive, `chat_session_participant`, and the authority rule (intersection).
+> **Status:** 🟢 Phase 1 shipped. **Multi-tenant user management now hands off to the multiplayer agent collaboration workstream — see [§10](#10-handoff-multiplayer-agent-collaboration).** §10.4's requested spec exists: [`groups_sessions_authority.md`](groups_sessions_authority.md) decides the group primitive, `chat_session_participant`, and the authority rule (intersection). ⚠️ **Tenancy re-framed 2026-08-08 (D15, WS-29):** this spec's per-deployment framing ('the single-tenant deployment', 'the person who owns the deployment') predates row-tenancy. The intra-org model it documents is unchanged and correct; read `saas_multitenancy.md` for anything cross-tenant. MT-1a/H6 reopen the identity store (user_identity + org_membership); §10's 'complete, not being extended' claim is superseded for the tenancy axis only.
 > **Created:** 2026-07-29 · **Handed off:** 2026-07-29 · **Verified against code:** 2026-08-03 (WS-14 doc remediation — §8 Phase 2 row and §9 Q2 only; the rest keeps its earlier stamps). That pass found **`email_account_member` does not exist** (0 hits repo-wide in `*.sql` and `*.py`) and that §9 Q2 gates `department_centers.md` Phase C4 — both annotated in place. **Repair round the same day (off `264f881e`):** the Q2 annotation's claim that `pending_actions.actor` "is the proposing *agent* … not the human behind it, and no group is derivable from any existing column" was **false** and is corrected in §9 Q2 — two of `actor`'s six writers embed the requesting human's email. Q2 remains OWNER-DECISION on the corrected evidence.
-> **Scope:** Turning the single-tenant deployment into a real multi-user organization: named members, roles, per-user feature/agent access, and one enforcement path the whole platform shares.
+> **Scope:** Turning the single-tenant deployment *(wording predates D15 — one org per deployment is no longer the model)* into a real multi-user organization: named members, roles, per-user feature/agent access, and one enforcement path the whole platform shares.
 > **Parent research:** [`multi_user_organization_research.md`](multi_user_organization_research.md) — the *why* and the long-horizon (SaaS, memory scoping, entity-graph RLS) design. This document is the *what we are building now*, and it deliberately implements a subset.
 > **Companion:** [`permissions_sandbox_b6.md`](permissions_sandbox_b6.md) (tool-level risk gating — orthogonal: that answers "may this *tool call* proceed", this answers "may this *person* reach this feature at all").
 
@@ -27,7 +27,7 @@ So Phase 1 is deliberately narrow and load-bearing:
 - Per-user integration credential scoping — §8.
 - Entity-graph row visibility + Postgres RLS — §9, §16.5.
 - Modules/teams as a first-class container — §5. Phase 1 uses flat org membership; the `module` concept is what Phase 2 adds when "the sales team" needs to mean something.
-- Everything SaaS (§17): subdomains, billing, tenant isolation of agent runtimes.
+- Everything SaaS (§17): subdomains, billing, tenant isolation of agent runtimes. *(in scope since 2026-08-08 — WS-29, saas_multitenancy.md §0.9.3)*
 
 **Why this order.** Modules, memory scoping, and credential scoping are all *consumers* of a resolved principal. Building them first means building three private half-implementations of the same permission check. Phase 1 is that check.
 
@@ -76,7 +76,7 @@ A role is a named bundle of permissions, scoped to an organization. Five are see
 
 | Role | Intent | Grants |
 |---|---|---|
-| `owner` | The person who owns the deployment. | `*` |
+| `owner` | The person who owns the deployment. *(under D15: owner is per-organization, not per-deployment)* | `*` |
 | `admin` | Runs the platform day to day. | `admin:*`, `feature:*`, `agents:*`, `apps:*`, `integrations:*`, `data:org:read` |
 | `manager` | Reads the member directory; cannot change platform config. | `feature:` chat, email, whatsapp, tasks, notes, memory, dashboard, observability, artifacts, approvals; `agents:run:*`; `apps:use:*`, `apps:create`; `data:org:read`; `admin:members:read` |
 | `member` | Default for a new employee. | `feature:` chat, email, tasks, notes, memory, artifacts, dashboard; `agents:run:*`; `apps:use:*` |
@@ -206,9 +206,9 @@ feature_catalog(slug PK, label, description, nav_href, category, sort_order, is_
 
 `feature_catalog` exists so the admin UI can render a checklist of real features without importing `nav.ts` into the gateway, and so a new pane is one seeded row rather than a code change in three places.
 
-The migration seeds the default organization from `ALLOWED_EMAIL_DOMAIN`, seeds the five system roles with their permission sets, backfills every existing `app_user` into the org as `active`, and maps the legacy column: `role='executive'` → `admin`, `role='employee'` → `member`. Existing users keep working; nobody is locked out by deploying this.
+The migration seeds the default organization from `ALLOWED_EMAIL_DOMAIN`, seeds the five system roles with their permission sets, backfills every existing `app_user` into the org as `active`, and maps the legacy column: `role='executive'` → `admin`, `role='employee'` → `member`. Existing users keep working; nobody is locked out by deploying this. *[⚠️ Trap under WS-29: this seeding is keyed slug='default' — org #2 gets no roles and no owner from it; see saas_multitenancy_implementation.md §7.1 and trap 5. Do not copy the pattern.]*
 
-**Ownership bootstrap:** if no member holds `owner` after backfill, the first address in `EXECUTIVE_EMAILS` (else the oldest `app_user`) is promoted. A deployment with no owner is one where nobody can grant themselves access back.
+**Ownership bootstrap:** if no member holds `owner` after backfill, the first address in `EXECUTIVE_EMAILS` (else the oldest `app_user`) is promoted. A deployment with no owner is one where nobody can grant themselves access back. *(per-org under D15: _HAS_OWNER_SQL carries no org filter — a lockout RLS does not fix; fixed under MT-1i)*
 
 ---
 
@@ -426,7 +426,7 @@ Two things keep the list honest, both tested: a `PUBLIC_ROUTES` entry matching n
 
 ## 10. Handoff: multiplayer agent collaboration
 
-**Multi-tenant user management is complete as Phase 1 and is not being extended on its own track.** Everything remaining — modules/teams, session sharing, memory and transcript scoping — is now owned by the multiplayer agent collaboration workstream, because those are the same primitives seen from two directions. Building them twice would produce two group models to reconcile later.
+**Multi-tenant user management is complete as Phase 1 and is not being extended on its own track.** *(true for the intra-org model; the tenancy axis reopened 2026-08-08 as WS-29 MT-1a/H6)* Everything remaining — modules/teams, session sharing, memory and transcript scoping — is now owned by the multiplayer agent collaboration workstream, because those are the same primitives seen from two directions. Building them twice would produce two group models to reconcile later.
 
 This section is the integration contract. Read it before designing multiplayer; it says what you can rely on, what will collide, and what is deliberately absent.
 
@@ -484,7 +484,7 @@ Not oversights — scoped out with reasons in the sections referenced.
 - Entity-graph row visibility + Postgres RLS (research §9, §16.5).
 - Transfer-on-removal: a removed member's private apps, sessions and workspaces persist unowned (§9 Q3).
 - Personal (BYO) integration credentials (research §8.3).
-- Everything SaaS — subdomains, billing, per-tenant isolation (research §17).
+- Everything SaaS — subdomains, billing, per-tenant isolation (research §17). *(in scope since 2026-08-08 — WS-29, saas_multitenancy.md §0.9.3)*
 - **True agent isolation.** Agents run in-process, so §8b's credential scoping is *authorization, not isolation*. That ceiling is **BO-7**, and it bounds what any access claim in this document can mean.
 - ~50 Next.js proxy routes still carry their own `EXECUTIVE_EMAILS` copy. Cosmetic — permissions resolve server-side from the email regardless — but `workbench/control_plane/src/lib/gateway.ts` is the single replacement when someone sweeps them.
 

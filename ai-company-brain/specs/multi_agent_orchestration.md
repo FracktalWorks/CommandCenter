@@ -919,3 +919,15 @@ Related specs: [`agent_file_and_memory_framework.md`](agent_file_and_memory_fram
 | Phase 5.1 (Magentic/GroupChat as graph node types) | **WS-11** — [`workflows_app.md`](workflows_app.md) §8; sequences after Phase 4 |
 | Phase 5.2 (Shape C collaborative chat) | **WS-10** — shipped as multiplayer rooms (`docs/multiplayer/README.md`); floor-control residue is 🔒 OWNER-GATE |
 | **Phase 4 (framework uplift)** | **stays here — WS-12** |
+
+## Board record (2026-08-09) — moved from work_plan.md §2
+
+> Moved here in the 2026-08-09 consolidation (work_plan.md D18): board rows now
+> carry state + gates only. The narrative below is preserved verbatim from the
+> final long-form row; the dated corrections after it win where they conflict.
+
+### WS-12 — **Framework uplift**
+**State cell (as of the move):** 🟡 Ph4
+**Narrative (verbatim):** **Audited NO-GO on all seven contract points; shrunk to Phase 4 only on 2026-08-03, not closed.** Ph0 shipped. **Ph1 struck** — 1.1 shipped as *progressive disclosure* (`93b93a08`, #191); 1.2 moot (`technical-project-planner` exists in neither `_AGENT_REGISTRY` nor `apps/agents/`); 1.3 delivered by **WS-23**. Ph2–3 superseded by the shipped Workflows app (D6). **Ph5 struck** — 5.2 shipped as multiplayer rooms *without* the orchestrations package, so it never depended on Phase 4; **5.1 is reassigned to WS-11**. **Ph4 is the genuinely undone part** — all four §5.5 shims re-verified in-tree 2026-08-03. **Drift correction: Phase 4 drags ONE SDK major, not two** — `uv.lock` and the repo `.venv` both carry `openai 2.38.0`, so the billed `openai 1.99 → 2.x` major already landed independently; only `github-copilot-sdk 0.1.32 → 1.0.2` remains. **0 PRs dispatchable today:** 4.0's target choice (minimal- vs full-bump) is **OWNER-GATE**; 4.1 (resolution proof in an isolated throwaway venv, evidence-only, AGENT-SAFE — it must never mutate `<repo>/.venv` or `uv.lock`) is what unblocks it.
+
+**Corrections applied 2026-08-09:** current as moved.

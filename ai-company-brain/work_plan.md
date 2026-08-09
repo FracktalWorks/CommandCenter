@@ -191,7 +191,7 @@ owning specs are the archive; this file owns ordering, gates and states only.
 
 ---
 
-## 3. Decisions recorded (D1–D14: 2026-07-31→08-04 · D15/D16: 2026-08-08 · D17–D21: 2026-08-09)
+## 3. Decisions recorded (D1–D14: 2026-07-31→08-04 · D15/D16: 2026-08-08 · D17–D21: 2026-08-09 · D22: 2026-08-10)
 
 Resolutions for the cross-doc conflicts the audit surfaced. D1–D8, **D13**, **D14**,
 **D16** and **D17** are **proposed defaults, adopted unless the owner objects**
@@ -200,6 +200,22 @@ calls, taken and dated. ⚠️ Two entries below are superseded and kept as reco
 **D11** (re-taken by D15) and **D10 part 1's planning premise** (re-scoped by
 D15/D16) — read their banners before citing either.
 
+- **D22 — The Center roster of record, and four architecture calls.**
+  *(owner statement + question round, 2026-08-10; owning spec
+  `department_centers.md` §5.)* The full shape: **Personal Center** (per-user
+  private workspace — Email/WhatsApp/Meetings/Tasks/Calendar — **NOT a
+  department**, no `org_group`, exists for every member automatically; the §2
+  registration checklist needs a caller-scoped variant, never a fake group) ·
+  **seven department Centers** — Sales, Marketing, Finance, **R&D (new)**,
+  People, Operations, **Support (new)** — answering that spec's open questions
+  2 and 3; **R&D and Operations launch slices-only** (cross-cutting apps
+  scoped to their teams, unique apps deferred) · **Company Center kept** as the
+  leadership surface (WS-15; multiple configurable rollups per D21, in-app
+  all-slices filters as explicit org-tier grants). **Sales' products, price
+  books, brochures and proposal generator are CRM-module features (₹300), not
+  separate SKUs** — `crm_app.md` gains them as future phases. The admin/IT
+  plane (Appearance, Membership/roles, Live activity, Integrations, Approvals,
+  Agent Registry, AI credits) is Core capability surface, not a Center.
 - **D21 — The future module roster is named.** *(owner-directed 2026-08-09;
   roadmap `agent-drafted, owner may amend`.)* Five directions beyond the D19
   catalog, recorded in **`specs/future_modules_roadmap.md`** so future specs

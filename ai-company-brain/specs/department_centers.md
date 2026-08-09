@@ -554,21 +554,68 @@ the filter is the small part.
    phrasing those rewrites installed embodied D11 and has itself been
    re-swept to organization/placement language after D15; this inventory
    stays as history.)*
-2. **R&D / Engineering Center?** Fracktal is a product company; a seventh
-   Center (projects, test logs, design docs) is plausible. Deferred until a
-   real workflow demands it. Adding one is **not** a one-file edit: work §2's
-   *Registering a Center* checklist end to end — `lib/centers.ts`, a
-   `feature_catalog` migration row, `acb_auth.permissions.FEATURES`,
-   `CENTER_GROUP_SLUGS`, and the test anchor `EXPECTED_CENTER_SLUGS`. Doing
-   only the first two is how Centers came to be unreachable by everyone once
-   already; `tests/unit/test_org_access_control.py::test_centers_registry_matches_the_feature_vocabulary`
+2. ~~**R&D / Engineering Center?**~~ **ANSWERED 2026-08-10 (owner, D22): yes —
+   R&D joins the roster**, launching **slices-only** (the cross-cutting apps
+   scoped to its team; no unique apps until a real workflow demands one). The
+   registration cost stands unchanged: adding it is §2's *Registering a Center*
+   checklist end to end — `lib/centers.ts`, a `feature_catalog` migration row,
+   `acb_auth.permissions.FEATURES`, `CENTER_GROUP_SLUGS`, and the test anchor
+   `EXPECTED_CENTER_SLUGS`. Doing only the first two is how Centers came to be
+   unreachable by everyone once already;
+   `tests/unit/test_org_access_control.py::test_centers_registry_matches_the_feature_vocabulary`
    is what now stops that recipe from passing CI.
-3. **Support: Operations sub-app or own Center?** Service & AMC starts inside
-   Operations; if the support team grows its own membership and mailbox, it
-   graduates to a Center by that same checklist.
+3. ~~**Support: Operations sub-app or own Center?**~~ **ANSWERED 2026-08-10
+   (owner, D22): its own Center**, paired with the future Customer Support &
+   Success module (`future_modules_roadmap.md` §3). Service & AMC's Operations
+   sketch (§2) stays where it is until the Support module is specced; the
+   Center registers by the same §2 checklist. Operations itself also launches
+   slices-only (D22) — its unique-app sketch (production tracker, inventory/BOM,
+   dispatch) remains future scope.
 4. **Guest access to Centers** — org_access open Q4; a guest with
    `center.sales` only is a plausible contractor shape and needs a decision
    before external sharing.
+
+## 5. The Center roster of record (owner architecture statement, 2026-08-10 — D22)
+
+The owner stated the full system shape in session; the four ambiguities it
+surfaced were answered the same day (work_plan.md §3 D22). This section is the
+roster of record; §2's shipped six-center list is the *current build state*, and
+the delta between them is registration work by §2's checklist.
+
+**Three kinds of surface, one platform** (nothing here changes "Centers are
+projections, never separate deployments"):
+
+1. **Personal Center — per-user, NOT a department.** Each member's private
+   workspace (D12's `private` tier): my Email, my WhatsApp, my Meetings, my
+   Tasks (and Calendar, which travels with tasks/meetings — Core module). No
+   `org_group`, no membership grant, no admin act — it exists for every member
+   automatically. ⚠️ Engineering consequence: §2's five-place registration
+   checklist assumes a group-backed Center; Personal needs a registry entry
+   whose scope is the caller, not a group — design that variant when Personal
+   registers, do not force a fake group.
+2. **Department Centers — seven:** Sales · Marketing · Finance · **R&D (new,
+   D22)** · People · Operations · **Support (new, D22)**. Each an `org_group` +
+   `center.*` slug per §1. Every department Center carries the **cross-cutting
+   apps sliced to its team** — Projects, Workflows, App Builder, Agent Builder,
+   Agent Chat, Dashboards, Knowledge Base (the D21 slicing doctrine: D12 tiers +
+   visibility-declared-at-creation). Unique apps per Center: Sales = the CRM
+   module surfaces **including products, price books, brochures/product info
+   and the proposal generator — all part of the CRM ₹300 module, not separate
+   SKUs (D22)**; Marketing = the future Marketing module (social/ads/website —
+   `future_modules_roadmap.md` §2); Finance = the Finance module; People = the
+   People directory surfaces (Core) + HR expansions; Support = the future
+   Support module; **R&D and Operations launch slices-only** (unique apps
+   deferred until a real workflow demands them — Operations' §2 sketch stays
+   future scope).
+3. **Company Center — kept (D22), the leadership surface.** WS-15's mandate:
+   company-wide dashboards (multiple, configurable — the D21 colour), org-level
+   rollups. Cross-cutting apps additionally offer leaders an all-slices filter
+   in-app, built as explicit org-tier grants per D12/D14 — never a bypass.
+
+**The admin/IT plane is not a Center:** Appearance, Membership & roles, Live
+activity (observability), Integrations, Approvals, Agent Registry, AI
+credits/access (WS-30 console + operator views). These are Core-module admin
+surfaces gated by capability, present regardless of Center membership.
 
 ## Board record (2026-08-09) — moved from work_plan.md §2
 

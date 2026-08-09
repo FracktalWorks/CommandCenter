@@ -188,7 +188,6 @@ owning specs are the archive; this file owns ordering, gates and states only.
 | WS-26 | **CRM app — native CRM + Zoho retirement** *(minted 2026-08-05)* | ✅ a–g · D5 PR open | `specs/crm_app.md` · board record 2026-08-09 | a + b + c + d (read · email · write) **merged + deployed** (d-write log-verified via deploy `31217978773`, 2026-08-08); f + g **merged to main** (#391, #397 — the old "on branch, NOT run against prod" wording is struck; f's stage repair still needs its 🔴 `?apply=true` run, §6 WS-26 (d)). **D5 d-autolead BUILT, PR #403 OPEN** — owner: merge, then 🔴 `CRM_AUTO_LEAD` flip (§6 WS-26 (b); clamp-anchor design, never reset-to-now). Zoho sync loop **ENABLED by the owner 2026-08-06** (§6 WS-26 (a)) — every "ships OFF / never run" sentence about it is struck. Next: **h** stage entry-requirements + rot badges (after f2) · **i** merge/bulk/CSV/saved-views — spec-thin, audit-narrow first · **e** cutover + retirement 🔴 (§6 WS-26 (c)). ⚠️ D15 coda: built single-Zoho-tenant by design; per-org credentials (migration 158) + per-org sync flags arrive with MT-1/MT-2, and D-CRM-3's org-wide read becomes org-scoped **by RLS**, not by hand-written predicates. (2026-08-08) |
 | WS-27 | **Projects app — native PM + ClickUp retirement** *(minted 2026-08-05)* | ✅ a–n merged · **o–t on PR #399** · c/g/h gated | `specs/project_management_app.md` · board record 2026-08-09 | a b d e f i j k l m n **merged to main** (#390, #393, #394, #398 + fixes — the board's "BUILT on branch" wording is struck). ~~Open defect: **§11.12** — WS-27j's `notifications.deliverable` probes `project_clause`~~ ✅ **FIXED on #399** (assignees without a project grant were judged undeliverable, so assignment notified nobody). 🟡 **c** two-way sync waits on WS-1's BO-1a + BO-1b; 🔴 push enable (§6 WS-27 (b)) · 🔴 **g** cutover + retirement incl. the root-`AGENTS.md` constraint-8 amendment — ships in the g PR, never before (§6 WS-27 (c)) · **h** `gtd_items` retirement after e; the data move is 🔴. ~~Remaining letters: recurring, dependency UI, calendar view, search.~~ ✅ **the §11.2 ClickUp-parity backlog is CLOSED** — o recurrence · p dependencies+subtasks · q calendar · r ⌘K search · s shared task card · t timeline, all on **PR #399** with D-PM-11/D-PM-12 recorded. **Second reference studied 2026-08-09: `makeplane/plane` v1.4.1 (⚠️ AGPL-3.0 — patterns only, never code)** → `specs/plane_pm_research_2026-08.md` + spec §11.19: 12 shipped decisions validated, beyond-parity queue P-1…P-31 minted → **minted as dispatchable tickets WS-27u–z (spec §9.1)**: u intake/triage · v watchers+mention-diff · w read-path/history hardening · x spreadsheet+shown-fields · y board upgrades · z lifecycle policy (🟡 per-project, default off) + a deferred small basket, 2 owner questions ANSWERED same day → **D-PM-13** (project docs live in the knowledge base — creator-owned, grant-shared; PM links, never owns) · **D-PM-14** (public boards deferred). ⚠️ granting `feature:projects`/`data:org:read` is §6 WS-27 (d) — D14's zero-consumer measurement is retired by this row. (2026-08-07) |
 | WS-28 | **People Center — directory, org chart, assignment seam** *(minted 2026-08-06)* | ✅ a+b+b-write | `specs/people_center_app.md` · board record 2026-08-09 | a (key shape, mig 148 + quarantine table) · b (directory + person page, mig 149, five-place registration) · b-write (create/edit UI restored; found three ways mig 148 had broken the write routes) — built 2026-08-06/07; **closes WS-13's directory item**. 🟢 c org chart · d capability search (**ranking EVAL-LOCKED**) · e Projects seams; 🔴 f seats/roles writes (§6 WS-24 (d) analogue). ⚠️ `schema.generated.sql` regeneration is **due**: stale since ~migration 113, and 148 reached prod ~2026-08-07 (after the #384 cast fix). (2026-08-07) |
-
 ---
 
 ## 3. Decisions recorded (D1–D14: 2026-07-31→08-04 · D15/D16: 2026-08-08 · D17–D21: 2026-08-09 · D22–D25: 2026-08-10)
@@ -1009,13 +1008,42 @@ push into the live Zoho tenant on the next sync cycle (which
 `POST /crm/sync/zoho` runs with or without `CRM_ZOHO_SYNC`)**. Ruled D-CRM-9
 (owner, 2026-08-06): this is intended behaviour — agent- and auto-originated
 writes enter the push queue exactly like human ones. So the flip is both a live
-change to email-app behaviour and, transitively, a write path into Zoho. ⚠️ The
-settings field **does not exist yet** and was deliberately not added by WS-26d's
-read half. **The hook it was missing is now named (2026-08-06, `crm_app.md` §9.2):**
+change to email-app behaviour and, transitively, a write path into Zoho.
+**The settings field now EXISTS — `crm_auto_lead: bool = False` in
+`packages/acb_common/acb_common/settings.py`, beside `crm_zoho_sync`** (WS-26d-autolead,
+BUILT 2026-08-08, branch `ws-26d-autolead`; the ⚠️ "does not exist yet" note is
+retired). **Built, NOT flipped, NOT deployed**, and while it is off the branch
+changes no runtime behaviour at all. The hook is
 `routes/email/scheduler_hooks.py::process_new_mail` — the one seam the scheduler,
-the manual-sync route and the webhook all funnel through. The field lands with
-WS-26d-autolead, shipping OFF, with a regression proving the OFF state makes no
-CRM call at all ·
+the manual-sync route and the webhook all funnel through — and the flag is read
+at that CALL SITE, before the CRM step is entered, so the OFF state issues no CRM
+query; both the runtime regression and an AST assertion that the gate is
+lexically outside the step live in `tests/unit/test_crm_auto_lead.py`. ⚠️ Three
+things an owner should know before flipping: **(1)** the first ON-state run per
+mailbox only ACTIVATES the cursor (`crm_auto_lead_cursors`, migration 163 — renumbered at merge; 157 is
+held by open PR #399) and mints nothing — mail that arrived before that instant is
+history by construction, which is what stops a deep resync minting a year of leads;
+**(2)** the same is true after the flag is turned OFF and back ON, or after the
+service is down, for more than an hour: the cursor RE-ANCHORS, the gap's backlog
+mints nothing, and the cycle says so at WARNING on `sync.auto_lead_reanchored`.
+That guard was added by diff review after an OFF→ON round trip was measured minting
+**27 leads for a 27-day OFF window**, each pushing unattended into the live tenant —
+so turning the flag off is genuinely a stop, not a pause that accumulates. ⚠️ **With
+one bounded exception the owner should expect: mail received in the FINAL HOUR before
+the flag goes back on IS minted** — one gap-width of mail (an hour), drained across
+however many cycles the per-cycle cap takes, not a single batch. That is deliberate —
+the re-anchor clamps the epoch one hour back rather than resetting it to now, because
+this step only runs when a sync persisted mail, so the cycle that detects the gap is
+always the cycle carrying the message that woke it; resetting would drop that message
+every single night. If the OFF window's tail matters, flip the flag on at a quiet
+moment; **(3)**
+the accepted residual is that two concurrent syncs of one account can double-mint one
+visible, hand-deletable duplicate (a UNIQUE index on `crm_leads.email` is refused:
+1,516 imported rows may already carry duplicates, the migration-148 shape). One
+operational note: a cycle that logs `sync.auto_lead_stalled` at WARNING every cycle
+means a message at the head of the queue cannot be written and the cursor is
+deliberately held — that is fail-closed toward the CRM and it needs a human, not a
+restart ·
 **(c) the WS-26e cutover + retirement** — the final import + parity check,
 repointing the graph-mirror consumers (`sales_views.py`, `reconciler.py`),
 retiring `ingestion/sources/zoho/` + cron + webhook + config (spec §7.4, which

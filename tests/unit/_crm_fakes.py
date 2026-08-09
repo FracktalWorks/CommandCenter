@@ -32,6 +32,7 @@ fake cannot read must never silently mean "the whole table".
 
 from __future__ import annotations
 
+import json
 import re
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -152,6 +153,39 @@ _ACCOUNT_SCOPE = re.compile(
 #: record's timeline.
 _JSONB_LOWER_CMP = re.compile(
     r"LOWER\((?:(\w+)\.)?(\w+)->>'(\w+)'\)\s*(?:=\s*:(\w+)|IN\s*\(([^)]*)\))",
+    re.I,
+)
+#: ``to_addresses @> :recipient`` — jsonb CONTAINMENT. The "have we ever
+#: emailed them" probe `senders._maybe_block_cold` answers with, and the one
+#: WS-26d-autolead's `_is_unknown_sender` mirrors. **No other reader here sees
+#: `@>`**: `_PLAIN_EQ` needs an `=` and `_NUM_CMP` needs a bare `>`, so without
+#: this the clause is invisible and the fake answers "yes, we have emailed
+#: them" for every message in the Sent folder regardless of who it went to —
+#: which turns the already-known-contact case into a test of nothing. Same
+#: reason `_IN_LITERALS` exists: a fake that cannot see a predicate agrees with
+#: the bug that deletes it.
+_JSONB_CONTAINS = re.compile(r"(?:(\w+)\.)?(\w+)\s*@>\s*:(\w+)", re.I)
+#: ``EXISTS (SELECT 1 FROM jsonb_array_elements(to_addresses) recipient
+#: WHERE lower(recipient->>'email') = :address)`` — the CASE-FOLDING form of
+#: the same "have we ever emailed them" question, which WS-26d-autolead asks
+#: because `@>` is case-exact and a reply from `asha@` after we wrote to
+#: `Asha@` is the same person.
+#:
+#: ⚠️ **Reading it is not the hard part; STRIPPING it is.** Its inner
+#: comparison is literally `lower(recipient->>'email') = :address`, which
+#: `_JSONB_LOWER_CMP` below matches — and that reader would then filter the
+#: OUTER `email_messages` rows on a `recipient` column they do not have,
+#: answering "no rows" for a correct query. Same trap `_ACCOUNT_SCOPE`
+#: documents, one subquery shape further on. Evaluated and removed FIRST.
+#:
+#: The element alias is a backreference, so a statement whose WHERE clause
+#: compares a DIFFERENT alias than the one `jsonb_array_elements` declared
+#: does not match here and fails the "could not read the WHERE clause" guard
+#: rather than being quietly accepted.
+_JSONB_ANY_LOWER = re.compile(
+    r"EXISTS\s*\(\s*SELECT\s+1\s+FROM\s+jsonb_array_elements\(\s*"
+    r"(?:(\w+)\.)?(\w+)\s*\)\s+(\w+)\s+WHERE\s+lower\(\s*\3->>'(\w+)'\s*\)"
+    r"\s*=\s*:(\w+)\s*\)",
     re.I,
 )
 #: ``LEFT JOIN email_thread_status ts ON ts.account_id = em.account_id AND
@@ -463,14 +497,20 @@ class FakeCrmDB:
         """
         return _FakeSavepoint(self)
 
-    def fail_on(self, needle: str, *, times: int = 1) -> None:
-        """Make the next ``times`` statements containing *needle* raise.
+    def fail_on(self, needle: str, *, times: int = 1, after: int = 0) -> None:
+        """Make ``times`` statements containing *needle* raise, skipping the
+        first ``after`` matches.
 
         Simulates a driver-level statement error — a `numeric field overflow`,
         a CHECK violation — which is the class of failure a plain
         ``try/except`` around a record cannot actually contain in Postgres.
+
+        ``after`` exists because *where* in a batch the failure lands is the
+        property under test in WS-26d-autolead: a cursor that advances over the
+        successful PREFIX behaves identically to one that advances
+        unconditionally when the very first record is the one that fails.
         """
-        self._failures.append([needle, times])
+        self._failures.append([needle, times, after])
 
     async def execute(self, sql: Any, params: dict | None = None) -> _Result:
         statement = " ".join(str(sql).split())
@@ -479,6 +519,9 @@ class FakeCrmDB:
         self.calls.append((statement, args))
         for entry in self._failures:
             if entry[0] in statement and entry[1] > 0:
+                if entry[2] > 0:
+                    entry[2] -= 1
+                    continue
                 entry[1] -= 1
                 raise RuntimeError(
                     f"fake driver error on statement containing {entry[0]!r}"
@@ -736,6 +779,21 @@ class FakeCrmDB:
                 allowed &= {str(args.get(aid))}
             rows = [row for row in rows if str(row.get(column)) in allowed]
             where = where.replace(scope.group(0), "")
+        # FIRST, and stripped before anything else looks at the clause — its
+        # inner `lower(recipient->>'email') = :address` is exactly what
+        # `_JSONB_LOWER_CMP` below matches, and that reader would filter the
+        # OUTER rows on a `recipient` column they do not have.
+        for _alias, column, _element, key, param in _JSONB_ANY_LOWER.findall(where):
+            seen = True
+            wanted = str(args.get(param) or "").lower()
+            rows = [
+                row for row in rows
+                if any(
+                    str((element or {}).get(key) or "").lower() == wanted
+                    for element in (row.get(column) or [])
+                )
+            ]
+        where = _JSONB_ANY_LOWER.sub("", where)
         for _alias, column, key, single, listed in _JSONB_LOWER_CMP.findall(where):
             seen = True
             names = (
@@ -747,6 +805,13 @@ class FakeCrmDB:
                 row for row in rows
                 if str((row.get(column) or {}).get(key) or "").lower() in wanted
             ]
+        for _alias, column, param in _JSONB_CONTAINS.findall(where):
+            seen = True
+            rows = [
+                row for row in rows
+                if _jsonb_contains(row.get(column), args.get(param))
+            ]
+        where = _JSONB_CONTAINS.sub("", where)
         return _JSONB_LOWER_CMP.sub("", where), rows, seen
 
     def _matching(
@@ -873,6 +938,37 @@ def _weighted(statement: str, rows: list[dict], args: dict) -> float:
             continue  # SQL: NULL * anything is NULL, and SUM skips it
         total += float(amount) * float(probability) / float(divisor)
     return total
+
+
+def _jsonb_contains(haystack: Any, needle: Any) -> bool:
+    """Postgres ``@>`` for the shapes this repo binds to it.
+
+    An array contains another array when EVERY element of the right side is
+    contained by SOME element of the left; an object contains another object
+    when every key/value pair of the right side is present on the left.
+
+    ⚠️ Comparison is EXACT, because ``@>`` is: ``'[{"email":"A@x.com"}]'`` does
+    not contain ``'[{"email":"a@x.com"}]'``. Case-folding here would make the
+    fake kinder than the database and hide a real miss in the "have we ever
+    emailed them" probe, whose parameter is lowercased while the stored
+    recipient is whatever the provider sent.
+    """
+    if isinstance(needle, str):
+        try:
+            needle = json.loads(needle)
+        except ValueError:  # a plain string value, not a JSON document
+            return haystack == needle
+    if isinstance(needle, list):
+        candidates = haystack if isinstance(haystack, list) else []
+        return all(
+            any(_jsonb_contains(item, want) for item in candidates)
+            for want in needle
+        )
+    if isinstance(needle, dict):
+        return isinstance(haystack, dict) and all(
+            haystack.get(key) == value for key, value in needle.items()
+        )
+    return haystack == needle
 
 
 def _normalized(value: str, wrap: str) -> str:

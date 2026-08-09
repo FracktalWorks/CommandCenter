@@ -1,6 +1,8 @@
 # Multi-tenancy handover — execution runbook for an agent with database access
 
-**Status:** 🟢 Ready to dispatch · **Created:** 2026-08-08 · **Owner:** vjvarada ·
+**Status:** 🟢 **In execution — H1 scratch gate PASSED 2026-08-09** (see H1's result
+block; prod apply rides **PR #404**, the owner's merge) · **Created:** 2026-08-08 ·
+**Owner:** vjvarada ·
 **Board row:** WS-29 · **Parent:** [`saas_multitenancy.md`](saas_multitenancy.md) ·
 **Shapes:** [`saas_multitenancy_implementation.md`](saas_multitenancy_implementation.md)
 
@@ -49,11 +51,11 @@ Start with H1. Report the GATE result before moving on.
 | Ticket | State | Note |
 |---|---|---|
 | MT-0a per-run credentials | ✅ | ContextVar replaces process-global `os.environ` |
-| MT-0b self-mutation containment | ✅ | migration **157**, never applied |
+| MT-0b self-mutation containment | ✅ | migration **157** — scratch-applied + verified 2026-08-09 (H1); prod = PR #404 |
 | MT-0c-1 no raw-SQL agent tools | ✅ | `query_history` rewritten; ratchet added |
-| MT-0d per-org provider keys | ✅ | migration **158**, never applied |
-| MT-1a control plane | ◐ | migration **159** + `placement.py`; identity cutover NOT done |
-| MT-1b RLS | ◐ | generated into `infra/postgres/generated/`, **never applied** |
+| MT-0d per-org provider keys | ✅ | migration **158** — scratch-applied + verified 2026-08-09 (H1); prod = PR #404 |
+| MT-1a control plane | ◐ | migration **159** — scratch-applied + verified 2026-08-09 (H1); identity cutover NOT done |
+| MT-1b RLS | ◐ | generated into `infra/postgres/generated/`, **never applied** (H3's act, after H2 — the scratch DB `mt-scratch` is its test target) |
 | MT-1c binding seam | ◐ | `tenant_session()` built; **561 call sites unconverted** |
 | MT-1e Redis wrapper | ◐ | built; **~58 key sites unconverted** |
 | MT-1i leak sites | ✅ | five predicates derived; one DB-backed criterion open |
@@ -159,6 +161,27 @@ stated values, **and** the baseline test set still passes.
 > testing. **Assume there is another one and look.**
 
 **GATE:** production is on 157/158/159 and the baseline suite is green.
+
+> **H1 RESULT (2026-08-09) — scratch half PASSED; prod half is the owner's merge.**
+> Executed on a local Docker scratch (`mt-scratch`, pgvector:pg16, 127.0.0.1:5433 —
+> plan-guard makes every VPS/deploy path OWNER-GATE, so "restored production dump"
+> became "full-ladder replica": 00→156 replayed clean, 154 files, zero failures, plus a
+> synthetic seed exercising every backfill path — case-duplicate emails, NULL org, empty
+> email, all four re-keyed credential tables). 157/158/159 applied clean, re-ran
+> idempotently, and **every verify query below returned the stated value**. Baseline:
+> **213 passed / 2 skipped** — after fixing a real defect this gate flushed out:
+> `import litellm` runs `load_dotenv()` at import and planted a dev `.env`'s
+> `DATABASE_URL` mid-collection, un-skipping the two DB gates against an unmigrated
+> local DB (`tests/conftest.py` launch snapshot, commit `817596b5`). Red-check done:
+> pointed at the migrated scratch, both H3 gates un-skip and fail on their real
+> assertions. The prophesied "another `u.name`-style bug" was not found — but
+> `schema.generated.sql` itself is **stale since ~migration 113**, so the static checks
+> above were made against a stale artifact; the scratch replay is the real reference.
+> **Remaining for the GATE, owner's acts:** (1) optionally repeat the apply on a scratch
+> restored from the *production* dump (runbook in PR #404's description); (2) merge
+> **PR #404** — deploy auto-applies via the ledger; verify by the three
+> `- 15N_*.sql ... ok` deploy-log lines, never the job conclusion; (3) run the verify
+> queries below against prod. H2 dispatches only after that.
 
 ---
 

@@ -225,8 +225,9 @@ async def test_unbound_connection_returns_no_rows(raw_session):
 
 ### 2.4 Mem0 — the decision MT-1c must record
 
-Path 8 hands a conninfo string to a third-party client. **Three options; pick one and
-write it into the parent spec, because "undecided" fails the ticket:**
+Path 8 hands a conninfo string to a third-party client. **DECIDED 2026-08-09: Option A
+(D17, `agent-proposed, owner may overrule` — recorded in `work_plan.md` §3 and the
+parent's §0.1 consequence 4).** The three options, kept for the record:
 
 | Option | Shape | Cost |
 |---|---|---|
@@ -278,8 +279,10 @@ CREATE TABLE org_membership (
 );
 ```
 
-> ⚠️ **`app_user.email` global uniqueness is load-bearing today** — `routes/admin/members.py:173`
-> and `acb_auth/access.py:447` both do `ON CONFLICT (email)`. Both are rewritten by MT-1a.
+> ⚠️ **`app_user.email` global uniqueness is load-bearing today** — two `ON CONFLICT (email)`
+> upserts on the live sign-in path, measured 2026-08-08 at `acb_auth/access.py:205` and `:509`
+> *(the `members.py:173`/`access.py:447` pair first published here was stale — corrected
+> 2026-08-09; re-derive with grep)*. Both are rewritten by MT-1a.
 > The invite path is the dangerous one: today's
 > `INSERT … ON CONFLICT (email) DO UPDATE SET organization_id = EXCLUDED.organization_id`
 > is, under two orgs, **an account-takeover primitive** (`tenancy_and_visibility.md` §1.1

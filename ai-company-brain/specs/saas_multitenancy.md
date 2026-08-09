@@ -2,7 +2,12 @@
 
 **Status:** Architecture of record (owner-requested 2026-08-08) · **Board row: `work_plan.md` §2 → WS-29 · Decision: D15** · **§11 is the dispatchable ticket list — start there; [`saas_multitenancy_implementation.md`](saas_multitenancy_implementation.md) is its child and holds the build shapes** · **Owner:** vjvarada ·
 **Supersedes:** `tenancy_and_visibility.md` §1 and §6 · **Verified against code:** 2026-08-08,
-working tree at `b09093a`
+working tree at `b09093a` · **Updated 2026-08-09** (consolidation pass): §8 items 1–2
+ANSWERED (D18 — Core ₹600 + ₹300/module; ₹10 AI-action credit ~50% margin), the Mem0
+path-8 decision taken (D17, Option A), §5.1's cutover trigger ADOPTED, MT-1a's stale
+`members.py` anchor corrected, and H1 scratch-verified (migrations 157–159 applied +
+verified on a full-ladder replica; prod apply = PR #404 — see the handover's H1 result
+block)
 
 > **This document re-takes a decision that was deliberately taken the other way.**
 > `tenancy_and_visibility.md` §1 (owner-answered 2026-08-03) set the tenant boundary at
@@ -99,7 +104,11 @@ silently serving another tenant's data in production.
 3. Add a companion ratchet for **`psycopg.connect`**, with the same allow-list-with-a-reason
    discipline. Paths 5–7 were invisible to the existing test.
 4. **Mem0 (path 8) is the genuinely awkward one** — the connection is opened by a
-   third-party library from a conninfo string. Either bind via connection options in the
+   third-party library from a conninfo string. **DECIDED 2026-08-09 (D17,
+   `agent-proposed, owner may overrule` — `work_plan.md` §3): Option A, bind via
+   connection options** (`options=-c app.tenant_id=<uuid>` on the conninfo Mem0
+   receives; shapes in `saas_multitenancy_implementation.md` §2.4). The alternatives,
+   kept for the record: bind via connection options in the
    conninfo, or give Mem0 its own tenant-scoped database role per tenant, or accept that
    memory isolation rests on the scope string and pin that decision here. **Do not leave
    it undecided.**
@@ -1254,6 +1263,8 @@ not a staged rollout, it is silo-by-default arrived at by drift:
 4. **A written cutover trigger**, checked monthly: customer count ≥ 8, *or* deploy
    overhead exceeding roughly a day a month, *or* the first version-skew incident —
    whichever comes first. **A bridge with no trigger is a destination.**
+   **ADOPTED 2026-08-09** (recorded on the board — `work_plan.md` §2 WS-29 row — per
+   §11.2 item 4; the monthly check is the owner's).
 
 ---
 
@@ -1359,9 +1370,19 @@ Recorded so they are not re-proposed, and so the reasoning survives:
 
 ## 8. Open — owner decisions still needed
 
-1. **Price points and module boundaries.** §2.4's module split is a proposal drawn from
-   today's `FEATURES`; the SKU list is a business call.
-2. **Credit-to-rupee conversion and target gross margin on AI.** Determines the rate card.
+1. ~~**Price points and module boundaries.**~~ **ANSWERED 2026-08-09 (owner, D18):
+   Core ₹600 per user per month** (Tasks, Calendar, Chat, People directory) **+ ₹300
+   per user per month per add-on module** (CRM, Projects, Email, Meetings, WhatsApp,
+   Workflows). Selected from agent-drafted options anchored on Zoho India pricing; the
+   owner expects to revise against the first five silo customers (§11.2 item 3 said
+   drafting-now-revising-later is correct). §2.4's module split becomes the SKU list's
+   starting shape — MT-2's entitlement catalog seeds from this.
+2. ~~**Credit-to-rupee conversion and target gross margin on AI.**~~ **ANSWERED
+   2026-08-09 (owner, D18): the credit unit is a ₹10 "AI action" at ~50% gross margin**
+   — the `model_rate_card` prices each model call at provider cost × 2, denominated in
+   credits, so buyers see actions, never tokens (§3's rate-card rule unchanged: sell
+   credits via the rate card, never provider tokens). Per-action costing lands with
+   MT-3's rate-card build.
 3. **Payment provider split.** Razorpay-for-India + Stripe-for-international is the
    recommendation (§4.3); a single provider is simpler and worth considering if the initial
    market is one geography.
@@ -1617,7 +1638,9 @@ replays from `02_` upward, and a failure there fails the deploy.
    tables. It carries **no** tenant business data and is **not** under RLS.
 2. `user_identity(id, email UNIQUE, …)` + `org_membership(user_id, org_id, status, …)`
    replace `app_user`'s dual role. ⚠️ **`app_user.email` global uniqueness is depended on
-   by `members.py:173` and `access.py:447` (`ON CONFLICT (email)`)** — both are rewritten
+   by two `ON CONFLICT (email)` upserts — measured 2026-08-08 at `acb_auth/access.py:205`
+   and `:509`, NOT the `members.py:173`/`access.py:447` pair this line first published
+   (anchor corrected 2026-08-09; re-derive with grep at build time)** — both are rewritten
    in this ticket, and a test pins that the same email can hold membership in two orgs.
 3. `tenant_placement(organization_id, target, region)` exists and is consulted, **even
    though every row resolves to the same target on day one.** A test asserts the resolver
@@ -1671,7 +1694,9 @@ replays from `02_` upward, and a failure there fails the deploy.
    `create_async_engine` — path 4 (`acb_graph/db.py:32`) exists today precisely because
    the ratchet only inspected the async name.
 3. A **new ratchet for `psycopg.connect`**, allow-list-with-a-reason, covering paths 5–7.
-4. **The Mem0 decision (path 8) is taken and written into this spec** — conninfo options,
+4. **The Mem0 decision (path 8) is taken and written into this spec** — **taken
+   2026-08-09: D17, Option A (conninfo options); the build must implement it or
+   escalate why not** — conninfo options,
    a per-tenant role, or scope-string-only isolation. **Leaving it undecided fails this
    ticket.**
 5. A test asserts an **unbound** connection returns **zero rows** rather than another
@@ -1760,8 +1785,8 @@ Each names the one thing that would make it so. **Do not hand these to an agent 
 
 | Ticket | Scope | Owning § | To become dispatchable |
 |---|---|---|---|
-| **MT-2** Entitlements | `module_catalog` · `org_module_entitlement` · `user_module_seat` · the `intersect()` mask · 402-vs-403 · `ModuleGate` + upsell · non-HTTP gating · per-org feature flags + release channel | §2, §1.4b | **The SKU list and price points** (§8 items 1–2). The table in §2.4 is a proposal drawn from today's `FEATURES`, not a decision |
-| **MT-3** AI credits | Per-org virtual keys · Redis budget gate + per-run circuit breaker · `usage_event` (idempotent on `request_id`) · `model_rate_card` · `credit_ledger` · BYOK tier | §3 | **The credit-to-rupee rate and target gross margin** (§8 item 2) |
+| **MT-2** Entitlements | `module_catalog` · `org_module_entitlement` · `user_module_seat` · the `intersect()` mask · 402-vs-403 · `ModuleGate` + upsell · non-HTTP gating · per-org feature flags + release channel | §2, §1.4b | ~~The SKU list and price points~~ **INPUT ANSWERED 2026-08-09 (D18: Core ₹600 + ₹300/module — §8 item 1).** Remaining to dispatch: write the seven-point ticket contract onto §2 (per-item done-whens + verification) — the input is no longer the blocker |
+| **MT-3** AI credits | Per-org virtual keys · Redis budget gate + per-run circuit breaker · `usage_event` (idempotent on `request_id`) · `model_rate_card` · `credit_ledger` · BYOK tier | §3 | ~~The credit-to-rupee rate and target gross margin~~ **INPUT ANSWERED 2026-08-09 (D18: ₹10 AI-action unit, ~50% margin — §8 item 2).** Remaining to dispatch: the per-action cost model in the rate card + the seven-point contract onto §3 |
 | **MT-4** Billing | `payment_provider` seam · Stripe + Razorpay · webhooks → entitlements · dunning state machine · Operator Console · reconciler | §4 | **The provider split decision** (§8 item 3) and MT-2 shipped |
 | **MT-5** Tiers & compliance | Per-tenant envelope encryption · dedicated-DB tier activation · **drop Neo4j / graph into Postgres** · residency · SOC 2 groundwork | §1.1a, §0.9.4 | Nothing blocking. ⚠️ **Envelope encryption should be pulled into MT-1 if MT-0d or MT-1g touch those columns anyway** — retrofitting encryption onto populated columns is materially harder |
 
@@ -1789,10 +1814,11 @@ Customers 1–5 shipped as silos (§5.1) ─────────────
 1. **Take the MT-0c decision** (un-park T2, or record why not). It is the only owner-gate
    in MT-0 and everything in §0.9.3 waits behind it. *Owner, ~1 hour.*
 2. **Dispatch MT-0a.** Largest live defect, self-contained, no dependencies.
-3. **Answer §8 items 1–2** — SKU list and credit rate. They unblock MT-2 and MT-3, and
-   they are the two answers the first five silo customers will change, so drafting them
-   now and revising later is correct.
-4. **Write the cutover trigger down** (§5.1 condition 4) before customer #1, not after.
+3. ~~**Answer §8 items 1–2**~~ **DONE 2026-08-09 (D18)** — Core ₹600 + ₹300/module;
+   ₹10 AI-action credit at ~50% margin. Revision against the first silo customers is
+   expected and fine.
+4. ~~**Write the cutover trigger down**~~ **DONE 2026-08-09** — adopted in §5.1
+   condition 4 and carried on the board's WS-29 row.
 
 ### 11.3 What this plan deliberately does not do
 
@@ -1836,3 +1862,21 @@ events](https://stripe.com/customers/langfuse) ·
 [LiteLLM — budgets and rate limits](https://docs.litellm.ai/docs/proxy/users) ·
 [Revenera — SaaS licensing models](https://www.revenera.com/blog/software-monetization/saas-licensing-models-guide/) ·
 [Nalpeiron — SaaS licensing and entitlement management](https://docs.nalpeiron.com/education-and-training/licensing-education/learn-about-software-licensing-models/saas-licensing-and-entitlement-management)
+
+## Board record (2026-08-09) — moved from work_plan.md §2
+
+> Moved here in the 2026-08-09 consolidation (work_plan.md D18): board rows now
+> carry state + gates only. The narrative below is preserved verbatim from the
+> final long-form row; the dated corrections after it win where they conflict.
+
+### WS-29 — Multi-tenancy — turning CommandCenter into a product sold to other companies
+**State cell (as of the move):** ✅ **Phase 0 DONE** (MT-0a/0b/0c-1/0d) · ◐ **MT-1 partial** (1a schema · 1b generated-not-applied · 1c seam · 1e wrapper · 1i done) · 🔴 MT-0c-2 OWNER-GATE (D16) · ◐ MT-2…MT-5 blocked on owner inputs
+**Narrative (verbatim):** **Re-takes D11.** `tenancy_and_visibility.md` §1 set the tenant boundary at THE DEPLOYMENT and §6 put row-level tenancy, an org switcher and multi-org users out of scope. The business model changed — per module, per user, per month, plus metered AI — so §1/§6 are **superseded** by that spec's own re-take procedure. **§2–§5 of `tenancy_and_visibility.md` (the visibility ladder, the `group:` project grant, the gap table) are UNCHANGED and still binding**; tenancy is *which company*, visibility is *who inside it*. **The decision: tenant = `organization_id` enforced by Postgres RLS at the connection seam; the deployment is a placement, not a boundary.** Pooled standard tier, dedicated DB/stack as priced tiers. ⚠️ **The thesis is not a database thesis** (§0.9): agents execute model-generated tool calls over adversarial input, and the database can be defended by a policy that cannot be forgotten while the agent runtime cannot — so **the isolation budget belongs on the execution plane**, and MT-0c is the load-bearing ticket, not MT-1b. **Three findings that changed the plan:** (1) *"one engine, one `get_db()`"* was **wrong** — true of the request path, false of the process; §0.1 enumerates **eight** connection paths, two of which the seam ratchet never inspected (`acb_graph`'s sync `create_engine`; three raw `psycopg.connect` callers), which is why MT-1c also extends the ratchets. (2) **RLS fails closed** (unset `app.tenant_id` → NULL → zero rows) where `search_path` fails open — that property, not topology, is why schema-per-tenant was rejected (§1.8). (3) The customization layer that makes per-customer code forks unnecessary **already ships** — Custom Apps, Workflows (ADR-028), `dynamic_agents`, `pm_custom_fields`, `settings JSONB` (§1.4b). **Blockers before ANY second tenant, silo or pooled — process-level, not database-level:** MT-0a (integration credentials reach agents via process-global `os.environ`, `executor.py:4388`, flaw documented in-code at `:4364`) and MT-0b (self-mutation opens PRs against this monorepo — root `AGENTS.md` non-negotiable 3). **MT-0c is OWNER-GATE and inverts D10:** T2 is parked because *"the ladder must hold against trusted colleagues, not hostile users"* — selling externally replaces that threat model, so un-parking is the architecture, not optional hardening. **Rollout (§5.1): silo customers 1–5, build MT-1 in parallel, cut over at 8–12** — crossover is where silo's linear cost meets MT-1's one-time 4–5 weeks; every silo runs the pooled schema with `organization_id` + RLS from day one, or the bridge becomes a rewrite. **Absorbs WS-14a** as MT-1i: the three `org_group` slug-only joins were "wrong within one org, leaking in none" under D11 — **under D15 they leak**, and `_HAS_OWNER_SQL` (`access.py:522`, no org filter) is a **lockout RLS does not fix**. §11.2 is the week-one list.
+
+**Corrections applied 2026-08-09:** H1 is now SCRATCH-VERIFIED (157/158/159 applied +
+idempotent on a full-ladder replica; baseline 213 passed / 2 skipped; prod apply = the
+owner's merge of PR #404 — see the handover's H1 result block). MT-2/MT-3's owner
+inputs are ANSWERED (D18 — §8 items 1–2). The §5.1 cutover trigger is ADOPTED. The
+Mem0 path-8 decision is taken (D17, Option A). "MT-2…MT-5 blocked on owner inputs" is
+therefore stale for 2 of 4: MT-2/MT-3 now lack only their seven-point ticket
+contracts; MT-4 still needs §8 item 3 (payment-provider split).

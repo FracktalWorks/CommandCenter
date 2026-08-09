@@ -297,16 +297,33 @@ it. That is the second reason to do RLS before the identity split.
 
 ## 4. MT-2 — entitlement shapes
 
-Control-plane tables. Parent §2.2 owns the reasoning.
+Control-plane tables. Parent §2.2 owns the reasoning; **§2.4b (D23) owns the
+sales-object shapes** — modules are internal atoms, customers buy Center
+packages, org-wide add-ons, or Complete.
 
 ```sql
-CREATE TABLE module_catalog (
+CREATE TABLE module_catalog (                            -- internal billing ATOM (D23)
     slug          TEXT PRIMARY KEY,
     display_name  TEXT NOT NULL,
     feature_slugs TEXT[] NOT NULL,                      -- unlocks these feature_catalog rows
     requires      TEXT[] NOT NULL DEFAULT '{}',
     is_core       BOOLEAN NOT NULL DEFAULT false,
-    list_price_per_seat_month NUMERIC(12,2),
+    list_price_per_seat_month NUMERIC(12,2),            -- atom cost WEIGHT, not a customer price
+    currency      TEXT NOT NULL DEFAULT 'INR'
+);
+
+CREATE TABLE center_package (                            -- D23: THE customer sales object
+    center_slug   TEXT PRIMARY KEY,                     -- matches the Center registry slug
+    display_name  TEXT NOT NULL,
+    module_slugs  TEXT[] NOT NULL,                      -- atoms this package expands to
+    price_per_seat_month NUMERIC(12,2) NOT NULL,        -- ₹600 app-bearing / ₹300 slices-only
+    currency      TEXT NOT NULL DEFAULT 'INR'
+);
+
+CREATE TABLE plan_catalog (                              -- D20.5 as amended by D23:
+    slug          TEXT PRIMARY KEY,                     --   holds ONLY the 'complete' row
+    module_slugs  TEXT[] NOT NULL,                      --   ['*'] wildcard, expanded at
+    price_per_seat_month NUMERIC(12,2) NOT NULL,        --   entitlement time (₹3,600)
     currency      TEXT NOT NULL DEFAULT 'INR'
 );
 
@@ -326,10 +343,18 @@ CREATE TABLE user_module_seat (
     organization_id UUID NOT NULL,
     user_id         UUID NOT NULL,
     module_slug     TEXT NOT NULL,
+    source          TEXT NOT NULL DEFAULT 'alacarte'    -- D23: which purchase granted it —
+                    CHECK (source IN ('center','plan','alacarte')),
+    source_slug     TEXT,                               -- the center_package/plan row, when not alacarte
     assigned_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
     assigned_by     TEXT,
     PRIMARY KEY (organization_id, user_id, module_slug)
 );
+-- D23.2 — the ONE-ASSIGNMENT ACT: granting a user a center_package writes, in one
+-- transaction: the billing seat rows (source='center'), the org_group membership,
+-- and the D12 slice grants. Unassignment reverses all of it. Union semantics: a
+-- module reached via two packages exists once (PK above); billing lines are per
+-- PACKAGE seat, never per module (parent §4.2).
 
 CREATE TABLE org_feature_flag (          -- §1.4b: release channel + per-org flags
     organization_id UUID NOT NULL,

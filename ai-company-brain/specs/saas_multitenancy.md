@@ -2,12 +2,16 @@
 
 **Status:** Architecture of record (owner-requested 2026-08-08) · **Board row: `work_plan.md` §2 → WS-29 · Decision: D15** · **§11 is the dispatchable ticket list — start there; [`saas_multitenancy_implementation.md`](saas_multitenancy_implementation.md) is its child and holds the build shapes** · **Owner:** vjvarada ·
 **Supersedes:** `tenancy_and_visibility.md` §1 and §6 · **Verified against code:** 2026-08-08,
-working tree at `b09093a` · **Updated 2026-08-09** (consolidation pass): §8 items 1–2
-ANSWERED (D18 — Core ₹600 + ₹300/module; ₹10 AI-action credit ~50% margin), the Mem0
-path-8 decision taken (D17, Option A), §5.1's cutover trigger ADOPTED, MT-1a's stale
-`members.py` anchor corrected, and H1 scratch-verified (migrations 157–159 applied +
-verified on a full-ladder replica; prod apply = PR #404 — see the handover's H1 result
-block)
+working tree at `b09093a` · **Updated 2026-08-10 (D23 pass): pricing is
+CENTER-SHAPED — §2.4b is the customer-facing shape of record** (Center packages
+₹600/₹300 + all-Centers seat ₹1,800 + add-ons Builder ₹500/Workflows ₹300 + Complete ₹3,000 (D24); modules demoted
+to internal billing atoms; D20's Team/Business retired; ₹10 credit model and D19.3
+seat rules carry over; §8 item 5 holds the OPEN customer-framing questions) ·
+*Prior update 2026-08-09* (consolidation pass): §8 items 1–2 first answered (D18,
+since superseded), the Mem0 path-8 decision taken (D17, Option A), §5.1's cutover
+trigger ADOPTED, MT-1a's stale `members.py` anchor corrected, and H1
+scratch-verified; **migrations 157–159 CONFIRMED on prod 2026-08-09** (PR #404
+merged, box self-applied via pull timer)
 
 > **This document re-takes a decision that was deliberately taken the other way.**
 > `tenancy_and_visibility.md` §1 (owner-answered 2026-08-03) set the tenant boundary at
@@ -450,8 +454,11 @@ single piece of work in this document, and §1.5 lists what it does *not* cover.
 > **its lead argument does not survive that input.** Corrected here rather than quietly
 > left standing, because the corrected version is what makes the recommendation honest.
 
-**What no longer holds — the infrastructure-cost argument.** A 25-user company on three
-modules at ~₹500/user/module is ~₹37,500/month (≈$450). A VPS able to run a full stack is
+**What no longer holds — the infrastructure-cost argument.** A 25-user company of
+desk workers on D23 pricing (₹600 Core + ₹600 Personal + one department Center
+₹600 ≈ ₹1,800/user for a typical seat) is ₹45,000/month (≈$540); even all-Core-only
+it is ₹15,000 *(earlier drafts computed ₹37,500 from module-first pricing — same
+order of magnitude, same conclusion)*. A VPS able to run a full stack is
 ~$30–40/month — roughly **8% of revenue**. That is affordable. The original claim that
 *"the SMB tier does not exist under this model"* was priced for a customer a quarter this
 size and **is withdrawn.** At this ACV, dedicated infrastructure is not what breaks.
@@ -973,25 +980,115 @@ module must be **absent-but-legible**, never broken:
    sync still polls every five minutes and **still costs you provider spend for a customer
    who is not paying for it.**
 
-**Mapping today's features to sellable modules** (`FEATURES` at
-`packages/acb_auth/acb_auth/permissions.py:73`, `feature_catalog` seeded by migrations
-130 and 140):
+**Mapping today's features to modules — THE INTERNAL ATOM LEDGER (D19 prices,
+demoted from "SKU list" by D23, 2026-08-10).** Modules are **billing atoms that
+Center packages compose from — customers never buy them individually**; the
+customer-facing list of record is **§2.4b**. The ₹ column is each atom's internal
+cost weight (used to price packages), not a purchasable price. Reachability:
+`email`/`whatsapp`/`meetings` only via the **Personal Center ₹600**; `crm` only
+via **Sales ₹600**; `finance` only via **Finance ₹600**; `projects` (plus
+Knowledge Base and Dashboards when built) ride inside **every** Center package as
+slices, never alone. Only `builder` (₹500) and `workflows` (₹300) are directly
+buyable, as org-wide add-ons. (`FEATURES` at
+`packages/acb_auth/acb_auth/permissions.py:73`, `feature_catalog` seeded by
+migrations 130 and 140):
 
-| Module | Features it unlocks | Note |
-|---|---|---|
-| `core` | chat, memory, dashboard, artifacts, settings | Always on |
-| `email` | email + `center.marketing` mail surfaces | Heaviest ingestion cost |
-| `whatsapp` | whatsapp | Per-number provider cost — price accordingly |
-| `crm` | crm, `center.sales` | |
-| `projects` | projects, tasks | |
-| `people` | people, `center.people` | |
-| `finance` | `center.finance` | Not yet built — the catalog row can exist before the module does |
-| `notes` | notes, meeting bot | Per-minute STT cost |
-| `automation` | workflows, approvals, observability | |
-| `builder` | build.apps, build.agents | Highest-risk module; gate hardest |
+| Module (atom) | ₹ weight | Features it unlocks | Note |
+|---|---|---|---|
+| `core` | **600** (every member) | chat, memory, dashboard, artifacts, settings, **tasks (personal lens)**, **calendar**, **people directory** (`people`, `center.people`), **approvals**, **observability** | Always on; every org member consumes a Core seat (D19.3). ⚠️ no `calendar` feature slug exists yet — mint one with MT-2 |
+| `email` | 300 | email + `center.marketing` mail surfaces | Heaviest ingestion cost; embeddings absorbed in price (D19.2) |
+| `whatsapp` | 300 | whatsapp | Per-number provider cost **absorbed in price** (D19.2) |
+| `crm` | 300 | crm, `center.sales` | |
+| `projects` | 300 | projects, `center.*` project surfaces | **One task store with Core** (D-PM-6): this SKU gates portfolios, project boards, dependencies, ClickUp import/sync, org-wide views — personal task management stays Core |
+| `finance` | 300 | `center.finance` | Not yet built — the catalog row can exist before the module does |
+| `meetings` *(was `notes`)* | 300 | notes, meeting bot | Per-minute STT **metered as credits** (D19.2). Customer-facing name: **Meetings** |
+| `workflows` *(was `automation`)* | 300 | workflows | Customer-facing name: **Workflows**. Approvals + observability moved to `core` (D19.1) |
+| `builder` | **500** | build.apps, build.agents | Highest-risk module; gate hardest; priced above the standard add-on for that reason |
 
-**Adding a module must stay a data change.** A new SKU is a `module_catalog` row plus a
-`feature_catalog` row plus a `FEATURES` tuple entry — never a code path per customer. Note
+*(The former standalone `people` module row folded into `core` — D19.1.)*
+
+### 2.4b Center packages — the pricing shape of record (D23, 2026-08-10; supersedes 2.4a's Team/Business tiers)
+
+**The sales object is the Center; the module stays the billing atom.** Full
+statement in `work_plan.md` §3 D23; the schema/enforcement consequences here:
+
+- **Layers:** Core ₹600/member mandatory (basic AI chat, tasks, calendar,
+  directory, personal dashboard, approvals, admin plane) · **Center packages**
+  per user per Center — app-bearing ₹600 (Personal = Email+WhatsApp+Meetings,
+  optional per user; Sales = CRM incl. CPQ; Marketing; Finance; Support),
+  slices-only ₹300 (R&D, Operations, People pre-HR) — each package bundling the
+  Center's modules **plus its slice of Projects, Knowledge Base and Dashboards**
+  · **org-wide add-ons** Builder ₹500, Workflows ₹300 · **all-Centers seat
+  ₹1,800/user (D24.3)** = every Center package, no add-ons — the multi-hat
+  relief · Company Center free for
+  leadership · **Complete ₹3,000/user (D24.4; was ₹3,600)** = Core + all
+  Centers + both add-ons, keeping rule 5 below
+  (all-GA, price-protected, wildcard). **D24 customer-framing calls:** the ₹600
+  Core headline stays; slices-only Centers pitch as "team workspace"; role
+  presets in SC-2. Ladder of record: 600 · 1,200 · 1,800 · 2,400 · 3,000.
+- **Schema (MT-2):** `center_package(center_slug TEXT PRIMARY KEY, module_slugs
+  TEXT[], price_per_seat_month NUMERIC, currency TEXT DEFAULT 'INR')` beside
+  `plan_catalog`; `user_module_seat.source` gains `'center'`. **Assigning a
+  Center package is ONE act** that creates the billing seat, the `org_group`
+  membership, the module entitlements and the D12 slice grants — and
+  unassignment reverses all four. The entitlement seam (§2.3), degradation
+  contract (§2.4), 402-vs-403, hard cap and proration (§4.2) are all unchanged;
+  a user's module set is the **union** across their packages (never billed
+  twice for a module; billed per Center because each package is a new team-data
+  slice).
+- The tier machinery below (2.4a) survives only for `complete`; its Team and
+  Business rows are **retired, never seeded**.
+
+### 2.4a Plan tiers — ⚠️ Team/Business SUPERSEDED by 2.4b (D23); Complete survives recast (D20, 2026-08-09)
+
+*(D23 body correction, 2026-08-10: the paragraph and table this section shipped
+with described Team/Business/Complete-₹2,400 over a purchasable a-la-carte list —
+**both retired**. Nothing on §2.4's atom table is customer-purchasable; the
+customer objects are §2.4b's Center packages, the two org-wide add-ons, and
+Complete at ₹3,600. The original table is kept below, struck, as the decision
+record only — never seed `plan_catalog` from it.)*
+
+| ~~Tier~~ | ~~₹/user/mo~~ | ~~Modules~~ | Status under D23 |
+|---|---|---|---|
+| Core | 600 | the base | **Survives** — the mandatory member layer (D19.3) |
+| ~~Team~~ | ~~1,200~~ | ~~Core + Projects + Meetings + Workflows~~ | **RETIRED, never seeded** |
+| ~~Business~~ | ~~1,800~~ | ~~Team + CRM + Email + WhatsApp~~ | **RETIRED, never seeded** |
+| Complete | ~~2,400~~ → ~~3,600~~ → **3,000 (D24.4)** | everything (wildcard) | **Survives recast** — all Centers + both add-ons + Core (§2.4b) |
+
+Rules (as amended by D23):
+
+1. **Schema (MT-2):** `plan_catalog(slug TEXT PRIMARY KEY, module_slugs TEXT[],
+   price_per_seat_month NUMERIC, currency TEXT DEFAULT 'INR')` beside
+   `module_catalog` — under D23 it holds **only the `complete` wildcard row** —
+   plus `center_package` (§2.4b); `user_module_seat` gains
+   `source ∈ ('center','plan','alacarte')` so a package or plan change can
+   recompute exactly the seats it granted and unbundling stays computable. No
+   org-level plan column — mixed levels inside one org are legal (three Complete
+   power users, twenty Core members).
+2. **Pricing floor:** Complete is always ≤ the sum of all Center packages plus
+   add-ons, and upgrading a user from stacked Center packages to Complete must
+   never cost more — the console surfaces that swap as a savings prompt
+   (upsell lever).
+3. **Included monthly credits per package/bundle: deliberately NOT decided.**
+   Launch default is none — credits sell separately (§3.2). Bundling credits is
+   an owner knob left open; do not invent values for it.
+4. The ladder of record is D23.5's worked seats as amended by D24 (600 · 1,200 ·
+   1,800 · 2,400 · 3,000) — driven by package count, not tier steps.
+5. **Complete is defined contractually (owner, 2026-08-09 review round):
+   Complete = every generally-available module, always.** New modules (the D21
+   roster as they ship) appear for Complete subscribers automatically; the list
+   price may rise at a module launch, but **existing subscribers keep their price
+   for their current contract term** (price protection). A frozen-2026
+   composition and float-for-everyone repricing were both rejected. Put this
+   sentence in the customer contract template verbatim, and encode it in MT-2 as
+   `plan_catalog.module_slugs = ['*']` for the `complete` row (a literal
+   wildcard, expanded at entitlement time) rather than a hand-maintained list
+   that silently goes stale at each module launch.
+
+**Adding a module must stay a data change.** A new atom is a `module_catalog` row plus a
+`feature_catalog` row plus a `FEATURES` tuple entry; a new **customer-visible**
+offering is additionally a `center_package` row (or a module folded into an
+existing package) — never a code path per customer. Note
 today's trap, documented in the `FEATURES` docstring at `permissions.py:65-72`: a slug
 seeded in SQL but missing from
 the `FEATURES` tuple is **invisible even to an owner holding `*`**. Keep the pinning test.
@@ -1090,6 +1187,27 @@ provider tokens:
 
 This is what OpenRouter, Cursor and Vercel's AI Gateway all do, and for these reasons.
 
+**The credit unit, defined (owner, 2026-08-09, D19.2 — this resolves the "flat ₹10
+vs cost × 2" ambiguity D18 carried):**
+
+- A **credit is the ₹10 purchase and display unit**. It is what customers buy and
+  what the balance shows. "AI action" is marketing shorthand for the credit — it is
+  **not** a flat per-call or per-gesture price.
+- Each model call draws credits **fractionally** at **provider cost × 2** through
+  the rate card: a cheap classification call might burn 0.2 credits, a long agent
+  run 15. The ~50% gross margin is a property of the multiplier, not of any flat
+  price.
+- The rate card is **denominated natively in INR** — hand-maintained per-model
+  prices, updated when providers reprice. There is **no FX machinery**;
+  `usage_event.provider_cost_usd` stays as a bookkeeping column, but nothing on the
+  billing path converts currency at runtime.
+- **Scope of metering:** LLM calls and **per-minute STT** (the Meetings module)
+  draw from the same credit balance via the same rate card. **Embeddings and
+  WhatsApp per-number provider fees are NOT metered** — they are absorbed into the
+  Center package prices (D23; the Personal Center ₹600 is where email/WhatsApp
+  live — roughly flat per-seat costs; metering background ingest the customer
+  never asked for reads badly).
+
 ### 3.3 Failure semantics — decide now, not at 2 a.m.
 
 **Soft-block with a grace overdraft.** At zero balance, LLM calls return a specific 402
@@ -1174,11 +1292,26 @@ trial → active → past_due (grace: warnings, still working)
 
 ### 4.2 How the seat charge is actually computed
 
-Per module: `quantity = COUNT(*) FROM user_module_seat WHERE module_slug = ?`, pushed to
-the processor as the subscription item quantity on assignment/unassignment, with
-proration. For mid-cycle changes, charge on **peak assigned seats in the period** or the
-processor's standard prorated behaviour — **pick one and state it in the contract.**
-Ambiguity here is the single most common source of B2B billing disputes.
+**Billing line items are per CENTER PACKAGE (D23), not per module**: each package
+(and each org-wide add-on, and Complete) is its own processor subscription item,
+`quantity = COUNT(*)` of seats holding it, pushed on assignment/unassignment with
+proration; module counts remain the internal expansion (union semantics — a
+shared module is never billed twice). **The three rules are decided (owner,
+2026-08-09, D19.3):**
+
+1. **Hard cap.** Assigning beyond `seats_purchased` is **blocked** with a buy-more
+   prompt — a purchase is always an explicit act, never a side effect of assignment.
+   `seats_purchased` is therefore a real cap, not advisory.
+2. **Every member consumes a Core seat.** Membership IS the Core billing event:
+   inviting a member bills a Core seat, removing them frees it, and there is no such
+   thing as a zero-seat member. The invoice reads (D23): members × ₹600 Core +
+   Σ(Center package seats × ₹600/₹300) + add-on seats (Builder ₹500, Workflows
+   ₹300) + all-Centers seats × ₹1,800 + Complete seats × ₹3,000 (D24).
+3. **Mid-cycle changes use the processor's standard prorated behaviour** (a day-20
+   assignment bills ~⅓ of the month; unassignment credits the remainder). "Peak
+   assigned seats in the period" was considered and rejected as punitive for brief
+   experiments. State the proration rule in the customer contract verbatim —
+   ambiguity here is the single most common source of B2B billing disputes.
 
 ### 4.3 Payment processor — and the India question
 
@@ -1376,19 +1509,41 @@ Recorded so they are not re-proposed, and so the reasoning survives:
    Workflows). Selected from agent-drafted options anchored on Zoho India pricing; the
    owner expects to revise against the first five silo customers (§11.2 item 3 said
    drafting-now-revising-later is correct). §2.4's module split becomes the SKU list's
-   starting shape — MT-2's entitlement catalog seeds from this.
+   starting shape — MT-2's entitlement catalog seeds from this. **⚠️ Refined 2026-08-09
+   by D19.1:** where this answer and §2.4's old table disagreed (Tasks, People,
+   Calendar, Builder/Finance pricing, Meetings/Workflows naming), D19's reconciled
+   table governed. **⚠️ Superseded again 2026-08-10 by D23:** the customer-facing
+   shape of record is **§2.4b's Center packages**; §2.4's table is demoted to the
+   internal atom ledger. Cite D23 for anything a customer buys.
 2. ~~**Credit-to-rupee conversion and target gross margin on AI.**~~ **ANSWERED
    2026-08-09 (owner, D18): the credit unit is a ₹10 "AI action" at ~50% gross margin**
    — the `model_rate_card` prices each model call at provider cost × 2, denominated in
    credits, so buyers see actions, never tokens (§3's rate-card rule unchanged: sell
-   credits via the rate card, never provider tokens). Per-action costing lands with
-   MT-3's rate-card build.
-3. **Payment provider split.** Razorpay-for-India + Stripe-for-international is the
-   recommendation (§4.3); a single provider is simpler and worth considering if the initial
-   market is one geography.
-4. **Data residency commitments.** Whether to promise India-only data at launch. This is
-   cheap to promise now (one region) and expensive to add later.
-5. ~~**Whether first customers get the pooled tier or hand-run silos.**~~
+   credits via the rate card, never provider tokens). **⚠️ Refined 2026-08-09 by
+   D19.2 — the flat-₹10-vs-cost×2 ambiguity is resolved:** the credit is the ₹10
+   purchase/display unit, calls draw fractionally at cost × 2, the rate card is
+   INR-native, STT is metered, embeddings/WhatsApp fees are absorbed. Full statement
+   in §3.2.
+3. ~~**Payment provider split.**~~ **ANSWERED 2026-08-09 (owner, D19.5): Razorpay
+   only at launch**, behind the `payment_provider` seam (§4.3's seam design stands);
+   Stripe lands as a second implementation of the same seam when the first
+   international customer appears. This was the last input blocking MT-4 — **MT-4 is
+   now unblocked for spec detailing.**
+4. ~~**Data residency commitments.**~~ **ANSWERED 2026-08-09 (owner, D19.6):
+   promise India-only at launch.** All customer data on India-region infrastructure;
+   a second residency tier is a deliberate priced-placement decision later (D15's
+   placement model). Constrains hosting choices to India regions from customer #1.
+5. ~~**Customer-facing framing of D23 pricing.**~~ **ANSWERED 2026-08-10 (owner,
+   D24 — all four ruled):** **(a)** the ₹600 Core headline STAYS (the
+   "Workspace ₹1,200 default" reframing was rejected); **(b)** slices-only
+   Centers stay ₹300, pitched as "a full team workspace", never a filter;
+   **(c)** the **all-Centers seat exists at ₹1,800** (every Center, no add-ons)
+   — and it forced **Complete down to ₹3,000** (D24.4, arithmetic in the D24
+   record); **(d)** role presets ship in SC-2's launch scope. Still standing
+   from the review: the typical-month credit anchor on the pricing page, and
+   zero internal vocabulary customer-facing. Purchase-flow copy is now
+   buildable.
+6. ~~**Whether first customers get the pooled tier or hand-run silos.**~~
    **ANSWERED 2026-08-08** by the owner's seat-count input (10–50 users per customer):
    **silo customers 1–5, build Phase 1 in parallel, cut over at 8–12.** The reasoning,
    the crossover arithmetic and the four conditions that keep it a bridge rather than a
@@ -1785,7 +1940,7 @@ Each names the one thing that would make it so. **Do not hand these to an agent 
 
 | Ticket | Scope | Owning § | To become dispatchable |
 |---|---|---|---|
-| **MT-2** Entitlements | `module_catalog` · `org_module_entitlement` · `user_module_seat` · the `intersect()` mask · 402-vs-403 · `ModuleGate` + upsell · non-HTTP gating · per-org feature flags + release channel | §2, §1.4b | ~~The SKU list and price points~~ **INPUT ANSWERED 2026-08-09 (D18: Core ₹600 + ₹300/module — §8 item 1).** Remaining to dispatch: write the seven-point ticket contract onto §2 (per-item done-whens + verification) — the input is no longer the blocker |
+| **MT-2** Entitlements | `module_catalog` · **`center_package` + `plan_catalog` (D23/D20 — the sales objects)** · `org_module_entitlement` · `user_module_seat` (**with `source ∈ center/plan/alacarte`**) · the `intersect()` mask · 402-vs-403 · `ModuleGate` + upsell · non-HTTP gating · per-org feature flags + release channel · **the one-assignment act (seat + membership + entitlements + grants, D23.2)** | §2, §2.4b, §1.4b | ~~The SKU list and price points~~ **INPUT ANSWERED — final shape D23 2026-08-10 (§2.4b; D18/D19's module-first answers superseded).** Remaining to dispatch: write the seven-point ticket contract onto §2/§2.4b (per-item done-whens + verification) — the input is no longer the blocker |
 | **MT-3** AI credits | Per-org virtual keys · Redis budget gate + per-run circuit breaker · `usage_event` (idempotent on `request_id`) · `model_rate_card` · `credit_ledger` · BYOK tier | §3 | ~~The credit-to-rupee rate and target gross margin~~ **INPUT ANSWERED 2026-08-09 (D18: ₹10 AI-action unit, ~50% margin — §8 item 2).** Remaining to dispatch: the per-action cost model in the rate card + the seven-point contract onto §3 |
 | **MT-4** Billing | `payment_provider` seam · Stripe + Razorpay · webhooks → entitlements · dunning state machine · Operator Console · reconciler | §4 | **The provider split decision** (§8 item 3) and MT-2 shipped |
 | **MT-5** Tiers & compliance | Per-tenant envelope encryption · dedicated-DB tier activation · **drop Neo4j / graph into Postgres** · residency · SOC 2 groundwork | §1.1a, §0.9.4 | Nothing blocking. ⚠️ **Envelope encryption should be pulled into MT-1 if MT-0d or MT-1g touch those columns anyway** — retrofitting encryption onto populated columns is materially harder |
@@ -1814,7 +1969,7 @@ Customers 1–5 shipped as silos (§5.1) ─────────────
 1. **Take the MT-0c decision** (un-park T2, or record why not). It is the only owner-gate
    in MT-0 and everything in §0.9.3 waits behind it. *Owner, ~1 hour.*
 2. **Dispatch MT-0a.** Largest live defect, self-contained, no dependencies.
-3. ~~**Answer §8 items 1–2**~~ **DONE 2026-08-09 (D18)** — Core ₹600 + ₹300/module;
+3. ~~**Answer §8 items 1–2**~~ **DONE — final shape D23 2026-08-10 (§2.4b Center packages; the first D18 answer — Core ₹600 + ₹300/module — is superseded)**;
    ₹10 AI-action credit at ~50% margin. Revision against the first silo customers is
    expected and fine.
 4. ~~**Write the cutover trigger down**~~ **DONE 2026-08-09** — adopted in §5.1

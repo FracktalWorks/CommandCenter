@@ -367,6 +367,18 @@ upsert per drop (the board's cross-column drag patches whatever field `column_by
 
 ---
 
+### 5.x The standalone app groups by Center (D22 amendment, 2026-08-10)
+
+`department_centers.md` §5's dual-access rule names this app its first consumer:
+the top-level `/projects` surface's primary grouping is **by Center** — the
+caller sees each Center they hold access to (D12 membership or `group:` grant),
+containing that Center's projects and tasks; org-tier holders see all Centers in
+the same layout; a Center the caller cannot access never renders as a group
+header. This is an IA requirement on the portfolio/list views, not a new
+permission model — visibility resolves through the same grants as everything
+else. Carry into the acceptance of whichever remaining letter first touches the
+portfolio/grouping views.
+
 ## 6. Integrations — bind, don't rebuild
 
 ### 6.1 Personal tasks (`/tasks`) — the org↔personal seam this spec exists for

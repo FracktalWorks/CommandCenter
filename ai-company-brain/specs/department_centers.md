@@ -523,6 +523,12 @@ the filter is the small part.
   (`agent-kinds.md` §9.4 — per-instance cost attribution).
 - **Weekly executive digest**: a scheduled workflow per Center → one Company
   Center brief.
+- **Owner scope colour (2026-08-09/10, D21 + D22 — carry into this phase's
+  acceptance when it dispatches):** dashboards are **configurable per
+  department** (widget/data selection, not a fixed layout); leadership can build
+  **multiple** company-wide dashboards, not one; and the standalone Dashboards
+  app follows the §5 dual-access rule (grouped by Center, union of the caller's
+  slices).
 
 ### Phase E — AI budgets and governance
 - **Per-member AI budgets**: monthly token/cost caps enforced at the gateway's
@@ -554,21 +560,99 @@ the filter is the small part.
    phrasing those rewrites installed embodied D11 and has itself been
    re-swept to organization/placement language after D15; this inventory
    stays as history.)*
-2. **R&D / Engineering Center?** Fracktal is a product company; a seventh
-   Center (projects, test logs, design docs) is plausible. Deferred until a
-   real workflow demands it. Adding one is **not** a one-file edit: work §2's
-   *Registering a Center* checklist end to end — `lib/centers.ts`, a
-   `feature_catalog` migration row, `acb_auth.permissions.FEATURES`,
-   `CENTER_GROUP_SLUGS`, and the test anchor `EXPECTED_CENTER_SLUGS`. Doing
-   only the first two is how Centers came to be unreachable by everyone once
-   already; `tests/unit/test_org_access_control.py::test_centers_registry_matches_the_feature_vocabulary`
+2. ~~**R&D / Engineering Center?**~~ **ANSWERED 2026-08-10 (owner, D22): yes —
+   R&D joins the roster**, launching **slices-only** (the cross-cutting apps
+   scoped to its team; no unique apps until a real workflow demands one). The
+   registration cost stands unchanged: adding it is §2's *Registering a Center*
+   checklist end to end — `lib/centers.ts`, a `feature_catalog` migration row,
+   `acb_auth.permissions.FEATURES`, `CENTER_GROUP_SLUGS`, and the test anchor
+   `EXPECTED_CENTER_SLUGS`. Doing only the first two is how Centers came to be
+   unreachable by everyone once already;
+   `tests/unit/test_org_access_control.py::test_centers_registry_matches_the_feature_vocabulary`
    is what now stops that recipe from passing CI.
-3. **Support: Operations sub-app or own Center?** Service & AMC starts inside
-   Operations; if the support team grows its own membership and mailbox, it
-   graduates to a Center by that same checklist.
+3. ~~**Support: Operations sub-app or own Center?**~~ **ANSWERED 2026-08-10
+   (owner, D22): its own Center**, paired with the future Customer Support &
+   Success module (`future_modules_roadmap.md` §3). Service & AMC's Operations
+   sketch (§2) stays where it is until the Support module is specced; the
+   Center registers by the same §2 checklist. Operations itself also launches
+   slices-only (D22) — its unique-app sketch (production tracker, inventory/BOM,
+   dispatch) remains future scope.
 4. **Guest access to Centers** — org_access open Q4; a guest with
    `center.sales` only is a plausible contractor shape and needs a decision
    before external sharing.
+
+## 5. The Center roster of record (owner architecture statement, 2026-08-10 — D22)
+
+The owner stated the full system shape in session; the four ambiguities it
+surfaced were answered the same day (work_plan.md §3 D22). This section is the
+roster of record; §2's shipped six-center list is the *current build state*, and
+the delta between them is registration work by §2's checklist.
+
+**Three kinds of surface, one platform** (nothing here changes "Centers are
+projections, never separate deployments"):
+
+1. **Personal Center — per-user, NOT a department.** Each member's private
+   workspace (D12's `private` tier). *(Reconciled with D23 pricing,
+   2026-08-10:)* the **surface** exists for every member automatically — no
+   `org_group`, no membership grant — and always shows its **Core apps** (my
+   Tasks, my Calendar, basic AI chat, personal dashboard); its **comms apps —
+   Email, WhatsApp, Meetings — light up only with the optional Personal Center
+   package (₹600/user, D23.1)**, rendering as locked/upsell otherwise per the
+   §2.4 degradation contract. ⚠️ Engineering consequence: §2's five-place
+   registration checklist assumes a group-backed Center; Personal needs a
+   registry entry whose scope is the caller, not a group — design that variant
+   when Personal registers, do not force a fake group.
+2. **Department Centers — seven:** Sales · Marketing · Finance · **R&D (new,
+   D22)** · People · Operations · **Support (new, D22)**. Each an `org_group` +
+   `center.*` slug per §1, **sold as a Center package (D23, 2026-08-10: ₹600
+   app-bearing / ₹300 slices-only — `saas_multitenancy.md` §2.4b)**. Every
+   department Center carries the cross-cutting apps sliced to its team, in two
+   commercial classes *(D23 correction)*: the **base slices — Projects,
+   Knowledge Base, Dashboards — ride inside every Center package**;
+   **Workflows (₹300) and Builder (App + Agent, ₹500) are separately-purchased
+   org-wide add-ons** that light up in all the Centers of a user who holds
+   them — a package alone does NOT include them; basic Agent Chat is Core. (The
+   D21 slicing doctrine — D12 tiers + visibility-declared-at-creation — governs
+   all of them.) Unique apps per Center: Sales = the CRM
+   surfaces **including products, price books, brochures/product info
+   and the proposal generator — all inside the Sales Center package (₹600; CRM
+   is the internal atom, D23), never separate
+   SKUs (D22)**; Marketing = the future Marketing module (social/ads/website —
+   `future_modules_roadmap.md` §2); Finance = the Finance module; People = the
+   People directory surfaces (Core) + HR expansions; Support = the future
+   Support module; **R&D and Operations launch slices-only** (unique apps
+   deferred until a real workflow demands them — Operations' §2 sketch stays
+   future scope).
+**Dual access paths for cross-cutting apps (owner, 2026-08-10 — D22 amendment).**
+Projects, Workflows, App Builder, Agent Builder, Agent Chat, Dashboards and
+Knowledge Base are reachable **two ways, same data, same grants** *(holding the
+app is the prerequisite either way — base slices come with any Center package,
+Workflows/Builder with the org-wide add-on, basic Agent Chat with Core; D23)*:
+
+- **Via a Center** — the app pre-scoped to that Center's slice (what §1 already
+  defines: a Center item is app + scope).
+- **As a standalone app** — the app's own top-level surface, whose primary
+  information architecture is **grouped by Center**: the user sees every Center
+  they hold access to (membership or explicit `group:` grant, per D12), and
+  under each, that Center's data — e.g. opening Projects shows the Centers as
+  the first-level grouping, each containing its projects and tasks. Leadership
+  with org-tier access sees all Centers in the same layout.
+
+The rule that keeps this honest: **both paths resolve visibility through the
+same D12 grants** — the standalone app view is a union of the caller's Center
+slices, never a separate permission model, and a Center the caller cannot access
+never renders as a group header. First consumers when their tickets dispatch:
+WS-27's portfolio/grouping views (Projects) and WS-15's dashboards.
+
+3. **Company Center — kept (D22), the leadership surface.** WS-15's mandate:
+   company-wide dashboards (multiple, configurable — the D21 colour), org-level
+   rollups. Cross-cutting apps additionally offer leaders an all-slices filter
+   in-app, built as explicit org-tier grants per D12/D14 — never a bypass.
+
+**The admin/IT plane is not a Center:** Appearance, Membership & roles, Live
+activity (observability), Integrations, Approvals, Agent Registry, AI
+credits/access (WS-30 console + operator views). These are Core-module admin
+surfaces gated by capability, present regardless of Center membership.
 
 ## Board record (2026-08-09) — moved from work_plan.md §2
 

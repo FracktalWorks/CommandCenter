@@ -1027,6 +1027,16 @@ Rules:
    owner knob left open; do not invent values for it.
 4. The ₹600-per-step ladder is a sales artifact — keep it when repricing unless
    the owner says otherwise.
+5. **Complete is defined contractually (owner, 2026-08-09 review round):
+   Complete = every generally-available module, always.** New modules (the D21
+   roster as they ship) appear for Complete subscribers automatically; the list
+   price may rise at a module launch, but **existing subscribers keep their price
+   for their current contract term** (price protection). A frozen-2026
+   composition and float-for-everyone repricing were both rejected. Put this
+   sentence in the customer contract template verbatim, and encode it in MT-2 as
+   `plan_catalog.module_slugs = ['*']` for the `complete` row (a literal
+   wildcard, expanded at entitlement time) rather than a hand-maintained list
+   that silently goes stale at each module launch.
 
 **Adding a module must stay a data change.** A new SKU is a `module_catalog` row plus a
 `feature_catalog` row plus a `FEATURES` tuple entry — never a code path per customer. Note

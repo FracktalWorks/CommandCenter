@@ -235,7 +235,10 @@ D15/D16) — read their banners before citing either.
   `module_catalog`; `user_module_seat` gains a `source ∈ (plan, alacarte)` so
   unbundling is computable. **Included-monthly-credits per tier is deliberately
   NOT decided** — launch default is none (credits sold separately); bundling
-  credits into tiers is an owner knob left open. Recorded in
+  credits into tiers is an owner knob left open. **Amended 2026-08-09 (owner,
+  final review round): Complete = every GA module, always, with price protection
+  for existing subscribers within their contract term** — encoded as a wildcard
+  `plan_catalog` row, never a hand-maintained list (§2.4a rule 5). Recorded in
   `saas_multitenancy.md` §2.4a; console impact in `subscription_console.md`.
 - **D19 — Twelve owner calls taken 2026-08-09** *(the subscription/pricing
   clarification round, answered question-by-question in session; supersedes D18's

@@ -168,6 +168,16 @@ system of record, Zoho becomes an import source, then Zoho is retired.**
 
 ---
 
+### 1.x Future phases — the rest of the Sales suite (D22, 2026-08-10; NOT dispatchable)
+
+Owner call, recorded in `work_plan.md` §3 D22: **products, price books,
+brochures/product-information library, and the proposal generator are CRM-module
+scope** — features of the ₹300 CRM SKU (`saas_multitenancy.md` §2.4), never
+separate SKUs. None is specced; each needs its own section here (data model, API,
+UI, done-whens per the §1 contract in `work_plan.md`) before any ticket exists.
+Sequenced after the current letters (h · i · e cutover); nothing in this note
+changes them.
+
 ## 2. Current state — the Zoho mirror, measured 2026-08-05
 
 **Zoho is read-only batch ingestion into three Phase-0 graph tables. There is no CRM UI, no

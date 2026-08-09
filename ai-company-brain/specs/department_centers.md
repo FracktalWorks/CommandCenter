@@ -523,6 +523,12 @@ the filter is the small part.
   (`agent-kinds.md` §9.4 — per-instance cost attribution).
 - **Weekly executive digest**: a scheduled workflow per Center → one Company
   Center brief.
+- **Owner scope colour (2026-08-09/10, D21 + D22 — carry into this phase's
+  acceptance when it dispatches):** dashboards are **configurable per
+  department** (widget/data selection, not a fixed layout); leadership can build
+  **multiple** company-wide dashboards, not one; and the standalone Dashboards
+  app follows the §5 dual-access rule (grouped by Center, union of the caller's
+  slices).
 
 ### Phase E — AI budgets and governance
 - **Per-member AI budgets**: monthly token/cost caps enforced at the gateway's

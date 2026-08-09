@@ -141,6 +141,11 @@ class ProjectModel(BaseModel):
     source: str = "manual"
     clickup_id: str | None = None
     clickup_kind: str | None = None
+    # WS-27z — the lifecycle policy (migration 166). ROOT rows only carry a
+    # meaningful value; the sweep reads the root's and the subtree inherits.
+    archive_after_months: int | None = None
+    close_after_months: int | None = None
+    timezone: str = "UTC"
     created_by: str | None = None
     created_at: str | None = None
     updated_at: str | None = None
@@ -156,6 +161,10 @@ class ProjectIn(BaseModel):
     lead: str | None = None
     position: float | None = None
     source: str | None = None
+    # WS-27z — settable on ROOT projects only (the write path refuses a child).
+    archive_after_months: int | None = None
+    close_after_months: int | None = None
+    timezone: str | None = None
 
 
 class TaskModel(BaseModel):
@@ -1109,6 +1118,7 @@ async def require_status_in_project(db: Any, root_id: str, status_id: str) -> An
 
 async def apply_status_transition(
     db: Any, task: Any, new_status_id: str, *, created_by: str,
+    automation: bool = False,
 ) -> dict[str, Any]:
     """Move a task to a new status. **Three effects, one helper.**
 
@@ -1151,6 +1161,7 @@ async def apply_status_transition(
             "from_category": old_status.category,
             "to_category": new_status.category,
         },
+        automation=automation,
     )
 
     # WS-27o — a task crossing INTO a closing category is what advances a
@@ -1184,12 +1195,20 @@ async def record_activity(
     project_id: str | None = None,
     body: str | None = None,
     meta: dict[str, Any] | None = None,
+    automation: bool = False,
 ) -> Any:
     """Write one timeline row.
 
     The migration's CHECK requires a target, and this refuses first so the
     failure names the caller's mistake instead of surfacing as an
     IntegrityError 500 from the driver.
+
+    ``automation=True`` (WS-27z) stamps ``meta.automation``, the one flag the
+    timeline renders automated entries distinctly by. A FLAG, not a new
+    activity type or a fourth actor shape: the actor stays
+    ``system:workflow:<id>`` inside the one vocabulary (D-PM-4), and the row
+    stays whatever type the change earns — a status move by a sweep is still a
+    ``status_change``. Human writes never pass it, so their meta is unchanged.
     """
     if task_id is None and project_id is None:
         raise HTTPException(
@@ -1201,6 +1220,8 @@ async def record_activity(
             status_code=422,
             detail=f"Unknown activity type '{activity_type}'.",
         )
+    if automation:
+        meta = {**(meta or {}), "automation": True}
     return await insert_row(db, "pm_activities", {
         "type": activity_type,
         "task_id": task_id,
@@ -1291,6 +1312,7 @@ async def resolve_fk_labels(db: Any, changes: list[dict]) -> list[dict]:
 async def _coalescible_prior(
     db: Any, *, created_by: str, changes: list[dict],
     task_id: str | None, project_id: str | None,
+    automation: bool = False,
 ) -> Any | None:
     """The activity row this edit folds into, or ``None`` to append normally.
 
@@ -1302,7 +1324,13 @@ async def _coalescible_prior(
 
     A prior row whose meta carries anything beside ``changes`` (a revert's
     ``reverted_activity_id``) is a statement of its own and is never coalesced
-    into or over.
+    into or over. The one exception is WS-27z's ``automation`` flag, which
+    rides beside ``changes`` on every automated write: an automation that
+    rewrites a description every run must keep coalescing (the WS-27f rule),
+    so an automation-flagged prior folds an automation-flagged edit — and only
+    that. A human edit never folds into an automated row or vice versa, even
+    under the same actor string, because the flag is part of what the row
+    asserts.
     """
     if len(changes) != 1 or str(changes[0].get("field") or "") not in COALESCED_FIELDS:
         return None
@@ -1326,7 +1354,9 @@ async def _coalescible_prior(
     if prior_actor != (created_by or "").strip().lower():
         return None
     meta = from_jsonb(getattr(row, "meta", None))
-    if not isinstance(meta, dict) or set(meta) != {"changes"}:
+    if not isinstance(meta, dict) or set(meta) - {"automation"} != {"changes"}:
+        return None
+    if bool(meta.get("automation")) != automation:
         return None
     prior = [c for c in (meta.get("changes") or []) if isinstance(c, dict)]
     if len(prior) != 1 or str(prior[0].get("field") or "") != str(changes[0]["field"]):
@@ -1342,6 +1372,7 @@ async def record_field_change(
     task_id: str | None = None,
     project_id: str | None = None,
     extra_meta: dict[str, Any] | None = None,
+    automation: bool = False,
 ) -> Any:
     """Write one ``field_change`` activity — THE one door (WS-27w items 2+3).
 
@@ -1365,18 +1396,23 @@ async def record_field_change(
     if extra_meta is None:
         prior = await _coalescible_prior(
             db, created_by=created_by, changes=resolved,
-            task_id=task_id, project_id=project_id,
+            task_id=task_id, project_id=project_id, automation=automation,
         )
         if prior is not None:
             prior_meta = from_jsonb(getattr(prior, "meta", None)) or {}
             first = (prior_meta.get("changes") or [{}])[0]
             merged = {**resolved[0], "old": first.get("old")}
+            coalesced: dict[str, Any] = {"changes": [merged]}
+            if automation:
+                # The flag survives the fold — a coalesced automated edit must
+                # not quietly turn back into a human-looking row.
+                coalesced["automation"] = True
             # `created_at` is bumped too, not only `updated_at`: the coalesced
             # row now records the LATEST edit, the timeline orders on
             # `created_at`, and the row is already the task's newest — so the
             # bump keeps it truthful without reordering anything.
             return await update_row(db, "pm_activities", str(prior.id), {
-                "meta": {"changes": [merged]},
+                "meta": coalesced,
                 "created_at": now(),
             })
     meta: dict[str, Any] = {"changes": resolved}
@@ -1385,6 +1421,7 @@ async def record_field_change(
     return await record_activity(
         db, activity_type="field_change", created_by=created_by,
         task_id=task_id, project_id=project_id, meta=meta,
+        automation=automation,
     )
 
 
@@ -1457,3 +1494,54 @@ def validate_choice(value: str | None, allowed: tuple[str, ...], what: str) -> N
             status_code=422,
             detail=f"Unknown {what} '{value}'. One of: {list(allowed)}.",
         )
+
+
+#: WS-27z — the three lifecycle-policy columns (migration 166). Named once so
+#: the write path's root-only guard and the tests read the same list.
+LIFECYCLE_FIELDS: tuple[str, ...] = (
+    "archive_after_months", "close_after_months", "timezone",
+)
+
+
+def validate_lifecycle_settings(values: dict[str, Any]) -> None:
+    """422 on a malformed lifecycle policy, before anything is written.
+
+    Months are whole numbers greater than zero, or ``null`` to switch the
+    policy off — the migration's CHECK says the same, and refusing here names
+    the field instead of surfacing an IntegrityError 500. The timezone is
+    validated against the IANA database exactly the way the workflows app
+    validates a schedule trigger's (``crud._timezone_is_valid``): a bad zone
+    discovered by the sweep is a policy that silently measures against the
+    wrong midnight; discovered at save time it is a 422 the owner can act on.
+    """
+    for column in ("archive_after_months", "close_after_months"):
+        if column not in values or values[column] is None:
+            continue
+        months = values[column]
+        if isinstance(months, bool) or not isinstance(months, int) or months <= 0:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"'{column}' must be a whole number of months greater "
+                    f"than zero, or null to switch the policy off."
+                ),
+            )
+    if "timezone" in values:
+        name = values["timezone"]
+        if name is None:
+            raise HTTPException(
+                status_code=422,
+                detail="'timezone' cannot be null — it defaults to 'UTC'.",
+            )
+        from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+        try:
+            ZoneInfo(str(name))
+        except (ZoneInfoNotFoundError, ValueError, KeyError):
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"Unknown timezone '{name}' — use an IANA name like "
+                    f"Asia/Kolkata"
+                ),
+            ) from None

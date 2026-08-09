@@ -27,6 +27,7 @@ import {
   projectsApi,
 } from "./lib/api";
 import { FieldManager } from "./components/FieldManager";
+import { LifecyclePolicy } from "./components/LifecyclePolicy";
 import { TagManager } from "./components/TagManager";
 import { BulkBar } from "./components/BulkBar";
 import { FilterBar } from "./components/FilterBar";
@@ -143,6 +144,10 @@ function ProjectsWorkspace() {
   // manager all read it, and three fetches of one list would disagree.
   const [tags, setTags] = useState<TagRow[]>([]);
   const [managingTags, setManagingTags] = useState(false);
+
+  // WS-27z — the lifecycle-policy dialog. Root projects only: the policy is a
+  // root setting the whole subtree inherits, and the gateway 422s a child.
+  const [managingLifecycle, setManagingLifecycle] = useState(false);
 
   // WS-27n — multi-select. `anchor` is the last card clicked without shift,
   // which is what a shift-click measures its range from.
@@ -777,6 +782,17 @@ function ProjectsWorkspace() {
                 Tags
               </Button>
             ) : null}
+            {selected && !mine && !selected.parent_project_id ? (
+              <Button
+                variant="ghost"
+                size="sm"
+                icon="Archive"
+                title="Auto-archive and auto-close policy for this project's subtree"
+                onClick={() => setManagingLifecycle(true)}
+              >
+                Lifecycle
+              </Button>
+            ) : null}
             <Button
               variant="ghost"
               size="sm"
@@ -1037,6 +1053,21 @@ function ProjectsWorkspace() {
           // it reloads — the chips would otherwise show a name no card carries.
           onTasksTouched={() => {
             if (selected) void loadProject(selected);
+          }}
+        />
+      ) : null}
+
+      {managingLifecycle && selected ? (
+        <LifecyclePolicy
+          project={selected}
+          onClose={() => setManagingLifecycle(false)}
+          onSaved={(fresh) => {
+            // The header's selected row keeps the fresh values; the tree
+            // re-reads so its copy does not disagree on the next select.
+            setSelected((current) =>
+              current && current.id === fresh.id ? { ...current, ...fresh } : current
+            );
+            setTreeKey((k) => k + 1);
           }}
         />
       ) : null}

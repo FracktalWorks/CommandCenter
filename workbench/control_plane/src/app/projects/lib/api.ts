@@ -16,6 +16,13 @@ export interface ProjectRow {
   lead?: string | null;
   clickup_id?: string | null;
   clickup_kind?: string | null;
+  /**
+   * WS-27z — the lifecycle policy. ROOT-project settings (the subtree
+   * inherits); `null` months = that policy is off, which is the default.
+   */
+  archive_after_months?: number | null;
+  close_after_months?: number | null;
+  timezone?: string | null;
   children?: ProjectRow[];
 }
 
@@ -243,6 +250,13 @@ export const projectsApi = {
 
   createProject: (payload: Record<string, unknown>) =>
     call<ProjectRow>("nodes", { method: "POST", body: JSON.stringify(payload) }),
+
+  /** WS-27z — root-project settings (lifecycle policy) ride the plain PATCH. */
+  patchProject: (projectId: string, payload: Record<string, unknown>) =>
+    call<ProjectRow>(`nodes/${projectId}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
 
   createTask: (payload: Record<string, unknown>) =>
     call<TaskRow>("tasks", { method: "POST", body: JSON.stringify(payload) }),

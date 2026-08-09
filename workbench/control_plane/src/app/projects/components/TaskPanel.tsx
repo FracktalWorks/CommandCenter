@@ -23,6 +23,7 @@ import {
   watchersApi,
 } from "../lib/api";
 import { taskDeepLink, taskRef } from "../lib/card";
+import { isAutomated } from "../lib/lifecycle";
 import { CustomFieldValues } from "./CustomFieldValues";
 import { TagPicker } from "./TagPicker";
 import { RepeatEditor } from "./RepeatEditor";
@@ -567,11 +568,25 @@ export function TaskPanel({
       <ol className="flex-1 space-y-3 overflow-y-auto p-3">
         {timeline.map((activity) => (
           <li key={activity.id} className="text-sm">
-            <p className="text-xs text-muted-foreground">
-              {activity.created_by ?? "system"}
-              {activity.created_at
-                ? ` · ${new Date(activity.created_at).toLocaleString()}`
-                : ""}
+            <p className="flex items-center gap-1 text-xs text-muted-foreground">
+              {/* WS-27z — an automated entry says so. The flag is the row's
+                  meta.automation, written only by the workflow engine; a
+                  sweep archiving a task must not read as a person did it. */}
+              {isAutomated(activity) ? (
+                <span
+                  className="inline-flex items-center gap-0.5"
+                  title="Automated by a workflow"
+                >
+                  <Icon name="Bot" className="h-3 w-3" />
+                  <span className="text-[10px]">auto</span>
+                </span>
+              ) : null}
+              <span className="min-w-0 truncate">
+                {activity.created_by ?? "system"}
+                {activity.created_at
+                  ? ` · ${new Date(activity.created_at).toLocaleString()}`
+                  : ""}
+              </span>
             </p>
             <p className="whitespace-pre-wrap text-foreground">{describe(activity, fields)}</p>
           </li>

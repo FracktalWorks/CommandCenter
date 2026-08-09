@@ -89,6 +89,11 @@ _ILIKE = re.compile(r"(?:\w+\.)?(\w+)\s+ILIKE\s+:(\w+)", re.I)
 #: WS-27q, which meant every `overdue` test was really only asserting the
 #: status half and would have passed with the date comparison deleted.
 _NOW_LT = re.compile(r"\b(?:\w+\.)?(\w+)\s*<\s*now\(\)", re.I)
+#: ``<col> < :param`` — a bound strict-less-than (WS-27z's untouched-since
+#: cutoff, and the `due_before` filter). The column must be a bare word right
+#: before the `<`, so `coalesce(…) < :window_to` (handled by `_WINDOW_CMP`)
+#: never matches, and `<=` never matches (`=` is not `:`).
+_BOUND_LT = re.compile(r"\b(?:\w+\.)?(\w+)\s*<\s*:(\w+)\b")
 #: WS-27q's calendar window: ``coalesce(<a>, <b>) < :window_to``. The captured
 #: expression is what says WHICH interval endpoint the comparison is about, so
 #: the mirror reads the SQL's coalesce order rather than assuming one.
@@ -350,6 +355,9 @@ _DEFAULTS: dict[str, dict[str, Any]] = {
         "position": None, "archived_at": None, "clickup_id": None,
         "clickup_kind": None, "task_prefix": None, "lead": None,
         "description": None,
+        # WS-27z — migration 166's lifecycle policy. NULL = off, the default.
+        "archive_after_months": None, "close_after_months": None,
+        "timezone": "UTC",
     },
     "pm_project_grants": {},
     "pm_task_statuses": {"color": "gray", "position": 0, "is_default": False},
@@ -1380,6 +1388,26 @@ class FakeProjectsDB:
                 r for r in rows
                 if r.get(column) is not None and _as_datetime(r[column]) < _now()
             ]
+        # WS-27z — `<col> < :param` with SQL's NULL semantics (a NULL column
+        # never matches). Datetimes compare as instants however they were
+        # stored; anything else falls back to `_sortable`'s total order.
+        for column, param in _BOUND_LT.findall(top):
+            if param not in args:
+                continue
+            seen = True
+            edge = args[param]
+            if isinstance(edge, datetime):
+                rows = [
+                    r for r in rows
+                    if r.get(column) is not None
+                    and _as_datetime(r[column]) < edge
+                ]
+            else:
+                rows = [
+                    r for r in rows
+                    if r.get(column) is not None
+                    and _sortable(r.get(column)) < _sortable(edge)
+                ]
         # WS-27q's calendar window. Applied ONLY when the statement carries the
         # bound, and each comparison is evaluated against the interval endpoint
         # the SQL's own `coalesce` order names — so swapping that order, which

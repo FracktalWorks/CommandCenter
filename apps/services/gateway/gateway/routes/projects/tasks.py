@@ -57,6 +57,7 @@ from gateway.routes.projects.core import (
     router,
     row_to_dict,
     task_visibility_clause,
+    triage_exclusion_clause,
     update_row,
     validate_choice,
 )
@@ -136,6 +137,9 @@ async def list_tasks(
     # WS-27m. `tags` is ANY, `tags_all` is ALL — see `build_task_filters`.
     tags: str | None = None,
     tags_all: str | None = None,
+    # WS-27u. Triage-parked tasks are invisible to every list surface unless
+    # asked for — the ONE predicate lives in `core.triage_exclusion_clause`.
+    include_triage: bool = False,
 ) -> ListResponse:
     """The one task-list endpoint every surface reads through.
 
@@ -197,6 +201,8 @@ async def list_tasks(
         )
         clauses.extend(extra_clauses)
         params.update(extra_params)
+        if not include_triage:
+            clauses.append(triage_exclusion_clause())
 
         where = " WHERE " + " AND ".join(clauses)
         total = (await db.execute(

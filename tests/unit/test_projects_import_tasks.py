@@ -80,17 +80,11 @@ def test_every_category_it_maps_to_is_one_the_DATABASE_allows():
     """
     from gateway.routes.projects.filters import STATUS_CATEGORIES
 
-    text = (
-        __import__("pathlib").Path(__file__).resolve().parents[2]
-        / "infra/postgres/146_projects.sql"
-    ).read_text(encoding="utf-8")
-    text = "\n".join(re.sub(r"--.*$", "", ln) for ln in text.splitlines())
-    match = re.search(
-        r"category\s+TEXT\s+NOT\s+NULL[^,]*?CHECK\s*\(\s*category\s+IN\s*\((.*?)\)\)",
-        text, re.S | re.I,
-    )
-    assert match, "146 no longer constrains pm_task_statuses.category"
-    allowed = set(re.findall(r"'([a-z_]+)'", match.group(1)))
+    # The LAST migration to constrain the column wins a full replay — 146
+    # created the CHECK inline and 164 (WS-27u) replaced it to admit `triage`.
+    from tests.unit.test_projects_filters import migrated_status_categories
+
+    allowed = migrated_status_categories()
     assert set(CATEGORY_BY_NAME.values()) <= allowed, (
         f"the importer would write categories the database refuses: "
         f"{sorted(set(CATEGORY_BY_NAME.values()) - allowed)}"

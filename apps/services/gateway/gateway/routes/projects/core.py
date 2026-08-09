@@ -61,10 +61,16 @@ PROJECT_STATUSES: tuple[str, ...] = ("active", "on_hold", "done", "archived")
 
 #: `pm_task_statuses.category` — the machine-readable half of a status. Name and
 #: colour are the owner's; this is what completion, the personal mirror (§6.1)
-#: and automation gates (§6.3) key off.
+#: and automation gates (§6.3) key off. `triage` (WS-27u, migration 164) is the
+#: parked-at-the-front-door value that :func:`triage_exclusion_clause` keys off.
 STATUS_CATEGORIES: tuple[str, ...] = (
-    "backlog", "todo", "in_progress", "done", "cancelled",
+    "backlog", "todo", "in_progress", "done", "cancelled", "triage",
 )
+
+#: The one category the default list reads exclude (WS-27u). A constant rather
+#: than a literal in the clause below so the vocabulary word and the predicate
+#: cannot drift apart silently.
+TRIAGE_CATEGORY = "triage"
 
 #: Categories that close a task: crossing INTO one stamps ``completed_at``,
 #: crossing out clears it. ``cancelled`` counts as closed — a cancelled task is
@@ -354,6 +360,8 @@ TIMESTAMP_COLUMNS: frozenset[str] = frozenset({
     # `text()` declares no column type, so an ISO string would arrive at a
     # timestamptz as text.
     "defer_until", "clarified_at",
+    # The intake wrapper's reappearance instant (164, WS-27u).
+    "snoozed_until",
 })
 DATE_COLUMNS: frozenset[str] = frozenset({"start_date"})
 
@@ -778,6 +786,35 @@ def task_visibility_clause(vis: Visibility, alias: str = "t") -> str:
         f"      OR EXISTS (SELECT 1 FROM pm_task_assignees a"
         f"                 WHERE a.task_id = {alias}.id"
         f"                   AND lower(a.assignee) = :vis_email)))"
+    )
+
+
+def triage_exclusion_clause(alias: str = "t") -> str:
+    """The default-list exclusion (WS-27u): triage-parked tasks are invisible.
+
+    A captured task is real from birth — an ordinary ``pm_tasks`` row — but it
+    is PARKED: its status carries the ``triage`` category, and until a human
+    rules on it it must appear on **no** board, list, calendar, timeline or
+    search read unless the caller passed ``include_triage=true``.
+
+    **This is the one copy of the predicate.** Every list surface appends this
+    helper's answer when ``include_triage`` is false, rather than writing the
+    clause itself — the §11.16 lesson restated for a WHERE fragment: two
+    hand-written copies are how one surface quietly starts leaking the queue.
+    The parameter-coverage test in ``test_projects_intake.py`` holds the other
+    half (no surface may silently drop the flag).
+
+    Joined through the status row rather than denormalised onto tasks, for
+    ``build_task_filters``' reason: the category is the status's property, and
+    a copy on the task would need re-stamping whenever a lane is recategorised.
+    ``NOT EXISTS`` rather than ``NOT IN`` so a task whose status row somehow
+    vanished stays visible — fail open into sight, never into a task nobody
+    can find.
+    """
+    return (
+        f"NOT EXISTS (SELECT 1 FROM pm_task_statuses s_triage"
+        f" WHERE s_triage.id = {alias}.status_id"
+        f" AND s_triage.category = '{TRIAGE_CATEGORY}')"
     )
 
 

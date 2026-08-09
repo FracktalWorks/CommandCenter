@@ -1,6 +1,6 @@
 # Agent Persistence — Implementation Reference (how it's built, so you can change it)
 
-**Status:** built 2026-07-15 (Part 2). Live once PR #60 merges to `main` (migrations
+**Status:** built 2026-07-15 (Part 2). **Live** (PR #60 merged; header corrected 2026-08-09) (migrations
 70 + 71 auto-apply on deploy). This is the **engineering companion** to
 `agent_file_and_memory_framework.md` — that doc is the *contract* (what agents must
 do); this doc is the *implementation* (every function, table, and seam), so we can
@@ -19,7 +19,11 @@ stored in Postgres (the **source of truth**) with the on-disk workspace as a
 append a version-history row (**write-through**). On agent load the workspace is
 **rehydrated** from Postgres. A read that misses on disk is **faulted-in** from
 Postgres. Everything is keyed on `agent_name` alone, so it ports to any platform
-(a second tenant deployment) unchanged. If Postgres is unavailable, every store call is a no-op
+unchanged. ⚠️ **Under D15 (`saas_multitenancy.md` §1) `agent_name` alone is no longer a
+sufficient key** — it was, while one deployment meant one tenant; pooled tenancy makes it
+ambiguous across organizations. `agent_blob` gains `organization_id` + RLS in **MT-1b**,
+and the blob content itself moves to object storage in **MT-1g**. The phrase "a second
+tenant deployment" is retained nowhere in this spec because a second tenant is now a row. If Postgres is unavailable, every store call is a no-op
 and agents keep working off the disk cache.
 
 ```

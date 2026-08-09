@@ -3,7 +3,7 @@
 > **Org:** Fracktal Works · **Updated:** 2026-08-01 · **Version:** 3.1
 > Single source of truth for **what** we build (requirements), **when** (milestones), and **how much** (phased WBS). Absorbs the former `product_requirements.md` and `wbs.md`.
 > **Read first:** [`AGENTS.md`](AGENTS.md) — current build status, file index, glossary.
-> **Near-term sequencing and dispatch:** [`work_plan.md`](work_plan.md) (2026-07-31) — for ordering, that doc wins.
+> **Near-term sequencing and dispatch:** [`work_plan.md`](work_plan.md) (2026-07-31) — for ordering, that doc wins. *(re-affirmed 2026-08-09: §6 sequencing yields to work_plan.md §2, which now also carries WS-29 multi-tenancy — D15/D16/D18)*
 > **Companions:** [`system_architecture.md`](system_architecture.md) (design + ADRs) · [`reference.md`](reference.md) (MAF / Copilot SDK / memory library notes) · [`agent_repo_compatibility.md`](agent_repo_compatibility.md) (how to build an agent) · [`specs/`](specs/) (per-feature specs).
 
 > **⚠️ Two work surfaces — this doc is the FEATURE roadmap (M3→M6). It is NOT the whole "what's left":**

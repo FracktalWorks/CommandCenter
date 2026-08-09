@@ -163,8 +163,17 @@ safe — do not point one of them at the public hostname.
 
 ## The user-management contract — binding on every route you add here
 
-Full contract: `ai-company-brain/specs/user_management_contract.md`. The six
-that bite in *this* directory, each learned by breaking it:
+Full contract: `ai-company-brain/specs/user_management_contract.md` (**eleven**
+rules since 2026-08-08). The six that bite in *this* directory, each learned by
+breaking it — **plus R11, which will bite here hardest when WS-29 lands:**
+
+> **R11 — never take the acting TENANT from input.** Not an `X-Organization-Id`
+> header, not a query parameter, not a body field. It comes from the
+> authenticated session or a tenant-scoped API key. Under **D15**
+> (`ai-company-brain/specs/saas_multitenancy.md` §1) every route in this
+> directory runs against a tenant-bound session, and the binding happens **once**
+> in `acb_common.db` — so a route that reaches data any other way is the bug.
+> Build shapes: `saas_multitenancy_implementation.md` §2.
 
 1. **The app is default-deny; do not opt out to make something reachable.**
    `require_authenticated` is attached at the app level in `main.py`, so a new

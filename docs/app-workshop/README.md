@@ -114,7 +114,9 @@ enforces. Translated internally: `window.cc.*` + SSO identity + manifest scopes.
   **consent is keyed to (user, app, scope-set)** — a new version with the same scopes
   inherits consent; widened scopes re-prompt. Deployments = immutable versions behind a
   stable URL; rollback = repoint. `executeAs` picks **run-as-viewer vs run-as-author**.
-  Domain trust removes verification friction inside one org.
+  Domain trust removes verification friction inside one org. *(per-org under D15 —
+  each tenant brings its own domain; the friction argument holds within a tenant,
+  not across)*
 - **Val Town** — platform **injects a short-lived, down-scoped API token** into the
   running val; std-library wrappers (`std/sqlite`, `std/email`, `std/openai`) use it
   transparently; dangerous scopes are excluded by default. Pure run-as-author.

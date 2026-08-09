@@ -1,5 +1,7 @@
 # Calendar-for-task-management — UX & backend review
 
+> **Status:** designer's audit record (2026-07-18) of PR #71. Sole home of the block-reminders/notifications item (`calendar_focus_os.md` §9.13 points here); everything else since triaged into the two owning calendar specs. Many fixes it proposes HAVE landed — check `calendar_focus_os.md` §9 before citing a gap as open. *(Header added 2026-08-09.)*
+
 A designer's-eye audit of the calendar built in PR #71 (2026-07-18). What's
 strong, what's missing, and the psychology of *why* people abandon calendars for
 task management — with prioritized, specific fixes.

@@ -1,5 +1,7 @@
 # Agents, Workspaces, Files & Artifacts — How It All Connects
 
+> **Status:** living reference (workspace/artifact model) · no owning board row · **Last reviewed:** 2026-08-09 (D15 phrasing sweep only — content not re-verified against code)
+
 Definitive reference for how agents are registered, loaded, where their files
 live on disk, and how the chat Files panel and the Artifacts viewer surface
 them. Written after a full end-to-end review (backend + frontend + live VPS).
@@ -11,7 +13,7 @@ them. Written after a full end-to-end review (backend + frontend + live VPS).
 > [`specs/agent_persistence_implementation.md`](specs/agent_persistence_implementation.md)
 > is the engineering reference (every function, table, and seam — read before
 > changing how persistence works). Required reading before building the
-> in-platform agent workbench or any new MAF agent (this deployment or a future second tenant deployment). This doc explains the *layout*; the framework explains the *contract*;
+> in-platform agent workbench or any new MAF agent (this deployment or a future second tenant deployment *(2026-08-09, under D15: another organization — rows + RLS, not a deployment)*). This doc explains the *layout*; the framework explains the *contract*;
 > the implementation reference explains *how it's built*.
 >
 > **The disk workspace described below is now a rehydratable cache** — the three

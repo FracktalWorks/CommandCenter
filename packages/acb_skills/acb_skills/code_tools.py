@@ -80,18 +80,24 @@ def _script_env() -> dict[str, str]:
     The base allowlist is secret-free (deny-pattern on top). On top of it, the
     canonical env vars of the integrations this agent declared in its
     ``config.json`` — and that resolved for this run — are passed through
-    (``acb_skills.integrations.FIELD_TO_ENV``; the executor injects them into
-    the run env, scoped by a restore token). So a script gets the ClickUp token
-    *its own agent* declared, but not the gateway master key or the DB URL.
+    (``acb_skills.integrations.FIELD_TO_ENV``). So a script gets the ClickUp
+    token *its own agent* declared, but not the gateway master key or the DB URL.
 
-    Concurrency caveat (same honest limit the executor documents for
-    ``_inject_integrations_to_env``): both ``os.environ`` and the declared-list
-    (``_WRITE_ARTIFACT_CONTEXT["integrations"]``) are process-global, so under
-    OVERLAPPING in-process runs of different agents the scoping is best-effort —
-    a concurrent run can transiently widen what a script sees. A true per-run
-    boundary is the Tier-2 container/subprocess env (BO-7); this Tier-0 layer
-    removes permanent accumulation and scopes to the declared set, it is not a
-    hard multi-tenant isolation guarantee.
+    **MT-0a: the credential values come from the run's ContextVar binding**
+    (``integrations.credential``), not from ``os.environ``. The executor used to
+    export them into the process environment, which meant two overlapping runs
+    shared them for the overlap window — a within-org concern under one tenant
+    and a credential leak under two (`saas_multitenancy.md` §6.1). A ContextVar
+    is per-task, so a concurrent run cannot widen what this script sees.
+
+    Residual caveat, narrowed but not gone: the declared-*list*
+    (``_WRITE_ARTIFACT_CONTEXT["integrations"]``) is still a process-global dict
+    despite its docstring calling itself coroutine-local, so a concurrent run can
+    still transiently widen *which names* are looked up. That is now much less
+    dangerous than it was — ``credential()`` resolves against **this** context's
+    binding, so a widened name list yields nothing unless this run also holds
+    that credential. Making the declared-list itself a ContextVar is the
+    remaining half; a true per-run boundary is the Tier-2 container env (MT-0c).
     """
     env = {
         k: v for k, v in os.environ.items()
@@ -100,10 +106,14 @@ def _script_env() -> dict[str, str]:
     declared = _declared_integrations()
     if declared:
         try:
-            from acb_skills.integrations import env_var_names  # noqa: PLC0415
+            from acb_skills.integrations import (
+                credential,
+                env_var_names,
+            )
             for var in env_var_names(declared):
-                if var in os.environ:
-                    env[var] = os.environ[var]
+                val = credential(var)
+                if val:
+                    env[var] = val
         except ImportError:
             pass
     env.setdefault("PYTHONUNBUFFERED", "1")
@@ -141,7 +151,7 @@ async def _sweep_to_blob_store(
     The tree walk + file reads (up to ``_SWEEP_MAX_FILES`` × ``_SWEEP_MAX_BYTES``)
     run OFF the event loop so a large sweep can't stall every concurrent run.
     """
-    import asyncio  # noqa: PLC0415
+    import asyncio
 
     cutoff = since - _SWEEP_MTIME_SLACK
 
@@ -168,20 +178,20 @@ async def _sweep_to_blob_store(
                     if st.st_mtime < cutoff or st.st_size > _SWEEP_MAX_BYTES:
                         continue
                     out.append((p.relative_to(root).as_posix(), p.read_bytes()))
-                except Exception:  # noqa: BLE001
+                except Exception:
                     continue
         return out
 
     try:
         collected = await asyncio.to_thread(_collect)
-    except Exception:  # noqa: BLE001
+    except Exception:
         return 0
     mirrored = 0
     for rel, data in collected:
         try:
             await mirror_to_blob_store(rel, data, actor="agent")
             mirrored += 1
-        except Exception:  # noqa: BLE001
+        except Exception:
             continue
     return mirrored
 
@@ -291,7 +301,7 @@ def _commit_repo_changes(root: Path, task: str) -> str | None:
     is not a git repo, the tree is clean, or any git step fails (best-effort —
     never raises).
     """
-    import subprocess  # noqa: PLC0415
+    import subprocess
 
     if not (root / ".git").exists():
         return None
@@ -327,7 +337,7 @@ def _commit_repo_changes(root: Path, task: str) -> str | None:
             return None
         sha = _git("rev-parse", "--short", "HEAD").stdout.strip()
         return sha or None
-    except Exception:  # noqa: BLE001 — a git hiccup must never fail the tool
+    except Exception:
         return None
 
 
@@ -378,7 +388,7 @@ async def code_task(task: str) -> str:
     declared = _declared_integrations()
     if declared:
         try:
-            from acb_skills.integrations import FIELD_TO_ENV  # noqa: PLC0415
+            from acb_skills.integrations import FIELD_TO_ENV
             lines = [
                 f"- {svc}: " + ", ".join(v for _, v in FIELD_TO_ENV.get(svc, []))
                 for svc in declared
@@ -407,7 +417,7 @@ async def code_task(task: str) -> str:
         swept = 0
     # Fail-safe: commit any repo-source edits the session left uncommitted so
     # the approval pipeline sees them and the next loader pull can't wipe them.
-    import asyncio  # noqa: PLC0415
+    import asyncio
     committed = await asyncio.to_thread(_commit_repo_changes, root, task)
     commit_note = (
         f"\n[repo changes committed locally as {committed} — queued for "

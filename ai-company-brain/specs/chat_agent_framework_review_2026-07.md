@@ -60,7 +60,10 @@ and `agents-workspaces-artifacts.md`.
 
 7. **Chat-level HITL is genuinely strong** (parked futures, cross-worker Redis control bus,
    reconnect replay, both-runtime parity tests). **Write-path HITL is not real yet**: the
-   Action Broker ships with zero handlers and real ClickUp/email writes bypass it (BO-1), and
+   ~~Action Broker ships with zero handlers and real ClickUp/email writes bypass it (BO-1)~~
+   *(corrected 2026-08-09: false since 2026-07-13 — the broker is live and wired at six
+   registration sites; `ACTION_BROKER_ENFORCE` ships OFF and email handlers remain BO-1c;
+   see `work_plan.md` WS-1)*, and
    `require_internal_auth` fails open with no token configured (BO-2). These remain the
    correct P0s.
 
@@ -242,6 +245,7 @@ cards in chat. Two gaps:
    workspace `.gitignore` protects deliverables from `git reset --hard`). Keep it; the only
    pending item is the known DEV-ONLY mutation-remote limitation
    (`docs/DESIGN_LIMITATION_native_maf_mutation.md`) before any multi-tenant use.
+   *(ticketed as MT-0b — built 2026-08-08 pending review)*
 
 ---
 

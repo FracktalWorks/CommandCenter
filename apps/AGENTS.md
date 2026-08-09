@@ -21,7 +21,7 @@ are *loaded by* a service at runtime and are never deployed on their own.
     - **Sinks must be idempotent per `(source, event_type, payload)`.** Strict mode stops at the first failure, so a retry re-runs every sink that already succeeded and still never runs the ones after it. Free today (one sink); it breaks silently the day a second is registered.
 - email_ingestion/ -- Multi-provider email sync engine (Gmail, Microsoft 365, IMAP/SMTP, aiosmtpd inbound, background scheduler)
 - reconciler/ -- Nightly source-of-truth diff and escalation
-- action_broker/ -- Approval-gated source-of-truth write executor: authority-tier disposition + fail-closed handler registry. **Decision core exists but ships with zero handlers and is not yet wired into the write path** — tracked as BO-1 (see `FOUNDATION_BUILDOUT_CHECKLIST.md`)
+- action_broker/ -- Approval-gated source-of-truth write executor: authority-tier disposition + fail-closed handler registry. **Live and wired since 2026-07-13** *(corrected 2026-08-09 — this line falsely said "zero handlers, not wired" for weeks)*: handlers register at six sites (ClickUp, WhatsApp, workflow, app-publish, `crm.zoho_*`); `ACTION_BROKER_ENFORCE` ships OFF (audit-and-chokepoint posture), and the flip is owner-gated behind BO-1a+BO-1b — see `work_plan.md` WS-1 and `FOUNDATION_BUILDOUT_CHECKLIST.md` §BO-1
 
 ## `agents/` — agent definitions (dynamically loaded at runtime)
 Identity + system prompt + tool set + integrations. Loaded via `build_agents()`

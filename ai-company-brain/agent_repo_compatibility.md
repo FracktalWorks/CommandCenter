@@ -1,5 +1,7 @@
 # Agent Builder Guide — CommandCenter Framework
 
+> ⚠️ **Superseded premise (banner added 2026-08-09).** This guide (2026-06-19) describes the distributed agent-repo model; `specs/agent_architecture.md` supersedes that framing (single runtime, manifests + agent_defs). Use this file only for maintaining EXISTING agent repos; new agents follow agent_architecture.md.
+
 > **Audience:** AI coding agents and developers building new CommandCenter-compatible agents.
 > **Reference implementation:** `sales-prospector` repo — the canonical pattern every new agent must follow.
 > **Framework:** DOE v2 — Skills (what to do) / Orchestration (decision making) / Execution (doing the work).

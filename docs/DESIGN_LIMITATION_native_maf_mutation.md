@@ -2,7 +2,8 @@
 
 **Status:** interim mechanism, in use while Command Center is a work in progress.
 **Must be replaced before:** any production / multi-tenant deployment where agents
-are run on behalf of third parties or customers.
+are run on behalf of third parties or customers. *(ticketed: saas_multitenancy.md
+MT-0b — built 2026-08-08, pending review; root AGENTS.md constraint 3 tracks it)*
 **Owner decision:** flagged 2026-07-15 — "we have to figure this out later."
 
 ---
@@ -56,8 +57,12 @@ evaluate when we get there (not yet decided):
    agents are provisioned into isolated forks with their own approval + deploy
    lane.
 
-The decision hinges on the tenancy model we land on for production, which is not
-settled yet — hence this note rather than an implementation.
+The tenancy model **was settled on 2026-08-08** (D15: organization_id + RLS,
+deployment = placement — `ai-company-brain/specs/saas_multitenancy.md` §1), and
+this limitation is ticketed as **MT-0b (WS-29)**: a config gate defaulting to
+disabled, **BUILT 2026-08-08 pending review** (migration 157 adds
+`organization.first_party`; mutation refuses non-first-party targets). This note
+stays until MT-0b is merged and verified.
 
 ## Guardrail until then
 
@@ -65,7 +70,8 @@ settled yet — hence this note rather than an implementation.
   and only in first-party/dev environments.
 - Do **not** enable the monorepo-PR path for any agent that is not first-party.
 - Before shipping multi-tenant Command Center, replace this path per the design
-  chosen above and delete this limitation once resolved.
+  chosen above and delete this limitation once resolved. *(= merging MT-0b; see
+  above)*
 
 See also: the `mutation_monorepo_repo` / `mutation_pr_token` settings docstrings in
 `packages/acb_common/acb_common/settings.py`, and the header of

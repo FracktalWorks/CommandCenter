@@ -29,6 +29,7 @@ from gateway.routes.projects import calendar as _calendar  # noqa: F401
 from gateway.routes.projects import custom_fields as _custom_fields  # noqa: F401
 from gateway.routes.projects import import_clickup as _import_clickup  # noqa: F401
 from gateway.routes.projects import import_tasks as _import_tasks  # noqa: F401
+from gateway.routes.projects import intake as _intake  # noqa: F401
 from gateway.routes.projects import me as _me  # noqa: F401
 from gateway.routes.projects import notifications as _notifications  # noqa: F401
 from gateway.routes.projects import personal as _personal  # noqa: F401

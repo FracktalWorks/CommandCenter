@@ -48,6 +48,7 @@ from gateway.routes.projects.core import (
     resolve_visibility,
     router,
     task_visibility_clause,
+    triage_exclusion_clause,
     wire,
 )
 from gateway.routes.projects.filters import like_escape
@@ -111,6 +112,7 @@ SELECT t.id, t.title, t.task_number, t.project_id, t.status_id, t.due_at,
   JOIN pm_projects p ON p.id = t.project_id
   JOIN pm_task_statuses s ON s.id = t.status_id
  WHERE {visible}
+   AND {triage}
    AND t.archived_at IS NULL
    AND (t.title ILIKE :term
         OR t.description ILIKE :term
@@ -125,6 +127,11 @@ SELECT t.id, t.title, t.task_number, t.project_id, t.status_id, t.due_at,
 async def search_tasks(
     q: str = "",
     limit: int = MAX_HITS,
+    # WS-27u. Search reaches every task in the app, so it is the surface where
+    # leaking the intake queue costs most — and the surface the duplicate
+    # picker needs the flag on, since "is this already captured" is a question
+    # about triage-parked tasks specifically. One predicate, in core.
+    include_triage: bool = False,
     user: UserContext = Depends(get_current_user),
 ) -> dict:
     """Ranked task hits across every project the caller can see.
@@ -144,7 +151,10 @@ async def search_tasks(
     try:
         vis = await resolve_visibility(db, user)
         rows = (await db.execute(
-            text(_SEARCH_SQL.format(visible=task_visibility_clause(vis))),
+            text(_SEARCH_SQL.format(
+                visible=task_visibility_clause(vis),
+                triage="TRUE" if include_triage else triage_exclusion_clause(),
+            )),
             {
                 **vis.params,
                 "term": f"%{escaped}%",

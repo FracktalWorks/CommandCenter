@@ -25,10 +25,11 @@ from typing import Any
 from fastapi import HTTPException
 from sqlalchemy import text
 
-#: `pm_task_statuses.category`. Mirrored from migration 146's CHECK and pinned
-#: by `test_projects_filters`.
+#: `pm_task_statuses.category`. Mirrored from the CHECK the migrations leave in
+#: force (146, widened by 164's `triage` — WS-27u) and pinned by
+#: `test_projects_filters`, which reads the LAST migration to constrain it.
 STATUS_CATEGORIES: tuple[str, ...] = (
-    "backlog", "todo", "in_progress", "done", "cancelled",
+    "backlog", "todo", "in_progress", "done", "cancelled", "triage",
 )
 
 #: Categories that mean "this task is finished". Shared with

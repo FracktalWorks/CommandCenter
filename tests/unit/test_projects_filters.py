@@ -56,15 +56,42 @@ def bound(**kwargs) -> dict:
 
 # ── The vocabulary matches the schema ───────────────────────────────────────
 
+def migrated_status_categories() -> set[str]:
+    """The category vocabulary as the DATABASE will enforce it.
+
+    Assembled from every migration that constrains `pm_task_statuses.category`,
+    taking the LAST one in file order — 146 creates the CHECK inline and 164
+    (WS-27u) replaces it wholesale to admit `triage`, so the newest definition
+    is the one that survives a full replay. The same aggregation
+    `test_projects_migration._activity_check_values` does for the activity
+    vocabulary, and for the same reason: a mirror pinned to the file that
+    CREATED the check goes quietly stale the day a later file widens it.
+
+    Scoped to files that name `pm_task_statuses`, because `feature_catalog`
+    (130/140) constrains a `category` column of its own.
+    """
+    latest: str | None = None
+    for path in sorted((REPO / "infra/postgres").glob("*.sql")):
+        if path.name == "schema.generated.sql":
+            continue
+        text = "\n".join(
+            re.sub(r"--.*$", "", line)
+            for line in path.read_text(encoding="utf-8").splitlines()
+        )
+        if "pm_task_statuses" not in text:
+            continue
+        for match in re.finditer(
+            r"CHECK\s*\(\s*category\s+IN\s*\((.*?)\)\s*\)", text, re.S | re.I,
+        ):
+            latest = match.group(1)
+    assert latest is not None, "no migration constrains pm_task_statuses.category"
+    return set(re.findall(r"'([a-z_]+)'", latest))
+
+
 def test_the_categories_are_the_ones_the_database_has():
-    """Read from the migration, not restated. A filter vocabulary that drifts
+    """Read from the migrations, not restated. A filter vocabulary that drifts
     from the CHECK is a filter that silently matches nothing."""
-    text = (REPO / "infra/postgres/146_projects.sql").read_text(encoding="utf-8")
-    text = "\n".join(re.sub(r"--.*$", "", line) for line in text.splitlines())
-    match = re.search(r"category\s+TEXT\s+NOT\s+NULL[^,]*?CHECK\s*\(\s*category\s+IN\s*\((.*?)\)\)",
-                      text, re.S | re.I)
-    assert match, "146 no longer constrains pm_task_statuses.category"
-    assert set(re.findall(r"'([a-z_]+)'", match.group(1))) == set(STATUS_CATEGORIES)
+    assert migrated_status_categories() == set(STATUS_CATEGORIES)
 
 
 def test_closed_means_done_or_cancelled():

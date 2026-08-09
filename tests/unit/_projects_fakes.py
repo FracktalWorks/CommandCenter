@@ -182,6 +182,9 @@ _ORGANIZATION_PARENT: dict[str, tuple[str, str]] = {
     "pm_task_personal": ("pm_tasks", "task_id"),
     "pm_notifications": ("pm_tasks", "task_id"),
     "pm_view_task_positions": ("pm_views", "view_id"),
+    # WS-27u. The wrapper's SECOND attachment (`duplicate_of_task_id`) is a
+    # refuse-a-straddle constraint, which is this fake's stated blind spot.
+    "pm_intake": ("pm_tasks", "task_id"),
 }
 
 
@@ -367,11 +370,16 @@ _DEFAULTS: dict[str, dict[str, Any]] = {
         "energy": None, "time_estimate_mins": None, "is_two_minute": False,
         "defer_until": None, "clarified_at": None,
     },
+    # WS-27u — migration 164's defaults, mirrored.
+    "pm_intake": {
+        "status": "pending", "snoozed_until": None,
+        "duplicate_of_task_id": None, "source": None, "source_ref": None,
+    },
 }
 
 _TIMESTAMPED = {
     "pm_projects", "pm_tasks", "pm_task_statuses", "pm_task_types",
-    "pm_activities", "pm_views",
+    "pm_activities", "pm_views", "pm_intake",
 }
 
 
@@ -568,6 +576,20 @@ class FakeProjectsDB:
         # be mistaken for a column predicate and drop every row.
         if "END AS rank" in statement:
             return _Result(self._search_hits(statement, args))
+        # WS-27u's intake queue: a join the generic reader cannot parse, and an
+        # OR over the wrapper's two queue states it must not try to. Answered
+        # explicitly, every arm keyed off the statement like the inbox's.
+        if "JOIN pm_intake i" in statement:
+            found = self._intake_queue(statement, args)
+            if re.search(r"SELECT\s+count\(\*\)", statement, re.I):
+                return _Result([], scalar=len(found))
+            offset = _OFFSET_RE.search(statement)
+            if offset:
+                found = found[int(args.get(offset.group(1), 0)):]
+            limit = _LIMIT_RE.search(statement)
+            if limit:
+                found = found[: int(args.get(limit.group(1), len(found)))]
+            return _Result(found)
         head = statement.split(None, 1)[0].upper()
         table = self._table(statement)
         if head == "INSERT":
@@ -657,10 +679,21 @@ class FakeProjectsDB:
         tenanted = bool(_ROW_TENANT.search(_CLOSURE_BODY.sub("", statement)))
         org = str(args.get("vis_org"))
         tenant_only = bool(_TENANT_PROJECTS.search(statement))
+        # WS-27u — search excludes the intake queue unless `include_triage`
+        # formatted the predicate away. Keyed on the clause's own alias.
+        parked = (
+            {
+                str(s["id"]) for s in self.rows("pm_task_statuses")
+                if s.get("category") == "triage"
+            }
+            if "s_triage" in statement else None
+        )
 
         found: list[Any] = []
         for task in self.rows("pm_tasks"):
             if tenanted and str(task.get("organization_id")) != org:
+                continue
+            if parked is not None and str(task.get("status_id")) in parked:
                 continue
             if tenant_only and str(task.get("project_id")) not in self.tenant_project_ids(org):
                 continue
@@ -731,6 +764,84 @@ class FakeProjectsDB:
                 blocked=ends.get(roles.get("blocked", ""), ""),
             ))
         return sorted(out, key=lambda r: str(r.id))
+
+    def _intake_queue(self, statement: str, args: dict) -> list[Any]:
+        """WS-27u's front-door queue: pending wrappers, plus snoozes past due.
+
+        Every arm is applied ONLY when the statement carries it — the module
+        docstring's rule, so a route that drops its visibility clause or its
+        queue-state arm stops being filtered here and its test goes red. The
+        reappearance is mirrored as the SQL means it: a comparison against
+        now(), never a status flip, because nothing in the system wakes a
+        snoozed row — it reappears by being read.
+        """
+        wrappers = {str(w.get("task_id")): w for w in self.rows("pm_intake")}
+        scoped = "pm_project_grants" in statement
+        me = str(args.get("vis_email") or "").lower()
+        visible = self.visible_project_ids(
+            me, list(args.get("vis_groups") or []),
+            organization_id=(
+                str(args.get("vis_org"))
+                if _CLOSURE_IS_TENANTED.search(statement) else None
+            ),
+            descendant_organization_id=(
+                str(args.get("vis_org"))
+                if _DESCENT_IS_TENANTED.search(statement) else None
+            ),
+        )
+        assignee_escape = (
+            "pm_task_assignees" in statement and "vis_email" in statement
+        )
+        tenanted = bool(_ROW_TENANT.search(_CLOSURE_BODY.sub("", statement)))
+        tenant_only = bool(_TENANT_PROJECTS.search(statement))
+        org = str(args.get("vis_org"))
+        skips_archived = "t.archived_at IS NULL" in statement
+        wants_pending = "i.status = 'pending'" in statement
+        reappears = "i.snoozed_until <= now()" in statement
+        subtree = (
+            self._subtree_ids(str(args.get("pid")))
+            if "RECURSIVE sub" in statement else None
+        )
+
+        out: list[Any] = []
+        for task in self.rows("pm_tasks"):
+            wrap = wrappers.get(str(task.get("id")))
+            if wrap is None:
+                continue
+            if tenanted and str(task.get("organization_id")) != org:
+                continue
+            if tenant_only and (
+                str(task.get("project_id")) not in self.tenant_project_ids(org)
+            ):
+                continue
+            if scoped and str(task.get("project_id")) not in visible and not (
+                assignee_escape and me in self._assignees_of(task.get("id"))
+            ):
+                continue
+            if skips_archived and task.get("archived_at") is not None:
+                continue
+            if subtree is not None and str(task.get("project_id")) not in subtree:
+                continue
+            state = wrap.get("status")
+            queued = (wants_pending and state == "pending") or (
+                reappears and state == "snoozed"
+                and wrap.get("snoozed_until") is not None
+                and _as_datetime(wrap["snoozed_until"]) <= _now()
+            )
+            if not queued:
+                continue
+            out.append(SimpleNamespace(
+                **task,
+                intake_id=wrap.get("id"),
+                intake_status=state,
+                intake_snoozed_until=wrap.get("snoozed_until"),
+                intake_source=wrap.get("source"),
+                intake_source_ref=wrap.get("source_ref"),
+                intake_duplicate_of_task_id=wrap.get("duplicate_of_task_id"),
+                intake_created_at=wrap.get("created_at"),
+            ))
+        out.sort(key=lambda r: (_sortable(r.intake_created_at), str(r.id)))
+        return out
 
     def _blocker_counts(self, statement: str, args: dict) -> list[Any]:
         """``{blocked, blockers}`` counting only blockers that are still OPEN.
@@ -1162,8 +1273,26 @@ class FakeProjectsDB:
             who = str(args.get(bound[-1]) or "").lower()
             rows = [r for r in rows if who in self._assignees_of(r.get("id"))]
 
-        # NOT EXISTS over pm_task_statuses — /assigned-to-me hiding closed work.
-        if any("pm_task_statuses" in b and "category" in b for b in blocks):
+        # WS-27u — the default-list exclusion: `NOT EXISTS` over a
+        # triage-category status (`core.triage_exclusion_clause`). Applied only
+        # when the statement carries the `s_triage` alias, so a surface that
+        # drops the predicate — or silently drops `include_triage` — leaks the
+        # queue here too and the exclusion tests go red.
+        if any("s_triage" in b for b in blocks):
+            seen = True
+            parked = {
+                str(s["id"]) for s in self.rows("pm_task_statuses")
+                if s.get("category") == "triage"
+            }
+            rows = [r for r in rows if str(r.get("status_id")) not in parked]
+
+        # NOT EXISTS over pm_task_statuses — /assigned-to-me hiding closed
+        # work. The triage predicate above also names both fingerprints, so it
+        # is excluded here by its own alias.
+        if any(
+            "pm_task_statuses" in b and "category" in b and "s_triage" not in b
+            for b in blocks
+        ):
             seen = True
             closed = {
                 str(s["id"]) for s in self.rows("pm_task_statuses")

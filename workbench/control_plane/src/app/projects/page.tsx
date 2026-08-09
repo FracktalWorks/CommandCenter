@@ -40,6 +40,7 @@ import { TimelineView } from "./components/TimelineView";
 import { TaskBoard } from "./components/TaskBoard";
 import { TaskList } from "./components/TaskList";
 import { TaskPanel } from "./components/TaskPanel";
+import { TriageRail } from "./components/TriageRail";
 import { SAVED_VIEW_POSITION, orderBearingView, type planDrop } from "./lib/board";
 import { calendarWindow, dayKey, monthGrid, shiftMonth } from "./lib/calendar";
 import { isOpenShortcut } from "./lib/search";
@@ -826,6 +827,19 @@ function ProjectsWorkspace() {
               className="w-full rounded-md border border-border bg-background px-2 py-1.5 text-sm text-foreground"
             />
           </form>
+        ) : null}
+
+        {/* WS-27u — the front door. Renders nothing when the queue is empty;
+            a ruling reloads the board because an accept just added a card. */}
+        {!mine && selected ? (
+          <TriageRail
+            projectId={selected.id}
+            statuses={statuses}
+            onOpenTask={(id) => void openTaskById(id)}
+            onResolved={() => {
+              if (selected) void loadProject(selected);
+            }}
+          />
         ) : null}
 
         <div className="min-h-0 flex-1 overflow-auto">

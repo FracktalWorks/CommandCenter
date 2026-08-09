@@ -51,6 +51,28 @@ export interface Filters {
   tags: string[];
 }
 
+/**
+ * WS-27y — the board's second axis, and the lane state that travels with a view.
+ *
+ * One object rather than three loose values because they only mean anything
+ * together: a collapsed-lane list without its axis is a list of keys from a
+ * board that no longer exists.
+ */
+export interface BoardLanes {
+  /** Sub-grouping axis drawn as swimlane rows. `"none"` = a flat board. */
+  subGroupBy: GroupBy;
+  /** Lane keys the viewer folded shut. Persisted with the view, like filters. */
+  collapsedLanes: string[];
+  /** Draw lanes with nothing in them. Off by default — an empty lane is noise. */
+  showEmptyLanes: boolean;
+}
+
+export const NO_LANES: BoardLanes = {
+  subGroupBy: "none",
+  collapsedLanes: [],
+  showEmptyLanes: false,
+};
+
 export const EMPTY_FILTERS: Filters = {
   q: "",
   statusCategory: "",
@@ -83,10 +105,24 @@ export function toQuery(filters: Filters): Record<string, string> {
 }
 
 /** A stored view's `config.filters` → the form state, defaults filled in. */
-export function fromConfig(config: unknown): { filters: Filters; groupBy: GroupBy } {
+export function fromConfig(config: unknown): {
+  filters: Filters;
+  groupBy: GroupBy;
+  lanes: BoardLanes;
+} {
   const raw = (config ?? {}) as Record<string, unknown>;
   const stored = (raw.filters ?? {}) as Record<string, unknown>;
-  const groupBy = raw.group_by;
+  const groupBy = GROUP_OPTIONS.includes(raw.group_by as GroupBy)
+    ? (raw.group_by as GroupBy)
+    : "status";
+  // A sub-axis equal to the main axis is a board that lanes by its own
+  // columns — nonsense a hand-edited config could still say. Normalised to
+  // "none" HERE so every consumer sees one truth rather than each re-deciding.
+  const storedSub = raw.sub_group_by;
+  const subGroupBy =
+    GROUP_OPTIONS.includes(storedSub as GroupBy) && storedSub !== groupBy
+      ? (storedSub as GroupBy)
+      : "none";
   return {
     filters: {
       ...EMPTY_FILTERS,
@@ -101,9 +137,17 @@ export function fromConfig(config: unknown): { filters: Filters; groupBy: GroupB
           ? stored.tags.split(",").map((s) => s.trim()).filter(Boolean)
           : [],
     },
-    groupBy: GROUP_OPTIONS.includes(groupBy as GroupBy)
-      ? (groupBy as GroupBy)
-      : "status",
+    groupBy,
+    lanes: {
+      subGroupBy,
+      // An array in the config (JSON keeps a list a list; lane keys never
+      // travel as a query string, so there is no CSV shape to mirror). A lane
+      // key that is not a string is a hand-edit, and is dropped.
+      collapsedLanes: Array.isArray(raw.collapsed_lanes)
+        ? raw.collapsed_lanes.filter((k): k is string => typeof k === "string")
+        : [],
+      showEmptyLanes: raw.show_empty_lanes === true,
+    },
   };
 }
 
@@ -116,7 +160,11 @@ export function fromConfig(config: unknown): { filters: Filters; groupBy: GroupB
  * `"false"` must not read as on — so a view built from query shape would come
  * back with its toggles silently cleared.
  */
-export function toConfig(filters: Filters, groupBy: GroupBy): Record<string, unknown> {
+export function toConfig(
+  filters: Filters,
+  groupBy: GroupBy,
+  lanes: BoardLanes = NO_LANES
+): Record<string, unknown> {
   const stored: Record<string, unknown> = {};
   if (filters.q.trim()) stored.q = filters.q.trim();
   if (filters.statusCategory) stored.status_category = filters.statusCategory;
@@ -127,7 +175,15 @@ export function toConfig(filters: Filters, groupBy: GroupBy): Record<string, unk
   // `split_csv`, so a saved view and a typed query string must be the same
   // shape or the view would be the one that breaks.
   if (filters.tags.length) stored.tags = filters.tags.join(",");
-  return { filters: stored, group_by: groupBy };
+  const config: Record<string, unknown> = { filters: stored, group_by: groupBy };
+  // WS-27y — lane state, only when it says something. A flat board stores no
+  // lane keys at all, so older views and lane-less views are byte-identical.
+  if (lanes.subGroupBy !== "none" && lanes.subGroupBy !== groupBy) {
+    config.sub_group_by = lanes.subGroupBy;
+    if (lanes.collapsedLanes.length) config.collapsed_lanes = lanes.collapsedLanes;
+    if (lanes.showEmptyLanes) config.show_empty_lanes = true;
+  }
+  return config;
 }
 
 /** Whether anything is actually filtering, for the "clear" affordance. */

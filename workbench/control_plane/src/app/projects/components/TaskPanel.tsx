@@ -11,8 +11,6 @@ import Icon from "@/components/Icon";
 import Button from "@/components/ui/Button";
 import { useEffect, useRef, useState } from "react";
 
-import Button from "@/components/ui/Button";
-
 import {
   type ActivityRow,
   type AttachmentRow,

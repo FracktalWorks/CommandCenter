@@ -263,10 +263,26 @@ def normalise_view_config(config: Any) -> dict[str, Any]:
         if key in VIEW_FILTER_KEYS
     } if isinstance(raw, dict) else {}
     group_by = config.get("group_by")
-    return {
+    out: dict[str, Any] = {
         "filters": filters,
         "group_by": group_by if group_by in GROUP_BY else "status",
     }
+    # WS-27y — lane state rides the same config. The client's rules mirrored
+    # exactly (grouping.ts `fromConfig`): a sub-axis equal to the main axis is
+    # nonsense and is dropped, lane keys must be strings, and the flags are
+    # stored only when they say something — so a lane-less view stays
+    # byte-identical to one saved before lanes existed.
+    sub = config.get("sub_group_by")
+    if sub in GROUP_BY and sub != "none" and sub != out["group_by"]:
+        out["sub_group_by"] = sub
+        lanes = config.get("collapsed_lanes")
+        if isinstance(lanes, list):
+            kept = [key for key in lanes if isinstance(key, str)]
+            if kept:
+                out["collapsed_lanes"] = kept
+        if config.get("show_empty_lanes") is True:
+            out["show_empty_lanes"] = True
+    return out
 
 
 #: Assignees for a page of tasks, in ONE query.

@@ -46,14 +46,17 @@ import { calendarWindow, dayKey, monthGrid, shiftMonth } from "./lib/calendar";
 import { isOpenShortcut } from "./lib/search";
 import type { Edge } from "./lib/timeline";
 import {
+  type BoardLanes,
   EMPTY_FILTERS,
   type Filters,
   type GroupBy,
+  NO_LANES,
   fromConfig,
   groupTasks,
   toConfig,
   toQuery,
 } from "./lib/grouping";
+import { toggleLane } from "./lib/swimlanes";
 import {
   allSelected as everySelected,
   buildRequest,
@@ -115,6 +118,8 @@ function ProjectsWorkspace() {
   // the chip clears the moment the state stops matching what was saved.
   const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS);
   const [groupBy, setGroupBy] = useState<GroupBy>("status");
+  // WS-27y — the board's second axis plus its lane state; saved with a view.
+  const [lanes, setLanes] = useState<BoardLanes>(NO_LANES);
   const [views, setViews] = useState<ViewRow[]>([]);
   const [activeViewId, setActiveViewId] = useState<string | null>(null);
   const [me, setMe] = useState("");
@@ -380,6 +385,13 @@ function ProjectsWorkspace() {
     if (!shift) setAnchor(id);
   }
 
+  // WS-27y — the keyboard's Shift+Arrow grew the selection; `stepCursor` only
+  // ever adds, so replacing with its superset is the union.
+  function extendSelection(ids: string[]) {
+    setBulkNotice(null);
+    setPicked(new Set(ids));
+  }
+
   async function applyBulk(request: ReturnType<typeof buildRequest>) {
     if (!request) return;
     setBulkBusy(true);
@@ -402,9 +414,12 @@ function ProjectsWorkspace() {
   }
 
   function applyView(view: ViewRow) {
-    const { filters: next, groupBy: nextGroup } = fromConfig(view.config);
+    const { filters: next, groupBy: nextGroup, lanes: nextLanes } = fromConfig(
+      view.config
+    );
     setFilters(next);
     setGroupBy(nextGroup);
+    setLanes(nextLanes);
     setActiveViewId(view.id);
   }
 
@@ -414,7 +429,7 @@ function ProjectsWorkspace() {
       const created = await projectsApi.createView(selected.id, {
         name,
         view_type: mode,
-        config: toConfig(filters, groupBy),
+        config: toConfig(filters, groupBy, lanes),
         // Above the seeded pair, so the drag handler keeps writing its order
         // into the project's original board rather than into a saved filter.
         position: SAVED_VIEW_POSITION + views.length,
@@ -596,14 +611,15 @@ function ProjectsWorkspace() {
   async function handleDrop(
     task: TaskRow,
     writes: ReturnType<typeof planDrop>,
-    patch: Record<string, string | null> | null
+    patch: Record<string, string | number | null> | null
   ) {
     // Optimistic: the card moves now and the truth arrives on reload. A drag
-    // that waits for a round trip feels broken even when it is correct.
-    if (patch?.status_id) {
+    // that waits for a round trip feels broken even when it is correct. The
+    // WHOLE patch applies — a lane-cell drop moves two axes at once (WS-27y).
+    if (patch) {
       setTasks((current) =>
         current.map((t) =>
-          t.id === task.id ? { ...t, status_id: patch.status_id as string } : t
+          t.id === task.id ? { ...t, ...(patch as Partial<TaskRow>) } : t
         )
       );
     }
@@ -782,6 +798,23 @@ function ProjectsWorkspace() {
             groupBy={groupBy}
             onGroupBy={(next) => {
               setGroupBy(next);
+              // The new main axis may be the current sub-axis; lanes of the
+              // board's own columns mean nothing, so they reset.
+              setLanes((current) =>
+                current.subGroupBy === next
+                  ? { ...current, subGroupBy: "none", collapsedLanes: [] }
+                  : current
+              );
+              setActiveViewId(null);
+            }}
+            subGroupBy={lanes.subGroupBy}
+            onSubGroupBy={(next) => {
+              // Collapsed-lane keys belong to the axis that made them.
+              setLanes((current) => ({
+                ...current,
+                subGroupBy: next,
+                collapsedLanes: [],
+              }));
               setActiveViewId(null);
             }}
             me={me}
@@ -867,6 +900,8 @@ function ProjectsWorkspace() {
               undated={month.undated}
               truncated={month.truncated}
               today={dayKey(new Date())}
+              projectId={selected.id}
+              onCreated={() => void loadMonth()}
               onSelect={(task) => void openWithStatuses(task)}
               onMove={(task, patch) => void moveTask(task, patch)}
               onStep={(months) => setMonthAnchor(shiftMonth(grid, months))}
@@ -876,8 +911,23 @@ function ProjectsWorkspace() {
             <TaskBoard
               groups={groups}
               groupBy={groupBy}
+              lanes={lanes}
+              onToggleLane={(key) =>
+                setLanes((current) => ({
+                  ...current,
+                  collapsedLanes: toggleLane(current.collapsedLanes, key),
+                }))
+              }
+              onShowEmptyLanes={(show) =>
+                setLanes((current) => ({ ...current, showEmptyLanes: show }))
+              }
+              statuses={statuses}
+              projectName={projectName}
+              projectId={selected.id}
+              onCreated={() => void loadProject(selected)}
               selected={picked}
               onToggle={toggleSelection}
+              onExtendSelection={extendSelection}
               onSelect={(task) => void openWithStatuses(task)}
               onDrop={handleDrop}
             />
@@ -886,6 +936,8 @@ function ProjectsWorkspace() {
               groups={groups}
               groupBy={groupBy}
               statuses={statuses}
+              projectId={selected.id}
+              onCreated={() => void loadProject(selected)}
               selected={picked}
               onToggle={toggleSelection}
               allChecked={everySelected(picked, onScreen)}
@@ -894,6 +946,7 @@ function ProjectsWorkspace() {
                   everySelected(picked, onScreen) ? new Set() : new Set(onScreen)
                 )
               }
+              onExtendSelection={extendSelection}
               onSelect={(task) => void openWithStatuses(task)}
             />
           )}

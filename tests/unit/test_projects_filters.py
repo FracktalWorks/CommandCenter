@@ -314,6 +314,43 @@ def test_every_advertised_grouping_survives_normalisation(group_by):
     assert normalise_view_config({"group_by": group_by})["group_by"] == group_by
 
 
+def test_lane_state_survives_normalisation():
+    """WS-27y — the sub-axis and its lane state ride the view config. The
+    server must not strip them, or every save round-trip silently flattens
+    the board back to a lane-less one."""
+    got = normalise_view_config({
+        "group_by": "status",
+        "sub_group_by": "assignee",
+        "collapsed_lanes": ["a@x.io", 7, "b@x.io"],
+        "show_empty_lanes": True,
+    })
+    assert got["sub_group_by"] == "assignee"
+    assert got["collapsed_lanes"] == ["a@x.io", "b@x.io"]
+    assert got["show_empty_lanes"] is True
+
+
+def test_a_sub_axis_equal_to_the_main_axis_is_dropped_with_its_lane_state():
+    """Mirrors grouping.ts fromConfig: laning a board by its own columns is
+    nonsense a hand-edited config could still say."""
+    got = normalise_view_config({
+        "group_by": "status",
+        "sub_group_by": "status",
+        "collapsed_lanes": ["todo"],
+        "show_empty_lanes": True,
+    })
+    assert "sub_group_by" not in got
+    assert "collapsed_lanes" not in got
+    assert "show_empty_lanes" not in got
+
+
+def test_a_lane_less_view_stores_no_lane_keys_at_all():
+    """A view saved before lanes existed and one saved after with no lanes
+    must stay byte-identical, so nothing bumps updated_at on a no-op save."""
+    assert normalise_view_config({"group_by": "status"}) == {
+        "filters": {}, "group_by": "status",
+    }
+
+
 def test_a_saved_view_and_the_same_filters_typed_by_hand_are_one_query():
     """The whole reason the builder is shared. If these ever diverge, a saved
     view shows a different set of tasks than the filters it claims to hold."""

@@ -86,8 +86,11 @@ codebase, most of them during this branch's work.
    su postgres -c "/usr/lib/postgresql/16/bin/pg_ctl -D <datadir> -o '-k /var/tmp -p 55432' start"
    ```
    DSN: `postgresql+asyncpg://postgres@/cc?host=/var/tmp&port=55432`.
-   Drive the **real endpoint functions**, not a mock. Patterns to copy live in the scratchpad as
-   `live_ws27*.py` / `live_ws29.py`.
+   Drive the **real endpoint functions**, not a mock. **Twelve working harnesses are in
+   [`tests/live/`](../tests/live/)** with a README explaining what each one pins — read that
+   table before writing a new one, because it is a list of the things a fake structurally
+   cannot catch. ⚠️ Most of them `TRUNCATE pm_projects CASCADE`; point them at a throwaway
+   database, never production.
 
    **This found a bug in every single ticket on this branch — including several where the
    entire hermetic suite was green.** It is not optional and it is not a formality.

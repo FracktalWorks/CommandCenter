@@ -47,6 +47,7 @@ fake cannot read must never silently mean "the whole table".
 from __future__ import annotations
 
 import re
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
@@ -1571,16 +1572,40 @@ def page(number: int = 1, size: int = 50) -> Any:
 
 
 def bind_db(monkeypatch: Any, fake: FakeProjectsDB, modules: tuple[Any, ...]) -> None:
-    """Point each submodule's ``_get_db`` seam at ``fake``.
+    """Point each submodule's ``_tenant_session`` seam at ``fake``.
 
-    Per-module and not per-package because each module imports ``_get_db`` from
+    Per-module and not per-package because each module imports the seam from
     ``core`` by name, so patching ``core`` alone would not reach them.
+
+    H2 note: the real seam is ``acb_common.db.tenant_session`` — an async
+    context manager that begins a transaction, issues ``SET LOCAL
+    app.tenant_id`` and commits on exit. The fake mirrors only the SHAPE
+    (``async with … as db``); transaction semantics stay out of the mirror
+    exactly as ``commit``/``close`` no-ops did before, because what these
+    tests pin is SQL behaviour, not the GUC plumbing —
+    ``test_tenant_session.py`` owns that.
     """
+    @asynccontextmanager
+    async def _tenant_session(organization_id: str | None = None) -> Any:
+        # Commit-on-clean-exit, exactly like the real wrapper — so "these
+        # writes share one transaction" stays an OBSERVABLE fact
+        # (`db.committed == 1`) rather than a comment, and a handler that
+        # raises mid-block commits nothing here just as it commits nothing
+        # against Postgres.
+        yield fake
+        await fake.commit()
+
     async def _get_db() -> FakeProjectsDB:
         return fake
 
     for module in modules:
-        monkeypatch.setattr(module, "_get_db", _get_db)
+        if hasattr(module, "_tenant_session"):
+            monkeypatch.setattr(module, "_tenant_session", _tenant_session)
+        else:
+            # The one H4 exemption: `agent_dispatch` is an event consumer and
+            # deliberately stays on the unbound `get_db` seam until H4 threads
+            # an explicit tenant through the event payload.
+            monkeypatch.setattr(module, "_get_db", _get_db)
 
 
 def silence_events(monkeypatch: Any, modules: tuple[Any, ...]) -> list[tuple[str, dict]]:

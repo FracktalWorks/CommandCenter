@@ -44,7 +44,15 @@ from uuid import UUID
 from acb_auth import UserContext, require_feature_router
 from acb_common import get_logger
 from fastapi import APIRouter, HTTPException, Query
-from gateway.db import get_db as _get_db  # noqa: F401  — the shared seam (BO-10)
+
+# The shared seam (BO-10 → MT-1c/H2). `_tenant_session` IS
+# `acb_common.db.tenant_session`, aliased per-package for the same reason
+# `_get_db` was: every submodule imports it from here BY NAME, which is the
+# seam `tests/unit/_projects_fakes.bind_db` patches per module. The tenant
+# comes from the request context — bound once in `_with_resolved_access` —
+# so no call site passes one (H2). A call outside a bound request raises
+# `TenantUnbound` rather than defaulting: fail closed, never "the usual org".
+from gateway.db import tenant_session as _tenant_session
 from pydantic import BaseModel
 from sqlalchemy import text
 

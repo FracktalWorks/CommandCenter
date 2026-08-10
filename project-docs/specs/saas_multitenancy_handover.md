@@ -187,6 +187,46 @@ stated values, **and** the baseline test set still passes.
 
 ## H2 · Convert 561 session-acquisition sites to `tenant_session()` · 🟢 AGENT-SAFE · **the long pole**
 
+> ### ◐ H2 STARTED 2026-08-10 — central binding SHIPPED + the Projects slice converted
+>
+> **The "do this first" step is done:** `_with_resolved_access` (acb_auth/deps.py) calls
+> `bind_tenant(organization_id)` when identity resolves — the one place, from the
+> `app_user` row, never a header (R11) — and the gateway's `TenantScopeMiddleware`
+> (main.py) opens a fresh scope per request and releases it after the response.
+> `tests/unit/test_tenant_request_binding.py` pins both, including
+> "`system:internal` binds nothing" and no-leak-across-sequential-requests.
+>
+> **`routes/projects` is converted** (84 sites, the largest single package): every
+> handler is `async with _tenant_session() as db:` where `_tenant_session` IS the
+> shared seam (identity asserted in `test_db_engine_seam.py`). One named exemption:
+> `agent_dispatch.py` (2 sites) is an **event consumer**, so per this document's own
+> rule it stays on `get_db()` until H4 threads an explicit tenant through the event
+> payload — inheriting the ambient one is exactly what H4 forbids.
+>
+> **Ratchets** (test_db_engine_seam.py): `routes/projects` must stay at ZERO
+> unconverted sites; the remainder elsewhere is frozen at **`H2_BASELINE_ELSEWHERE =
+> 494`** and only ratchets down (progress must be banked by lowering the constant).
+>
+> ⚠️ **A live run found a defect in `tenant_session()` itself:** the literal
+> `SET LOCAL app.tenant_id = :tenant` is a Postgres syntax error through the extended
+> protocol — `SET` cannot bind a parameter, and every hermetic test was green with it.
+> Fixed to `SELECT set_config('app.tenant_id', :tenant, true)` (identical
+> transaction-local semantics), pinned by `test_tenant_session.py`, and proven by a
+> live scratch-Postgres smoke: unbound → `TenantUnbound`; converted handlers write
+> under the GUC; rows stamped with the bound org. **Converters of the remaining
+> packages: the runbook below stands unchanged** — but test against real Postgres at
+> least once per package; this class of defect is invisible to fakes.
+>
+> Conversion notes that generalize (learned on the Projects slice): handlers' explicit
+> `await db.commit()` goes away (the wrapper commits on clean exit — and a mid-block
+> commit would END the transaction and drop the GUC for everything after it, so a
+> handler that genuinely needs two transactions needs two `async with` blocks);
+> read-only endpoints now commit an empty transaction, so tests asserting
+> `committed == 0` as a "writes nothing" proxy must assert on statements/rows instead;
+> hermetic fakes swap in via an `asynccontextmanager` patched over the package's
+> `_tenant_session` alias, commit-on-clean-exit so one-transaction contracts stay
+> observable.
+
 `acb_common.db.tenant_session()` exists and is tested. `get_db()` still exists, is
 documented as **not** tenant-bound, and every one of the 561 sites still uses it.
 

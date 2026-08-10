@@ -28,7 +28,7 @@ from gateway.routes.projects.core import (
     STATUS_CATEGORIES,
     StatusModel,
     TypeModel,
-    _get_db,
+    _tenant_session,
     clean_payload,
     count_where,
     load_visible_project,
@@ -93,8 +93,7 @@ async def _clear_other_defaults(db: Any, table: str, root: str, keep: str) -> No
 async def list_statuses(
     project_id: str, user: UserContext = Depends(get_current_user),
 ) -> dict:
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         vis = await resolve_visibility(db, user)
         root = await _root_for(db, vis, project_id)
         rows = (await db.execute(
@@ -107,8 +106,6 @@ async def list_statuses(
         return {
             "rows": [row_to_dict(r, StatusModel) for r in rows], "total": len(rows),
         }
-    finally:
-        await db.close()
 
 
 @router.post("/nodes/{project_id}/statuses", status_code=201)
@@ -123,8 +120,7 @@ async def create_status(
     category = values.get("category") or "todo"
     validate_choice(category, STATUS_CATEGORIES, "status category")
 
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         vis = await resolve_visibility(db, user)
         root = await _root_for(db, vis, project_id)
         row = (await db.execute(
@@ -144,10 +140,7 @@ async def create_status(
         )).fetchone()
         if row.is_default:
             await _clear_other_defaults(db, "pm_task_statuses", root, str(row.id))
-        await db.commit()
         return row_to_dict(row, StatusModel)
-    finally:
-        await db.close()
 
 
 @router.patch("/statuses/{status_id}")
@@ -157,8 +150,7 @@ async def patch_status(
 ) -> dict:
     values = clean_payload(payload)
     validate_choice(values.get("category"), STATUS_CATEGORIES, "status category")
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         existing = await require_row(db, "pm_task_statuses", status_id, "Status")
         vis = await resolve_visibility(db, user)
         await load_visible_project(db, vis, str(existing.project_id))
@@ -169,10 +161,7 @@ async def patch_status(
             await _clear_other_defaults(
                 db, "pm_task_statuses", str(row.project_id), status_id,
             )
-        await db.commit()
         return row_to_dict(row, StatusModel)
-    finally:
-        await db.close()
 
 
 @router.delete("/statuses/{status_id}")
@@ -186,8 +175,7 @@ async def delete_status(
     that into a 409 naming how many tasks are in the way, which is the number
     the caller needs to decide what to do next.
     """
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         existing = await require_row(db, "pm_task_statuses", status_id, "Status")
         vis = await resolve_visibility(db, user)
         await load_visible_project(db, vis, str(existing.project_id))
@@ -204,10 +192,7 @@ async def delete_status(
             text("DELETE FROM pm_task_statuses WHERE id = CAST(:sid AS uuid)"),
             {"sid": status_id},
         )
-        await db.commit()
         return {"deleted": status_id, "tasks_affected": 0}
-    finally:
-        await db.close()
 
 
 # ── Types ───────────────────────────────────────────────────────────────────
@@ -216,8 +201,7 @@ async def delete_status(
 async def list_types(
     project_id: str, user: UserContext = Depends(get_current_user),
 ) -> dict:
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         vis = await resolve_visibility(db, user)
         root = await _root_for(db, vis, project_id)
         rows = (await db.execute(
@@ -230,8 +214,6 @@ async def list_types(
         return {
             "rows": [row_to_dict(r, TypeModel) for r in rows], "total": len(rows),
         }
-    finally:
-        await db.close()
 
 
 @router.post("/nodes/{project_id}/types", status_code=201)
@@ -244,8 +226,7 @@ async def create_type(
     if not name:
         raise HTTPException(status_code=422, detail="A task type needs a name.")
 
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         vis = await resolve_visibility(db, user)
         root = await _root_for(db, vis, project_id)
         row = (await db.execute(
@@ -266,10 +247,7 @@ async def create_type(
         # second root-only type — or, worse, a type that claims Epic's exemption.
         if row.is_default:
             await _clear_other_defaults(db, "pm_task_types", root, str(row.id))
-        await db.commit()
         return row_to_dict(row, TypeModel)
-    finally:
-        await db.close()
 
 
 @router.patch("/types/{type_id}")
@@ -278,8 +256,7 @@ async def patch_type(
     user: UserContext = Depends(get_current_user),
 ) -> dict:
     values = clean_payload(payload)
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         existing = await require_row(db, "pm_task_types", type_id, "Task type")
         vis = await resolve_visibility(db, user)
         await load_visible_project(db, vis, str(existing.project_id))
@@ -298,10 +275,7 @@ async def patch_type(
             await _clear_other_defaults(
                 db, "pm_task_types", str(row.project_id), type_id,
             )
-        await db.commit()
         return row_to_dict(row, TypeModel)
-    finally:
-        await db.close()
 
 
 @router.delete("/types/{type_id}")
@@ -315,8 +289,7 @@ async def delete_type(
     lane. The count is reported (R7/R8) because "12 tasks became untyped" is
     not something to discover from a board.
     """
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         existing = await require_row(db, "pm_task_types", type_id, "Task type")
         vis = await resolve_visibility(db, user)
         await load_visible_project(db, vis, str(existing.project_id))
@@ -330,7 +303,4 @@ async def delete_type(
             text("DELETE FROM pm_task_types WHERE id = CAST(:tid AS uuid)"),
             {"tid": type_id},
         )
-        await db.commit()
         return {"deleted": type_id, "tasks_untyped": affected}
-    finally:
-        await db.close()

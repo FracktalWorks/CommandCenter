@@ -24,7 +24,7 @@ from fastapi import Depends, HTTPException
 from gateway.routes.projects.core import (
     ActivityModel,
     Page,
-    _get_db,
+    _tenant_session,
     actor,
     emit,
     from_jsonb,
@@ -85,8 +85,7 @@ async def get_timeline(
     never withheld — the history of what happened to a task is not editable by
     the people it happened to.
     """
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         vis = await resolve_visibility(db, user)
         await load_visible_task(db, vis, task_id)
         params = {
@@ -111,8 +110,6 @@ async def get_timeline(
             "rows": [row_to_dict(r, ActivityModel) for r in rows],
             "total": int(total),
         }
-    finally:
-        await db.close()
 
 
 @router.post("/tasks/{task_id}/comments", status_code=201)
@@ -123,8 +120,7 @@ async def add_comment(
     body = (payload.body or "").strip()
     if not body:
         raise HTTPException(status_code=422, detail="A comment needs a body.")
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         vis = await resolve_visibility(db, user)
         await load_visible_task(db, vis, task_id)
         row = await record_activity(
@@ -170,13 +166,10 @@ async def add_comment(
                 task_id=task_id,
                 meta={"mentioned": mention_result["notified"]},
             )
-        await db.commit()
         result = row_to_dict(row, ActivityModel)
         # Surfaced, not swallowed: a mention that reached nobody would
         # otherwise leave the author believing they pulled a colleague in.
         result["not_notified"] = mention_result["skipped"]
-    finally:
-        await db.close()
 
     await emit("pm.task.comment_added", {"task_id": task_id})
     return result
@@ -211,8 +204,7 @@ async def edit_comment(
     body = (payload.body or "").strip()
     if not body:
         raise HTTPException(status_code=422, detail="A comment needs a body.")
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         comment = await _load_own_comment(db, activity_id, user)
         # The task must still be visible: a member removed from a Center keeps
         # authorship of what they wrote but not access to it.
@@ -244,12 +236,9 @@ async def edit_comment(
                 task_id=task_id,
                 meta={"mentioned": mention_result["notified"]},
             )
-        await db.commit()
         result = row_to_dict(row, ActivityModel)
         result["not_notified"] = mention_result["skipped"]
         return result
-    finally:
-        await db.close()
 
 
 @router.delete("/comments/{activity_id}")
@@ -263,17 +252,13 @@ async def delete_comment(
     the row hidden, so "deleted" means the words are gone rather than merely
     filtered out of one read path.
     """
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         await _load_own_comment(db, activity_id, user)
         await update_row(
             db, "pm_activities", activity_id,
             {"deleted_at": now(), "body": None},
         )
-        await db.commit()
         return {"deleted": activity_id}
-    finally:
-        await db.close()
 
 
 def _restore_custom(task: Any, changes: list[dict]) -> dict | None:
@@ -317,8 +302,7 @@ async def revert_change(
     the timeline shows that a revert happened instead of history appearing never
     to have contained the change.
     """
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         row = (await db.execute(
             text(
                 "SELECT * FROM pm_activities WHERE id = CAST(:aid AS uuid) "
@@ -378,7 +362,6 @@ async def revert_change(
             ],
             extra_meta={"reverted_activity_id": activity_id},
         )
-        await db.commit()
         task_id = str(task.id)
         reverted = sorted(
             [k for k in restore if k != "custom_fields"]
@@ -387,8 +370,6 @@ async def revert_change(
                 if str(c.get("field") or "").startswith(_CUSTOM_PREFIX)
             ]
         )
-    finally:
-        await db.close()
 
     await emit("pm.task.updated", {"task_id": task_id})
     return {"task_id": task_id, "reverted": reverted, "skipped": skipped}

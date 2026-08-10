@@ -32,7 +32,7 @@ from gateway.routes.projects.core import (
     Page,
     TaskIn,
     TaskModel,
-    _get_db,
+    _tenant_session,
     actor,
     apply_status_transition,
     assert_epic_has_no_parent,
@@ -164,8 +164,7 @@ async def list_tasks(
             detail=f"Unknown sort direction '{direction}'. One of: asc, desc.",
         )
 
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         vis = await resolve_visibility(db, user)
         clauses: list[str] = [task_visibility_clause(vis)]
         params: dict[str, Any] = dict(vis.params)
@@ -228,16 +227,13 @@ async def list_tasks(
         await attach_assignees(db, page_rows)
         await attach_relation_counts(db, page_rows)
         return ListResponse(rows=page_rows, total=int(total))
-    finally:
-        await db.close()
 
 
 @router.get("/tasks/{task_id}")
 async def get_task(
     task_id: str, user: UserContext = Depends(get_current_user),
 ) -> dict:
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         vis = await resolve_visibility(db, user)
         row = await load_visible_task(db, vis, task_id)
         result = row_to_dict(row, TaskModel)
@@ -250,8 +246,6 @@ async def get_task(
         )).fetchall()
         result["assignees"] = [r.assignee for r in assignees]
         return result
-    finally:
-        await db.close()
 
 
 # ── Writes ──────────────────────────────────────────────────────────────────
@@ -271,8 +265,7 @@ async def create_task(
     values["title"] = title
     values["created_by"] = actor(user)
 
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         vis = await resolve_visibility(db, user)
         await load_visible_project(db, vis, str(project_id))
         root = await root_project_id(db, str(project_id))
@@ -309,10 +302,7 @@ async def create_task(
         # WS-27j author-hears-about-comments behaviour once the audience is
         # watchers ∪ assignees (migration 165 seeds the same for older tasks).
         await ensure_watchers(db, task_id, [actor(user)], by=actor(user))
-        await db.commit()
         result = row_to_dict(row, TaskModel)
-    finally:
-        await db.close()
 
     await emit("pm.task.created", {
         "task_id": task_id, "project_id": str(project_id), "title": title,
@@ -347,8 +337,7 @@ async def patch_task(
     new_status = values.pop("status_id", None)
     custom = values.pop("custom_fields", None)
 
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         vis = await resolve_visibility(db, user)
         before = await load_visible_task(db, vis, task_id)
 
@@ -423,10 +412,7 @@ async def patch_task(
                 db, task_id, mentioned["notified"], by=actor(user),
             )
 
-        await db.commit()
         result = row_to_dict(after, TaskModel)
-    finally:
-        await db.close()
 
     await emit("pm.task.updated", {"task_id": task_id})
     if moved is not None:
@@ -449,8 +435,7 @@ async def move_task(
     the status, because statuses are per-root: carrying the old status across
     would leave the task in a lane the destination board does not render.
     """
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         vis = await resolve_visibility(db, user)
         task = await load_visible_task(db, vis, task_id)
         values: dict[str, Any] = {}
@@ -489,10 +474,7 @@ async def move_task(
             meta={"from_project": str(task.project_id),
                   "from_number": getattr(task, "task_number", None)},
         )
-        await db.commit()
         result = row_to_dict(row, TaskModel)
-    finally:
-        await db.close()
 
     await emit("pm.task.moved", {"task_id": task_id})
     return result
@@ -510,8 +492,7 @@ async def delete_task(
     the exact class of lie the N8 purge shipped: a count that reassures in the
     wrong direction.
     """
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         vis = await resolve_visibility(db, user)
         await load_visible_task(db, vis, task_id)
         promoted = await count_where(db, "pm_tasks", "parent_task_id", task_id)
@@ -536,9 +517,6 @@ async def delete_task(
             text("DELETE FROM pm_tasks WHERE id = CAST(:tid AS uuid)"),
             {"tid": task_id},
         )
-        await db.commit()
-    finally:
-        await db.close()
 
     await emit("pm.task.deleted", {"task_id": task_id})
     return DeleteResponse(
@@ -571,8 +549,7 @@ async def archive_task(
 
     WS-27z's sweeper depends on this guard shipping first.
     """
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         vis = await resolve_visibility(db, user)
         task = await load_visible_task(db, vis, task_id)
         status = await require_row(
@@ -596,10 +573,7 @@ async def archive_task(
             db, activity_type="system", created_by=actor(user),
             task_id=task_id, body="Task archived",
         )
-        await db.commit()
         result = row_to_dict(row, TaskModel)
-    finally:
-        await db.close()
 
     await emit("pm.task.archived", {"task_id": task_id})
     return result
@@ -617,8 +591,7 @@ async def unarchive_task(
     writes ``archived_at``, and the PATCH surface deliberately does not accept
     it.
     """
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         vis = await resolve_visibility(db, user)
         task = await load_visible_task(db, vis, task_id)
         if getattr(task, "archived_at", None) is None:
@@ -628,10 +601,7 @@ async def unarchive_task(
             db, activity_type="system", created_by=actor(user),
             task_id=task_id, body="Task restored from the archive",
         )
-        await db.commit()
         result = row_to_dict(row, TaskModel)
-    finally:
-        await db.close()
 
     await emit("pm.task.unarchived", {"task_id": task_id})
     return result
@@ -654,8 +624,7 @@ async def set_assignees(
     off, so it carries the added assignees rather than the whole set: a
     re-assert of an existing assignee must not re-dispatch a run.
     """
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         vis = await resolve_visibility(db, user)
         await load_visible_task(db, vis, task_id)
 
@@ -717,9 +686,6 @@ async def set_assignees(
         # dispatched, never subscribed), and the rows survive a later
         # unassignment — having held the work is a reason to keep hearing.
         await ensure_watchers(db, task_id, sorted(added), by=actor(user))
-        await db.commit()
-    finally:
-        await db.close()
 
     if added:
         await emit("pm.task.assigned", {
@@ -753,8 +719,7 @@ async def create_link(
         raise HTTPException(
             status_code=422, detail="A task cannot be linked to itself.",
         )
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         vis = await resolve_visibility(db, user)
         await load_visible_task(db, vis, task_id)
         # Both ends must be visible: a link is readable from either side, so
@@ -783,14 +748,11 @@ async def create_link(
             db, activity_type="link", created_by=actor(user), task_id=task_id,
             meta={"target": str(payload.target_task_id), "type": payload.link_type},
         )
-        await db.commit()
         return {
             "id": str(row.id), "source_task_id": task_id,
             "target_task_id": str(payload.target_task_id),
             "link_type": payload.link_type,
         }
-    finally:
-        await db.close()
 
 
 @router.delete("/tasks/{task_id}/links/{link_id}")
@@ -798,8 +760,7 @@ async def delete_link(
     task_id: str, link_id: str,
     user: UserContext = Depends(get_current_user),
 ) -> dict:
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         vis = await resolve_visibility(db, user)
         await load_visible_task(db, vis, task_id)
         row = (await db.execute(
@@ -812,7 +773,4 @@ async def delete_link(
         )).fetchone()
         if row is None:
             raise HTTPException(status_code=404, detail="Link not found")
-        await db.commit()
         return {"deleted": link_id}
-    finally:
-        await db.close()

@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+from contextlib import asynccontextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -111,8 +112,12 @@ def db() -> FakeDB:
 
 @pytest.fixture(autouse=True)
 def wiring(monkeypatch, db, tmp_path):
-    async def _get_db():
-        return db
+    # H2: the module's seam is `_tenant_session` (an async context manager),
+    # mirrored commit-on-clean-exit like `_projects_fakes.bind_db`.
+    @asynccontextmanager
+    async def _tenant_session(organization_id=None):
+        yield db
+        await db.commit()
 
     async def _resolve(_db, _user):
         from gateway.routes.projects.core import Visibility
@@ -130,7 +135,7 @@ def wiring(monkeypatch, db, tmp_path):
     async def _emit(*_a, **_k):
         return None
 
-    monkeypatch.setattr(pm_attachments, "_get_db", _get_db)
+    monkeypatch.setattr(pm_attachments, "_tenant_session", _tenant_session)
     monkeypatch.setattr(pm_attachments, "resolve_visibility", _resolve)
     monkeypatch.setattr(pm_attachments, "load_visible_task", _load_visible)
     monkeypatch.setattr(pm_attachments, "record_activity", _record)

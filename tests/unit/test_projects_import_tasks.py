@@ -262,10 +262,15 @@ def gtd_item(**over) -> SimpleNamespace:
 @pytest.fixture()
 def bind(monkeypatch):
     def _bind(db: FakeDB):
-        async def _get_db():
-            return db
+        # H2: the module's seam is `_tenant_session`, commit-on-clean-exit.
+        from contextlib import asynccontextmanager
 
-        monkeypatch.setattr(sut, "_get_db", _get_db, raising=False)
+        @asynccontextmanager
+        async def _tenant_session(organization_id=None):
+            yield db
+            await db.commit()
+
+        monkeypatch.setattr(sut, "_tenant_session", _tenant_session)
         # `_seed_root` lives in tree.py and writes its own rows; it is exercised
         # by the tree suite, and stubbing it keeps this suite about the import.
         async def _seed(*_a, **_k):

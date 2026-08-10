@@ -31,7 +31,7 @@ from typing import Any
 from acb_auth import UserContext, get_current_user
 from fastapi import Depends, HTTPException
 from gateway.routes.projects.core import (
-    _get_db,
+    _tenant_session,
     actor,
     clean_payload,
     insert_row,
@@ -387,8 +387,7 @@ async def spawn_successor(db: Any, task: Any, *, actor_id: str) -> str | None:
 async def get_recurrence(
     task_id: str, user: UserContext = Depends(get_current_user),
 ) -> dict:
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         vis = await resolve_visibility(db, user)
         task = await load_visible_task(db, vis, task_id)
         if task.recurrence_id is None:
@@ -398,8 +397,6 @@ async def get_recurrence(
             {"rid": str(task.recurrence_id)},
         )).fetchone()
         return {"rule": rule_of(row) if row else None}
-    finally:
-        await db.close()
 
 
 @router.put("/tasks/{task_id}/recurrence")
@@ -413,8 +410,7 @@ async def set_recurrence(
     "change the cadence" is the same act as "give it one".
     """
     rule = validate_rule(clean_payload(payload))
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         vis = await resolve_visibility(db, user)
         task = await load_visible_task(db, vis, task_id)
         root = str(task.root_project_id)
@@ -431,10 +427,7 @@ async def set_recurrence(
             await update_row(
                 db, "pm_tasks", task_id, {"recurrence_id": str(row.id)},
             )
-        await db.commit()
         return {"rule": rule_of(row)}
-    finally:
-        await db.close()
 
 
 @router.delete("/tasks/{task_id}/recurrence")
@@ -447,8 +440,7 @@ async def clear_recurrence(
     some of it finished, and a "stop repeating this" button that swept away
     three months of completed reports would be the last time anybody pressed it.
     """
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         vis = await resolve_visibility(db, user)
         task = await load_visible_task(db, vis, task_id)
         if task.recurrence_id is None:
@@ -467,10 +459,7 @@ async def clear_recurrence(
             text("DELETE FROM pm_recurrences WHERE id = CAST(:rid AS uuid)"),
             {"rid": rule_id},
         )
-        await db.commit()
         return {"cleared": True, "cascaded": {"tasks_detached": detached}}
-    finally:
-        await db.close()
 
 
 __all__ = [

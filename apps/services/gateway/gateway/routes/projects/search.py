@@ -54,7 +54,7 @@ from acb_auth import UserContext, get_current_user
 from fastapi import Depends
 from gateway.routes.projects.core import (
     MAX_DEPTH,
-    _get_db,
+    _tenant_session,
     load_visible_task,
     resolve_visibility,
     router,
@@ -231,8 +231,7 @@ async def search_tasks(
     cap = max(1, min(int(limit), MAX_HITS))
     escaped = like_escape(term)
 
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         vis = await resolve_visibility(db, user)
         exclude_sql = ""
         exclude_params: dict[str, Any] = {}
@@ -286,8 +285,6 @@ async def search_tasks(
             "truncated": len(rows) > cap,
             "query": term,
         }
-    finally:
-        await db.close()
 
 
 __all__ = ["MAX_HITS", "MIN_QUERY", "relative_task_ids", "task_number"]

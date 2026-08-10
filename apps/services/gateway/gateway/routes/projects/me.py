@@ -23,7 +23,7 @@ from gateway.routes.projects.core import (
     ListResponse,
     Page,
     TaskModel,
-    _get_db,
+    _tenant_session,
     actor,
     resolve_organization_id,
     router,
@@ -77,8 +77,7 @@ async def assigned_to_me(
         )
     where = " WHERE " + " AND ".join(clauses)
 
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         # A caller the directory does not know binds NULL and matches nothing,
         # which is the same fail-closed shape every other read here has.
         scope = {"who": email, "vis_org": await resolve_organization_id(db, email)}
@@ -96,5 +95,3 @@ async def assigned_to_me(
         return ListResponse(
             rows=[row_to_dict(r, TaskModel) for r in rows], total=int(total),
         )
-    finally:
-        await db.close()

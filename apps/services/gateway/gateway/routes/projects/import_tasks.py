@@ -52,7 +52,7 @@ from acb_auth import UserContext, get_current_user, require_permission
 from acb_common import get_logger
 from fastapi import Depends
 from gateway.routes.projects.core import (
-    _get_db,
+    _tenant_session,
     actor,
     insert_row,
     next_task_number,
@@ -377,8 +377,7 @@ async def import_from_tasks(
     tally = _Tally()
     department = (payload.department or "Company").strip() or "Company"
 
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         organization_id = await require_organization_of(db, who.lower())
         root_id = await _root_department(
             db, department, who, tally, payload.dry_run,
@@ -465,9 +464,6 @@ async def import_from_tasks(
                     f"ClickUp mirror into '{department}'"
                 ),
             )
-            await db.commit()
-    finally:
-        await db.close()
 
     return tally.as_dict(department=department, dry_run=payload.dry_run)
 

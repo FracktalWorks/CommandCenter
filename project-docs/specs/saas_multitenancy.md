@@ -428,6 +428,15 @@ async def get_db(tenant_id: str | None = None) -> AsyncSession:
     await s.execute(text("SET LOCAL app.tenant_id = :t"), {"t": tenant_id or _ctx_tenant()})
     return s
 ```
+> ⚠️ **Correction (2026-08-10, found by the first live H2 run):** the literal
+> `SET LOCAL app.tenant_id = :t` is a Postgres **syntax error** through the extended
+> protocol — `SET` cannot take a bind parameter. Every hermetic test was green with it;
+> real Postgres refused it on the first converted handler. The shipped encoding in
+> `acb_common.db.tenant_session()` is `SELECT set_config('app.tenant_id', :tenant, true)`
+> — identical transaction-local semantics (`is_local = true` IS `SET LOCAL`), but
+> parameterizable. The warning below still binds; only the spelling changed.
+> `test_tenant_session.py` pins the `set_config` form and refuses both the literal and
+> an `is_local = false` variant.
 > ⚠️ **`SET LOCAL`, never `SET`.** The pool recycles connections across requests
 > (`pool_size` + `max_overflow`, `db.py:114-120`). A session-scoped `SET` survives the
 > connection's return to the pool and becomes a cross-tenant read on the next borrower.

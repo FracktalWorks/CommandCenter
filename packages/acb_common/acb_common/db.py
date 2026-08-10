@@ -177,8 +177,20 @@ def bind_tenant(organization_id: str) -> Token[str | None]:
     return _TENANT.set(str(organization_id))
 
 
+def clear_tenant() -> Token[str | None]:
+    """Open a fresh, empty tenant scope. Returns a reset token.
+
+    The gateway's request middleware calls this at the top of every HTTP
+    request and :func:`release_tenant` after the response, so one request can
+    never inherit another's binding — whatever the server's task model does
+    with context propagation. Inside the scope, the auth dependency's
+    :func:`bind_tenant` is what fills it in.
+    """
+    return _TENANT.set(None)
+
+
 def release_tenant(token: Token[str | None] | None) -> None:
-    """Undo :func:`bind_tenant`. Never raises."""
+    """Undo :func:`bind_tenant` / :func:`clear_tenant`. Never raises."""
     if token is None:
         return
     try:
@@ -232,8 +244,19 @@ async def tenant_session(organization_id: str | None = None) -> AsyncIterator[An
     session = get_session_factory()()
     try:
         await session.begin()
+        # ``set_config(..., is_local := true)`` IS ``SET LOCAL`` — same
+        # transaction-scoped reset on commit/rollback — but it is a function
+        # call, so the tenant can be a BOUND parameter. The literal
+        # ``SET LOCAL app.tenant_id = :tenant`` form is a Postgres syntax
+        # error through the extended protocol (``SET`` takes no bind
+        # parameters), which every hermetic test missed because a Python fake
+        # does not parse SQL; the first live run found it (2026-08-10, the
+        # same lesson as WS-27r's CAST). Interpolating the id into the
+        # statement instead would be the injection seam this module exists to
+        # avoid handing out.
         await session.execute(
-            text("SET LOCAL app.tenant_id = :tenant"), {"tenant": str(tenant)}
+            text("SELECT set_config('app.tenant_id', :tenant, true)"),
+            {"tenant": str(tenant)},
         )
         yield session
         await session.commit()

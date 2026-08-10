@@ -92,17 +92,29 @@ theme's own card *and* background** (`contrast.test.ts` measures all 64) and so
 the worst pairwise perceptual gap stays wide even on Graphite, the least
 saturated theme.
 
+The class strings live in **`src/lib/categorical.ts`**, next to
+`statusAccent.ts` and deliberately separate from it: a *status* resolves to a
+semantic tone because its hue is information; a *category* resolves to a ramp
+slot because its hue is only an identity. Two concepts, two mechanisms, no third
+(AGENTS.md rules 4 and 7).
+
 ```tsx
-<span className="rounded border border-cat-3/30 bg-cat-3/10 px-1.5 py-0.5 text-cat-3">
-  @home
+import { categoricalAccent } from "@/lib/categorical";
+
+<span className={`rounded border px-1.5 py-0.5 ${categoricalAccent(tag).chip}`}>
+  {tag}
 </span>
 ```
+
+An app that needs to pin some of its own names to fixed slots keeps that map
+locally and delegates the rest — `app/tasks/lib/contextColors.ts` is the worked
+example, and it is the same shape `stageColors.ts` has over `statusAccent.ts`.
 
 Three rules:
 
 * **Pick the slot from a stable hash of the thing's name**, never an array
-  index — `contextColors.ts` is the worked example. An index shifts when
-  somebody adds an item and repaints everything below it.
+  index. An index shifts when somebody adds an item and repaints everything
+  below it.
 * **Never reorder the slots.** A reorder silently recolours every existing
   @context for every user at once, and nothing fails.
 * **Never let a slot be the only carrier.** Under simulated deuteranopia the

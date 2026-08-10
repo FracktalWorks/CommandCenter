@@ -1,63 +1,41 @@
-// Per-@context colour accents. A GTD @context (@computer, @calls, @errands, …)
-// reads faster when each carries its own stable hue instead of every context
-// sharing the one primary tint. The hue is derived from the context NAME so it's
-// deterministic across every surface (card chip, list column, anywhere a context
-// pill renders) and survives new contexts being added — no colour is stored.
+// Per-@context colour accents — a thin adapter over the SHARED categorical
+// vocabulary (`src/lib/categorical.ts`).
 //
-// Common contexts get a fixed, intuitive slot via KEYWORD; anything else hashes
-// to a stable slot.
+// A GTD @context (@computer, @calls, @errands, …) reads faster when each carries
+// its own stable hue instead of every context sharing the one primary tint. The
+// hue is derived from the context NAME so it's deterministic across every
+// surface (card chip, list column, toolbar facet) and survives new contexts
+// being added — no colour is stored anywhere.
 //
-// The hues come from the THEMED categorical ramp (`--cat-1` … `--cat-8`,
-// src/lib/theme/themes.ts), not from Tailwind's palette. This file used to
-// write `bg-sky-500/10 text-sky-600 dark:text-sky-400` and friends, which is
-// eight colours the theming engine cannot reach: switch the org to Material and
-// every other surface followed while these eight stayed put and clashed. Each
-// theme now supplies its own eight, so a context chip belongs to whichever
-// theme is active — and the `dark:` variants are gone, because a token already
-// knows which mode it is in.
-
-import { CATEGORICAL_TOKENS } from "@/lib/theme/types";
-
-export interface ContextAccent {
-  /** filled tint chip (border + bg + text) for a @context pill */
-  chip: string;
-  /** the solid dot, for a leading marker / legend */
-  dot: string;
-}
-
-// One entry per ramp slot, in slot order. Written out literally rather than
-// generated from CATEGORICAL_TOKENS because Tailwind v4 finds classes by
-// scanning source text: a template-built `bg-cat-${n}` is a class that exists
-// in this file and in no stylesheet.
-const PALETTE: ContextAccent[] = [
-  { chip: "border-cat-1/30 bg-cat-1/10 text-cat-1", dot: "bg-cat-1" },
-  { chip: "border-cat-2/30 bg-cat-2/10 text-cat-2", dot: "bg-cat-2" },
-  { chip: "border-cat-3/30 bg-cat-3/10 text-cat-3", dot: "bg-cat-3" },
-  { chip: "border-cat-4/30 bg-cat-4/10 text-cat-4", dot: "bg-cat-4" },
-  { chip: "border-cat-5/30 bg-cat-5/10 text-cat-5", dot: "bg-cat-5" },
-  { chip: "border-cat-6/30 bg-cat-6/10 text-cat-6", dot: "bg-cat-6" },
-  { chip: "border-cat-7/30 bg-cat-7/10 text-cat-7", dot: "bg-cat-7" },
-  { chip: "border-cat-8/30 bg-cat-8/10 text-cat-8", dot: "bg-cat-8" },
-];
-
-// The literal list above and the ramp have to stay the same length: `hash %
-// PALETTE.length` is what makes an assignment stable, so a ninth slot added to
-// the ramp and not to this list would leave it unreachable, while a slot
-// removed from the ramp and not from here would emit a class with no token.
-if (PALETTE.length !== CATEGORICAL_TOKENS.length) {
-  throw new Error(
-    `contextColors PALETTE has ${PALETTE.length} entries but the categorical ` +
-      `ramp has ${CATEGORICAL_TOKENS.length}. Keep them in step.`,
-  );
-}
-
-// Fixed slot for the common contexts so they never move when the palette
-// changes — indexes into PALETTE above. Keyed on the bare word (no leading @).
+// The hues come from the themed ramp (`--cat-1` … `--cat-8`), not from
+// Tailwind's palette. This file used to write `bg-sky-500/10 text-sky-600
+// dark:text-sky-400` and seven more like it — eight colours the theming engine
+// cannot reach, so switching the org to Material moved every other surface and
+// left these clashing. Each theme now supplies its own eight, and the `dark:`
+// variants are gone, because a token already knows which mode it is in.
 //
-// This map and the hash below are the whole stability contract: a given
+// What stays local is the one rule that is /tasks' and not everyone's: KEYWORD,
+// the hand-assigned slot for the common GTD contexts. Everything else — the
+// class strings, the hash, the slot count — is shared, for the same reason
+// `stageColors.ts` kept only `lastIsDone` and delegated the rest.
+
+import {
+  CATEGORICAL_SLOTS,
+  accentForSlot,
+  hashSlot,
+  type CategoricalAccent,
+} from "@/lib/categorical";
+
+/** @deprecated-in-name-only: the shared shape, re-exported for call sites. */
+export type ContextAccent = CategoricalAccent;
+
+// Fixed slot for the common contexts, so they read intuitively rather than
+// arbitrarily. Keyed on the bare word (no leading @).
+//
+// This map and the shared hash are the whole stability contract: a given
 // @context name resolves to the same slot for every user, in every session,
-// forever. Nothing here may be reordered, and an index may not be reassigned —
-// both repaint contexts people have already learned. Adding a NEW key is safe.
+// forever. An index may not be reassigned and a key may not be removed — both
+// repaint a colour people have already learned. Adding a NEW key is safe.
 const KEYWORD: Record<string, number> = {
   computer: 0, mac: 0, laptop: 0, online: 0, desk: 0,
   agenda: 1, meeting: 1, meetings: 1, "1:1": 1,
@@ -69,11 +47,12 @@ const KEYWORD: Record<string, number> = {
   read: 7, reading: 7, review: 7,
 };
 
-/** djb2-ish string hash → stable non-negative int. */
-function hash(s: string): number {
-  let h = 5381;
-  for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) >>> 0;
-  return h;
+// Every hand-assigned slot has to exist on the ramp. A typo'd index here would
+// otherwise be silently wrapped by `accentForSlot` into somebody else's colour.
+for (const [word, slot] of Object.entries(KEYWORD)) {
+  if (!Number.isInteger(slot) || slot < 0 || slot >= CATEGORICAL_SLOTS) {
+    throw new Error(`KEYWORD["${word}"] = ${slot} is not a ramp slot (0…${CATEGORICAL_SLOTS - 1}).`);
+  }
 }
 
 /** The ramp slot a @context maps to — 0-based, stable for a given name. */
@@ -83,10 +62,10 @@ export function contextSlot(name: string): number {
   // hash to a different slot than `"@office"` — the same context rendering two
   // colours depending on which surface had padded the string.
   const key = name.trim().replace(/^@/, "").trim().toLowerCase();
-  return key in KEYWORD ? KEYWORD[key] : hash(key) % PALETTE.length;
+  return key in KEYWORD ? KEYWORD[key] : hashSlot(key);
 }
 
 /** The colour accent for a @context, deterministic from its name. */
 export function contextAccent(name: string): ContextAccent {
-  return PALETTE[contextSlot(name)];
+  return accentForSlot(contextSlot(name));
 }

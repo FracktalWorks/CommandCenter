@@ -77,14 +77,16 @@ Four rules on top of the three above. Each one exists because it was broken:
 7. **Categorical hues are a theme decision too.** A set of colours that only
    has to be *mutually distinguishable* (contexts, tags, labels) still belongs to
    the theme. **The ramp now exists**: `--cat-1` … `--cat-8`, eight slots every
-   theme supplies in both modes, used as `bg-cat-3/10 text-cat-3
-   border-cat-3/30` (WS-27af; DESIGN_SYSTEM §1, values in
-   `src/lib/theme/themes.ts`). Pick the slot by hashing the item's NAME, never by
-   array index — `app/tasks/lib/contextColors.ts` is the worked example — and
-   never reorder the slots, which silently repaints everything already assigned.
-   This is not a second status vocabulary and does not compete with rule 4: a
-   status resolves to a **semantic** tone through `statusAccent.ts`, a category
-   resolves to a **ramp slot**. Two concepts, two mechanisms, no third.
+   theme supplies in both modes (WS-27af; values in `src/lib/theme/themes.ts`,
+   class strings in **`src/lib/categorical.ts`** — `categoricalAccent(name)`,
+   never a hand-written `bg-cat-*` table). Pick the slot by hashing the item's
+   NAME, never by array index; never reorder the slots, which silently repaints
+   everything already assigned. `app/tasks/lib/contextColors.ts` is the worked
+   adapter — it keeps only the hand-assigned @context slots and delegates the
+   rest, the same shape `stageColors.ts` has over `statusAccent.ts`.
+   This does **not** compete with rule 4, it completes it: a status resolves to
+   a **semantic** tone (its hue is information), a category resolves to a **ramp
+   slot** (its hue is only an identity). Two concepts, two mechanisms, no third.
    ⚠️ `bg-sky-500/10` used to pass every conformance regex — it is a named class,
    not a bracket class — which is how ~950 of them accumulated. **CI catches it
    now** (conformance rule 5, per-file baselines that only go down), but the

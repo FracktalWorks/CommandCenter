@@ -3,19 +3,20 @@
  *
  * A context's colour is not stored anywhere: it is recomputed from the name on
  * every render, on every machine, for every member. That is only a feature
- * while the computation is FROZEN. Change the hash, reorder `KEYWORD`, resize
- * the palette, or "tidy" the normalisation, and every @context in the product
- * silently changes colour for everybody at once — with nothing failing, because
- * the new colours are just as valid as the old ones.
+ * while the computation is FROZEN. Change the hash, reassign a `KEYWORD` index,
+ * resize the ramp, or "tidy" the normalisation, and every @context in the
+ * product silently changes colour for everybody at once — with nothing failing,
+ * because the new colours are just as valid as the old ones.
  *
  * So the assignment is pinned here as a golden table rather than described. The
  * table is the contract; if you have a reason to break it, the failure is the
- * conversation.
+ * conversation. The ramp's own behaviour — the class strings, the hash's
+ * spread, out-of-range slots — belongs to `src/lib/categorical.test.ts`.
  */
 
 import { describe, expect, it } from "vitest";
 
-import { CATEGORICAL_TOKENS } from "@/lib/theme/types";
+import { CATEGORICAL_SLOTS } from "@/lib/categorical";
 
 import { contextAccent, contextSlot } from "./contextColors";
 
@@ -47,55 +48,52 @@ describe("contextSlot", () => {
   });
 
   it("is stable across the surface spellings of the same context", () => {
-    // The three call sites pass what the store holds, what a facet key holds
-    // and what a user typed. A chip and its filter option disagreeing on
-    // colour is the bug this normalisation prevents.
+    // The call sites pass what the store holds, what a facet key holds and what
+    // a user typed. A chip and its own filter option disagreeing on colour is
+    // the bug this normalisation prevents — and `" @office "` really did miss
+    // KEYWORD and hash elsewhere, because the sigil was stripped before the
+    // trim rather than after.
     for (const spelling of ["@Office", "office", " @office ", "@OFFICE"]) {
       expect(contextSlot(spelling), spelling).toBe(contextSlot("@office"));
     }
   });
 
-  it("never lands outside the ramp", () => {
-    // `hash % length` is only in range while the palette and the ramp agree;
-    // an out-of-range slot renders `undefined` classes, not a wrong colour.
-    for (let i = 0; i < 500; i++) {
-      const slot = contextSlot(`@ctx-${i}`);
-      expect(slot).toBeGreaterThanOrEqual(0);
-      expect(slot).toBeLessThan(CATEGORICAL_TOKENS.length);
-    }
+  it("keeps every hand-assigned context on its own slot", () => {
+    // The eight KEYWORD groups were chosen to be mutually distinguishable; two
+    // of them landing on one slot would quietly undo that.
+    const common = ["@computer", "@agenda", "@home", "@errands", "@calls", "@email", "@office", "@read"];
+    const slots = common.map(contextSlot);
+    expect(new Set(slots).size).toBe(common.length);
+    expect(new Set(slots).size).toBe(CATEGORICAL_SLOTS);
   });
 
-  it("spreads unknown contexts over the whole ramp", () => {
-    // A hash that collapsed onto two slots would still be "stable" and still
-    // pass every test above, while making contexts indistinguishable — the one
-    // thing the ramp exists for.
-    const used = new Set(
-      Array.from({ length: 200 }, (_, i) => contextSlot(`@ctx-${i}`)),
-    );
-    expect(used.size).toBe(CATEGORICAL_TOKENS.length);
+  it("puts an unknown context somewhere on the ramp", () => {
+    for (let i = 0; i < 200; i++) {
+      const slot = contextSlot(`@ctx-${i}`);
+      expect(slot).toBeGreaterThanOrEqual(0);
+      expect(slot).toBeLessThan(CATEGORICAL_SLOTS);
+    }
   });
 });
 
 describe("contextAccent", () => {
-  it("only ever emits themed ramp classes", () => {
-    // The regression this file was written for: eight raw Tailwind palette
-    // hues that survived a theme switch while everything around them changed.
-    for (let i = 0; i < 200; i++) {
-      const { chip, dot } = contextAccent(`@ctx-${i}`);
+  it("draws only themed ramp classes", () => {
+    // The regression this file was written for: eight raw Tailwind palette hues
+    // that survived a theme switch while everything around them changed.
+    for (const name of [...Object.keys(GOLDEN), "@whatever", "@x"]) {
+      const { chip, dot } = contextAccent(name);
       for (const cls of `${chip} ${dot}`.split(" ")) {
-        expect(cls, cls).toMatch(/^(?:border|bg|text)-cat-[1-8](?:\/\d+)?$/);
+        expect(cls, `${name} → ${cls}`).toMatch(/^(?:border|bg|text)-cat-[1-8](?:\/\d+)?$/);
       }
     }
   });
 
-  it("gives each slot its own chip and dot", () => {
-    const bySlot = new Map<number, string>();
-    for (let i = 0; i < 500 && bySlot.size < CATEGORICAL_TOKENS.length; i++) {
-      const name = `@ctx-${i}`;
-      const { chip, dot } = contextAccent(name);
-      bySlot.set(contextSlot(name), `${chip}|${dot}`);
-    }
-    expect(bySlot.size).toBe(CATEGORICAL_TOKENS.length);
-    expect(new Set(bySlot.values()).size).toBe(CATEGORICAL_TOKENS.length);
+  it("gives the eight common contexts eight different chips", () => {
+    const chips = new Set(
+      ["@computer", "@agenda", "@home", "@errands", "@calls", "@email", "@office", "@read"].map(
+        (n) => contextAccent(n).chip,
+      ),
+    );
+    expect(chips.size).toBe(CATEGORICAL_SLOTS);
   });
 });

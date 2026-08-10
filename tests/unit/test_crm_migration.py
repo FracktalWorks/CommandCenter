@@ -1,6 +1,6 @@
 """The CRM migration, read as text — idempotency and the shape §3 specifies.
 
-Spec: ``ai-company-brain/specs/crm_app.md`` §3 · WS-26a done-when 1.
+Spec: ``project-docs/specs/crm_app.md`` §3 · WS-26a done-when 1.
 
 **Why static.** ``infra/postgres/README.md`` requires every ``02+`` migration to
 be idempotent, because ``apply_migrations.sh`` replays the whole ladder on every

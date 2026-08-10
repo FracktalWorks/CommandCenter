@@ -1,6 +1,6 @@
 """The sign-in request queue — capture the knock, and let the owner answer it.
 
-Spec: ``ai-company-brain/specs/colleague_onboarding.md`` §6 (WS-24 / N6a).
+Spec: ``project-docs/specs/colleague_onboarding.md`` §6 (WS-24 / N6a).
 
 Before N6a an authenticated stranger produced one artefact — a journald
 warning nobody read back — so the owner's only way to learn that a colleague

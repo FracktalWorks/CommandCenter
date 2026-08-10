@@ -1,7 +1,7 @@
 """Where an agent's code lives, and where each tenant's state lives.
 
-Spec: ai-company-brain/specs/agent_architecture.md §2
-      ai-company-brain/specs/memory_architecture.md §5.3
+Spec: project-docs/specs/agent_architecture.md §2
+      project-docs/specs/memory_architecture.md §5.3
 
 THE PROBLEM THIS SOLVES
 -----------------------

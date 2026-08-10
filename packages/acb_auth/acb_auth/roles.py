@@ -10,7 +10,7 @@ verbatim: deploying migration 128 changes nobody's access.
 **Effective access** (``UserContext.access``) — the DB-backed permission set
 resolved from the member's roles and per-user overrides. New code guards on
 this via ``require_permission()``. See
-``ai-company-brain/specs/org_access_control.md``.
+``project-docs/specs/org_access_control.md``.
 
 The two coexist by design. `app_user.role` is dual-written and the migration
 maps executive→admin / employee→member, so a route can move from one to the

@@ -1,6 +1,6 @@
 """Workflows route package — the gateway `/workflows` API (visual automation).
 
-Spec: ai-company-brain/specs/workflows_app.md · RFC: docs/workflow-editor/.
+Spec: project-docs/specs/workflows_app.md · RFC: docs/workflow-editor/.
 
 ``core`` is the leaf; feature modules register routes on the shared ``router``
 as an import side effect (the tasks/notes/apps convention). Import order is

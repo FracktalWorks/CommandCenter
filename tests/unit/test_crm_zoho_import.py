@@ -1,6 +1,6 @@
 """CRM · the Zoho backfill — the mapping, the floor, and what dry-run does.
 
-Spec: ``ai-company-brain/specs/crm_app.md`` §7.1 (the mapping table) · ticket
+Spec: ``project-docs/specs/crm_app.md`` §7.1 (the mapping table) · ticket
 WS-26b done-when 2 and 5.
 
 Hermetic: no Postgres, no network, no Zoho. The route function is called

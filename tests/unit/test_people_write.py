@@ -1,6 +1,6 @@
 """WS-28b-write — the person write half, restored and made survivable.
 
-Spec: `ai-company-brain/specs/people_center_app.md` §3.2, §7 (WS-28b-write).
+Spec: `project-docs/specs/people_center_app.md` §3.2, §7 (WS-28b-write).
 
 The write routes themselves are old; what is new is that migration 148 changed
 the table under them and nobody told them. Three of the claims below are about

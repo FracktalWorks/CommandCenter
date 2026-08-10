@@ -11,7 +11,7 @@
 --       same address — so an email join could silently attribute one person's
 --       capacity to another. The People Center is about to make this table the
 --       assignment source, so the shape is fixed before anything relies on it.
---       Spec: ai-company-brain/specs/people_center_app.md §2, §5 (P-1/P-2), §7.
+--       Spec: project-docs/specs/people_center_app.md §2, §5 (P-1/P-2), §7.
 -- Depends on: 49_gtd_people.sql, 74_gtd_people_editable_and_resumes.sql.
 --
 -- ⚠️ NOTHING HERE MAY BLOCK A DEPLOY. `apply_migrations.sh` runs under

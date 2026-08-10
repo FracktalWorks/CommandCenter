@@ -81,7 +81,7 @@ Each **skill repo** is a Python package — pip‑installable, well‑typed entr
 ## This repo layout (CommandCenter Core)
 
 ```
-ai-company-brain/        # Planning docs — start with AGENTS.md
+project-docs/        # Planning docs — start with AGENTS.md
   project_plan.md        # Requirements + roadmap + WBS
   system_architecture.md # C4 diagrams, data model, ADRs
   reference.md           # MAF / Copilot SDK / memory notes
@@ -231,14 +231,14 @@ See [`Makefile`](Makefile) for convenience targets.
 
 ## Planning docs
 
-All planning artefacts live in [`ai-company-brain/`](ai-company-brain/). Start with `AGENTS.md`.
+All planning artefacts live in [`project-docs/`](project-docs/). Start with `AGENTS.md`.
 
 | Doc | Purpose |
 |---|---|
 | [`AGENTS.md`](AGENTS.md) | Root project contract + constraints + conventions (read first) |
-| [`ai-company-brain/project_plan.md`](ai-company-brain/project_plan.md) | Requirements + milestones + WBS + risks |
-| [`ai-company-brain/system_architecture.md`](ai-company-brain/system_architecture.md) | C4 diagrams, data model, ADRs |
-| [`ai-company-brain/reference.md`](ai-company-brain/reference.md) | MAF / Copilot SDK / memory library notes |
+| [`project-docs/project_plan.md`](project-docs/project_plan.md) | Requirements + milestones + WBS + risks |
+| [`project-docs/system_architecture.md`](project-docs/system_architecture.md) | C4 diagrams, data model, ADRs |
+| [`project-docs/reference.md`](project-docs/reference.md) | MAF / Copilot SDK / memory library notes |
 | [`FOUNDATION_AUDIT_REPORT.md`](FOUNDATION_AUDIT_REPORT.md) | Foundational architecture audit (findings by severity) |
 | [`FOUNDATION_BUILDOUT_CHECKLIST.md`](FOUNDATION_BUILDOUT_CHECKLIST.md) | Missing/partial foundational capabilities + priorities (incl. `CH-*` competitive refs, BO‑20/BO‑21) |
-| [`COMPETITIVE_COMPARISON.md`](COMPETITIVE_COMPARISON.md) | Three‑way comparison vs Hermes Agent & OpenClaw — where we stand + what to learn (annealed into `ai-company-brain/specs/competitive_hardening_2026-07.md`) |
+| [`COMPETITIVE_COMPARISON.md`](COMPETITIVE_COMPARISON.md) | Three‑way comparison vs Hermes Agent & OpenClaw — where we stand + what to learn (annealed into `project-docs/specs/competitive_hardening_2026-07.md`) |

@@ -3,7 +3,7 @@
 The leaf module: it imports nothing from its siblings. It owns the shared
 ``router``, the Pydantic models, the row→model mapper, the SQL helpers, the
 **visibility read model**, the status-transition helper and the event seam.
-Spec: ``ai-company-brain/specs/project_management_app.md`` §3 and §4 (WS-27a).
+Spec: ``project-docs/specs/project_management_app.md`` §3 and §4 (WS-27a).
 
 Four things here are load-bearing and worth stating once:
 

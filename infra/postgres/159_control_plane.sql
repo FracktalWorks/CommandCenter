@@ -1,7 +1,7 @@
 -- ============================================================================
 -- 159_control_plane.sql — MT-1a: the tenant catalog
 -- ============================================================================
--- Spec: ai-company-brain/specs/saas_multitenancy.md §1.5 / §0.9.5 / MT-1a ·
+-- Spec: project-docs/specs/saas_multitenancy.md §1.5 / §0.9.5 / MT-1a ·
 -- shapes in saas_multitenancy_implementation.md §3 · board WS-29 · D15.
 --
 -- Three things a pooled deployment needs that a single-tenant one never did:

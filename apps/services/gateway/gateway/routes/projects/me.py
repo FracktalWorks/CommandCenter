@@ -1,6 +1,6 @@
 """Projects · me — the caller's own work.
 
-Spec: ``ai-company-brain/specs/project_management_app.md`` §4 (``me.py`` row).
+Spec: ``project-docs/specs/project_management_app.md`` §4 (``me.py`` row).
 
     GET /projects/assigned-to-me
 

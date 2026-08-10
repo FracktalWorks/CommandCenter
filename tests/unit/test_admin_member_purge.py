@@ -1,6 +1,6 @@
 """Deleting a member permanently — ``DELETE /admin/members/{email}/purge``.
 
-Spec: ``ai-company-brain/specs/colleague_onboarding.md`` §2 Step 5 (WS-24 / N8).
+Spec: ``project-docs/specs/colleague_onboarding.md`` §2 Step 5 (WS-24 / N8).
 
 A **second, harder action beside** Remove, not a flag on it. Remove is a soft
 off-boarding and its reasoning stands; this one destroys the identity and every

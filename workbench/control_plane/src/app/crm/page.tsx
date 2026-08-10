@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * /crm — the native CRM (spec: ai-company-brain/specs/crm_app.md §5).
+ * /crm — the native CRM (spec: project-docs/specs/crm_app.md §5).
  *
  * Five tabs over one dataset: the deals kanban (the landing tab) and a list
  * per entity on the shared list contract. The record sheet opens OVER

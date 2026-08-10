@@ -6,7 +6,7 @@
 -- Why:  spec §11.2 item 1, the first ClickUp-parity gap: "a task with a photo
 --       of the failed print is the normal case in a hardware company, and today
 --       there is nowhere to put it."
---       Spec: ai-company-brain/specs/project_management_app.md §11.
+--       Spec: project-docs/specs/project_management_app.md §11.
 -- Depends on: 52_gtd_attachments.sql (the file registry), 146_projects.sql.
 --
 -- **One file store, not two.** Paca's shape is a central `files` registry plus

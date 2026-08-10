@@ -1,6 +1,6 @@
 """Tenant placement — which data plane serves an organization (MT-1a).
 
-Spec: ``ai-company-brain/specs/saas_multitenancy.md`` §1.5 · D15 · board WS-29.
+Spec: ``project-docs/specs/saas_multitenancy.md`` §1.5 · D15 · board WS-29.
 
 Under D15 the tenant boundary is a **row** (`organization_id` + Postgres RLS) and
 the *deployment* is demoted to a **placement**: a region and a tier, not an

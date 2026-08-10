@@ -1,6 +1,6 @@
 """MT-1c — the tenant binding seam. ``SET LOCAL``, in a transaction, or refuse.
 
-Spec: ``ai-company-brain/specs/saas_multitenancy.md`` §0.1 / §1.3 · WS-29 · D15.
+Spec: ``project-docs/specs/saas_multitenancy.md`` §0.1 / §1.3 · WS-29 · D15.
 
 RLS enforces isolation server-side, but only against a session that has told the
 server which tenant it acts for. ``tenant_session`` is the one place that

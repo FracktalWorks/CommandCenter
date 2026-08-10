@@ -1,6 +1,6 @@
 """WS-27k — filters and saved views.
 
-Spec: `ai-company-brain/specs/project_management_app.md` §11.2 item 3.
+Spec: `project-docs/specs/project_management_app.md` §11.2 item 3.
 
 *"My open bugs in Ops, grouped by assignee"* is a daily question the board could
 not answer. This is the filter half.

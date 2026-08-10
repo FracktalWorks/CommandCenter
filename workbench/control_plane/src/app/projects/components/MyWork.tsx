@@ -3,7 +3,7 @@
 /**
  * Projects · My work — the personal lens over the one task store.
  *
- * Spec: `ai-company-brain/specs/project_management_app.md` §3.11-§3.12, §6.1 ·
+ * Spec: `project-docs/specs/project_management_app.md` §3.11-§3.12, §6.1 ·
  * **D-PM-6 (revised)** · ticket WS-27e.
  *
  * This is **not a second app**. The rows here are `pm_tasks` rows — the same

@@ -1,7 +1,7 @@
 // ── Navigation structure for CommandCenter Control Plane ─────────────────
 //
 // The sidebar is organised around the Centers model (one platform, many
-// projections — see ai-company-brain/specs/org_access_control.md §5):
+// projections — see project-docs/specs/org_access_control.md §5):
 //   1. Personal Center — apps mapped one-to-one with the signed-in user
 //   2. Centers         — departmental projections (Sales, Marketing, …),
 //                        each gated by its `center.<slug>` feature and

@@ -7,7 +7,7 @@
 // be a second vocabulary to keep in step with migration 144 for no gain, and
 // the one that drifts is the copy.
 //
-// Spec: ai-company-brain/specs/crm_app.md §3, §4, §5.
+// Spec: project-docs/specs/crm_app.md §3, §4, §5.
 
 /** The four record types, and the URL segment each one lives at. */
 export const ENTITIES = ["deals", "leads", "contacts", "organizations"] as const;

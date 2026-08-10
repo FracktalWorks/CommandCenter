@@ -1,6 +1,6 @@
 """WS-27r — the search surface, and the LIKE defect it uncovered.
 
-Spec: ``ai-company-brain/specs/project_management_app.md`` §11.2 item 10, §11.18.
+Spec: ``project-docs/specs/project_management_app.md`` §11.2 item 10, §11.18.
 
 The last row of the parity backlog. `?q=` has existed on the list endpoint
 since WS-27a; what was missing was a way to reach it, and — it turned out — an

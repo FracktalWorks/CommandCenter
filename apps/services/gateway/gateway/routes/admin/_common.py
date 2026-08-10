@@ -1,7 +1,7 @@
 """Org administration routes — shared kernel.
 
 DB access, the org lookup, and the invariants every write path in this package
-has to respect. Spec: ``ai-company-brain/specs/org_access_control.md``.
+has to respect. Spec: ``project-docs/specs/org_access_control.md``.
 
 The four invariants, stated once here because they are the difference between
 an access model and an outage:

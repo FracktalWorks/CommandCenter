@@ -1,6 +1,6 @@
 """Agent manifest — derivation, validation, and equivalence with today.
 
-Spec: ``ai-company-brain/specs/agent_architecture.md``.
+Spec: ``project-docs/specs/agent_architecture.md``.
 
 The manifest is introduced as a PARALLEL representation: it computes values the
 platform currently derives from ``config.json`` plus hardcoded defaults, but is

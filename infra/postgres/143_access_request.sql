@@ -1,7 +1,7 @@
 -- ============================================================================
 -- 143_access_request.sql — the sign-in queue (WS-24 / N6a)
 -- ============================================================================
--- Spec: ai-company-brain/specs/colleague_onboarding.md §6.
+-- Spec: project-docs/specs/colleague_onboarding.md §6.
 --
 -- Before this table, an authenticated stranger who reached the app produced
 -- exactly one artefact: a `access_unprovisioned_signin` warning in journald.

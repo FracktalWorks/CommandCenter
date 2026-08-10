@@ -7,7 +7,7 @@ to a credential dict, and injects the result into ``state["integrations"]``.
 
 Agents and skills must only read credentials from ``state["integrations"]``.
 They must never call ``os.getenv()`` for secrets or import ``Settings``
-directly — see §5 of ``ai-company-brain/agent_repo_compatibility.md``.
+directly — see §5 of ``project-docs/agent_repo_compatibility.md``.
 
 ----
 

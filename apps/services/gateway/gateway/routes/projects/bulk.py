@@ -1,6 +1,6 @@
 """Projects · bulk edit (WS-27n).
 
-Spec: ``ai-company-brain/specs/project_management_app.md`` §11.2 item 6, §11.11.
+Spec: ``project-docs/specs/project_management_app.md`` §11.2 item 6, §11.11.
 
     POST /projects/tasks/bulk    → per-task outcomes
 

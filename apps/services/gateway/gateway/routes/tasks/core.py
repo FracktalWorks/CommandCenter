@@ -5,7 +5,7 @@ and ownership helpers used by the accounts/items/ai layers. Mirrors the email
 package's ``core.py`` (the leaf module: it imports nothing from siblings).
 
 Canonical store: the ``task_accounts`` / ``gtd_*`` tables from
-``infra/postgres/48_task_manager_gtd.sql`` (spec: ai-company-brain/specs/
+``infra/postgres/48_task_manager_gtd.sql`` (spec: project-docs/specs/
 task_manager_app.md §4). Dual-source model (§5.1): LOCAL rows are ours;
 SYNCED rows mirror a connected PM tool through the provider layer.
 """
@@ -35,7 +35,7 @@ router = APIRouter(
 
 
 # ── People directory (HR) access ─────────────────────────────────────────────
-# Spec: ai-company-brain/specs/colleague_onboarding.md §4 N4 (owner-answered
+# Spec: project-docs/specs/colleague_onboarding.md §4 N4 (owner-answered
 # 2026-08-04, "directory open, HR fields restricted").
 #
 # `gtd_people` is an ORG roster, not per-user rows, so the owner-predicate

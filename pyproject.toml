@@ -3,7 +3,7 @@
 # stitched together as a uv workspace so they share a single .venv + lockfile.
 
 [project]
-name = "ai-company-brain"
+name = "project-docs"
 version = "0.0.1"
 description = "Fracktal Works internal multi-agent brain — mirror + reasoning + action layer over ClickUp/Zoho/Odoo."
 readme = "README.md"

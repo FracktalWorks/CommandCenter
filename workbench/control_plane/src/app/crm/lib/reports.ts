@@ -13,7 +13,7 @@
 // calculation added to this file is a second answer to a question that already
 // has one.
 //
-// Spec: ai-company-brain/specs/crm_app.md §5.1 system 2 (WS-26g).
+// Spec: project-docs/specs/crm_app.md §5.1 system 2 (WS-26g).
 
 import type {
   FunnelReport,

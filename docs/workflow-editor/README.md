@@ -1,7 +1,7 @@
 # Visual Workflow Editor — Analysis & Implementation Plan
 
 **Status:** RFC accepted — v1 slice built 2026-07-30 (product spec:
-`ai-company-brain/specs/workflows_app.md` · policy: ADR-028 · code: gateway
+`project-docs/specs/workflows_app.md` · policy: ADR-028 · code: gateway
 `routes/workflows/` + workbench `/workflows` + migration `132_workflows.sql`)
 · **Date:** 2026-07-16 · **Owner:** vjvarada
 

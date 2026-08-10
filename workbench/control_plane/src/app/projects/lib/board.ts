@@ -1,7 +1,7 @@
 /**
  * Projects · board and ordering maths.
  *
- * Spec: `ai-company-brain/specs/project_management_app.md` §3.10, §5 · D-PM-5.
+ * Spec: `project-docs/specs/project_management_app.md` §3.10, §5 · D-PM-5.
  *
  * Pure functions only, so the arithmetic that decides where a dragged card
  * lands is testable without a DOM. Everything here is the client half of the

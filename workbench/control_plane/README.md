@@ -5,7 +5,7 @@ Next.js 16 + React 19 + Tailwind v4 shell for the Skill Workbench.
 ## Panes
 - `/workflows` - Workflows app: visual automation editor (React Flow → compiled
   to MAF Workflows server-side) + Module Studio. Spec:
-  `ai-company-brain/specs/workflows_app.md`
+  `project-docs/specs/workflows_app.md`
 - `/observability` - Audit / escalations / traces / spend
 - (full pane list: `src/lib/nav.ts` — this README lists only the ones this
   file used to misdescribe)

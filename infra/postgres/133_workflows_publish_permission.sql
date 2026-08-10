@@ -1,7 +1,7 @@
 -- ============================================================================
 -- 133_workflows_publish_permission.sql — who may make a workflow LIVE
 -- ============================================================================
--- Resolves spec question Q3 of ai-company-brain/specs/workflows_app.md: "any
+-- Resolves spec question Q3 of project-docs/specs/workflows_app.md: "any
 -- `workflows`-granted member may draft; publish requires `workflows:publish`
 -- (default: executives)".
 --

@@ -1,7 +1,7 @@
 // GTD Task Manager — canonical client types.
 //
 // These mirror the canonical Postgres model in
-// `ai-company-brain/specs/task_manager_app.md` §4 (gtd_items / gtd_projects /
+// `project-docs/specs/task_manager_app.md` §4 (gtd_items / gtd_projects /
 // gtd_contexts), trimmed to what the UI needs. The app is built UI-first
 // against mock data (see mockData.ts); when the gateway `/tasks` API lands,
 // these types stay and only the data source swaps.

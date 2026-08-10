@@ -2,7 +2,7 @@
 -- MT-1b · phase 4/4 policies — GENERATED, DO NOT EDIT BY HAND
 -- ============================================================================
 -- Regenerate with: uv run python scripts/gen_tenant_migration.py
--- Spec: ai-company-brain/specs/saas_multitenancy.md §1.3 · MT-1b · WS-29 · D15
+-- Spec: project-docs/specs/saas_multitenancy.md §1.3 · MT-1b · WS-29 · D15
 --
 -- ENABLE + FORCE ROW LEVEL SECURITY + the policy. Instant — no scan. ⚠️ AND IT IS A CLIFF: the moment this applies, any connection that has not bound app.tenant_id reads ZERO ROWS. That is the fail-closed property working (§0.1). MT-1c must be deployed AND VERIFIED first, or the product goes dark.
 --

@@ -19,7 +19,7 @@ clone cache.
 3. agent_tools.py -- call_agent, call_agents_parallel, call_agent_background for cross-agent delegation.
 4. web_tools.py -- web_search (DuckDuckGo) and fetch_page (Jina Reader). Zero credential.
 5. write_artifact.py -- write_artifact tool for surfacing created files in the UI.
-5a. skill_families.py -- WS-23 skill-family registry (spec: ai-company-brain/specs/skills_registry.md).
+5a. skill_families.py -- WS-23 skill-family registry (spec: project-docs/specs/skills_registry.md).
    `SKILL_FAMILIES` maps family slug -> {label, description, tool names} and must
    cover EVERY tool `orchestrator._tool_injection` injects, each in exactly ONE
    family; the `core` family must equal `_CORE_STANDARD_TOOL_NAMES` verbatim

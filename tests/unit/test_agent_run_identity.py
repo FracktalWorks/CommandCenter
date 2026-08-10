@@ -1,6 +1,6 @@
 """S1-4 — an agent run's acting user must not outlive the run, or cross into another.
 
-Spec: ``ai-company-brain/specs/multi_tenancy_leak_audit.md`` §S1-4.
+Spec: ``project-docs/specs/multi_tenancy_leak_audit.md`` §S1-4.
 
 Both executors used to open every run with::
 

@@ -1,6 +1,6 @@
 """Off-boarding yourself — the guard on both doors to ``is_active = False``.
 
-Spec: ``ai-company-brain/specs/colleague_onboarding.md`` §2 Step 5 (WS-24 / N7).
+Spec: ``project-docs/specs/colleague_onboarding.md`` §2 Step 5 (WS-24 / N7).
 
 ``DELETE /admin/members/{email}`` refused the caller. ``PATCH
 /admin/members/{email} {"status": "suspended"}`` reaches the same outcome by the

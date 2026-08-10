@@ -9,7 +9,7 @@ warning there) · **Date:** 2026-07-26, updated 2026-08-01 (doc-truth pass) ·
 > **Header correction 2026-08-03 (R4).** This file read `Draft / RFC · 2026-07-26`
 > while carrying 2026-08-01 update blocks in the body. The date now reflects both.
 > Also note its **path**: this document lives at `docs/multiplayer/agent-kinds.md`, not
-> under `ai-company-brain/specs/` — `work_plan.md` §4 cited it as if it were a spec and
+> under `project-docs/specs/` — `work_plan.md` §4 cited it as if it were a spec and
 > was corrected in the same change.
 
 Which agents are one-per-person and which are one-brain-for-the-team — and what that
@@ -54,7 +54,7 @@ formatters, linters, and one-shot utilities, and it removes an entire class of q
 > **Update 2026-08-01 (doc-truth pass): no longer the live behaviour.**
 > Instance-keying shipped — migration 136 added the instance key to
 > `agent_blob` and the run path now resolves instance-keyed agent memory
-> ([`groups_sessions_authority.md`](../../ai-company-brain/specs/groups_sessions_authority.md)
+> ([`groups_sessions_authority.md`](../../project-docs/specs/groups_sessions_authority.md)
 > §6, step 2). This section stands as the rationale and the pre-change history.
 
 Today **every agent has exactly one memory bucket, keyed by agent name, written by every user
@@ -360,10 +360,10 @@ layer, not by reading the answers.
    > That covers "these two instances really are one brain" deliberately and reversibly, without an
    > aggregate-derivation pipeline. It does **not** answer the cross-instance *learning* case above
    > (it merges, it does not generalise), so the two are complementary rather than alternatives.
-   > [`multiplayer_prior_art_qm_2026-08.md` §QM-7](../../ai-company-brain/specs/multiplayer_prior_art_qm_2026-08.md).
+   > [`multiplayer_prior_art_qm_2026-08.md` §QM-7](../../project-docs/specs/multiplayer_prior_art_qm_2026-08.md).
 2. **Team membership source.** ~~`team_ref` needs a real team object; the org research doc's
    `module` is the natural home, but it isn't built yet.~~ **Answered** —
-   [`groups_sessions_authority.md`](../../ai-company-brain/specs/groups_sessions_authority.md) §1:
+   [`groups_sessions_authority.md`](../../project-docs/specs/groups_sessions_authority.md) §1:
    `sharing.team` names an `org_group.slug` (migration 138), the single group primitive shared
    with access control Phase 2 and session sharing. `t:<team>` keys are `t:<org_group.slug>`.
 3. **Per-user agent config.** If everyone has their own email agent, does everyone get their

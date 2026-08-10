@@ -1,6 +1,6 @@
 """Org administration — groups (the teams that scope Centers, rooms, agents).
 
-Spec: ``ai-company-brain/specs/department_centers.md`` §3 Phase B, over the
+Spec: ``project-docs/specs/department_centers.md`` §3 Phase B, over the
 ``org_group`` / ``org_group_member`` tables from
 ``groups_sessions_authority.md`` §1.
 

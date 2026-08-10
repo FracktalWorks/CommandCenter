@@ -90,7 +90,7 @@ Copilot SDK sandboxes.
 
 ## Global Constraints (Non-Negotiable)
 
-1. No in-app agent/skill *code* editing -- all code authoring is VS Code + Git. The Workflows app (`/workflows`) is the sanctioned exception-by-design: workflows are DB-persisted configuration orchestrating code-authored agents, compiled to MAF Workflows (ADR-028; spec ai-company-brain/specs/workflows_app.md) -- not generated agent code, not a second runtime
+1. No in-app agent/skill *code* editing -- all code authoring is VS Code + Git. The Workflows app (`/workflows`) is the sanctioned exception-by-design: workflows are DB-persisted configuration orchestrating code-authored agents, compiled to MAF Workflows (ADR-028; spec project-docs/specs/workflows_app.md) -- not generated agent code, not a second runtime
 2. No credentials in agent or skill repos -- Integration Registry holds all secrets
 3. Self-mutation max_mutation_attempts = 1 per failure event
    - ⚠️ **DEV-ONLY / must be replaced before production:** native MAF agents (local_path, no own remote) currently land approved self-mutations by opening a PR against THIS Command Center monorepo. This is fine only while all agents are first-party and Command Center is WIP. It MUST be swapped for a tenant-isolated mechanism before any multi-tenant/customer deployment — third parties must never push to the shared monorepo. See `docs/DESIGN_LIMITATION_native_maf_mutation.md`. **This is now ticketed as `saas_multitenancy.md` MT-0b (WS-29) and is a HARD BLOCKER before customer #2** — the cheapest sufficient fix is a config gate defaulting to disabled, not a redesign.
@@ -100,10 +100,10 @@ Copilot SDK sandboxes.
 7. No Theia / browser IDE
 8. Source systems are authoritative -- CommandCenter is a read-mostly mirror
 9. New event-driven / specialist-agent execution features default to MAF paths; the Copilot-SDK runtime is reserved for interactive chat + mutation (both gateway-routed), not new autonomous execution entrypoints
-10. **All gateway endpoints require auth, by construction rather than by opting in.** `require_authenticated` is attached app-wide at the `FastAPI(dependencies=[…])` level, so a route added tomorrow is covered without anyone remembering; `PUBLIC_ROUTES` is the exemption list and every entry authenticates itself another way. **Before building or modifying ANY app, read `ai-company-brain/specs/user_management_contract.md`** — the ten binding rules for identity, membership and authorization, each one learned by breaking it. In particular: never navigate the browser directly at the gateway (it carries no credentials), never add a route to `PUBLIC_ROUTES` to make it reachable, and never take the acting identity from a query parameter or request body — **nor the acting TENANT, which is R11, added 2026-08-08 with D15; the tenant comes from the authenticated session or a tenant-scoped API key and from nowhere else.** The contract carries **eleven** rules, not ten.
+10. **All gateway endpoints require auth, by construction rather than by opting in.** `require_authenticated` is attached app-wide at the `FastAPI(dependencies=[…])` level, so a route added tomorrow is covered without anyone remembering; `PUBLIC_ROUTES` is the exemption list and every entry authenticates itself another way. **Before building or modifying ANY app, read `project-docs/specs/user_management_contract.md`** — the ten binding rules for identity, membership and authorization, each one learned by breaking it. In particular: never navigate the browser directly at the gateway (it carries no credentials), never add a route to `PUBLIC_ROUTES` to make it reachable, and never take the acting identity from a query parameter or request body — **nor the acting TENANT, which is R11, added 2026-08-08 with D15; the tenant comes from the authenticated session or a tenant-scoped API key and from nowhere else.** The contract carries **eleven** rules, not ten.
 11. **Multi-tenancy is `organization_id` + Postgres RLS, and it is NOT built yet.**
     The tenant boundary was re-taken on 2026-08-08 (**D15**, board **WS-29**, spec
-    `ai-company-brain/specs/saas_multitenancy.md`): a tenant is a **row** isolated by
+    `project-docs/specs/saas_multitenancy.md`): a tenant is a **row** isolated by
     `FORCE ROW LEVEL SECURITY` bound at the `get_db()` seam; a deployment is a
     *placement*, not a boundary. This **supersedes `tenancy_and_visibility.md` §1 and §6**
     (one-deployment-per-tenant) — **§2–§5 of that document, the private → Center → org
@@ -114,7 +114,7 @@ Copilot SDK sandboxes.
     `organization_id`; visibility inside a tenant stays `email | group:<slug> | org`), and
     **never give an agent a raw-SQL tool or a database connection** — §0.9.3 makes that a
     condition on the whole tenancy decision, not a nicety. Board rule **R5**
-    (`ai-company-brain/work_plan.md` §1, owner-directed 2026-08-09) binds every PR
+    (`project-docs/work_plan.md` §1, owner-directed 2026-08-09) binds every PR
     tenant-ready by construction while WS-29 is in flight: new persisted tables satisfy
     the tenant-coverage gate (or are exempted with a reason), no new database-connection
     or Redis sites outside the seam/wrapper, and session acquisition stays on the seam
@@ -175,16 +175,16 @@ best practice:
   eval harnesses, observability, sandboxing). Consult it when designing or
   reviewing harness features; cite the practice you're applying or
   deliberately rejecting in the spec/PR.
-- Our gap analysis + work queue: ai-company-brain/specs/harness_hardening_2026-07.md
+- Our gap analysis + work queue: project-docs/specs/harness_hardening_2026-07.md
   (HH-1..8). Check it before starting harness work — the gap may already be
   queued, in-progress, or explicitly deferred with rationale.
-- Competitor reference implementations: ai-company-brain/specs/competitive_hardening_2026-07.md
+- Competitor reference implementations: project-docs/specs/competitive_hardening_2026-07.md
   (CH-1..9, sourced from COMPETITIVE_COMPARISON.md) — proven patterns from Hermes
   Agent (fail-closed approval, container sandbox flags, self-improving Curator,
   typed sub-agent messaging) and OpenClaw (durable job queue, hub-and-spoke
   channels; and its CVEs as the cautionary case). Consult it for "what good looks
   like" when hardening security, plumbing, or multi-agent coordination.
-- Multiplayer prior art: ai-company-brain/specs/multiplayer_prior_art_qm_2026-08.md
+- Multiplayer prior art: project-docs/specs/multiplayer_prior_art_qm_2026-08.md
   (QM-0..7, sourced from github.com/yc-software/qm) — a shipped multiplayer agent
   harness that independently reproduced our least-cleared-viewer rule. Consult it
   before building room concurrency (it folds a second turn into the live run as a
@@ -236,5 +236,5 @@ Check with `uv tree` / `uv pip list`. Key runtime pins: `agent-framework-*`
 | Skills | skills/AGENTS.md | Skill definitions and SKILL.md patterns |
 | Infrastructure | infra/AGENTS.md | Docker Compose, Postgres, LLM tier config, Redis |
 | Deployment | deploy/AGENTS.md | Hostinger VPS deployment |
-| Planning docs | ai-company-brain/AGENTS.md | Product requirements, project plan, architecture |
+| Planning docs | project-docs/AGENTS.md | Product requirements, project plan, architecture |
 | Workbench UI | workbench/AGENTS.md | Control Plane (Next.js) and local dev tools |

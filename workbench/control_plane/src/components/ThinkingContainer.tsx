@@ -16,7 +16,7 @@
  *   • Auto-expand during active streaming, auto-collapse on completion
  *
  * Patterns sourced from VS Code Copilot Chat UI study —
- * see ai-company-brain/spec_chat_ux.md.
+ * see project-docs/spec_chat_ux.md.
  */
 
 import AppIcon, { themedIcon } from "@/components/Icon";

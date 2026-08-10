@@ -95,7 +95,7 @@
 --       migration 148 had to defuse. The accepted race is recorded in
 --       `crm_app.md` §9 WS-26d-autolead. Do not "fix" it with that index.
 --
--- Spec: ai-company-brain/specs/crm_app.md §9 WS-26d-autolead (the cursor
+-- Spec: project-docs/specs/crm_app.md §9 WS-26d-autolead (the cursor
 --       paragraph) · D-CRM-9.
 -- Depends on: 17_email_accounts.sql (email_accounts, the FK target) and
 --       144_crm.sql (the CRM spine this cursor guards writes into).

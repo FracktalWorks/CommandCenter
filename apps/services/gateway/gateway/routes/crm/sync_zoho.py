@@ -1,6 +1,6 @@
 """CRM · sync_zoho — the two-way Zoho sync engine, and its scheduled loop.
 
-Spec: ``ai-company-brain/specs/crm_app.md`` §7.1 (all seven sync bullets) ·
+Spec: ``project-docs/specs/crm_app.md`` §7.1 (all seven sync bullets) ·
 D-CRM-6 · D-CRM-7 · D-CRM-8 · ticket WS-26b done-when 3, 4 and 5.
 
     POST /crm/sync/zoho    run ONE cycle now (admin:access:manage), with or

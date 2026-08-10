@@ -1,6 +1,6 @@
 -- 48_task_manager_gtd.sql — canonical GTD store for the Task Manager app.
 --
--- What: the seven task-manager tables from ai-company-brain/specs/task_manager_app.md §4 —
+-- What: the seven task-manager tables from project-docs/specs/task_manager_app.md §4 —
 --       task_accounts (connected PM-tool workspaces, multi-account/multi-provider, like
 --       email_accounts), gtd_contexts, gtd_horizons, gtd_projects, gtd_items, gtd_waiting,
 --       gtd_reviews.

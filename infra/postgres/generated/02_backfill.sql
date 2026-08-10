@@ -2,7 +2,7 @@
 -- MT-1b · phase 2/4 backfill — GENERATED, DO NOT EDIT BY HAND
 -- ============================================================================
 -- Regenerate with: uv run python scripts/gen_tenant_migration.py
--- Spec: ai-company-brain/specs/saas_multitenancy.md §1.3 · MT-1b · WS-29 · D15
+-- Spec: project-docs/specs/saas_multitenancy.md §1.3 · MT-1b · WS-29 · D15
 --
 -- Batched UPDATE. Re-runnable and interruptible — each statement is idempotent, so a run that aborts can simply be run again. This is the slow phase; expect it to be the long pole on any table with real volume.
 --

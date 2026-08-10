@@ -1,6 +1,6 @@
 """Projects · tree — the project hierarchy and the grants that scope it.
 
-Spec: ``ai-company-brain/specs/project_management_app.md`` §4 (``tree.py`` row).
+Spec: ``project-docs/specs/project_management_app.md`` §4 (``tree.py`` row).
 
     GET    /projects/tree                        → the granted forest, nested
     GET    /projects/nodes                       → the same, flat

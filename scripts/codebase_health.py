@@ -2,7 +2,7 @@
 """Codebase-health measurement — one command, complexity + size + trend report.
 
 The shared measurement engine behind the dev-velocity tooling
-(ai-company-brain/specs/dev_velocity_tooling_2026-07.md). It reports the
+(project-docs/specs/dev_velocity_tooling_2026-07.md). It reports the
 structural-health signals that predict *agent drag* — the cost a coding agent
 pays to edit a file: cyclomatic complexity (per function), file size (LOC), and
 the maintainability index. It is deliberately dependency-light (radon only) and

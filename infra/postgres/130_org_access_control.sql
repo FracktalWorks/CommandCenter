@@ -1,7 +1,7 @@
 -- ============================================================================
 -- 130_org_access_control.sql — Organization membership, roles, permissions
 -- ============================================================================
--- Phase 1 of ai-company-brain/specs/org_access_control.md. Turns the
+-- Phase 1 of project-docs/specs/org_access_control.md. Turns the
 -- single-tenant deployment into a real multi-user organization:
 --
 --   organization              the tenant boundary (one row today; the column is

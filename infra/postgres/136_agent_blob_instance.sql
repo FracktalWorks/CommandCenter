@@ -1,8 +1,8 @@
 -- ============================================================================
 -- 138_agent_blob_instance.sql — partition the agent file store by instance
 -- ============================================================================
--- Spec: ai-company-brain/specs/memory_architecture.md §5.3, §6.1
---       ai-company-brain/specs/agent_architecture.md §2
+-- Spec: project-docs/specs/memory_architecture.md §5.3, §6.1
+--       project-docs/specs/agent_architecture.md §2
 --       docs/multiplayer/agent-kinds.md §4
 --
 -- WHY

@@ -1,6 +1,6 @@
 """WS-28a — gtd_people's key shape (People Center P-1/P-2).
 
-Spec: `ai-company-brain/specs/people_center_app.md` §2, §5, §7.
+Spec: `project-docs/specs/people_center_app.md` §2, §5, §7.
 
 Migration 49 made `name` UNIQUE and left `email` unconstrained. That is
 backwards for a directory that has to join on email: two real people cannot

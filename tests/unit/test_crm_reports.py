@@ -1,6 +1,6 @@
 """CRM · forecast & funnel reports — WS-26g.
 
-Spec: ``ai-company-brain/specs/crm_app.md`` §5.1 system 2 · ticket WS-26g.
+Spec: ``project-docs/specs/crm_app.md`` §5.1 system 2 · ticket WS-26g.
 
 Hermetic: no Postgres, no network. The route functions are called directly with
 ``core._get_db`` monkeypatched onto each SUT submodule (the ``_crm_fakes``

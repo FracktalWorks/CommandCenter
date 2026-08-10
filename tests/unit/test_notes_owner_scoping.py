@@ -1,6 +1,6 @@
 """Notes is private to its owner — reads, deletes, and acting-as.
 
-Spec: ``ai-company-brain/specs/note_taker_app.md``. Four live defects, all
+Spec: ``project-docs/specs/note_taker_app.md``. Four live defects, all
 reachable by any member holding ``feature:notes``:
 
 1. ``GET /notes/meetings`` had no owner filter, and its ``query`` parameter

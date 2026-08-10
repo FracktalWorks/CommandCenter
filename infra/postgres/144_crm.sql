@@ -2,7 +2,7 @@
 -- 144_crm.sql — the native CRM spine: organizations, contacts, leads, deals,
 --               statuses-as-data, one activity timeline, a status-change log.
 --
--- What: spec ai-company-brain/specs/crm_app.md §3.1–§3.10 (WS-26a). Four
+-- What: spec project-docs/specs/crm_app.md §3.1–§3.10 (WS-26a). Four
 --   entities on Frappe's lead → convert → deal+contact+organization shape,
 --   trycompai's single activity spine + `source` provenance + the denormalized
 --   `last_activity_at` column every write bumps.

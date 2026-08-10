@@ -1,6 +1,6 @@
 """Projects · assignment IS dispatch — WS-27f / `workflows_app.md` §13 U7.
 
-Spec: `ai-company-brain/specs/project_management_app.md` §6.4.
+Spec: `project-docs/specs/project_management_app.md` §6.4.
 
 Assigning a task to `agent:<name>` starts an agent run. Not a separate
 "delegate to AI" button, not a parallel feature with its own field — the same

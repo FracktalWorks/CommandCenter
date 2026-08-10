@@ -1,6 +1,6 @@
 """Room membership — the one predicate that replaces ``WHERE user_id = :uid``.
 
-Spec: ``ai-company-brain/specs/groups_sessions_authority.md`` §2 (participants
+Spec: ``project-docs/specs/groups_sessions_authority.md`` §2 (participants
 and visibility), ``docs/multiplayer/README.md`` §4.2 ("the thread is the room")
 and §4.5 (``resolve_room_access`` replaces ``_thread_owner_ok`` everywhere).
 

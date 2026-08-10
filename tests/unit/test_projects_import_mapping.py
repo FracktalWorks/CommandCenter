@@ -1,6 +1,6 @@
 """Projects · the ClickUp importer and its Space→Center mapping plan.
 
-Spec: ``ai-company-brain/specs/project_management_app.md`` §7.1 · **D-PM-10** ·
+Spec: ``project-docs/specs/project_management_app.md`` §7.1 · **D-PM-10** ·
 ticket WS-27b done-whens 1-8.
 
 Hermetic: no Postgres, no ClickUp, no LLM. The provider is a fake returning the

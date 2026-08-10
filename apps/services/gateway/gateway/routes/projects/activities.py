@@ -1,6 +1,6 @@
 """Projects · activities — the task timeline, comments, and revert.
 
-Spec: ``ai-company-brain/specs/project_management_app.md`` §4 (``activities.py``).
+Spec: ``project-docs/specs/project_management_app.md`` §4 (``activities.py``).
 
     GET    /projects/tasks/{id}/timeline
     POST   /projects/tasks/{id}/comments

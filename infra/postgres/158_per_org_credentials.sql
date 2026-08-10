@@ -1,7 +1,7 @@
 -- ============================================================================
 -- 158_per_org_credentials.sql — MT-0d: credentials stop being deployment-wide
 -- ============================================================================
--- Spec: ai-company-brain/specs/saas_multitenancy.md §6.3 / MT-0d · board WS-29.
+-- Spec: project-docs/specs/saas_multitenancy.md §6.3 / MT-0d · board WS-29.
 --
 -- `provider_keys` is `provider TEXT PRIMARY KEY` (08_provider_keys.sql:6-7) —
 -- one key per provider for the whole box. `mcp_servers`, `plugins` and

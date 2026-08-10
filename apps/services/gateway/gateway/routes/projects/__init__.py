@@ -1,6 +1,6 @@
 """Projects route package — the gateway `/projects` API (native project management).
 
-Spec: ``ai-company-brain/specs/project_management_app.md`` (WS-27a builds §3 + §4).
+Spec: ``project-docs/specs/project_management_app.md`` (WS-27a builds §3 + §4).
 
 Same layout as ``routes/crm``, ``routes/tasks`` and ``routes/notes``: ``core`` is
 the leaf and the feature modules register their routes on the shared ``router``

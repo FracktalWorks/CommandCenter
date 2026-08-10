@@ -3,7 +3,7 @@
 /**
  * Projects — departments, projects, subprojects, tasks and subtasks.
  *
- * Spec: `ai-company-brain/specs/project_management_app.md` §5 · ticket WS-27d.
+ * Spec: `project-docs/specs/project_management_app.md` §5 · ticket WS-27d.
  *
  * ONE app, projected into every Center. `?center=<slug>` pre-filters the tree
  * to that Center's granted departments — **presentation only**: the server's

@@ -1,6 +1,6 @@
 """WS-27o — recurring tasks.
 
-Spec: `ai-company-brain/specs/project_management_app.md` §11.2 item 7, §11.13.
+Spec: `project-docs/specs/project_management_app.md` §11.2 item 7, §11.13.
 
 Recurrence looks trivial and is not. Each of these is a different way to be
 quietly wrong for a year:

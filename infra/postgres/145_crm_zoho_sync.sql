@@ -2,7 +2,7 @@
 -- 145_crm_zoho_sync.sql — the schema the two-way Zoho sync needs: per-row
 --                         dirty tracking, delete tombstones, pull cursors.
 --
--- What: spec ai-company-brain/specs/crm_app.md §7.1 (WS-26b done-when 3).
+-- What: spec project-docs/specs/crm_app.md §7.1 (WS-26b done-when 3).
 --   Three additions, no changes to anything 144 created:
 --     1. `zoho_dirty` + `zoho_synced_at` on the FOUR record tables. A native
 --        write sets `zoho_dirty`; the push phase clears it and stamps

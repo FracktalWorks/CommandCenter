@@ -1,6 +1,6 @@
 """Projects · views — saved views and per-view manual order.
 
-Spec: ``ai-company-brain/specs/project_management_app.md`` §4 (``views.py`` row).
+Spec: ``project-docs/specs/project_management_app.md`` §4 (``views.py`` row).
 
     GET    /projects/nodes/{project_id}/views
     POST   /projects/nodes/{project_id}/views

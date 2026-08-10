@@ -1,6 +1,6 @@
 """Projects · the personal lens — one task store, seen as my own work.
 
-Spec: ``ai-company-brain/specs/project_management_app.md`` §3.11-§3.12, §6.1 ·
+Spec: ``project-docs/specs/project_management_app.md`` §3.11-§3.12, §6.1 ·
 **D-PM-6 (revised 2026-08-06)** · ticket WS-27e.
 
     GET   /projects/my/inbox                     → my work, with my overlay

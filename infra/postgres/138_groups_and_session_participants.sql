@@ -1,7 +1,7 @@
 -- ============================================================================
 -- 138_groups_and_session_participants.sql — the two shared primitives
 -- ============================================================================
--- Spec: ai-company-brain/specs/groups_sessions_authority.md §1–§2
+-- Spec: project-docs/specs/groups_sessions_authority.md §1–§2
 --       (answers org_access_control.md §10.2 collisions 1 and 2)
 --
 -- Two workstreams — access control Phase 2 ("modules/teams") and multiplayer

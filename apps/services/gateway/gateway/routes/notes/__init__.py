@@ -2,7 +2,7 @@
 
 Same layout as ``routes/tasks``: ``core`` is the leaf; the feature modules
 register their routes on the shared ``router`` as an import side effect.
-Spec: ai-company-brain/specs/note_taker_app.md §3.7.
+Spec: project-docs/specs/note_taker_app.md §3.7.
 """
 
 from gateway.routes.notes import actions as _actions  # noqa: F401

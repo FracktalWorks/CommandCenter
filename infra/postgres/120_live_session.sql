@@ -13,7 +13,7 @@
 --   Phase B (the orchestrator). Off by default — the copilot never runs unless
 --   explicitly enabled for a session.
 -- Depends on: 95_note_taker.sql (meeting). ADDITIVE + idempotent.
--- Spec: ai-company-brain/specs/live_meeting_copilot.md §7, §8, §10.
+-- Spec: project-docs/specs/live_meeting_copilot.md §7, §8, §10.
 
 CREATE TABLE IF NOT EXISTS live_session (
     id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),

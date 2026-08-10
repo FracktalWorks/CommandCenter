@@ -1,6 +1,6 @@
 """Projects · tags — the registry the research notes said to build (WS-27m).
 
-Spec: ``ai-company-brain/specs/project_management_app.md`` §11.2 item 5, §11.10.
+Spec: ``project-docs/specs/project_management_app.md`` §11.2 item 5, §11.10.
 
     GET    /projects/nodes/{project_id}/tags        → with a usage count each
     POST   /projects/nodes/{project_id}/tags

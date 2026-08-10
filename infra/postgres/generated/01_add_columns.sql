@@ -2,7 +2,7 @@
 -- MT-1b · phase 1/4 add_columns — GENERATED, DO NOT EDIT BY HAND
 -- ============================================================================
 -- Regenerate with: uv run python scripts/gen_tenant_migration.py
--- Spec: ai-company-brain/specs/saas_multitenancy.md §1.3 · MT-1b · WS-29 · D15
+-- Spec: project-docs/specs/saas_multitenancy.md §1.3 · MT-1b · WS-29 · D15
 --
 -- Nullable ADD COLUMN. No table scan, no lock of consequence. Safe to apply on a live system.
 --

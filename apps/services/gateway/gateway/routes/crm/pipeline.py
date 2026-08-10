@@ -1,6 +1,6 @@
 """CRM · pipeline — status transitions, the kanban board, and lead conversion.
 
-Spec: ``ai-company-brain/specs/crm_app.md`` §3.6, §3.7, §3.9, §4.
+Spec: ``project-docs/specs/crm_app.md`` §3.6, §3.7, §3.9, §4.
 
     GET  /crm/pipeline               deals grouped by status: per-lane rows,
                                      count and ₹ total

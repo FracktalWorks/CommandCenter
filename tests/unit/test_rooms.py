@@ -1,6 +1,6 @@
 """Room membership: what each person may do in a shared conversation.
 
-Spec: ``ai-company-brain/specs/groups_sessions_authority.md`` §2,
+Spec: ``project-docs/specs/groups_sessions_authority.md`` §2,
 ``docs/multiplayer/README.md`` §4.2, §5.4.
 
 The properties, asserted against a live database:

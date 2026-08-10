@@ -29,7 +29,7 @@ Note the streaming model is chosen independently of the ``tier-stt`` batch model
 (see ``routes/notes/live.py::_live_model`` / ``ASSEMBLYAI_LIVE_MODEL``) — picking
 universal-2 in Settings -> Models does not make streaming use universal-2.
 
-Spec: ai-company-brain/specs/note_taker_app.md §3.4.
+Spec: project-docs/specs/note_taker_app.md §3.4.
 """
 
 from __future__ import annotations

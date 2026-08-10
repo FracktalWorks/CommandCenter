@@ -6,7 +6,7 @@ One-off operational scripts (migrations, data backfills, secret rotations). Each
 
 | Script | Answers | Safe for an agent to run? |
 |---|---|---|
-| `onboarding_preflight.py` | "Is it safe to invite a colleague yet?" — seven readiness checks, PASS/FAIL/SKIP with exact remediation, non-zero exit on any FAIL. Owning spec: `ai-company-brain/specs/colleague_onboarding.md` §1 (board row WS-24). | **Only with `--mode local`.** Its database and systemd checks read the live box, so an agent must never point it at production; `--mode local` refuses those checks and says so rather than guessing. |
+| `onboarding_preflight.py` | "Is it safe to invite a colleague yet?" — seven readiness checks, PASS/FAIL/SKIP with exact remediation, non-zero exit on any FAIL. Owning spec: `project-docs/specs/colleague_onboarding.md` §1 (board row WS-24). | **Only with `--mode local`.** Its database and systemd checks read the live box, so an agent must never point it at production; `--mode local` refuses those checks and says so rather than guessing. |
 | `feature_check.py` | "Is chat + each AI app actually working right now?" — live smoke against a running gateway. | No — it drives real endpoints. |
 | `check_infra.py` | Container / port / dependency sanity for the local stack. | Yes, locally. |
 

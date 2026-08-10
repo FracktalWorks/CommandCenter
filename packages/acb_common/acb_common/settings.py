@@ -408,7 +408,7 @@ class Settings(BaseSettings):
         Callers that hit gateway *business* APIs (``/tasks``, ``/email``,
         ``/whatsapp``, workspace upload) still need
         ``gateway_internal_token`` — until they act on behalf of a member
-        instead. See ai-company-brain/specs/org_access_control.md §8b.
+        instead. See project-docs/specs/org_access_control.md §8b.
         """
         return (self.litellm_master_key or "").strip() or "sk-local"
 

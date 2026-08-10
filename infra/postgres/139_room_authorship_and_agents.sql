@@ -1,7 +1,7 @@
 -- ============================================================================
 -- 139_room_authorship_and_agents.sql — a transcript that knows who said what
 -- ============================================================================
--- Spec: ai-company-brain/specs/groups_sessions_authority.md §4 (the transcript
+-- Spec: project-docs/specs/groups_sessions_authority.md §4 (the transcript
 --       boundary) + docs/multiplayer/README.md §3.4, §4.3.
 --
 -- Migration 134 said WHO IS IN a session. This one makes the session's contents

@@ -1,6 +1,6 @@
 """MT-1a — tenant placement resolves, or refuses. It never guesses.
 
-Spec: ``ai-company-brain/specs/saas_multitenancy.md`` §1.5 / §1.6 / MT-1a ·
+Spec: ``project-docs/specs/saas_multitenancy.md`` §1.5 / §1.6 / MT-1a ·
 board WS-29 · D15.
 
 Placement is the indirection that makes the tenancy decision **reversible**:

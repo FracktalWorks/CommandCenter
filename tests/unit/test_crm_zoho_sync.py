@@ -1,6 +1,6 @@
 """CRM · the two-way Zoho sync engine — the seven rules §7.1 makes binding.
 
-Spec: ``ai-company-brain/specs/crm_app.md`` §7.1 · D-CRM-6/7/8 · ticket WS-26b
+Spec: ``project-docs/specs/crm_app.md`` §7.1 · D-CRM-6/7/8 · ticket WS-26b
 done-when 3, 4 and 5.
 
 Hermetic: no Postgres, no network, no Zoho, no credential. The engine's two

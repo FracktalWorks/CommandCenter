@@ -3,7 +3,7 @@
 # rolling tracking issue with the complexity + size + maintainability report.
 # It FLAGS and PROPOSES — it never edits code. Acting on the report is done
 # by a human or a coding agent via the `codebase-health-audit` skill.
-# Spec: ai-company-brain/specs/dev_velocity_tooling_2026-07.md
+# Spec: project-docs/specs/dev_velocity_tooling_2026-07.md
 name: codebase-health
 
 on:
@@ -67,7 +67,7 @@ jobs:
             cat health.txt
             echo '```'
             echo ""
-            echo "Ratchet plan: [\`dev_velocity_tooling_2026-07.md\`](../blob/main/ai-company-brain/specs/dev_velocity_tooling_2026-07.md)"
+            echo "Ratchet plan: [\`dev_velocity_tooling_2026-07.md\`](../blob/main/project-docs/specs/dev_velocity_tooling_2026-07.md)"
           } > "$body_file"
 
           # Find an existing open tracking issue by its label; update it, else create.

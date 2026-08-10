@@ -4,7 +4,7 @@
  * AccessProvider — the signed-in member's effective access, fetched once and
  * shared by the whole shell.
  *
- * Spec: ai-company-brain/specs/org_access_control.md §5 (seams 4 and 5).
+ * Spec: project-docs/specs/org_access_control.md §5 (seams 4 and 5).
  *
  * Two consumers: the Sidebar filters nav panes with it, and AccessGate blocks
  * direct navigation to a route the member cannot reach. Neither is a security

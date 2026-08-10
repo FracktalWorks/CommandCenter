@@ -1,7 +1,7 @@
 """Rooms — the HTTP surface for who is in a conversation and what it can reach.
 
 Spec: ``docs/multiplayer/README.md`` §4.5 (API surface), §7 (UX),
-``ai-company-brain/specs/groups_sessions_authority.md`` §2-§4.
+``project-docs/specs/groups_sessions_authority.md`` §2-§4.
 
 Mounted under ``/chat`` alongside the history CRUD, because a room *is* a chat
 session — there is no second object. Everything here reads or writes the two

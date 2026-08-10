@@ -1,6 +1,6 @@
 -- 156_projects_tags.sql — WS-27m
 --
--- Spec: ai-company-brain/specs/project_management_app.md §11.2 item 5, §11.10.
+-- Spec: project-docs/specs/project_management_app.md §11.2 item 5, §11.10.
 --
 -- The fifth row of the parity backlog, and the one the research notes left
 -- open on purpose. `paca_pm_research_2026-08.md` row 13 REFUSED Paca's model —

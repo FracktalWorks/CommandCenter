@@ -1,6 +1,6 @@
 """CRM · import_zoho — the Zoho backfill, and the Zoho→native mapping itself.
 
-Spec: ``ai-company-brain/specs/crm_app.md`` §7.1 (the mapping table) · §4
+Spec: ``project-docs/specs/crm_app.md`` §7.1 (the mapping table) · §4
 (``import_zoho.py`` row) · ticket WS-26b done-when 2.
 
     POST /crm/import/zoho {dry_run: bool}   → per-module {fetched, created,

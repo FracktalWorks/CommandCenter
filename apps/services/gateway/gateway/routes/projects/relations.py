@@ -1,6 +1,6 @@
 """Projects · dependencies and subtasks, made reachable (WS-27p).
 
-Spec: ``ai-company-brain/specs/project_management_app.md`` §11.2 item 8, §11.14.
+Spec: ``project-docs/specs/project_management_app.md`` §11.2 item 8, §11.14.
 
     GET /projects/tasks/{task_id}/relations   → subtasks + links, both directions
 

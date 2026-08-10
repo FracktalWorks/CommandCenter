@@ -1,6 +1,6 @@
 """WS-27m — the tag registry.
 
-Spec: `ai-company-brain/specs/project_management_app.md` §11.2 item 5, §11.10.
+Spec: `project-docs/specs/project_management_app.md` §11.2 item 5, §11.10.
 
 `paca_pm_research_2026-08.md` row 13 REFUSED Paca's bare array — "no registry,
 no colors, no rename/merge" — and §5 shipped `pm_tasks.tags TEXT[]` in its

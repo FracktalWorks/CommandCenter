@@ -1,6 +1,6 @@
 -- 142_agent_skill_settings.sql — per-agent skill-family toggles (WS-23 S2)
 --
--- Spec: ai-company-brain/specs/skills_registry.md §3. One row = one explicit
+-- Spec: project-docs/specs/skills_registry.md §3. One row = one explicit
 -- admin decision about one skill family for one agent. The three rules the
 -- enforcement seam (orchestrator/_tool_injection.py::_resolve_injected_scope)
 -- lives by:

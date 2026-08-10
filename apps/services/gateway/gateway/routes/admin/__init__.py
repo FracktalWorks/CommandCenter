@@ -1,7 +1,7 @@
 """Org administration routes (prefix ``/admin``) plus ``/auth/me``.
 
 Members, groups, roles, and per-user access overrides for the multi-user
-organization model. Spec: ``ai-company-brain/specs/org_access_control.md``
+organization model. Spec: ``project-docs/specs/org_access_control.md``
 (+ ``department_centers.md`` §3 Phase B for groups).
 
 Layout mirrors ``routes/apps/``: ``_common`` is the leaf (DB, org lookup,

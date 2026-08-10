@@ -1,6 +1,6 @@
 """WS-27q — the calendar window.
 
-Spec: ``ai-company-brain/specs/project_management_app.md`` §11.2 item 9, §11.16.
+Spec: ``project-docs/specs/project_management_app.md`` §11.2 item 9, §11.16.
 
 The third view, and the first one that cannot be a page. The claims worth
 pinning are the ones where the wrong implementation looks right:

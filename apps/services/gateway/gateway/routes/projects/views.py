@@ -8,6 +8,8 @@ Spec: ``project-docs/specs/project_management_app.md`` §4 (``views.py`` row).
     DELETE /projects/views/{view_id}
     GET    /projects/views/{view_id}/positions
     PUT    /projects/views/{view_id}/positions      → bulk upsert
+    GET    /projects/views/{view_id}/state          → the CALLER's overlay
+    PUT    /projects/views/{view_id}/state
 
 **Ordering is per view** (D-PM-5). There is no rank column on ``pm_tasks``,
 because the People Center's master board and a Center slice must be able to
@@ -18,6 +20,7 @@ between two neighbours is ``(prev + next) / 2``.
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from acb_auth import UserContext, get_current_user
@@ -27,6 +30,7 @@ from gateway.routes.projects.core import (
     _tenant_session,
     actor,
     clean_payload,
+    from_jsonb,
     insert_row,
     load_visible_project,
     require_row,
@@ -35,7 +39,10 @@ from gateway.routes.projects.core import (
     row_to_dict,
     update_row,
 )
-from gateway.routes.projects.filters import normalise_view_config
+from gateway.routes.projects.filters import (
+    normalise_view_config,
+    normalise_view_user_state,
+)
 from pydantic import BaseModel
 from sqlalchemy import text
 
@@ -65,10 +72,28 @@ class PositionsIn(BaseModel):
     positions: list[PositionIn]
 
 
+class UserStateIn(BaseModel):
+    config: dict | None = None
+
+
 @router.get("/nodes/{project_id}/views")
 async def list_views(
     project_id: str, user: UserContext = Depends(get_current_user),
 ) -> dict:
+    """Every view on this project, each carrying the CALLER's own overlay.
+
+    ``user_state`` is attached here rather than left to a second round trip
+    because the board already makes this call and needs both halves before it
+    can paint: fetching the overlay separately would mean one frame drawn with
+    the shared collapse state and a second with the member's.
+
+    ⚠️ **The overlay is filtered to the caller, in the SQL** — never fetched
+    for the view and picked apart afterwards. `member` is
+    :func:`core.actor`'s answer for the authenticated session (R11: never
+    anything the request sent), so a member cannot read what a colleague has
+    collapsed, and the endpoint cannot start leaking it by an oversight in a
+    later projection step.
+    """
     async with _tenant_session() as db:
         vis = await resolve_visibility(db, user)
         await load_visible_project(db, vis, project_id)
@@ -79,9 +104,24 @@ async def list_views(
             ),
             {"pid": project_id},
         )).fetchall()
-        return {
-            "rows": [row_to_dict(r, ViewModel) for r in rows], "total": len(rows),
+        states = {
+            str(r.view_id): from_jsonb(r.config) or {}
+            for r in (await db.execute(
+                text(
+                    "SELECT view_id, config FROM pm_view_user_state s "
+                    "WHERE lower(s.member) = :member AND s.view_id IN ("
+                    "  SELECT id FROM pm_views "
+                    "  WHERE project_id = CAST(:pid AS uuid))"
+                ),
+                {"pid": project_id, "member": actor(user).lower()},
+            )).fetchall()
         }
+        out = []
+        for row in rows:
+            item = row_to_dict(row, ViewModel)
+            item["user_state"] = states.get(str(row.id), {})
+            out.append(item)
+        return {"rows": out, "total": len(out)}
 
 
 @router.post("/nodes/{project_id}/views", status_code=201)
@@ -162,11 +202,102 @@ async def delete_view(
             ),
             {"vid": view_id},
         )).scalar() or 0
+        # WS-27ae — `pm_view_user_state` CASCADEs too, and it is other people's
+        # work: deleting a shared view discards every member's arrangement of
+        # it, so the count is reported for the same reason `positions` is.
+        states = (await db.execute(
+            text(
+                "SELECT count(*) FROM pm_view_user_state "
+                "WHERE view_id = CAST(:vid AS uuid)"
+            ),
+            {"vid": view_id},
+        )).scalar() or 0
         await db.execute(
             text("DELETE FROM pm_views WHERE id = CAST(:vid AS uuid)"),
             {"vid": view_id},
         )
-        return {"deleted": view_id, "cascaded": {"positions": int(positions)}}
+        return {
+            "deleted": view_id,
+            "cascaded": {
+                "positions": int(positions), "user_states": int(states),
+            },
+        }
+
+
+# ── Per-user view state (WS-27ae / P-28) ────────────────────────────────────
+#
+# `pm_views` stays canonical: it is what the view IS, and everyone sees the same
+# one. `pm_view_user_state` is what one MEMBER has done to their own screen —
+# which lanes they collapsed, which axis they grouped by, which columns they
+# want. WS-27y stored `collapsed_lanes` in the SHARED config, so collapsing a
+# swimlane collapsed it for the whole company; this is that fix, server-side.
+#
+# ⚠️ Presentation only. `filters.VIEW_USER_STATE_KEYS` deliberately excludes
+# filters: two people must never be looking at a view that means two different
+# sets of tasks.
+
+@router.get("/views/{view_id}/state")
+async def get_view_state(
+    view_id: str, user: UserContext = Depends(get_current_user),
+) -> dict:
+    """The CALLER's overlay on this view. Never anybody else's.
+
+    There is deliberately no way to ask for another member's state, not even
+    for an admin: it is a window arrangement, not a record, and an endpoint
+    that could serve it would be the endpoint that leaks it.
+    """
+    async with _tenant_session() as db:
+        await _load_visible_view(db, user, view_id)
+        row = (await db.execute(
+            text(
+                "SELECT config FROM pm_view_user_state "
+                "WHERE view_id = CAST(:vid AS uuid) AND lower(member) = :member"
+            ),
+            {"vid": view_id, "member": actor(user).lower()},
+        )).fetchone()
+        return {
+            "view_id": view_id,
+            "member": actor(user).lower(),
+            # An absent row is an empty overlay, not a 404: "I have not
+            # arranged this view yet" is the normal state, and answering 404
+            # would make every client special-case its first read.
+            "config": (from_jsonb(getattr(row, "config", None)) or {}) if row else {},
+        }
+
+
+@router.put("/views/{view_id}/state")
+async def set_view_state(
+    view_id: str, payload: UserStateIn,
+    user: UserContext = Depends(get_current_user),
+) -> dict:
+    """Replace the caller's overlay on this view.
+
+    A PUT rather than a PATCH because the overlay is small and whole: the
+    client holds the complete arrangement it is rendering, and a merge protocol
+    would only add a way for two tabs to interleave into a state neither chose.
+
+    ⚠️ ``member`` comes from the authenticated session (R11) and there is no
+    parameter that could name somebody else — writing another member's screen
+    arrangement is not a feature this app has.
+    """
+    config = normalise_view_user_state(payload.config)
+    async with _tenant_session() as db:
+        await _load_visible_view(db, user, view_id)
+        await db.execute(
+            text(
+                "INSERT INTO pm_view_user_state (view_id, member, config) "
+                "VALUES (CAST(:vid AS uuid), :member, CAST(:config AS jsonb)) "
+                "ON CONFLICT (view_id, member) DO UPDATE "
+                "SET config = EXCLUDED.config, updated_at = now()"
+            ),
+            {
+                "vid": view_id, "member": actor(user).lower(),
+                "config": json.dumps(config),
+            },
+        )
+        return {
+            "view_id": view_id, "member": actor(user).lower(), "config": config,
+        }
 
 
 # ── Manual order ────────────────────────────────────────────────────────────

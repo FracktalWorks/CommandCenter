@@ -329,7 +329,14 @@ async def test_the_signin_path_is_the_only_caller_that_opts_in() -> None:
     hits: list[str] = []
     for path in sorted(REPO_ROOT.glob("**/*.py")):
         parts = set(path.parts)
-        if parts & {".venv", "node_modules", "__pycache__", "site-packages"}:
+        # `.claude` carries agent WORKTREES — full checkouts of this same repo
+        # under the repo root. Without it, this repo-wide glob finds
+        # `packages/acb_auth/acb_auth/deps.py` once per worktree in flight and
+        # fails with a list that looks like three new opt-in call sites. That
+        # is a false P1 report, which is worse than no test: it trains the next
+        # reader to dismiss this failure. Measured 2026-08-10 with two agent
+        # worktrees present.
+        if parts & {".venv", "node_modules", "__pycache__", "site-packages", ".claude"}:
             continue
         if path.name == Path(__file__).name:
             continue

@@ -320,6 +320,68 @@ def normalise_view_config(config: Any) -> dict[str, Any]:
     return out
 
 
+#: The keys ONE MEMBER's private overlay on a shared view may carry (WS-27ae /
+#: P-28). Presentation only — deliberately **no filters**: a per-person filter
+#: set would make one saved view mean two different task sets for two people,
+#: which is precisely what a *shared* view may not do. What a member is allowed
+#: to disagree about is how their own screen is arranged.
+VIEW_USER_STATE_KEYS: frozenset[str] = frozenset({
+    "group_by", "sub_group_by", "collapsed_lanes", "show_empty_lanes",
+    "shown_fields",
+})
+
+
+def normalise_view_user_state(config: Any) -> dict[str, Any]:
+    """One member's overlay on a shared view, reduced to what it may say.
+
+    ⚠️ **Not `normalise_view_config` with a different key set, and the
+    difference is the whole point.** That function fills a DEFAULT (`group_by`
+    falls back to `status`) because a view must always render something. An
+    overlay must not: a key it does not carry means *"I have no opinion, use the
+    view's"*, and a normaliser that injected `status` would make every member's
+    first collapse silently re-group the board for themselves.
+
+    So this is absent-preserving, and it shares the vocabulary — `GROUP_BY`,
+    `SHOWN_FIELDS`, the custom-field prefix — with the shared parser rather than
+    restating it. Unknown keys and bad values are dropped for
+    `normalise_view_config`'s reason: an overlay written by a newer client must
+    not make an older one refuse to open the view.
+    """
+    if not isinstance(config, dict):
+        return {}
+    out: dict[str, Any] = {}
+    for axis in ("group_by", "sub_group_by"):
+        value = config.get(axis)
+        if value in GROUP_BY:
+            out[axis] = value
+    # A sub-axis equal to the main axis is nonsense — the same rule the shared
+    # parser applies, and it has to be applied to the MERGED pair, so it is
+    # checked here only when this overlay states both.
+    if out.get("sub_group_by") is not None and out.get("sub_group_by") == out.get("group_by"):
+        out.pop("sub_group_by")
+    lanes = config.get("collapsed_lanes")
+    if isinstance(lanes, list):
+        # An explicit empty list is KEPT: "I have expanded every lane" is an
+        # opinion, and dropping it would make the shared config's collapse
+        # state reappear on the next load.
+        out["collapsed_lanes"] = [key for key in lanes if isinstance(key, str)]
+    if isinstance(config.get("show_empty_lanes"), bool):
+        out["show_empty_lanes"] = config["show_empty_lanes"]
+    shown = config.get("shown_fields")
+    if isinstance(shown, list):
+        kept: list[str] = []
+        for key in shown:
+            if not isinstance(key, str) or key in kept:
+                continue
+            if key in SHOWN_FIELDS or (
+                key.startswith(_CUSTOM_FIELD_PREFIX)
+                and len(key) > len(_CUSTOM_FIELD_PREFIX)
+            ):
+                kept.append(key)
+        out["shown_fields"] = kept
+    return out
+
+
 #: Assignees for a page of tasks, in ONE query.
 #:
 #: Not a subquery on the list itself (which would repeat a task per assignee and

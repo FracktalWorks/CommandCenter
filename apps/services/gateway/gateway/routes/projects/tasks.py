@@ -57,6 +57,7 @@ from gateway.routes.projects.core import (
     router,
     row_to_dict,
     task_visibility_clause,
+    touch_task,
     triage_exclusion_clause,
     update_row,
     validate_choice,
@@ -468,6 +469,16 @@ async def move_task(
             return row_to_dict(task, TaskModel)
 
         row = await update_row(db, "pm_tasks", task_id, values)
+        # WS-27ae / P-27 — SUBTASK MEMBERSHIP is a satellite of the PARENT, and
+        # it is the one satellite that lives on the child's own row. Re-parenting
+        # changes what both parents contain (`attach_relation_counts` draws
+        # `{done, total}` from exactly this), and neither parent row is touched
+        # by the UPDATE above.
+        if "parent_task_id" in values:
+            await touch_task(
+                db, getattr(task, "parent_task_id", None),
+                values.get("parent_task_id"),
+            )
         await record_activity(
             db, activity_type="system", created_by=actor(user), task_id=task_id,
             body="Task moved",
@@ -494,8 +505,22 @@ async def delete_task(
     """
     async with _tenant_session() as db:
         vis = await resolve_visibility(db, user)
-        await load_visible_task(db, vis, task_id)
+        doomed = await load_visible_task(db, vis, task_id)
         promoted = await count_where(db, "pm_tasks", "parent_task_id", task_id)
+        # WS-27ae / P-27 — read BEFORE the delete, because afterwards the FK has
+        # already SET NULL and nothing connects these rows to the task that used
+        # to own them. Their `parent_task_id` changed without any statement in
+        # this module writing them, so without the bump a promoted subtask is an
+        # edit no delta client can ever see.
+        children = [
+            str(r.id) for r in (await db.execute(
+                text(
+                    "SELECT id FROM pm_tasks "
+                    "WHERE parent_task_id = CAST(:tid AS uuid)"
+                ),
+                {"tid": task_id},
+            )).fetchall()
+        ]
         activities = await count_where(db, "pm_activities", "task_id", task_id)
         assignees = (await db.execute(
             text(
@@ -517,6 +542,13 @@ async def delete_task(
             text("DELETE FROM pm_tasks WHERE id = CAST(:tid AS uuid)"),
             {"tid": task_id},
         )
+        # The tombstone itself is written by migration 168's AFTER DELETE
+        # trigger, NOT here — `pm_projects` CASCADEs to `pm_tasks`, so a
+        # statement in this function would have recorded the one deletion path
+        # that has an endpoint and silently missed the one that takes hundreds
+        # of tasks at once. What this function still owes is the bump on the
+        # rows the delete CHANGED but did not remove.
+        await touch_task(db, getattr(doomed, "parent_task_id", None), *children)
 
     await emit("pm.task.deleted", {"task_id": task_id})
     return DeleteResponse(
@@ -763,6 +795,11 @@ async def create_link(
             db, activity_type="link", created_by=actor(user), task_id=task_id,
             meta={"target": str(payload.target_task_id), "type": payload.link_type},
         )
+        # WS-27ae / P-27 — the activity above bumps the SOURCE. A link is
+        # readable from both ends (`attach_relation_counts` draws "blocked" on
+        # the target), so the target changed too and a delta client watching
+        # only the blocked task would otherwise never learn it is blocked.
+        await touch_task(db, str(payload.target_task_id))
         return {
             "id": str(row.id), "source_task_id": task_id,
             "target_task_id": str(payload.target_task_id),
@@ -782,10 +819,20 @@ async def delete_link(
             text(
                 "DELETE FROM pm_task_links WHERE id = CAST(:lid AS uuid) "
                 "AND (source_task_id = CAST(:tid AS uuid) "
-                "     OR target_task_id = CAST(:tid AS uuid)) RETURNING id"
+                "     OR target_task_id = CAST(:tid AS uuid)) "
+                "RETURNING id, source_task_id, target_task_id"
             ),
             {"lid": link_id, "tid": task_id},
         )).fetchone()
         if row is None:
             raise HTTPException(status_code=404, detail="Link not found")
+        # WS-27ae / P-27 — unlinking records NO activity (deliberately: WS-27p
+        # kept the timeline for the link, not the unlink), so this is the one
+        # place the bump cannot ride the spine. BOTH ends, read off the deleted
+        # row rather than assumed from the path, because the caller may be
+        # either end of it.
+        await touch_task(
+            db, getattr(row, "source_task_id", None),
+            getattr(row, "target_task_id", None),
+        )
         return {"deleted": link_id}

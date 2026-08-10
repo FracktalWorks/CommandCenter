@@ -39,6 +39,7 @@ copy, never at production, and never at a database whose contents you have not j
 | `live_ws27r.py` | search | `AmbiguousParameterError`; backslash as LIKE's escape on a bound param |
 | `live_ws27s.py` | task card | Page-wide aggregates over `= ANY(CAST(:ids AS uuid[]))` |
 | `live_ws27t.py` | timeline | Edges with both ends in a window; a DATE beside a timestamptz in `UNION ALL` |
+| `live_ws27ae_delta.py` | delta sync | The tombstone trigger firing on a project **CASCADE** — the fake models no FKs, so its `_delete` mirror can only prove the endpoint path |
 | `live_ws29.py` | tenancy | **Two tenants, real routes — proves isolation and 404-never-403** |
 | `live_ws29e.py` | admin tenancy | Two orgs, two admins — roster, invite, roles, groups, overrides |
 | `prove_bootstrap.sh` | WS-25 D1 | `git reset --hard` renames, so a self-rewriting script runs stale steps and **exits 0** |

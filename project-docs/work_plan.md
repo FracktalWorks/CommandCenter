@@ -93,8 +93,32 @@ verification commands.)
   (allow-list additions likewise); **(d)** session acquisition uses the current
   seam idiom only, so H2's conversion stays mechanical — do not invent new
   acquisition idioms; **(e)** never trust a tenant (or identity) from request
-  input — `user_management_contract.md` R11/R3. The ratchet tests ride PR #404;
-  until it merges they bind on the WS-29 branch, from merge they bind `main`.
+  input — `user_management_contract.md` R11/R3. The ratchet tests **bind `main`** (PR #404 merged 2026-08-09).
+- **R6 — expand/contract migrations** *(D28, 2026-08-10; owning spec
+  `specs/engineering_practice.md` §3).* **The deploy applies migrations BEFORE
+  restarting services**, so old code always runs against new schema for a window.
+  A migration must therefore be compatible with the code currently running: new
+  columns **nullable with a default**; **no rename in place** (add, backfill,
+  switch readers, drop in a LATER release); constraints over existing data land
+  `NOT VALID` and validate in a guarded block (migration 148 is the reference).
+  The tightening half is always a second, later migration. ⚠️ **We cannot roll
+  back** — forward-only ladder, no blue/green — so recovery is roll-forward or
+  restore, which is why §8's off-box backup and SHA-in-`/health` items are
+  business risks rather than tech debt.
+- **R7 — a rule names its fence, or it is advisory** *(D28; the generalisation of
+  R5's "enforced by an existing test, not by prose").* Any PR introducing an
+  architectural rule must name the test that makes breaking it fail, or label the
+  rule advisory. Prose binds nobody: the next agent has not read that paragraph.
+  Prefer **structural fences** (assert the invariant over the whole tree) to
+  example tests — they are what defend against future agents.
+- **R8 — SQL is verified against a real database** *(D28; `engineering_practice.md`
+  §4).* Hermetic fakes agree with whatever SQL they are handed, which is how five
+  live bugs shipped green (an unencodable `CAST(:param AS timestamptz)`; a fake
+  matching `lower(col) = :param` against NULL; a `LEFT JOIN` whose `ON` could not
+  see its table). Any change whose subject is a query, a migration or a predicate
+  is run against a real Postgres before it is believed. **Verified-red-first**
+  applies to every fence and every bug fix; **mutation testing** applies to money,
+  auth, tenancy and outward writes.
 
 ---
 
@@ -191,7 +215,7 @@ owning specs are the archive; this file owns ordering, gates and states only.
 | WS-28 | **People Center — directory, org chart, assignment seam** *(minted 2026-08-06)* | ✅ a+b+b-write | `specs/people_center_app.md` · board record 2026-08-09 | a (key shape, mig 148 + quarantine table) · b (directory + person page, mig 149, five-place registration) · b-write (create/edit UI restored; found three ways mig 148 had broken the write routes) — built 2026-08-06/07; **closes WS-13's directory item**. 🟢 c org chart · d capability search (**ranking EVAL-LOCKED**) · e Projects seams; 🔴 f seats/roles writes (§6 WS-24 (d) analogue). ⚠️ `schema.generated.sql` regeneration is **due**: stale since ~migration 113, and 148 reached prod ~2026-08-07 (after the #384 cast fix). (2026-08-07) |
 ---
 
-## 3. Decisions recorded (D1–D14: 2026-07-31→08-04 · D15/D16: 2026-08-08 · D17–D21: 2026-08-09 · D22–D27: 2026-08-10)
+## 3. Decisions recorded (D1–D14: 2026-07-31→08-04 · D15/D16: 2026-08-08 · D17–D21: 2026-08-09 · D22–D28: 2026-08-10)
 
 Resolutions for the cross-doc conflicts the audit surfaced. D1–D8, **D13**, **D14**,
 **D16** and **D17** are **proposed defaults, adopted unless the owner objects**
@@ -200,6 +224,29 @@ calls, taken and dated. ⚠️ Two entries below are superseded and kept as reco
 **D11** (re-taken by D15) and **D10 part 1's planning premise** (re-scoped by
 D15/D16) — read their banners before citing either.
 
+- **D28 — The development doctrine is written down and three of its rules
+  bind.** *(owner-requested 2026-08-10 — "document all of this for our
+  development process"; the doctrine itself is `agent-proposed, owner may
+  overrule`.)* Owning spec: **`specs/engineering_practice.md`** (CONTRACTS &
+  DOCTRINE in `INDEX.md`). Two premises: **(i)** our failures are *delivery and
+  integration* failures, not coding failures — the evidence table in §0.1 is
+  seven measured incidents from one fortnight, none of which a unit test could
+  see; **(ii)** *a rule binds an agent only when a test refuses to break it*,
+  which R5 already said and R7 now generalises. Recorded as binding: **R6**
+  expand/contract migrations (the deploy applies migrations before restarting
+  services, so old code always meets new schema), **R7** name-the-fence, **R8**
+  real-database verification for SQL plus verified-red-first and mutation
+  testing. Recorded as doctrine, not enforced: deploy≠release with **ring order
+  us → one friendly customer → all** (the silo phase makes rings free), seam-based
+  work partition with short branches and a **3–4 in-flight cap** (long branches
+  are the single root cause behind the renumber trap, the cross-PR fences and the
+  duplicated tenancy design), the adversarial-reviewer rule, and the
+  customer-grade definition of done (delivery verified by evidence, never by a
+  green job). §8 lists five items to close before customer #1, each pointed at an
+  existing board row — SHA-in-`/health` (WS-25), off-box backup (BO-23,
+  owner-deferred and **due for revisit**), migration rehearsal against a
+  prod-shaped restore (WS-5, new), RLS promotion (MT-1b), lifecycle-sweep tenant
+  binding (MT-1d).
 - **D27 — The WS-27 × WS-29 alignment audit.** *(agent-run 2026-08-10 at the
   owner's request; findings fixed or recorded the same day.)* **Verdict:
   substantially aligned** — the Projects app's 19 `pm_*` tables are all

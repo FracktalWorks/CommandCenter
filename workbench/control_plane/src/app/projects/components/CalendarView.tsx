@@ -18,8 +18,9 @@
 
 import { TaskMeta } from "@/components/TaskMeta";
 import Button from "@/components/ui/Button";
+import { useMemo } from "react";
 
-import type { TaskRow } from "../lib/api";
+import type { TagRow, TaskRow } from "../lib/api";
 import { projectsApi } from "../lib/api";
 import {
   type MonthGrid,
@@ -28,7 +29,7 @@ import {
   placeTasks,
   rescheduleTo,
 } from "../lib/calendar";
-import { visibleChips } from "../lib/card";
+import { tagColours, visibleChips } from "../lib/card";
 import { quickAddPrefill } from "../lib/quickAdd";
 import { QuickAdd } from "./QuickAdd";
 import { useFlash } from "./useFlash";
@@ -46,6 +47,9 @@ interface Props {
   /** WS-27y — where a day's quick-added task is created (the selected node). */
   /** WS-27x — the view's shown fields; chips a hidden field earned are not drawn. */
   shownFields: readonly string[];
+  /** S6 — the project's tag registry, so a tag chip is the colour its owner
+   *  chose here too. One tag, one colour, on every surface of the project. */
+  tags?: readonly TagRow[];
   projectId: string;
   onCreated: (task: TaskRow) => void;
   onSelect: (task: TaskRow) => void;
@@ -62,6 +66,7 @@ export function CalendarView({
   today,
   projectId,
   shownFields,
+  tags,
   onCreated,
   onSelect,
   onMove,
@@ -70,6 +75,8 @@ export function CalendarView({
 }: Props) {
   const byDay = placeTasks(tasks, grid);
   const { flash, attach } = useFlash();
+  // Once per registry, not once per card.
+  const tagHues = useMemo(() => tagColours(tags ?? []), [tags]);
 
   /** WS-27y — a title typed into a day creates a task DUE that day, through
    *  the same axis→payload mapping every other quick-add uses. */
@@ -180,7 +187,14 @@ export function CalendarView({
                       >
                         {task.title}
                       </span>
-                      <TaskMeta chips={visibleChips(task, shownFields)} />
+                      <TaskMeta
+                        chips={visibleChips(
+                          task,
+                          shownFields,
+                          undefined,
+                          tagHues
+                        )}
+                      />
                     </button>
                   </li>
                 ))}

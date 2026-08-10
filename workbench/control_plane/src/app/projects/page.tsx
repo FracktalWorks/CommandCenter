@@ -1129,6 +1129,7 @@ function ProjectsWorkspace() {
             truncated={month.truncated}
             today={dayKey(new Date())}
             shownFields={shownFields}
+            tags={tags}
             onSelect={(task) => void openWithStatuses(task)}
             onLink={(blockerId, blockedId) => void linkTasks(blockerId, blockedId)}
             onRefuse={(reason) => setError(reason)}
@@ -1142,6 +1143,7 @@ function ProjectsWorkspace() {
             today={dayKey(new Date())}
             projectId={selected.id}
             shownFields={shownFields}
+            tags={tags}
             onCreated={() => void loadMonth()}
             onSelect={(task) => void openWithStatuses(task)}
             onMove={(task, patch) => void moveTask(task, patch)}
@@ -1184,6 +1186,7 @@ function ProjectsWorkspace() {
               setLanes((current) => ({ ...current, showEmptyLanes: show }))
             }
             statuses={statuses}
+            tags={tags}
             projectName={projectName}
             projectId={selected.id}
             shownFields={shownFields}
@@ -1201,6 +1204,7 @@ function ProjectsWorkspace() {
             filters={filters}
             onClearFilters={() => changeFilters(EMPTY_FILTERS)}
             statuses={statuses}
+            tags={tags}
             projectId={selected.id}
             shownFields={shownFields}
             onCreated={() => void loadProject(selected)}

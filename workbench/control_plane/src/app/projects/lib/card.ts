@@ -7,29 +7,118 @@
  * surfaces that draw a card (board and list) cannot start disagreeing about
  * which facts a task has, which is exactly how they drifted before.
  *
- * **Only fields the LIST endpoint actually returns.** `attachmentCount` and
- * `estimateMins` are honestly absent: attachments are counted on the single
- * task read (WS-27i) and there is no estimate column at all. Filling either
- * with a plausible zero would make the card assert something it does not know.
+ * **Only fields the LIST endpoint actually returns.** `attachmentCount` is
+ * honestly absent — attachments are counted on the single task read (WS-27i) —
+ * and filling it with a plausible zero would make the card assert something it
+ * does not know. `estimateMins` is NOT in that category and used to be treated
+ * as though it were: `pm_tasks.estimate_mins` has always been on `TaskModel`
+ * and the table's Estimate column has always read it, so the card was the one
+ * surface that dropped the fact (S6).
  */
 
-import { type MetaChip, type TaskFacts, taskMeta } from "@/lib/taskCard";
+import {
+  type MetaChip,
+  type TagFact,
+  type TaskFacts,
+  chipKind,
+  taskMeta,
+} from "@/lib/taskCard";
 
-import type { TaskRow } from "./api";
+import type { TagRow, TaskRow } from "./api";
+import { importanceLabel } from "./table";
 
-export function taskFacts(task: TaskRow): TaskFacts {
+/**
+ * `lower(tag name)` → the registry's stored colour.
+ *
+ * Built once per surface, not once per card: a board draws hundreds of rows
+ * and the registry is one array. Case-folded because a task's `tags` array
+ * carries the spelling that was saved and the registry owns the canonical one
+ * (`tags.registryOf` folds the same way) — a chip that lost its colour because
+ * somebody typed `Bug` is the drift this avoids.
+ */
+export function tagColours(
+  tags: readonly Pick<TagRow, "name" | "color">[]
+): Map<string, string> {
+  return new Map(tags.map((tag) => [tag.name.toLowerCase(), tag.color]));
+}
+
+export function taskFacts(
+  task: TaskRow,
+  colours?: ReadonlyMap<string, string>
+): TaskFacts {
   return {
     dueAt: task.due_at,
     completedAt: task.completed_at,
     subtasks: task.subtasks ?? null,
     blockedByCount: task.blocked_by_count ?? 0,
-    tagCount: task.tags?.length ?? 0,
+    tags: (task.tags ?? []).map(
+      (name): TagFact => ({ name, color: colours?.get(name.toLowerCase()) })
+    ),
+    estimateMins: task.estimate_mins,
   };
 }
 
-/** The chips one row has earned. */
-export function cardChips(task: TaskRow, nowMs?: number): MetaChip[] {
-  return taskMeta(taskFacts(task), nowMs);
+/**
+ * S6 — `importance` as a chip, in the vocabulary the table already speaks.
+ *
+ * The closest true analogue of the /tasks priority pill, and the one field
+ * `DEFAULT_SHOWN` has promised since WS-27x while no card drew it: a view says
+ * "show Priority", the spreadsheet obeys, the board and list did not.
+ *
+ * **Unset earns no chip, but `0` does.** `importance` is only ever set by a
+ * deliberate act (the select's own empty row PATCHes `null`), so a value is
+ * somebody's decision and `0` means Low rather than "nobody said" — the exact
+ * distinction `importanceLabel` was written for, reused here so the card and
+ * the cell cannot disagree about what a 2 is called.
+ *
+ * Only `Urgent` gets the danger tone. A scale where three of four levels are
+ * loud is a scale nobody reads; `warning` is the step below, and Normal/Low
+ * stay quiet while still saying which they are. The four glyphs differ so the
+ * level survives a reader who cannot see the tones apart.
+ */
+const IMPORTANCE_CHIP: Record<number, { icon: string; tone: MetaChip["tone"] }> = {
+  3: { icon: "ArrowUp", tone: "danger" },
+  2: { icon: "ChevronUp", tone: "warning" },
+  1: { icon: "Minus", tone: "muted" },
+  0: { icon: "ChevronDown", tone: "muted" },
+};
+
+function importanceChip(task: TaskRow): MetaChip | null {
+  const value = task.importance;
+  if (value === null || value === undefined) return null;
+  const style = IMPORTANCE_CHIP[value];
+  const label = importanceLabel(value);
+  if (!style || !label) return null;
+  return {
+    key: "importance",
+    icon: style.icon,
+    label,
+    tone: style.tone,
+    title: `${label} priority`,
+  };
+}
+
+/**
+ * The chips one row has earned.
+ *
+ * `taskMeta` stays the rulebook for the facts both apps share; priority is
+ * spliced in immediately after `blocked` — the same move `/tasks`' adapter
+ * makes for its count-only subtasks. The slot is deliberate: blocked says *do
+ * not start this*, priority says *how much this matters*, due says *when*, and
+ * a reader scanning a column wants them in that order.
+ */
+export function cardChips(
+  task: TaskRow,
+  nowMs?: number,
+  colours?: ReadonlyMap<string, string>
+): MetaChip[] {
+  const chips = taskMeta(taskFacts(task, colours), nowMs);
+  const priority = importanceChip(task);
+  if (priority) {
+    const at = chips.findIndex((chip) => chip.key === "blocked") + 1;
+    chips.splice(at, 0, priority);
+  }
+  return chips;
 }
 
 /**
@@ -42,11 +131,16 @@ export function cardChips(task: TaskRow, nowMs?: number): MetaChip[] {
  * table's columns read, so hiding a field silences its chip on every surface
  * at once.
  *
- * Exported so a test can assert every chip `taskMeta` can emit is mapped —
+ * Exported so a test can assert every chip `cardChips` can emit is mapped —
  * an unmapped chip kind would silently bypass the gate.
+ *
+ * **Keyed by chip KIND, not by chip key** (S6): a task with three tags emits
+ * `tags:ops`, `tags:api`, `tags:more`, and a whole-key lookup would find none
+ * of them and silence every tag on every view.
  */
 export const CHIP_FIELD: Record<string, string> = {
   blocked: "blocked",
+  importance: "importance",
   due: "due_at",
   subtasks: "subtasks",
   tags: "tags",
@@ -65,11 +159,13 @@ export const CHIP_FIELD: Record<string, string> = {
 export function visibleChips(
   task: TaskRow,
   shownFields: readonly string[],
-  nowMs?: number
+  nowMs?: number,
+  colours?: ReadonlyMap<string, string>
 ): MetaChip[] {
-  return cardChips(task, nowMs).filter((chip) =>
-    shownFields.includes(CHIP_FIELD[chip.key] ?? chip.key)
-  );
+  return cardChips(task, nowMs, colours).filter((chip) => {
+    const kind = chipKind(chip.key);
+    return shownFields.includes(CHIP_FIELD[kind] ?? kind);
+  });
 }
 
 /**

@@ -34,7 +34,7 @@ import { dropIndexFor, gapKey } from "@/lib/boardDrop";
 import { Fragment, useMemo, useState } from "react";
 
 import { accentForGroup, accentForStatus } from "../lib/accent";
-import type { StatusRow, TaskRow } from "../lib/api";
+import type { StatusRow, TagRow, TaskRow } from "../lib/api";
 import { projectsApi } from "../lib/api";
 import {
   buildCellDropPatch,
@@ -42,7 +42,7 @@ import {
   planDrop,
   sortForView,
 } from "../lib/board";
-import { taskRef, visibleChips } from "../lib/card";
+import { tagColours, taskRef, visibleChips } from "../lib/card";
 import { clampCursor, stepCursor } from "../lib/cursor";
 import { emptyStateCopy } from "../lib/emptyState";
 import {
@@ -83,6 +83,16 @@ interface Props {
   onShowEmptyLanes: (show: boolean) => void;
   /** Context the lane computation needs — same as the page's `groupTasks` call. */
   statuses: StatusRow[];
+  /**
+   * S6 — the project's tag registry, for the colour of a tag chip alone.
+   *
+   * The card names its tags now, and a tag has to be the SAME colour here, in
+   * the picker inside the panel and in the filter bar — `pm_tags.color` is the
+   * owner's choice and there is one of it. Optional so a surface that has no
+   * registry (a cross-project list) draws named chips in the gray fallback
+   * rather than the wrong colour.
+   */
+  tags?: readonly TagRow[];
   projectName?: (id: string) => string;
   /** Where a quick-added task is created (the selected node). */
   projectId: string;
@@ -111,6 +121,7 @@ export function TaskBoard({
   onToggleLane,
   onShowEmptyLanes,
   statuses,
+  tags,
   projectName,
   projectId,
   shownFields,
@@ -145,6 +156,9 @@ export function TaskBoard({
     () => new Map(statuses.map((row) => [row.id, row])),
     [statuses]
   );
+
+  // Once per registry, not once per card: a board draws hundreds of rows.
+  const tagHues = useMemo(() => tagColours(tags ?? []), [tags]);
 
   /**
    * WS-27ad — the column's colour.
@@ -436,8 +450,11 @@ export function TaskBoard({
         </TaskCardTitle>
         {/* The chip row and the owner strip are the shared card vocabulary
             (WS-27s) — the same components /tasks draws, so a task looks like
-            the same kind of thing in both. */}
-        <TaskMeta chips={visibleChips(task, shownFields)} />
+            the same kind of thing in both. S6 added the two facts the row
+            already carried and the card threw away: the priority the view's
+            `shown_fields` has always asked for, and the tags by NAME in the
+            colour their registry gives them, instead of a bare count. */}
+        <TaskMeta chips={visibleChips(task, shownFields, undefined, tagHues)} />
         <span className="flex items-center justify-between gap-2 text-[10px] text-muted-foreground">
           <span>{taskRef(task)}</span>
           <AvatarStack people={task.assignees} label={personLabel} />

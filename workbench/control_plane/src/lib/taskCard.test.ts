@@ -19,8 +19,11 @@
 
 import { describe, expect, it } from "vitest";
 
+import { accentForHue } from "./statusAccent";
 import {
+  MAX_TAG_CHIPS,
   avatarStack,
+  chipKind,
   durationLabel,
   initials,
   isOverdue,
@@ -138,7 +141,7 @@ describe("taskMeta", () => {
       keys({
         subtasks: { done: 0, total: 0 },
         blockedByCount: 0,
-        tagCount: 0,
+        tags: [],
         attachmentCount: 0,
         estimateMins: 0,
       }),
@@ -153,12 +156,19 @@ describe("taskMeta", () => {
       keys({
         estimateMins: 30,
         attachmentCount: 2,
-        tagCount: 1,
+        tags: [{ name: "ops" }],
         subtasks: { done: 1, total: 2 },
         dueAt: hours(4),
         blockedByCount: 1,
       }),
-    ).toEqual(["blocked", "due", "subtasks", "tags", "attachments", "estimate"]);
+    ).toEqual([
+      "blocked",
+      "due",
+      "subtasks",
+      "tags:ops",
+      "attachments",
+      "estimate",
+    ]);
   });
 
   it("marks an overdue task with a different icon, not only a colour", () => {
@@ -213,7 +223,7 @@ describe("taskMeta", () => {
         dueAt: hours(-1),
         blockedByCount: 1,
         subtasks: { done: 4, total: 4 },
-        tagCount: 3,
+        tags: [{ name: "ops", color: "blue" }],
         attachmentCount: 1,
         estimateMins: 90,
       },
@@ -221,9 +231,13 @@ describe("taskMeta", () => {
     );
     expect(every).toHaveLength(6);
     for (const chip of every) {
-      expect(["muted", "danger", "accent"]).toContain(chip.tone);
+      expect(["muted", "danger", "accent", "warning"]).toContain(chip.tone);
       expect(chip.title.length).toBeGreaterThan(chip.label.length);
-      expect(chip.icon).toMatch(/^[A-Z]/);
+      // A chip carries an icon or a hue — a bare word in a wrapping row of
+      // words is a chip nobody can find. `icon` went optional for the tag
+      // pills, and "optional" is exactly how a chip loses both signals.
+      if (chip.icon !== undefined) expect(chip.icon).toMatch(/^[A-Z]/);
+      else expect(chip.hue).toBeDefined();
     }
   });
 
@@ -233,13 +247,108 @@ describe("taskMeta", () => {
         dueAt: hours(1),
         blockedByCount: 1,
         subtasks: { done: 1, total: 2 },
-        tagCount: 1,
+        tags: [{ name: "ops" }, { name: "api" }],
         attachmentCount: 1,
         estimateMins: 5,
       },
       NOW,
     );
     expect(new Set(all.map((c) => c.key)).size).toBe(all.length);
+  });
+});
+
+// ── chipKind + the tag chips (S6) ───────────────────────────────────────────
+
+describe("chipKind", () => {
+  it("reads the kind off a namespaced key", () => {
+    // The gate that decides whether a chip is drawn keys on this. Read the
+    // WHOLE key and every tag chip a task grew falls out of the lookup and is
+    // silently never drawn — which looks exactly like a task with no tags.
+    expect(chipKind("tags:needs review")).toBe("tags");
+    expect(chipKind("tags:more")).toBe("tags");
+  });
+
+  it("leaves a plain key alone", () => {
+    expect(chipKind("blocked")).toBe("blocked");
+  });
+
+  it("splits on the FIRST colon, so a tag may contain one", () => {
+    // `blocked: review` is a real tag name in this workspace's own docs.
+    expect(chipKind("tags:blocked: review")).toBe("tags");
+  });
+});
+
+describe("taskMeta — tags by name", () => {
+  const named = (n: number) =>
+    Array.from({ length: n }, (_, i) => ({ name: `t${i}` }));
+
+  it("names each tag rather than counting them", () => {
+    // The regression this replaced: one chip reading "3", which is the shape
+    // of a fact with the fact removed.
+    const chips = taskMeta({ tags: [{ name: "ops" }, { name: "api" }] }, NOW);
+    expect(chips.map((c) => [c.key, c.label])).toEqual([
+      ["tags:ops", "ops"],
+      ["tags:api", "api"],
+    ]);
+  });
+
+  it("keeps the row's own order — a tag must not move between renders", () => {
+    expect(
+      taskMeta({ tags: [{ name: "zeta" }, { name: "alpha" }] }, NOW).map(
+        (c) => c.label,
+      ),
+    ).toEqual(["zeta", "alpha"]);
+  });
+
+  it("caps the names and counts the rest", () => {
+    const chips = taskMeta({ tags: named(MAX_TAG_CHIPS + 2) }, NOW);
+    expect(chips).toHaveLength(MAX_TAG_CHIPS + 1);
+    const last = chips[chips.length - 1];
+    expect([last.key, last.label]).toEqual(["tags:more", "+2"]);
+    // The overflow has to SAY what it swallowed, or the cap is censorship.
+    expect(last.title).toBe(
+      `2 more tags: t${MAX_TAG_CHIPS}, t${MAX_TAG_CHIPS + 1}`,
+    );
+  });
+
+  it("draws no overflow chip when everything fits", () => {
+    expect(
+      taskMeta({ tags: named(MAX_TAG_CHIPS) }, NOW).map((c) => c.key),
+    ).not.toContain("tags:more");
+  });
+
+  it("earns no chip from an empty tag list", () => {
+    expect(taskMeta({ tags: [] }, NOW)).toEqual([]);
+  });
+
+  it("resolves the hue from the registry's stored colour, not the name", () => {
+    // ⚠️ The fence for "one tag, one colour". `accentForHue(hue).chip` is
+    // byte-identical to `app/projects/lib/tags.chipClass(color)`, so the chip
+    // on a card and the chip in the picker cannot drift apart.
+    const chip = taskMeta({ tags: [{ name: "ops", color: "green" }] }, NOW)[0];
+    expect(chip.hue).toBe("green");
+    expect(accentForHue(chip.hue!).chip).toBe(accentForHue("green").chip);
+  });
+
+  it("falls back to gray when the surface has no registry", () => {
+    // A cross-project surface has no single registry to read. Gray is what
+    // `chipClass(undefined)` already draws — not a second answer.
+    expect(taskMeta({ tags: [{ name: "ops" }] }, NOW)[0].hue).toBe("gray");
+    expect(
+      taskMeta({ tags: [{ name: "ops", color: "chartreuse" }] }, NOW)[0].hue,
+    ).toBe("gray");
+  });
+
+  it("gives the overflow chip an icon and the named ones none", () => {
+    // The pill's colour and word ARE its signal; three tag glyphs in a row is
+    // the noise the density budget exists to prevent. The counter is not a
+    // pill, so it needs the glyph to say what it counts.
+    const chips = taskMeta({ tags: named(MAX_TAG_CHIPS + 1) }, NOW);
+    expect(chips.slice(0, MAX_TAG_CHIPS).map((c) => c.icon)).toEqual(
+      Array(MAX_TAG_CHIPS).fill(undefined),
+    );
+    expect(chips[MAX_TAG_CHIPS].icon).toBe("Tag");
+    expect(chips[MAX_TAG_CHIPS].hue).toBeUndefined();
   });
 });
 

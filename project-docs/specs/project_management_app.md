@@ -66,6 +66,18 @@
 > visual sweep was actually run this time** (Playwright + the pre-installed Chromium, fixtures
 > at the network boundary), which closes the check af/ag/S1/S3/S4/S5 all left owed *for this
 > surface*; one honest finding recorded in §11.23 about Material dark's pale `--warning`. ·
+> 🟢 **WS-27ab BUILT 2026-08-10, on branch `ws-27ab-view-ergonomics`, NOT merged and NOT
+> deployed** (§11.24) — view ergonomics, from Plane research P-14/15/16: the task panel gains
+> **peek → side → full**, persisted per user, and Escape hands focus back to the card that
+> opened it; the saved-view association **survives an edit** and `FilterBar` grows a
+> dirty-view row (**Update view · Save as new · Reset**) driven by ONE pure
+> `grouping.viewDivergence` over the `toConfig`/`fromConfig` round trip; the palette's
+> commands become a **declared registry** (`lib/commands.ts`) that `g`/`v` key sequences run
+> and the `?` sheet is *printed from*. Plus the WS-27x gap S6 recorded: the list's **Status
+> and Assignees columns now obey `shown_fields`** like every other field — **no default
+> moved**, both keys have been in `DEFAULT_SHOWN` since WS-27x. Frontend only — no migration,
+> no API change (the view update uses the existing `PATCH /projects/views/{id}`). ✅ Browser
+> driven, and the four-theme × two-mode sweep run. ·
 > **Owner:** vjvarada · **Board row: WS-27**
 >
 > **Tenancy (audited 2026-08-10 — this spec previously cited no tenancy decision at all).**
@@ -1423,8 +1435,9 @@ Mutation-measured: deleting the roots predicate turns 4 live checks red (includi
 for the resolver, which must stay unbound — while `routes/projects` goes from **2** unbound
 sites to **0** and `H2_EXEMPT_FILES` loses its Projects entry.
 
-**WS-27ab — view ergonomics: peek, dirty views, one palette registry.** 🟢 AGENT-SAFE
-*(P-14, P-15, P-16)*.
+**WS-27ab — view ergonomics: peek, dirty views, one palette registry.** ✅ **BUILT
+2026-08-10** *(P-14, P-15, P-16; as built, and the one place the ticket was wrong, in
+§11.24)*.
 Done when: (1) **peek escalation** — `TaskPanel` offers peek → side → full, the choice
 persists per user, and Esc returns focus to whatever opened the panel so the card/row keeps
 the cursor (WS-27y's cursor is the thing being returned to); (2) **dirty-view affordances**
@@ -3070,6 +3083,135 @@ tag in every theme. **One honest note:** Material dark's `--warning` is a pale p
 (`hsl(35 90% 78%)`), so the `High` chip reads faint against `Normal` there — the chevron-up vs
 dash glyph is what carries the distinction, which is why the four levels have four glyphs.
 That is the theme's token doing what it says, not a hardcoded colour.
+
+### 11.24 WS-27ab — view ergonomics: peek escalation, dirty views, one palette registry (built 2026-08-10)
+
+Plane research items **P-14/15/16** (§11.19), plus a sixth done-when added by the owner from
+the S6 review: the `shown_fields` gap on the list. Frontend only: **no migration, no API
+change, no new dependency**, and no change to the shown-fields vocabulary on either side of
+the wire. The view update rides the existing `PATCH /projects/views/{id}`, which has accepted
+`config` (through `normalise_view_config`) since WS-27k. Branch `ws-27ab-view-ergonomics` —
+**not merged, not deployed.**
+
+**1 · Peek → side → full.** `lib/panelMode.ts` is the vocabulary: three stops, narrowest
+first, a `max-w-*` per stop (`xs` · `md` · `3xl`), `widerPanel`/`narrowerPanel` that **stop at
+the ends rather than wrapping** (a cycling control makes "wider" mean "suddenly tiny" on the
+third press), and a `localStorage` read that degrades a corrupt value to the default rather
+than to a panel with no width class. Persistence is `localStorage`, the house idiom for a
+reading preference (`ViewModeProvider`, `Sidebar`'s folds) — a per-user server preference
+would be a table and an endpoint for a value with no meaning on another device. The panel is
+**one component at all three stops**; only its width class and, at `full`, where `page.tsx`
+mounts it (over the board, scrimmed, at `/tasks`' `max-w-3xl` reading width) change. Read in
+an **effect**, not a lazy initialiser: `localStorage` does not exist during SSR and the two
+renders would disagree.
+
+⚠️ **The ticket said "Esc returns focus to whatever opened the panel". Built as written, it
+did nothing** — and the browser is what said so. Opening a task leaves focus on the card (the
+board canvas is `tabIndex={0}` and the card is its focusable descendant), so the panel's own
+`onKeyDown` **never sees Escape at all**: measured, Esc did nothing unless you had first
+clicked *into* the panel. The fix is two handlers with one rule between them — the panel
+keeps its own (first Escape leaves a comment box holding text, second closes), and the page's
+window listener closes the panel when focus is outside it. The panel's handler calls
+`stopPropagation`, so exactly one of the two ever fires. Focus return is an unmount cleanup
+over the element captured at mount, guarded by `document.contains` (the board reloads under an
+open panel, and focusing a detached node silently moves focus to `<body>`).
+
+**2 · The dirty-view row.** The measured defect was not a missing affordance but a **dropped
+association**: `changeFilters`, `onGroupBy`, `onSubGroupBy` and `changeShownFields` each ran
+`setActiveViewId(null)`, so touching one control severed the board from the view on the first
+keystroke and the only way back was to re-apply and lose the edit. Those four lines are gone.
+The chip stays lit with an edited dot, and `FilterBar` grows a row offering **Update view ·
+Save as new · Reset** — three answers and no fourth. Divergence is **one exported pure
+function**, `grouping.viewDivergence`, beside the round trip it reads: both sides go through
+`toConfig`, and the saved side through `fromConfig` first, so a config stored by an older
+client or hand-edited into a shape `fromConfig` normalises compares **by meaning, not by
+bytes**. A byte comparison lights the marker on a board nobody touched, which is how such a
+marker comes to be ignored. Sets are compared as sets (tag CSV, collapsed lanes,
+`shown_fields`), an assignee's case is noise because the server treats it so, and the four
+parts are named back (`filters`, `grouping`, `lanes`, `shown fields`) so the row says *what*
+moved. `Reset` re-applies through the same `onApplyView` the chip uses — one path back, so
+"reset" and "click the chip again" cannot come to mean different things. `Update view`
+replaces the stored row with the **server's** response: `normalise_view_config` may drop a key,
+and keeping the local copy would leave the bar comparing against a config that was never
+stored, i.e. a dirty marker that never clears.
+
+**3 · The palette action registry.** The ticket says the palette's commands "become a declared
+registry instead of inline branches"; the palette had **no commands at all** — it was a task
+finder. So this adds them, in the shape the ticket demanded and never as branches:
+`lib/commands.ts` declares `id`, `label`, `section`, `keywords`, `icon`, optional `sequence`,
+optional `href`, `when`, `run`. Three consumers, one source — the palette lists them, the page
+runs their key sequences, and `ShortcutsSheet` is *printed from* `shortcutSections()`, so `?`
+cannot describe behaviour the keyboard does not have.
+
+* **The Go section is derived from `@/lib/nav`**, not written out. `GO_KEYS` assigns eight
+  letters and nothing else; the label, the glyph and the route are the `NavPane` the sidebar
+  draws, so `g t` says *Tasks* because that is what Tasks is called. A pane removed from the
+  nav produces no command, and the test makes that loud rather than quietly shorter help.
+* `ViewMode`/`VIEW_MODES` **moved out of `page.tsx`** into the registry's file. Two lists of
+  the five canvases is how the toolbar and the palette come to offer different sets.
+* `stepSequence` restarts on a dead prefix: `g` · `z` · `g` · `p` reaches Projects. Without
+  it the third key is swallowed clearing the prefix and the shortcut fails once per typo.
+  A prefix is forgotten after `SEQUENCE_TIMEOUT_MS`, sequences are suppressed while anything
+  modal is open, and `isTypingTarget` keeps a bare letter out of the quick-add box.
+* Commands lead the palette's list and task hits follow, because rows appearing **below** the
+  cursor cannot move what is already under it — the hits arrive after a debounce.
+
+**4 · `shown_fields` gates the list's last two columns** *(the sixth done-when)*. Every other
+field on `TaskList` gated; **Status and Assignees rendered unconditionally**, so un-ticking
+*Status* silenced its chip on the board and left the column standing on the list — the field
+picker was lying on that surface. **Before → after:**
+
+| Case | Before | After |
+|---|---|---|
+| a view nobody edited (`DEFAULT_SHOWN`) | `#` · Title · Status · Assignees · Details | **identical** — both keys are in `DEFAULT_SHOWN` |
+| *Status* un-ticked | column still drawn | column gone; `colSpan` 6 → 5 |
+| both un-ticked | both still drawn | both gone; `colSpan` 6 → 4 |
+| a saved view whose stored `shown_fields` omits them | columns drawn anyway | columns hidden — the stored choice is finally honoured |
+
+**No default moved**, so turning this on hides nothing from anyone who never opened the field
+picker. The one behaviour change that reaches existing data is the last row, and it is the
+point of the ticket. The column set is `table.listColumns` rather than a hand-counted number,
+because the header, every group heading's `colSpan` and the quick-add row's `colSpan` have to
+be the same figure — two hand-counts is how a heading comes to span four of five columns.
+
+**Fences added (R7).** `panelMode.test.ts` (17): escalation stops at the ends, a corrupt or
+absent stored value reads as the default, a `Storage` that throws does not take the panel with
+it, Escape blurs a field holding text and closes an empty one, every stop has a label, a glyph
+and a `max-w` class. `commands.test.ts` (38): **every action carries a label, a section and a
+glyph**; **every go-sequence resolves to a route in `nav.PANES`**; **no two actions share a key
+sequence** *and* none is a prefix of another (which would make the shorter one unreachable);
+every glyph is mapped in `icon-data/registry.json` for every pack; `when` hides what would
+no-op; the cursor never lands on a heading; and the sheet prints every command exactly once
+with the command's own keys. `grouping.test.ts` (+11): the round trip is clean, each part is
+named alone, four normalising configs are *not* dirty, set order is noise, `[]` shown-fields is
+a real choice in both directions. `table.test.ts` (+6): the default list is byte-identical to
+before the gate, each column drops independently, and the three fixed columns survive
+everything.
+
+**Conformance.** Two baselines came **down**, as the ratchet requires:
+`SearchPalette.tsx` left `ACTIVE_DEBT` entirely (its selected row is now
+`bg-primary/10 text-primary`) and `FilterBar.tsx` went **2 → 1** (the applied-view chip; only
+its pressed tag chip remains). Nothing was added: the new `ShortcutsSheet.tsx` and
+`commands.ts`/`panelMode.ts` carry no budget and are clean. One honest note — *Save as new*
+wears `Plus` rather than the `Bookmark` on the Save-view button beside it, because `Bookmark`
+has **no entry in `icon-data/registry.json`** and draws the Lucide glyph under Fluent and
+Material. Fixing the existing one is a registry ticket; adding a second was not on.
+
+**Verified in a browser, not asserted.** `next build` → `next start -p 3601` → Playwright
+against `/opt/pw-browsers/chromium`, fixtures at the **network boundary** only. Measured:
+the panel at 448 → 320 (peek) → 448 (side) → 766 in a `position: fixed` overlay (full), the
+choice surviving a reload, Escape from the *board* closing it with focus landing back on the
+card that opened it (identity-checked, not "not `<body>`") and ArrowDown then moving the board
+cursor; the dirty row absent on apply, present after an edit, worded *"Overdue firmware has
+unsaved changes to its filters."*, cleared by Reset with the filter restored, and cleared by
+Update view with the `PATCH` body captured; `?` drawing 24 rows in five sections with real
+keys; `g t` navigating to `/tasks`; the list's columns and `colSpan`s tracking the field
+picker exactly; and the phone branch carrying **no** width switch with the panel at the full
+390px even with `"full"` persisted. Then the DESIGN_SYSTEM §8 sweep — RapidTool · Fluent ·
+Material · Graphite × light and dark, on the panel, the dirty row, the palette and the sheet,
+with `/tasks` beside it: `data-theme` applied in all eight, *Update view* rendering as a
+Material pill (`9999px`), a Graphite 2px uppercase button and a Fluent 4px one, and **zero page
+errors** in every combination.
 
 ## Board record (2026-08-09) — moved from work_plan.md §2
 

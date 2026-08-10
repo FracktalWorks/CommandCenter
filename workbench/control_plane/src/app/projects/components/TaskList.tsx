@@ -16,6 +16,14 @@
  * WS-27y: every group section ends in a quick-add pre-filled with the group's
  * value (`lib/quickAdd.ts` owns that mapping), and an arrow-key cursor walks
  * the rows — Shift extends the WS-27n selection, Enter opens the panel.
+ *
+ * WS-27ab item 6: **the Status and Assignees columns obey `shown_fields`** like
+ * every other field on this surface. They rendered unconditionally from WS-27x
+ * until now, which made the field picker a liar here — un-ticking *Status*
+ * silenced its chip on the board and left the column standing on the list.
+ * Which columns exist is `table.listColumns`, so the header, the group heading
+ * and the quick-add row cannot disagree about the `colSpan`. No default moved:
+ * both keys are in `DEFAULT_SHOWN`.
  */
 import { EmptyState } from "@/components/EmptyState";
 import Icon from "@/components/Icon";
@@ -38,6 +46,7 @@ import {
   personLabel,
 } from "../lib/grouping";
 import { quickAddPrefill } from "../lib/quickAdd";
+import { listColumns } from "../lib/table";
 import { QuickAdd } from "./QuickAdd";
 import { useFlash } from "./useFlash";
 
@@ -210,7 +219,12 @@ export function TaskList({
     );
   }
 
-  const columnCount = onToggle ? 6 : 5;
+  // ONE list of columns, so the header, every group heading's colSpan and the
+  // quick-add row's colSpan are the same number by construction.
+  const columns = listColumns(shownFields, Boolean(onToggle));
+  const columnCount = columns.length;
+  const showStatus = columns.includes("status");
+  const showAssignees = columns.includes("assignees");
 
   return (
     <div
@@ -234,8 +248,12 @@ export function TaskList({
             ) : null}
             <th className="px-3 py-2 font-medium">#</th>
             <th className="px-3 py-2 font-medium">Title</th>
-            <th className="px-3 py-2 font-medium">Status</th>
-            <th className="px-3 py-2 font-medium">Assignees</th>
+            {showStatus ? (
+              <th className="px-3 py-2 font-medium">Status</th>
+            ) : null}
+            {showAssignees ? (
+              <th className="px-3 py-2 font-medium">Assignees</th>
+            ) : null}
             {/* Was "Due", showing a bare locale date. The shared chip row
                 (WS-27s) carries the due date *and* says when it is overdue,
                 what is blocking, how far a checklist has got, what priority
@@ -331,27 +349,31 @@ export function TaskList({
                       {task.title}
                     </span>
                   </td>
-                  <td className="px-3 py-2 text-muted-foreground">
-                    {/* WS-27ad — the shared status pill, coloured by the
-                        owner's stored colour / the status category. It used
-                        to be a bare grey word while the same status on the
-                        /tasks side was a coloured pill. */}
-                    {status ? (
-                      <StatusChip
-                        accent={accentForStatus(status)}
-                        label={status.name}
-                      />
-                    ) : (
-                      "—"
-                    )}
-                  </td>
-                  <td className="px-3 py-2 text-muted-foreground">
-                    {task.assignees?.length ? (
-                      <AvatarStack people={task.assignees} label={personLabel} />
-                    ) : (
-                      "—"
-                    )}
-                  </td>
+                  {showStatus ? (
+                    <td className="px-3 py-2 text-muted-foreground">
+                      {/* WS-27ad — the shared status pill, coloured by the
+                          owner's stored colour / the status category. It used
+                          to be a bare grey word while the same status on the
+                          /tasks side was a coloured pill. */}
+                      {status ? (
+                        <StatusChip
+                          accent={accentForStatus(status)}
+                          label={status.name}
+                        />
+                      ) : (
+                        "—"
+                      )}
+                    </td>
+                  ) : null}
+                  {showAssignees ? (
+                    <td className="px-3 py-2 text-muted-foreground">
+                      {task.assignees?.length ? (
+                        <AvatarStack people={task.assignees} label={personLabel} />
+                      ) : (
+                        "—"
+                      )}
+                    </td>
+                  ) : null}
                   <td className="px-3 py-2 text-muted-foreground">
                     <TaskMeta
                       chips={visibleChips(task, shownFields, undefined, tagHues)}

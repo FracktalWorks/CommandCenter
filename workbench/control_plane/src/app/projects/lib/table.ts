@@ -120,6 +120,43 @@ export function tableColumns(
 }
 
 /**
+ * ── The LIST's columns (WS-27ab item 6) ──────────────────────────────────
+ *
+ * The list is not a thin table: it draws three fixed columns (`#`, Title, and
+ * the shared chip strip) plus an optional selection gutter, and exactly two
+ * gated ones. Those two — Status and Assignees — rendered **unconditionally**
+ * from WS-27x until now, which made the field picker a liar on that surface:
+ * un-ticking *Status* silenced its chip everywhere and left the column
+ * standing.
+ *
+ * `shown_fields` is one contract, so the list obeys it like everything else.
+ * **No default moves**: both keys have been in `DEFAULT_SHOWN` since WS-27x,
+ * so a view nobody has edited draws exactly the columns it drew yesterday.
+ *
+ * Returned as an ordered key list rather than a count because the `colSpan` on
+ * the group header and the quick-add row has to equal what the header renders
+ * — computing that number twice by hand is how a table ends up with a heading
+ * that spans four of its five columns.
+ *
+ * Fence: `table.test.ts` — "the list's columns".
+ */
+export const LIST_GATED_COLUMNS = ["status", "assignees"] as const;
+
+export function listColumns(
+  shown: readonly string[],
+  selectable: boolean,
+): string[] {
+  const wanted = new Set(shown);
+  return [
+    ...(selectable ? ["select"] : []),
+    "ref",
+    "title",
+    ...LIST_GATED_COLUMNS.filter((key) => wanted.has(key)),
+    "details",
+  ];
+}
+
+/**
  * The priority vocabulary, as the importance cell offers and reads it.
  * `""` is the unset row — the PATCH sends `importance: null`, and a select
  * can otherwise never be emptied once somebody has chosen something.

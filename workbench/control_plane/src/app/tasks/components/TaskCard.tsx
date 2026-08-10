@@ -1,6 +1,7 @@
 "use client";
 
 import Icon, { themedIcon } from "@/components/Icon";
+import { TaskCardShell, TaskCardTitle } from "@/components/TaskCardShell";
 import { TaskMeta } from "@/components/TaskMeta";
 import { useState } from "react";
 import { GtdItem } from "../lib/types";
@@ -239,26 +240,18 @@ export function TaskCard({
   };
   return (
     <>
-      <div
-        role="button"
-        tabIndex={0}
+      {/* WS-27ad: the box is `@/components/TaskCardShell`, the same one the
+          /projects board draws — same radius, padding, `bg-card` surface,
+          border and shadow lift. What goes INSIDE stays this app's: the GTD
+          badges, the context menu and the priority pair are not concepts
+          /projects has. */}
+      <TaskCardShell
         draggable={draggable}
         onDragStart={onDragStart}
         onDragEnd={onDragEnd}
-        onClick={activate}
+        onActivate={activate}
         onContextMenu={openMenu}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" || e.key === " ") {
-            e.preventDefault();
-            activate();
-          }
-        }}
-        className={[
-          "group tech-transition relative flex cursor-pointer flex-col gap-2 rounded-lg border bg-card p-3 shadow-sm hover:shadow-md",
-          selected
-            ? "border-primary ring-1 ring-primary"
-            : "border-border hover:border-primary/40",
-        ].join(" ")}
+        selected={selected}
       >
         {selectMode ? (
           <input
@@ -289,9 +282,7 @@ export function TaskCard({
         </div>
         <div className="flex items-start gap-2">
           {!selectMode && showStage && <StatusPill item={item} />}
-          <p className="text-[13px] font-medium leading-snug text-foreground">
-            {item.title}
-          </p>
+          <TaskCardTitle>{item.title}</TaskCardTitle>
         </div>
         {item.nextAction && item.nextAction !== item.title && (
           <p className="line-clamp-2 text-[11px] text-muted-foreground">
@@ -321,7 +312,7 @@ export function TaskCard({
             )}
           </div>
         </div>
-      </div>
+      </TaskCardShell>
       {contextMenu}
     </>
   );

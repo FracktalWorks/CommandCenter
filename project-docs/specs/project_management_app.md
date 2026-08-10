@@ -2380,6 +2380,89 @@ paid subscription; do not copy the flag. · **`class-variance-authority`**, agai
 
 ---
 
+### 9.6 Upstream reference index — Plane
+
+*Every link pinned to `31853ab2` per §9.0. All **128** references in the source report were
+mechanically checked: the file exists at that path and the cited end line is within the file.
+Two candidates failed that check and were corrected before inclusion — which is the argument
+for `tests/unit/test_reference_links.py` rather than trust.*
+
+**A REF is a reading list, not a port.** Plane is AGPL-3.0: read it, then write ours.
+
+#### P-1 … P-31 (the original research queue)
+
+| Item | Upstream reference | The part worth reading |
+|---|---|---|
+| P-1 intake/triage | [`issue.py#L92-L100`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/apps/api/plane/db/models/issue.py) | ⭐ the load-bearing trick: the **default manager excludes `state__group=triage`**, which is the whole "capture does not pollute a board" mechanism |
+| P-2 watchers + mention diffing | [`notification_task.py#L53-L111`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/apps/api/plane/bgtasks/notification_task.py) | set-difference of old vs new mentions; the fan-out excludes new mentions *and* the actor |
+| P-3 archive guard | [`archive.py#L255-L278`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/apps/api/plane/app/views/issue/archive.py) | one `state.group not in (completed, cancelled)` check; its bulk sibling is the counterexample (aborts mid-loop) |
+| P-4 lifecycle sweeper | [`issue_automation_task.py#L28-L149`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/apps/api/plane/bgtasks/issue_automation_task.py) | exempts issues in an unfinished cycle; stamps `automation: True` into the activity |
+| P-5 activity id+label | [`issue.py#L414-L437`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/apps/api/plane/db/models/issue.py) | `old_value`/`new_value` beside `old_identifier`/`new_identifier` |
+| P-6 category-ranked sort | [`order_queryset.py#L145-L193`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/apps/api/plane/utils/order_queryset.py) | ⚠️ their tiebreaker is only `-created_at`; **ours is `(created_at, id)` — we are a step ahead of the source we cited** |
+| P-7 picker exclusions | [`search/issue.py#L37-L83`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/apps/api/plane/app/views/search/issue.py) | four separate methods, not one param — ours is a consolidation, not a port |
+| P-8 child distribution | [`sub_issue.py#L165-L201`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/apps/api/plane/app/views/issue/sub_issue.py) | one `defaultdict(list)` keyed by state group, no denormalisation |
+| P-9 import provenance | [`api/views/issue.py#L616-L646`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/apps/api/plane/api/views/issue.py) | idempotent PUT-upsert keyed on the pair. ⚠️ uniqueness is enforced **at the query, not by a constraint** — we should add the constraint they lack |
+| P-10 spreadsheet | [`use-table-keyboard-navigation.tsx#L7-L62`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/apps/web/core/hooks/use-table-keyboard-navigation.tsx) | the arrow-cursor logic; row nesting caps at depth 3 |
+| P-11 swimlanes | [`swimlanes.tsx#L50-L59`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/apps/web/core/components/issues/issue-layouts/kanban/swimlanes.tsx) | the empty-lane visibility predicate |
+| P-12 shown-fields contract | [`with-display-properties-HOC.tsx#L18-L35`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/apps/web/core/components/issues/issue-layouts/properties/with-display-properties-HOC.tsx) | ⭐ **35 lines is the entire contract** |
+| P-13 group-context quick-add | [`quick-add/root.tsx#L100-L136`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/apps/web/core/components/issues/issue-layouts/quick-add/root.tsx) | `reset()` fires *before* the request, so typing continues immediately |
+| P-14 peek escalation | [`peek-overview/view.tsx#L102-L113`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/apps/web/core/components/issues/peek-overview/view.tsx) | focus return gated on "no modal / not in an input / no editor bar open" |
+| P-15 dirty-view affordances | [`rich-filters/filter.ts#L294-L312`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/packages/shared-state/src/store/rich-filters/filter.ts) | the store half is the instructive one |
+| P-16 palette registry | [`shortcut-handler.ts#L30-L140`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/apps/web/core/components/power-k/core/shortcut-handler.ts) | **library: `cmdk` (MIT)** for the list; this file is the registry + key-sequence machine |
+| P-17 keyboard cursor | [`use-multiple-select.ts#L290-L360`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/apps/web/core/hooks/use-multiple-select.ts) | Shift+Arrow extends from the cursor; both share one neighbour helper |
+| P-18 drop refusal + flash | [`group-drag-overlay.tsx#L27-L86`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/apps/web/core/components/issues/issue-layouts/group-drag-overlay.tsx) | **library: `pragmatic-drag-and-drop` (Apache-2.0)** owns the drag; only the reason overlay is theirs |
+| P-19 calendar | [`calendar/issue-blocks.tsx#L60-L113`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/apps/web/core/components/issues/issue-layouts/calendar/issue-blocks.tsx) | ⚠️ **correction: their per-day overflow is a paginated "Load more", not "+N more"** — WS-27ac shipped the better one |
+| P-20 notifications inbox | [`workspace-notifications/root.tsx#L85-L118`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/apps/web/core/components/workspace-notifications/root.tsx) | ⚠️ their split count is a `sender__icontains="mentioned"` **string match** — use a real column |
+| P-21 human task IDs | [`work-item/base.ts#L315-L340`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/packages/utils/src/work-item/base.ts) | `/browse/KEY-42/` is a real resolvable route, not a display string |
+| P-22 timeline polish | [`gantt-chart/add-block.tsx#L26-L80`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/apps/web/core/components/gantt-chart/helpers/add-block.tsx) | ⭐ the direct answer to our `TimelineView`'s "there is nothing to place" comment |
+| P-23 sprints | [`cycle_transfer_issues.py#L400-L470`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/apps/api/plane/utils/cycle_transfer_issues.py) | carry-forward as an explicit logged transfer |
+| P-24 webhooks | [`url_security.py#L160-L230`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/apps/api/plane/utils/url_security.py) | ⭐ resolve→validate→pin, closing the DNS-rebinding TOCTOU; its docstring explains why `requests` alone is unsafe |
+| P-25 email digest | [`email_notification_task.py#L46-L84`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/apps/api/plane/bgtasks/email_notification_task.py) | group per receiver → entity → actor, then one bulk `processed_at` |
+| P-26 export job | [`exporter_expired_task.py#L22-L53`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/apps/api/plane/bgtasks/exporter_expired_task.py) | the 8-day sweep deletes the object and nulls the URL, keeping the history row |
+| P-27 delta feed | [`issue_activities_task.py#L1526-L1538`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/apps/api/plane/bgtasks/issue_activities_task.py) | the unconditional satellite bump is the prerequisite. ⚠️ **their `cursor` is offset in costume — do not copy as keyset** (ours is a real keyset) |
+| P-28 small columns | [`session.py#L44-L56`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/apps/api/plane/db/models/session.py) | the `create_model_instance` override that denormalises the user id *is* the feature |
+| P-29 public boards | [`space/views/project.py#L54-L63`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/apps/api/plane/space/views/project.py) | ⚠️ the `AllowAny` **anchor-recovery** endpoint that defeats unpublish-as-rotation. `is_disabled`: **NO UPSTREAM — read by zero views and zero components** |
+| P-30 pages/wiki | [`page.py#L23-L175`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/apps/api/plane/db/models/page.py) | refused as PM; useful as the KB's eventual checklist (hierarchy, versions, backlinks) |
+| P-31 refusals | [`db/mixins.py#L48-L84`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/apps/api/plane/db/mixins.py) | the soft-delete tax every query then re-asserts |
+
+#### The active queue (§9.3 / §9.4)
+
+| Ticket | Upstream reference | Note |
+|---|---|---|
+| WS-27ah(1) segments | [`linear-progress-indicator.tsx#L21-L55`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/packages/ui/src/progress/linear-progress-indicator.tsx) | the renderer that consumes P-8's datum |
+| WS-27ah(2) click-to-filter | [`active-cycle/progress.tsx#L60-L90`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/apps/web/core/components/cycles/active-cycle/progress.tsx) | the click emits a `state_group in [...]` filter — exactly the behaviour |
+| WS-27ah(4a) draft restore | [`quick-actions.tsx#L40-L67`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/apps/web/core/components/workspace/sidebar/quick-actions.tsx) | one slot **per workspace**, cleared on submit |
+| WS-27ah(4b) pins | [`favorite.py#L14-L50`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/apps/api/plane/db/models/favorite.py) | ⚠️ theirs has **folders** via a `parent` self-FK; our ticket says flat — take the generic table + `sequence`, leave `parent` |
+| WS-27ah(4c) recently-viewed | [`recent_visited_task.py#L17-L52`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/apps/api/plane/bgtasks/recent_visited_task.py) | ⚠️ **correction to §9.4**: a cap *does* exist, but it is written `if count == 20` — an equality, so once the count ever exceeds 20 it never trims again. Copy the intent, not the comparison |
+| WS-27ai inbox | [`notification-card/item.tsx#L46-L67`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/apps/web/core/components/workspace-notifications/sidebar/notification-card/item.tsx) | mark-read-on-open; the right pane embeds peek with `embedIssue` (no portal) — that flag is the two-pane trick |
+| WS-27ak(1) Modal | [`propel/dialog/root.tsx#L1-L141`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/packages/propel/src/dialog/root.tsx) | **library: Base UI (MIT)** owns focus trap/inert/scroll-lock. Plane adds only sizing — go to the library |
+| WS-27ak(3) Toast | [`propel/toast/toast.tsx#L290-L324`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/packages/propel/src/toast/toast.tsx) | the promise-bound `loading → success \| error` one-toast mutation |
+| WS-27al(1) ControlLink | [`control-link.tsx#L19-L58`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/packages/ui/src/control-link/control-link.tsx) | ⚠️ theirs exempts meta/ctrl only — **middle-click is not exempted**; ours must be |
+| WS-27al(2) prevent-outside-click | [`use-peek-overview-outside-click.tsx#L16-L45`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/apps/web/core/hooks/use-peek-overview-outside-click.tsx) | `closest("[data-prevent-outside-click]")` plus a containment check |
+| WS-27al(3) lazy tooltip | [`ui/tooltip.tsx#L56-L82`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/packages/ui/src/tooltip/tooltip.tsx) | ⚠️ read the in-file FIXME: `renderByDefault` **defaults true**, so the optimisation is opt-in and mostly unused. Invert the default |
+| WS-27al(5) overdue predicate | [`work-item/base.ts#L171-L187`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/packages/utils/src/work-item/base.ts) | false for completed/cancelled; `<= 0` days makes **today count as due** |
+| WS-27al(6) selection self-heal | [`use-multiple-select.ts#L372-L384`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/apps/web/core/hooks/use-multiple-select.ts) | ten lines |
+| WS-27am(1) empty triad | [`empty-states/project-issues.tsx#L30-L71`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/apps/web/core/components/issues/issue-layouts/empty-states/project-issues.tsx) | the no-permission branch renders the CTA **disabled, not hidden** |
+| WS-27am(2) layout HOC | [`issue-layout-HOC.tsx#L45-L63`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/apps/web/core/components/issues/issue-layouts/issue-layout-HOC.tsx) | 19 lines, including the `layout !== CALENDAR` judgement call |
+| WS-27am(3) error boundary | [`layout-error-boundary.tsx#L36-L59`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/apps/web/core/components/common/layout-error-boundary.tsx) | Retry bumps a key so children genuinely remount |
+| WS-27an autosave | [`title-input.tsx#L46-L140`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/apps/web/core/components/issues/title-input.tsx) | ⭐ **best single-file reference in the queue** — all six behaviours, including save-on-unmount |
+| WS-27ao editor | [`editor/extensions.ts#L100-L120`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/packages/editor/src/core/extensions/extensions.ts) | **libraries: TipTap v3 + ProseMirror + tiptap-markdown (MIT)** — we already ship TipTap. Asset-GC sweeper: [`file_asset_task.py#L20-L26`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/apps/api/plane/bgtasks/file_asset_task.py) |
+| WS-27ap filter tree | [`filter_backend.py#L164-L217`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/apps/api/plane/utils/filters/filter_backend.py) | the `and`/`or`/`not` walker + allowlist + depth cap. ⚠️ the **lossy converter to avoid** is [`filter_migrations.py#L47-L57`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/apps/api/plane/utils/filters/filter_migrations.py) — per-record `except: log; continue` silently drops a view's filters |
+| WS-27aq notif prefs | [`notification.py#L81-L110`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/apps/api/plane/db/models/notification.py) | one row, nullable workspace **and** project. ⚠️ their flags only ever set `send_email` — **the in-app bell is unmutable**, verified |
+| WS-27as join-table audit | [`cycle/issue.py#L238-L262`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/apps/api/plane/app/views/cycle/issue.py) | ⭐ the **post-fix** code with GHSA-4w5x-wc9w-f47x named in-file — the pattern our remaining audit checks for |
+| WS-27at gallery | [`design-system-philosophy.stories.tsx#L70-L230`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/packages/propel/src/design-system/design-system-philosophy.stories.tsx) | ✅/❌ nesting pairs rendered live — read for *content*, not tooling |
+
+#### Where there is nothing to link — and that is the answer
+
+`is_disabled` per-board kill switch · `collaboration-cursor` (a string in a type union, no
+implementation) · **RTL** (zero occurrences repo-wide, so D-PM-18 gains nothing from Plane) ·
+**timeline dependency arrows** (not rendered in their OSS core, so **D-PM-12 stands
+unchallenged**) · **page-batched list badges** (their implementation is the anti-pattern; the
+rule is ours and their file is only the evidence for it) · **per-tenant OAuth callback routing**
+(instance-global upstream — the hard part is unsolved there).
+
+---
+
 ## 10. Verification
 
 ⚠️ Never `uv run pytest tests/unit/` bare — whole-directory collection hangs on the

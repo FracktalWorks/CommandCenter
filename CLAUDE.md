@@ -99,7 +99,7 @@ Rules that make it work:
   fences — both are auto-loaded when you touch UI code. Owner directive
   2026-08-10. Categorical hues (contexts, tags, labels) go through the
   `--cat-1…8` ramp via `src/lib/categorical.ts`, never a raw Tailwind palette
-  class. The conformance suite checks five regexes and **nothing tests layout
+  class. The conformance suite checks seven regexes and **nothing tests layout
   or cross-app continuity**, so the theme-switch check (Fluent → Material →
   Graphite, on your surface *and* its neighbour) is the real gate.
 - **Keep branches short and integrate often.** Long branches are the root cause

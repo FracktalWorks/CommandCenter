@@ -130,7 +130,7 @@ Four rules on top of the three above. Each one exists because it was broken:
 
 **What CI cannot catch, and you must.** There is no structural or layout test in
 this tree: nothing asserts panel counts, shell adoption, mobile branches, or that
-two apps draw a card the same way. The conformance suite checks six regexes.
+two apps draw a card the same way. The conformance suite checks seven regexes.
 (`src/lib/sharedTaskUi.test.ts` is the nearest thing to a structural test and is
 narrower than it sounds: it pins that a shared module is declared **once** and
 that each app still imports it — never that a surface actually uses it.)

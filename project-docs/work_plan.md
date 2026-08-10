@@ -215,7 +215,7 @@ owning specs are the archive; this file owns ordering, gates and states only.
 | WS-28 | **People Center — directory, org chart, assignment seam** *(minted 2026-08-06)* | ✅ a+b+b-write | `specs/people_center_app.md` · board record 2026-08-09 | a (key shape, mig 148 + quarantine table) · b (directory + person page, mig 149, five-place registration) · b-write (create/edit UI restored; found three ways mig 148 had broken the write routes) — built 2026-08-06/07; **closes WS-13's directory item**. 🟢 c org chart · d capability search (**ranking EVAL-LOCKED**) · e Projects seams; 🔴 f seats/roles writes (§6 WS-24 (d) analogue). ⚠️ `schema.generated.sql` regeneration is **due**: stale since ~migration 113, and 148 reached prod ~2026-08-07 (after the #384 cast fix). (2026-08-07) |
 ---
 
-## 3. Decisions recorded (D1–D14: 2026-07-31→08-04 · D15/D16: 2026-08-08 · D17–D21: 2026-08-09 · D22–D28: 2026-08-10)
+## 3. Decisions recorded (D1–D14: 2026-07-31→08-04 · D15/D16: 2026-08-08 · D17–D21: 2026-08-09 · D22–D29: 2026-08-10)
 
 Resolutions for the cross-doc conflicts the audit surfaced. D1–D8, **D13**, **D14**,
 **D16** and **D17** are **proposed defaults, adopted unless the owner objects**
@@ -224,6 +224,25 @@ calls, taken and dated. ⚠️ Two entries below are superseded and kept as reco
 **D11** (re-taken by D15) and **D10 part 1's planning premise** (re-scoped by
 D15/D16) — read their banners before citing either.
 
+- **D29 — The agent harness is tracked in git; derived indexes are not.**
+  *(owner-raised 2026-08-10 — "cloud instances should use the full development
+  philosophy"; `agent-proposed, owner may overrule`.)* `.claude/` was a **blanket
+  gitignore**, so every checkout that was not the owner's laptop — a cloud Claude
+  instance, a fresh clone, a headless run, an agent's own worktree — ran with
+  **no `plan-guard`** (i.e. no §6 owner-gate enforcement at all), no
+  supervisor-worker agent definitions and no `/next-ticket`. A safety control was
+  travelling by accident. **Now tracked:** `.claude/AGENTS.md`, `agents/`,
+  `commands/`, `hooks/` (`plan-guard.mjs` + test, `rtk-bash.sh`),
+  `settings.json` — scanned, no secrets. **Still ignored:**
+  `settings.local.json` (per-machine), `worktrees/` (ephemeral checkouts),
+  `scheduled_tasks.lock`, `skill-observations/`, `skills/` (third-party bundles —
+  tooling, not doctrine). **Derived artifacts stay ignored and are rebuilt:** the
+  CodeGraph index (`.codegraph/`) would be large, churn every commit and conflict
+  every merge; its config (`.mcp.json`, `codegraph.json`) is already tracked, so a
+  fresh environment installs the tool and builds its own. General rule: **anything
+  derivable from source is rebuilt on the new machine; only sources of truth are
+  tracked.** Fence (R7): `node .claude/hooks/plan-guard.test.mjs` now runs
+  **blocking** in `pr-check`. Recorded in `engineering_practice.md` §5.1.
 - **D28 — The development doctrine is written down and three of its rules
   bind.** *(owner-requested 2026-08-10 — "document all of this for our
   development process"; the doctrine itself is `agent-proposed, owner may

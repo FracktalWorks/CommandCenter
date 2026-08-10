@@ -50,6 +50,16 @@ jobs:
       - name: Ruff correctness (blocking)
         run: uv run ruff check . --select F821,F601,F602,F502,F7,B006
 
+      # plan-guard is the deterministic half of work_plan.md §6: it REFUSES
+      # owner-gated actions (VPS reach, deploy, commits on main, .env edits) no
+      # matter what an agent intends. It is tracked in git as of D29 precisely so
+      # every checkout — cloud instance, fresh clone, worktree, headless run —
+      # inherits the same refusals. This gate is what keeps that true: break the
+      # guard and CI goes red, rather than the guard silently allowing
+      # everything on somebody else's machine. R7 — the rule names its fence.
+      - name: plan-guard owner-gate enforcement (blocking)
+        run: node .claude/hooks/plan-guard.test.mjs
+
       # Non-blocking report: the FULL ruff check (all configured rules incl. the
       # ~1.3k-finding style backlog + C901 complexity hotspots). This is the
       # ratchet dashboard — the number should trend down; rules graduate to the

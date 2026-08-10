@@ -21,7 +21,7 @@ Operators interact via a thin **Control Plane** (Next.js) with chat Q&A, HITL ap
 ## Where state lives (read in this order)
 
 1. **Root `AGENTS.md`** — global constraints (11, including D15 tenancy rules) and the DOX contract.
-2. **`work_plan.md`** — the dispatch board: WS-0…WS-29 rows (§2), the agent-ready spec contract + standing rules R1–R5 (§1), decisions D1–D18 (§3), single-owner registry (§4), remediation record (§5), owner-gate registry (§6). **For ordering and ownership it wins over every spec, including `project_plan.md` §6.**
+2. **`work_plan.md`** — the dispatch board: WS-0…WS-29 rows (§2), the agent-ready spec contract + standing rules **R1–R8** (§1 — R6/R7/R8 are the engineering-practice rules, D28), decisions D1–D28 (§3), single-owner registry (§4), remediation record (§5), owner-gate registry (§6). **For ordering and ownership it wins over every spec, including `project_plan.md` §6.**
 3. **The owning spec** for your concern — see the index below. Its status header is authoritative for that feature's state.
 4. `FOUNDATION_BUILDOUT_CHECKLIST.md` (repo root) — foundation items BO-1…BO-23.
 
@@ -34,6 +34,7 @@ Milestone history, kept to one line: M1 core engine 2026-05-25 · M2 self-mutati
 | Concern | File |
 |---|---|
 | **What order, who owns it, what's gated** (single source) | [`work_plan.md`](work_plan.md) |
+| **HOW we build** — environments, release rings, migrations, testing, agent work-partitioning, security posture, definition of done | [`specs/engineering_practice.md`](specs/engineering_practice.md) (D28; binding rules R6/R7/R8) |
 | **Requirements + long-horizon roadmap** (sequencing yields to work_plan) | [`project_plan.md`](project_plan.md) |
 | **System design: containers, data model, ADRs** (⚠️ stale-warning in header) | [`system_architecture.md`](system_architecture.md) |
 | **How to maintain an existing external agent repo** (⚠️ superseded premise) | [`agent_repo_compatibility.md`](agent_repo_compatibility.md) |
@@ -103,7 +104,7 @@ Status: 🟢 live/shipped · 🔄 in progress · 🔲 planned/not started. *(Ind
 | [`core_module_map.md`](specs/core_module_map.md) | Living architecture hub (orchestrator module map) | 🟢 living reference |
 | [`drawio_integration.md`](specs/drawio_integration.md) | draw.io master (ST-DRW-01…13) | 🔲 unbuilt; needs an owner (WS-22) |
 | [`drawio_diagram_svc_contract.md`](specs/drawio_diagram_svc_contract.md) | draw.io wire contract | 🔲 unbuilt |
-| [`../work_plan.md`](work_plan.md) | **Work Plan of Record — the dispatch board.** WS-0…WS-29 with gates; contract + R1–R5; decisions D1–D18; single-owner registry; owner-gate registry. **Read before dispatching any agent; for ordering/ownership it wins over every spec** | 🟢 active; consolidation pass 2026-08-09 |
+| [`../work_plan.md`](work_plan.md) | **Work Plan of Record — the dispatch board.** WS-0…WS-29 with gates; contract + R1–R8; decisions D1–D28; single-owner registry; owner-gate registry. **Read before dispatching any agent; for ordering/ownership it wins over every spec** | 🟢 active; consolidation pass 2026-08-09 |
 
 ---
 

@@ -306,7 +306,7 @@ export function TaskBoard({
     cellTasks: TaskRow[],
     laneKey: string | null
   ) => {
-    const scope = laneKey === null ? colKey : `${colKey} ${laneKey}`;
+    const scope = laneKey === null ? colKey : `${colKey}\0${laneKey}`;
     const gap = (index: number) => (
       <li key={`gap-${index}`}>
         <DropGap

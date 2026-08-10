@@ -15,6 +15,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import HTTPException
 from gateway.routes.email.automation import runner as r
+from tests.unit._email_fakes import bind_db
 
 _MID = "msg-1"
 
@@ -52,7 +53,7 @@ async def test_timeline_assembles_received_then_events_oldest_first() -> None:
             action_errors=None, match_source=None, created_at=_dt(22)),
     ]
     db = _db_returning(msg, rows)
-    with patch.object(r, "_get_db", AsyncMock(return_value=db)):
+    with patch.object(r, "_tenant_session", bind_db(db)):
         out = await r.message_timeline(_MID, user=_User())
 
     kinds = [e["kind"] for e in out["events"]]
@@ -67,7 +68,7 @@ async def test_timeline_assembles_received_then_events_oldest_first() -> None:
 
 async def test_unowned_or_unknown_message_is_404() -> None:
     db = _db_returning(None, [])
-    with patch.object(r, "_get_db", AsyncMock(return_value=db)):
+    with patch.object(r, "_tenant_session", bind_db(db)):
         with pytest.raises(HTTPException) as ei:
             await r.message_timeline(_MID, user=_User())
     assert ei.value.status_code == 404
@@ -83,7 +84,7 @@ async def test_failed_run_carries_its_action_errors() -> None:
         reason="matched", match_source="pattern", created_at=_dt(21),
         action_errors=[{"type": "ARCHIVE", "error": "provider refused"}])]
     db = _db_returning(msg, rows)
-    with patch.object(r, "_get_db", AsyncMock(return_value=db)):
+    with patch.object(r, "_tenant_session", bind_db(db)):
         out = await r.message_timeline(_MID, user=_User())
 
     ev = out["events"][-1]

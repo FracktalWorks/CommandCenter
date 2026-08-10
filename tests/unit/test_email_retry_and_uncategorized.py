@@ -32,6 +32,7 @@ from unittest.mock import AsyncMock, MagicMock
 from email_ingestion import scheduler as sched
 from gateway.routes.email.automation import analytics as a
 from gateway.routes.email.automation import runner as m
+from tests.unit._email_fakes import bind_db
 
 # ── the account id is a string, everywhere ──────────────────────────────────
 
@@ -113,7 +114,7 @@ async def test_nothing_to_retry_is_not_an_error() -> None:
         scalar=MagicMock(return_value="u@example.com"),
     )
     import unittest.mock as _mock
-    with _mock.patch.object(m, "_get_db", AsyncMock(return_value=db)):
+    with _mock.patch.object(m, "_tenant_session", bind_db(db)):
         out = await m.retry_failed_executions("acc-1")
     assert out["considered"] == 0 and out["repaired"] == 0
 

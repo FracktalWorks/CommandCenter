@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from gateway.routes import email as m
+from tests.unit._email_fakes import bind_db
 
 
 # ── Settings model carries the new drafting fields ──────────────────────────
@@ -91,7 +92,7 @@ async def test_create_knowledge_inserts_and_returns() -> None:
     db = AsyncMock()
     user = SimpleNamespace(email="u@example.com")
     req = m.KnowledgeModel(account_id="acc-1", title="FAQ", content="Answers.")
-    with patch.object(m.automation.assistant, "_get_db", AsyncMock(return_value=db)), \
+    with patch.object(m.automation.assistant, "_tenant_session", bind_db(db)), \
             patch.object(m.automation.assistant, "_assert_account_owner", AsyncMock()):
         res = await m.create_knowledge(req, user=user)
     assert res["title"] == "FAQ"
@@ -109,7 +110,7 @@ async def test_list_knowledge_returns_entries() -> None:
     db = AsyncMock()
     db.execute.return_value = result
     user = SimpleNamespace(email="u@example.com")
-    with patch.object(m.automation.assistant, "_get_db", AsyncMock(return_value=db)), \
+    with patch.object(m.automation.assistant, "_tenant_session", bind_db(db)), \
             patch.object(m.automation.assistant, "_assert_account_owner", AsyncMock()):
         res = await m.list_knowledge(account_id="acc-1", user=user)
     assert [e["title"] for e in res["entries"]] == ["Pricing", "Policy"]

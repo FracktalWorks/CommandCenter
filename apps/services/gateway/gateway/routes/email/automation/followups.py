@@ -25,6 +25,7 @@ from gateway.routes.email.automation.replyzero import (
 from gateway.routes.email.core import (
     _assert_account_owner,
     _get_db,
+    _tenant_session,
     _instantiate_provider,
     _log,
     _persist_rotated_creds,
@@ -49,11 +50,8 @@ async def scan_follow_ups(
 
     Respects the configured reminder windows; if neither is set, returns
     ``configured: false`` so the UI can prompt the user to set them first."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         await _assert_account_owner(db, req.account_id, user.email or "anonymous")
-    finally:
-        await db.close()
     return await _maybe_send_follow_up_reminders(req.account_id)
 
 
@@ -84,6 +82,8 @@ async def _maybe_send_follow_up_reminders(account_id: str) -> dict[str, int | bo
     result: dict[str, int | bool] = {
         "configured": False, "scanned": 0, "labeled": 0, "drafted": 0,
     }
+    # H4: mixed callers — _maybe_send_follow_up_reminders also runs on the
+    # scheduler's sync loop; needs an explicit tenant from the account row.
     db = await _get_db()
     try:
         srow = (await db.execute(text(

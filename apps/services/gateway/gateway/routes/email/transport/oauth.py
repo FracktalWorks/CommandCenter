@@ -218,6 +218,11 @@ async def oauth_callback(
     creds_json = json.dumps(token_data)
     encrypted_creds = store.encrypt(creds_json)
 
+    # H4/H6: service-identity route — the OAuth callback is a provider
+    # browser redirect with no member session (trust = HMAC-signed state),
+    # so no ambient tenant is bound; needs an explicit tenant derived from
+    # the app_user row of the user encoded in the signed state before
+    # conversion.
     db = await _get_db()
     try:
         # Check if an account already exists for this user+email.  If so, this

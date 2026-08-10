@@ -16,14 +16,21 @@ The short version, because these are the three mistakes that actually happen:
    friendly name. See rule 7 for what to use instead.
 2. **Never `import … from "lucide-react"`.** Use `<Icon name="Plus" />` — the
    active theme decides which pack draws it.
-3. **Never hand-roll a control.** `Button` / `Input` / `Badge` from
-   `src/components/ui/`. Material makes every button a pill, Graphite uppercases
-   every label; no class string can express that.
+3. **Never hand-roll a control.** `Button` / `Input` / `Select` / `Textarea` /
+   `Badge` from `src/components/ui/`. Material makes every button a pill,
+   Graphite uppercases every label; no class string can express that.
+   **`Select` exists since S5** — a bare `<select>` wears the OS's own
+   disclosure triangle, and 38 files had each copied their own class string
+   instead. A **file input must be hidden** (`className="hidden"`) behind a
+   `<Button>` that raises it, with the chosen filenames listed by the app:
+   "Choose Files / No file chosen" is the browser's string in the browser's
+   font and no theme can reach it.
 
-All three are enforced by `src/lib/theme/conformance.test.ts` (**six** rules:
+All three are enforced by `src/lib/theme/conformance.test.ts` (**seven** rules:
 literals, `lucide-react`, bracket classes, solid-button chrome, raw palette
-classes, and — since S4 — the `bg-accent text-accent-foreground` active pair
-rule 6 below forbids), which carries a frozen baseline for existing debt: a file with no
+classes, the `bg-accent text-accent-foreground` active pair rule 6 below forbids
+— since S4 — and, since S5, raw `<select>`s and visible file inputs), which
+carries a frozen baseline for existing debt: a file with no
 budget must be clean, a baselined file may not get worse, and a baselined file
 that got *better* fails until you lower its number — so the debt figures never
 quietly become fiction. **If your change improves a baselined file, lowering

@@ -31,15 +31,22 @@ export interface ColumnDef {
 
 /** Columns in their fixed left→right order (Name is always first, rendered
  *  separately as the flexible 1fr track). Order here === on-screen order. */
+// Widths measured against the widest real chip each column draws, not rounded
+// to a comfortable number: "Speculative Bet" is the widest priority, "Delegate?"
+// the widest suggestion, "@computer" the widest context. The old set was ~120px
+// of slack spread across six tracks — invisible individually, and collectively
+// the reason the Name column was left with 147px and every title truncated
+// mid-word. Reclaiming it is what lets Name have a readable floor *without*
+// pushing Due date off the right edge.
 export const COLUMNS: ColumnDef[] = [
-  { key: "priority", label: "Priority", width: "150px", align: "left" },
-  { key: "mode", label: "Suggestion", width: "120px", align: "left" },
-  { key: "context", label: "Context", width: "120px", align: "left" },
-  { key: "energy", label: "Energy", width: "90px", align: "left" },
-  { key: "estimate", label: "Estimate", width: "80px", align: "left" },
-  { key: "due", label: "Due date", width: "110px", align: "left" },
-  { key: "attachments", label: "Files", width: "60px", align: "center" },
-  { key: "subtasks", label: "Subtasks", width: "80px", align: "center" },
+  { key: "priority", label: "Priority", width: "130px", align: "left" },
+  { key: "mode", label: "Suggestion", width: "110px", align: "left" },
+  { key: "context", label: "Context", width: "100px", align: "left" },
+  { key: "energy", label: "Energy", width: "76px", align: "left" },
+  { key: "estimate", label: "Estimate", width: "64px", align: "left" },
+  { key: "due", label: "Due date", width: "96px", align: "left" },
+  { key: "attachments", label: "Files", width: "56px", align: "center" },
+  { key: "subtasks", label: "Subtasks", width: "72px", align: "center" },
 ];
 
 /** Default visibility — the signals that were already pills on the card, on by
@@ -154,5 +161,18 @@ export function visibleColumns(
  *  window) + each visible column's fixed track. Kept in one place so the header
  *  and the rows align. */
 export function gridTemplate(cols: ColumnDef[]): string {
-  return ["minmax(140px, 1fr)", ...cols.map((c) => c.width)].join(" ");
+  // Name floor measured in a browser, not guessed. At 1440px with both rails
+  // open the row is 865px; the six default fixed tracks plus gaps take 718 of
+  // it, so the old `1fr` resolved to **147px** and every title truncated
+  // mid-word ("Call the travel agent about an…" wanting 312px). 1fr cannot
+  // help — the competing tracks are fixed pixels, so the name only ever gets
+  // the remainder.
+  //
+  // 240px is a floor, not a size: it still grows with `1fr` on a wide screen or
+  // a collapsed rail. It only fits because `COLUMNS` above gave back ~120px of
+  // slack — the first attempt raised this floor alone, and a browser showed the
+  // result immediately: names became readable and Due date fell off the right
+  // edge. Both halves are one change; moving either on its own re-breaks the
+  // other.
+  return ["minmax(240px, 1fr)", ...cols.map((c) => c.width)].join(" ");
 }

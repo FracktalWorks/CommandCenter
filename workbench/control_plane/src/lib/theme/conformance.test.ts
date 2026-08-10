@@ -29,6 +29,16 @@
  *    `sky-500` keeps its hue while every surface around it moves. Categorical
  *    hues have their own themed home now (`--cat-1` … `--cat-8`); state has
  *    `--success` / `--warning` / `--destructive`.
+ * 6. **Active/selected wears the house token.** `bg-accent text-accent-foreground`
+ *    is a legal pair of tokens meaning the wrong thing — see that rule's own note.
+ * 7. **Single-choice and file pickers use the primitives.** A bare `<select>`
+ *    wears the OS's own disclosure triangle and a raw `<input type="file">`
+ *    wears the browser's *"Choose Files / No file chosen"*. Neither follows the
+ *    theme, the icon pack or the label transform, and both were sitting on
+ *    `/projects`' task panel when the owner compared it with `/tasks`' detail
+ *    side by side. Use `<Select>` from `components/ui/Input.tsx`, and keep the
+ *    file input hidden behind a `<Button>` — which is what every correct call
+ *    site in this tree already does.
  *
  * ## Ratchet, not a wall
  *
@@ -294,7 +304,7 @@ describe("solid controls go through the Button primitive", () => {
    * stating is "this number goes down". New files are covered separately and
    * absolutely below — which is the half that governs work we have not done yet.
    */
-  const SOLID_BUTTON_DEBT = 30;
+  const SOLID_BUTTON_DEBT = 29;
 
   function solidButtons(): Record<string, number> {
     const out: Record<string, number> = {};
@@ -551,6 +561,210 @@ describe("active and selected use the house token", () => {
         `${f} no longer uses the pair — drop it from ACTIVE_EXCEPTIONS`,
       ).toBeGreaterThan(0);
     }
+  });
+});
+
+// ── Rule 7: single-choice and file pickers use the primitives ───────────────
+
+describe("selects and file pickers go through the primitives", () => {
+  /**
+   * Why this rule exists, and why it is two halves of one thing (S5).
+   *
+   * `/projects`' task panel changed status through a bare `<select>` and
+   * attached files through a raw `<input type="file">`. Both are *themed for
+   * colour* — they carried `border-border` and `bg-background` — and both are
+   * unreachable by everything else the engine does: the disclosure triangle is
+   * drawn by the OS, "Choose Files / No file chosen" is the browser's own
+   * string in the browser's own font, and neither picks up Graphite's uppercase
+   * labels, Material's state layer or the theme's focus ring. That is the same
+   * argument rule 4 makes about `<button className="bg-primary">`, and the same
+   * blind spot: rules 1/3/5 look only at colour, so CI was silent while an owner
+   * spotted it from a screenshot of the deployed app.
+   *
+   * The file half is deliberately narrower than "no `<input type='file'>`": the
+   * hidden input is the ONLY way to raise the OS dialog, so every correct
+   * implementation has one. What must not happen is the input being the visible
+   * control. So the fence is *a file input that is not hidden*.
+   */
+  const SELECT_TAG = /<select\b/g;
+
+  /**
+   * Comments removed — this rule's own version, because the shared `strip()`
+   * cannot be used here and neither can raw source.
+   *
+   * * Raw source counts the *documentation*: the first run of this rule failed
+   *   `TaskPanel.tsx` twice over, on the two comments explaining why its raw
+   *   controls were replaced. A gate a code comment can trip teaches people not
+   *   to comment (`sharedTaskUi.test.ts` learned the same thing).
+   * * The shared `strip()` deletes `/* … *\/` wherever it appears, and
+   *   `accept="image/*"` opens one — so it swallowed the remainder of
+   *   `SignatureEditor.tsx` into one `<input>` tag and reported an
+   *   already-hidden picker as visible.
+   *
+   * So a block comment is only removed when its `/*` sits on a token boundary,
+   * which `{/* … *\/}` and `/** … *\/` do and an attribute value does not.
+   */
+  const stripTags = (text: string) =>
+    text
+      .replace(/(?<=^|[\s{(])\/\*[\s\S]*?\*\//g, "")
+      .replace(/(?<![:"'/])\/\/[^\n]*/g, "");
+
+  /** The primitive's own implementation. Same shape as ICON_SOURCES. */
+  const SELECT_SOURCES = ["components/ui/Input.tsx"];
+
+  /**
+   * Every hand-rolled `<select>` left in the tree, per file.
+   *
+   * Large because `<Select>` did not exist until S5 — each of these predates the
+   * primitive and carries its own copy of the class string. Same ratchet as
+   * rules 1/3/5/6: an unbudgeted file must be clean, a budgeted one may not get
+   * worse, and one that improved fails until its number comes down.
+   *
+   * `app/projects/components/TaskPanel.tsx` is deliberately absent: it was the
+   * first file converted and is the worked example.
+   */
+  const SELECT_DEBT: Record<string, number> = {
+    "app/artifacts/page.tsx": 3,
+    "app/crm/components/PipelineSettings.tsx": 2,
+    "app/email/components/SignatureEditor.tsx": 1,
+    "app/email/components/TaskCaptureModal.tsx": 2,
+    "app/email/components/automation/DigestSettingsDialog.tsx": 2,
+    "app/email/components/automation/ai-settings/HistoryTab.tsx": 1,
+    "app/email/components/automation/ai-settings/RulesTab.tsx": 3,
+    "app/email/components/automation/ai-settings/SettingsTab.tsx": 3,
+    "app/email/components/automation/ai-settings/VoiceProfileDialog.tsx": 1,
+    "app/notes/components/FollowupEmailModal.tsx": 1,
+    "app/notes/components/MeetingPrep.tsx": 1,
+    "app/notes/components/NotesSettingsModal.tsx": 1,
+    "app/notes/meeting/[id]/page.tsx": 1,
+    "app/people/components/PersonEditor.tsx": 2,
+    "app/projects/components/BulkBar.tsx": 2,
+    "app/projects/components/CustomFieldValues.tsx": 1,
+    "app/projects/components/FieldManager.tsx": 1,
+    "app/projects/components/FilterBar.tsx": 3,
+    "app/projects/components/ImportClickUp.tsx": 2,
+    "app/projects/components/RelationsBlock.tsx": 1,
+    "app/projects/components/RepeatEditor.tsx": 3,
+    "app/projects/components/TableView.tsx": 3,
+    "app/projects/components/TagManager.tsx": 1,
+    "app/settings/groups/page.tsx": 2,
+    "app/settings/members/page.tsx": 2,
+    "app/tasks/components/EngageView.tsx": 2,
+    "app/tasks/components/TaskSettingsModal.tsx": 2,
+    "app/tasks/components/TaskToolbar.tsx": 3,
+    "app/tasks/components/calendar/CalendarSettings.tsx": 3,
+    "app/tasks/components/calendar/PlanDayPanel.tsx": 1,
+    "app/whatsapp/calls/page.tsx": 1,
+    "app/whatsapp/settings/categories/page.tsx": 1,
+    "app/workflows/components/NodeInspector.tsx": 6,
+    "app/workflows/components/TriggerPanel.tsx": 1,
+    "components/TierCard.tsx": 1,
+    "components/genUITemplates.tsx": 1,
+    "components/room/ShareSheet.tsx": 1,
+  };
+
+  const selects = (rel: string) =>
+    SELECT_SOURCES.includes(rel)
+      ? 0
+      : (stripTags(read(rel)).match(SELECT_TAG) ?? []).length;
+
+  it("a file with no budget uses <Select>", () => {
+    const offenders = sourceFiles()
+      .filter((f) => f.endsWith(".tsx") && !(f in SELECT_DEBT))
+      .map((f) => [f, selects(f)] as const)
+      .filter(([, n]) => n > 0);
+    expect(
+      offenders,
+      "Use `<Select>` from components/ui/Input.tsx. A bare <select> is themed " +
+        "for colour and frozen for everything else — the disclosure glyph comes " +
+        "from the OS rather than the active icon pack, and the label transform " +
+        "and focus ring never reach it.",
+    ).toEqual([]);
+  });
+
+  it("no baselined file gets worse, and none is stale", () => {
+    const drift = Object.entries(SELECT_DEBT)
+      .map(([f, budget]) => ({ file: f, budget, actual: selects(f) }))
+      .filter((r) => r.actual !== r.budget);
+    expect(drift, "Update SELECT_DEBT to match reality — down only.").toEqual([]);
+  });
+
+  it("the primitive's allowlist has no stale entry", () => {
+    for (const f of SELECT_SOURCES) {
+      expect(
+        count(read(f), SELECT_TAG),
+        `${f} no longer renders a <select> — drop it from SELECT_SOURCES`,
+      ).toBeGreaterThan(0);
+    }
+  });
+
+  /**
+   * Every `<input …>` opening tag, brace-aware.
+   *
+   * Not `/<input\b[^>]*>/`: a JSX attribute routinely contains `>` inside an
+   * arrow function, so the lazy version ends the tag at `onChange={(e) =>` and
+   * whether `className="hidden"` was seen would depend on the order somebody
+   * happened to write the attributes in. That is a fence that passes for the
+   * wrong reason — the same trap `sharedTaskUi.test.ts` documents for
+   * `<TaskCardShell>`.
+   *
+   * Fed by `stripTags`, not the shared `strip()` — see that helper's note.
+   */
+  const inputTags = (text: string): string[] => {
+    const out: string[] = [];
+    for (const m of text.matchAll(/<input\b/g)) {
+      let depth = 0;
+      let i = m.index + m[0].length;
+      for (; i < text.length; i++) {
+        const c = text[i];
+        if (c === "{") depth++;
+        else if (c === "}") depth--;
+        else if (c === ">" && depth === 0) break;
+      }
+      out.push(text.slice(m.index, i));
+    }
+    return out;
+  };
+
+  const fileInputs = (rel: string) =>
+    inputTags(stripTags(read(rel))).filter((tag) =>
+      /type=["']file["']/.test(tag),
+    );
+
+  /** File inputs that are the visible control rather than a hidden trigger. */
+  const visibleFileInputs = (rel: string) =>
+    fileInputs(rel).filter((tag) => !/\bhidden\b/.test(tag)).length;
+
+  /**
+   * No budget, on purpose. Measured across the whole tree at S5: every other
+   * file picker here — chat uploads, the résumé parser, the signature image,
+   * the meeting-audio drop, the email composer — was already a hidden input
+   * behind a real control, and `TaskPanel` was the only surface showing the
+   * browser's own. A rule with no exceptions is worth more than a budget nobody
+   * reads (rule 2 learned the same thing about `lucide-react`).
+   */
+  it("a file picker is a Button, not the browser's own control", () => {
+    const offenders = sourceFiles()
+      .filter((f) => f.endsWith(".tsx"))
+      .map((f) => [f, visibleFileInputs(f)] as const)
+      .filter(([, n]) => n > 0);
+    expect(
+      offenders,
+      'Hide the input (`className="hidden"`) and raise it from a <Button> — ' +
+        '"Choose Files / No file chosen" is the browser\'s string in the ' +
+        "browser's font, and no theme can reach it. The chosen filenames belong " +
+        "on the surface, listed by the app.",
+    ).toEqual([]);
+  });
+
+  it("the file-picker scan sees the real ones", () => {
+    // Guards the shape of the assertion above: a scanner that matches nothing
+    // passes it forever. There are hidden file inputs in this tree, and this is
+    // the count that says the regex still finds them.
+    const seen = sourceFiles()
+      .filter((f) => f.endsWith(".tsx"))
+      .reduce((n, f) => n + fileInputs(f).length, 0);
+    expect(seen, "No file inputs found at all — the scan broke.").toBeGreaterThan(5);
   });
 });
 

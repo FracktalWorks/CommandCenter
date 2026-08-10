@@ -13,7 +13,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 import { DEFAULT_THEME_ID, THEMES, findTheme, resolveTheme } from "./themes";
-import { REQUIRED_COLOR_TOKENS } from "./types";
+import { CATEGORICAL_TOKENS, REQUIRED_COLOR_TOKENS } from "./types";
 import type { ColorTokens } from "./types";
 
 const GLOBALS = readFileSync(
@@ -78,6 +78,59 @@ describe("theme registry", () => {
       expect(theme.colors.dark.background).not.toBe(theme.colors.light.background);
     },
   );
+});
+
+describe("the categorical ramp", () => {
+  // The ramp is what stops a set of @contexts, tags or chart series from
+  // needing raw palette classes. It only works if EVERY theme carries EVERY
+  // slot in BOTH modes: a caller writes `text-cat-6` once and it has to
+  // resolve on all eight theme/mode combinations, or the surface renders with
+  // an unresolvable var() — which invalidates the declaration and drops the
+  // colour entirely, on exactly half the matrix.
+  it.each(THEMES.map((t) => [t.id, t] as const))(
+    "%s declares all eight slots in both modes",
+    (_id, theme) => {
+      for (const mode of ["dark", "light"] as const) {
+        const missing = CATEGORICAL_TOKENS.filter((token) => !theme.colors[mode][token]);
+        expect(missing, `${theme.id}/${mode}`).toEqual([]);
+      }
+    },
+  );
+
+  it.each(THEMES.map((t) => [t.id, t] as const))(
+    "%s gives every slot a distinct value in each mode",
+    (_id, theme) => {
+      // Two slots sharing a value is a copy-paste slip that defeats the whole
+      // point — the two @contexts that hash to them become one colour, and
+      // nothing else in the app would ever complain.
+      for (const mode of ["dark", "light"] as const) {
+        const values = CATEGORICAL_TOKENS.map((token) => theme.colors[mode][token]);
+        expect(new Set(values).size, `${theme.id}/${mode}`).toBe(CATEGORICAL_TOKENS.length);
+      }
+    },
+  );
+
+  it.each(THEMES.map((t) => [t.id, t] as const))(
+    "%s re-tints the ramp for light mode rather than reusing dark's",
+    (_id, theme) => {
+      // Dark-mode slots are chosen to read on a near-black surface. Reused on
+      // a white card they are the unreadable half of this feature, and the
+      // contrast gate would catch it — this says WHICH mistake was made.
+      for (const token of CATEGORICAL_TOKENS) {
+        expect(theme.colors.light[token], `${theme.id}/${token}`).not.toBe(
+          theme.colors.dark[token],
+        );
+      }
+    },
+  );
+
+  it("bridges every slot into Tailwind", () => {
+    // `bg-cat-3` exists only because `@theme inline` names it. A slot defined
+    // in the manifests but missing here is a class that silently does nothing.
+    for (const token of CATEGORICAL_TOKENS) {
+      expect(GLOBALS, `--color-${token}`).toContain(`--color-${token}: var(--${token});`);
+    }
+  });
 });
 
 describe("globals.css fallback matches the default manifest", () => {

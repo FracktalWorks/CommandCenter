@@ -77,7 +77,7 @@ export function UnscheduledRail({
   return (
     <aside className="hidden w-64 shrink-0 flex-col border-l border-border bg-card md:flex">
       <div className="border-b border-border px-3 py-2">
-        <div className="flex items-center gap-1.5 text-[12px] font-semibold text-foreground">
+        <div className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
           <Icon name="CalendarPlus" className="h-3.5 w-3.5 text-primary" />
           Unscheduled
         </div>
@@ -160,7 +160,7 @@ export function UnscheduledRail({
                 ].join(" ")}
               >
                 <div className="flex items-start gap-1">
-                  <span className="min-w-0 flex-1 truncate text-left text-[12px] text-foreground">
+                  <span className="min-w-0 flex-1 truncate text-left text-xs text-foreground">
                     {t.id === oneThingId && (
                       <span className="text-amber-400">★ </span>
                     )}

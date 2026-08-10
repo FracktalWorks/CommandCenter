@@ -16,14 +16,64 @@
  */
 
 /**
+ * The categorical ramp — `--cat-1` … `--cat-8`.
+ *
+ * Semantic tokens answer "what does this MEAN" (success, warning, primary).
+ * A categorical hue answers a different question: "which ONE of these is it",
+ * for a set whose members have no ranking and no meaning — @contexts, tags,
+ * custom-field options, chart series. There are about five semantic tones, so
+ * tokenising categories onto them makes eight @contexts share four colours and
+ * stop being distinguishable, which is the whole job.
+ *
+ * Hence a ramp: eight hues chosen to be mutually distinguishable at chip size,
+ * each theme picking values coherent with its own identity, both modes
+ * supplied. A surface that uses them tracks the theme like everything else —
+ * which `bg-sky-500` never did.
+ *
+ * Rules for a theme author:
+ *   • all eight slots, both modes, always (a missing one is a compile error,
+ *     and `themes.test.ts` says so at runtime too);
+ *   • each must clear WCAG AA against that theme's `card` AND `background`,
+ *     because these render as text, not just as dots — `contrast.test.ts`;
+ *   • slot order is meaningless to a reader but STABLE for callers: nothing
+ *     may be reordered, because `contextColors.ts` hashes a name to a slot and
+ *     reordering would repaint every existing @context.
+ */
+export type CategoricalToken =
+  | "cat-1"
+  | "cat-2"
+  | "cat-3"
+  | "cat-4"
+  | "cat-5"
+  | "cat-6"
+  | "cat-7"
+  | "cat-8";
+
+/** The ramp's slots, in order. The length IS the number of slots. */
+export const CATEGORICAL_TOKENS = [
+  "cat-1",
+  "cat-2",
+  "cat-3",
+  "cat-4",
+  "cat-5",
+  "cat-6",
+  "cat-7",
+  "cat-8",
+] as const satisfies readonly CategoricalToken[];
+
+/**
  * Semantic colour tokens. Names mirror the shadcn/ui convention already used
  * across the app, which keeps us compatible with the wider ecosystem of theme
  * generators (tweakcn and friends export exactly this vocabulary).
  *
  * Values are raw CSS colours — `hsl(…)`, `oklch(…)` or hex all work, because
  * Tailwind v4 consumes them through `var()` without parsing.
+ *
+ * The categorical ramp is intersected in rather than listed here: it is not
+ * semantic, it is ordinal, and keeping it a separate named set is what lets a
+ * caller iterate the slots without also iterating `--background`.
  */
-export type ColorTokens = {
+export type ColorTokens = Record<CategoricalToken, string> & {
   background: string;
   foreground: string;
   card: string;
@@ -88,6 +138,7 @@ export const REQUIRED_COLOR_TOKENS = [
   "successForeground",
   "warning",
   "warningForeground",
+  ...CATEGORICAL_TOKENS,
 ] as const satisfies readonly (keyof ColorTokens)[];
 
 /**

@@ -166,11 +166,11 @@ export function AiTaskActions({ item }: { item: GtdItem }) {
                   )}
                 </div>
                 <div className="mt-2.5 flex items-center gap-2">
-                  <Button size="none" radius="keep" layout="inline-flex items-center" type="button" onClick={apply} disabled={chosen.size === 0} className="gap-1.5 rounded-md px-2.5 py-1.5 text-[12px]">
+                  <Button size="none" radius="keep" layout="inline-flex items-center" type="button" onClick={apply} disabled={chosen.size === 0} className="gap-1.5 rounded-md px-2.5 py-1.5 text-xs">
                     <Icon name="Check" className="h-3.5 w-3.5" />
                     Apply {chosen.size > 0 ? chosen.size : ""}
                   </Button>
-                  <Button variant="ghost" size="none" radius="keep" layout="" type="button" onClick={() => setFillOpen(false)} className="rounded-md px-2 py-1.5 text-[12px]">
+                  <Button variant="ghost" size="none" radius="keep" layout="" type="button" onClick={() => setFillOpen(false)} className="rounded-md px-2 py-1.5 text-xs">
                     Cancel
                   </Button>
                 </div>
@@ -222,7 +222,7 @@ function FillRow({
       <span className="w-16 shrink-0 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
         {label}
       </span>
-      <span className="min-w-0 flex-1 truncate text-[12px] text-foreground">
+      <span className="min-w-0 flex-1 truncate text-xs text-foreground">
         {value}
       </span>
     </button>

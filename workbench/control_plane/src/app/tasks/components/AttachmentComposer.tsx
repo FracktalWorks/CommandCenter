@@ -159,7 +159,7 @@ export function AttachmentComposer({
                 if (e.key === "Escape") setLinkOpen(false);
               }}
               placeholder="Paste a URL…"
-              className="flex-1 rounded-md border border-border bg-background/60 px-2 py-1 text-base text-foreground focus:border-primary/50 focus:outline-none sm:text-[12px]"
+              className="flex-1 rounded-md border border-border bg-background/60 px-2 py-1 text-base text-foreground focus:border-primary/50 focus:outline-none sm:text-xs"
             />
             <button
               type="button"

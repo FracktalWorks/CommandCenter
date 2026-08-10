@@ -63,7 +63,7 @@ export function InboxTable({
                 key={item.id}
                 onClick={() => selectItem(item.id)}
                 className={[
-                  "group cursor-pointer border-b border-border/60 text-[13px] last:border-b-0",
+                  "group cursor-pointer border-b border-border/60 text-sm last:border-b-0",
                   cursorId === item.id ? "bg-primary/5" : "hover:bg-secondary/50",
                 ].join(" ")}
               >

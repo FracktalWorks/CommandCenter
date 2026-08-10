@@ -54,13 +54,13 @@ export function UndoToast() {
 
   return (
     <div className="chat-fade-in fixed bottom-20 left-1/2 z-[70] flex -translate-x-1/2 items-center gap-3 rounded-full border border-border bg-popover px-4 py-2 shadow-2xl sm:bottom-6">
-      <span className="whitespace-nowrap text-[13px] text-foreground">
+      <span className="whitespace-nowrap text-sm text-foreground">
         {undoSnapshot.label}
       </span>
       <button
         type="button"
         onClick={undoLastChange}
-        className="tech-transition inline-flex items-center gap-1 whitespace-nowrap text-[13px] font-semibold text-primary hover:underline"
+        className="tech-transition inline-flex items-center gap-1 whitespace-nowrap text-sm font-semibold text-primary hover:underline"
       >
         <Icon name="Undo2" className="h-3.5 w-3.5" />
         Undo

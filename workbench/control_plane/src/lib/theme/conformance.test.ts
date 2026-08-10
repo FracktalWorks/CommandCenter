@@ -22,6 +22,13 @@
  *    have Material's pill radius and state layer, Fluent's outline on solid
  *    fills, or an uppercase label, because none of that is expressible in a
  *    class string. `<Button>` is where those tokens are applied.
+ * 5. **No raw Tailwind PALETTE classes.** `bg-sky-500/10` is the one that got
+ *    away: it is a named class, not a bracket class, so rules 1 and 3 both let
+ *    it through, and the app accumulated ~950 of them. It is every bit as
+ *    unthemed as `#0ea5e9` — switch the org to Material and a chip painted
+ *    `sky-500` keeps its hue while every surface around it moves. Categorical
+ *    hues have their own themed home now (`--cat-1` … `--cat-8`); state has
+ *    `--success` / `--warning` / `--destructive`.
  *
  * ## Ratchet, not a wall
  *
@@ -94,7 +101,21 @@ function strip(text: string): string {
 }
 
 const COLOR_LITERAL = /#[0-9a-fA-F]{6}\b|#[0-9a-fA-F]{3}\b|\brgba?\(|\bhsla?\(/g;
-const ARBITRARY_CLASS = /\b(?:bg|text|border|ring|fill|stroke|from|via|to|shadow|outline|decoration|accent|caret)-\[(?:#|rgb|hsl)[^\]]*\]/g;
+const COLOR_UTILITY =
+  "(?:bg|text|border|ring|fill|stroke|from|via|to|shadow|outline|decoration|accent|caret)";
+const ARBITRARY_CLASS = new RegExp(`\\b${COLOR_UTILITY}-\\[(?:#|rgb|hsl)[^\\]]*\\]`, "g");
+/**
+ * Tailwind's own palette, named. Every family and every step, because the
+ * point is that NONE of them is a theme token — `text-slate-400` is as
+ * unreachable as `text-fuchsia-600`. Deliberately does not match `text-cat-3`:
+ * the ramp is ours and is defined per theme.
+ */
+const PALETTE_CLASS = new RegExp(
+  `\\b${COLOR_UTILITY}-(?:slate|gray|zinc|neutral|stone|red|orange|amber|yellow|lime|` +
+    `green|emerald|teal|cyan|sky|blue|indigo|violet|purple|fuchsia|pink|rose)-` +
+    `(?:50|100|200|300|400|500|600|700|800|900|950)\\b`,
+  "g",
+);
 const BUTTON_TAG = /<button\b(?:[^>]|\n)*?>/g;
 /**
  * A SOLID fill — `bg-primary`, and nothing else that merely contains it.
@@ -162,8 +183,11 @@ const COLOR_DEBT: Record<string, number> = {
   "components/ThinkingContainer.tsx": 4,
 };
 
-const excepted = (rel: string) =>
-  Object.keys(COLOR_EXCEPTIONS).some((k) => (k.endsWith("/") ? rel.startsWith(k) : rel === k));
+/** A key ending in `/` is a directory prefix; anything else is an exact path. */
+const matches = (rel: string, keys: string[]) =>
+  keys.some((k) => (k.endsWith("/") ? rel.startsWith(k) : rel === k));
+
+const excepted = (rel: string) => matches(rel, Object.keys(COLOR_EXCEPTIONS));
 
 describe("no hardcoded colour", () => {
   it("a file with no budget has no colour literals", () => {
@@ -302,6 +326,150 @@ describe("solid controls go through the Button primitive", () => {
     // Guards the one way a total can lie: deleting five in an old file and
     // writing five in a new one nets zero while the invariant gets worse.
     expect([...BASELINE_FILES].length).toBeGreaterThan(0);
+  });
+});
+
+// ── Rule 5: no raw Tailwind palette classes ─────────────────────────────────
+
+describe("no raw Tailwind palette colours", () => {
+  /**
+   * Palette classes that are NOT a theme decision. Same bar as rule 1's list:
+   * the value has to be wrong to theme, not merely expensive to migrate.
+   */
+  const PALETTE_EXCEPTIONS: Record<string, string> = {
+    "app/observability/office-topdown.tsx":
+      "the isometric office scene — depiction, not chrome; a floor recoloured " +
+      "per theme is broken art, which is the same argument COLOR_EXCEPTIONS makes " +
+      "for this file's literals",
+  };
+
+  /**
+   * The tree as it stands. This baseline is large on purpose: it is the debt
+   * that rules 1 and 3 could not see, written down where it can only shrink.
+   *
+   * Three of these are ramps in the same sense `contextColors.ts` was, and are
+   * the natural next customers for `--cat-*`: `app/workflows/lib/types.ts`
+   * (node categories), `lib/providers.ts` + `lib/model-types.ts` (per-provider
+   * accents), `app/tasks/components/PriorityControls.tsx` (matrix cells).
+   */
+  const PALETTE_DEBT: Record<string, number> = {
+    "app/agents/page.tsx": 17,
+    "app/artifacts/page.tsx": 18,
+    "app/chat/page.tsx": 5,
+    "app/email/components/AccountSidebar.tsx": 3,
+    "app/email/components/ComposePanel.tsx": 1,
+    "app/email/components/EmailAssistantChat.tsx": 1,
+    "app/email/components/EmailDetail.tsx": 5,
+    "app/email/components/EmailList.tsx": 7,
+    "app/email/components/MessageTimelineModal.tsx": 1,
+    "app/email/components/TaskCaptureModal.tsx": 4,
+    "app/email/components/automation/AISettingsView.tsx": 1,
+    "app/email/components/automation/AnalyticsView.tsx": 4,
+    "app/email/components/automation/BulkUnsubscribeView.tsx": 41,
+    "app/email/components/automation/DashboardView.tsx": 4,
+    "app/email/components/automation/ai-settings/HistoryTab.tsx": 2,
+    "app/email/components/automation/ai-settings/RulesTab.tsx": 25,
+    "app/email/components/automation/ai-settings/SettingsTab.tsx": 22,
+    "app/email/components/automation/ai-settings/TestTab.tsx": 4,
+    "app/email/components/automation/ai-settings/VoiceProfileDialog.tsx": 6,
+    "app/email/components/automation/ai-settings/actionFormat.tsx": 56,
+    "app/email/components/automation/ai-settings/common.tsx": 6,
+    "app/email/components/automation/ai-settings/fixDialog.tsx": 6,
+    "app/email/oauth/callback/page.tsx": 2,
+    "app/email/page.tsx": 35,
+    "app/integrations/page.tsx": 110,
+    "app/notes/components/BotIdentitySection.tsx": 8,
+    "app/notes/components/LiveDock.tsx": 2,
+    "app/notes/meeting/[id]/page.tsx": 3,
+    "app/observability/page.tsx": 29,
+    "app/settings/models/page.tsx": 3,
+    "app/signin/page.tsx": 5,
+    "app/tasks/components/AssistantRail.tsx": 1,
+    "app/tasks/components/ClarifyPanel.tsx": 5,
+    "app/tasks/components/DeleteConfirmModal.tsx": 4,
+    "app/tasks/components/FocusMode.tsx": 2,
+    "app/tasks/components/PriorityControls.tsx": 48,
+    "app/tasks/components/StartupRitual.tsx": 6,
+    "app/tasks/components/calendar/EndOfDayReview.tsx": 6,
+    "app/tasks/components/calendar/ScheduleSheet.tsx": 1,
+    "app/tasks/components/calendar/TimeGrid.tsx": 8,
+    "app/tasks/components/calendar/UnscheduledRail.tsx": 9,
+    "app/whatsapp/connect/page.tsx": 19,
+    "app/whatsapp/insights/page.tsx": 2,
+    "app/whatsapp/numbers/page.tsx": 4,
+    "app/whatsapp/page.tsx": 4,
+    "app/whatsapp/settings/categories/page.tsx": 2,
+    "app/whatsapp/settings/replies/page.tsx": 3,
+    "app/whatsapp/settings/rules/page.tsx": 1,
+    "app/workflows/[id]/page.tsx": 4,
+    "app/workflows/components/CopilotPanel.tsx": 3,
+    "app/workflows/components/ModuleStudio.tsx": 1,
+    "app/workflows/components/NodePalette.tsx": 1,
+    "app/workflows/components/TriggerPanel.tsx": 1,
+    "app/workflows/lib/types.ts": 60,
+    "components/AddAgentWizard.tsx": 19,
+    "components/AgentChat.tsx": 33,
+    "components/AgentStatusBar.tsx": 4,
+    "components/ArtifactCard.tsx": 5,
+    "components/ArtifactSidebar.tsx": 11,
+    "components/ArtifactViewerModal.tsx": 24,
+    "components/ChatErrorCard.tsx": 7,
+    "components/ConfirmationCard.tsx": 8,
+    "components/FileUploadButton.tsx": 10,
+    "components/GenerativeUINode.tsx": 31,
+    "components/GenerativeUIPanel.tsx": 6,
+    "components/GitHubAccountBadge.tsx": 1,
+    "components/IntegrationSetup.tsx": 1,
+    "components/MarkdownMessage.tsx": 11,
+    "components/MessageBubble.tsx": 4,
+    "components/Sidebar.tsx": 2,
+    "components/ThinkingContainer.tsx": 44,
+    "components/TodoPanel.tsx": 1,
+    "components/email/EmailToolCards.tsx": 20,
+    "components/tasks/TaskToolCards.tsx": 6,
+    "lib/model-types.ts": 39,
+    "lib/providers.ts": 33,
+  };
+
+  const paletteExcepted = (rel: string) => matches(rel, Object.keys(PALETTE_EXCEPTIONS));
+
+  it("a file with no budget uses only themed colour", () => {
+    const offenders = sourceFiles()
+      .filter((f) => !(f in PALETTE_DEBT) && !paletteExcepted(f))
+      .map((f) => [f, count(read(f), PALETTE_CLASS)] as const)
+      .filter(([, n]) => n > 0);
+    expect(
+      offenders,
+      "`bg-sky-500` is a hardcoded colour with a friendly name. For STATE use " +
+        "`text-success` / `bg-warning/10` / `border-destructive/30`; for a set " +
+        "of things with no meaning and no ranking — @contexts, tags, chart " +
+        "series — use the categorical ramp, `bg-cat-3/10 text-cat-3`, which " +
+        "every theme defines in both modes (src/lib/theme/themes.ts).",
+    ).toEqual([]);
+  });
+
+  it("no baselined file gets worse", () => {
+    const worse = Object.entries(PALETTE_DEBT)
+      .map(([f, budget]) => ({ file: f, budget, actual: count(read(f), PALETTE_CLASS) }))
+      .filter((r) => r.actual > r.budget);
+    expect(worse, "Palette debt grew. Use tokens or the --cat-* ramp.").toEqual([]);
+  });
+
+  it("no baseline is stale", () => {
+    const improved = Object.entries(PALETTE_DEBT)
+      .map(([f, budget]) => ({ file: f, budget, actual: count(read(f), PALETTE_CLASS) }))
+      .filter((r) => r.actual < r.budget);
+    expect(improved, "Thank you — now lower these numbers in PALETTE_DEBT.").toEqual([]);
+  });
+
+  it("every exception names a file that still needs one", () => {
+    // An exception outliving its reason is latitude nobody asked for.
+    for (const f of Object.keys(PALETTE_EXCEPTIONS)) {
+      expect(
+        count(read(f), PALETTE_CLASS),
+        `${f} has no palette classes left — drop it from PALETTE_EXCEPTIONS`,
+      ).toBeGreaterThan(0);
+    }
   });
 });
 

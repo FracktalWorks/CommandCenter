@@ -141,7 +141,7 @@ export function ScheduleSheet({
         </div>
 
         <div className="px-3 pb-2">
-          <Button size="none" radius="keep" layout="flex items-center justify-center" type="button" onClick={onPlan} className="w-full gap-1.5 rounded-md px-3 py-2.5 text-[13px] font-semibold">
+          <Button size="none" radius="keep" layout="flex items-center justify-center" type="button" onClick={onPlan} className="w-full gap-1.5 rounded-md px-3 py-2.5 text-sm font-semibold">
             <Icon name="Wand2" className="h-4 w-4" />
             Rebuild my day with AI
           </Button>
@@ -149,7 +149,7 @@ export function ScheduleSheet({
 
         <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-4">
           {tasks.length === 0 ? (
-            <p className="px-1 py-8 text-center text-[12px] text-muted-foreground">
+            <p className="px-1 py-8 text-center text-xs text-muted-foreground">
               Nothing to schedule — inbox zero on next actions. 🎉
             </p>
           ) : (
@@ -204,7 +204,7 @@ export function ScheduleSheet({
                       className="tech-transition flex items-center gap-2 rounded-lg border border-border bg-background/60 p-2.5 text-left hover:border-primary/50 active:bg-primary/5"
                     >
                       <span className="min-w-0 flex-1">
-                        <span className="block truncate text-[13px] font-medium text-foreground">
+                        <span className="block truncate text-sm font-medium text-foreground">
                           {t.leveraged && (
                             <span className="text-amber-500">★ </span>
                           )}
@@ -269,7 +269,7 @@ export function ScheduleSheet({
                         onClick={() => onSchedule(t, at)}
                         className="tech-transition flex items-center gap-2 rounded-lg border border-border/60 bg-background/40 p-2 text-left opacity-70 hover:opacity-100"
                       >
-                        <span className="min-w-0 flex-1 truncate text-[12px] text-muted-foreground">
+                        <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
                           {t.title}
                         </span>
                         <span className="shrink-0 text-[10px] tabular-nums text-warning">

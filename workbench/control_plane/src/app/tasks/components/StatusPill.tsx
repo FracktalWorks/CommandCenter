@@ -50,7 +50,7 @@ export function StatusPill({ item }: { item: GtdItem }) {
                   setStage(s);
                   setOpen(false);
                 }}
-                className="tech-transition flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[12px] text-foreground hover:bg-secondary"
+                className="tech-transition flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-xs text-foreground hover:bg-secondary"
               >
                 <span
                   className={`h-1.5 w-1.5 shrink-0 rounded-full ${stageAccent(s, i, stages.length).dot}`}

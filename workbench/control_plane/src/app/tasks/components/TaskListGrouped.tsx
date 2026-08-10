@@ -702,7 +702,7 @@ function SubtaskRows({ parent }: { parent: GtdItem }) {
               type="button"
               onClick={() => openFocus(c.id)}
               className={[
-                "min-w-0 flex-1 truncate text-left text-[13px]",
+                "min-w-0 flex-1 truncate text-left text-sm",
                 done
                   ? "text-muted-foreground line-through"
                   : "text-foreground hover:text-primary",

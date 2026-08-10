@@ -126,7 +126,7 @@ function WaitingRow({
     <div className="flex min-w-0 items-start gap-2 px-3 py-2">
       <div className="min-w-0 flex-1">
         {/* WHAT — the clarified next action if there is one, else the title. */}
-        <p className="truncate text-[13px] text-foreground">
+        <p className="truncate text-sm text-foreground">
           {item.nextAction || item.title}
         </p>
         <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1">

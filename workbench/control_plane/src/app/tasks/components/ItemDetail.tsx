@@ -361,7 +361,7 @@ export function TaskDetail({
                       });
                       close();
                     }}
-                    className="rounded-md border border-border bg-background px-2 py-1 text-[13px] text-foreground focus:border-primary/50 focus:outline-none"
+                    className="rounded-md border border-border bg-background px-2 py-1 text-sm text-foreground focus:border-primary/50 focus:outline-none"
                   />
                   {item.dueAt && (
                     <button type="button" onClick={() => { updateItem(item.id, { dueAt: "" }); close(); }}
@@ -533,11 +533,11 @@ export function TaskDetail({
             <span className="min-w-0 flex-1 text-[12.5px] text-foreground">
               No longer your action? Remove it from My Next Actions — it stays on ClickUp.
             </span>
-            <Button size="none" radius="keep" layout="inline-flex items-center" type="button" onClick={() => { updateItem(item.id, { isMine: false }); setOfferDropFromNext(false); }} className="gap-1.5 rounded-md px-2.5 py-1.5 text-[12px]">
+            <Button size="none" radius="keep" layout="inline-flex items-center" type="button" onClick={() => { updateItem(item.id, { isMine: false }); setOfferDropFromNext(false); }} className="gap-1.5 rounded-md px-2.5 py-1.5 text-xs">
               <AppIcon name="UserMinus" className="h-3.5 w-3.5" />
               Remove from My Next Actions
             </Button>
-            <Button variant="ghost" size="none" radius="keep" layout="" type="button" onClick={() => setOfferDropFromNext(false)} className="rounded-md px-2.5 py-1.5 text-[12px]">
+            <Button variant="ghost" size="none" radius="keep" layout="" type="button" onClick={() => setOfferDropFromNext(false)} className="rounded-md px-2.5 py-1.5 text-xs">
               Keep
             </Button>
           </div>
@@ -568,7 +568,7 @@ export function TaskDetail({
                       {promiseLate ? <AppIcon name="AlertTriangle" className="h-3 w-3" /> : <AppIcon name="Clock" className="h-3 w-3" />}
                       {relativeTime(item.expectedBy)}
                     </span>
-                  : <span className="text-[13px] text-muted-foreground/70">
+                  : <span className="text-sm text-muted-foreground/70">
                       {item.dueAt
                         ? `not promised — judged on due ${relativeTime(item.dueAt)}`
                         : "not promised"}
@@ -587,7 +587,7 @@ export function TaskDetail({
                         });
                         close();
                       }}
-                      className="rounded-md border border-border bg-background px-2 py-1 text-[13px] text-foreground focus:border-primary/50 focus:outline-none"
+                      className="rounded-md border border-border bg-background px-2 py-1 text-sm text-foreground focus:border-primary/50 focus:outline-none"
                     />
                     {item.expectedBy && (
                       <button type="button" onClick={() => { updateItem(item.id, { expectedBy: "" }); close(); }}
@@ -653,7 +653,7 @@ export function TaskDetail({
         {item.syncState === "pending" && backend === "live" && (
           <section className="rounded-lg border border-warning/30 bg-warning/5 px-3 py-2.5">
             <div className="flex items-center justify-between gap-2">
-              <span className="inline-flex items-center gap-1.5 text-[12px] font-medium text-warning">
+              <span className="inline-flex items-center gap-1.5 text-xs font-medium text-warning">
                 <AppIcon name="Clock" className="h-3.5 w-3.5" />
                 Not yet pushed to {item.provider ?? "the tool"}
               </span>
@@ -755,7 +755,7 @@ function LocalSubtasksSection({ item }: { item: GtdItem }) {
             return (
               <div
                 key={s.id}
-                className="group flex items-center gap-2 rounded-md border border-border bg-card px-3 py-2 text-[13px]"
+                className="group flex items-center gap-2 rounded-md border border-border bg-card px-3 py-2 text-sm"
               >
                 <button
                   type="button"
@@ -804,7 +804,7 @@ function LocalSubtasksSection({ item }: { item: GtdItem }) {
                   if (e.key === "Enter") { e.preventDefault(); void add(); }
                 }}
                 placeholder="Add a subtask…"
-                className="min-w-0 flex-1 bg-transparent px-0.5 py-0.5 text-[13px] text-foreground placeholder:text-muted-foreground focus:outline-none"
+                className="min-w-0 flex-1 bg-transparent px-0.5 py-0.5 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none"
               />
               {adding.trim() && (
                 <Button size="none" radius="keep" layout="" type="button" onClick={() => void add()} className="shrink-0 rounded-md px-2 py-1 text-[11px]">
@@ -845,7 +845,7 @@ function ProviderDetailSections({
 
   if (loading) {
     return (
-      <div className="flex items-center gap-2 text-[12px] text-muted-foreground">
+      <div className="flex items-center gap-2 text-xs text-muted-foreground">
         <AppIcon name="Loader2" className="h-3.5 w-3.5 animate-spin" />
         Loading {provider === "clickup" ? "ClickUp" : provider} detail…
       </div>
@@ -908,7 +908,7 @@ function ProviderDetailSections({
 function SubtaskRow({ s }: { s: TaskSubtask }) {
   const done = s.statusType === "closed" || s.statusType === "done";
   const inner = (
-    <div className="flex items-center gap-2 rounded-md border border-border bg-card px-3 py-2 text-[13px]">
+    <div className="flex items-center gap-2 rounded-md border border-border bg-card px-3 py-2 text-sm">
       <span
         className={[
           "flex h-4 w-4 shrink-0 items-center justify-center rounded-full border",
@@ -942,14 +942,14 @@ function CommentRow({ c }: { c: TaskComment }) {
       <Avatar name={c.author} lg />
       <div className="min-w-0 flex-1 rounded-lg rounded-tl-sm border border-border bg-card px-3 py-2">
         <div className="mb-0.5 flex items-center gap-2">
-          <span className="text-[12px] font-semibold text-foreground">{c.author}</span>
+          <span className="text-xs font-semibold text-foreground">{c.author}</span>
           {c.createdAtMs && (
             <span className="text-[10px] text-muted-foreground">
               {relativeTime(new Date(c.createdAtMs).toISOString())}
             </span>
           )}
         </div>
-        <p className="whitespace-pre-wrap break-words text-[13px] text-muted-foreground">
+        <p className="whitespace-pre-wrap break-words text-sm text-muted-foreground">
           {c.text}
         </p>
       </div>
@@ -1047,7 +1047,7 @@ function EditableText({
       <button
         type="button"
         onClick={startEdit}
-        className="tech-transition inline-flex items-center gap-1.5 rounded-md border border-dashed border-border px-2.5 py-1.5 text-[13px] text-muted-foreground hover:border-primary/40 hover:text-foreground"
+        className="tech-transition inline-flex items-center gap-1.5 rounded-md border border-dashed border-border px-2.5 py-1.5 text-sm text-muted-foreground hover:border-primary/40 hover:text-foreground"
       >
         <AppIcon name="Pencil" className="h-3 w-3" />
         {emptyHint}
@@ -1165,7 +1165,7 @@ function ChipMenu({
           type="button"
           onClick={() => onPick(o)}
           className={[
-            "tech-transition rounded-full border px-2 py-0.5 text-[12px]",
+            "tech-transition rounded-full border px-2 py-0.5 text-xs",
             mono ? "font-mono" : capitalize ? "capitalize" : "",
             active === o
               ? "border-primary bg-primary/10 text-primary"
@@ -1179,7 +1179,7 @@ function ChipMenu({
         <button
           type="button"
           onClick={() => onPick(null)}
-          className="tech-transition rounded-full border border-border px-2 py-0.5 text-[12px] text-muted-foreground hover:border-destructive/40 hover:text-destructive"
+          className="tech-transition rounded-full border border-border px-2 py-0.5 text-xs text-muted-foreground hover:border-destructive/40 hover:text-destructive"
         >
           Clear
         </button>
@@ -1239,7 +1239,7 @@ function MultiPersonMenu({
         type="button"
         onClick={onClear}
         className={[
-          "tech-transition rounded-full border px-2 py-0.5 text-[12px]",
+          "tech-transition rounded-full border px-2 py-0.5 text-xs",
           active.length === 0
             ? "border-primary bg-primary/10 text-primary"
             : "border-border text-muted-foreground hover:bg-secondary",
@@ -1256,7 +1256,7 @@ function MultiPersonMenu({
             onClick={() => onToggle(p)}
             aria-pressed={on}
             className={[
-              "tech-transition inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[12px]",
+              "tech-transition inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs",
               on
                 ? "border-primary bg-primary/10 text-primary"
                 : "border-border text-muted-foreground hover:bg-secondary",
@@ -1286,7 +1286,7 @@ function PersonMenu({
         type="button"
         onClick={() => onPick(null)}
         className={[
-          "tech-transition rounded-full border px-2 py-0.5 text-[12px]",
+          "tech-transition rounded-full border px-2 py-0.5 text-xs",
           !active ? "border-primary bg-primary/10 text-primary" : "border-border text-muted-foreground hover:bg-secondary",
         ].join(" ")}
       >
@@ -1298,7 +1298,7 @@ function PersonMenu({
           type="button"
           onClick={() => onPick(p)}
           className={[
-            "tech-transition inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[12px]",
+            "tech-transition inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs",
             active?.name === p.name ? "border-primary bg-primary/10 text-primary" : "border-border text-muted-foreground hover:bg-secondary",
           ].join(" ")}
         >
@@ -1342,7 +1342,7 @@ function StatusPicker({
                 type="button"
                 onClick={() => { onPick(d); setOpen(false); }}
                 className={[
-                  "tech-transition flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px]",
+                  "tech-transition flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm",
                   item.disposition === d ? "bg-primary/10 text-primary" : "text-foreground hover:bg-secondary",
                 ].join(" ")}
               >

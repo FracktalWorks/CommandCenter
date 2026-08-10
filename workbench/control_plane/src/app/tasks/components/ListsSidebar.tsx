@@ -184,7 +184,7 @@ export function ListsSidebar({
         {accounts.map((a) => (
           <div
             key={a.id}
-            className="flex items-center gap-2.5 rounded-lg px-2 py-1.5 text-[13px] text-muted-foreground"
+            className="flex items-center gap-2.5 rounded-lg px-2 py-1.5 text-sm text-muted-foreground"
           >
             <Icon name="Cloud" className="h-3.5 w-3.5 shrink-0 text-primary/70" />
             <div className="min-w-0 flex-1">
@@ -237,7 +237,7 @@ export function ListsSidebar({
             openWorkspaces();
             onNavigate?.();
           }}
-          className="tech-transition flex w-full items-center gap-2.5 rounded-lg px-2 py-2 text-left text-[13px] text-muted-foreground hover:bg-secondary hover:text-foreground"
+          className="tech-transition flex w-full items-center gap-2.5 rounded-lg px-2 py-2 text-left text-sm text-muted-foreground hover:bg-secondary hover:text-foreground"
         >
           <Icon name="Plug" className="h-3.5 w-3.5 shrink-0" />
           <span className="flex-1">Connect workspace…</span>
@@ -248,7 +248,7 @@ export function ListsSidebar({
             openSettings();
             onNavigate?.();
           }}
-          className="tech-transition flex w-full items-center gap-2.5 rounded-lg px-2 py-2 text-left text-[13px] text-muted-foreground hover:bg-secondary hover:text-foreground"
+          className="tech-transition flex w-full items-center gap-2.5 rounded-lg px-2 py-2 text-left text-sm text-muted-foreground hover:bg-secondary hover:text-foreground"
         >
           <Icon name="Settings2" className="h-3.5 w-3.5 shrink-0" />
           <span className="flex-1">Settings</span>

@@ -115,7 +115,7 @@ export function InboxCard({
           onChange={(e) => setDraftNote(e.target.value)}
           placeholder="Add a note (optional)…"
           rows={2}
-          className="w-full resize-none rounded-md border border-border bg-background/60 px-2.5 py-1.5 text-[13px] text-muted-foreground focus:border-primary/40 focus:outline-none"
+          className="w-full resize-none rounded-md border border-border bg-background/60 px-2.5 py-1.5 text-sm text-muted-foreground focus:border-primary/40 focus:outline-none"
         />
       </div>
     );
@@ -214,7 +214,7 @@ export function InboxCard({
         <p className="text-sm leading-snug text-foreground">{item.title}</p>
         <HintRow hint={hint} />
         {item.notes && (
-          <p className="mt-1 flex items-start gap-1 text-[12px] leading-snug text-muted-foreground">
+          <p className="mt-1 flex items-start gap-1 text-xs leading-snug text-muted-foreground">
             <AppIcon name="StickyNote" className="mt-0.5 h-3 w-3 shrink-0" />
             <span className="line-clamp-2">{item.notes}</span>
           </p>
@@ -413,7 +413,7 @@ function SnoozeMenu({
             key={o.label}
             type="button"
             onClick={() => onPick(o.iso)}
-            className="tech-transition flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] text-foreground hover:bg-secondary"
+            className="tech-transition flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-foreground hover:bg-secondary"
           >
             <AppIcon name="CalendarClock" className="h-3.5 w-3.5 text-muted-foreground" />
             {o.label}

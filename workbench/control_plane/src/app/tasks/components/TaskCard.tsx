@@ -136,7 +136,7 @@ export function TaskCard({
       {item.deepWork && (
         <span
           title="Deep work — needs an unbroken flow state"
-          className="inline-flex items-center gap-1 rounded border border-sky-500/30 bg-sky-500/10 px-1.5 py-0.5 text-[10px] font-medium text-sky-600 dark:text-sky-400"
+          className="inline-flex items-center gap-1 rounded border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary"
         >
           <Icon name="Waves" className="h-3 w-3" />
           Deep
@@ -289,7 +289,7 @@ export function TaskCard({
         </div>
         <div className="flex items-start gap-2">
           {!selectMode && showStage && <StatusPill item={item} />}
-          <p className="text-[13px] font-medium leading-snug text-foreground">
+          <p className="text-sm font-medium leading-snug text-foreground">
             {item.title}
           </p>
         </div>

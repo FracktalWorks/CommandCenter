@@ -417,7 +417,7 @@ export function CalendarView() {
           <Button variant="ghost" size="icon-xs" radius="keep" layout="" type="button" aria-label="Previous" onClick={() => step(-1)} className="rounded-md">
             <Icon name="ChevronLeft" className="h-4 w-4" />
           </Button>
-          <Button variant="ghost" size="none" radius="keep" layout="" type="button" onClick={() => setAnchor(startOfDay(new Date()))} className="rounded-md px-2 py-1 text-[12px]">
+          <Button variant="ghost" size="none" radius="keep" layout="" type="button" onClick={() => setAnchor(startOfDay(new Date()))} className="rounded-md px-2 py-1 text-xs">
             Today
           </Button>
           <Button variant="ghost" size="icon-xs" radius="keep" layout="" type="button" aria-label="Next" onClick={() => step(1)} className="rounded-md">
@@ -444,7 +444,7 @@ export function CalendarView() {
               type="button"
               onClick={() => setStartupOpen(true)}
               title="Start (or restart) your day — breathe · review · commit the One Thing"
-              className="tech-transition inline-flex items-center gap-1.5 rounded-md bg-secondary px-2.5 py-1.5 text-[12px] font-medium text-muted-foreground hover:bg-secondary/70 hover:text-foreground"
+              className="tech-transition inline-flex items-center gap-1.5 rounded-md bg-secondary px-2.5 py-1.5 text-xs font-medium text-muted-foreground hover:bg-secondary/70 hover:text-foreground"
             >
               <Icon name="Sun" className="h-3.5 w-3.5" />
               <span className="hidden sm:inline">Start day</span>
@@ -455,7 +455,7 @@ export function CalendarView() {
               type="button"
               onClick={() => setReviewOpen(true)}
               title="End-of-day review — what got done, what carries forward, estimate accuracy"
-              className="tech-transition inline-flex items-center gap-1.5 rounded-md bg-secondary px-2.5 py-1.5 text-[12px] font-medium text-muted-foreground hover:bg-secondary/70 hover:text-foreground"
+              className="tech-transition inline-flex items-center gap-1.5 rounded-md bg-secondary px-2.5 py-1.5 text-xs font-medium text-muted-foreground hover:bg-secondary/70 hover:text-foreground"
             >
               <Icon name="ClipboardCheck" className="h-3.5 w-3.5" />
               <span className="hidden sm:inline">Review</span>
@@ -466,7 +466,7 @@ export function CalendarView() {
               type="button"
               onClick={() => setPlanMode("replan")}
               title="Fit what's left: reshuffle today's not-done tasks into the time you have left, and move anything that no longer fits back to your list. Adds no new tasks."
-              className="tech-transition inline-flex items-center gap-1.5 rounded-md bg-secondary px-2.5 py-1.5 text-[12px] font-medium text-muted-foreground hover:bg-secondary/70 hover:text-foreground"
+              className="tech-transition inline-flex items-center gap-1.5 rounded-md bg-secondary px-2.5 py-1.5 text-xs font-medium text-muted-foreground hover:bg-secondary/70 hover:text-foreground"
             >
               <Icon name="CalendarClock" className="h-3.5 w-3.5" />
               <span className="hidden sm:inline">Fit what&apos;s left</span>
@@ -476,7 +476,7 @@ export function CalendarView() {
             type="button"
             onClick={() => setPlanMode("plan")}
             title="Rebuild my day: reshuffle what's on your calendar into the time left, trim the overflow back to your list, and fill any remaining room from your Next Actions."
-            className="tech-transition inline-flex items-center gap-1.5 rounded-md bg-primary/10 px-2.5 py-1.5 text-[12px] font-medium text-primary hover:bg-primary/20"
+            className="tech-transition inline-flex items-center gap-1.5 rounded-md bg-primary/10 px-2.5 py-1.5 text-xs font-medium text-primary hover:bg-primary/20"
           >
             <Icon name="Wand2" className="h-3.5 w-3.5" />
             <span className="hidden sm:inline">Rebuild my day</span>
@@ -544,7 +544,7 @@ export function CalendarView() {
       {/* Startup ritual offer — once per local day, dismissible. Habits form
           around rituals; the banner invites, it never ambushes. */}
       {startupOffered && !startupOpen && !dayClosed && (
-        <div className="flex items-center gap-2 border-b border-border bg-warning/5 px-4 py-2 text-[12px]">
+        <div className="flex items-center gap-2 border-b border-border bg-warning/5 px-4 py-2 text-xs">
           <Icon name="Sun" className="h-4 w-4 shrink-0 text-warning" />
           <span className="min-w-0 flex-1 text-foreground">
             Start your day — breathe · review · commit the One Thing.
@@ -566,7 +566,7 @@ export function CalendarView() {
       )}
 
       {overdueCount > 0 && (
-        <div className="flex items-center gap-2 border-b border-warning/40 bg-warning/10 px-4 py-2 text-[12px]">
+        <div className="flex items-center gap-2 border-b border-warning/40 bg-warning/10 px-4 py-2 text-xs">
           <Icon name="AlertTriangle" className="h-4 w-4 shrink-0 text-warning" />
           <span className="min-w-0 flex-1 text-foreground">
             {overdueCount} unfinished task{overdueCount === 1 ? "" : "s"} from
@@ -670,7 +670,7 @@ export function CalendarView() {
         >
           <Icon name="CalendarPlus" className="h-5 w-5" />
           {unscheduled.length > 0 && (
-            <span className="text-[13px] tabular-nums">{unscheduled.length}</span>
+            <span className="text-sm tabular-nums">{unscheduled.length}</span>
           )}
         </button>
       )}

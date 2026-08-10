@@ -90,7 +90,7 @@ function WorkspacesPanel() {
 
         <div className="flex flex-col gap-4 overflow-y-auto p-4">
           {backend !== "live" && (
-            <p className="rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-[12px] text-warning">
+            <p className="rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning">
               The tasks backend isn&apos;t reachable — running on demo data.
               Connecting workspaces needs the gateway.
             </p>
@@ -102,7 +102,7 @@ function WorkspacesPanel() {
               Connected
             </h3>
             {accounts.length === 0 ? (
-              <p className="text-[12px] text-muted-foreground">
+              <p className="text-xs text-muted-foreground">
                 No workspaces connected yet. Personal tasks stay Local; connect
                 your team&apos;s ClickUp to delegate and sync collaborative work.
               </p>
@@ -115,7 +115,7 @@ function WorkspacesPanel() {
                   >
                     <Icon name="Building2" className="h-4 w-4 shrink-0 text-primary/80" />
                     <div className="min-w-0 flex-1">
-                      <p className="truncate text-[13px] font-medium text-foreground">
+                      <p className="truncate text-sm font-medium text-foreground">
                         {a.label}
                       </p>
                       <p className="text-[11px] text-muted-foreground">
@@ -186,7 +186,7 @@ function WorkspacesPanel() {
             </p>
 
             {error && (
-              <p className="mt-2 rounded-md border border-destructive/30 bg-destructive/10 px-2.5 py-1.5 text-[12px] text-destructive">
+              <p className="mt-2 rounded-md border border-destructive/30 bg-destructive/10 px-2.5 py-1.5 text-xs text-destructive">
                 {error}
               </p>
             )}
@@ -194,7 +194,7 @@ function WorkspacesPanel() {
             {workspaces && (
               <div className="mt-2 flex flex-col gap-1.5">
                 {workspaces.length === 0 && (
-                  <p className="text-[12px] text-muted-foreground">
+                  <p className="text-xs text-muted-foreground">
                     This token reaches no workspaces.
                   </p>
                 )}
@@ -207,7 +207,7 @@ function WorkspacesPanel() {
                     >
                       <Icon name="Building2" className="h-4 w-4 shrink-0 text-muted-foreground" />
                       <div className="min-w-0 flex-1">
-                        <p className="truncate text-[13px] text-foreground">{w.name}</p>
+                        <p className="truncate text-sm text-foreground">{w.name}</p>
                         <p className="text-[11px] text-muted-foreground">
                           {w.memberCount} members · id {w.id}
                         </p>

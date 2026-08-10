@@ -1011,6 +1011,42 @@ Until then the gateway's posture is unchanged: no anonymous tenant-data read rou
 
 ## 9. Tickets
 
+> ### 9.0 Reference links — the two upstream repositories, pinned
+>
+> *(Added 2026-08-10 on the owner's instruction: "link relevant files from their respective
+> repositories in those features… so that when we are developing it, we always have a
+> reference to the original file to study.")*
+>
+> Tickets below carry **REF:** lines pointing at the file that inspired them. Both repos are
+> pinned to a **commit SHA, never a branch** — `main` moves, and a line number against a
+> moving branch is a link to the wrong code within a week.
+>
+> | Repo | Licence | Pinned commit | Link prefix |
+> |---|---|---|---|
+> | `makeplane/plane` | **AGPL-3.0** | `31853ab2b8b7810c59dc30d22e52c8f4b5a71a47` (= `v1.4.1-rc2`) | `https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/` |
+> | `Paca-AI/paca` | **Apache-2.0** | `09dab28e3caee9e43891697998dcfa7fcf76991c` | `https://github.com/paca-ai/paca/blob/09dab28e3caee9e43891697998dcfa7fcf76991c/` |
+>
+> **⚠️ The two licences are not the same rule, and the difference is load-bearing.**
+>
+> * **Plane is AGPL-3.0.** Reading it and reimplementing a behaviour is fine — functionality
+>   and interaction design are not copyrightable. **Copying its source, markup, CSS or assets
+>   into this tree is not available to us**, at any size. A REF: link to Plane means *go read
+>   this to understand the behaviour*, and nothing more.
+> * **Paca is Apache-2.0** (verified: plain, no Commons Clause, no added terms, no NOTICE
+>   file). Permissive — reuse in a proprietary product **is** legally available, subject to
+>   retaining the copyright and licence notices, carrying the licence text, and stating that
+>   the file was modified. **We still default to reimplementation**, for an engineering
+>   reason rather than a legal one: anything on our surfaces has to satisfy
+>   `DESIGN_SYSTEM.md`, so a copied component gets rewritten anyway. If anyone ever does copy
+>   a Paca file substantially, that is a decision to record here with the attribution
+>   discharged in the same PR — not a thing to do quietly.
+>
+> A REF: is **evidence and a reading list, never an instruction to port.** Where the upstream
+> is a thin wrapper over a permissively-licensed library, the REF: names the **library**
+> instead — that is the more useful reference, and in several cases converts a blocked idea
+> into an `npm install`.
+
+
 **WS-27a — schema + feature registration + core API.** 🟢 AGENT-SAFE.
 Done when: (1) the migration exists at the next free number, idempotent, with the
 `feature_catalog` row — and the WS-26a-style **static idempotency test** over the migration

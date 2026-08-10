@@ -93,8 +93,32 @@ verification commands.)
   (allow-list additions likewise); **(d)** session acquisition uses the current
   seam idiom only, so H2's conversion stays mechanical — do not invent new
   acquisition idioms; **(e)** never trust a tenant (or identity) from request
-  input — `user_management_contract.md` R11/R3. The ratchet tests ride PR #404;
-  until it merges they bind on the WS-29 branch, from merge they bind `main`.
+  input — `user_management_contract.md` R11/R3. The ratchet tests **bind `main`** (PR #404 merged 2026-08-09).
+- **R6 — expand/contract migrations** *(D28, 2026-08-10; owning spec
+  `specs/engineering_practice.md` §3).* **The deploy applies migrations BEFORE
+  restarting services**, so old code always runs against new schema for a window.
+  A migration must therefore be compatible with the code currently running: new
+  columns **nullable with a default**; **no rename in place** (add, backfill,
+  switch readers, drop in a LATER release); constraints over existing data land
+  `NOT VALID` and validate in a guarded block (migration 148 is the reference).
+  The tightening half is always a second, later migration. ⚠️ **We cannot roll
+  back** — forward-only ladder, no blue/green — so recovery is roll-forward or
+  restore, which is why §8's off-box backup and SHA-in-`/health` items are
+  business risks rather than tech debt.
+- **R7 — a rule names its fence, or it is advisory** *(D28; the generalisation of
+  R5's "enforced by an existing test, not by prose").* Any PR introducing an
+  architectural rule must name the test that makes breaking it fail, or label the
+  rule advisory. Prose binds nobody: the next agent has not read that paragraph.
+  Prefer **structural fences** (assert the invariant over the whole tree) to
+  example tests — they are what defend against future agents.
+- **R8 — SQL is verified against a real database** *(D28; `engineering_practice.md`
+  §4).* Hermetic fakes agree with whatever SQL they are handed, which is how five
+  live bugs shipped green (an unencodable `CAST(:param AS timestamptz)`; a fake
+  matching `lower(col) = :param` against NULL; a `LEFT JOIN` whose `ON` could not
+  see its table). Any change whose subject is a query, a migration or a predicate
+  is run against a real Postgres before it is believed. **Verified-red-first**
+  applies to every fence and every bug fix; **mutation testing** applies to money,
+  auth, tenancy and outward writes.
 
 ---
 
@@ -187,11 +211,11 @@ owning specs are the archive; this file owns ordering, gates and states only.
 | WS-21 | **Calendar F2/F3** | 🟡 partial | `calendar_focus_os.md` §9 (+§5) + `calendar_timeboxing.md` §13 · board record 2026-08-09 | P3 roll-over + ideal-week + packer-breaks all shipped (struck from scope 2026-08-03). `gtd_time_blocks` is **four slices S1–S4** — the "one non-breaking PR" claim was false (17 TS files + 3 gateway modules + skill + agent). Focus Shield is AGENT-SAFE (needs a design, not a credential). Owns Horizons (§4) — DO-NOT-DISPATCH, no acceptance. 🔴 external-sync OAuth credentials (§6) · shared nudge-send gate (§6). Never `pytest tests/unit -k calendar` (collection hangs). (2026-08-03) |
 | WS-22 | **draw.io** | ⏸ PARKED | `drawio_integration.md` | **PARKED BY OWNER 2026-08-10 (D25.7)** — no agent time until a real need (proposal diagrams, KB visuals) pulls it back. The spec's acceptance structure keeps; anchors need re-verification at un-park. |
 | WS-26 | **CRM app — native CRM + Zoho retirement** *(minted 2026-08-05)* | ✅ a–g · D5 PR open | `specs/crm_app.md` · board record 2026-08-09 | a + b + c + d (read · email · write) **merged + deployed** (d-write log-verified via deploy `31217978773`, 2026-08-08); f + g **merged to main** (#391, #397 — the old "on branch, NOT run against prod" wording is struck; f's stage repair still needs its 🔴 `?apply=true` run, §6 WS-26 (d)). **D5 d-autolead MERGED 2026-08-09 (#403; migration renumbered 158→163 at merge)** — remaining: 🔴 `CRM_AUTO_LEAD` flip (§6 WS-26 (b); clamp-anchor design, never reset-to-now). Zoho sync loop **ENABLED by the owner 2026-08-06** (§6 WS-26 (a)) — every "ships OFF / never run" sentence about it is struck. Next: **h** stage entry-requirements + rot badges (after f2) · **i** merge/bulk/CSV/saved-views — spec-thin, audit-narrow first · **e** cutover + retirement 🔴 (§6 WS-26 (c)). ⚠️ D15 coda: built single-Zoho-tenant by design; per-org credentials (migration 158) + per-org sync flags arrive with MT-1/MT-2, and D-CRM-3's org-wide read becomes org-scoped **by RLS**, not by hand-written predicates. (2026-08-08) |
-| WS-27 | **Projects app — native PM + ClickUp retirement** *(minted 2026-08-05)* | ✅ a–t merged · **u–z on PR #408** · c/g/h gated | `specs/project_management_app.md` · board record 2026-08-09 | a b d e f i j k l m n **merged to main** (#390, #393, #394, #398 + fixes — the board's "BUILT on branch" wording is struck). ~~Open defect: **§11.12** — WS-27j's `notifications.deliverable` probes `project_clause`~~ ✅ **FIXED on #399** (assignees without a project grant were judged undeliverable, so assignment notified nobody). 🟡 **c** two-way sync waits on WS-1's BO-1a + BO-1b; 🔴 push enable (§6 WS-27 (b)) · 🔴 **g** cutover + retirement incl. the root-`AGENTS.md` constraint-8 amendment — ships in the g PR, never before (§6 WS-27 (c)) · **h** `gtd_items` retirement after e; the data move is 🔴. ~~Remaining letters: recurring, dependency UI, calendar view, search.~~ ✅ **the §11.2 ClickUp-parity backlog is CLOSED** — o recurrence · p dependencies+subtasks · q calendar · r ⌘K search · s shared task card · t timeline, all on **PR #399** with D-PM-11/D-PM-12 recorded. **Second reference studied 2026-08-09: `makeplane/plane` v1.4.1 (⚠️ AGPL-3.0 — patterns only, never code)** → `specs/plane_pm_research_2026-08.md` + spec §11.19: 12 shipped decisions validated, beyond-parity queue P-1…P-31 minted → **minted as dispatchable tickets WS-27u–z (spec §9.1)**: u intake/triage · v watchers+mention-diff · w read-path/history hardening · x spreadsheet+shown-fields · y board upgrades · z lifecycle policy (🟡 per-project, default off) + a deferred small basket, 2 owner questions ANSWERED same day → **D-PM-13** (project docs live in the knowledge base — creator-owned, grant-shared; PM links, never owns) · **D-PM-14** (public boards deferred). ✅ **WS-27u–z ALL BUILT 2026-08-10 on the restarted branch** (#399 merged; branch restarted from main per the merged-PR rule) — migrations **164** intake · **165** watchers · **166** lifecycle; plus the **Tasks↔Projects continuity backport** (shared chips/cursor/QuickAdd/flash promoted to `src/lib`+`src/components`, both apps consume one implementation; remaining gaps recorded in HANDOVER). z's sweeper is wired as a `pm_lifecycle` workflow node — the scheduled workflow itself is an owner authoring step on the live box (workflows are DB rows, never files). ⚠️ granting `feature:projects`/`data:org:read` is §6 WS-27 (d) — D14's zero-consumer measurement is retired by this row. (2026-08-07 · updated 2026-08-10) |
+| WS-27 | **Projects app — native PM + ClickUp retirement** *(minted 2026-08-05)* | ✅ a–t merged · **u–z on PR #408** · c/g/h gated | `specs/project_management_app.md` · board record 2026-08-09 | a b d e f i j k l m n **merged to main** (#390, #393, #394, #398 + fixes — the board's "BUILT on branch" wording is struck). ~~Open defect: **§11.12** — WS-27j's `notifications.deliverable` probes `project_clause`~~ ✅ **FIXED on #399** (assignees without a project grant were judged undeliverable, so assignment notified nobody). 🟡 **c** two-way sync waits on WS-1's BO-1a + BO-1b; 🔴 push enable (§6 WS-27 (b)) · 🔴 **g** cutover + retirement incl. the root-`AGENTS.md` constraint-8 amendment — ships in the g PR, never before (§6 WS-27 (c)) · **h** `gtd_items` retirement after e; the data move is 🔴. ~~Remaining letters: recurring, dependency UI, calendar view, search.~~ ✅ **the §11.2 ClickUp-parity backlog is CLOSED** — o recurrence · p dependencies+subtasks · q calendar · r ⌘K search · s shared task card · t timeline, all on **PR #399** with D-PM-11/D-PM-12 recorded. **Second reference studied 2026-08-09: `makeplane/plane` v1.4.1 (⚠️ AGPL-3.0 — patterns only, never code)** → `specs/plane_pm_research_2026-08.md` + spec §11.19: 12 shipped decisions validated, beyond-parity queue P-1…P-31 minted → **minted as dispatchable tickets WS-27u–z (spec §9.1)**: u intake/triage · v watchers+mention-diff · w read-path/history hardening · x spreadsheet+shown-fields · y board upgrades · z lifecycle policy (🟡 per-project, default off) + a deferred small basket, 2 owner questions ANSWERED same day → **D-PM-13** (project docs live in the knowledge base — creator-owned, grant-shared; PM links, never owns) · **D-PM-14** (public boards deferred). ✅ **WS-27u–z ALL BUILT 2026-08-10 on the restarted branch** (#399 merged; branch restarted from main per the merged-PR rule) — migrations **164** intake · **165** watchers · **166** lifecycle; plus the **Tasks↔Projects continuity backport** (shared chips/cursor/QuickAdd/flash promoted to `src/lib`+`src/components`, both apps consume one implementation; remaining gaps recorded in HANDOVER). z's sweeper is wired as a `pm_lifecycle` workflow node — the scheduled workflow itself is an owner authoring step on the live box (workflows are DB rows, never files). ⚠️ granting `feature:projects`/`data:org:read` is §6 WS-27 (d) — D14's zero-consumer measurement is retired by this row. ✅ **Tenancy alignment AUDITED 2026-08-10 (D27): substantially aligned** — all 19 `pm_*` tables keyed, seam clean, no request-input tenant, no homonym. Fixed in the same pass: the generated RLS set was **stale AND carried a phantom `ALTER TABLE if`** (2 Projects tables would have promoted with no policy; the phantom would have aborted the window) — regenerated, generator taught to strip comments, and a new fence `test_the_generated_set_on_disk_matches_the_tables_that_exist` pins both. Two non-mechanical conversion sites recorded where the tenancy agents read them: `core.resolve_organization_id` (handover H2) · `run_lifecycle_sweep` (MT-1d). (2026-08-10) |
 | WS-28 | **People Center — directory, org chart, assignment seam** *(minted 2026-08-06)* | ✅ a+b+b-write | `specs/people_center_app.md` · board record 2026-08-09 | a (key shape, mig 148 + quarantine table) · b (directory + person page, mig 149, five-place registration) · b-write (create/edit UI restored; found three ways mig 148 had broken the write routes) — built 2026-08-06/07; **closes WS-13's directory item**. 🟢 c org chart · d capability search (**ranking EVAL-LOCKED**) · e Projects seams; 🔴 f seats/roles writes (§6 WS-24 (d) analogue). ⚠️ `schema.generated.sql` regeneration is **due**: stale since ~migration 113, and 148 reached prod ~2026-08-07 (after the #384 cast fix). (2026-08-07) |
 ---
 
-## 3. Decisions recorded (D1–D14: 2026-07-31→08-04 · D15/D16: 2026-08-08 · D17–D21: 2026-08-09 · D22–D26: 2026-08-10)
+## 3. Decisions recorded (D1–D14: 2026-07-31→08-04 · D15/D16: 2026-08-08 · D17–D21: 2026-08-09 · D22–D30: 2026-08-10)
 
 Resolutions for the cross-doc conflicts the audit surfaced. D1–D8, **D13**, **D14**,
 **D16** and **D17** are **proposed defaults, adopted unless the owner objects**
@@ -200,6 +224,97 @@ calls, taken and dated. ⚠️ Two entries below are superseded and kept as reco
 **D11** (re-taken by D15) and **D10 part 1's planning premise** (re-scoped by
 D15/D16) — read their banners before citing either.
 
+- **D30 — `CLAUDE.md` at the repo root is the always-loaded briefing.**
+  *(owner-directed 2026-08-10 — "any cloud instance must understand the
+  development philosophy, the work plan and the architecture at all times".)*
+  Claude Code auto-loads `CLAUDE.md` into **every** session including cloud and
+  headless ones; the repo had none, and the 16 KB root `AGENTS.md` is not
+  guaranteed to be in context at session start — so a cloud instance began
+  blind. `CLAUDE.md` is a **router plus the minimum that must be known before
+  the first tool call**, and deliberately duplicates nothing: where truth lives
+  and in what order (INDEX → §1 rules → §2 board → §6 gates → §3 decisions →
+  engineering practice → owning spec); the architecture in one screen (Centers
+  are projections · apps have two access paths and one permission model ·
+  modules are billing atoms and Center packages are what customers buy · tenancy
+  is a row and we are multi-tenant from customer #1 · visibility is
+  private→Center→org); the non-negotiables (never commit on main, refuse
+  owner-gated work by name, R5/R6/R7/R8/R1, verify delivery by evidence); the
+  development method (one narrowed slice, audit → implement → verify → review →
+  PR → stop, verifier ≠ implementer, adversarial reviewer, re-verify anchors,
+  extend seams never fork them, short branches); what NOT to do (re-litigate
+  D1–D29, refactor to conform, build a second way to do an existing thing, mark
+  done from the write-up); and the environment traps that waste the most time.
+  **Rule: `CLAUDE.md` stays a router.** Anything that grows into content belongs
+  in an owning spec with a pointer here — a briefing nobody finishes reading is
+  a briefing nobody follows.
+- **D29 — The agent harness is tracked in git; derived indexes are not.**
+  *(owner-raised 2026-08-10 — "cloud instances should use the full development
+  philosophy"; `agent-proposed, owner may overrule`.)* `.claude/` was a **blanket
+  gitignore**, so every checkout that was not the owner's laptop — a cloud Claude
+  instance, a fresh clone, a headless run, an agent's own worktree — ran with
+  **no `plan-guard`** (i.e. no §6 owner-gate enforcement at all), no
+  supervisor-worker agent definitions and no `/next-ticket`. A safety control was
+  travelling by accident. **Now tracked:** `.claude/AGENTS.md`, `agents/`,
+  `commands/`, `hooks/` (`plan-guard.mjs` + test, `rtk-bash.sh`),
+  `settings.json` — scanned, no secrets. **Still ignored:**
+  `settings.local.json` (per-machine), `worktrees/` (ephemeral checkouts),
+  `scheduled_tasks.lock`, `skill-observations/`, `skills/` (third-party bundles —
+  tooling, not doctrine). **Derived artifacts stay ignored and are rebuilt:** the
+  CodeGraph index (`.codegraph/`) would be large, churn every commit and conflict
+  every merge; its config (`.mcp.json`, `codegraph.json`) is already tracked, so a
+  fresh environment installs the tool and builds its own. General rule: **anything
+  derivable from source is rebuilt on the new machine; only sources of truth are
+  tracked.** Fence (R7): `node .claude/hooks/plan-guard.test.mjs` now runs
+  **blocking** in `pr-check`. Recorded in `engineering_practice.md` §5.1.
+- **D28 — The development doctrine is written down and three of its rules
+  bind.** *(owner-requested 2026-08-10 — "document all of this for our
+  development process"; the doctrine itself is `agent-proposed, owner may
+  overrule`.)* Owning spec: **`specs/engineering_practice.md`** (CONTRACTS &
+  DOCTRINE in `INDEX.md`). Two premises: **(i)** our failures are *delivery and
+  integration* failures, not coding failures — the evidence table in §0.1 is
+  seven measured incidents from one fortnight, none of which a unit test could
+  see; **(ii)** *a rule binds an agent only when a test refuses to break it*,
+  which R5 already said and R7 now generalises. Recorded as binding: **R6**
+  expand/contract migrations (the deploy applies migrations before restarting
+  services, so old code always meets new schema), **R7** name-the-fence, **R8**
+  real-database verification for SQL plus verified-red-first and mutation
+  testing. Recorded as doctrine, not enforced: deploy≠release with **ring order
+  us → one friendly customer → all** (the silo phase makes rings free), seam-based
+  work partition with short branches and a **3–4 in-flight cap** (long branches
+  are the single root cause behind the renumber trap, the cross-PR fences and the
+  duplicated tenancy design), the adversarial-reviewer rule, and the
+  customer-grade definition of done (delivery verified by evidence, never by a
+  green job). §8 lists five items to close before customer #1, each pointed at an
+  existing board row — SHA-in-`/health` (WS-25), off-box backup (BO-23,
+  owner-deferred and **due for revisit**), migration rehearsal against a
+  prod-shaped restore (WS-5, new), RLS promotion (MT-1b), lifecycle-sweep tenant
+  binding (MT-1d).
+- **D27 — The WS-27 × WS-29 alignment audit.** *(agent-run 2026-08-10 at the
+  owner's request; findings fixed or recorded the same day.)* **Verdict:
+  substantially aligned** — the Projects app's 19 `pm_*` tables are all
+  tenant-keyed, `routes/projects/` uses the one shared seam with no Redis and
+  no route reading a tenant from request input (R5 a–e hold), and no `pm_*`
+  column repeats the CRM `organization_id` homonym. **Three gaps, all closed or
+  ticketed:** (1) **the generated RLS set was stale and contained a phantom** —
+  `pm_intake`/`pm_task_watchers` had no policy in any phase file (they would
+  have promoted tenant-keyed but cross-tenant readable), and
+  `04_policies.sql` carried `ALTER TABLE if ENABLE ROW LEVEL SECURITY`, a
+  statement that cannot run, in a script promoted **by hand against production**;
+  root cause was the generator regexing `CREATE TABLE` out of comment prose.
+  Fixed: comments stripped, phantom names now RAISE, set regenerated (135
+  tables), and a new CI fence compares the committed artifact against
+  `discover_tables()` — nothing did before. (2) **`run_lifecycle_sweep` sweeps
+  every tenant's projects with no predicate on a scheduled path H2 never
+  reaches** — recorded as a named site on **MT-1d**, to be done *before* the
+  phase-4 promotion. (3) **`resolve_organization_id` resolves the tenant from
+  inside the session and encodes one-person-one-org** — recorded on **H2/H6**,
+  which also gained the measurement that 21 `app_user`-derived org reads across
+  6 modules sit behind H6's one-line "app_user reads are gone" criterion. Also
+  swept: migration 161's header now covers the generated **phase 3** (duplicate
+  FK + the 17 indexes it argues against), `intake.py`'s recursive descent
+  repeats the tenant predicate like `core.py`'s, and
+  `project_management_app.md` — which had cited **no tenancy decision at all** —
+  now cites D15 and records D23's placement of Projects inside Center packages.
 - **D26 — The docs consolidation: `ai-company-brain/` → `project-docs/`, and an
   ACTIVE/DEFERRED classification of record.** *(owner-directed 2026-08-10 —
   "retire what is not in the immediate work plan, make active vs deferred

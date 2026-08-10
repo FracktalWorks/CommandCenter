@@ -64,12 +64,12 @@ def test_migration_has_partial_unique_index() -> None:
     """begin() upserts via ON CONFLICT (meeting_id) WHERE status = 'live'; that
     inference REQUIRES this partial unique index. Without it a reconnect would
     fork presence into two live rows."""
-    sql = _MIGRATION.read_text()
+    sql = _MIGRATION.read_text(encoding="utf-8")
     assert "CREATE UNIQUE INDEX IF NOT EXISTS live_session_one_live_per_meeting" in sql
     assert "ON live_session (meeting_id) WHERE status = 'live'" in sql
 
 
 def test_migration_is_idempotent_and_additive() -> None:
-    sql = _MIGRATION.read_text()
+    sql = _MIGRATION.read_text(encoding="utf-8")
     assert "CREATE TABLE IF NOT EXISTS live_session" in sql
     assert "DROP TABLE" not in sql.upper()

@@ -1,19 +1,34 @@
 # Projects App — Master Plan (native project management; ClickUp retirement path)
 
 > **Product:** CommandCenter · **Feature:** Projects (the People Center's primary work-management
-> module, sliced into every other Center) · **Created:** 2026-08-05 · **Updated:** 2026-08-06
-> (owner pass — §8's three open questions are answered as **D-PM-8/9/10**; §7.1 gains the
-> Space→Center mapping step and WS-27b's done-whens grew with it) ·
-> **Status:** 🟢 **WS-27a + WS-27b + WS-27d + WS-27e BUILT** (2026-08-06, branch
-> `claude/paca-research-task-management-a1f6zd`, PR #367) — migration `146_projects.sql`
-> (§3.1–§3.10), `feature:projects` registered on both sides, the `routes/projects/` API (§4
-> minus `sync.py`) live behind the feature gate on the `gateway/db.py` seam, the ClickUp
-> importer with its Space→Center mapping plan (§7.1), and the `/projects` UI with its Center
-> projections (§5), and the personal lens (§3.11-§3.12, §6.1) on migration
-> `147_projects_personal.sql`. **Not deployed and never run** — neither migration has been
-> applied anywhere and neither import endpoint has been executed against the live tenant. ·
-> **WS-27c, f, g, h: 🟡 SPEC, nothing built.** ·
+> module, sliced into every other Center) · **Created:** 2026-08-05 · **Updated: 2026-08-10**
+> (status truth pass + tenancy alignment — R4) ·
+> **Status:** ✅ **WS-27 a–t MERGED AND DEPLOYED** (a b d e f i j k l m n via #390/#393/#394/#398;
+> o–t via **#399**; **u–z via #408**, 2026-08-10) — migrations **146, 147, 150, 152, 155, 156,
+> 160, 161, 164, 165, 166 are applied on prod** (164/165/166 log-verified on the 2026-08-10
+> deploy). The earlier "not deployed and never run" status is **struck**; what remains never-run
+> is the **ClickUp import against the live workspace**, which is OWNER-GATE (§6 WS-27 (a)).
+> 🟡 **c** two-way sync (waits on WS-1 BO-1a+BO-1b) · 🔴 **g** cutover/retirement · 🟡 **h**
+> `gtd_items` retirement (data move 🔴) · 🟢 **u–z shipped**, their owner activation steps in
+> HANDOVER §1 ·
 > **Owner:** vjvarada · **Board row: WS-27**
+>
+> **Tenancy (audited 2026-08-10 — this spec previously cited no tenancy decision at all).**
+> The canonical architecture is **D15** — tenant = `organization_id`, enforced by Postgres
+> FORCE ROW LEVEL SECURITY bound at the `get_db()` seam (`project-docs/specs/saas_multitenancy.md`;
+> its `_implementation.md` holds the shapes). **Cite D15, never `multi_tenancy.md`'s D-MT-*,**
+> which is the earlier narrower record and carries a superseded-for-architecture banner.
+> All **19** `pm_*` tables are tenant-keyed (17 by migration 161, `pm_intake`/`pm_task_watchers`
+> at CREATE time) and `routes/projects/` is clean against R5: one shared seam, no Redis, no
+> route reads a tenant from request input. **Two known non-mechanical conversion sites are
+> recorded where the tenancy agents will see them** — `core.resolve_organization_id` (handover
+> H2) and `automation.run_lifecycle_sweep` (MT-1d). Do not "fix" either from this spec.
+>
+> **Commercially (D23/D24):** Projects is **not** an a-la-carte module. It rides inside
+> **every Center package** as one of the base cross-cutting slices (with Knowledge Base and
+> Dashboards); the paid Projects surfaces are what a Center package buys, and the
+> `project_management_app` feature slug is gated by the entitlement seam, never sold alone
+> (`saas_multitenancy.md` §2.4b).
 >
 > **Verified 2026-08-06:** 140 hermetic cases across
 > `test_projects_{routes,grants,migration,import_mapping}.py` (no DB, no ClickUp, no LLM),
@@ -1115,7 +1130,10 @@ description, not an assignment).
 A captured task is real from birth, parked out of sight until a human rules on it.
 Done when: (1) a migration adds a `pm_intake` join table (`task_id` unique, `status ∈
 pending|accepted|declined|duplicate|snoozed`, `snoozed_until`, `duplicate_of_task_id`,
-`source`, `source_ref`, `organization_id` per D-MT-3) and a `triage` value in the
+`source`, `source_ref`, `organization_id` — the tenant key every `pm_*` table
+carries per **D15**, kept on the row rather than derived through a parent; the
+rule's original statement was `multi_tenancy.md`'s D-MT-3, superseded for
+architecture but unchanged on this point) and a `triage` value in the
 status-category vocabulary; (2) the **default list exclusion is one predicate in
 `core.py`** beside the visibility clause — tasks whose status category is `triage` appear
 in no board/list/calendar/timeline/search surface unless `include_triage` is passed, and

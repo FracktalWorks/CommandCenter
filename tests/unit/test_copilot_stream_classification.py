@@ -35,13 +35,13 @@ def test_assistant_message_dedup_is_per_message_id():
 
 
 def test_frontend_fold_reset_requires_real_text():
-    reducer = (REPO / "workbench/control_plane/src/lib/chatStream.ts").read_text()
+    reducer = (REPO / "workbench/control_plane/src/lib/chatStream.ts").read_text(encoding="utf-8")
     assert "if (deltaText.trim()) fold.foldedAnswerIdx = -1;" in reducer, (
         "whitespace deltas must not cancel the trailing-answer un-fold"
     )
     translator = (
         REPO / "workbench/control_plane/src/app/api/agent/chat/route.ts"
-    ).read_text()
+    ).read_text(encoding="utf-8")
     assert "if (delta.trim()) foldedAnswerIdx = -1;" in translator, (
         "server persistence translator must mirror the whitespace guard"
     )
@@ -50,7 +50,7 @@ def test_frontend_fold_reset_requires_real_text():
 def test_live_loop_missing_done_fallback_unfolds():
     hook = (
         REPO / "workbench/control_plane/src/hooks/useAgentChat.ts"
-    ).read_text()
+    ).read_text(encoding="utf-8")
     assert 'applyStreamEvent(m, { type: "done" }, fold)' in hook, (
         "the no-done fallback must run the shared done reducer (un-fold)"
     )

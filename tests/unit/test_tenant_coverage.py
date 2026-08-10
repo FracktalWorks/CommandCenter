@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -97,6 +98,51 @@ def test_generated_policies_carry_all_four_load_bearing_clauses() -> None:
     assert "current_setting('app.tenant_id', true)" in sql, (
         "the missing-ok flag must be true, or an unset GUC RAISES instead of "
         "returning NULL and every unconverted path 500s at once"
+    )
+
+
+def test_the_generated_set_on_disk_matches_the_tables_that_exist() -> None:
+    """The committed phase files must name exactly the tables the ladder
+    creates — no missing table, and **no name that is not a table at all**.
+
+    Both halves have a measured incident behind them (2026-08-10):
+
+    - `pm_intake` and `pm_task_watchers` (migrations 164/165) were absent from
+      all four committed phase files. Promoting the set would have given them a
+      tenant column and **no policy** — two Projects tables silently readable
+      and writable across tenants while everything around them failed closed.
+    - `04_policies.sql` carried ``ALTER TABLE if ENABLE ROW LEVEL SECURITY``.
+      There is no table named ``if``: the generator regexed `CREATE TABLE`
+      out of *comment prose* (a backticked ``CREATE TABLE IF NOT EXISTS`` in
+      `143_access_request.sql`). That statement cannot run, and phase 4 is
+      applied **by hand against production in a maintenance window**, so it
+      would have aborted the promotion part-way through.
+
+    This is the only test that reads the committed artifact rather than calling
+    the generator, which is exactly why it catches a stale checkout.
+    """
+    generated = _REPO / "infra" / "postgres" / "generated" / "04_policies.sql"
+    if not generated.is_file():
+        pytest.skip("generated set not present in this checkout")
+
+    gen = _generator()
+    expected = set(gen.discover_tables()) - set(gen.EXEMPT) - set(gen.HOMONYM_BLOCKED)
+    on_disk = set(
+        re.findall(r"ALTER TABLE ([a-z_][a-z0-9_]*) ENABLE ROW LEVEL SECURITY",
+                   generated.read_text(encoding="utf-8"))
+    )
+
+    phantom = sorted(on_disk - expected)
+    assert not phantom, (
+        f"{phantom} appear in the promotion script but are not tables the "
+        "migrations create. Do not delete the lines — fix the generator and "
+        "regenerate: `uv run python scripts/gen_tenant_migration.py`."
+    )
+    missing = sorted(expected - on_disk)
+    assert not missing, (
+        f"{missing} carry no RLS policy in the committed set — they would be "
+        "cross-tenant readable after promotion. Regenerate: "
+        "`uv run python scripts/gen_tenant_migration.py`."
     )
 
 

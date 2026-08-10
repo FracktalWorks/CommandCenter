@@ -8,8 +8,11 @@ every sub-app, and the overall architecture. *(The owner's suggested name
 was avoided because the Projects app's own spec lives inside and the collision
 would confuse exactly the agents this cleanup serves.)*
 
-**How an agent navigates:** start at **`work_plan.md` §2** (the dispatch
-board — ordering, states, gates). The board row names the **owning spec**; build
+**How an agent navigates:** the repo root **`CLAUDE.md`** is loaded into every
+session (D30) and routes you here; then start at **`work_plan.md` §1** (the spec contract and
+the standing rules **R1–R8** — R6/R7/R8 are the engineering-practice rules from
+D28 and bind every PR), then **§2** (the dispatch board — ordering, states,
+gates). The board row names the **owning spec**; build
 only from owning specs listed **ACTIVE** here. Anything in DEFERRED or
 HISTORICAL is banner-marked and dispatches nothing. `work_plan.md` §6 is the
 owner-gate registry an agent must refuse by name. Decisions (D1–D26) live in
@@ -56,6 +59,7 @@ limitations). Do not add product specs to `docs/`.
 
 | Spec | Role |
 |---|---|
+| **`specs/engineering_practice.md`** | **HOW we build (D28): environments, deploy≠release + rings, expand/contract migrations, what a test is worth when an agent wrote it, agent work-partitioning, security once users are not colleagues, definition of done. Its binding rules are R6/R7/R8 in `work_plan.md` §1 — read those first if you read nothing else.** |
 | `specs/user_management_contract.md` | The rules every app must follow (identity, lifecycle, permissions) |
 | `specs/org_access_control.md` | The access model of record |
 | `specs/tenancy_and_visibility.md` | §2–§5 visibility doctrine (D12) — ⚠️ §1/§6 SUPERSEDED by D15 |

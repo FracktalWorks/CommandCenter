@@ -4,7 +4,11 @@
 a bug list — it is the honest state of a system built for one organisation. The
 bug would be adding the 147th.
 
-**137 → 123 → 113 → 114.** (+1 2026-08-10: `crm_auto_lead_cursors`, mig 163 — per-mailbox cursor, tenant derived through `email_accounts`; see its baseline entry.) WS-29a keyed all 17 `pm_*` tables (migration 161) while
+**137 → 123 → 113 → 114.** (+1 2026-08-10: `crm_auto_lead_cursors`, mig 163 —
+per-mailbox cursor, tenant derived through `email_accounts`; see its baseline
+entry.) WS-29a keyed all 17 `pm_*` tables of the day (migration 161) — and the
+two that arrived after it, `pm_intake` (164) and `pm_task_watchers` (165), were
+keyed at CREATE time, so the Projects app is **19 of 19** scoped — while
 they were still empty enough to make it a one-line default rather than a
 backfill. Then `main`'s MT-0d keyed `provider_keys`, `model_config`,
 `mcp_servers` and `plugins`, and MT-1a introduced a control plane that is
@@ -96,11 +100,17 @@ EXPECTED_SCOPED = {
     "app_user",
     "org_group",
     "org_role",
-    # WS-29a — the whole Projects app, keyed while it was empty.
-    "pm_activities", "pm_custom_fields", "pm_notifications",
+    # WS-29a — the whole Projects app, keyed while it was empty (17 tables,
+    # migration 161) — plus the two WS-27u/v tables that arrived after it and
+    # were keyed at CREATE time (164 `pm_intake`, 165 `pm_task_watchers`).
+    # ⚠️ Listing them here is bookkeeping, not enforcement: this set is only
+    # asserted to be a SUBSET of what `_scan()` finds, so an omission is silent.
+    # The enforcement is `test_a_new_table_must_carry_a_tenant_key`.
+    "pm_activities", "pm_custom_fields", "pm_intake", "pm_notifications",
     "pm_project_grants", "pm_projects", "pm_recurrences", "pm_tags",
     "pm_task_assignees", "pm_task_attachments", "pm_task_counters",
-    "pm_task_links", "pm_task_personal", "pm_task_statuses", "pm_task_types",
+    "pm_task_links", "pm_task_personal", "pm_task_statuses",
+    "pm_task_types", "pm_task_watchers",
     "pm_tasks", "pm_view_task_positions", "pm_views",
 }
 

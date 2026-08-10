@@ -538,7 +538,7 @@ def test_the_default_org_slug_is_gone_entirely() -> None:
     # that explanation out of the file it belongs in.
     for path in ADMIN_SOURCES:
         code = [
-            line for line in path.read_text().splitlines()
+            line for line in path.read_text(encoding="utf-8").splitlines()
             if not line.lstrip().startswith(("#", "#:"))
         ]
         assert "DEFAULT_ORG_SLUG" not in "\n".join(code), (
@@ -554,7 +554,7 @@ def test_no_admin_route_resolves_an_organization_from_a_literal() -> None:
     request can reach."""
     pattern = re.compile(r"FROM\s+organization\s+WHERE\s+slug", re.IGNORECASE)
     for path in ADMIN_SOURCES:
-        assert not pattern.search(path.read_text()), (
+        assert not pattern.search(path.read_text(encoding="utf-8")), (
             f"{path.name} resolves an organization from a slug"
         )
 
@@ -570,7 +570,7 @@ def test_every_call_site_passes_a_caller() -> None:
     passing = re.compile(r"get_org_id\(\s*db\s*,\s*(admin|user)\b")
     sites = 0
     for path in ADMIN_SOURCES:
-        body = path.read_text()
+        body = path.read_text(encoding="utf-8")
         assert not bare.search(body), f"{path.name} calls get_org_id without a caller"
         sites += len(passing.findall(body))
     assert sites >= 20, f"only {sites} call sites found — did the sweep miss a module?"

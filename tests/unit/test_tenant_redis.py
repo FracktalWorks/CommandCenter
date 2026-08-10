@@ -629,7 +629,7 @@ def test_the_cc_root_is_written_in_exactly_one_place() -> None:
     the only literal the wrapper itself uses to build a key, so a future edit
     cannot quietly add a second, unprefixed builder beside it.
     """
-    source = (_REPO / "packages/acb_common/acb_common/tenant_redis.py").read_text()
+    source = (_REPO / "packages/acb_common/acb_common/tenant_redis.py").read_text(encoding="utf-8")
     tree = ast.parse(source)
     literals = [
         n.value for n in ast.walk(tree)

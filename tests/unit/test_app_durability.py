@@ -104,8 +104,8 @@ def test_rehydrate_recreates_workspace_with_git_baseline(tmp_path: Path) -> None
         ("index.html", "<html>hi</html>"),
         ("src/app.js", "let x = 1;"),
     ])
-    assert (workspace / "index.html").read_text() == "<html>hi</html>"
-    assert (workspace / "src" / "app.js").read_text() == "let x = 1;"
+    assert (workspace / "index.html").read_text(encoding="utf-8") == "<html>hi</html>"
+    assert (workspace / "src" / "app.js").read_text(encoding="utf-8") == "let x = 1;"
     assert (workspace / ".git").is_dir()
     assert len(_log_shas(workspace)) == 1        # the baseline commit
 
@@ -120,7 +120,7 @@ def test_rehydrate_refuses_traversal_and_dot_paths(tmp_path: Path) -> None:
         (".git/hooks/pre-commit", "no"),
         ("ok.txt", "yes"),
     ])
-    assert (workspace / "ok.txt").read_text() == "yes"
+    assert (workspace / "ok.txt").read_text(encoding="utf-8") == "yes"
     assert not (tmp_path / "evil.txt").exists()
     assert not (workspace / ".env").exists()
     assert not (workspace / ".git" / "hooks" / "pre-commit").exists()
@@ -156,7 +156,7 @@ def test_checkpoint_list_restore_round_trip(tmp_path: Path) -> None:
     restored = restore_checkpoint(ws, first)
     assert restored is not None
     assert restored not in (first, second)       # a NEW restore commit
-    assert (ws / "index.html").read_text() == "v1"
+    assert (ws / "index.html").read_text(encoding="utf-8") == "v1"
 
 
 def test_restore_is_additive_and_history_grows(tmp_path: Path) -> None:
@@ -171,8 +171,8 @@ def test_restore_is_additive_and_history_grows(tmp_path: Path) -> None:
     before = _log_shas(ws)
     assert restore_checkpoint(ws, str(first)) is not None
     # Additive: the file created after the checkpoint survives the restore…
-    assert (ws / "later.txt").read_text() == "born after first"
-    assert (ws / "a.txt").read_text() == "a1"
+    assert (ws / "later.txt").read_text(encoding="utf-8") == "born after first"
+    assert (ws / "a.txt").read_text(encoding="utf-8") == "a1"
     # …and history only grew — the old log is intact under one new commit.
     after = _log_shas(ws)
     assert len(after) == len(before) + 1

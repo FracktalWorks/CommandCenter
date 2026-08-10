@@ -73,8 +73,35 @@ ide/
 /test-results/
 workbench/control_plane/test-results/
 
-# Local agent configuration and observation logs
-.claude/
+# Agent harness. ⚠️ NOT a blanket ignore any more (D29, 2026-08-10).
+#
+# `.claude/` holds the development philosophy in EXECUTABLE form — the
+# supervisor-worker agent definitions, the /next-ticket command, and
+# `plan-guard.mjs`, which is what refuses work_plan.md §6's owner-gated actions.
+# While the whole directory was ignored, any checkout that was not this laptop —
+# a cloud Claude instance, a fresh clone, a headless run, an agent worktree — ran
+# with **no owner-gate enforcement and none of the review loop**. That is a
+# safety control travelling by accident, so the harness is now tracked and only
+# the genuinely local parts are ignored.
+#
+# Track: AGENTS.md · agents/ · commands/ · hooks/ · settings.json
+# Ignore: everything below.
+#
+# ⚠️ Comments MUST be on their own line. `#` does not start a comment mid-line,
+# so `foo/   # why` is a literal pattern ending in the comment text and matches
+# nothing. The first draft of this block wrote it that way and committed the
+# 2.3 MB skill bundle it says to ignore.
+#
+# per-machine permissions/overrides; may name local paths
+.claude/settings.local.json
+# ephemeral full checkouts made by parallel agents
+.claude/worktrees/
+# runtime state
+.claude/scheduled_tasks.lock
+# local observation logs
+.claude/skill-observations/
+# third-party skill bundles (tooling a developer installs, not project doctrine)
+.claude/skills/
 skill-observations/
 
 # Runtime caches / secrets / junk that must never be committed (foundation audit F2).

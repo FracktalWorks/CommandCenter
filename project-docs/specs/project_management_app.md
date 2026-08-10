@@ -1684,12 +1684,21 @@ Windows box against the live DB. **Name the files.**
 
 ```bash
 uv run pytest tests/unit/test_projects_routes.py tests/unit/test_projects_grants.py \
-              tests/unit/test_projects_migration.py tests/unit/test_projects_sync.py \
+              tests/unit/test_projects_migration.py \
               tests/unit/test_projects_import_mapping.py \
-              tests/unit/test_projects_personal_mirror.py \
+              tests/unit/test_projects_personal.py \
+              tests/unit/test_gtd_retirement_plan.py \
               tests/unit/test_org_access_control.py tests/unit/test_org_access_enforcement.py
 cd workbench/control_plane && npx tsc --noEmit && npm test
 ```
+
+*(Corrected 2026-08-10, found by S5 while running this block: it named
+`test_projects_sync.py` and `test_projects_personal_mirror.py`, **neither of
+which exists** — the second is `test_projects_personal.py`, and the first never
+landed under that name. A verification command that names a missing file makes
+pytest exit non-zero before running anything, so anyone who pasted this block
+saw a red run that had nothing to do with their change — and anyone who "fixed"
+it by deleting the offending path silently dropped real coverage.)*
 
 House style applies: hermetic route tests (fake session, monkeypatch the DB seam on the
 SUT submodule), the migration asserted idempotent **statically** over its text, cascade

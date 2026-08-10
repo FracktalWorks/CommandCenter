@@ -27,6 +27,7 @@ from gateway.routes.email.core import (
     _account_scope,
     _assert_account_owner,
     _get_db,
+    _tenant_session,
     _llm_json,
     _log,
     provider_session,
@@ -97,8 +98,7 @@ async def list_senders(
     many senders exist and every one of them is reachable by paging, so the quiet
     tail can still be cleaned up.
     """
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         params: dict[str, Any] = {"uid": user.email or "anonymous",
                                   "limit": limit, "offset": offset}
         scope = _account_scope(account_id, params)
@@ -326,8 +326,6 @@ async def list_senders(
             # and the UI must say so rather than imply completeness.
             "total": int(total_row.c) if total_row else len(rows),
         }
-    finally:
-        await db.close()
 
 
 class BulkActionRequest(BaseModel):
@@ -400,8 +398,7 @@ async def bulk_action(
                    "message_ids, sender_email, folder, older_than_days, only_read.",
         )
 
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         params: dict[str, Any] = {"uid": user.email or "anonymous"}
         scope = _account_scope(req.account_id, params)
         clauses = [scope]
@@ -443,7 +440,6 @@ async def bulk_action(
         ), params)).fetchall()
         if not rows:
             return {"affected": 0}
-        await db.commit()
 
         # Group provider message ids per account for background reconciliation.
         per_account: dict[str, list[str]] = {}
@@ -453,8 +449,6 @@ async def bulk_action(
             background.add_task(_bulk_reconcile_provider, aid, pmids, req.action)
 
         return {"affected": len(rows)}
-    finally:
-        await db.close()
 
 
 # How hard to push a bulk action at the provider before giving up. The dominant
@@ -486,6 +480,8 @@ async def _bulk_reconcile_provider(
     folder reverted so the mirror matches the mailbox instead of lying until the
     next sync corrects it.
     """
+    # H4: called from _maybe_auto_archive (scheduler post-sync path); no
+    # ambient tenant to inherit.
     db = await _get_db()
     try:
         # Unscoped session: background task, no request user. Missing account
@@ -560,6 +556,7 @@ async def _maybe_auto_archive(account_id: str) -> None:
     """Archive freshly-synced inbox mail from senders marked AUTO_ARCHIVED (the
     bulk-archive 'Auto' action), then reconcile to the provider. This is what
     makes auto-archive apply to FUTURE mail, not just existing. Idempotent."""
+    # H4: scheduler post-sync hook path; no ambient tenant to inherit.
     db = await _get_db()
     try:
         rows = (await db.execute(text(
@@ -605,8 +602,7 @@ async def list_newsletters(
     user: UserContext = Depends(get_current_user),
 ):
     """List newsletter dispositions for the user's accounts."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         params: dict[str, Any] = {"uid": user.email or "anonymous"}
         scope = "account_id IN (SELECT id FROM email_accounts WHERE user_id = :uid"
         if account_id:
@@ -628,8 +624,6 @@ async def list_newsletters(
                 for r in rows
             ]
         }
-    finally:
-        await db.close()
 
 
 async def _apply_newsletter_status(
@@ -662,7 +656,10 @@ async def _apply_newsletter_status(
              updated_at = now()"""
     ), {"aid": account_id, "email": email, "name": name,
         "status": status, "link": link})
-    await db.commit()
+    # No commit here: both callers are converted request handlers (H2) whose
+    # `_tenant_session` commits on clean exit — BEFORE the response is sent,
+    # so the BackgroundTasks scheduled below always see the committed rows.
+    # A mid-block commit would end that transaction and drop the tenant GUC.
 
     archived = 0
     if status in ("UNSUBSCRIBED", "AUTO_ARCHIVED"):
@@ -679,7 +676,6 @@ async def _apply_newsletter_status(
                 "UPDATE email_messages SET folder = 'archive', updated_at = now() "
                 "WHERE id::text = ANY(:ids)"
             ), {"ids": ids})
-            await db.commit()
             archived = len(ids)
             background.add_task(
                 _bulk_reconcile_provider, account_id,
@@ -705,16 +701,13 @@ async def upsert_newsletter(
     provider-native filter so future mail skips the inbox at the source."""
     if req.status not in ("APPROVED", "UNSUBSCRIBED", "AUTO_ARCHIVED"):
         raise HTTPException(status_code=400, detail=f"Bad status: {req.status}")
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         await _assert_account_owner(db, req.account_id, user.email or "anonymous")
         archived = await _apply_newsletter_status(
             db, background, req.account_id, req.email, req.name, req.status,
             req.unsubscribe_link, create_filter=(req.status == "AUTO_ARCHIVED"),
         )
         return {"ok": True, "status": req.status, "archived": archived}
-    finally:
-        await db.close()
 
 
 # ── Real unsubscribe: RFC 8058 one-click + mailto, with SSRF guard ───────────
@@ -808,6 +801,8 @@ async def _create_block_filter(
     """Best-effort background task: create a provider-native auto-archive filter
     for ``email`` and record its id on the newsletter row. No-ops gracefully for
     providers without filters (IMAP) — the AUTO_ARCHIVED sweep covers those."""
+    # H4: background consumer — _create_block_filter runs as a
+    # post-response BackgroundTask; no ambient tenant to inherit.
     db = await _get_db()
     try:
         # Unscoped session: background task, no request user. Missing account
@@ -840,6 +835,8 @@ async def _remove_block_filter(account_id: str, email: str) -> None:
     """Best-effort background task: delete the provider-native auto-archive
     filter recorded for ``email`` and clear it on the newsletter row. No-ops when
     no filter is recorded (e.g. IMAP, or never auto-archived)."""
+    # H4: background consumer — _remove_block_filter runs as a
+    # post-response BackgroundTask; no ambient tenant to inherit.
     db = await _get_db()
     try:
         row = (await db.execute(text(
@@ -892,8 +889,7 @@ async def unsubscribe_sender(
     still handled rather than silently continuing to the inbox. Either way the
     sender's existing inbox mail is archived. Returns what was actually done so
     the UI can tell the user (unsubscribed vs blocked)."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         await _assert_account_owner(db, req.account_id, user.email or "anonymous")
 
         # Use the link the UI passed; otherwise recover the best one we stored.
@@ -924,8 +920,8 @@ async def unsubscribe_sender(
                     ok, detail = await _mailto_unsubscribe(sess.provider, link)
                 else:
                     detail = "auth-failed"
-            if sess.authed:
-                await db.commit()
+            # Rotated creds staged by provider_session land at the wrapper's
+            # exit commit.
 
         # Unsubscribe worked → UNSUBSCRIBED (the sender stops; no filter needed).
         # Otherwise block: AUTO_ARCHIVED + a provider filter so future mail is
@@ -942,8 +938,6 @@ async def unsubscribe_sender(
         )
         return {"ok": ok, "method": method, "detail": detail,
                 "status": status, "archived": archived, "unsubscribe_link": link}
-    finally:
-        await db.close()
 
 
 EMAIL_CATEGORIES = [
@@ -1060,6 +1054,8 @@ async def _categorize_senders_job(account_id: str, limit: int) -> None:
     through the same ``_LABEL_TALLY_SQL`` + ``_rule_category`` helpers, so the
     two views cannot disagree.
     """
+    # H4: background consumer — _categorize_senders_job runs as a
+    # BackgroundTask and from the scheduler; no ambient tenant to inherit.
     db = await _get_db()
     try:
         # Busiest senders, with their CURRENT category/source so a 'user'
@@ -1172,11 +1168,8 @@ async def categorize_senders(
     the rules actually label more mail, use ``/email/senders/auto-categorize``
     (learned-pattern sweep) or ``/email/rules/process-past`` (full re-run).
     """
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         await _assert_account_owner(db, req.account_id, user.email or "anonymous")
-    finally:
-        await db.close()
     background.add_task(_categorize_senders_job, req.account_id, min(req.limit, 300))
     return {"scheduled": True}
 
@@ -1187,8 +1180,7 @@ async def sender_categories(
     user: UserContext = Depends(get_current_user),
 ):
     """List the category vocabulary + per-category sender counts."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         await _assert_account_owner(db, account_id, user.email or "anonymous")
         rows = (await db.execute(text(
             """SELECT category, COUNT(*) AS c FROM email_senders
@@ -1199,8 +1191,6 @@ async def sender_categories(
             "categories": EMAIL_CATEGORIES,
             "counts": {r.category: r.c for r in rows},
         }
-    finally:
-        await db.close()
 
 
 async def _llm_is_cold(email: dict[str, str]) -> tuple[bool, str]:
@@ -1316,8 +1306,7 @@ async def list_cold_senders(
     user: UserContext = Depends(get_current_user),
 ):
     """List cold-email verdicts (flagged + whitelisted) for an account."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         await _assert_account_owner(db, account_id, user.email or "anonymous")
         rows = (await db.execute(text(
             """SELECT from_email, status, reason, updated_at
@@ -1332,8 +1321,6 @@ async def list_cold_senders(
                 for r in rows
             ]
         }
-    finally:
-        await db.close()
 
 
 @router.post("/cold-senders")
@@ -1342,8 +1329,7 @@ async def upsert_cold_sender(
     user: UserContext = Depends(get_current_user),
 ):
     """Set a sender's cold verdict — USER_REJECTED_COLD whitelists them."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         await _assert_account_owner(db, req.account_id, user.email or "anonymous")
         await db.execute(text(
             """INSERT INTO email_cold_senders
@@ -1352,7 +1338,4 @@ async def upsert_cold_sender(
                ON CONFLICT (account_id, from_email) DO UPDATE SET
                  status = EXCLUDED.status, updated_at = now()"""
         ), {"aid": req.account_id, "e": req.from_email, "status": req.status})
-        await db.commit()
         return {"ok": True, "status": req.status}
-    finally:
-        await db.close()

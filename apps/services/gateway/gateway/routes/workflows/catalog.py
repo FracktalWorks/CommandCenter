@@ -12,7 +12,7 @@ from typing import Any
 
 from acb_auth import UserContext, get_current_user
 from fastapi import Depends
-from gateway.routes.workflows.core import _get_db, _log, iso, router
+from gateway.routes.workflows.core import _log, _tenant_session, iso, router
 from gateway.routes.workflows.tools import list_tools
 from sqlalchemy import text
 
@@ -249,8 +249,7 @@ def _tool_entry(spec: Any) -> dict[str, Any]:
 async def get_catalog(
     user: UserContext = Depends(get_current_user),
 ) -> dict[str, Any]:
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         modules = (
             await db.execute(
                 text(
@@ -260,8 +259,6 @@ async def get_catalog(
                 ),
             )
         ).fetchall()
-    finally:
-        await db.close()
     from gateway.routes.workflows.core import parse_jsonb
 
     return {

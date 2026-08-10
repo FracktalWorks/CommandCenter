@@ -18,7 +18,7 @@ from datetime import UTC, datetime
 from acb_auth import UserContext, get_current_user
 from fastapi import Depends, HTTPException
 from gateway.routes.whatsapp.automation.replyzero import recompute_chat_status
-from gateway.routes.whatsapp.core import _get_db, assert_chat_owned, router
+from gateway.routes.whatsapp.core import _tenant_session, assert_chat_owned, router
 from pydantic import BaseModel
 from sqlalchemy import text
 
@@ -71,8 +71,7 @@ async def snooze_chat(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         account_id = await assert_chat_owned(db, chat_id, user.email or "anonymous")
         # Ensure a status row exists (a never-classified chat has none yet), then
         # stamp the snooze onto it.
@@ -85,12 +84,11 @@ async def snooze_chat(
         )).fetchone()
         if result is None:
             # No status row and no messages to classify — nothing to snooze.
+            # The 422 rolls back the recompute too, exactly as before (the old
+            # shape only committed after this check).
             raise HTTPException(
                 status_code=422, detail="Nothing to snooze in this chat yet")
-        await db.commit()
         return SnoozeModel(chat_id=chat_id, snoozed_until=when.isoformat())
-    finally:
-        await db.close()
 
 
 @router.post("/chats/{chat_id}/unsnooze", response_model=SnoozeModel)
@@ -98,15 +96,11 @@ async def unsnooze_chat(
     chat_id: str, user: UserContext = Depends(get_current_user),
 ):
     """Wake a snoozed chat now — it returns to the queue with its real status."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         account_id = await assert_chat_owned(db, chat_id, user.email or "anonymous")
         await db.execute(
             text("""UPDATE wa_chat_status SET snoozed_until = NULL
                     WHERE account_id = :aid AND chat_id = :cid"""),
             {"aid": account_id, "cid": chat_id},
         )
-        await db.commit()
         return SnoozeModel(chat_id=chat_id, snoozed_until=None)
-    finally:
-        await db.close()

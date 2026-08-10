@@ -56,6 +56,7 @@ from gateway.routes.email.automation.senders import (
 from gateway.routes.email.core import (
     _assert_account_owner,
     _get_db,
+    _tenant_session,
     _instantiate_provider,
     _log,
     _persist_rotated_creds,
@@ -524,6 +525,9 @@ async def sweep_uncategorized(
         # which means the mailbox actually ran dry.
         "apply_capped": False,
     }
+    # H4: mixed callers — sweep_uncategorized also runs from the scheduler's
+    # post-sync sweep and the backfill BackgroundTask, where no ambient
+    # tenant exists; needs an explicit tenant from the account row.
     db = await _get_db()
     provider = None
     store = None
@@ -716,68 +720,65 @@ async def restore_provider_labels(account_id: str) -> dict[str, Any]:
     only ever existed locally isn't destroyed by the very job meant to repair.
     """
     out: dict[str, Any] = {"messages": 0, "labels": 0, "updated": 0}
-    db = await _get_db()
     try:
-        acc = (await db.execute(text(
-            "SELECT provider, credentials_encrypted FROM email_accounts "
-            "WHERE id = :id"
-        ), {"id": account_id})).fetchone()
-        if not acc:
-            return out
-        import json  # noqa: PLC0415
+        async with _tenant_session() as db:
+            acc = (await db.execute(text(
+                "SELECT provider, credentials_encrypted FROM email_accounts "
+                "WHERE id = :id"
+            ), {"id": account_id})).fetchone()
+            if not acc:
+                return out
+            import json  # noqa: PLC0415
 
-        from acb_llm.key_store import get_key_store  # noqa: PLC0415
-        store = get_key_store()
-        creds = json.loads(store.decrypt(acc.credentials_encrypted))
-        provider = _instantiate_provider(acc.provider, creds)
-        # Say so BEFORE authenticating: on a provider that can't list messages
-        # per label, an empty result is indistinguishable from "your mailbox
-        # has no labels". Reporting the latter tells a user with thousands of
-        # labelled messages that they have none — the opposite of the truth
-        # this repair path exists to restore.
-        if not getattr(provider, "SUPPORTS_LABEL_READBACK", False):
-            out["error"] = "unsupported"
-            out["provider"] = acc.provider
-            return out
-        if not await provider.authenticate():
-            out["error"] = "auth-failed"
-            return out
+            from acb_llm.key_store import get_key_store  # noqa: PLC0415
+            store = get_key_store()
+            creds = json.loads(store.decrypt(acc.credentials_encrypted))
+            provider = _instantiate_provider(acc.provider, creds)
+            # Say so BEFORE authenticating: on a provider that can't list messages
+            # per label, an empty result is indistinguishable from "your mailbox
+            # has no labels". Reporting the latter tells a user with thousands of
+            # labelled messages that they have none — the opposite of the truth
+            # this repair path exists to restore.
+            if not getattr(provider, "SUPPORTS_LABEL_READBACK", False):
+                out["error"] = "unsupported"
+                out["provider"] = acc.provider
+                return out
+            if not await provider.authenticate():
+                out["error"] = "auth-failed"
+                return out
 
-        assignments = await provider.fetch_label_assignments()
-        out["messages"] = len(assignments)
-        out["labels"] = len({lbl for v in assignments.values() for lbl in v})
-        # Group by label-set and write one statement per DISTINCT set rather
-        # than one per message. A mailbox has a handful of label combinations
-        # and tens of thousands of messages, so this is ~20 round-trips instead
-        # of 40,000 — the difference between a route that returns and one that
-        # times out on exactly the large mailbox that needs it most.
-        # Same canonicalisation the sync ingest applies (renamed labels map to
-        # their new names, the "Uncategorized" indicator is dropped) — this
-        # repair writes raw provider label sets, so without it a restore would
-        # resurrect exactly the stale names ingest exists to retire.
-        from email_ingestion.persist import _canon_categories  # noqa: PLC0415
-        by_labels: dict[tuple[str, ...], list[str]] = {}
-        for pmid, labels in assignments.items():
-            by_labels.setdefault(tuple(_canon_categories(labels)), []).append(pmid)
-        for labels_key, pmids in by_labels.items():
-            res = await db.execute(text(
-                "UPDATE email_messages SET categories = :cats, updated_at = now() "
-                "WHERE account_id = :aid AND provider_message_id = ANY(:pmids) "
-                "AND categories IS DISTINCT FROM :cats"
-            ), {"aid": account_id, "pmids": pmids, "cats": list(labels_key)})
-            out["updated"] += res.rowcount or 0
-        await _persist_rotated_creds(db, store, account_id, provider)
-        await db.commit()
-        _log.info("email.restore_labels", account_id=account_id, **{
-            k: v for k, v in out.items() if isinstance(v, int)})
-        return out
+            assignments = await provider.fetch_label_assignments()
+            out["messages"] = len(assignments)
+            out["labels"] = len({lbl for v in assignments.values() for lbl in v})
+            # Group by label-set and write one statement per DISTINCT set rather
+            # than one per message. A mailbox has a handful of label combinations
+            # and tens of thousands of messages, so this is ~20 round-trips instead
+            # of 40,000 — the difference between a route that returns and one that
+            # times out on exactly the large mailbox that needs it most.
+            # Same canonicalisation the sync ingest applies (renamed labels map to
+            # their new names, the "Uncategorized" indicator is dropped) — this
+            # repair writes raw provider label sets, so without it a restore would
+            # resurrect exactly the stale names ingest exists to retire.
+            from email_ingestion.persist import _canon_categories  # noqa: PLC0415
+            by_labels: dict[tuple[str, ...], list[str]] = {}
+            for pmid, labels in assignments.items():
+                by_labels.setdefault(tuple(_canon_categories(labels)), []).append(pmid)
+            for labels_key, pmids in by_labels.items():
+                res = await db.execute(text(
+                    "UPDATE email_messages SET categories = :cats, updated_at = now() "
+                    "WHERE account_id = :aid AND provider_message_id = ANY(:pmids) "
+                    "AND categories IS DISTINCT FROM :cats"
+                ), {"aid": account_id, "pmids": pmids, "cats": list(labels_key)})
+                out["updated"] += res.rowcount or 0
+            await _persist_rotated_creds(db, store, account_id, provider)
+            _log.info("email.restore_labels", account_id=account_id, **{
+                k: v for k, v in out.items() if isinstance(v, int)})
+            return out
     except Exception as exc:  # noqa: BLE001
         _log.warning("email.restore_labels_failed", account_id=account_id,
                      error=str(exc)[:200])
         out["error"] = str(exc)[:200]
         return out
-    finally:
-        await db.close()
 
 
 class RestoreLabelsRequest(BaseModel):
@@ -794,11 +795,8 @@ async def restore_labels(
     Synchronous — it is a handful of list calls, not a per-message fetch — so the
     caller gets the real counts back rather than having to poll.
     """
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         await _assert_account_owner(db, req.account_id, user.email or "anonymous")
-    finally:
-        await db.close()
     return await restore_provider_labels(req.account_id)
 
 
@@ -875,6 +873,8 @@ async def _backfill_and_clean_job(
     # second request sees this run in-flight before this task even starts.
     started = datetime.now(timezone.utc)
     try:
+        # H4: background consumer — _backfill_and_clean_job runs as a
+        # post-response BackgroundTask; no ambient tenant to inherit.
         db = await _get_db()
         try:
             row = (await db.execute(text(
@@ -887,6 +887,7 @@ async def _backfill_and_clean_job(
         from email_ingestion.scheduler import _sync_account  # noqa: PLC0415
         await _sync_account(account_id, deep=True, since=since)
 
+        # H4: background consumer (see above) — second session of the same job.
         db = await _get_db()
         try:
             after = (await db.execute(text(
@@ -934,11 +935,8 @@ async def cleanup_backfill(
     Runs in the background; poll ``GET /email/cleanup/status``.
     """
     owner = user.email or "anonymous"
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         await _assert_account_owner(db, req.account_id, owner)
-    finally:
-        await db.close()
 
     since = None
     if req.since_date:
@@ -993,11 +991,8 @@ async def auto_categorize_inbox(
     owner = user.email or "anonymous"
     # limit=0 means "everything"; _MAX_SWEEP is only a runaway backstop.
     limit = min(req.limit, _MAX_SWEEP) if req.limit > 0 else _MAX_SWEEP
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         await _assert_account_owner(db, req.account_id, owner)
-    finally:
-        await db.close()
 
     if req.dry_run:
         preview_limit = min(limit, _PREVIEW_MAX)
@@ -1051,8 +1046,7 @@ async def uncategorized_overview(
     the sweep could only ever act on a fraction of it. A backlog number that
     cannot reach zero teaches the user to ignore the badge.
     """
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         await _assert_account_owner(db, account_id, user.email or "anonymous")
         internal_domains = await _internal_domains(db, account_id)
         params = _cleanup_scope_params(account_id, internal_domains)
@@ -1101,5 +1095,3 @@ async def uncategorized_overview(
                 for r in rows
             ],
         }
-    finally:
-        await db.close()

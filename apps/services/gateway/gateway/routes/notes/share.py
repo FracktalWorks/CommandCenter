@@ -11,7 +11,7 @@ import json
 
 from acb_auth import UserContext, get_current_user
 from fastapi import Depends, HTTPException
-from gateway.routes.notes.core import _get_db, _log, load_owned_meeting, router
+from gateway.routes.notes.core import _log, _tenant_session, load_owned_meeting, router
 from pydantic import BaseModel
 
 
@@ -34,7 +34,7 @@ async def draft_followup_email(
     through ``/email/send`` under whichever account they pick. So the thing to
     scope is the read, and the read is the whole of a colleague's notes plus
     their attendee list, rendered as prose."""
-    async with await _get_db() as db:
+    async with _tenant_session() as db:
         m = await load_owned_meeting(
             db, meeting_id, user.email,
             columns="m.title, m.summary_md, m.attendees",

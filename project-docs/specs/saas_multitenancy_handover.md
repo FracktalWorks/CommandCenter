@@ -187,6 +187,34 @@ stated values, **and** the baseline test set still passes.
 
 ## H2 · Convert 561 session-acquisition sites to `tenant_session()` · 🟢 AGENT-SAFE · **the long pole**
 
+> ### ◐◐ H2 NEARLY DONE 2026-08-10 (same day) — nine packages converted, 111 sites left, ALL classified
+>
+> Two waves of parallel slice-agents converted the rest of the gateway's request
+> handlers on top of the Projects slice below: **notes** (61 converted/33 left),
+> **whatsapp** (38/14), **email** (98/27), **tasks** (73/6), **workflows** (26/17),
+> **apps** (32/6), **crm** (28/3), **people** (4/0), **admin** (23/0).
+> `H2_BASELINE_ELSEWHERE` banked stepwise **494 → 111**, and every one of the 111
+> remaining sites is CLASSIFIED in place: a `# H4:` (background consumer — scheduler,
+> pipeline, sink, broker handler, `asyncio.create_task`) or `# H4/H6:`
+> (service-identity route — provider webhook, bridge secret, hook token, OAuth
+> callback) marker naming the tenant-derivation source for the conversion H4/H6 owns.
+> Zero-remainder packages are pinned by the parametrized
+> `test_converted_packages_stay_converted` (projects/crm/people/admin +
+> `H2_EXEMPT_FILES`); whatsapp and apps hold at exact per-file counts
+> (`H2_WHATSAPP_EXEMPT_SITES`, `H2_APPS_EXEMPT_SITES`).
+>
+> **Live verification (R8):** every wave ended with a real-Postgres smoke — wave 1
+> and wave 2 integration smokes drove one converted read per package under a bound
+> GUC on a migrated scratch cluster; the tasks slice additionally proved actual
+> FORCE-RLS org-A/org-B row isolation; unbound sessions raise `TenantUnbound`
+> everywhere.
+>
+> **What "H2 done" still needs:** the 111 H4/H6 sites are NOT H2's — they convert
+> with explicit tenants in H4 (jobs/consumers) and H6 (service-identity + identity
+> cutover). H2's own remaining act is nothing in `apps/` or `packages/` — the
+> original done-when ("grep returns 0") is superseded by this classification: the
+> grep now returns exactly the named, pinned, owned remainder.
+
 > ### ◐ H2 STARTED 2026-08-10 — central binding SHIPPED + the Projects slice converted
 >
 > **The "do this first" step is done:** `_with_resolved_access` (acb_auth/deps.py) calls

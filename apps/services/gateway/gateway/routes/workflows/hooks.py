@@ -19,6 +19,12 @@ from collections import deque
 from typing import Any
 
 from fastapi import HTTPException, Request
+
+# H4/H6: service-identity route, not a member request — the caller
+# authenticates by the per-workflow `hook_token`, so no user resolves and no
+# tenant is bound in context; the tenant derives from the workflow row the
+# token names (its `organization_id`), which H4 threads through explicitly
+# (`tenant_session(org_id)`). Until then this stays on the unbound `get_db()`.
 from gateway.routes.workflows.core import (
     HOOK_RATE_LIMIT_PER_MINUTE,
     MAX_TRIGGER_PAYLOAD_BYTES,

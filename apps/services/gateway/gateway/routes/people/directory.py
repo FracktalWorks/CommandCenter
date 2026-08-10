@@ -16,7 +16,7 @@ from acb_auth import UserContext, get_current_user
 from fastapi import Depends, HTTPException
 from gateway.routes.people.core import (
     STATUSES,
-    _get_db,
+    _tenant_session,
     can_manage_people,
     can_read_hr_fields,
     has_login,
@@ -145,8 +145,7 @@ async def list_directory(
         skill=skill, has_capacity=has_capacity,
     )
 
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         rows = (await db.execute(
             text(
                 "SELECT * FROM gtd_people WHERE " + " AND ".join(clauses)
@@ -155,8 +154,6 @@ async def list_directory(
             params,
         )).fetchall()
         people = [_row_to_person(r, include_hr=hr).model_dump() for r in rows]
-    finally:
-        await db.close()
     return DirectoryResponse(rows=people, total=len(people), hr_visible=hr,
                              can_manage=can_manage_people(user))
 
@@ -169,8 +166,7 @@ async def list_facets(user: UserContext = Depends(get_current_user)) -> dict:
     stale the first time the org changes — the same call ``/projects/my/contexts``
     made for GTD contexts.
     """
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         rows = (await db.execute(
             text(
                 "SELECT department, team, count(*) AS total FROM gtd_people "
@@ -178,8 +174,6 @@ async def list_facets(user: UserContext = Depends(get_current_user)) -> dict:
                 "ORDER BY department, team"
             ),
         )).fetchall()
-    finally:
-        await db.close()
     departments: dict[str, int] = {}
     teams: list[dict[str, Any]] = []
     for row in rows:
@@ -205,8 +199,7 @@ async def get_person(
     the *shape* of the answer, not whether one comes back.
     """
     hr = can_read_hr_fields(user)
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         row = (await db.execute(
             text("SELECT * FROM gtd_people WHERE id = CAST(:id AS uuid)"),
             {"id": person_id},
@@ -223,8 +216,6 @@ async def get_person(
         person["load"] = (
             await compute_load(db, getattr(row, "email", None)) if hr else None
         )
-    finally:
-        await db.close()
     person["hr_visible"] = hr
     # Independent of `hr_visible` on purpose. The two permissions are separate
     # grants, and an admin who may edit a record but not read its HR half is a
@@ -301,8 +292,7 @@ async def get_person_work(
     if not user.has_permission("feature:projects"):
         return WorkResponse(rows=[], total=0, available=False)
 
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         person = (await db.execute(
             text("SELECT email FROM gtd_people WHERE id = CAST(:id AS uuid)"),
             {"id": person_id},
@@ -339,8 +329,6 @@ async def get_person_work(
             ),
             params,
         )).fetchall()
-    finally:
-        await db.close()
 
     items = [
         {

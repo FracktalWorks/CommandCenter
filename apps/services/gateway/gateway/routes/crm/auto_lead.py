@@ -100,6 +100,7 @@ from typing import Any
 
 from acb_auth import UserContext, UserRole
 from acb_common import get_settings
+from acb_common.db import bind_tenant, release_tenant
 from gateway.routes.crm.core import (
     LEADS,
     LeadIn,
@@ -269,6 +270,17 @@ async def create_leads_from_new_mail(account_id: str) -> dict[str, int]:
     "considered 0" are different facts and one of them is a bug report.
     """
     stats = _new_stats()
+    # H4, DELIBERATELY NOT H2 (`saas_multitenancy_handover.md`): this is a
+    # BACKGROUND path, not a request handler — it is invoked from the email
+    # scheduler's shared new-mail hook (`routes/email/scheduler_hooks.py::
+    # process_new_mail`), which the background sync loop, the Graph webhook and
+    # the manual-sync route all fan into, and it runs under no member's request
+    # context. The runbook's rule for that category is "do not let a job
+    # inherit an ambient tenant", so it stays on the unbound `get_db()` until
+    # H4 threads an explicit tenant through — the natural source is the
+    # mailbox's own row (`email_accounts.user_id` → `app_user.organization_id`,
+    # i.e. `tenant_session(org_id)`). Named in `test_db_engine_seam.py`'s
+    # H2_EXEMPT_FILES.
     db = await _get_db()
     try:
         account = await _load_account(db, account_id)
@@ -778,7 +790,7 @@ async def _consider(
         stats["skipped_known"] += 1
         return False
     try:
-        lead = await _create_lead(account, address, display_name)
+        lead = await _create_lead(db, account, address, display_name)
     except Exception as exc:
         stats["errors"] += 1
         _log.warning("crm.auto_lead_message_failed",
@@ -807,7 +819,7 @@ async def _consider(
 
 
 async def _create_lead(
-    account: Any, address: str, display_name: str,
+    db: Any, account: Any, address: str, display_name: str,
 ) -> dict[str, Any]:
     """Create the lead through the CRM's own service write path.
 
@@ -821,6 +833,17 @@ async def _create_lead(
     ``POST /crm/leads`` calls), which is also why the caller counts a created
     lead before it writes the activity: by the time this returns, the row is
     committed and queued for Zoho.
+
+    ⚠️ H4, done early because it was a today-failure: ``create_record`` is H2-
+    converted (``_tenant_session``), and THIS caller runs on the background
+    mail path with no request and no ambient tenant. Left alone it raised
+    ``TenantUnbound`` on every message, ``_consider`` counted it failed, and
+    the watermark never advanced — auto-lead dead, wearing a WARNING. The
+    tenant is therefore bound EXPLICITLY here from the mailbox owner's
+    ``app_user`` row (the source this file's H4 marker names), scoped to
+    exactly this call — never inherited (the runbook's rule for jobs). An
+    owner with no organization fails this one message the same way any other
+    ``_consider`` error does, with the org named in the log.
     """
     first_name, last_name = _split_display_name(display_name)
     # Absent, never explicitly null: ``clean_payload`` is ``exclude_unset``, so
@@ -833,9 +856,37 @@ async def _create_lead(
         fields["first_name"] = first_name
     if last_name:
         fields["last_name"] = last_name
-    return await create_record(
-        LEADS, LeadIn(**fields), _principal(str(account.user_id)),
-    )
+    owner = str(account.user_id)
+    token = bind_tenant(await _owner_organization(db, owner))
+    try:
+        return await create_record(
+            LEADS, LeadIn(**fields), _principal(owner),
+        )
+    finally:
+        release_tenant(token)
+
+
+async def _owner_organization(db: Any, owner_email: str) -> str:
+    """The mailbox owner's organization id, from their ``app_user`` row.
+
+    Reads on the CALLER's (unbound, background) session: this runs before any
+    tenant is bound — it is what DECIDES the tenant, exactly like identity
+    resolution on the request path. Raises rather than returning None — a
+    mailbox whose owner has no organization must fail its message loudly, not
+    write a lead nowhere.
+    """
+    row = (await db.execute(
+        text("SELECT organization_id FROM app_user "
+             "WHERE lower(email) = lower(:e)"),
+        {"e": owner_email},
+    )).fetchone()
+    org = getattr(row, "organization_id", None) if row is not None else None
+    if not org:
+        raise RuntimeError(
+            f"auto-lead: mailbox owner {owner_email!r} has no app_user "
+            f"organization — cannot choose a tenant for the lead"
+        )
+    return str(org)
 
 
 async def _log_origin_activity(

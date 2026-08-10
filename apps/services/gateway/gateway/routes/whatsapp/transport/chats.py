@@ -11,7 +11,7 @@ from typing import Any
 
 from acb_auth import UserContext, get_current_user
 from fastapi import Depends, Query
-from gateway.routes.whatsapp.core import WhatsAppChatModel, _get_db, router
+from gateway.routes.whatsapp.core import WhatsAppChatModel, _tenant_session, router
 from sqlalchemy import text
 
 # The triage streams shown in the nav, in order. Status streams map to
@@ -88,8 +88,7 @@ async def list_streams(
     user: UserContext = Depends(get_current_user),
 ):
     """Return the nav stream counts for the account(s) the user owns."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         params: dict[str, Any] = {"uid": user.email or "anonymous"}
         scope = "c.account_id IN (SELECT id FROM wa_accounts WHERE user_id = :uid"
         if account_id:
@@ -116,8 +115,6 @@ async def list_streams(
             "all": int(row.all or 0),
             "snoozed": int(row.snoozed or 0),
         }
-    finally:
-        await db.close()
 
 
 @router.get("/chats", response_model=list[WhatsAppChatModel])
@@ -130,8 +127,7 @@ async def list_chats(
     user: UserContext = Depends(get_current_user),
 ):
     """List conversations, newest first, optionally scoped to a stream/category/label."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         params: dict[str, Any] = {"uid": user.email or "anonymous", "limit": limit}
         where = ["c.account_id IN (SELECT id FROM wa_accounts WHERE user_id = :uid"]
         if account_id:
@@ -186,5 +182,3 @@ async def list_chats(
             _chat_model(r, labels_by_chat.get((str(r.account_id), r.wa_chat_id)))
             for r in rows
         ]
-    finally:
-        await db.close()

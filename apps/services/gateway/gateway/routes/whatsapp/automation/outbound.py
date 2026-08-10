@@ -22,7 +22,12 @@ from uuid import uuid4
 from acb_auth import UserContext, get_current_user
 from acb_common import get_logger
 from fastapi import Depends, HTTPException
-from gateway.routes.whatsapp.core import _get_db, _provider_for_account, router
+from gateway.routes.whatsapp.core import (
+    _get_db,
+    _provider_for_account,
+    _tenant_session,
+    router,
+)
 from pydantic import BaseModel
 from sqlalchemy import text
 
@@ -61,6 +66,9 @@ async def _wa_broadcast_handler(proposal: Any) -> dict[str, Any]:
     text_body = payload["text"]
     targets = payload.get("targets", [])  # [{wa_chat_id, chat_id}]
 
+    # H4: Action Broker handler — runs at approval/apply time, outside the
+    # proposing request; no ambient tenant may be inherited. H4 threads an
+    # explicit tenant through the proposal payload (or the wa_accounts row).
     db = await _get_db()
     try:
         provider, _store, _row = await _provider_for_account(db, account_id)
@@ -116,8 +124,7 @@ async def broadcast(
     if not req.chat_ids and not req.category:
         raise HTTPException(status_code=400, detail="chat_ids or category required")
 
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         # Resolve targets, owner-scoped.
         params: dict[str, Any] = {
             "uid": user.email or "anonymous", "aid": req.account_id,
@@ -138,8 +145,6 @@ async def broadcast(
         targets = [{"chat_id": str(r.id), "wa_chat_id": r.wa_chat_id} for r in rows]
         if not targets:
             raise HTTPException(status_code=404, detail="no matching chats")
-    finally:
-        await db.close()
 
     # Always propose with SUGGEST authority → the broker holds it for a human.
     from action_broker.broker import (

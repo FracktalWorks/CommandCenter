@@ -16,7 +16,7 @@ from typing import Any
 
 from acb_auth import UserContext, get_current_user
 from fastapi import Depends, HTTPException
-from gateway.routes.notes.core import _get_db, _log, load_owned_meeting, router
+from gateway.routes.notes.core import _get_db, _log, _tenant_session, load_owned_meeting, router
 from gateway.routes.notes.templates import (
     build_system_prompt,
     get_template,
@@ -218,6 +218,10 @@ async def generate_notes(meeting_id: str, run_id: str, triggered_by: str) -> Non
     the row it is about.
     """
     try:
+        # H4: background job (spawned via `enqueue_summary`) — no ambient
+        # tenant; derive it from the meeting row / `triggered_by` when H4
+        # threads an explicit tenant through. Applies to every `_get_db`
+        # block in this function.
         async with await _get_db() as db:
             m = (
                 await db.execute(
@@ -405,6 +409,9 @@ async def enqueue_summary(meeting_id: str, triggered_by: str) -> str:
     recording). It has no default so that a new caller has to answer the
     question rather than inherit somebody else's authority.
     """
+    # H4: shared entry point also called from the background transcription
+    # pipeline (`pipeline.run_transcription`) — no ambient tenant there;
+    # derive it from the meeting row.
     async with await _get_db() as db:
         row = (
             await db.execute(
@@ -475,7 +482,7 @@ async def summarize(
     also refused at the dispatch seam — this is the endpoint half of the same
     fix, not a substitute for it.
     """
-    async with await _get_db() as db:
+    async with _tenant_session() as db:
         m = await load_owned_meeting(
             db, meeting_id, user.email, columns="m.status"
         )
@@ -493,7 +500,7 @@ async def get_note(
     meeting_id: str,
     _user: UserContext = Depends(get_current_user),
 ) -> NoteDoc:
-    async with await _get_db() as db:
+    async with _tenant_session() as db:
         row = (
             await db.execute(
                 text("SELECT * FROM meeting_note WHERE meeting_id=:id"),
@@ -517,7 +524,7 @@ async def put_note(
     body: PutNoteRequest,
     user: UserContext = Depends(get_current_user),
 ) -> NoteDoc:
-    async with await _get_db() as db:
+    async with _tenant_session() as db:
         exists = (
             await db.execute(
                 text("SELECT 1 FROM meeting WHERE id=:id"), {"id": meeting_id}
@@ -540,7 +547,6 @@ async def put_note(
                 "by": user.email or "user",
             },
         )
-        await db.commit()
     return await get_note(meeting_id, _user=user)
 
 
@@ -549,7 +555,7 @@ async def list_actions(
     meeting_id: str,
     _user: UserContext = Depends(get_current_user),
 ) -> list[ActionItemModel]:
-    async with await _get_db() as db:
+    async with _tenant_session() as db:
         rows = (
             await db.execute(
                 text(

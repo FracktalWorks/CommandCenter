@@ -14,7 +14,7 @@ from acb_auth import UserContext, get_current_user
 from fastapi import Depends, HTTPException, Query, status
 from gateway.routes.email.core import (
     _assert_account_owner,
-    _get_db,
+    _tenant_session,
     _log,
     email_memory_scope,
     router,
@@ -246,8 +246,7 @@ async def get_assistant_settings(
     user: UserContext = Depends(get_current_user),
 ):
     """Get the assistant's About/signature/auto-run settings for an account."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         await _assert_account_owner(db, account_id, user.email or "anonymous")
         row = (await db.execute(text(
             """SELECT about, signature, auto_run, cold_email_blocker,
@@ -370,8 +369,6 @@ async def get_assistant_settings(
             # Read-only: the account's own domain, always treated as internal.
             "own_domain": own_domain,
         }
-    finally:
-        await db.close()
 
 
 @router.put("/assistant/settings")
@@ -380,8 +377,7 @@ async def put_assistant_settings(
     user: UserContext = Depends(get_current_user),
 ):
     """Upsert the assistant settings for an account."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         await _assert_account_owner(db, req.account_id, user.email or "anonymous")
         # `follow_up_awaiting_days` is canonical; accept the legacy `follow_up_days`
         # as a fallback so older clients keep working.
@@ -456,7 +452,6 @@ async def put_assistant_settings(
             "mre": req.multi_rule_execution,
             "sdp": req.sensitive_data_protection,
             "orgd": org_domains})
-        await db.commit()
         # inbox-zero parity: the "Auto draft replies" toggle adds/removes the
         # DRAFT_EMAIL action on the "Reply" rule (like inbox-zero's
         # enableDraftRepliesAction), so to-reply mail is auto-drafted when on.
@@ -464,9 +459,9 @@ async def put_assistant_settings(
             from gateway.routes.email.automation.rules import (  # noqa: PLC0415
                 sync_draft_reply_action,
             )
-            if await sync_draft_reply_action(db, req.account_id, req.draft_replies):
-                await db.commit()
-        except Exception as exc:  # noqa: BLE001 — settings already saved; best-effort
+            # The wrapper's exit commit lands any action change this makes.
+            await sync_draft_reply_action(db, req.account_id, req.draft_replies)
+        except Exception as exc:  # noqa: BLE001 — best-effort; the settings save must not fail over it
             _log.warning("email.draft_replies_sync_failed",
                          account_id=req.account_id, error=str(exc)[:200])
         acc_row = (await db.execute(text(
@@ -502,8 +497,6 @@ async def put_assistant_settings(
             "org_domains": org_domains,
             "own_domain": own_domain,
         }
-    finally:
-        await db.close()
 
 
 class KnowledgeModel(BaseModel):
@@ -519,8 +512,7 @@ async def list_knowledge(
     user: UserContext = Depends(get_current_user),
 ):
     """List the account's knowledge-base entries (used when drafting replies)."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         await _assert_account_owner(db, account_id, user.email or "anonymous")
         # Suggested entries (voice-profile candidates awaiting review) first,
         # so they surface for approval instead of sinking below the fold.
@@ -538,8 +530,6 @@ async def list_knowledge(
              "updated_at": r.updated_at.isoformat() if r.updated_at else None}
             for r in rows
         ]}
-    finally:
-        await db.close()
 
 
 @router.post("/knowledge")
@@ -548,8 +538,7 @@ async def create_knowledge(
     user: UserContext = Depends(get_current_user),
 ):
     """Add (or overwrite by title) a knowledge-base entry."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         await _assert_account_owner(db, req.account_id, user.email or "anonymous")
         kid = str(uuid4())
         # A user-authored save is manual + active — including when it lands on
@@ -564,11 +553,8 @@ async def create_knowledge(
                  status = 'active', updated_at = now()"""
         ), {"id": kid, "aid": req.account_id, "title": req.title,
             "content": req.content})
-        await db.commit()
         return {"id": kid, "account_id": req.account_id, "title": req.title,
                 "content": req.content}
-    finally:
-        await db.close()
 
 
 @router.patch("/knowledge/{kid}")
@@ -578,8 +564,7 @@ async def update_knowledge(
     user: UserContext = Depends(get_current_user),
 ):
     """Edit a knowledge-base entry."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         owner = (await db.execute(text(
             """SELECT ek.id FROM email_knowledge ek
                JOIN email_accounts ea ON ek.account_id = ea.id
@@ -591,11 +576,8 @@ async def update_knowledge(
             """UPDATE email_knowledge SET title = :title, content = :content,
                       updated_at = now() WHERE id = :id"""
         ), {"id": kid, "title": req.title, "content": req.content})
-        await db.commit()
         return {"id": kid, "account_id": req.account_id, "title": req.title,
                 "content": req.content}
-    finally:
-        await db.close()
 
 
 @router.delete("/knowledge/{kid}", status_code=status.HTTP_204_NO_CONTENT)
@@ -604,18 +586,14 @@ async def delete_knowledge(
     user: UserContext = Depends(get_current_user),
 ):
     """Delete a knowledge-base entry."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         res = await db.execute(text(
             """DELETE FROM email_knowledge ek USING email_accounts ea
                WHERE ek.id = :id AND ek.account_id = ea.id
                  AND ea.user_id = :uid"""
         ), {"id": kid, "uid": user.email or "anonymous"})
-        await db.commit()
         if res.rowcount == 0:
             raise HTTPException(status_code=404, detail="Not found")
-    finally:
-        await db.close()
 
 
 async def _llm_writing_style(samples: list[str]) -> str:
@@ -652,8 +630,7 @@ async def generate_writing_style(
     user: UserContext = Depends(get_current_user),
 ):
     """Derive a writing-style guide from the account's recent sent mail + save it."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         await _assert_account_owner(db, account_id, user.email or "anonymous")
         rows = (await db.execute(text(
             """SELECT body_text FROM email_messages
@@ -683,7 +660,6 @@ async def generate_writing_style(
                ON CONFLICT (account_id) DO UPDATE SET
                  writing_style = EXCLUDED.writing_style, updated_at = now()"""
         ), {"aid": account_id, "ws": style})
-        await db.commit()
         # Index the derived style into Mem0 — keyed PER ACCOUNT so a user's other
         # mailboxes don't inherit this inbox's writing voice (see
         # email_memory_scope). The drafter reads it back under the same scope.
@@ -698,8 +674,6 @@ async def generate_writing_style(
         except Exception:  # noqa: BLE001
             pass
         return {"writing_style": style}
-    finally:
-        await db.close()
 
 
 @router.get("/learned-patterns")
@@ -708,8 +682,7 @@ async def list_learned_patterns(
     user: UserContext = Depends(get_current_user),
 ):
     """Preferences the assistant has learned from the user's draft edits."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         await _assert_account_owner(db, account_id, user.email or "anonymous")
         rows = (await db.execute(text(
             """SELECT id, pattern, weight, kind, scope_type, scope_value
@@ -724,8 +697,6 @@ async def list_learned_patterns(
              "scope_value": getattr(r, "scope_value", None)}
             for r in rows
         ]}
-    finally:
-        await db.close()
 
 
 @router.delete("/learned-patterns/{pid}", status_code=status.HTTP_204_NO_CONTENT)
@@ -734,15 +705,11 @@ async def delete_learned_pattern(
     user: UserContext = Depends(get_current_user),
 ):
     """Forget a learned preference."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         res = await db.execute(text(
             """DELETE FROM email_learned_patterns lp USING email_accounts ea
                WHERE lp.id = :id AND lp.account_id = ea.id
                  AND ea.user_id = :uid"""
         ), {"id": pid, "uid": user.email or "anonymous"})
-        await db.commit()
         if res.rowcount == 0:
             raise HTTPException(status_code=404, detail="Not found")
-    finally:
-        await db.close()

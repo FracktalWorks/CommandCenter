@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from acb_auth import UserContext, get_current_user
 from fastapi import Depends, HTTPException
-from gateway.routes.notes.core import _get_db, _log, router
+from gateway.routes.notes.core import _get_db, _log, _tenant_session, router
 from pydantic import BaseModel
 from sqlalchemy import text
 
@@ -33,7 +33,7 @@ class AddTermRequest(BaseModel):
 async def list_glossary(
     user: UserContext = Depends(get_current_user),
 ) -> list[GlossaryTerm]:
-    async with await _get_db() as db:
+    async with _tenant_session() as db:
         rows = (
             await db.execute(
                 text(
@@ -56,7 +56,7 @@ async def add_term(
         raise HTTPException(status_code=400, detail="empty term")
     if len(term) > 120:
         raise HTTPException(status_code=400, detail="term too long")
-    async with await _get_db() as db:
+    async with _tenant_session() as db:
         # Idempotent per (user, case-folded term): return the existing row.
         row = (
             await db.execute(
@@ -68,7 +68,6 @@ async def add_term(
                 {"u": user.email or "anonymous", "t": term},
             )
         ).fetchone()
-        await db.commit()
     _log.info("notes.glossary_add", user=user.email, term=term)
     return GlossaryTerm(id=str(row.id), term=row.term)
 
@@ -78,12 +77,11 @@ async def delete_term(
     term_id: str,
     user: UserContext = Depends(get_current_user),
 ) -> None:
-    async with await _get_db() as db:
+    async with _tenant_session() as db:
         await db.execute(
             text("DELETE FROM notes_glossary WHERE id=:id AND user_id=:u"),
             {"id": term_id, "u": user.email or "anonymous"},
         )
-        await db.commit()
 
 
 def format_glossary_prompt(terms: list[str]) -> str:
@@ -106,6 +104,9 @@ async def glossary_prompt(user_id: str) -> str:
     if not user_id:
         return ""
     try:
+        # H4: called from the background transcription pipeline
+        # (`pipeline.run_transcription`, a spawned task) — no ambient tenant;
+        # derive it from the meeting row's owner.
         async with await _get_db() as db:
             rows = (
                 await db.execute(

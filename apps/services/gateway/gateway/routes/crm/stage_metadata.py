@@ -48,7 +48,7 @@ from gateway.routes.crm import import_zoho
 from gateway.routes.crm.core import (
     CLOSING_TYPES,
     STATUS_TYPES,
-    _get_db,
+    _tenant_session,
     actor,
     insert_row,
     router,
@@ -634,8 +634,7 @@ async def import_zoho_stages(
             f"({report.layout_name or report.layout_id})."
         )
 
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         rows = (await db.execute(
             text(f"SELECT * FROM {STATUS_TABLE} ORDER BY position, name"), {},
         )).fetchall()
@@ -656,10 +655,6 @@ async def import_zoho_stages(
         # never print a count for a computation that did not happen.
         backfill = await backfill_closed_at(db, plan.types_after, apply=apply)
         report.closed_at = backfill
-        if apply:
-            await db.commit()
-    finally:
-        await db.close()
 
     _log.info(
         "crm.stages.repair",

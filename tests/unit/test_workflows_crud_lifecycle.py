@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from typing import Any
 
@@ -50,10 +51,18 @@ class _ScriptedDb:
 
 
 def _install(monkeypatch, module, db: _ScriptedDb) -> None:
-    async def fake_get_db() -> Any:
-        return db
+    """Swap the module's `_tenant_session` for the fake (H2 shape).
 
-    monkeypatch.setattr(module, "_get_db", fake_get_db)
+    Commit-on-clean-exit mirrors the real wrapper, so the one-transaction
+    contract (`db.committed`) stays observable; an exception propagates
+    without committing, mirroring the wrapper's rollback."""
+
+    @asynccontextmanager
+    async def fake_tenant_session():
+        yield db
+        await db.commit()
+
+    monkeypatch.setattr(module, "_tenant_session", fake_tenant_session)
 
 
 def _wf_row(**over: Any) -> SimpleNamespace:

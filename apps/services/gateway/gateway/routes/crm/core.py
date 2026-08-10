@@ -41,7 +41,22 @@ from uuid import UUID
 from acb_auth import require_feature_router
 from acb_common import get_logger
 from fastapi import APIRouter, HTTPException
-from gateway.db import get_db as _get_db  # noqa: F401  — the shared seam (D-CRM-4)
+# The shared seam (BO-10 / D-CRM-4 → MT-1c/H2). `_tenant_session` IS
+# `acb_common.db.tenant_session`, aliased per-package for the same reason
+# `_get_db` was: every request-handler submodule imports it from here BY NAME,
+# which is the seam `tests/unit/_crm_fakes.bind_db` patches per module. The
+# tenant comes from the request context — bound centrally in
+# `_with_resolved_access` — so no call site passes one (H2). A call outside a
+# bound request raises `TenantUnbound` rather than defaulting: fail closed,
+# never "the usual org".
+#
+# `_get_db` stays exported for the package's three NON-request leaves only —
+# `sync_zoho` (the scheduled sync engine), `auto_lead` (the email scheduler's
+# hook) and `broker_handlers` (the approval-time push handler). Those run
+# outside a member's request, so inheriting the ambient tenant is exactly what
+# H4 forbids; they stay unbound until H4 threads an explicit tenant through.
+from gateway.db import get_db as _get_db  # noqa: F401
+from gateway.db import tenant_session as _tenant_session  # noqa: F401
 from pydantic import BaseModel
 from sqlalchemy import text
 

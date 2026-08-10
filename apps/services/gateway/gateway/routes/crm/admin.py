@@ -28,7 +28,7 @@ from gateway.routes.crm.core import (
     STATUS_TYPES,
     LostReasonModel,
     StatusModel,
-    _get_db,
+    _tenant_session,
     insert_row,
     require_row,
     router,
@@ -181,14 +181,11 @@ async def list_statuses(
 ) -> list[StatusModel]:
     """The kanban lanes, in lane order."""
     table, _ = _kind(kind)
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         rows = (await db.execute(
             text(f"SELECT * FROM {table} ORDER BY position, name"), {},
         )).fetchall()
         return [status_wire(r) for r in rows]
-    finally:
-        await db.close()
 
 
 @router.post("/statuses/{kind}", response_model=StatusModel, status_code=201)
@@ -202,15 +199,11 @@ async def create_status(
     if not (values.get("name") or "").strip():
         raise HTTPException(status_code=422, detail="A status needs a name.")
     values.setdefault("type", "open")
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         if values.get("position") is None:
             values["position"] = await _next_position(db, table)
         row = await insert_row(db, table, values)
-        await db.commit()
         return status_wire(row)
-    finally:
-        await db.close()
 
 
 @router.patch("/statuses/{kind}/{status_id}", response_model=StatusModel)
@@ -227,17 +220,13 @@ async def patch_status(
     """
     table, _ = _kind(kind)
     values = payload.model_dump(exclude_unset=True)
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         row = await require_row(db, table, status_id, "Status")
         _validate_status(kind, values, existing=row)
         if not values:
             return status_wire(row)
         row = await update_row(db, table, status_id, values, touch=False)
-        await db.commit()
         return status_wire(row)
-    finally:
-        await db.close()
 
 
 @router.delete("/statuses/{kind}/{status_id}")
@@ -246,8 +235,7 @@ async def delete_status(
     user: UserContext = Depends(get_current_user),
 ) -> dict:
     table, referencing = _kind(kind)
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         await require_row(db, table, status_id, "Status")
         in_use = (await db.execute(
             text(
@@ -268,10 +256,7 @@ async def delete_status(
             text(f"DELETE FROM {table} WHERE id = CAST(:id AS uuid)"),
             {"id": status_id},
         )
-        await db.commit()
         return {"deleted": status_id, "kind": kind}
-    finally:
-        await db.close()
 
 
 async def _next_position(db: Any, table: str) -> int:
@@ -289,8 +274,7 @@ async def _next_position(db: Any, table: str) -> int:
 async def list_lost_reasons(
     user: UserContext = Depends(get_current_user),
 ) -> list[LostReasonModel]:
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         rows = (await db.execute(
             text("SELECT * FROM crm_lost_reasons ORDER BY position, label"), {},
         )).fetchall()
@@ -301,8 +285,6 @@ async def list_lost_reasons(
             )
             for r in rows
         ]
-    finally:
-        await db.close()
 
 
 @router.post("/lost-reasons", response_model=LostReasonModel, status_code=201)
@@ -312,18 +294,14 @@ async def create_lost_reason(
     values = payload.model_dump(exclude_unset=True)
     if not (values.get("label") or "").strip():
         raise HTTPException(status_code=422, detail="A lost reason needs a label.")
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         if values.get("position") is None:
             values["position"] = await _next_position(db, "crm_lost_reasons")
         row = await insert_row(db, "crm_lost_reasons", values)
-        await db.commit()
         return LostReasonModel(
             id=str(row.id), label=row.label,
             position=int(getattr(row, "position", 0) or 0),
         )
-    finally:
-        await db.close()
 
 
 @router.patch("/lost-reasons/{reason_id}", response_model=LostReasonModel)
@@ -332,20 +310,16 @@ async def patch_lost_reason(
     user: UserContext = Depends(get_current_user),
 ) -> LostReasonModel:
     values = payload.model_dump(exclude_unset=True)
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         row = await require_row(db, "crm_lost_reasons", reason_id, "Lost reason")
         if values:
             row = await update_row(
                 db, "crm_lost_reasons", reason_id, values, touch=False,
             )
-            await db.commit()
         return LostReasonModel(
             id=str(row.id), label=row.label,
             position=int(getattr(row, "position", 0) or 0),
         )
-    finally:
-        await db.close()
 
 
 @router.delete("/lost-reasons/{reason_id}")
@@ -354,14 +328,10 @@ async def delete_lost_reason(
 ) -> dict:
     """Deleting a lost reason is safe: both FKs are ``ON DELETE SET NULL``, so
     the records that cited it keep their ``lost_note`` and lose the label."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         await require_row(db, "crm_lost_reasons", reason_id, "Lost reason")
         await db.execute(
             text("DELETE FROM crm_lost_reasons WHERE id = CAST(:id AS uuid)"),
             {"id": reason_id},
         )
-        await db.commit()
         return {"deleted": reason_id}
-    finally:
-        await db.close()

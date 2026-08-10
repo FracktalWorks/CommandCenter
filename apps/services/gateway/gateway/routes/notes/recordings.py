@@ -16,8 +16,8 @@ from fastapi import Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
 from gateway.routes.notes.core import (
     OWNED_MEETING_PREDICATE,
-    _get_db,
     _log,
+    _tenant_session,
     load_owned_meeting,
     media_dir,
     router,
@@ -102,7 +102,7 @@ async def upload_recording(
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_bytes(content)
 
-    async with await _get_db() as db:
+    async with _tenant_session() as db:
         try:
             await load_owned_meeting(db, meeting_id, user.email, columns="m.id")
         except HTTPException:
@@ -137,7 +137,6 @@ async def upload_recording(
             text("UPDATE meeting SET status = 'processing' WHERE id = :id"),
             {"id": meeting_id},
         )
-        await db.commit()
 
     run_id = str(run_row.id)
     _log.info(
@@ -187,7 +186,7 @@ async def start_recording(
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.touch()
 
-    async with await _get_db() as db:
+    async with _tenant_session() as db:
         try:
             await load_owned_meeting(db, meeting_id, user.email, columns="m.id")
         except HTTPException:
@@ -206,7 +205,6 @@ async def start_recording(
             text("UPDATE meeting SET status='recording' WHERE id=:id"),
             {"id": meeting_id},
         )
-        await db.commit()
     _REC_SEQ[recording_id] = -1
     # Register presence so this shows up as "live now" across Command Center and
     # the copilot console can attach to it. Additive + fail-safe.
@@ -229,7 +227,7 @@ async def _recording_path(recording_id: str, meeting_id: str, owner_email: str |
     that belongs to a colleague must be indistinguishable from one that does
     not exist.
     """
-    async with await _get_db() as db:
+    async with _tenant_session() as db:
         row = (
             await db.execute(
                 text(
@@ -306,15 +304,14 @@ async def complete_recording(
     size = path.stat().st_size if path.exists() else 0
     _REC_SEQ.pop(recording_id, None)
     if size == 0:
-        async with await _get_db() as db:
+        async with _tenant_session() as db:
             await db.execute(
                 text("UPDATE meeting SET status='failed' WHERE id=:id"),
                 {"id": meeting_id},
             )
-            await db.commit()
         raise HTTPException(status_code=400, detail="no audio was recorded")
 
-    async with await _get_db() as db:
+    async with _tenant_session() as db:
         await db.execute(
             text(
                 "UPDATE meeting_recording SET byte_size=:size, duration_s=:dur "
@@ -335,7 +332,6 @@ async def complete_recording(
             text("UPDATE meeting SET status='processing', end_at=now() WHERE id=:id"),
             {"id": meeting_id},
         )
-        await db.commit()
 
     run_id = str(run_row.id)
     _log.info(
@@ -363,7 +359,7 @@ async def retranscribe(
     mailbox. Unscoped, it was a way for any member holding ``feature:notes`` to
     reach both of those on a colleague's meeting.
     """
-    async with await _get_db() as db:
+    async with _tenant_session() as db:
         await load_owned_meeting(db, meeting_id, user.email, columns="m.id")
         rows = (
             await db.execute(
@@ -394,7 +390,6 @@ async def retranscribe(
             text("UPDATE meeting SET status='processing' WHERE id=:id"),
             {"id": meeting_id},
         )
-        await db.commit()
 
     run_id = str(run_row.id)
     _log.info("notes.retranscribe", meeting_id=meeting_id, recording_id=recording_id)
@@ -414,7 +409,7 @@ async def get_audio(
     Owner only: this is the raw recording — the verbatim audio of a
     conversation nobody chose to publish, and the one asset the transcript is
     only a lossy rendering of."""
-    async with await _get_db() as db:
+    async with _tenant_session() as db:
         await load_owned_meeting(db, meeting_id, user.email, columns="m.id")
         rows = (
             await db.execute(

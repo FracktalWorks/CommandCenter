@@ -31,9 +31,9 @@ from fastapi import Depends, HTTPException
 from gateway.routes.tasks.core import (
     PROJECT_SELECT,
     _assert_account_owner,
-    _get_db,
     _key_store,
     _log,
+    _tenant_session,
     _uid,
     router,
 )
@@ -250,8 +250,7 @@ async def plan_project(
     if not name:
         raise HTTPException(status_code=400, detail="A project name is required.")
     uid = _uid(user)
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         from gateway.routes.tasks.settings import gtd_models
         model = (await gtd_models(db, uid))["clarify"]
         people, projects_brief = await _plan_context(
@@ -264,8 +263,6 @@ async def plan_project(
                 detail="Couldn't draft a plan right now — try again, or add "
                        "more detail to the brief.")
         return plan
-    finally:
-        await db.close()
 
 
 def _due_from_offset(offset: int | None) -> datetime | None:
@@ -300,13 +297,10 @@ async def apply_plan(
         raise HTTPException(status_code=400, detail="The plan has no tasks.")
     if req.target not in ("local", "clickup"):
         raise HTTPException(status_code=400, detail="target must be local|clickup")
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         if req.target == "clickup":
             return await _apply_clickup(db, uid, req, tasks)
         return await _apply_local(db, uid, req.plan, tasks)
-    finally:
-        await db.close()
 
 
 async def _apply_local(
@@ -314,7 +308,8 @@ async def _apply_local(
 ) -> ApplyResult:
     """Create a LOCAL project + a NEXT gtd_item per task + parent_item_id
     subtasks. Phase names ride on the task title prefix (kept simple — no phase
-    table). All in one transaction."""
+    table). All in one transaction — the caller's `_tenant_session` block
+    commits on clean exit (H2), so this helper issues no commit of its own."""
     project_id = str(uuid4())
     await db.execute(text(
         """INSERT INTO gtd_projects
@@ -356,7 +351,6 @@ async def _apply_local(
                  "proj": project_id, "rank": srank})
             subtasks_created += 1
             srank += 1000.0
-    await db.commit()
     return ApplyResult(project_id=project_id, tasks_created=tasks_created,
                        subtasks_created=subtasks_created, target="local")
 
@@ -435,7 +429,6 @@ async def _apply_clickup(
                 list_ref, {"title": sub, "parent": ptid})
             if sres.get("provider_task_id"):
                 subtasks_created += 1
-    await db.commit()
     return ApplyResult(
         project_id=project_id, provider_ref=list_ref,
         tasks_created=tasks_created, subtasks_created=subtasks_created,

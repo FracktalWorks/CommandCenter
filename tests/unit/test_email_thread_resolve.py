@@ -13,6 +13,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from gateway.routes.email.automation import replyzero as rz
+from tests.unit._email_fakes import bind_db
 
 
 def _db(rowcount: int = 1):
@@ -28,7 +29,7 @@ def _db(rowcount: int = 1):
 async def _call(req):
     db = _db()
     background = MagicMock()
-    with patch.object(rz, "_get_db", AsyncMock(return_value=db)), \
+    with patch.object(rz, "_tenant_session", bind_db(db)), \
             patch.object(rz, "_assert_account_owner", AsyncMock()):
         out = await rz.resolve_thread(
             req, background, user=SimpleNamespace(email="u@x.com"))

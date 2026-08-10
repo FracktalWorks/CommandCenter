@@ -43,7 +43,7 @@ from gateway.routes.email.core import (
     KNOWN_LABELS_LOWER,
     UNCATEGORIZED_SQL,
     _account_scope,
-    _get_db,
+    _tenant_session,
     _row_to_message,
     folder_scope,
     router,
@@ -202,8 +202,7 @@ async def search_messages(
     ``all`` (everything but junk/trash), or ``starred``; omit it to span every
     folder. Unless ``account_id`` narrows it, the search spans all the user's
     accounts."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         uid = user.email or "anonymous"
         text_q = (q or "").strip()
         params: dict[str, Any] = {"uid": uid, "q": text_q}
@@ -345,5 +344,3 @@ async def search_messages(
             "query": text_q,
             "hybrid": bool(join_sql),
         }
-    finally:
-        await db.close()

@@ -30,12 +30,12 @@ from gateway.routes.tasks.core import (
     GtdProjectModel,
     PersonModel,
     _assert_account_owner,
-    _get_db,
     _key_store,
     _log,
     _parse_jsonb,
     _row_to_item,
     _row_to_project,
+    _tenant_session,
     _uid,
     router,
 )
@@ -210,8 +210,7 @@ async def capture_item(
     title = req.title.strip()
     if not title:
         raise HTTPException(status_code=400, detail="Empty capture")
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         item_id = str(uuid4())
         await db.execute(
             text("""INSERT INTO gtd_items
@@ -226,10 +225,7 @@ async def capture_item(
              "due": _parse_ts(req.due_at),
              "hard": bool(req.is_hard_date and req.due_at)},
         )
-        await db.commit()
         return _row_to_item(await _fetch_item(db, item_id, _uid(user)))
-    finally:
-        await db.close()
 
 
 @router.post("/items/batch", response_model=list[GtdItemModel], status_code=201)
@@ -241,8 +237,7 @@ async def capture_batch(
     titles = [t.strip() for t in req.titles if t.strip()]
     if not titles:
         raise HTTPException(status_code=400, detail="No items to capture")
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         out = []
         for title in titles:
             item_id = str(uuid4())
@@ -252,14 +247,11 @@ async def capture_batch(
                 {"id": item_id, "uid": _uid(user), "title": title},
             )
             out.append(item_id)
-        await db.commit()
         rows = (await db.execute(
             text(ITEM_SELECT + " WHERE i.id::text = ANY(:ids)"), {"ids": out},
         )).fetchall()
         by_id = {str(r.id): r for r in rows}
         return [_row_to_item(by_id[i]) for i in out if i in by_id]
-    finally:
-        await db.close()
 
 
 # ── Browse ───────────────────────────────────────────────────────────────────
@@ -303,8 +295,7 @@ async def list_items(
         clauses.append("i.source = 'LOCAL'")
     elif src == "synced":
         clauses.append("i.source <> 'LOCAL'")
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         # LOCAL (unprocessed / ours) rows ALWAYS sort first, so a large synced
         # mirror can never push our own captures past the row cap — the Inbox
         # invariant ("unprocessed items are always visible") holds regardless of
@@ -319,8 +310,6 @@ async def list_items(
             params,
         )).fetchall()
         return [_row_to_item(r) for r in rows]
-    finally:
-        await db.close()
 
 
 @router.get("/calendar", response_model=list[GtdItemModel])
@@ -338,8 +327,7 @@ async def calendar_range(
     if frm is None or until is None:
         raise HTTPException(
             status_code=400, detail="from and to must be ISO datetimes")
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         rows = (await db.execute(
             text(ITEM_SELECT + f"""
                 WHERE i.user_id = :uid
@@ -358,29 +346,23 @@ async def calendar_range(
             {"uid": _uid(user), "frm": frm, "until": until},
         )).fetchall()
         return [_row_to_item(r) for r in rows]
-    finally:
-        await db.close()
 
 
 @router.get("/projects", response_model=list[GtdProjectModel])
 async def list_projects(user: UserContext = Depends(get_current_user)):
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         rows = (await db.execute(
             text(PROJECT_SELECT + " WHERE p.user_id = :uid "
                  "ORDER BY p.source, p.created_at DESC"),
             {"uid": _uid(user)},
         )).fetchall()
         return [_row_to_project(r) for r in rows]
-    finally:
-        await db.close()
 
 
 @router.get("/contexts")
 async def list_contexts(user: UserContext = Depends(get_current_user)):
     """The user's @ lists — seeded with the GTD defaults on first read."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         for i, (name, icon) in enumerate(DEFAULT_CONTEXTS):
             await db.execute(
                 text("""INSERT INTO gtd_contexts (user_id, name, icon, sort_order)
@@ -388,24 +370,18 @@ async def list_contexts(user: UserContext = Depends(get_current_user)):
                         ON CONFLICT (user_id, name) DO NOTHING"""),
                 {"uid": _uid(user), "name": name, "icon": icon, "ord": i},
             )
-        await db.commit()
         rows = (await db.execute(
             text("""SELECT name, icon FROM gtd_contexts
                     WHERE user_id = :uid ORDER BY sort_order, name"""),
             {"uid": _uid(user)},
         )).fetchall()
         return {"contexts": [{"name": r.name, "icon": r.icon} for r in rows]}
-    finally:
-        await db.close()
 
 
 @router.get("/items/{item_id}", response_model=GtdItemModel)
 async def get_item(item_id: str, user: UserContext = Depends(get_current_user)):
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         return _row_to_item(await _fetch_item(db, item_id, _uid(user)))
-    finally:
-        await db.close()
 
 
 @router.delete("/items/{item_id}", status_code=204)
@@ -416,8 +392,7 @@ async def delete_item(item_id: str, user: UserContext = Depends(get_current_user
     ClickUp task deleted — by an explicit purge (POST /items/{id}/purge) once
     the client's undo window has passed. Idempotent: re-deleting a tombstoned
     row just refreshes the timestamp."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         res = (await db.execute(
             text("""UPDATE gtd_items
                     SET deleted_at = now(), updated_at = now()
@@ -426,9 +401,6 @@ async def delete_item(item_id: str, user: UserContext = Depends(get_current_user
         )).fetchone()
         if res is None:
             raise HTTPException(status_code=404, detail="Item not found")
-        await db.commit()
-    finally:
-        await db.close()
 
 
 @router.post("/items/{item_id}/restore", response_model=GtdItemModel)
@@ -437,8 +409,7 @@ async def restore_item(item_id: str, user: UserContext = Depends(get_current_use
     exactly as it was (nothing was touched upstream). 404 if there's no
     soft-deleted row with this id (already purged, or never deleted)."""
     uid = _uid(user)
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         res = (await db.execute(
             text("""UPDATE gtd_items
                     SET deleted_at = NULL, updated_at = now()
@@ -448,10 +419,7 @@ async def restore_item(item_id: str, user: UserContext = Depends(get_current_use
         )).fetchone()
         if res is None:
             raise HTTPException(status_code=404, detail="No deleted item to restore")
-        await db.commit()
         return _row_to_item(await _fetch_item(db, item_id, uid))
-    finally:
-        await db.close()
 
 
 @router.post("/items/{item_id}/purge", status_code=204)
@@ -466,8 +434,7 @@ async def purge_item(item_id: str, user: UserContext = Depends(get_current_user)
     never blocks the local purge (the user asked to delete — we don't strand the
     task locally because ClickUp hiccuped)."""
     uid = _uid(user)
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         row = (await db.execute(
             text(ITEM_SELECT + " WHERE i.id = :id AND i.user_id = :uid"),
             {"id": item_id, "uid": uid},
@@ -481,9 +448,6 @@ async def purge_item(item_id: str, user: UserContext = Depends(get_current_user)
             text("DELETE FROM gtd_items WHERE id = :id AND user_id = :uid"),
             {"id": item_id, "uid": uid},
         )
-        await db.commit()
-    finally:
-        await db.close()
 
 
 async def _delete_upstream(db: Any, row: Any, uid: str) -> None:
@@ -650,8 +614,7 @@ async def patch_item(
     user: UserContext = Depends(get_current_user),
 ):
     from gateway.routes.tasks.settings import gtd_workflow_stages
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         # A board move (workflow_stage) that crosses the DONE boundary also flips
         # the disposition, so the card lands where the drop implies:
         #   • dropped on the LAST stage  → mark DONE  (completed_at + ClickUp close)
@@ -707,14 +670,14 @@ async def patch_item(
                 propagate_task_done_to_thread)
             with contextlib.suppress(Exception):  # best-effort; close stands
                 await propagate_task_done_to_thread(db, before)
-        await db.commit()
-        # Back-sync the edit to the connected tool (SYNCED tasks only). Runs
-        # AFTER the local commit and is best-effort: the user's edit is already
-        # saved, so an upstream hiccup logs but never loses the edit.
+    # Back-sync the edit to the connected tool (SYNCED tasks only). Runs
+    # AFTER the local edit committed (the block above) and is best-effort:
+    # the user's edit is already saved, so an upstream hiccup logs but never
+    # loses it. A second transaction, not a mid-block commit — a commit inside
+    # the tenant block would drop the GUC for everything after it (H2).
+    async with _tenant_session() as db:
         await _push_patch_upstream(db, before, patch, _uid(user))
         return _row_to_item(await _fetch_item(db, item_id, _uid(user)))
-    finally:
-        await db.close()
 
 
 async def _status_for_stage(
@@ -800,7 +763,9 @@ async def _push_patch_upstream(
 ) -> None:
     """Back-sync a PATCH to the connected PM tool for a SYNCED, already-pushed
     task. No-op for LOCAL/pending items. Best-effort — never raises to the
-    caller (a failed upstream write must not undo the saved local edit)."""
+    caller (a failed upstream write must not undo the saved local edit).
+    Does NOT commit — the caller's transaction owns the mirror write (H2:
+    a mid-block commit would drop the tenant GUC for statements after it)."""
     if before.source == "LOCAL" or not before.provider_task_id \
             or not before.account_id:
         return
@@ -836,7 +801,6 @@ async def _push_patch_upstream(
                 text(f"UPDATE gtd_items SET {', '.join(upd)} WHERE id = :id"),
                 uparams,
             )
-            await db.commit()
     except Exception as exc:  # best-effort back-sync — never fail the local edit
         _log.warning("tasks.patch.backsync_failed",
                      item_id=str(before.id)[:12], error=str(exc)[:160])
@@ -862,8 +826,7 @@ async def merge_into_existing(
     if str(req.target_id) == str(item_id):
         raise HTTPException(status_code=400,
                             detail="Cannot merge an item into itself")
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         source = await _fetch_item(db, item_id, uid)
         target = await _fetch_item(db, req.target_id, uid)
         if not source or not target:
@@ -889,12 +852,12 @@ async def merge_into_existing(
                     WHERE id = :id AND user_id = :uid"""),
             {"id": item_id, "uid": uid},
         )
-        await db.commit()
-        # Best-effort: push the enriched description upstream to the tool.
+    # The merge is committed above; the upstream push runs AFTER it, in its own
+    # transaction, and is best-effort — a provider hiccup never undoes it (H2:
+    # a mid-block commit would drop the tenant GUC).
+    async with _tenant_session() as db:
         await _push_patch_upstream(db, target, ItemPatch(notes=merged), uid)
         return _row_to_item(await _fetch_item(db, req.target_id, uid))
-    finally:
-        await db.close()
 
 
 class FileUnderRequest(BaseModel):
@@ -917,8 +880,7 @@ async def file_under_parent(
     if str(req.parent_id) == str(item_id):
         raise HTTPException(status_code=400,
                             detail="Cannot file an item under itself")
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         await _fetch_item(db, item_id, uid)      # 404 before any writes
         parent = await _fetch_item(db, req.parent_id, uid)
         if parent.parent_item_id:
@@ -942,10 +904,7 @@ async def file_under_parent(
              "sync": "pending" if parent.source != "LOCAL" else "local",
              "id": item_id, "uid": uid},
         )
-        await db.commit()
         return _row_to_item(await _fetch_item(db, req.parent_id, uid))
-    finally:
-        await db.close()
 
 
 # ── Archive ──────────────────────────────────────────────────────────────────
@@ -965,8 +924,7 @@ async def archive_item(
     a SYNCED task the archive mirrors to the connected tool (best-effort) so the
     app and ClickUp stay consistent; restoring un-archives it upstream too."""
     uid = _uid(user)
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         res = (await db.execute(
             text("""UPDATE gtd_items
                     SET archived_at = CASE WHEN :on THEN now() ELSE NULL END,
@@ -976,12 +934,13 @@ async def archive_item(
         )).fetchone()
         if not res:
             raise HTTPException(status_code=404, detail="Item not found")
-        await db.commit()
         row = await _fetch_item(db, item_id, uid)
+    # The local archive is committed above; the upstream mirror runs AFTER it,
+    # in its own transaction, and is best-effort (H2 restructure of the old
+    # commit-then-continue shape).
+    async with _tenant_session() as db:
         await _archive_upstream(db, [row], uid, req.archived)
-        return _row_to_item(row)
-    finally:
-        await db.close()
+    return _row_to_item(row)
 
 
 @router.post("/items/bulk", response_model=list[GtdItemModel])
@@ -992,8 +951,7 @@ async def bulk_dispose(
     if req.disposition not in DISPOSITIONS:
         raise HTTPException(status_code=400,
                             detail=f"Bad disposition: {req.disposition}")
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         await db.execute(
             text("""UPDATE gtd_items
                     SET disposition = :disp,
@@ -1004,14 +962,11 @@ async def bulk_dispose(
                     WHERE id::text = ANY(:ids) AND user_id = :uid"""),
             {"disp": req.disposition, "ids": req.ids, "uid": _uid(user)},
         )
-        await db.commit()
         rows = (await db.execute(
             text(ITEM_SELECT + " WHERE i.id::text = ANY(:ids) AND i.user_id = :uid"),
             {"ids": req.ids, "uid": _uid(user)},
         )).fetchall()
         return [_row_to_item(r) for r in rows]
-    finally:
-        await db.close()
 
 
 class BulkArchiveRequest(BaseModel):
@@ -1029,8 +984,7 @@ async def bulk_archive(
     and, for each SYNCED (ClickUp) task, mirrors the archive to the connected
     tool (best-effort, after the local commit) so the app and ClickUp agree."""
     uid = _uid(user)
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         await db.execute(
             text("""UPDATE gtd_items
                     SET archived_at = CASE WHEN :on THEN now() ELSE NULL END,
@@ -1038,15 +992,15 @@ async def bulk_archive(
                     WHERE id::text = ANY(:ids) AND user_id = :uid"""),
             {"ids": req.ids, "on": req.archived, "uid": uid},
         )
-        await db.commit()
         rows = (await db.execute(
             text(ITEM_SELECT + " WHERE i.id::text = ANY(:ids) AND i.user_id = :uid"),
             {"ids": req.ids, "uid": uid},
         )).fetchall()
+    # The local archive is committed above; the upstream mirror runs AFTER it,
+    # in its own transaction, and is best-effort per row.
+    async with _tenant_session() as db:
         await _archive_upstream(db, list(rows), uid, req.archived)
-        return [_row_to_item(r) for r in rows]
-    finally:
-        await db.close()
+    return [_row_to_item(r) for r in rows]
 
 
 # ── Clarify → organize (the decision applier) ────────────────────────────────
@@ -1101,8 +1055,7 @@ async def organize_item(
         disposition = "WAITING"
 
     uid = _uid(user)
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         src_item = await _fetch_item(db, item_id, uid)  # 404 before any writes
 
         source, sync_state = "LOCAL", "local"
@@ -1201,30 +1154,30 @@ async def organize_item(
             await _create_subtasks(
                 db, uid, item_id, req.subtasks, source, req.account_id,
                 project_id, sync_state)
-        await db.commit()
 
-        # Teach the task-manager's clarification memory from the COMMITTED
-        # decision (§9, Phase 4) — the real outcome, not a proposal. Fire-and-
-        # forget + best-effort, so it never slows or breaks organize.
-        from gateway.routes.tasks.task_memory import remember_decision_background
-        remember_decision_background(
-            title=getattr(src_item, "title", "") or "",
-            disposition=disposition,
-            next_action=(req.next_action or "").strip() or None,
-            owner=(req.assignee.name if req.assignee else None),
-            project=(req.outcome.strip() if req.kind == "project"
-                     and req.outcome else None),
-            context=req.context)
+    # Teach the task-manager's clarification memory from the COMMITTED
+    # decision (§9, Phase 4) — the block above has committed. Fire-and-
+    # forget + best-effort, so it never slows or breaks organize.
+    from gateway.routes.tasks.task_memory import remember_decision_background
+    remember_decision_background(
+        title=getattr(src_item, "title", "") or "",
+        disposition=disposition,
+        next_action=(req.next_action or "").strip() or None,
+        owner=(req.assignee.name if req.assignee else None),
+        project=(req.outcome.strip() if req.kind == "project"
+                 and req.outcome else None),
+        context=req.context)
 
-        # Delegating to a connected tool auto-pushes so the teammate actually
-        # sees it (parity with POST /items/{id}/delegate). Extracted so the tail
-        # stays flat.
+    # Delegating to a connected tool auto-pushes so the teammate actually
+    # sees it (parity with POST /items/{id}/delegate). Runs AFTER the local
+    # decision committed, in its own transaction — a push hiccup can never
+    # undo the saved clarify (H2 restructure of the commit-then-continue
+    # shape).
+    async with _tenant_session() as db:
         pushed = await _maybe_push_delegated(
             db, item_id, uid, delegated=delegated, source=source,
             project_id=project_id)
         return pushed or _row_to_item(await _fetch_item(db, item_id, uid))
-    finally:
-        await db.close()
 
 
 async def _maybe_push_delegated(
@@ -1287,8 +1240,7 @@ async def list_subtasks(
 ):
     """The child subtasks of a task, in manual order (the detail panel list)."""
     uid = _uid(user)
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         rows = (await db.execute(
             text(ITEM_SELECT + " WHERE i.parent_item_id = :pid "
                  "AND i.user_id = :uid "
@@ -1296,8 +1248,6 @@ async def list_subtasks(
             {"pid": item_id, "uid": uid},
         )).fetchall()
         return [_row_to_item(r) for r in rows]
-    finally:
-        await db.close()
 
 
 @router.post("/items/{item_id}/subtasks", response_model=list[GtdItemModel])
@@ -1313,8 +1263,7 @@ async def add_subtasks(
     titles = [t.strip() for t in req.titles if t.strip()]
     if not titles:
         raise HTTPException(status_code=400, detail="No subtasks to add")
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         parent = await _fetch_item(db, item_id, uid)
         # Append after the last existing child so order is preserved.
         last = (await db.execute(
@@ -1338,7 +1287,6 @@ async def add_subtasks(
                  "sync": "pending" if parent.source != "LOCAL" else "local",
                  "rank": base_rank + offset * 1000.0},
             )
-        await db.commit()
         rows = (await db.execute(
             text(ITEM_SELECT + " WHERE i.parent_item_id = :pid "
                  "AND i.user_id = :uid "
@@ -1346,8 +1294,6 @@ async def add_subtasks(
             {"pid": item_id, "uid": uid},
         )).fetchall()
         return [_row_to_item(r) for r in rows]
-    finally:
-        await db.close()
 
 
 # ── The approved push (staged → provider) ────────────────────────────────────
@@ -1355,8 +1301,11 @@ async def add_subtasks(
 async def _push_pending_item(db: Any, item_id: str, uid: str) -> Any:
     """Create a staged (sync_state='pending') task in its destination workspace
     and mark it synced. Shared by the manual Push and the delegate-promotion
-    path. Commits and returns the refreshed row. Raises 400 with a reason when
-    the item isn't in a pushable state (no account, no provider project)."""
+    path. Returns the refreshed row. Does NOT commit — every caller runs it as
+    its own `_tenant_session` block, whose clean exit commits (H2: a mid-block
+    commit would drop the tenant GUC for the refresh read). Raises 400 with a
+    reason when the item isn't in a pushable state (no account, no provider
+    project)."""
     row = await _fetch_item(db, item_id, uid)
     if row.sync_state != "pending" or not row.account_id:
         raise HTTPException(status_code=400,
@@ -1416,7 +1365,6 @@ async def _push_pending_item(db: Any, item_id: str, uid: str) -> Any:
     if parent_tid:
         await _push_child_subtasks(
             db, item_id, uid, provider, project_ref, parent_tid)
-    await db.commit()
     return _row_to_item(await _fetch_item(db, item_id, uid))
 
 
@@ -1428,11 +1376,8 @@ async def push_item(
     """Create the staged task in its destination workspace — an explicit,
     user-initiated apply (C-04: no autonomous provider writes)."""
     uid = _uid(user)
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         return await _push_pending_item(db, item_id, uid)
-    finally:
-        await db.close()
 
 
 class DelegateRequest(BaseModel):
@@ -1460,8 +1405,7 @@ async def delegate_item(
     Already-synced tasks don't use this path: a plain assignee PATCH back-syncs
     to their existing ClickUp task."""
     uid = _uid(user)
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         row = await _fetch_item(db, item_id, uid)
         if row.source == "SYNCED":
             raise HTTPException(
@@ -1510,11 +1454,12 @@ async def delegate_item(
                     VALUES (:iid, :who, now())"""),
             {"iid": item_id, "who": json.dumps(req.assignee.model_dump())},
         )
-        await db.commit()
-        # Now create it in ClickUp assigned to the teammate.
+    # The re-home + waiting record are committed above; now create it in
+    # ClickUp assigned to the teammate, in a second transaction — a push
+    # failure leaves the delegation saved as pending with the manual Push
+    # affordance, exactly as before (H2 restructure).
+    async with _tenant_session() as db:
         return await _push_pending_item(db, item_id, uid)
-    finally:
-        await db.close()
 
 
 async def _push_child_subtasks(
@@ -1567,8 +1512,7 @@ async def item_detail(
     empty sections with an ``error`` note rather than failing the panel."""
     uid = _uid(user)
     empty = {"comments": [], "attachments": [], "subtasks": []}
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         row = await _fetch_item(db, item_id, uid)
         if not row:
             raise HTTPException(status_code=404, detail="Item not found")
@@ -1576,17 +1520,15 @@ async def item_detail(
                 or not row.account_id:
             return empty
         account = await _assert_account_owner(db, str(row.account_id), uid)
-        creds = json.loads(_key_store().decrypt(account.credentials_encrypted))
-        provider = build_provider(
+    creds = json.loads(_key_store().decrypt(account.credentials_encrypted))
+    provider = build_provider(
         account.provider, creds, account.workspace_id, str(account.id))
-        try:
-            return await provider.get_task_detail(str(row.provider_task_id))
-        except Exception as exc:  # provider hiccup — panel still renders
-            _log.warning("tasks.item_detail.failed",
-                         item_id=item_id[:12], error=str(exc)[:160])
-            return {**empty, "error": "Could not load live detail"}
-    finally:
-        await db.close()
+    try:
+        return await provider.get_task_detail(str(row.provider_task_id))
+    except Exception as exc:  # provider hiccup — panel still renders
+        _log.warning("tasks.item_detail.failed",
+                     item_id=item_id[:12], error=str(exc)[:160])
+        return {**empty, "error": "Could not load live detail"}
 
 
 @router.get("/items/{item_id}/stage-options")
@@ -1600,23 +1542,20 @@ async def item_stage_options(
     real pipeline), not the whole-workspace union that the settings mapping
     needs. Empty for a LOCAL / not-yet-pushed task (the picker falls back)."""
     uid = _uid(user)
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         row = await _fetch_item(db, item_id, uid)
         if row.source == "LOCAL" or not row.provider_task_id \
                 or not row.account_id:
             return {"statuses": []}
         account = await _assert_account_owner(db, str(row.account_id), uid)
-        creds = json.loads(_key_store().decrypt(account.credentials_encrypted))
-        provider = build_provider(
+    creds = json.loads(_key_store().decrypt(account.credentials_encrypted))
+    provider = build_provider(
         account.provider, creds, account.workspace_id, str(account.id))
-        try:
-            statuses = await provider.list_statuses_for_task(
-                str(row.provider_task_id))
-            return {"statuses": [str(s) for s in statuses if s]}
-        except Exception as exc:  # provider hiccup — picker falls back
-            _log.warning("tasks.stage_options.failed",
-                         item_id=item_id[:12], error=str(exc)[:160])
-            return {"statuses": []}
-    finally:
-        await db.close()
+    try:
+        statuses = await provider.list_statuses_for_task(
+            str(row.provider_task_id))
+        return {"statuses": [str(s) for s in statuses if s]}
+    except Exception as exc:  # provider hiccup — picker falls back
+        _log.warning("tasks.stage_options.failed",
+                     item_id=item_id[:12], error=str(exc)[:160])
+        return {"statuses": []}

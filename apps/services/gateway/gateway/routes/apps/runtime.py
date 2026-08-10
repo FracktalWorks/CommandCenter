@@ -23,8 +23,8 @@ from gateway.routes.apps._common import (
     MAX_STORAGE_ROWS_PER_APP,
     MAX_STORAGE_VALUE_BYTES,
     TABLE_NAME_RE,
-    _get_db,
     _log,
+    _tenant_session,
     _uid,
     app_workspace,
     get_app_or_404,
@@ -131,11 +131,8 @@ async def app_me(
     user: UserContext = Depends(require_app_viewer),
 ) -> dict[str, str]:
     """Who is viewing — what ``cc.user()`` returns."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         await get_app_or_404(db, slug, user)
-    finally:
-        await db.close()
     return {"email": _uid(user), "role": user.role.value}
 
 
@@ -149,8 +146,7 @@ async def list_storage_rows(
     user: UserContext = Depends(require_app_viewer),
 ) -> dict[str, list[StorageRow]]:
     _validate_table(table)
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         row, _grants = await get_app_or_404(db, slug, user)
         rows = (await db.execute(
             text(
@@ -163,8 +159,6 @@ async def list_storage_rows(
             {"app_id": str(row.id), "table": table,
              "scope": _partition(scope, user)},
         )).fetchall()
-    finally:
-        await db.close()
     return {"rows": [_row_out(r) for r in rows]}
 
 
@@ -177,8 +171,7 @@ async def get_storage_row(
     user: UserContext = Depends(require_app_viewer),
 ) -> StorageRow:
     _validate_table(table)
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         row, _grants = await get_app_or_404(db, slug, user)
         rec = (await db.execute(
             text(
@@ -190,8 +183,6 @@ async def get_storage_row(
             {"app_id": str(row.id), "table": table, "key": key,
              "scope": _partition(scope, user)},
         )).fetchone()
-    finally:
-        await db.close()
     if rec is None:
         raise HTTPException(status_code=404, detail="Key not found")
     return _row_out(rec)
@@ -217,8 +208,7 @@ async def put_storage_row(
             detail=f"Value too large. Maximum is {MAX_STORAGE_VALUE_BYTES} bytes.",
         )
     partition = _partition(body.scope, user)
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         row, _grants = await get_app_or_404(db, slug, user)
         # Per-app row quota. Overwrites of an existing key stay allowed at the
         # cap so a full app can still update (not brick) its own data.
@@ -259,9 +249,6 @@ async def put_storage_row(
             {"app_id": str(row.id), "table": table, "key": key,
              "value": encoded, "scope": partition, "by": _uid(user)},
         )).fetchone()
-        await db.commit()
-    finally:
-        await db.close()
     await record_app_audit(
         app_id=str(row.id), user_email=_uid(user), kind="storage",
         detail={"table": table, "key": key, "op": "put"},
@@ -278,8 +265,7 @@ async def delete_storage_row(
     user: UserContext = Depends(require_app_viewer),
 ) -> dict[str, bool]:
     _validate_table(table)
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         row, _grants = await get_app_or_404(db, slug, user)
         result = await db.execute(
             text(
@@ -290,9 +276,6 @@ async def delete_storage_row(
             {"app_id": str(row.id), "table": table, "key": key,
              "scope": _partition(scope, user)},
         )
-        await db.commit()
-    finally:
-        await db.close()
     deleted = bool(getattr(result, "rowcount", 0))
     if deleted:
         await record_app_audit(
@@ -353,14 +336,11 @@ async def ai_complete(
     the app's monthly token budget (429 ``ai_budget_exhausted`` when spent)."""
     messages = _build_messages(body)
     max_tokens = min(max(int(body.max_tokens or 1000), 1), MAX_AI_OUTPUT_TOKENS)
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         row, _grants = await get_app_or_404(db, slug, user)
         manifest = _effective_manifest(row)
         budget = resolve_ai_budget(manifest)
         used = (await _month_ai_usage(db, str(row.id)))["tokens"]
-    finally:
-        await db.close()
     if used >= budget:
         return JSONResponse(
             status_code=429,
@@ -431,12 +411,9 @@ async def app_usage(
     user: UserContext = Depends(require_app_viewer),
 ) -> dict[str, Any]:
     """This calendar month's AI usage + budget (the info-popover numbers)."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         row, _grants = await get_app_or_404(db, slug, user)
         usage = await _month_ai_usage(db, str(row.id))
-    finally:
-        await db.close()
     return {
         "month_tokens": usage["tokens"],
         "month_cost_usd": round(usage["cost_usd"], 6),

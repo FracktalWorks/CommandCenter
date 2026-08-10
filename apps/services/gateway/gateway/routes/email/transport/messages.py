@@ -20,7 +20,7 @@ from gateway.routes.email.core import (
     _assert_account_owner,
     _fetch_attachments,
     _fetch_attachments_batch,
-    _get_db,
+    _tenant_session,
     _instantiate_provider,
     _log,
     _persist_rotated_creds,
@@ -81,8 +81,7 @@ async def message_facets(
     Counts, not booleans, because the same query yields them and "Newsletter
     1,204" is the number that tells you where to start.
     """
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         params: dict[str, Any] = {"user_id": user.email or "anonymous"}
         where = ["ea.user_id = :user_id"]
         if account_id:
@@ -132,8 +131,6 @@ async def message_facets(
             # still lights up the Newsletter chip.
             "labels": {r.label: int(r.n or 0) for r in rows},
         }
-    finally:
-        await db.close()
 
 
 @router.get("/messages")
@@ -179,8 +176,7 @@ async def list_messages(
     assistant's inbox-query tools leave it off so their counts stay per-message.
     Ignored when ``thread_id`` is set (the conversation view wants every message).
     """
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         where_clauses = [
             "ea.user_id = :user_id"
         ]
@@ -392,8 +388,6 @@ async def list_messages(
             "page": page,
             "page_size": page_size,
         }
-    finally:
-        await db.close()
 
 
 # Sender categories that are bulk/automated and never "important to check".
@@ -417,8 +411,7 @@ async def priority_inbox(
     Bulk/automated senders (Newsletter / Marketing / Cold Email / Notification)
     are excluded so the list stays high-signal. Returns one row per thread with
     the reason it ranked, newest-first within score."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         await _assert_account_owner(db, account_id, user.email or "anonymous")
         rows = (await db.execute(text(
             """WITH latest AS (
@@ -486,8 +479,6 @@ async def priority_inbox(
                 "reason": ", ".join(reasons) or "recent",
             })
         return {"emails": out, "count": len(out), "days": days}
-    finally:
-        await db.close()
 
 
 async def _hydrate_attachments(
@@ -529,7 +520,9 @@ async def _hydrate_attachments(
                 },
             )
         await _persist_rotated_creds(db, store, account_id, provider)
-        await db.commit()
+        # No commit here: the only caller is the converted get_message (H2),
+        # whose `_tenant_session` commits on clean exit — a mid-block commit
+        # would end that transaction and drop the tenant GUC.
         return await _fetch_attachments(db, message_id)
     except Exception as exc:  # noqa: BLE001
         _log.warning(
@@ -559,8 +552,7 @@ async def message_summaries(
     ids = [i for i in (req.ids or []) if i]
     if not ids:
         return {"summaries": []}
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         rows = (await db.execute(
             text(
                 """SELECT em.id, em.thread_id, em.subject, em.from_address,
@@ -588,8 +580,6 @@ async def message_summaries(
         # Preserve caller order (and drop ids the user doesn't own).
         summaries = [by_id[i] for i in ids if i in by_id]
         return {"summaries": summaries}
-    finally:
-        await db.close()
 
 
 @router.get("/messages/{message_id}", response_model=EmailMessageModel)
@@ -598,8 +588,7 @@ async def get_message(
     user: UserContext = Depends(get_current_user),
 ):
     """Get full email detail."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         result = await db.execute(
             text(
                 """SELECT em.id, em.provider_message_id, em.thread_id,
@@ -629,7 +618,6 @@ async def get_message(
             ),
             {"id": message_id},
         )
-        await db.commit()
 
         msg = _row_to_message(row)
 
@@ -685,7 +673,6 @@ async def get_message(
                             },
                         )
                     await _persist_rotated_creds(db, store, account_id, provider)
-                    await db.commit()
                     msg.body_text = body_text
                     msg.body_html = body_html
                     msg.has_attachments = full.has_attachments
@@ -703,8 +690,6 @@ async def get_message(
                     db, message_id, user.email or "anonymous"
                 )
         return msg
-    finally:
-        await db.close()
 
 
 @router.patch("/messages/{message_id}", response_model=EmailMessageModel)
@@ -722,8 +707,7 @@ async def update_message(
             name for name in updates.add_labels
             if name.strip().lower() not in RESERVED_INDICATORS
         ]
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         # Verify ownership
         result = await db.execute(
             text(
@@ -760,7 +744,6 @@ async def update_message(
             ),
             params,
         )
-        await db.commit()
 
         # Apply label add/remove locally — the categories column drives the
         # label chips shown in the UI.
@@ -784,7 +767,6 @@ async def update_message(
                 ),
                 {"id": message_id, "cats": cats},
             )
-            await db.commit()
 
         # ── Two-way sync: push the change to the provider (best-effort) ──
         # The local DB is already updated; if the provider write fails we keep the
@@ -821,7 +803,6 @@ async def update_message(
                             ),
                             {"pid": new_pid, "id": message_id},
                         )
-                        await db.commit()
                         provider_msg_id = new_pid
                 if updates.add_labels or updates.remove_labels:
                     await provider.set_labels(
@@ -830,9 +811,9 @@ async def update_message(
                         remove=updates.remove_labels or [],
                     )
                 await _persist_rotated_creds(db, store, account_id, provider)
-                await db.commit()
         except Exception as exc:  # noqa: BLE001
-            # Best-effort: the local change is already committed, so a provider
+            # Best-effort: the local change lands at the tenant session's
+            # clean-exit commit either way, so a provider
             # failure (incl. an HTTPException from the provider lookup/write) must
             # NOT fail the user's action — just log it.
             _log.warning(
@@ -842,8 +823,6 @@ async def update_message(
 
         # Return updated message
         return await get_message(message_id, user)
-    finally:
-        await db.close()
 
 
 class SnoozeRequest(BaseModel):
@@ -864,8 +843,7 @@ async def snooze_message(
     no thread is stamped on its own). It's app-local — there is no provider
     concept of snooze — so nothing is pushed upstream. The conversation reappears
     on its own once the time passes (query-time wake; no scheduler)."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         row = (await db.execute(text(
             """SELECT em.account_id, em.thread_id
                FROM email_messages em
@@ -887,7 +865,6 @@ async def snooze_message(
             f"""UPDATE email_messages SET snoozed_until = :until, updated_at = now()
                 WHERE account_id = :acc AND {scope}"""
         ), params)
-        await db.commit()
         return {
             "ok": True,
             "message_id": message_id,
@@ -895,8 +872,6 @@ async def snooze_message(
             "snoozed_until": until.isoformat() if until else None,
             "affected": res.rowcount,
         }
-    finally:
-        await db.close()
 
 
 @router.delete("/messages/{message_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -905,8 +880,7 @@ async def delete_message(
     user: UserContext = Depends(get_current_user),
 ):
     """Move email to trash (locally and on the provider)."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         result = await db.execute(
             text(
                 """UPDATE email_messages SET folder = 'trash', updated_at = now()
@@ -919,7 +893,6 @@ async def delete_message(
         )
         if result.rowcount == 0:
             raise HTTPException(status_code=404, detail="Message not found")
-        await db.commit()
 
         # ── Two-way sync: trash on the provider too (best-effort) ──
         try:
@@ -940,7 +913,6 @@ async def delete_message(
                         {"pid": new_pid, "id": message_id},
                     )
                 await _persist_rotated_creds(db, store, account_id, provider)
-                await db.commit()
         except Exception as exc:  # noqa: BLE001
             # Best-effort: local trash already committed; never fail the user's
             # action on a provider error (incl. provider-raised HTTPException).
@@ -948,8 +920,6 @@ async def delete_message(
                 "delete_message.provider_sync_failed",
                 message_id=message_id, error=str(exc)[:200],
             )
-    finally:
-        await db.close()
 
 
 @router.get("/messages/{message_id}/full-body")
@@ -963,56 +933,54 @@ async def get_full_body(
     was capped to stay within storage limits.  This endpoint reaches out
     to Gmail/Microsoft/IMAP live to retrieve the complete message body.
     """
-    db = await _get_db()
-    try:
-        result = await db.execute(
-            text(
-                """SELECT em.provider_message_id, p.provider,
-                          p.credentials_encrypted
-                   FROM email_messages em
-                   JOIN email_accounts p ON em.account_id = p.id
-                   WHERE em.id = :mid AND p.user_id = :user_id"""
-            ),
-            {"mid": message_id, "user_id": user.email or "anonymous"},
-        )
-        row = result.fetchone()
-        if not row:
-            raise HTTPException(status_code=404, detail="Message not found")
-
-        # Decrypt credentials
-        from acb_llm.key_store import get_key_store
-        store = get_key_store()
-        creds = json.loads(store.decrypt(row.credentials_encrypted))
-
-        # Instantiate provider
-        provider = _instantiate_provider(row.provider, creds)
-
-        if not await provider.authenticate():
-            raise HTTPException(
-                status_code=401,
-                detail="Email account authentication failed",
+    async with _tenant_session() as db:
+        try:
+            result = await db.execute(
+                text(
+                    """SELECT em.provider_message_id, p.provider,
+                              p.credentials_encrypted
+                       FROM email_messages em
+                       JOIN email_accounts p ON em.account_id = p.id
+                       WHERE em.id = :mid AND p.user_id = :user_id"""
+                ),
+                {"mid": message_id, "user_id": user.email or "anonymous"},
             )
+            row = result.fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="Message not found")
 
-        msg = await provider.get_message(row.provider_message_id)
-        return {
-            "message_id": message_id,
-            "body_text": msg.body_text,
-            "body_html": msg.body_html,
-            "subject": msg.subject,
-            "from": (
-                f"{msg.from_address.name} <{msg.from_address.email}>"
-                if msg.from_address else ""
-            ),
-        }
-    except HTTPException:
-        raise
-    except Exception as exc:
-        _log.error(
-            "full_body.failed", message_id=message_id, error=str(exc)[:200]
-        )
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to fetch full body: {str(exc)}",
-        )
-    finally:
-        await db.close()
+            # Decrypt credentials
+            from acb_llm.key_store import get_key_store
+            store = get_key_store()
+            creds = json.loads(store.decrypt(row.credentials_encrypted))
+
+            # Instantiate provider
+            provider = _instantiate_provider(row.provider, creds)
+
+            if not await provider.authenticate():
+                raise HTTPException(
+                    status_code=401,
+                    detail="Email account authentication failed",
+                )
+
+            msg = await provider.get_message(row.provider_message_id)
+            return {
+                "message_id": message_id,
+                "body_text": msg.body_text,
+                "body_html": msg.body_html,
+                "subject": msg.subject,
+                "from": (
+                    f"{msg.from_address.name} <{msg.from_address.email}>"
+                    if msg.from_address else ""
+                ),
+            }
+        except HTTPException:
+            raise
+        except Exception as exc:
+            _log.error(
+                "full_body.failed", message_id=message_id, error=str(exc)[:200]
+            )
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to fetch full body: {str(exc)}",
+            )

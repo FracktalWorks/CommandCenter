@@ -37,8 +37,8 @@ from gateway.routes.notes.core import (
     MeetingDetail,
     MeetingListItem,
     PatchMeetingRequest,
-    _get_db,
     _log,
+    _tenant_session,
     load_owned_meeting,
     media_dir,
     router,
@@ -92,7 +92,7 @@ async def list_meetings(
     """The caller's own meeting library. Never anybody else's — the search box
     searches transcript text, so an unscoped list was a full-text search over
     every recorded conversation in the company."""
-    async with await _get_db() as db:
+    async with _tenant_session() as db:
         rows = (
             await db.execute(
                 text(_LIST_SQL),
@@ -111,7 +111,7 @@ async def create_meeting(
     body: CreateMeetingRequest,
     user: UserContext = Depends(get_current_user),
 ) -> MeetingListItem:
-    async with await _get_db() as db:
+    async with _tenant_session() as db:
         row = (
             await db.execute(
                 text(
@@ -134,7 +134,6 @@ async def create_meeting(
                 },
             )
         ).fetchone()
-        await db.commit()
     _log.info("notes.meeting_created", meeting_id=str(row.id), user=user.email)
     return row_to_list_item(row)
 
@@ -164,7 +163,7 @@ async def get_meeting(
     meeting_id: str,
     user: UserContext = Depends(get_current_user),
 ) -> MeetingDetail:
-    async with await _get_db() as db:
+    async with _tenant_session() as db:
         m = await _load_meeting(db, meeting_id, user)
         recs = (
             await db.execute(
@@ -225,13 +224,12 @@ async def put_scratch(
     user: UserContext = Depends(get_current_user),
 ) -> dict:
     """Save the user's rough notes — merged into generation as emphasis signals."""
-    async with await _get_db() as db:
+    async with _tenant_session() as db:
         await _load_meeting(db, meeting_id, user)
         await db.execute(
             text("UPDATE meeting SET scratch_notes = :s WHERE id = :id"),
             {"s": body.scratch_notes or None, "id": meeting_id},
         )
-        await db.commit()
     return {"ok": True}
 
 
@@ -251,13 +249,12 @@ async def put_attendees(
     clean = [
         a for a in body.attendees if (a.name.strip() or a.email.strip())
     ]
-    async with await _get_db() as db:
+    async with _tenant_session() as db:
         await _load_meeting(db, meeting_id, user)
         await db.execute(
             text("UPDATE meeting SET attendees = CAST(:a AS JSONB) WHERE id = :id"),
             {"a": _json.dumps([a.model_dump() for a in clean]), "id": meeting_id},
         )
-        await db.commit()
     return clean
 
 
@@ -282,7 +279,7 @@ async def put_speakers(
         for k, v in body.names.items()
         if str(k).strip() and isinstance(v, str) and v.strip()
     }
-    async with await _get_db() as db:
+    async with _tenant_session() as db:
         await _load_meeting(db, meeting_id, user)
         await db.execute(
             text(
@@ -290,7 +287,6 @@ async def put_speakers(
             ),
             {"n": _json.dumps(clean), "id": meeting_id},
         )
-        await db.commit()
     _log.info("notes.speakers_named", meeting_id=meeting_id, count=len(clean))
     return clean
 
@@ -301,7 +297,7 @@ async def patch_meeting(
     body: PatchMeetingRequest,
     user: UserContext = Depends(get_current_user),
 ) -> MeetingListItem:
-    async with await _get_db() as db:
+    async with _tenant_session() as db:
         await _load_meeting(db, meeting_id, user)
         await db.execute(
             text(
@@ -323,7 +319,6 @@ async def patch_meeting(
                 "copilot": body.copilot_enabled,
             },
         )
-        await db.commit()
         row = await _load_meeting(db, meeting_id, user)
     return row_to_list_item(row)
 
@@ -338,7 +333,7 @@ async def delete_meeting(
     Irreversible and the reason the owner check above is not optional: a
     colleague's recording, transcript, notes and action items all go with it.
     """
-    async with await _get_db() as db:
+    async with _tenant_session() as db:
         await _load_meeting(db, meeting_id, user)
         paths = (
             await db.execute(
@@ -354,7 +349,6 @@ async def delete_meeting(
             ),
             {"actor": user.email or "unknown", "target": f"meeting:{meeting_id}"},
         )
-        await db.commit()
     root = media_dir().resolve()
     for p in paths:
         try:

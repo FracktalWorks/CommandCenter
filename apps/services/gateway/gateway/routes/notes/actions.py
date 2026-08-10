@@ -17,8 +17,8 @@ from acb_auth import UserContext, get_current_user
 from fastapi import Depends, HTTPException
 from gateway.routes.notes.core import (
     OWNED_MEETING_PREDICATE,
-    _get_db,
     _log,
+    _tenant_session,
     load_owned_meeting,
     router,
 )
@@ -106,7 +106,7 @@ async def approve_action(
     colleague's ``description`` copied into its title — an exfiltration with
     a durable row to show for it, not just a nuisance edit.
     """
-    async with await _get_db() as db:
+    async with _tenant_session() as db:
         action = await _load_action(db, action_id, user.email)
         if action.resulting_task_id:  # idempotent
             return ApproveResponse(
@@ -132,7 +132,6 @@ async def approve_action(
                 "p": json.dumps({"task_id": task_id, "meeting_id": str(action.meeting_id)}),
             },
         )
-        await db.commit()
     _log.info("notes.action_approved", action_id=action_id, task_id=task_id)
     return ApproveResponse(action_id=action_id, status="created", resulting_task_id=task_id)
 
@@ -144,7 +143,7 @@ async def reject_action(
 ) -> ApproveResponse:
     """Dismiss a draft action item. Owner only — the item is the owner's
     triage queue, and a rejection is not reversible through this API."""
-    async with await _get_db() as db:
+    async with _tenant_session() as db:
         action = await _load_action(db, action_id, user.email)
         if action.resulting_task_id:
             raise HTTPException(
@@ -154,7 +153,6 @@ async def reject_action(
             text("UPDATE action_item SET status='rejected' WHERE id=:id"),
             {"id": action_id},
         )
-        await db.commit()
     return ApproveResponse(action_id=action_id, status="rejected")
 
 
@@ -186,7 +184,7 @@ async def approve_all(
     # Deferred import: dispatch imports helpers from this module.
     from gateway.routes.notes import dispatch as notes_dispatch
 
-    async with await _get_db() as db:
+    async with _tenant_session() as db:
         meeting = await load_owned_meeting(
             db, meeting_id, user.email,
             columns="m.id, m.title, m.owner_email, m.attendees, "
@@ -211,7 +209,7 @@ async def approve_all(
         if error is None and ref is not None:
             created.append(str(action.id))
     if created:
-        async with await _get_db() as db:
+        async with _tenant_session() as db:
             await db.execute(
                 text(
                     "INSERT INTO audit_event (actor, action, target, payload) VALUES "
@@ -223,6 +221,5 @@ async def approve_all(
                     "p": json.dumps({"count": len(created), "min_confidence": body.min_confidence}),
                 },
             )
-            await db.commit()
     _log.info("notes.actions_bulk_approved", meeting_id=meeting_id, count=len(created))
     return BulkApproveResponse(created=created)

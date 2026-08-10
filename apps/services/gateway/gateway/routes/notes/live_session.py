@@ -28,7 +28,7 @@ from typing import Any
 
 from acb_auth import UserContext, get_current_user
 from fastapi import Depends, HTTPException
-from gateway.routes.notes.core import _get_db, _iso, _log, router
+from gateway.routes.notes.core import _get_db, _iso, _log, _tenant_session, router
 from pydantic import BaseModel
 from sqlalchemy import text
 
@@ -72,7 +72,7 @@ async def begin(meeting_id: str, source: str, owner_email: str | None) -> None:
     refreshes the existing row rather than forking presence (enforced by the
     partial unique index). Never raises."""
     try:
-        async with await _get_db() as db:
+        async with _tenant_session() as db:
             await db.execute(
                 text(
                     """
@@ -87,7 +87,6 @@ async def begin(meeting_id: str, source: str, owner_email: str | None) -> None:
                 ),
                 {"m": meeting_id, "s": source, "o": owner_email},
             )
-            await db.commit()
         _log.info("notes.live_session_begin", meeting_id=meeting_id, source=source)
     except Exception as exc:
         # Presence is additive — never let it break a recording or a bot join.
@@ -113,7 +112,7 @@ async def _apply_prepared_copilot(meeting_id: str) -> None:
         from gateway.routes.notes import copilot
         from gateway.routes.notes.settings import copilot_should_run, load_for_meeting
 
-        async with await _get_db() as db:
+        async with _tenant_session() as db:
             row = (
                 await db.execute(
                     text(
@@ -127,7 +126,7 @@ async def _apply_prepared_copilot(meeting_id: str) -> None:
         settings, _ = await load_for_meeting(meeting_id)
         if not copilot_should_run(per_meeting, settings.copilot_default_on):
             return
-        async with await _get_db() as db:
+        async with _tenant_session() as db:
             await db.execute(
                 text(
                     "UPDATE live_session SET copilot_enabled = TRUE, "
@@ -136,7 +135,6 @@ async def _apply_prepared_copilot(meeting_id: str) -> None:
                 ),
                 {"m": meeting_id},
             )
-            await db.commit()
         copilot.start(meeting_id)
         _log.info("notes.copilot_autostarted", meeting_id=meeting_id)
     except Exception as exc:
@@ -148,6 +146,9 @@ async def _apply_prepared_copilot(meeting_id: str) -> None:
 
 async def end(meeting_id: str) -> None:
     """Mark a meeting no longer live (no-op if it wasn't). Never raises."""
+    # H4: also called from background paths (the transcription pipeline task
+    # and the meeting-bot poller) — no ambient tenant there; derive it from
+    # the live_session/meeting row.
     try:
         async with await _get_db() as db:
             await db.execute(
@@ -173,7 +174,7 @@ async def list_live_sessions(
     _user: UserContext = Depends(get_current_user),
 ) -> list[LiveSessionModel]:
     """Meetings being captured right now — drives the global "live now" dock."""
-    async with await _get_db() as db:
+    async with _tenant_session() as db:
         rows = (
             await db.execute(
                 text(
@@ -194,7 +195,7 @@ async def get_live_session(
     """This meeting's live session, if any — how the console reattaches after a
     refresh. Returns null (200) rather than 404 when nothing is live, so the UI
     can poll it without treating "not live" as an error."""
-    async with await _get_db() as db:
+    async with _tenant_session() as db:
         row = (
             await db.execute(
                 text(
@@ -230,7 +231,7 @@ async def set_copilot(
     mode = (body.mode or "").strip() or None
     if mode is not None and mode not in _MODES:
         raise HTTPException(status_code=400, detail=f"mode must be one of {_MODES}")
-    async with await _get_db() as db:
+    async with _tenant_session() as db:
         row = (
             await db.execute(
                 text(
@@ -244,7 +245,6 @@ async def set_copilot(
         ).fetchone()
         if row is None:
             raise HTTPException(status_code=404, detail="no live session for this meeting")
-        await db.commit()
     # Start/stop the orchestrator to match. Turning it OFF cancels the task,
     # which unsubscribes it from the transcript bus — spend stops immediately,
     # which is the whole point of the toggle being cheap to hit.

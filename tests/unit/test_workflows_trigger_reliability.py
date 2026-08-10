@@ -15,6 +15,7 @@ is a pure function.
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any
@@ -368,10 +369,12 @@ def test_update_carries_the_baseline_onto_the_replacement_row(monkeypatch) -> No
     # load wf → previous triggers → DELETE → INSERT → reload wf → load triggers
     db = _ScriptedDb([wf, [old], None, None, wf, []])
 
-    async def fake_get_db() -> Any:
-        return db
+    @asynccontextmanager
+    async def fake_tenant_session() -> Any:
+        yield db
+        await db.commit()
 
-    monkeypatch.setattr(crud, "_get_db", fake_get_db)
+    monkeypatch.setattr(crud, "_tenant_session", fake_tenant_session)
 
     body = crud.WorkflowUpdate(
         triggers=[

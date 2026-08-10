@@ -26,6 +26,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from gateway.routes.email.automation import cleanup as c
 from gateway.routes.email.automation import engine as e
 from gateway.routes.email.automation import rules as r
+from tests.unit._email_fakes import bind_db
 
 _ACC = "acc-approve"
 _USER = SimpleNamespace(email="u@example.com")
@@ -145,7 +146,7 @@ def test_resetting_the_rules_preserves_review_state() -> None:
 async def _review(**kw) -> tuple[dict, str, dict]:
     db = AsyncMock()
     db.execute.return_value = MagicMock(rowcount=7)
-    with patch.object(r, "_get_db", AsyncMock(return_value=db)), \
+    with patch.object(r, "_tenant_session", bind_db(db)), \
             patch.object(r, "_assert_account_owner", AsyncMock()):
         res = await r.review_rule_patterns(
             r.PatternReviewRequest(account_id=_ACC, **kw), user=_USER)
@@ -193,7 +194,7 @@ async def test_an_empty_selection_is_a_no_op_not_an_approve_all() -> None:
     """`pattern_ids=[]` means "nothing selected". Falling through to the
     unfiltered UPDATE would approve the entire backlog on an empty click."""
     db = AsyncMock()
-    with patch.object(r, "_get_db", AsyncMock(return_value=db)), \
+    with patch.object(r, "_tenant_session", bind_db(db)), \
             patch.object(r, "_assert_account_owner", AsyncMock()):
         res = await r.review_rule_patterns(
             r.PatternReviewRequest(account_id=_ACC, pattern_ids=[]), user=_USER)

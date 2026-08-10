@@ -16,7 +16,7 @@ from fastapi import Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from gateway.routes.workflows.core import (
     MAX_RUNS_PAGE,
-    _get_db,
+    _tenant_session,
     _uid,
     iso,
     load_workflow_or_404,
@@ -48,8 +48,7 @@ async def run_workflow(
     body: RunRequest,
     user: UserContext = Depends(get_current_user),
 ) -> dict[str, Any]:
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         row = await load_workflow_or_404(db, workflow_id)
         if body.draft:
             ready_modules = (
@@ -86,8 +85,8 @@ async def run_workflow(
                 raise HTTPException(status_code=500, detail="Published version missing")
         variables = parse_jsonb(row.variables, {})
         name = row.name
-    finally:
-        await db.close()
+    # The session is closed before `start_run`: the run acquires its own
+    # (unbound, H4) sessions and outlives this request's transaction.
     try:
         run_id = await start_run(
             workflow_id=workflow_id,
@@ -111,8 +110,7 @@ async def list_runs(
     user: UserContext = Depends(get_current_user),
 ) -> list[dict[str, Any]]:
     limit = max(1, min(limit, MAX_RUNS_PAGE))
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         rows = (
             await db.execute(
                 text(
@@ -124,8 +122,6 @@ async def list_runs(
                 {"wid": workflow_id, "limit": limit},
             )
         ).fetchall()
-    finally:
-        await db.close()
     return [
         {
             "id": str(r.id),
@@ -146,16 +142,13 @@ async def get_run(
     run_id: str,
     user: UserContext = Depends(get_current_user),
 ) -> dict[str, Any]:
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         row = (
             await db.execute(
                 text("SELECT * FROM workflow_runs WHERE id = :id"),
                 {"id": run_id},
             )
         ).fetchone()
-    finally:
-        await db.close()
     if row is None:
         raise HTTPException(status_code=404, detail="Run not found")
     status = row.status
@@ -197,8 +190,10 @@ async def stream_run(
         hub = hub_for(run_id)
         if hub is None:
             # Finished (or lost) run: serve the stored summary once and close.
-            db = await _get_db()
-            try:
+            # The tenant scope is still bound here: `TenantScopeMiddleware` is
+            # pure ASGI, so the streamed body is produced inside the request's
+            # scope, not after it.
+            async with _tenant_session() as db:
                 row = (
                     await db.execute(
                         text(
@@ -207,8 +202,6 @@ async def stream_run(
                         {"id": run_id},
                     )
                 ).fetchone()
-            finally:
-                await db.close()
             if row is None:
                 yield _sse({"event": "error", "error": "run not found"})
                 return
@@ -262,10 +255,13 @@ async def _reconcile_rejected_pause(
     run_id: str, status: str, error: str | None
 ) -> tuple[str, str | None]:
     """If the pause's approvals-inbox proposal was rejected, the run is over:
-    mark it cancelled (and the pause rejected). Best-effort on read."""
+    mark it cancelled (and the pause rejected). Best-effort on read.
+
+    The best-effort `except` wraps the `async with`: an exception mid-write
+    rolls the transaction back and the caller keeps the stored status, same
+    as before the H2 conversion."""
     try:
-        db = await _get_db()
-        try:
+        async with _tenant_session() as db:
             pause = (
                 await db.execute(
                     text(
@@ -303,9 +299,6 @@ async def _reconcile_rejected_pause(
                 ),
                 {"id": run_id, "error": "approval rejected"},
             )
-            await db.commit()
             return "cancelled", "approval rejected"
-        finally:
-            await db.close()
     except Exception:
         return status, error

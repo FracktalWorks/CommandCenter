@@ -35,7 +35,20 @@ from uuid import uuid4
 from acb_auth import UserContext, get_current_user
 from acb_common import get_logger
 from fastapi import Depends, Request, Response
-from gateway.routes.whatsapp.core import _get_db, fire_post_sync_hooks, router
+
+# Two seams, deliberately (H2): `_tenant_session` serves the two USER routes
+# (`/bridge/connect`, `/bridge/status` — session-authenticated, tenant bound
+# centrally). The five PUSH routes the Go bridge calls (`/bridge/ingest`,
+# `/bridge/reclassify`, `/bridge/labels`, `/bridge/avatars`, `/bridge/paired`)
+# authenticate by X-Bridge-Secret with NO member session, so no ambient tenant
+# exists to bind — they stay on the unbound `_get_db` (H4/H6 markers at each
+# site) until an explicit tenant is derived from the wa_accounts row.
+from gateway.routes.whatsapp.core import (
+    _get_db,
+    _tenant_session,
+    fire_post_sync_hooks,
+    router,
+)
 from pydantic import BaseModel
 from sqlalchemy import text
 from whatsapp_ingestion.providers.base import (
@@ -297,6 +310,8 @@ async def bridge_ingest(request: Request):
     if not account_id:
         return Response(status_code=200, content="ok")  # nothing to route
 
+    # H4/H6: service-identity route — the Go bridge authenticates by shared
+    # secret, no ambient tenant; derive it from the wa_accounts row it names.
     db = await _get_db()
     try:
         owned = (await db.execute(
@@ -342,6 +357,8 @@ async def bridge_reclassify(request: Request):
     if not account_id:
         return Response(status_code=400, content="account_id required")
 
+    # H4/H6: service-identity route — no ambient tenant; derive from the
+    # wa_accounts row the payload names.
     db = await _get_db()
     try:
         owned = (await db.execute(
@@ -378,6 +395,8 @@ async def bridge_labels(request: Request):
     if not account_id:
         return Response(status_code=200, content="ok")
 
+    # H4/H6: service-identity route — no ambient tenant; derive from the
+    # wa_accounts row the payload names.
     db = await _get_db()
     try:
         owned = (await db.execute(
@@ -412,6 +431,8 @@ async def bridge_avatars(request: Request):
     if not account_id:
         return Response(status_code=200, content="ok")
 
+    # H4/H6: service-identity route — no ambient tenant; derive from the
+    # wa_accounts row the payload names.
     db = await _get_db()
     try:
         owned = (await db.execute(
@@ -444,6 +465,8 @@ async def bridge_paired(request: Request):
     account_id = str(payload.get("session") or payload.get("account_id") or "").strip()
     if not account_id:
         return Response(status_code=400, content="session required")
+    # H4/H6: service-identity route — no ambient tenant; derive from the
+    # wa_accounts row the payload names.
     db = await _get_db()
     try:
         await db.execute(
@@ -483,8 +506,7 @@ async def bridge_connect(user: UserContext = Depends(get_current_user)):
     from acb_llm.key_store import get_key_store
     encrypted = get_key_store().encrypt(json.dumps(creds))
 
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         is_first = (await db.execute(
             text("SELECT COUNT(*) FROM wa_accounts WHERE user_id = :uid"),
             {"uid": uid},
@@ -498,9 +520,6 @@ async def bridge_connect(user: UserContext = Depends(get_current_user)):
             {"id": account_id, "uid": uid, "pnid": f"bridge-{account_id}",
              "creds": encrypted, "is_default": is_first},
         )
-        await db.commit()
-    finally:
-        await db.close()
 
     qr, reachable = await _bridge_start_session(account_id)
     return BridgeConnectModel(
@@ -512,16 +531,13 @@ async def bridge_status(
     account_id: str, user: UserContext = Depends(get_current_user),
 ):
     """Poll pairing status + the current QR for a pairing account."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         row = (await db.execute(
             text("""SELECT sync_status FROM wa_accounts
                     WHERE id = :aid AND user_id = :uid
                       AND provider = 'whatsmeow'"""),
             {"aid": account_id, "uid": user.email or "anonymous"},
         )).fetchone()
-    finally:
-        await db.close()
     if not row:
         return BridgeConnectModel(account_id=account_id, status="unknown")
     if row.sync_status == "live":

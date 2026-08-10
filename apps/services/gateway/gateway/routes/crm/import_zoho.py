@@ -42,7 +42,7 @@ from gateway.routes.crm.core import (
     LEADS,
     ORGANIZATIONS,
     Entity,
-    _get_db,
+    _tenant_session,
     actor,
     bump_last_activity,
     compute_lead_name,
@@ -806,8 +806,7 @@ async def import_from_zoho(
             report.modules[module] = ModuleReport(fetched=len(records))
         return report
 
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         for module in ALL_MODULES:
             # The backfill has no cursor to advance, so the watermark half of
             # the pass is discarded here.
@@ -815,9 +814,6 @@ async def import_from_zoho(
                 db, module, fetched[module],
                 owners=owners, fallback_owner=who, report=report,
             )).report
-        await db.commit()
-    finally:
-        await db.close()
 
     _log.info(
         "crm.import.completed",

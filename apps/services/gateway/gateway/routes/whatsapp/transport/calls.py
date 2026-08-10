@@ -27,7 +27,7 @@ from typing import Any
 from acb_auth import UserContext, get_current_user
 from acb_common import get_logger
 from fastapi import Depends, HTTPException, Request, Response
-from gateway.routes.whatsapp.core import _get_db, router
+from gateway.routes.whatsapp.core import _tenant_session, router
 from gateway.routes.whatsapp.transport.bridge import (
     _bridge_headers,
     _bridge_url,
@@ -96,15 +96,12 @@ async def _assert_owns_account(account_id: str, user: UserContext) -> None:
     to be enforced here."""
     if not account_id:
         raise HTTPException(status_code=400, detail="account_id required")
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         row = (await db.execute(
             text("""SELECT sync_status FROM wa_accounts
                     WHERE id = :aid AND user_id = :uid AND provider = 'whatsmeow'"""),
             {"aid": account_id, "uid": user.email or "anonymous"},
         )).fetchone()
-    finally:
-        await db.close()
     if not row:
         raise HTTPException(
             status_code=404,

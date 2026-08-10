@@ -17,6 +17,7 @@ from email_ingestion.providers.base import (
 )
 from email_ingestion.providers.gmail import GmailProvider
 from gateway.routes.email.automation import senders as s
+from tests.unit._email_fakes import bind_db
 
 
 # ── HTML-body scraping + best-link selection ────────────────────────────────
@@ -199,7 +200,7 @@ async def test_unsubscribe_endpoint_marks_unsubscribed_on_success() -> None:
     req = s.UnsubscribeRequest(
         account_id="acc-1", email="news@x.com",
         unsubscribe_link="https://list.example/u")
-    with patch.object(s, "_get_db", AsyncMock(return_value=AsyncMock())), \
+    with patch.object(s, "_tenant_session", bind_db(AsyncMock())), \
             patch.object(s, "_assert_account_owner", AsyncMock()), \
             patch.object(s, "_http_unsubscribe",
                          AsyncMock(return_value=(True, "one-click-post"))), \
@@ -224,7 +225,7 @@ async def test_unsubscribe_endpoint_blocks_when_no_link() -> None:
     db.execute.return_value = SimpleNamespace(
         fetchone=lambda: SimpleNamespace(link=None))
     req = s.UnsubscribeRequest(account_id="acc-1", email="news@x.com")
-    with patch.object(s, "_get_db", AsyncMock(return_value=db)), \
+    with patch.object(s, "_tenant_session", bind_db(db)), \
             patch.object(s, "_assert_account_owner", AsyncMock()), \
             patch.object(s, "_apply_newsletter_status", _apply):
         res = await s.unsubscribe_sender(req, SimpleNamespace(add_task=lambda *a: None),

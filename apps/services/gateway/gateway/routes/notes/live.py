@@ -32,7 +32,7 @@ import os
 import httpx
 from acb_auth import UserContext, get_current_user
 from fastapi import Depends, Header, HTTPException
-from gateway.routes.notes.core import _get_db, _log, load_owned_meeting, router
+from gateway.routes.notes.core import _log, _tenant_session, load_owned_meeting, router
 from pydantic import BaseModel
 
 _DG_API = "https://api.deepgram.com/v1"
@@ -223,6 +223,9 @@ async def live_wanted(meeting_id: str) -> tuple[bool, str]:
         from sqlalchemy import text as _text
 
         settings, _ = await load_for_meeting(meeting_id)
+        # H4/H6: service-identity route — `read_live_wanted` is called by the
+        # meeting-bot worker (MEETING_BOT_TOKEN, `system`-shaped identity, no
+        # ambient tenant); derive the tenant from the live_session/meeting row.
         async with await _get_db() as db:
             row = (
                 await db.execute(
@@ -300,7 +303,7 @@ async def live_token(
     presence oracle over a colleague's calendar. The parameter stays optional
     — a token minted with no meeting names nothing to scope."""
     if meeting_id:
-        async with await _get_db() as db:
+        async with _tenant_session() as db:
             await load_owned_meeting(
                 db, meeting_id, user.email, columns="m.id"
             )

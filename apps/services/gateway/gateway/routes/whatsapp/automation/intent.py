@@ -114,6 +114,9 @@ async def process_new_messages(account_id: str) -> None:
     sender categorization + auto-answer execution layer on here later."""
     from gateway.routes.whatsapp.automation.commitments import apply_commitments
     from gateway.routes.whatsapp.core import _get_db
+    # H4: post-sync hook — fired by the Meta webhook / bridge ingest (service
+    # identity, no member session), so there is NO ambient tenant to bind and
+    # none may be inherited; H4 threads an explicit one from the account row.
     db = await _get_db()
     try:
         classified = await apply_intents(db, account_id)

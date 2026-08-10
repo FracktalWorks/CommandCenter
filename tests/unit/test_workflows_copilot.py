@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from typing import Any
 
@@ -167,10 +168,13 @@ class _FakeSession:
 def fake_db(monkeypatch):
     store: dict[str, SimpleNamespace] = {}
 
-    async def _get_db() -> _FakeSession:
-        return _FakeSession(store)
+    @asynccontextmanager
+    async def _tenant_session():
+        session = _FakeSession(store)
+        yield session
+        await session.commit()
 
-    monkeypatch.setattr(copilot_mod, "_get_db", _get_db)
+    monkeypatch.setattr(copilot_mod, "_tenant_session", _tenant_session)
     # Deterministic agent registry for validation.
     import gateway.routes.workflows.catalog as catalog_mod
 

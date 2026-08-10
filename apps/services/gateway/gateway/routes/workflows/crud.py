@@ -15,7 +15,7 @@ from fastapi import Depends, HTTPException
 from gateway.routes.workflows.core import (
     HOOK_PATH,
     MAX_GRAPH_BYTES,
-    _get_db,
+    _tenant_session,
     _uid,
     hook_url,
     iso,
@@ -74,8 +74,7 @@ def _row_summary(row: Any) -> dict[str, Any]:
 async def list_workflows(
     user: UserContext = Depends(get_current_user),
 ) -> list[dict[str, Any]]:
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         rows = (
             await db.execute(
                 text(
@@ -92,8 +91,6 @@ async def list_workflows(
                 )
             )
         ).fetchall()
-    finally:
-        await db.close()
     return [
         {
             **_row_summary(r),
@@ -110,8 +107,7 @@ async def create_workflow(
     body: WorkflowCreate,
     user: UserContext = Depends(get_current_user),
 ) -> dict[str, Any]:
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         row = (
             await db.execute(
                 text(
@@ -127,9 +123,6 @@ async def create_workflow(
                 },
             )
         ).fetchone()
-        await db.commit()
-    finally:
-        await db.close()
     return {
         **_row_summary(row),
         "graph": parse_jsonb(row.graph, {}),
@@ -150,8 +143,7 @@ async def duplicate_workflow(
     workflows, and the copy starts as a draft with no versions). The webhook
     hook token is always regenerated: it is a credential, never cloned.
     """
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         row = await load_workflow_or_404(db, workflow_id)
         triggers = await load_triggers(db, workflow_id)
         name = f"{row.name} (copy)"[:120]
@@ -187,9 +179,6 @@ async def duplicate_workflow(
                     "enabled": t["enabled"],
                 },
             )
-        await db.commit()
-    finally:
-        await db.close()
     return {
         **_row_summary(new),
         "graph": parse_jsonb(new.graph, {}),
@@ -207,8 +196,7 @@ async def get_workflow(
     workflow_id: str,
     user: UserContext = Depends(get_current_user),
 ) -> dict[str, Any]:
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         row = await load_workflow_or_404(db, workflow_id)
         triggers = await load_triggers(db, workflow_id)
         versions = (
@@ -221,8 +209,6 @@ async def get_workflow(
                 {"id": workflow_id},
             )
         ).fetchall()
-    finally:
-        await db.close()
     return {
         **_row_summary(row),
         "graph": parse_jsonb(row.graph, {"nodes": [], "edges": []}),
@@ -257,8 +243,7 @@ async def update_workflow(
             raise HTTPException(status_code=413, detail="Graph too large")
     if body.triggers is not None:
         _validate_trigger_specs(body.triggers)
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         row = await load_workflow_or_404(db, workflow_id)
         sets, params = [], {"id": workflow_id}
         if body.name is not None:
@@ -321,11 +306,11 @@ async def update_workflow(
                         ),
                     },
                 )
-        await db.commit()
+        # No mid-block commit: the wrapper owns the one transaction (a commit
+        # here would end it and drop the tenant GUC for the reads below). The
+        # re-reads see this transaction's own writes, same rows as before.
         row = await load_workflow_or_404(db, workflow_id)
         triggers = await load_triggers(db, workflow_id)
-    finally:
-        await db.close()
     return {
         **_row_summary(row),
         "graph": parse_jsonb(row.graph, {"nodes": [], "edges": []}),
@@ -339,16 +324,12 @@ async def delete_workflow(
     workflow_id: str,
     user: UserContext = Depends(get_current_user),
 ) -> None:
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         await load_workflow_or_404(db, workflow_id)
         await db.execute(
             text("DELETE FROM workflows WHERE id = :id"),
             {"id": workflow_id},
         )
-        await db.commit()
-    finally:
-        await db.close()
 
 
 @router.post("/{workflow_id}/validate")
@@ -357,16 +338,13 @@ async def validate_workflow(
     user: UserContext = Depends(get_current_user),
 ) -> dict[str, Any]:
     """Design-time validation for editor badges (spec F4, §3.2 rung 3)."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         row = await load_workflow_or_404(db, workflow_id)
         ready_modules = (
             await db.execute(
                 text("SELECT id FROM workflow_modules WHERE status = 'ready'"),
             )
         ).fetchall()
-    finally:
-        await db.close()
     from gateway.routes.workflows.catalog import known_agent_names
     from gateway.routes.workflows.tools import (
                 destructive_action_names,

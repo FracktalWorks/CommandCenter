@@ -13,7 +13,7 @@ import re
 
 from acb_auth import UserContext, get_current_user
 from fastapi import Depends, HTTPException
-from gateway.routes.notes.core import _get_db, _log, load_owned_meeting, router
+from gateway.routes.notes.core import _log, _tenant_session, load_owned_meeting, router
 from gateway.routes.notes.summaries import _PASS_CHARS, _llm_json, _model, _tag
 from pydantic import BaseModel
 from sqlalchemy import text
@@ -96,7 +96,7 @@ async def ask_meeting(
     if not question:
         raise HTTPException(status_code=400, detail="empty question")
 
-    async with await _get_db() as db:
+    async with _tenant_session() as db:
         mrow = await load_owned_meeting(
             db, meeting_id, user.email, columns="m.speaker_names"
         )

@@ -8,10 +8,10 @@ chart stays readable by anyone holding ``feature:tasks``; the HR-sensitive half
 
 Convention: the ``test_admin_groups.py`` / ``test_app_grants.py`` shape — no
 TestClient, no live Postgres. The read routes are called as plain async
-functions with the DB seam (``people._get_db``) monkeypatched on the SUT
-submodule; the write gates are exercised by executing the route's own
-permission dependency, so a route that loses its gate fails here rather than
-in production.
+functions with the DB seam (``people._tenant_session``, the H2 tenant-bound
+context manager) monkeypatched on the SUT submodule; the write gates are
+exercised by executing the route's own permission dependency, so a route that
+loses its gate fails here rather than in production.
 
 What is locked:
 
@@ -30,6 +30,7 @@ What is locked:
 from __future__ import annotations
 
 import inspect
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from typing import Any
 
@@ -137,11 +138,15 @@ class _FakeDB:
     def __init__(self, rows: list[Any]):
         self.rows = rows
         self.statements: list[str] = []
+        self.committed = 0
         self.closed = False
 
     async def execute(self, statement: Any, params: Any = None) -> _Result:
         self.statements.append(str(statement))
         return _Result(self.rows)
+
+    async def commit(self) -> None:
+        self.committed += 1
 
     async def close(self) -> None:
         self.closed = True
@@ -151,10 +156,14 @@ class _FakeDB:
 def fake_db(monkeypatch: pytest.MonkeyPatch) -> _FakeDB:
     db = _FakeDB([_person_row()])
 
-    async def _get_db() -> _FakeDB:
-        return db
+    # H2: the seam is the tenant-bound context manager, patched per module —
+    # commit-on-clean-exit mirrors the real wrapper (see _projects_fakes).
+    @asynccontextmanager
+    async def _tenant_session(organization_id: str | None = None):
+        yield db
+        await db.commit()
 
-    monkeypatch.setattr(people, "_get_db", _get_db)
+    monkeypatch.setattr(people, "_tenant_session", _tenant_session)
     return db
 
 

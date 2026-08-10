@@ -8,13 +8,16 @@ provider call, and an explicit ``source=f"app:{slug}"`` override so
 another's (stack-inferred attribution collapses every custom app into one
 generic "apps" bucket — see ``acb_llm.context._infer_app_source``).
 
-DB-touching seams (``_get_db``/``get_app_or_404``/``_month_ai_usage``/
+DB-touching seams (``_tenant_session``/``get_app_or_404``/``_month_ai_usage``/
 ``record_app_audit``) and the LLM call itself are monkeypatched with fakes —
 no live Postgres, no live model — mirroring ``test_app_actions.py``'s
-conventions.
+conventions (``_tenant_session`` swapped in as an ``asynccontextmanager``,
+the H2 seam shape).
 """
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from typing import Any
 
@@ -60,6 +63,9 @@ def _row(**overrides: Any) -> Any:
 
 
 class _FakeDB:
+    async def commit(self) -> None:
+        pass
+
     async def close(self) -> None:
         pass
 
@@ -68,8 +74,11 @@ def _patch_common(monkeypatch: pytest.MonkeyPatch, *, used_tokens: int = 0,
                    budget: int = 100_000) -> None:
     row = _row()
 
-    async def _get_db() -> _FakeDB:
-        return _FakeDB()
+    @asynccontextmanager
+    async def _tenant_session() -> AsyncIterator[_FakeDB]:
+        db = _FakeDB()
+        yield db
+        await db.commit()
 
     async def _get_app_or_404(_db: Any, _slug: str, _user: UserContext) -> Any:
         return row, []
@@ -80,7 +89,7 @@ def _patch_common(monkeypatch: pytest.MonkeyPatch, *, used_tokens: int = 0,
     async def _record_app_audit(**_kw: Any) -> None:
         pass
 
-    monkeypatch.setattr(runtime, "_get_db", _get_db)
+    monkeypatch.setattr(runtime, "_tenant_session", _tenant_session)
     monkeypatch.setattr(runtime, "get_app_or_404", _get_app_or_404)
     monkeypatch.setattr(runtime, "_month_ai_usage", _month_ai_usage)
     monkeypatch.setattr(runtime, "resolve_ai_budget", lambda _manifest: budget)

@@ -40,7 +40,7 @@ from gateway.routes.crm.core import (
     ORGANIZATIONS,
     ActivityModel,
     Entity,
-    _get_db,
+    _tenant_session,
     actor,
     bump_last_activity,
     insert_row,
@@ -107,8 +107,7 @@ async def _timeline(
 ) -> TimelineResponse:
     """The merged timeline. ``user`` is required because one of the three
     sources — email — is scoped to the CALLER's mailboxes, not to the record."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         record = await require_row(db, entity.table, record_id, entity.label)
         sources: list[tuple[Entity, str, str]] = [(entity, record_id, "own")]
         inherited = getattr(record, "lead_id", None)
@@ -137,8 +136,6 @@ async def _timeline(
         # which sorts last rather than crashing the comparison.
         entries.sort(key=lambda e: (e.at or ""), reverse=True)
         return TimelineResponse(entries=entries[:limit])
-    finally:
-        await db.close()
 
 
 async def _activity_entries(
@@ -395,8 +392,7 @@ async def _log_activity(
                 "('status_change' and 'system' are written by the platform.)"
             ),
         )
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         await require_row(db, entity.table, record_id, entity.label)
         # `entity.activity_column` is one of four registry literals, so the
         # CHECK requiring at least one target cannot be reached with all four
@@ -412,10 +408,7 @@ async def _log_activity(
             entity.activity_column: record_id,
         })
         await bump_last_activity(db, entity.table, record_id)
-        await db.commit()
         return row_to_dict(row, ActivityModel)
-    finally:
-        await db.close()
 
 
 # ── Timelines ───────────────────────────────────────────────────────────────
@@ -504,8 +497,7 @@ async def patch_activity(
     history, and re-logging is one request.
     """
     values = payload.model_dump(exclude_unset=True)
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         row = await require_row(db, "crm_activities", activity_id, "Activity")
         if row.type in ("status_change", "system"):
             # Same guard as delete_activity: one rule, both verbs. An edited
@@ -524,10 +516,7 @@ async def patch_activity(
         row = await update_row(
             db, "crm_activities", activity_id, values, touch=False,
         )
-        await db.commit()
         return row_to_dict(row, ActivityModel)
-    finally:
-        await db.close()
 
 
 @router.delete("/activities/{activity_id}")
@@ -544,8 +533,7 @@ async def delete_activity(
     retired. Do not "fix" one direction alone — a native tombstone without the
     matching Zoho→native delete would make the two sides disagree in a new way.
     """
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         row = await require_row(db, "crm_activities", activity_id, "Activity")
         if row.type in ("status_change", "system"):
             raise HTTPException(
@@ -559,10 +547,7 @@ async def delete_activity(
             text("DELETE FROM crm_activities WHERE id = CAST(:id AS uuid)"),
             {"id": activity_id},
         )
-        await db.commit()
         return {"deleted": activity_id}
-    finally:
-        await db.close()
 
 
 __all__ = [

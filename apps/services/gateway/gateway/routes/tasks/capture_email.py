@@ -33,9 +33,9 @@ from fastapi import Depends, HTTPException
 from gateway.routes.tasks.core import (
     ITEM_SELECT,
     GtdItemModel,
-    _get_db,
     _parse_jsonb,
     _row_to_item,
+    _tenant_session,
     _uid,
     router,
 )
@@ -636,8 +636,7 @@ async def capture_from_email(
     user: UserContext = Depends(get_current_user),
 ):
     uid = _uid(user)
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         # Owner check THROUGH the email account: the email must belong to one of
         # the user's mailboxes. Pull to/cc/thread + the account's own address.
         email = (await db.execute(text(
@@ -797,7 +796,6 @@ async def capture_from_email(
                 {"iid": item_id, "who": json.dumps(waiting_on),
                  "now": datetime.now(tz=UTC)},
             )
-        await db.commit()
         row = (await db.execute(
             text(ITEM_SELECT + " WHERE i.id = :id"), {"id": item_id},
         )).fetchone()
@@ -807,8 +805,6 @@ async def capture_from_email(
             disposition=item.disposition,
             assignee_name=item.assignee.name if item.assignee else None,
             due_at=item.due_at)
-    finally:
-        await db.close()
 
 
 # ── Popup flow: preview → enhance → create ───────────────────────────────────
@@ -829,8 +825,7 @@ async def preview_capture_from_email(
     fuzzy title). If this exact email was already captured, surface the existing
     item so the popup can offer to open it instead of duplicating."""
     uid = _uid(user)
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         email = await _load_email(db, uid, req.account_id, req.email_id)
         from_addr = _parse_addr(email.from_address)
         from_name = str(from_addr.get("name") or from_addr.get("email") or "")
@@ -853,8 +848,6 @@ async def preview_capture_from_email(
         return CapturePreviewResponse(
             already_captured=already, draft=draft, similar=similar,
             from_name=from_name, subject=email.subject or "")
-    finally:
-        await db.close()
 
 
 @router.post("/capture/from-email/enhance",
@@ -867,8 +860,7 @@ async def enhance_capture_from_email(
     returns a routed draft (title/notes/disposition/due/delegate/context). No
     write — the user still reviews and confirms in the popup."""
     uid = _uid(user)
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         email = await _load_email(db, uid, req.account_id, req.email_id)
         from_addr = _parse_addr(email.from_address)
         from_name = str(from_addr.get("name") or from_addr.get("email") or "")
@@ -919,8 +911,6 @@ async def enhance_capture_from_email(
         return CaptureEnhanceResponse(
             draft=draft, used_llm=used_llm,
             assignee_resolved=resolved["name"] if resolved else None)
-    finally:
-        await db.close()
 
 
 @router.post("/capture/from-email/create",
@@ -933,8 +923,7 @@ async def create_capture_from_email(
     if the user left the popup open and the email was captured meanwhile, the
     existing item wins rather than creating a duplicate."""
     uid = _uid(user)
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         email = await _load_email(db, uid, req.account_id, req.email_id)
 
         existing = await _find_existing_capture(db, uid, str(email.id))
@@ -950,7 +939,6 @@ async def create_capture_from_email(
 
         item_id, _disp, _assignee = await _route_and_persist(
             db, uid, email, req.draft.model_dump(), people)
-        await db.commit()
         row = (await db.execute(
             text(ITEM_SELECT + " WHERE i.id = :id"), {"id": item_id},
         )).fetchone()
@@ -960,8 +948,6 @@ async def create_capture_from_email(
             disposition=item.disposition,
             assignee_name=item.assignee.name if item.assignee else None,
             due_at=item.due_at)
-    finally:
-        await db.close()
 
 
 # ── Commitment capture: a reply I SENT that promises a future action ──────────
@@ -1271,8 +1257,7 @@ async def detect_commitment_from_reply(
     commitment — or if this thread already has an open commitment task — returns
     is_commitment=false so no popup opens. No write happens here."""
     uid = _uid(user)
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         owner_name, owner_email = await _account_owner(db, uid, req.account_id)
 
         # Already have a commitment task on this thread → don't re-prompt.
@@ -1323,8 +1308,6 @@ async def detect_commitment_from_reply(
             db, uid, req.thread_id, "", draft.title)
         return DetectCommitmentResponse(
             is_commitment=True, draft=draft, similar=similar, used_llm=True)
-    finally:
-        await db.close()
 
 
 @router.post("/capture/from-reply/create",
@@ -1338,8 +1321,7 @@ async def create_commitment_from_reply(
     thread with the "Task" category so the mailbox surfaces it. Idempotent per
     thread — a second confirm on the same thread returns the existing task."""
     uid = _uid(user)
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         owner_name, owner_email = await _account_owner(db, uid, req.account_id)
 
         existing = await _find_existing_commitment(db, uid, req.thread_id)
@@ -1371,7 +1353,6 @@ async def create_commitment_from_reply(
         ), {"id": item_id})
         await _tag_thread_task_category(
             db, req.account_id, req.thread_id, uid)
-        await db.commit()
 
         row = (await db.execute(
             text(ITEM_SELECT + " WHERE i.id = :id"), {"id": item_id},
@@ -1381,5 +1362,3 @@ async def create_commitment_from_reply(
             item=item, created=True, disposition=item.disposition,
             assignee_name=item.assignee.name if item.assignee else None,
             due_at=item.due_at)
-    finally:
-        await db.close()

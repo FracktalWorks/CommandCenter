@@ -45,10 +45,10 @@ from acb_auth import UserContext, get_current_user
 from fastapi import Depends, HTTPException
 from gateway.routes.tasks.core import (
     _assert_account_owner,
-    _get_db,
     _key_store,
     _log,
     _parse_jsonb,
+    _tenant_session,
     _uid,
     router,
 )
@@ -176,7 +176,13 @@ _UPSERT_SQL = text("""
 
 
 async def _sync_account(db: Any, account: Any, *, full: bool) -> AccountSyncResult:
-    """Pull one account's tasks and upsert the mirror. Commits on success."""
+    """Pull one account's tasks and upsert the mirror. Commits on success.
+
+    H2 note: the trailing commit is this helper's LAST database action, so a
+    request handler may run it as the sole occupant of a `_tenant_session`
+    block — every statement above the commit runs under the tenant GUC, and
+    the wrapper's own commit on clean exit is then an empty no-op. Do not add
+    statements after the commit, and do not call this mid-block."""
     result = AccountSyncResult(account_id=str(account.id),
                                label=account.label or "")
     creds = json.loads(_key_store().decrypt(account.credentials_encrypted))
@@ -394,8 +400,7 @@ async def sync_status(user: UserContext = Depends(get_current_user)):
     background loop hasn't refreshed it in time, e.g. loop not yet running).
     Plus the live scheduler state (which account loops are running)."""
     uid = _uid(user)
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         rows = (await db.execute(
             text("""SELECT id, label, provider, sync_enabled, sync_interval_secs,
                            sync_status, sync_error, last_synced_at,
@@ -404,8 +409,6 @@ async def sync_status(user: UserContext = Depends(get_current_user)):
                     ORDER BY created_at"""),
             {"uid": uid},
         )).fetchall()
-    finally:
-        await db.close()
 
     try:
         from gateway.routes.tasks.scheduler import get_scheduler_status
@@ -453,8 +456,7 @@ async def sync_tasks(
     other accounts' syncs.
     """
     uid = _uid(user)
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         if req.account_id:
             rows = [await _assert_account_owner(db, req.account_id, uid)]
         else:
@@ -468,32 +470,34 @@ async def sync_tasks(
             raise HTTPException(status_code=400,
                                 detail="No sync-enabled accounts to sync")
 
-        results: list[AccountSyncResult] = []
-        for account in rows:
+    # One transaction per step, per account (H2 restructure of the old
+    # commit-as-you-go shape): the 'syncing' marker must be visible before the
+    # potentially slow provider pull, and an account's failure must roll back
+    # only its own pull while still recording the error.
+    results: list[AccountSyncResult] = []
+    for account in rows:
+        async with _tenant_session() as db:
             await db.execute(
                 text("""UPDATE task_accounts SET sync_status = 'syncing',
                         updated_at = now() WHERE id = :id"""),
                 {"id": str(account.id)},
             )
-            await db.commit()
-            try:
+        try:
+            async with _tenant_session() as db:
                 results.append(await _sync_account(db, account, full=req.full))
-            except Exception as exc:
-                await db.rollback()
-                msg = str(getattr(exc, "detail", None) or exc)[:500]
-                _log.warning("tasks.sync.account_failed",
-                             account_id=str(account.id)[:12], error=msg)
+        except Exception as exc:
+            msg = str(getattr(exc, "detail", None) or exc)[:500]
+            _log.warning("tasks.sync.account_failed",
+                         account_id=str(account.id)[:12], error=msg)
+            async with _tenant_session() as db:
                 await db.execute(
                     text("""UPDATE task_accounts SET sync_status = 'error',
                             sync_error = :e, updated_at = now()
                             WHERE id = :id"""),
                     {"id": str(account.id), "e": msg},
                 )
-                await db.commit()
-                results.append(AccountSyncResult(
-                    account_id=str(account.id),
-                    label=account.label or "", error=msg,
-                ))
-        return results
-    finally:
-        await db.close()
+            results.append(AccountSyncResult(
+                account_id=str(account.id),
+                label=account.label or "", error=msg,
+            ))
+    return results

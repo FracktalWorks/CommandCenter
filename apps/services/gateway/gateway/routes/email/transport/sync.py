@@ -15,6 +15,7 @@ from fastapi import BackgroundTasks, Depends, HTTPException, Query, Request
 from fastapi.responses import PlainTextResponse
 from gateway.routes.email.core import (
     _get_db,
+    _tenant_session,
     _instantiate_provider,
     _log,
     _persist_rotated_creds,
@@ -205,15 +206,12 @@ async def trigger_sync(
     the deep-vs-incremental heuristic and label-change capture (the
     ``learn_label_changes`` hook) all live in the core.
     """
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         own = (await db.execute(text(
             "SELECT id FROM email_accounts WHERE id = :id AND user_id = :uid"
         ), {"id": req.account_id, "uid": user.email or "anonymous"})).fetchone()
         if not own:
             raise HTTPException(status_code=404, detail="Account not found")
-    finally:
-        await db.close()
     return await _run_manual_sync(req.account_id, background, full=req.full)
 
 
@@ -262,8 +260,7 @@ async def resync_account(
     pulls its full history. With ``purge=true`` it first DELETES the account's
     local messages (cascades attachments) before re-fetching — use this when
     local data is corrupt or badly out of sync. Returns the sync result."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         own = (await db.execute(text(
             "SELECT id FROM email_accounts WHERE id = :id AND user_id = :uid"
         ), {"id": account_id, "uid": user.email or "anonymous"})).fetchone()
@@ -279,9 +276,6 @@ async def resync_account(
             "UPDATE email_accounts SET last_history_id = NULL, updated_at = now() "
             "WHERE id = :id"
         ), {"id": account_id})
-        await db.commit()
-    finally:
-        await db.close()
     # Re-fetch through the shared core, forcing the DEEP (≈1-year, all-folder)
     # backfill — ``full=True`` overrides the ``initial_sync_done`` gate so an
     # already-initialised account actually pulls its older mail instead of just
@@ -333,6 +327,10 @@ async def microsoft_webhook(request: Request, background: BackgroundTasks):
         client_state = n.get("clientState")
         if not sub_id:
             continue
+        # H4/H6: service-identity route — Graph change notification carries no
+        # member session, so no ambient tenant is bound; needs an explicit
+        # tenant derived from the email_accounts row matched by the
+        # subscription's clientState/account before conversion.
         db = await _get_db()
         try:
             row = (await db.execute(text(
@@ -360,6 +358,8 @@ async def _ensure_subscription(account_id: str) -> None:
     ).rstrip("/")
     if not public:
         return
+    # H4: scheduler post-sync hook (_ensure_subscription); no ambient
+    # tenant to inherit.
     db = await _get_db()
     try:
         row = (await db.execute(text(

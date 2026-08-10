@@ -16,6 +16,7 @@ from gateway.routes.email.automation.senders import canonical_cleanup_category
 from gateway.routes.email.core import (
     _assert_account_owner,
     _get_db,
+    _tenant_session,
     _llm_json,
     _log,
     provider_session,
@@ -600,16 +601,13 @@ async def get_digest(
     user: UserContext = Depends(get_current_user),
 ):
     """Generate an inbox digest for the account (day or week window)."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         await _assert_account_owner(db, account_id, user.email or "anonymous")
         days = 7 if period == "week" else 1
         cats = await _configured_categories(db, account_id)
         # The in-app view is the DASHBOARD projection: full lists + ids so
         # every row can open its thread. The scheduled email keeps small caps.
         return await _generate_digest(db, account_id, days, cats, full=True)
-    finally:
-        await db.close()
 
 
 class DigestSendRequest(BaseModel):
@@ -623,8 +621,7 @@ async def send_digest(
     user: UserContext = Depends(get_current_user),
 ):
     """Generate the digest and email it to the account's own address."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         await _assert_account_owner(db, req.account_id, user.email or "anonymous")
         days = 7 if req.period == "week" else 1
         cats = await _configured_categories(db, req.account_id)
@@ -645,10 +642,7 @@ async def send_digest(
                 "UPDATE email_assistant_settings SET last_digest_at = now() "
                 "WHERE account_id = :aid"
             ), {"aid": req.account_id})
-        await db.commit()
         return {"sent": True, "to": sess.owner_email}
-    finally:
-        await db.close()
 
 
 async def _maybe_send_digest(account_id: str) -> None:
@@ -658,6 +652,8 @@ async def _maybe_send_digest(account_id: str) -> None:
     before that UTC time), digest_day_of_week (WEEKLY only; 0=Sun…6=Sat),
     digest_categories (which categories to include) and digest_send_to_email.
     """
+    # H4: scheduler-run digest tick — no ambient tenant; needs an explicit
+    # tenant derived from the email_accounts row before conversion.
     db = await _get_db()
     try:
         row = (await db.execute(text(

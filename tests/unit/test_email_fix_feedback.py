@@ -12,6 +12,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from gateway.routes import email as m
+from tests.unit._email_fakes import bind_db
 
 _rules = m.automation.rules
 _rz = m.automation.replyzero
@@ -48,7 +49,7 @@ async def _run_feedback(req, *, rules, status_result=None):
                                  "label": "Reply"}
 
     user = SimpleNamespace(email="u@example.com")
-    with patch.object(_rules, "_get_db", AsyncMock(return_value=db)), \
+    with patch.object(_rules, "_tenant_session", bind_db(db)), \
             patch.object(_rules, "_assert_account_owner", AsyncMock()), \
             patch.object(_rules, "_load_rules", AsyncMock(return_value=rules)), \
             patch.object(_rules, "_upsert_rule_pattern",
@@ -148,7 +149,7 @@ async def test_refused_pattern_is_not_reported_as_learned() -> None:
         return False           # every write refused by a guard
 
     user = SimpleNamespace(email="u@example.com")
-    with patch.object(_rules, "_get_db", AsyncMock(return_value=db)), \
+    with patch.object(_rules, "_tenant_session", bind_db(db)), \
             patch.object(_rules, "_assert_account_owner", AsyncMock()), \
             patch.object(_rules, "_load_rules", AsyncMock(return_value=rules)), \
             patch.object(_rules, "_upsert_rule_pattern",

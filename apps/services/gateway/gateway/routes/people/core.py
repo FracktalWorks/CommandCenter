@@ -18,6 +18,15 @@ from typing import Any
 from acb_auth import require_feature_router
 from acb_common import get_logger
 from fastapi import APIRouter
+
+# The shared seam (BO-10 → MT-1c/H2). `_tenant_session` IS
+# `acb_common.db.tenant_session`, aliased here for the same reason every
+# converted package aliases it: submodules import it from this module BY NAME,
+# which is the seam the hermetic tests patch per module. The tenant comes from
+# the request context — bound centrally in `_with_resolved_access` — so no
+# call site passes one (H2). A call outside a bound request raises
+# `TenantUnbound` rather than defaulting: fail closed, never "the usual org".
+from gateway.db import tenant_session as _tenant_session  # noqa: F401
 from gateway.routes.tasks.core import (  # noqa: F401 — re-exports
     PEOPLE_STATUSES,
     can_manage_people,
@@ -31,13 +40,6 @@ router = APIRouter(
     prefix="/people", tags=["people"],
     dependencies=[require_feature_router("people")],
 )
-
-
-async def _get_db() -> Any:
-    """The shared engine seam (BO-10) — never ``create_async_engine`` here."""
-    from gateway.db import get_session
-
-    return await get_session()
 
 
 #: Statuses the directory understands — the SAME tuple the write routes

@@ -17,7 +17,7 @@ from acb_auth import UserContext, get_current_user
 from fastapi import Depends, HTTPException
 from gateway.routes.whatsapp.core import (
     WhatsAppAccountModel,
-    _get_db,
+    _tenant_session,
     router,
 )
 from pydantic import BaseModel
@@ -55,8 +55,7 @@ def _account_model(row: Any) -> WhatsAppAccountModel:
 @router.get("/accounts", response_model=list[WhatsAppAccountModel])
 async def list_accounts(user: UserContext = Depends(get_current_user)):
     """List the WhatsApp Business numbers connected by the current user."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         rows = (await db.execute(
             text("""SELECT id, phone_number, phone_number_id, waba_id,
                            display_name, avatar_color, sync_status, sync_error,
@@ -67,8 +66,6 @@ async def list_accounts(user: UserContext = Depends(get_current_user)):
             {"uid": user.email or "anonymous"},
         )).fetchall()
         return [_account_model(r) for r in rows]
-    finally:
-        await db.close()
 
 
 async def persist_account(
@@ -137,8 +134,7 @@ async def create_account(
     req: CreateAccountRequest, user: UserContext = Depends(get_current_user),
 ):
     """Register a WhatsApp Business number (the manual / guided-wizard path)."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         row = await persist_account(
             db, user_id=user.email or "anonymous",
             phone_number=req.phone_number, phone_number_id=req.phone_number_id,
@@ -146,10 +142,7 @@ async def create_account(
             credentials=req.credentials,
             webhook_verify_token=req.webhook_verify_token,
         )
-        await db.commit()
         return _account_model(row)
-    finally:
-        await db.close()
 
 
 @router.delete("/accounts/{account_id}", status_code=204)
@@ -159,14 +152,12 @@ async def delete_account(
     """Disconnect a number. The message archive is kept (rows cascade only if the
     account row is removed) — we remove the account, which cascades its data; the
     UI copy makes that explicit."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         result = await db.execute(
             text("DELETE FROM wa_accounts WHERE id = :id AND user_id = :uid"),
             {"id": account_id, "uid": user.email or "anonymous"},
         )
-        await db.commit()
+        # A miss deleted nothing, so the 404's rollback discards an empty
+        # transaction — same outcome as the old commit-then-404 ordering.
         if result.rowcount == 0:
             raise HTTPException(status_code=404, detail="Account not found")
-    finally:
-        await db.close()

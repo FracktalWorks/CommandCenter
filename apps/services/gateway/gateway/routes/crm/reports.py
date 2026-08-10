@@ -73,7 +73,7 @@ from gateway.routes.crm.core import (
     WEIGHTED_SQL,
     WEIGHTED_TYPES,
     StatusModel,
-    _get_db,
+    _tenant_session,
     now,
     router,
     status_wire,
@@ -303,8 +303,7 @@ async def pipeline_report(
     stage's prior is how a pipeline number stays high while the quarter empties
     (``core.WEIGHTED_TYPES``).
     """
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         stages: list[StageTotals] = []
         for lane in await _deal_stages(db):
             if getattr(lane, "type", "open") not in WEIGHTED_TYPES:
@@ -322,8 +321,6 @@ async def pipeline_report(
             amount=sum(s.amount for s in stages),
             weighted=sum(s.weighted for s in stages),
         )
-    finally:
-        await db.close()
 
 
 # ── 2 · Funnel ──────────────────────────────────────────────────────────────
@@ -338,8 +335,7 @@ async def funnel_report(
     three numbers are each defined against what the log ACTUALLY records, and
     the naive reading of each one is wrong in a way that looks right.
     """
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         lanes = await _deal_stages(db)
         names = {str(lane.id): lane.name for lane in lanes}
         # `position` per stage NAME — the log's join key. A duplicate name
@@ -377,8 +373,6 @@ async def funnel_report(
             transitions=len(owned),
             unmatched=_unmatched(owned, set(positions)),
         )
-    finally:
-        await db.close()
 
 
 def _visited_sets(deals: list[Any], names: dict[str, str]) -> dict[str, set[str]]:
@@ -525,8 +519,7 @@ async def win_loss_report(
     INCLUSIVE: ``closed_at`` is an instant, so the endpoints are a measure-zero
     set, and stating the rule beats leaving it to be inferred from an operator.
     """
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         lanes = await _deal_stages(db)
         types = {str(lane.id): getattr(lane, "type", "open") for lane in lanes}
         until = now()
@@ -558,8 +551,6 @@ async def win_loss_report(
             closed_without_date=await _undated_closed(db, lanes),
             lost_reasons=await _lost_breakdown(db, lost),
         )
-    finally:
-        await db.close()
 
 
 def _amount(deals: list[Any]) -> float:
@@ -657,8 +648,7 @@ async def owner_leaderboard(
     leaderboard over who is carrying what, not a permission surface, and every
     ``feature:crm`` holder sees all of it.
     """
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         lanes = await _deal_stages(db)
         ranked, omitted = await _owners(db)
         until = now()
@@ -671,8 +661,6 @@ async def owner_leaderboard(
         return OwnerLeaderboard(
             owners=rows, window_days=WINDOW_DAYS, omitted=omitted,
         )
-    finally:
-        await db.close()
 
 
 async def _owners(db: Any) -> tuple[list[str | None], int]:

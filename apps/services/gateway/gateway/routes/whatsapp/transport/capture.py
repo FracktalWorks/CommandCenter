@@ -16,7 +16,7 @@ from uuid import uuid4
 
 from acb_auth import UserContext, get_current_user
 from fastapi import Depends, HTTPException
-from gateway.routes.whatsapp.core import _get_db, router
+from gateway.routes.whatsapp.core import _tenant_session, router
 from pydantic import BaseModel
 from sqlalchemy import text
 
@@ -50,8 +50,7 @@ async def capture_task(
 ):
     """Capture a WhatsApp message as a GTD inbox item (idempotent per message)."""
     uid = user.email or "anonymous"
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         # Owner check THROUGH the account, and pull the fields we tag the origin
         # with in one query.
         msg = (await db.execute(
@@ -108,7 +107,4 @@ async def capture_task(
              "notes": (msg.body_text or "")[:500] or None,
              "origin": json.dumps(origin)},
         )
-        await db.commit()
         return CaptureTaskResponse(item_id=item_id, title=title, created=True)
-    finally:
-        await db.close()

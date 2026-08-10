@@ -7,7 +7,7 @@ import json
 from acb_auth import UserContext, get_current_user
 from fastapi import Depends, HTTPException
 from gateway.routes.email.core import (
-    _get_db,
+    _tenant_session,
     _instantiate_provider,
     _log,
     _persist_rotated_creds,
@@ -58,74 +58,71 @@ async def list_folders(
     Fetches live from the provider (Gmail labels, Outlook folders, IMAP mailboxes)
     so the UI always shows the current folder structure.
     """
-    db = await _get_db()
-    try:
-        result = await db.execute(
-            text(
-                """SELECT provider, credentials_encrypted
-                   FROM email_accounts
-                   WHERE id = :id AND user_id = :user_id"""
-            ),
-            {"id": account_id, "user_id": user.email or "anonymous"},
-        )
-        row = result.fetchone()
-        if not row:
-            raise HTTPException(status_code=404, detail="Account not found")
-
-        # Decrypt credentials
-        from acb_llm.key_store import get_key_store
-        store = get_key_store()
-        creds = json.loads(store.decrypt(row.credentials_encrypted))
-
-        # Instantiate provider
-        provider = _instantiate_provider(row.provider, creds)
-
-        # Authenticate and fetch folders
-        if not await provider.authenticate():
-            raise HTTPException(
-                status_code=401,
-                detail="Email account authentication failed — token may have expired",
-            )
-
-        folders = await provider.list_folders()
-
-        # Persist rotated OAuth tokens so a later sync doesn't reuse a stale one.
-        if provider.credentials_dirty():
-            await db.execute(
+    async with _tenant_session() as db:
+        try:
+            result = await db.execute(
                 text(
-                    """UPDATE email_accounts
-                       SET credentials_encrypted = :creds, updated_at = now()
-                       WHERE id = :id"""
+                    """SELECT provider, credentials_encrypted
+                       FROM email_accounts
+                       WHERE id = :id AND user_id = :user_id"""
                 ),
-                {
-                    "id": account_id,
-                    "creds": store.encrypt(
-                        json.dumps(provider.export_credentials())
-                    ),
-                },
+                {"id": account_id, "user_id": user.email or "anonymous"},
             )
-            await db.commit()
+            row = result.fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="Account not found")
 
-        return [
-            EmailFolderModel(
-                provider_folder_id=f.provider_folder_id,
-                name=f.name,
-                type=f.type,
-                message_count=f.message_count,
-                unread_count=f.unread_count,
+            # Decrypt credentials
+            from acb_llm.key_store import get_key_store
+            store = get_key_store()
+            creds = json.loads(store.decrypt(row.credentials_encrypted))
+
+            # Instantiate provider
+            provider = _instantiate_provider(row.provider, creds)
+
+            # Authenticate and fetch folders
+            if not await provider.authenticate():
+                raise HTTPException(
+                    status_code=401,
+                    detail="Email account authentication failed — token may have expired",
+                )
+
+            folders = await provider.list_folders()
+
+            # Persist rotated OAuth tokens so a later sync doesn't reuse a stale one.
+            if provider.credentials_dirty():
+                await db.execute(
+                    text(
+                        """UPDATE email_accounts
+                           SET credentials_encrypted = :creds, updated_at = now()
+                           WHERE id = :id"""
+                    ),
+                    {
+                        "id": account_id,
+                        "creds": store.encrypt(
+                            json.dumps(provider.export_credentials())
+                        ),
+                    },
+                )
+
+            return [
+                EmailFolderModel(
+                    provider_folder_id=f.provider_folder_id,
+                    name=f.name,
+                    type=f.type,
+                    message_count=f.message_count,
+                    unread_count=f.unread_count,
+                )
+                for f in folders
+            ]
+        except HTTPException:
+            raise
+        except Exception as exc:
+            _log.error("list_folders.failed", account_id=account_id, error=str(exc)[:200])
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to list folders: {str(exc)}",
             )
-            for f in folders
-        ]
-    except HTTPException:
-        raise
-    except Exception as exc:
-        _log.error("list_folders.failed", account_id=account_id, error=str(exc)[:200])
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to list folders: {str(exc)}",
-        )
-    finally:
-        await db.close()
 
 
 @router.post(
@@ -142,70 +139,67 @@ async def create_folder(
     provider returns the existing folder if one with the same name already
     exists (Outlook get-or-create, Gmail label create).
     """
-    db = await _get_db()
-    try:
-        row = (await db.execute(
-            text(
-                """SELECT provider, credentials_encrypted
-                   FROM email_accounts
-                   WHERE id = :id AND user_id = :user_id"""
-            ),
-            {"id": account_id, "user_id": user.email or "anonymous"},
-        )).fetchone()
-        if not row:
-            raise HTTPException(status_code=404, detail="Account not found")
-
-        from acb_llm.key_store import get_key_store
-        store = get_key_store()
-        creds = json.loads(store.decrypt(row.credentials_encrypted))
-        provider = _instantiate_provider(row.provider, creds)
-        if not await provider.authenticate():
-            raise HTTPException(
-                status_code=401,
-                detail="Email account authentication failed — reconnect.",
-            )
-
+    async with _tenant_session() as db:
         try:
-            folder = await provider.create_folder(req.name)
-        except NotImplementedError:
-            raise HTTPException(
-                status_code=400,
-                detail="This account type doesn't support creating folders.",
+            row = (await db.execute(
+                text(
+                    """SELECT provider, credentials_encrypted
+                       FROM email_accounts
+                       WHERE id = :id AND user_id = :user_id"""
+                ),
+                {"id": account_id, "user_id": user.email or "anonymous"},
+            )).fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="Account not found")
+
+            from acb_llm.key_store import get_key_store
+            store = get_key_store()
+            creds = json.loads(store.decrypt(row.credentials_encrypted))
+            provider = _instantiate_provider(row.provider, creds)
+            if not await provider.authenticate():
+                raise HTTPException(
+                    status_code=401,
+                    detail="Email account authentication failed — reconnect.",
+                )
+
+            try:
+                folder = await provider.create_folder(req.name)
+            except NotImplementedError:
+                raise HTTPException(
+                    status_code=400,
+                    detail="This account type doesn't support creating folders.",
+                )
+
+            # Mirror into email_folders so the folder is queryable immediately.
+            await db.execute(
+                text(
+                    """INSERT INTO email_folders
+                         (account_id, provider_folder_id, name, type)
+                       VALUES (:aid, :pid, :name, :type)
+                       ON CONFLICT (account_id, provider_folder_id)
+                       DO UPDATE SET name = EXCLUDED.name"""
+                ),
+                {"aid": account_id, "pid": folder.provider_folder_id,
+                 "name": folder.name, "type": folder.type},
             )
+            await _persist_rotated_creds(db, store, account_id, provider)
 
-        # Mirror into email_folders so the folder is queryable immediately.
-        await db.execute(
-            text(
-                """INSERT INTO email_folders
-                     (account_id, provider_folder_id, name, type)
-                   VALUES (:aid, :pid, :name, :type)
-                   ON CONFLICT (account_id, provider_folder_id)
-                   DO UPDATE SET name = EXCLUDED.name"""
-            ),
-            {"aid": account_id, "pid": folder.provider_folder_id,
-             "name": folder.name, "type": folder.type},
-        )
-        await _persist_rotated_creds(db, store, account_id, provider)
-        await db.commit()
-
-        return EmailFolderModel(
-            provider_folder_id=folder.provider_folder_id,
-            name=folder.name,
-            type=folder.type,
-            message_count=folder.message_count,
-            unread_count=folder.unread_count,
-        )
-    except HTTPException:
-        raise
-    except Exception as exc:
-        _log.error(
-            "create_folder.failed", account_id=account_id, error=str(exc)[:200]
-        )
-        raise HTTPException(
-            status_code=500, detail=f"Failed to create folder: {str(exc)}"
-        )
-    finally:
-        await db.close()
+            return EmailFolderModel(
+                provider_folder_id=folder.provider_folder_id,
+                name=folder.name,
+                type=folder.type,
+                message_count=folder.message_count,
+                unread_count=folder.unread_count,
+            )
+        except HTTPException:
+            raise
+        except Exception as exc:
+            _log.error(
+                "create_folder.failed", account_id=account_id, error=str(exc)[:200]
+            )
+            raise HTTPException(
+                status_code=500, detail=f"Failed to create folder: {str(exc)}"
+            )
 
 
 @router.get("/accounts/{account_id}/labels", response_model=list[LabelInfo])
@@ -219,60 +213,57 @@ async def list_labels(
     ('preset0'..'preset24') or null. Gmail = user labels, Outlook = master
     categories, IMAP = none.
     """
-    db = await _get_db()
-    try:
-        result = await db.execute(
-            text(
-                """SELECT provider, credentials_encrypted
-                   FROM email_accounts
-                   WHERE id = :id AND user_id = :user_id"""
-            ),
-            {"id": account_id, "user_id": user.email or "anonymous"},
-        )
-        row = result.fetchone()
-        if not row:
-            raise HTTPException(status_code=404, detail="Account not found")
-
-        from acb_llm.key_store import get_key_store
-        store = get_key_store()
-        creds = json.loads(store.decrypt(row.credentials_encrypted))
-
+    async with _tenant_session() as db:
         try:
-            provider = _instantiate_provider(row.provider, creds)
-        except HTTPException:
-            # list_labels degrades gracefully for an unknown provider.
-            return []
-
-        if not await provider.authenticate():
-            raise HTTPException(
-                status_code=401,
-                detail="Email account authentication failed — reconnect.",
-            )
-        labels = await provider.list_labels()
-
-        if provider.credentials_dirty():
-            await db.execute(
+            result = await db.execute(
                 text(
-                    """UPDATE email_accounts
-                       SET credentials_encrypted = :creds, updated_at = now()
-                       WHERE id = :id"""
+                    """SELECT provider, credentials_encrypted
+                       FROM email_accounts
+                       WHERE id = :id AND user_id = :user_id"""
                 ),
-                {
-                    "id": account_id,
-                    "creds": store.encrypt(
-                        json.dumps(provider.export_credentials())
-                    ),
-                },
+                {"id": account_id, "user_id": user.email or "anonymous"},
             )
-            await db.commit()
-        return labels
-    except HTTPException:
-        raise
-    except Exception as exc:
-        _log.error("list_labels.failed", account_id=account_id, error=str(exc)[:200])
-        raise HTTPException(status_code=500, detail=f"Failed to list labels: {exc}")
-    finally:
-        await db.close()
+            row = result.fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="Account not found")
+
+            from acb_llm.key_store import get_key_store
+            store = get_key_store()
+            creds = json.loads(store.decrypt(row.credentials_encrypted))
+
+            try:
+                provider = _instantiate_provider(row.provider, creds)
+            except HTTPException:
+                # list_labels degrades gracefully for an unknown provider.
+                return []
+
+            if not await provider.authenticate():
+                raise HTTPException(
+                    status_code=401,
+                    detail="Email account authentication failed — reconnect.",
+                )
+            labels = await provider.list_labels()
+
+            if provider.credentials_dirty():
+                await db.execute(
+                    text(
+                        """UPDATE email_accounts
+                           SET credentials_encrypted = :creds, updated_at = now()
+                           WHERE id = :id"""
+                    ),
+                    {
+                        "id": account_id,
+                        "creds": store.encrypt(
+                            json.dumps(provider.export_credentials())
+                        ),
+                    },
+                )
+            return labels
+        except HTTPException:
+            raise
+        except Exception as exc:
+            _log.error("list_labels.failed", account_id=account_id, error=str(exc)[:200])
+            raise HTTPException(status_code=500, detail=f"Failed to list labels: {exc}")
 
 
 @router.patch("/accounts/{account_id}/labels", response_model=LabelInfo)
@@ -284,45 +275,42 @@ async def set_label_color(
     """Set a label/category's colour on the provider (Gmail label / Outlook
     master category). The colour is a canonical preset token; it round-trips to
     the real mailbox. No-op for providers without label colours (IMAP)."""
-    db = await _get_db()
-    try:
-        result = await db.execute(
-            text(
-                """SELECT provider, credentials_encrypted
-                   FROM email_accounts
-                   WHERE id = :id AND user_id = :user_id"""
-            ),
-            {"id": account_id, "user_id": user.email or "anonymous"},
-        )
-        row = result.fetchone()
-        if not row:
-            raise HTTPException(status_code=404, detail="Account not found")
-
-        from acb_llm.key_store import get_key_store
-        store = get_key_store()
-        creds = json.loads(store.decrypt(row.credentials_encrypted))
-        provider = _instantiate_provider(row.provider, creds)
-
-        if not await provider.authenticate():
-            raise HTTPException(
-                status_code=401,
-                detail="Email account authentication failed — reconnect.",
+    async with _tenant_session() as db:
+        try:
+            result = await db.execute(
+                text(
+                    """SELECT provider, credentials_encrypted
+                       FROM email_accounts
+                       WHERE id = :id AND user_id = :user_id"""
+                ),
+                {"id": account_id, "user_id": user.email or "anonymous"},
             )
-        await provider.set_label_color(req.name, req.color)
-        await _persist_rotated_creds(db, store, account_id, provider)
-        await db.commit()
-        return LabelInfo(name=req.name, color=req.color)
-    except HTTPException:
-        raise
-    except Exception as exc:
-        _log.error(
-            "set_label_color.failed", account_id=account_id, error=str(exc)[:200]
-        )
-        raise HTTPException(
-            status_code=500, detail=f"Failed to set label colour: {exc}"
-        )
-    finally:
-        await db.close()
+            row = result.fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="Account not found")
+
+            from acb_llm.key_store import get_key_store
+            store = get_key_store()
+            creds = json.loads(store.decrypt(row.credentials_encrypted))
+            provider = _instantiate_provider(row.provider, creds)
+
+            if not await provider.authenticate():
+                raise HTTPException(
+                    status_code=401,
+                    detail="Email account authentication failed — reconnect.",
+                )
+            await provider.set_label_color(req.name, req.color)
+            await _persist_rotated_creds(db, store, account_id, provider)
+            return LabelInfo(name=req.name, color=req.color)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            _log.error(
+                "set_label_color.failed", account_id=account_id, error=str(exc)[:200]
+            )
+            raise HTTPException(
+                status_code=500, detail=f"Failed to set label colour: {exc}"
+            )
 
 
 @router.post("/accounts/{account_id}/backfill")
@@ -340,87 +328,83 @@ async def backfill_folder(
     """
     from email_ingestion.providers.base import canonical_folder
 
-    db = await _get_db()
-    try:
-        result = await db.execute(
-            text(
-                """SELECT provider, credentials_encrypted
-                   FROM email_accounts
-                   WHERE id = :id AND user_id = :user_id"""
-            ),
-            {"id": account_id, "user_id": user.email or "anonymous"},
-        )
-        row = result.fetchone()
-        if not row:
-            raise HTTPException(status_code=404, detail="Account not found")
-
-        from acb_llm.key_store import get_key_store
-        store = get_key_store()
-        creds = json.loads(store.decrypt(row.credentials_encrypted))
-
-        provider = _instantiate_provider(row.provider, creds)
-
-        if not await provider.authenticate():
-            raise HTTPException(
-                status_code=401,
-                detail="Email account authentication failed — reconnect.",
-            )
-
-        canon_req = canonical_folder(req.folder)
-
-        # Resolve the provider-native folder id/label for the canonical key so
-        # both system and user folders page correctly (Gmail label id, Graph
-        # folder id, IMAP mailbox name).
-        provider_folder = req.folder
+    async with _tenant_session() as db:
         try:
-            for f in await provider.list_folders():
-                if canonical_folder(f.name) == canon_req:
-                    provider_folder = f.provider_folder_id
-                    break
-        except Exception:
-            pass
-
-        token = req.page_token
-        synced = 0
-        for _ in range(req.max_pages):
-            msgs, token = await provider.list_messages(
-                folder=provider_folder,
-                max_results=100,
-                page_token=token,
-                canonical_override=canon_req,
-            )
-            for msg in msgs:
-                await _upsert_message(db, account_id, msg)
-                synced += 1
-            if not token:
-                break
-        await db.commit()
-
-        if provider.credentials_dirty():
-            await db.execute(
+            result = await db.execute(
                 text(
-                    """UPDATE email_accounts
-                       SET credentials_encrypted = :creds, updated_at = now()
-                       WHERE id = :id"""
+                    """SELECT provider, credentials_encrypted
+                       FROM email_accounts
+                       WHERE id = :id AND user_id = :user_id"""
                 ),
-                {
-                    "id": account_id,
-                    "creds": store.encrypt(
-                        json.dumps(provider.export_credentials())
-                    ),
-                },
+                {"id": account_id, "user_id": user.email or "anonymous"},
             )
-            await db.commit()
+            row = result.fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="Account not found")
 
-        return {
-            "synced": synced,
-            "next_page_token": token,
-            "exhausted": token is None,
-        }
-    except HTTPException:
-        raise
-    except Exception as exc:
-        _log.error("backfill.failed", account_id=account_id, error=str(exc)[:200])
-        raise HTTPException(status_code=500, detail=f"Backfill failed: {str(exc)}")
-    finally:
-        await db.close()
+            from acb_llm.key_store import get_key_store
+            store = get_key_store()
+            creds = json.loads(store.decrypt(row.credentials_encrypted))
+
+            provider = _instantiate_provider(row.provider, creds)
+
+            if not await provider.authenticate():
+                raise HTTPException(
+                    status_code=401,
+                    detail="Email account authentication failed — reconnect.",
+                )
+
+            canon_req = canonical_folder(req.folder)
+
+            # Resolve the provider-native folder id/label for the canonical key so
+            # both system and user folders page correctly (Gmail label id, Graph
+            # folder id, IMAP mailbox name).
+            provider_folder = req.folder
+            try:
+                for f in await provider.list_folders():
+                    if canonical_folder(f.name) == canon_req:
+                        provider_folder = f.provider_folder_id
+                        break
+            except Exception:
+                pass
+
+            token = req.page_token
+            synced = 0
+            for _ in range(req.max_pages):
+                msgs, token = await provider.list_messages(
+                    folder=provider_folder,
+                    max_results=100,
+                    page_token=token,
+                    canonical_override=canon_req,
+                )
+                for msg in msgs:
+                    await _upsert_message(db, account_id, msg)
+                    synced += 1
+                if not token:
+                    break
+
+            if provider.credentials_dirty():
+                await db.execute(
+                    text(
+                        """UPDATE email_accounts
+                           SET credentials_encrypted = :creds, updated_at = now()
+                           WHERE id = :id"""
+                    ),
+                    {
+                        "id": account_id,
+                        "creds": store.encrypt(
+                            json.dumps(provider.export_credentials())
+                        ),
+                    },
+                )
+
+            return {
+                "synced": synced,
+                "next_page_token": token,
+                "exhausted": token is None,
+            }
+        except HTTPException:
+            raise
+        except Exception as exc:
+            _log.error("backfill.failed", account_id=account_id, error=str(exc)[:200])
+            raise HTTPException(status_code=500, detail=f"Backfill failed: {str(exc)}")

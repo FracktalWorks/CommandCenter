@@ -23,7 +23,7 @@ from typing import Any
 
 from acb_auth import UserContext, get_current_user
 from fastapi import Depends, Query
-from gateway.routes.email.core import _account_scope, _get_db, _log, router
+from gateway.routes.email.core import _account_scope, _tenant_session, _log, router
 from pydantic import BaseModel
 from sqlalchemy import text
 
@@ -365,7 +365,9 @@ async def _remember_contact(
             "links": details.links,
             "source_message_id": details.source_message_id,
         })).fetchone()
-        await db.commit()
+        # No commit here: the only caller is the converted contact_card (H2),
+        # whose `_tenant_session` commits on clean exit — a mid-block commit
+        # would end that transaction and drop the tenant GUC.
         return row
     except Exception:
         _log.debug("contact directory upsert failed for %s", email, exc_info=True)
@@ -399,8 +401,7 @@ async def contact_card(
     if not address:
         return card
 
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         params: dict[str, Any] = {"uid": user.email or "anonymous", "addr": address}
         scope = _account_scope(account_id, params)
         # Mail FROM this person. Drafts are excluded: an unsent draft of the
@@ -546,8 +547,6 @@ async def contact_card(
         card.details = details
 
         return card
-    finally:
-        await db.close()
 
 
 # ── Recipient autocomplete ────────────────────────────────────────────────────
@@ -578,67 +577,65 @@ async def suggest_contacts(
     needle = (q or "").strip().lower()
     if not needle:
         return []
-    db = await _get_db()
     try:
-        params: dict[str, Any] = {
-            "uid": user.email or "anonymous",
-            "aid": account_id or "",
-            "any": f"%{needle}%",
-            "pre": f"{needle}%",
-            "lim": limit,
-        }
-        rows = (await db.execute(text(
-            """
-            WITH accts AS (
-                SELECT id FROM email_accounts
-                 WHERE user_id = :uid AND (:aid = '' OR id::text = :aid)
-            ),
-            cands (email, name, weight, last_at) AS (
-                -- People the user has WRITTEN to — the strongest signal.
-                SELECT LOWER(r->>'email'), NULLIF(TRIM(r->>'name'), ''),
-                       3, em.received_at
-                  FROM email_messages em
-                  CROSS JOIN LATERAL jsonb_array_elements(
-                    COALESCE(em.to_addresses, '[]'::jsonb)
-                    || COALESCE(em.cc_addresses, '[]'::jsonb)) AS r
-                 WHERE em.account_id IN (SELECT id FROM accts)
-                   AND LOWER(COALESCE(em.folder, '')) = 'sent'
-                UNION ALL
-                -- The learned people directory (names parsed from signatures).
-                SELECT LOWER(ec.email), NULLIF(TRIM(ec.display_name), ''),
-                       2, ec.updated_at
-                  FROM email_contacts ec
-                 WHERE ec.account_id IN (SELECT id FROM accts)
-                UNION ALL
-                -- Everyone who has mailed the user (the senders rollup).
-                SELECT LOWER(es.email), NULLIF(TRIM(es.name), ''),
-                       1, es.updated_at
-                  FROM email_senders es
-                 WHERE es.account_id IN (SELECT id FROM accts)
-            )
-            SELECT c.email,
-                   COALESCE(MAX(c.name), '') AS name,
-                   (BOOL_OR(c.email LIKE :pre)
-                    OR BOOL_OR(COALESCE(c.name, '') ILIKE :pre)) AS prefix_hit,
-                   MAX(c.weight)  AS weight,
-                   COUNT(*)       AS hits,
-                   MAX(c.last_at) AS last_at
-              FROM cands c
-             WHERE c.email IS NOT NULL AND POSITION('@' IN c.email) > 1
-               AND (c.email LIKE :any OR COALESCE(c.name, '') ILIKE :any)
-               AND c.email NOT IN (
-                   SELECT LOWER(email_address) FROM email_accounts
-                    WHERE user_id = :uid)
-             GROUP BY c.email
-             ORDER BY prefix_hit DESC, weight DESC, hits DESC,
-                      last_at DESC NULLS LAST
-             LIMIT :lim
-            """
-        ), params)).fetchall()
-        return [ContactSuggestion(email=r.email, name=r.name or "")
-                for r in rows]
+        async with _tenant_session() as db:
+            params: dict[str, Any] = {
+                "uid": user.email or "anonymous",
+                "aid": account_id or "",
+                "any": f"%{needle}%",
+                "pre": f"{needle}%",
+                "lim": limit,
+            }
+            rows = (await db.execute(text(
+                """
+                WITH accts AS (
+                    SELECT id FROM email_accounts
+                     WHERE user_id = :uid AND (:aid = '' OR id::text = :aid)
+                ),
+                cands (email, name, weight, last_at) AS (
+                    -- People the user has WRITTEN to — the strongest signal.
+                    SELECT LOWER(r->>'email'), NULLIF(TRIM(r->>'name'), ''),
+                           3, em.received_at
+                      FROM email_messages em
+                      CROSS JOIN LATERAL jsonb_array_elements(
+                        COALESCE(em.to_addresses, '[]'::jsonb)
+                        || COALESCE(em.cc_addresses, '[]'::jsonb)) AS r
+                     WHERE em.account_id IN (SELECT id FROM accts)
+                       AND LOWER(COALESCE(em.folder, '')) = 'sent'
+                    UNION ALL
+                    -- The learned people directory (names parsed from signatures).
+                    SELECT LOWER(ec.email), NULLIF(TRIM(ec.display_name), ''),
+                           2, ec.updated_at
+                      FROM email_contacts ec
+                     WHERE ec.account_id IN (SELECT id FROM accts)
+                    UNION ALL
+                    -- Everyone who has mailed the user (the senders rollup).
+                    SELECT LOWER(es.email), NULLIF(TRIM(es.name), ''),
+                           1, es.updated_at
+                      FROM email_senders es
+                     WHERE es.account_id IN (SELECT id FROM accts)
+                )
+                SELECT c.email,
+                       COALESCE(MAX(c.name), '') AS name,
+                       (BOOL_OR(c.email LIKE :pre)
+                        OR BOOL_OR(COALESCE(c.name, '') ILIKE :pre)) AS prefix_hit,
+                       MAX(c.weight)  AS weight,
+                       COUNT(*)       AS hits,
+                       MAX(c.last_at) AS last_at
+                  FROM cands c
+                 WHERE c.email IS NOT NULL AND POSITION('@' IN c.email) > 1
+                   AND (c.email LIKE :any OR COALESCE(c.name, '') ILIKE :any)
+                   AND c.email NOT IN (
+                       SELECT LOWER(email_address) FROM email_accounts
+                        WHERE user_id = :uid)
+                 GROUP BY c.email
+                 ORDER BY prefix_hit DESC, weight DESC, hits DESC,
+                          last_at DESC NULLS LAST
+                 LIMIT :lim
+                """
+            ), params)).fetchall()
+            return [ContactSuggestion(email=r.email, name=r.name or "")
+                    for r in rows]
     except Exception as exc:  # noqa: BLE001 — typeahead is best-effort
         _log.warning("email.contact_suggest_failed", error=str(exc)[:160])
         return []
-    finally:
-        await db.close()

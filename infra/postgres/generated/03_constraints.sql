@@ -6,7 +6,7 @@
 --
 -- SET NOT NULL + FK + index. ⚠️ THIS IS THE ACCESS EXCLUSIVE PHASE — it scans each table. Apply in a window, table by table if necessary, and never behind a long-running transaction (see the generator docstring: that is the exact shape of the 14h44m outage).
 --
--- Tables in this phase: 133
+-- Tables in this phase: 135
 --
 -- ⚠️ NOT COVERED BY THIS FILE — `organization_id` already means something
 -- else on these tables, so scoping them by that name would corrupt a
@@ -298,6 +298,18 @@ ALTER TABLE copilot_event ALTER COLUMN organization_id SET NOT NULL;
 ALTER TABLE copilot_event ADD CONSTRAINT copilot_event_org_fk
     FOREIGN KEY (organization_id) REFERENCES organization(id) ON DELETE CASCADE;
 CREATE INDEX IF NOT EXISTS copilot_event_org_idx ON copilot_event (organization_id);
+
+-- crm_auto_lead_cursors
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM crm_auto_lead_cursors WHERE organization_id IS NULL) THEN
+        RAISE EXCEPTION 'MT-1b: crm_auto_lead_cursors still has unowned rows — run phase 2 (backfill) to completion first';
+    END IF;
+END $$;
+ALTER TABLE crm_auto_lead_cursors ALTER COLUMN organization_id SET NOT NULL;
+ALTER TABLE crm_auto_lead_cursors ADD CONSTRAINT crm_auto_lead_cursors_org_fk
+    FOREIGN KEY (organization_id) REFERENCES organization(id) ON DELETE CASCADE;
+CREATE INDEX IF NOT EXISTS crm_auto_lead_cursors_org_idx ON crm_auto_lead_cursors (organization_id);
 
 -- crm_deal_contacts
 DO $$
@@ -875,18 +887,6 @@ ALTER TABLE gtd_waiting ADD CONSTRAINT gtd_waiting_org_fk
     FOREIGN KEY (organization_id) REFERENCES organization(id) ON DELETE CASCADE;
 CREATE INDEX IF NOT EXISTS gtd_waiting_org_idx ON gtd_waiting (organization_id);
 
--- if
-DO $$
-BEGIN
-    IF EXISTS (SELECT 1 FROM if WHERE organization_id IS NULL) THEN
-        RAISE EXCEPTION 'MT-1b: if still has unowned rows — run phase 2 (backfill) to completion first';
-    END IF;
-END $$;
-ALTER TABLE if ALTER COLUMN organization_id SET NOT NULL;
-ALTER TABLE if ADD CONSTRAINT if_org_fk
-    FOREIGN KEY (organization_id) REFERENCES organization(id) ON DELETE CASCADE;
-CREATE INDEX IF NOT EXISTS if_org_idx ON if (organization_id);
-
 -- live_session
 DO $$
 BEGIN
@@ -1079,6 +1079,18 @@ ALTER TABLE pm_custom_fields ADD CONSTRAINT pm_custom_fields_org_fk
     FOREIGN KEY (organization_id) REFERENCES organization(id) ON DELETE CASCADE;
 CREATE INDEX IF NOT EXISTS pm_custom_fields_org_idx ON pm_custom_fields (organization_id);
 
+-- pm_intake
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM pm_intake WHERE organization_id IS NULL) THEN
+        RAISE EXCEPTION 'MT-1b: pm_intake still has unowned rows — run phase 2 (backfill) to completion first';
+    END IF;
+END $$;
+ALTER TABLE pm_intake ALTER COLUMN organization_id SET NOT NULL;
+ALTER TABLE pm_intake ADD CONSTRAINT pm_intake_org_fk
+    FOREIGN KEY (organization_id) REFERENCES organization(id) ON DELETE CASCADE;
+CREATE INDEX IF NOT EXISTS pm_intake_org_idx ON pm_intake (organization_id);
+
 -- pm_notifications
 DO $$
 BEGIN
@@ -1222,6 +1234,18 @@ ALTER TABLE pm_task_types ALTER COLUMN organization_id SET NOT NULL;
 ALTER TABLE pm_task_types ADD CONSTRAINT pm_task_types_org_fk
     FOREIGN KEY (organization_id) REFERENCES organization(id) ON DELETE CASCADE;
 CREATE INDEX IF NOT EXISTS pm_task_types_org_idx ON pm_task_types (organization_id);
+
+-- pm_task_watchers
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM pm_task_watchers WHERE organization_id IS NULL) THEN
+        RAISE EXCEPTION 'MT-1b: pm_task_watchers still has unowned rows — run phase 2 (backfill) to completion first';
+    END IF;
+END $$;
+ALTER TABLE pm_task_watchers ALTER COLUMN organization_id SET NOT NULL;
+ALTER TABLE pm_task_watchers ADD CONSTRAINT pm_task_watchers_org_fk
+    FOREIGN KEY (organization_id) REFERENCES organization(id) ON DELETE CASCADE;
+CREATE INDEX IF NOT EXISTS pm_task_watchers_org_idx ON pm_task_watchers (organization_id);
 
 -- pm_tasks
 DO $$

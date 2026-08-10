@@ -166,13 +166,24 @@ SELECT count(*)
 #: The queue's project filter covers the SUBTREE — a project's front door
 #: receives captures aimed at any of its subprojects, the same closure the
 #: task list's `include_subtree` walks.
+#:
+#: ⚠️ **The recursive step repeats the tenant predicate**, matching
+#: `core._VISIBLE_PROJECTS_SQL`. It is redundant today three times over — the
+#: seed `:pid` is validated by `load_visible_project`, migration 161's
+#: `pm_organization_from_parent` trigger refuses a child whose org disagrees
+#: with its parent, and phase-4 RLS will filter the table anyway. It is here
+#: for the reason `core.py` states about its own copy: a closure must not be
+#: the thing that would leak if the trigger were ever dropped. A descent that
+#: only checks its seed trusts every edge it walks.
 _SUBTREE_SCOPE = (
     "AND t.project_id IN ("
     "  WITH RECURSIVE sub AS ("
     "    SELECT id FROM pm_projects WHERE id = CAST(:pid AS uuid)"
+    "      AND organization_id = CAST(:vis_org AS uuid)"
     "    UNION ALL"
     "    SELECT p.id FROM pm_projects p JOIN sub s"
     "      ON p.parent_project_id = s.id"
+    "     WHERE p.organization_id = CAST(:vis_org AS uuid)"
     "  ) SELECT id FROM sub)"
 )
 

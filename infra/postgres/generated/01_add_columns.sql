@@ -6,7 +6,7 @@
 --
 -- Nullable ADD COLUMN. No table scan, no lock of consequence. Safe to apply on a live system.
 --
--- Tables in this phase: 133
+-- Tables in this phase: 135
 --
 -- ⚠️ NOT COVERED BY THIS FILE — `organization_id` already means something
 -- else on these tables, so scoping them by that name would corrupt a
@@ -112,6 +112,10 @@ ALTER TABLE copilot_config
     DEFAULT current_setting('app.tenant_id', true)::uuid;
 
 ALTER TABLE copilot_event
+    ADD COLUMN IF NOT EXISTS organization_id UUID
+    DEFAULT current_setting('app.tenant_id', true)::uuid;
+
+ALTER TABLE crm_auto_lead_cursors
     ADD COLUMN IF NOT EXISTS organization_id UUID
     DEFAULT current_setting('app.tenant_id', true)::uuid;
 
@@ -307,10 +311,6 @@ ALTER TABLE gtd_waiting
     ADD COLUMN IF NOT EXISTS organization_id UUID
     DEFAULT current_setting('app.tenant_id', true)::uuid;
 
-ALTER TABLE if
-    ADD COLUMN IF NOT EXISTS organization_id UUID
-    DEFAULT current_setting('app.tenant_id', true)::uuid;
-
 ALTER TABLE live_session
     ADD COLUMN IF NOT EXISTS organization_id UUID
     DEFAULT current_setting('app.tenant_id', true)::uuid;
@@ -375,6 +375,10 @@ ALTER TABLE pm_custom_fields
     ADD COLUMN IF NOT EXISTS organization_id UUID
     DEFAULT current_setting('app.tenant_id', true)::uuid;
 
+ALTER TABLE pm_intake
+    ADD COLUMN IF NOT EXISTS organization_id UUID
+    DEFAULT current_setting('app.tenant_id', true)::uuid;
+
 ALTER TABLE pm_notifications
     ADD COLUMN IF NOT EXISTS organization_id UUID
     DEFAULT current_setting('app.tenant_id', true)::uuid;
@@ -420,6 +424,10 @@ ALTER TABLE pm_task_statuses
     DEFAULT current_setting('app.tenant_id', true)::uuid;
 
 ALTER TABLE pm_task_types
+    ADD COLUMN IF NOT EXISTS organization_id UUID
+    DEFAULT current_setting('app.tenant_id', true)::uuid;
+
+ALTER TABLE pm_task_watchers
     ADD COLUMN IF NOT EXISTS organization_id UUID
     DEFAULT current_setting('app.tenant_id', true)::uuid;
 

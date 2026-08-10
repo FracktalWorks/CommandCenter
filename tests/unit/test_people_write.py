@@ -161,7 +161,7 @@ def test_the_vocabulary_matches_migration_148s_check():
     test that searched the raw text would pass on the explanation of the bug
     instead of on the fix.
     """
-    sql = MIGRATION.read_text()
+    sql = MIGRATION.read_text(encoding="utf-8")
     sql = re.sub(r"--[^\n]*", "", sql)
     match = re.search(r"CHECK \(status IN \(([^)]*)\)\)", sql)
     assert match, "148 no longer constrains status — this test is now fiction"

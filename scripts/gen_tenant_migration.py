@@ -136,6 +136,23 @@ _CREATE_RE = re.compile(
     re.IGNORECASE,
 )
 
+#: ``--`` line comments, stripped before :data:`_CREATE_RE` runs.
+#:
+#: ⚠️ **Not cosmetic.** These migrations document themselves in prose, and the
+#: prose talks about SQL: ``163_crm_auto_lead_cursor.sql`` contains the sentence
+#: "``CREATE TABLE IF NOT EXISTS`` above is a NO-OP against a database that…".
+#: Regexing the raw text discovered a table called **``above``** and emitted
+#: ``ALTER TABLE above ENABLE ROW LEVEL SECURITY`` into phase 4 — a statement
+#: that cannot run, in a set that is promoted **by hand against production in a
+#: maintenance window**, where an abort mid-phase is the 14h44m outage this
+#: generator's docstring exists to prevent. A generator that reads comments as
+#: schema is a generator that fails exactly where it is least recoverable.
+#:
+#: Line comments only: a ``/* … */`` block containing `CREATE TABLE` would slip
+#: through, and none exists today. `discover_tables` asserts the shape it found
+#: is real, so the next such case fails loudly here rather than in the window.
+_LINE_COMMENT_RE = re.compile(r"--[^\n]*")
+
 #: A column literally named ``organization_id`` together with its FK target. The
 #: name alone is not evidence of tenancy — matching on it is what let the homonym
 #: through in the first place.
@@ -164,12 +181,35 @@ def discover_homonyms() -> dict[str, str]:
     return found
 
 
+#: Words that are never a table name — the residue of prose that survives
+#: comment stripping (e.g. a `CREATE TABLE` inside a string literal). Kept as a
+#: last-resort assertion, not a filter: `discover_tables` RAISES on a hit so the
+#: cause gets fixed, rather than quietly dropping a name that might be real.
+_NEVER_A_TABLE = frozenset({"above", "below", "if", "not", "exists", "this", "the"})
+
+
 def discover_tables() -> list[str]:
-    """Every table the numbered migrations create, in name order."""
+    """Every table the numbered migrations create, in name order.
+
+    ``--`` comments are stripped first: these migrations explain themselves in
+    prose *about SQL*, and reading that prose as schema put a table named
+    ``above`` into a production maintenance-window script (see
+    :data:`_LINE_COMMENT_RE`).
+    """
     names: set[str] = set()
     for path in sorted(_MIGRATIONS.glob("[0-9]*_*.sql")):
-        for match in _CREATE_RE.finditer(path.read_text(encoding="utf-8")):
-            names.add(match.group(1).lower())
+        sql = _LINE_COMMENT_RE.sub("", path.read_text(encoding="utf-8"))
+        for match in _CREATE_RE.finditer(sql):
+            name = match.group(1).lower()
+            if name in _NEVER_A_TABLE:
+                raise AssertionError(
+                    f"{path.name}: discovered a table named {name!r}, which is "
+                    "prose, not schema. Something is being read as a CREATE "
+                    "TABLE that is not one (a block comment? a string "
+                    "literal?). Fix the parser — do NOT filter the name away: "
+                    "these files are applied by hand against production."
+                )
+            names.add(name)
     return sorted(names)
 
 
@@ -303,6 +343,16 @@ def gen_policies(tables: list[str]) -> str:
 
 
 def main() -> int:
+    # This script's summary is full of ⚠️/→, and Windows consoles default to
+    # cp1252: printing the plan raised UnicodeEncodeError and killed the run
+    # BEFORE any file was written (measured 2026-08-10). A generator that
+    # cannot run on a maintainer's own machine gets run from memory instead,
+    # which is how the set on disk goes stale.
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:            # py3.7+; absent on odd wrappers
+            reconfigure(encoding="utf-8", errors="replace")
+
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--dry-run", action="store_true",
                     help="print the plan without writing files")

@@ -6,7 +6,7 @@
 --
 -- Batched UPDATE. Re-runnable and interruptible — each statement is idempotent, so a run that aborts can simply be run again. This is the slow phase; expect it to be the long pole on any table with real volume.
 --
--- Tables in this phase: 133
+-- Tables in this phase: 135
 --
 -- ⚠️ NOT COVERED BY THIS FILE — `organization_id` already means something
 -- else on these tables, so scoping them by that name would corrupt a
@@ -93,6 +93,9 @@ UPDATE copilot_config SET organization_id = (SELECT id FROM organization WHERE s
  WHERE organization_id IS NULL;
 
 UPDATE copilot_event SET organization_id = (SELECT id FROM organization WHERE slug = 'default')
+ WHERE organization_id IS NULL;
+
+UPDATE crm_auto_lead_cursors SET organization_id = (SELECT id FROM organization WHERE slug = 'default')
  WHERE organization_id IS NULL;
 
 UPDATE crm_deal_contacts SET organization_id = (SELECT id FROM organization WHERE slug = 'default')
@@ -239,9 +242,6 @@ UPDATE gtd_spaces SET organization_id = (SELECT id FROM organization WHERE slug 
 UPDATE gtd_waiting SET organization_id = (SELECT id FROM organization WHERE slug = 'default')
  WHERE organization_id IS NULL;
 
-UPDATE if SET organization_id = (SELECT id FROM organization WHERE slug = 'default')
- WHERE organization_id IS NULL;
-
 UPDATE live_session SET organization_id = (SELECT id FROM organization WHERE slug = 'default')
  WHERE organization_id IS NULL;
 
@@ -290,6 +290,9 @@ UPDATE pm_activities SET organization_id = (SELECT id FROM organization WHERE sl
 UPDATE pm_custom_fields SET organization_id = (SELECT id FROM organization WHERE slug = 'default')
  WHERE organization_id IS NULL;
 
+UPDATE pm_intake SET organization_id = (SELECT id FROM organization WHERE slug = 'default')
+ WHERE organization_id IS NULL;
+
 UPDATE pm_notifications SET organization_id = (SELECT id FROM organization WHERE slug = 'default')
  WHERE organization_id IS NULL;
 
@@ -324,6 +327,9 @@ UPDATE pm_task_statuses SET organization_id = (SELECT id FROM organization WHERE
  WHERE organization_id IS NULL;
 
 UPDATE pm_task_types SET organization_id = (SELECT id FROM organization WHERE slug = 'default')
+ WHERE organization_id IS NULL;
+
+UPDATE pm_task_watchers SET organization_id = (SELECT id FROM organization WHERE slug = 'default')
  WHERE organization_id IS NULL;
 
 UPDATE pm_tasks SET organization_id = (SELECT id FROM organization WHERE slug = 'default')

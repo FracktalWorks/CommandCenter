@@ -29,7 +29,7 @@ def test_first_write_keeps_name(tmp_path, monkeypatch) -> None:
     _set_ctx(tmp_path)
     res = asyncio.run(wa.write_artifact("report.md", "v1"))
     assert res["path"] == "outputs/report.md"
-    assert (tmp_path / "outputs" / "report.md").read_text() == "v1"
+    assert (tmp_path / "outputs" / "report.md").read_text(encoding="utf-8") == "v1"
 
 
 def test_second_write_does_not_clobber(tmp_path, monkeypatch) -> None:
@@ -39,8 +39,8 @@ def test_second_write_does_not_clobber(tmp_path, monkeypatch) -> None:
     res = asyncio.run(wa.write_artifact("report.md", "new"))
     # Original preserved; the new write went to a uniquified name.
     assert res["path"] == "outputs/report (1).md"
-    assert (tmp_path / "outputs" / "report.md").read_text() == "original"
-    assert (tmp_path / "outputs" / "report (1).md").read_text() == "new"
+    assert (tmp_path / "outputs" / "report.md").read_text(encoding="utf-8") == "original"
+    assert (tmp_path / "outputs" / "report (1).md").read_text(encoding="utf-8") == "new"
     assert res["download_url"].endswith("path=outputs/report (1).md")
 
 
@@ -50,7 +50,7 @@ def test_overwrite_true_replaces_in_place(tmp_path, monkeypatch) -> None:
     asyncio.run(wa.write_artifact("report.md", "original"))
     res = asyncio.run(wa.write_artifact("report.md", "replaced", overwrite=True))
     assert res["path"] == "outputs/report.md"
-    assert (tmp_path / "outputs" / "report.md").read_text() == "replaced"
+    assert (tmp_path / "outputs" / "report.md").read_text(encoding="utf-8") == "replaced"
     assert not (tmp_path / "outputs" / "report (1).md").exists()
 
 
@@ -61,5 +61,5 @@ def test_does_not_overwrite_user_upload_in_inputs(tmp_path, monkeypatch) -> None
     (tmp_path / "inputs" / "data.csv").write_text("user-uploaded")
     res = asyncio.run(wa.write_artifact("inputs/data.csv", "agent-version"))
     # The user's original upload is untouched.
-    assert (tmp_path / "inputs" / "data.csv").read_text() == "user-uploaded"
+    assert (tmp_path / "inputs" / "data.csv").read_text(encoding="utf-8") == "user-uploaded"
     assert res["path"] == "inputs/data (1).csv"

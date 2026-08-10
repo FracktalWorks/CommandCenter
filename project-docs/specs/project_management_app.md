@@ -4,7 +4,8 @@
 > module, sliced into every other Center) · **Created:** 2026-08-05 · **Updated: 2026-08-10**
 > (status truth pass + tenancy alignment — R4; **WS-27ag shell/mobile slice built the same
 > day**; **S4 convergence slice built the same day — §11.21**; **S6 card-pills slice built the
-> same day — §11.23**) ·
+> same day — §11.23**; **WS-27ae's delta-sync + small-columns thirds built the same day —
+> §11.27, migration 168**) ·
 > **Status:** ✅ **WS-27 a–t MERGED AND DEPLOYED** (a b d e f i j k l m n via #390/#393/#394/#398;
 > o–t via **#399**; **u–z via #408**, 2026-08-10) — migrations **146, 147, 150, 152, 155, 156,
 > 160, 161, 164, 165, 166 are applied on prod** (164/165/166 log-verified on the 2026-08-10
@@ -13,6 +14,12 @@
 > 🟡 **c** two-way sync (waits on WS-1 BO-1a+BO-1b) · 🔴 **g** cutover/retirement · 🟡 **h**
 > `gtd_items` retirement (data move 🔴) · 🟢 **u–z shipped**, their owner activation steps in
 > HANDOVER §1 ·
+> 🟢 **ae (delta-sync + small columns) BUILT 2026-08-10, on branch, NOT merged and NOT
+> deployed** (§11.27) — `GET /projects/delta/tasks` with a keyset cursor, an explicit
+> `removed[]` over migration **168**'s `pm_task_tombstones`, satellite `updated_at` bumps,
+> `pm_task_types.is_epic` and `pm_view_user_state`. **Migration 168 is NOT applied on prod**
+> (verified only against a scratch Postgres 16). The CSV-export third of the basket is a
+> separate slice. ·
 > 🟢 **ag BUILT 2026-08-10, on branch, NOT merged and NOT deployed** (§11.20) — the app joins
 > the house shell and gets a mobile layout at all: `AppShell` learns `isProjectsPage`
 > (Projects · Views · Search), the tree and the mode picker become drawer sheets, an opened
@@ -1598,10 +1605,26 @@ review, exactly as for af and ag. What was checked is `npx tsc --noEmit`, the fu
 `npx vitest run`, `npx vitest run src/lib/theme/`, `eslint` on the changed files, and each
 new fence mutation-measured red before being reverted byte-identical.
 
-**WS-27ae — export, delta-sync, small columns.** 🟢 AGENT-SAFE, **not this wave** *(P-26,
-P-27, P-28 rest)*. Filtered-list CSV export on the export-job pattern; a delta-sync list
-variant plus satellite `updated_at` bumps for agents/mobile; `is_epic`, per-user view state
-and the session `user_id` denorm. Minted so the basket has an owner; dispatch after aa–ad.
+**WS-27ae — export, delta-sync, small columns.** 🟢 AGENT-SAFE *(P-26, P-27, P-28 rest)*.
+A three-part basket, dispatched in parts after aa–ad.
+
+* **delta-sync + satellite `updated_at` bumps + the small columns** — ✅ **BUILT 2026-08-10,
+  on branch, NOT merged and NOT deployed.** As-built record: **§11.27**. `GET
+  /projects/delta/tasks` (path chosen so `/projects/tasks/{task_id}` cannot shadow it), a
+  `(updated_at, id)` keyset cursor with a horizon, and — the part a naive feed cannot do —
+  an explicit `removed[]` fed by migration **168**'s `pm_task_tombstones` (written by an
+  AFTER DELETE trigger, so a project CASCADE is recorded too) plus rows that changed and
+  fell out of scope. Losing VISIBILITY stays inexpressible and is documented + pinned as
+  silence. Satellites bump the task through `record_activity` plus `core.touch_task`;
+  watchers, the personal overlay, notifications and per-view order deliberately do not.
+  Small columns: `pm_task_types.is_epic` (read by `core.is_epic_type`) and
+  `pm_view_user_state` (read by `views.list_views`); the session `user_id` denorm was **not
+  built because `chat_session.user_id` already exists and is already indexed** (migration
+  02) — measured, not assumed. Migration **168**, tenant-scoped both tables, generated
+  phase files regenerated. ⚠️ No UI consumes any of it yet, and tombstone retention is
+  owed to a `/workflows` sweep (D6).
+* **filtered-list CSV export** *(P-26)* — the third part, dispatched separately; it writes
+  no migration.
 
 **WS-27af — the themed categorical ramp.** 🟢 AGENT-SAFE. ✅ **BUILT 2026-08-10.**
 *(Owner-ruled the same day, choosing the ramp over tokenising to the semantic set or
@@ -3070,6 +3093,155 @@ tag in every theme. **One honest note:** Material dark's `--warning` is a pale p
 (`hsl(35 90% 78%)`), so the `High` chip reads faint against `Normal` there — the chevron-up vs
 dash glyph is what carries the distinction, which is why the four levels have four glyphs.
 That is the theme's token doing what it says, not a hardcoded colour.
+
+### 11.27 WS-27ae — delta-sync and the small columns (built 2026-08-10)
+
+*The delta-sync and small-columns thirds of the WS-27ae basket. The CSV-export third is
+a sibling slice and is recorded separately.* Migration **168** — number taken by listing
+`infra/postgres/` at file creation (highest on disk and on `origin/main` was
+`167_projects_seed_status_colours.sql`) and re-checked immediately before commit. R1.
+
+**The endpoint is `GET /projects/delta/tasks`, not `/projects/tasks/delta`.** The natural
+spelling would be matched by `/projects/tasks/{task_id}` and the answer would depend on
+import order — the route-shadowing trap `routes/workflows/__init__.py` documents and this
+package's `__init__` claims immunity from *because* every path is a literal. The claim is
+now also a test (`test_the_path_cannot_be_shadowed_by_the_task_id_route`).
+
+**The deletion answer, because a naive feed cannot express one.** `WHERE updated_at >
+:since` can never tell a client a task was DELETED — the row stops appearing, and an
+upsert client keeps the ghost for as long as it lives. Plane's feed has that hole. So the
+response is `{rows, removed, cursor, has_more, snapshot, reconcile_after}` and `removed[]`
+carries two shapes:
+
+1. **hard deletes**, from `pm_task_tombstones` (migration 168), written by an **AFTER
+   DELETE trigger on `pm_tasks`** rather than by `delete_task`. ⚠️ That choice is the
+   whole value of the table: `pm_projects` CASCADEs to `pm_tasks`, so an application-level
+   write would have recorded the one deletion path that has an endpoint and silently
+   missed the one that takes hundreds of tasks at once — which is precisely the deletion a
+   client is holding the most rows for.
+2. **fell out of scope** — a task that changed and no longer satisfies the feed's own
+   predicate (archived, moved into `triage`, moved out of the requested subtree). Stream A
+   therefore applies **no** project scoping, archive filter or triage exclusion; those are
+   applied in a second pass over the ids it returned, and whatever does not survive is a
+   removal. Filtering at the first step is exactly the naive feed's blind spot.
+
+⚠️ **One removal shape is NOT expressible, and is documented rather than pretended away:
+losing VISIBILITY.** A revoked grant simply makes the row stop matching the visibility
+clause; nothing records that it used to match, and manufacturing that would mean storing a
+per-member history of everything anybody could ever see. Clients are told to reconcile
+with a full pull (`reconcile_after`, on every response). `test_losing_VISIBILITY_is_silence_
+and_that_is_documented` pins the SILENCE, so the day somebody closes the gap the docs and
+the behaviour move together instead of the docs going quietly stale.
+
+**The boundary: a keyset, plus a horizon.** The cursor is the `(updated_at, id)` of the
+last row actually **delivered**, compared with SQL's row comparison — so a page of rows
+sharing one instant is delivered exactly once each, which `updated_at > :since` cannot do
+(it skips) and `>=` cannot do either (it loops). A bare ISO timestamp is still accepted for
+a first call and is treated as inclusive. On top of that the feed refuses to look at
+anything newer than `now() - HORIZON_LAG_SECONDS` (5): `now()` is TRANSACTION-start time,
+so a writer that began before the read can commit after it with an earlier stamp and land
+behind a cursor forever. **The residual is stated, not eliminated:** a write transaction
+that stays open longer than the lag while another commits after it can still be missed
+until the client's next full reconcile. Every write path in this package is one short
+request.
+
+**Satellites that bump the task, and the ones that deliberately do not.** The bump lives at
+ONE choke point — `core.record_activity` bumps whenever the entry names a task, because an
+activity naming a task *is* the statement that the task changed — plus `core.touch_task`
+at the writes that legitimately record no activity: link **target** on create, **both ends**
+on unlink, comment edit, comment soft-delete, the old and new **parent** on a re-parent, and
+the **promoted subtasks** plus the parent on a delete (their `parent_task_id` SET NULLs, so
+nothing in this package writes them). Covered: assignees, links, attachments, comments and
+timeline entries, subtask membership, plus tags/custom fields/status which already live on
+the task row. **Deliberately not bumped:** `pm_task_watchers` (one person's subscription —
+bumping would wake every synced device in the company each time somebody pressed Watch),
+`pm_task_personal` (the §6.1 per-user overlay), `pm_notifications` (one person's bell),
+`pm_view_task_positions` (per-VIEW order, D-PM-5), `pm_view_user_state`. The fence (R7) is
+`test_every_satellite_writer_bumps_its_task_or_is_named_here`, which scans the package for
+satellite writes and requires each writing module to reach the bump, with a named allow-list
+for modules that only write satellites of a task they created in the same transaction.
+
+**The small columns, and what reads each.**
+* `pm_task_types.is_epic` — read by the new `core.is_epic_type`, which `assert_epic_has_no_
+  parent` calls at its three sites. §3.4's rule stops keying off a SEED NAME, so a project
+  can call its top level "Initiative" and still get it. Written through `admin.create_type` /
+  `patch_type` and stamped by `tree._seed_root`; the migration backfills every type the old
+  predicate matched, and un-flagging the *system* Epic is a 409 (the seed-name arm would
+  still apply, so a 200 would be a write that reported itself applied while nothing changed).
+* `pm_view_user_state` — read by `views.list_views`, which now returns each view with the
+  **caller's own** overlay attached, plus `GET/PUT /projects/views/{id}/state`. It fixes
+  WS-27y storing `collapsed_lanes` in the SHARED config, i.e. one person's collapse
+  collapsing the lane for the whole company. Presentation only: `filters.
+  VIEW_USER_STATE_KEYS` excludes filters, because two people must never be looking at a
+  saved view that means two different sets of tasks. Its normaliser is **absent-preserving**
+  and therefore deliberately not `normalise_view_config` with a different key set — that one
+  fills a `group_by` default, which on an overlay would re-group the board for whoever
+  collapsed a lane.
+* ⚠️ **The session `user_id` denorm was NOT built, because it already exists.** Measured
+  before writing: `chat_session.user_id` is `TEXT NOT NULL` and indexed by
+  `chat_session_user_idx (user_id, updated_at DESC)` since migration 02, and
+  `public."Session"` carries a `user_id` with an FK. P-28 asks for a denormalisation that is
+  present in both session stores. `pm_task_statuses.color` was stored from migration 146 and
+  rendered nowhere for twenty-one migrations; a column with no reader is not a feature, and
+  the check that avoided repeating that is itself a test
+  (`test_the_session_user_id_denorm_is_already_there`).
+
+**R5 / tenancy.** Both new tables carry `organization_id NOT NULL REFERENCES organization`
+(D-MT-3), `pm_view_user_state` through migration 161's `pm_organization_from_parent` trigger
+(its 20th attachment), and both are in the regenerated `infra/postgres/generated/` phase
+files — MT-1b's own lesson, since `pm_intake` and `pm_task_watchers` were once absent from
+all four. `pm_task_types.is_epic` is a column on a table that already carries the key.
+`routes/projects` stays at **zero** unbound sites and holds no H2 exemption; the feed takes
+its tenant from `resolve_visibility` like every other read and declares no
+identity-shaped query parameter (asserted).
+
+⚠️ **The organization-delete trap, measured rather than reasoned about.** With a plain FK
+and no guard, deleting an `organization` cascades to `pm_projects` → `pm_tasks`, fires the
+tombstone trigger, and the insert references the organization the same statement has already
+removed:
+
+```
+ERROR:  insert or update on table "pm_task_tombstones" violates foreign key
+        constraint … Key (organization_id)=(860f107d…) is not present in table "organization".
+```
+
+i.e. the first version made an organization **undeletable**. Fixed in the trigger, not by
+dropping the constraint: it returns early when the tenant is already gone — which is also
+the right answer, since a deleted tenant has no clients left to tell. The FK therefore stays
+in migration 161's shape and `test_tenancy_boundary.py`'s new-table rule is satisfied on its
+own terms rather than by an exemption.
+
+⚠️ **A second hole the LIVE harness found and the hermetic suite could not.** A tombstone
+left by a project CASCADE names a project row that no longer exists, so the
+project-visibility closure — which resolves grants through `pm_projects` — can never match
+it. With the closure alone, the single deletion that strands the most rows on a client was
+the one deletion the feed could not report. The query gained a second arm for tombstones
+whose project is gone, still bounded by the tenant predicate; what a member can learn from
+it is the uuid and instant of a task in a project of their own company that has since been
+deleted, with no title and no content. **Measured:** deleting that arm leaves the whole
+hermetic suite green and turns `live_ws27ae.py` red, so the comment above the line says the
+live script is its only fence.
+
+**Verification.** `tests/unit/test_projects_delta.py` — 41 hermetic cases. `tests/live/
+live_ws27ae.py` — **32 checks against Postgres 16**, two organizations whose tasks are
+stamped at identical instants: alpha's feed never returns beta's row or removal and vice
+versa, paging one row at a time across a shared instant delivers each exactly once, a row
+written this second is withheld and the same row delivered once it ages past the lag, a
+project CASCADE leaves a tombstone the endpoint never touched, the human task id survives
+the row, the per-user overlay round-trips through JSONB with the tenant filled by 161's
+trigger, another tenant 404s on the view, and an organization is still deletable.
+Mutation-measured: degrading the keyset to a bare timestamp, deleting the horizon, dropping
+the tombstone stream, weakening `has_more`, removing `record_activity`'s bump and bumping
+only one end on an unlink each turn the hermetic suite red; removing the orphan-tombstone
+arm turns the LIVE script red and nothing else.
+
+**Owed, deliberately not built here.** (1) **Tombstone retention** — they are one small row
+per deleted task and never swept; a sweep is a scheduled job touching real data, which D6
+says belongs to `/workflows`, the shape WS-27z already had to hand over. (2) **No UI
+consumes any of this yet**: the per-user overlay is served by `list_views` and the board
+still reads `collapsed_lanes` from the shared config, so the behaviour changes only when a
+frontend slice adopts it. (3) The feed has **no client** in-tree — it is built for the
+agents/mobile consumers P-27 names.
 
 ## Board record (2026-08-09) — moved from work_plan.md §2
 

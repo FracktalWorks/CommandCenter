@@ -6,7 +6,7 @@
 --
 -- SET NOT NULL + FK + index. ⚠️ THIS IS THE ACCESS EXCLUSIVE PHASE — it scans each table. Apply in a window, table by table if necessary, and never behind a long-running transaction (see the generator docstring: that is the exact shape of the 14h44m outage).
 --
--- Tables in this phase: 135
+-- Tables in this phase: 137
 --
 -- ⚠️ NOT COVERED BY THIS FILE — `organization_id` already means something
 -- else on these tables, so scoping them by that name would corrupt a
@@ -1223,6 +1223,18 @@ ALTER TABLE pm_task_statuses ADD CONSTRAINT pm_task_statuses_org_fk
     FOREIGN KEY (organization_id) REFERENCES organization(id) ON DELETE CASCADE;
 CREATE INDEX IF NOT EXISTS pm_task_statuses_org_idx ON pm_task_statuses (organization_id);
 
+-- pm_task_tombstones
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM pm_task_tombstones WHERE organization_id IS NULL) THEN
+        RAISE EXCEPTION 'MT-1b: pm_task_tombstones still has unowned rows — run phase 2 (backfill) to completion first';
+    END IF;
+END $$;
+ALTER TABLE pm_task_tombstones ALTER COLUMN organization_id SET NOT NULL;
+ALTER TABLE pm_task_tombstones ADD CONSTRAINT pm_task_tombstones_org_fk
+    FOREIGN KEY (organization_id) REFERENCES organization(id) ON DELETE CASCADE;
+CREATE INDEX IF NOT EXISTS pm_task_tombstones_org_idx ON pm_task_tombstones (organization_id);
+
 -- pm_task_types
 DO $$
 BEGIN
@@ -1270,6 +1282,18 @@ ALTER TABLE pm_view_task_positions ALTER COLUMN organization_id SET NOT NULL;
 ALTER TABLE pm_view_task_positions ADD CONSTRAINT pm_view_task_positions_org_fk
     FOREIGN KEY (organization_id) REFERENCES organization(id) ON DELETE CASCADE;
 CREATE INDEX IF NOT EXISTS pm_view_task_positions_org_idx ON pm_view_task_positions (organization_id);
+
+-- pm_view_user_state
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM pm_view_user_state WHERE organization_id IS NULL) THEN
+        RAISE EXCEPTION 'MT-1b: pm_view_user_state still has unowned rows — run phase 2 (backfill) to completion first';
+    END IF;
+END $$;
+ALTER TABLE pm_view_user_state ALTER COLUMN organization_id SET NOT NULL;
+ALTER TABLE pm_view_user_state ADD CONSTRAINT pm_view_user_state_org_fk
+    FOREIGN KEY (organization_id) REFERENCES organization(id) ON DELETE CASCADE;
+CREATE INDEX IF NOT EXISTS pm_view_user_state_org_idx ON pm_view_user_state (organization_id);
 
 -- pm_views
 DO $$

@@ -82,6 +82,16 @@ _ANY_UUID = re.compile(
 )
 #: ``<col> = 'literal'``
 _LITERAL_EQ = re.compile(r"\b(?:\w+\.)?(\w+)\s*=\s*'([^']*)'")
+#: ``(<a> = CAST(:p AS uuid) OR <b> = CAST(:p AS uuid))`` — a row addressed
+#: from EITHER end, which is how `pm_task_links` is deleted (the caller may be
+#: the source or the target). Read as the OR it is: the generic scanner ANDs the
+#: predicates it finds, so without this the clause matches nothing and a route
+#: that works in production looks broken here.
+_EITHER_END = re.compile(
+    r"\(\s*(?:\w+\.)?(\w+)\s*=\s*CAST\(:(\w+)\s+AS\s+uuid\)\s+OR\s+"
+    r"(?:\w+\.)?(\w+)\s*=\s*CAST\(:(\w+)\s+AS\s+uuid\)\s*\)",
+    re.I,
+)
 #: ``<col> IS [NOT] NULL``
 _IS_NULL = re.compile(r"\b(?:\w+\.)?(\w+)\s+IS\s+(NOT\s+)?NULL", re.I)
 #: ``<col> ILIKE :q``
@@ -90,6 +100,21 @@ _ILIKE = re.compile(r"(?:\w+\.)?(\w+)\s+ILIKE\s+:(\w+)", re.I)
 #: WS-27q, which meant every `overdue` test was really only asserting the
 #: status half and would have passed with the date comparison deleted.
 _NOW_LT = re.compile(r"\b(?:\w+\.)?(\w+)\s*<\s*now\(\)", re.I)
+#: WS-27ae: ``<col> <= :param`` — the delta feed's horizon. Distinct from
+#: `_BOUND_LT` below, which requires `:` immediately after the `<` and so cannot
+#: match `<=`; the two are told apart because the feed's whole boundary argument
+#: is about which comparison is inclusive.
+_BOUND_LTE = re.compile(r"\b(?:\w+\.)?(\w+)\s*<=\s*:(\w+)\b")
+#: WS-27ae: the delta feed's KEYSET cursor —
+#: ``(t.updated_at, t.id) > (:since_ts, CAST(:since_id AS uuid))``. Read as a
+#: row comparison, not as two independent predicates: reading it loosely (`ts >`
+#: OR `id >`) is exactly the mutation that reintroduces the boundary-second hole
+#: this endpoint exists to close, so the mirror has to model the tuple.
+_KEYSET_GT = re.compile(
+    r"\((?:\w+\.)?(\w+),\s*(?:\w+\.)?(\w+)\)\s*>\s*"
+    r"\(:(\w+),\s*CAST\(:(\w+)\s+AS\s+uuid\)\)",
+    re.I,
+)
 #: ``<col> < :param`` — a bound strict-less-than (WS-27z's untouched-since
 #: cutoff, and the `due_before` filter). The column must be a bare word right
 #: before the `<`, so `coalesce(…) < :window_to` (handled by `_WINDOW_CMP`)
@@ -197,6 +222,10 @@ _ORGANIZATION_PARENT: dict[str, tuple[str, str]] = {
     # WS-27u. The wrapper's SECOND attachment (`duplicate_of_task_id`) is a
     # refuse-a-straddle constraint, which is this fake's stated blind spot.
     "pm_intake": ("pm_tasks", "task_id"),
+    # WS-27ae. `pm_task_tombstones` is deliberately ABSENT: it has no live
+    # parent (its task is gone), and migration 168 fills its tenant from the
+    # deleted row inside the AFTER DELETE trigger `_delete` mirrors below.
+    "pm_view_user_state": ("pm_views", "view_id"),
 }
 
 
@@ -395,7 +424,7 @@ _DEFAULTS: dict[str, dict[str, Any]] = {
 
 _TIMESTAMPED = {
     "pm_projects", "pm_tasks", "pm_task_statuses", "pm_task_types",
-    "pm_activities", "pm_views", "pm_intake",
+    "pm_activities", "pm_views", "pm_intake", "pm_view_user_state",
 }
 
 
@@ -660,6 +689,49 @@ class FakeProjectsDB:
             if limit:
                 found = found[: int(args.get(limit.group(1), len(found)))]
             return _Result(found)
+        # WS-27ae — the delta feed's HORIZON read. It names no table (`_table`
+        # would raise), and it deliberately asks the DATABASE for the instant
+        # rather than computing it gateway-side, because the two clocks are not
+        # the same one and `updated_at` comes from Postgres's.
+        if "AS delta_horizon" in statement:
+            # ⚠️ The LAG is read out of the statement, never assumed. A mirror
+            # that answered a bare `now()` would agree with a route that had
+            # dropped the horizon entirely — which is precisely the property
+            # `test_the_horizon_withholds_the_most_recent_writes` exists to
+            # pin.
+            lag = re.search(r"interval '(\d+) seconds'", statement)
+            return _Result([SimpleNamespace(
+                delta_horizon=_now() - timedelta(seconds=int(lag.group(1)))
+                if lag else _now(),
+            )])
+
+        # WS-27ae — one member's overlays for a project's views
+        # (`views.list_views`). A subquery over `pm_views` the generic WHERE
+        # reader cannot parse. Each arm is honoured ONLY when the statement
+        # carries it, the `_select` convention: a route that dropped the
+        # `member` predicate would start returning colleagues' arrangements
+        # here too, and the privacy test goes red.
+        if "FROM pm_view_user_state s" in statement:
+            out = []
+            wanted = str(args.get("member") or "").lower()
+            scoped = (
+                {
+                    str(v["id"]) for v in self.rows("pm_views")
+                    if str(v.get("project_id")) == str(args.get("pid"))
+                }
+                if "project_id = CAST(:pid AS uuid)" in statement else None
+            )
+            for row in self.rows("pm_view_user_state"):
+                if ("lower(s.member) = :member" in statement
+                        and str(row.get("member") or "").lower() != wanted):
+                    continue
+                if scoped is not None and str(row.get("view_id")) not in scoped:
+                    continue
+                out.append(SimpleNamespace(
+                    view_id=row.get("view_id"), config=row.get("config"),
+                ))
+            return _Result(out)
+
         head = statement.split(None, 1)[0].upper()
         table = self._table(statement)
         if head == "INSERT":
@@ -1042,6 +1114,31 @@ class FakeProjectsDB:
         self.tables[table] = [
             r for r in self.tables.get(table, []) if r not in matched
         ]
+        # WS-27ae — migration 168's `trg_pm_tasks_tombstone`, mirrored for the
+        # reason 161's tenant trigger is: the tombstone is written by the
+        # DATABASE, so a fake that did not model it would make every delta test
+        # about deletion pass against a route with no tombstone table at all.
+        #
+        # ⚠️ This mirrors the TRIGGER, not the cascade that also fires it. FKs
+        # are this fake's stated blind spot, so deleting a `pm_projects` row
+        # here leaves its tasks — and therefore writes no tombstones — where
+        # Postgres would take both. `tests/live/live_ws27ae.py` is what proves
+        # the cascade path.
+        if table == "pm_tasks":
+            tombstones = self.tables.setdefault("pm_task_tombstones", [])
+            known = {str(t.get("task_id")) for t in tombstones}
+            for row in matched:
+                if str(row.get("id")) in known:
+                    continue
+                tombstones.append({
+                    "task_id": str(row.get("id")),
+                    "project_id": row.get("project_id"),
+                    "root_project_id": row.get("root_project_id"),
+                    "task_number": row.get("task_number"),
+                    "organization_id": row.get("organization_id"),
+                    "deleted_by": None,
+                    "deleted_at": _now(),
+                })
         return _Result([SimpleNamespace(**r) for r in matched])
 
     def _select(self, statement: str, table: str, args: dict) -> _Result:
@@ -1385,6 +1482,18 @@ class FakeProjectsDB:
         self, rows: list[dict], top: str, args: dict,
     ) -> tuple[list[dict], bool]:
         seen = False
+        # Consumed FIRST and removed from `top`, or the generic scanner below
+        # would read the two arms as an AND and match nothing.
+        either = _EITHER_END.search(top)
+        if either:
+            seen = True
+            a_column, a_param, b_column, b_param = either.groups()
+            rows = [
+                r for r in rows
+                if str(r.get(a_column)) == str(args.get(a_param))
+                or str(r.get(b_column)) == str(args.get(b_param))
+            ]
+            top = _EITHER_END.sub(" ", top)
         for column, param in _UUID_EQ.findall(top):
             seen = True
             rows = [r for r in rows if str(r.get(column)) == str(args.get(param))]
@@ -1442,6 +1551,32 @@ class FakeProjectsDB:
                     if r.get(column) is not None
                     and _sortable(r.get(column)) < _sortable(edge)
                 ]
+        # WS-27ae — the delta feed's horizon (`<col> <= :param`). SQL's NULL
+        # semantics: a NULL column never matches.
+        for column, param in _BOUND_LTE.findall(top):
+            if param not in args:
+                continue
+            seen = True
+            edge = _as_datetime(args[param])
+            rows = [
+                r for r in rows
+                if r.get(column) is not None and _as_datetime(r[column]) <= edge
+            ]
+        # WS-27ae — the delta feed's keyset cursor, modelled as the ROW
+        # COMPARISON it is. The columns and the bound names are read off the
+        # statement, so a route that compares the wrong pair — or drops the id
+        # half back to a bare timestamp — changes this mirror's answer instead
+        # of being invisible to it.
+        keyset = _KEYSET_GT.search(top)
+        if keyset and keyset.group(3) in args:
+            seen = True
+            ts_column, id_column, ts_param, id_param = keyset.groups()
+            edge = (_as_datetime(args[ts_param]), str(args[id_param]))
+            rows = [
+                r for r in rows
+                if r.get(ts_column) is not None
+                and (_as_datetime(r[ts_column]), str(r.get(id_column))) > edge
+            ]
         # WS-27q's calendar window. Applied ONLY when the statement carries the
         # bound, and each comparison is evaluated against the interval endpoint
         # the SQL's own `coalesce` order names — so swapping that order, which
@@ -1490,6 +1625,20 @@ class FakeProjectsDB:
                 )
 
             return sorted(rows, key=status_key, reverse=reverse)
+        # WS-27ae — the delta feed's total order, `(<stamp>, <id>)` ascending.
+        # It is the SAME pair the cursor encodes, so a mirror that ordered on
+        # the stamp alone would break ties differently from Postgres and the
+        # boundary cases would pass or fail by luck.
+        pair = re.search(
+            r"ORDER\s+BY\s+(?:\w+\.)?(\w+)\s+ASC\s*,\s*(?:\w+\.)?(\w+)\s+ASC",
+            statement, re.I,
+        )
+        if pair:
+            first, second = pair.groups()
+            return sorted(
+                rows,
+                key=lambda r: (_sortable(r.get(first)), str(r.get(second))),
+            )
         order = _ORDER_RE.search(statement)
         if order is None:
             return rows

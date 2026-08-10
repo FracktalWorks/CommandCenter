@@ -57,6 +57,11 @@ class TypeIn(BaseModel):
     icon: str | None = None
     color: str | None = None
     is_default: bool | None = None
+    #: WS-27ae / P-28. Unlike `is_system`, this IS the caller's to set: it says
+    #: "this type is a top level", which is a workflow decision a project makes
+    #: about its own vocabulary. `is_system` stays a hard-coded literal below,
+    #: because that one grants an exemption rather than accepting a rule.
+    is_epic: bool | None = None
 
 
 async def _root_for(db: Any, vis: Any, project_id: str) -> str:
@@ -232,14 +237,16 @@ async def create_type(
         row = (await db.execute(
             text(
                 "INSERT INTO pm_task_types "
-                "(project_id, name, icon, color, is_default, is_system) "
-                "VALUES (CAST(:root AS uuid), :name, :icon, :color, :is_default, "
-                "        false) RETURNING *"
+                "(project_id, name, icon, color, is_default, is_epic, "
+                " is_system) "
+                "VALUES (CAST(:root AS uuid), :name, :icon, :color, "
+                "        :is_default, :is_epic, false) RETURNING *"
             ),
             {
                 "root": root, "name": name,
                 "icon": values.get("icon"), "color": values.get("color"),
                 "is_default": bool(values.get("is_default")),
+                "is_epic": bool(values.get("is_epic")),
             },
         )).fetchone()
         # is_system is written as a literal false, never from the payload: the
@@ -266,6 +273,19 @@ async def patch_type(
                 detail=(
                     f"'{EPIC_TYPE_NAME}' is a system type and cannot be renamed; "
                     "the hierarchy rule keys off it."
+                ),
+            )
+        # WS-27ae — and it cannot be un-flagged either, for exactly the same
+        # reason the rename is refused. `core.is_epic_type` still recognises the
+        # seeded system type by name, so clearing the flag would answer 200 and
+        # change nothing: a write that reports success while the rule stays on
+        # is worse than one that says no.
+        if getattr(existing, "is_system", False) and values.get("is_epic") is False:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"'{EPIC_TYPE_NAME}' is a system type and stays the top "
+                    "level; the hierarchy rule keys off it."
                 ),
             )
         if not values:

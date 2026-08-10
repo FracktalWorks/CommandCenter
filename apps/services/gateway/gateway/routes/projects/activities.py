@@ -35,6 +35,7 @@ from gateway.routes.projects.core import (
     resolve_visibility,
     router,
     row_to_dict,
+    touch_task,
     update_row,
 )
 from gateway.routes.projects.notifications import (
@@ -212,6 +213,10 @@ async def edit_comment(
         await load_visible_task(db, vis, str(comment.task_id))
         row = await update_row(db, "pm_activities", activity_id, {"body": body})
         task_id = str(comment.task_id)
+        # WS-27ae / P-27 — an edit UPDATEs an existing activity row rather than
+        # inserting one, so it never reaches `record_activity`'s bump. Reworded
+        # comments are exactly the change a delta client must not miss.
+        await touch_task(db, task_id)
         # WS-27v — mention DIFFING: only the addresses this edit ADDED are
         # notified. The old body is the one loaded above, before the update, so
         # fixing a typo next to `@priya@…` re-pings nobody, while appending
@@ -253,11 +258,15 @@ async def delete_comment(
     filtered out of one read path.
     """
     async with _tenant_session() as db:
-        await _load_own_comment(db, activity_id, user)
+        comment = await _load_own_comment(db, activity_id, user)
         await update_row(
             db, "pm_activities", activity_id,
             {"deleted_at": now(), "body": None},
         )
+        # WS-27ae / P-27 — same reason as the edit: a soft delete is an UPDATE,
+        # so nothing on the activity spine bumps the task. A client that never
+        # hears about it keeps rendering words their author retracted.
+        await touch_task(db, getattr(comment, "task_id", None))
         return {"deleted": activity_id}
 
 

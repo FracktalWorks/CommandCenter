@@ -481,6 +481,119 @@ def test_h2_exempt_files_still_use_the_unbound_seam() -> None:
     assert stale == [], f"H2 exemptions with no get_db() call left: {stale}"
 
 
+#: Cross-file edges from an H4-exempt (background/service) file into a
+#: converted function that opens `_tenant_session()`. ⚠️ **Every entry here is
+#: a reviewed decision that the callee is safe WITHOUT an ambient request
+#: binding** — because the caller binds an explicit tenant around the call, or
+#: the callee takes one. An UNLISTED edge is the auto-lead defect class: the
+#: exempt file runs with no tenant bound, the converted callee raises
+#: `TenantUnbound` at runtime, and no file-scoped ratchet or hermetic fake can
+#: see it (the fakes yield unconditionally). Found by the H2 adversarial
+#: review — the exemption markers are file-scoped, but the call graph is not.
+H2_EXEMPT_CALL_EDGES: dict[tuple[str, str], str] = {
+    ("apps/services/gateway/gateway/routes/crm/auto_lead.py", "create_record"):
+        "_create_lead binds the mailbox owner's organization explicitly "
+        "(bind_tenant around the call — the H4 shape, done early because the "
+        "unbound call was a today-failure that stalled the watermark)",
+}
+
+
+def _h4_files() -> set[str]:
+    return (
+        set(H2_EXEMPT_FILES)
+        | set(H2_WHATSAPP_EXEMPT_SITES)
+        | set(H2_APPS_EXEMPT_SITES)
+    )
+
+
+def _tenant_session_functions(module_rel: str) -> frozenset[str]:
+    """Names of functions in *module_rel* whose body CALLS `tenant_session`.
+
+    AST calls, not source text — an H4 marker comment that merely *mentions*
+    tenant_session must not read as an opener (first version's false positive:
+    `record_app_audit`'s own exemption comment).
+    """
+    path = _REPO / module_rel
+    if not path.exists():
+        return frozenset()
+    src = path.read_text(encoding="utf-8-sig")
+    tree = ast.parse(src, filename=str(path))
+    out: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        for inner in ast.walk(node):
+            if isinstance(inner, ast.Call):
+                fn = inner.func
+                name = fn.id if isinstance(fn, ast.Name) else (
+                    fn.attr if isinstance(fn, ast.Attribute) else ""
+                )
+                if name.endswith("tenant_session"):
+                    out.add(node.name)
+                    break
+    return frozenset(out)
+
+
+def test_exempt_files_do_not_reach_converted_sessions_unreviewed() -> None:
+    """No H4-exempt file may CALL into a `_tenant_session`-opening function
+    without a reviewed edge in H2_EXEMPT_CALL_EDGES.
+
+    The failure this catches is invisible to everything else in this file: the
+    exempt caller has no bound tenant, the converted callee raises
+    `TenantUnbound` on the background path, and the hermetic fakes (which
+    yield unconditionally) stay green. Auto-lead died exactly this way.
+    """
+    offenders: list[str] = []
+    for rel in sorted(_h4_files()):
+        path = _REPO / rel
+        src = path.read_text(encoding="utf-8-sig")
+        tree = ast.parse(src, filename=str(path))
+        # name -> defining module (repo-relative) for names imported from
+        # gateway route packages
+        imported: dict[str, str] = {}
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module and \
+                    node.module.startswith("gateway.routes."):
+                mod_rel = (
+                    "apps/services/gateway/"
+                    + node.module.replace(".", "/") + ".py"
+                )
+                for alias in node.names:
+                    imported[alias.asname or alias.name] = mod_rel
+        if not imported:
+            continue
+        called = _called_names(path)
+        for name, mod_rel in sorted(imported.items()):
+            if name not in called:
+                continue
+            if name in _tenant_session_functions(mod_rel) and \
+                    (rel, name) not in H2_EXEMPT_CALL_EDGES:
+                offenders.append(
+                    f"{rel} calls {name}() from {mod_rel}, which opens a "
+                    f"tenant session — the exempt caller has NO bound tenant"
+                )
+    assert offenders == [], (
+        "unreviewed exempt→converted call edges (TenantUnbound at runtime "
+        "on the background path):\n  " + "\n  ".join(offenders)
+        + "\n\nEither bind an explicit tenant around the call (H4 shape) and "
+          "add the reviewed edge to H2_EXEMPT_CALL_EDGES, or un-convert the "
+          "callee."
+    )
+
+
+def test_exempt_call_edge_allowlist_has_no_stale_entries() -> None:
+    for (rel, name), _reason in H2_EXEMPT_CALL_EDGES.items():
+        assert rel in _h4_files(), f"{rel} is no longer an H4-exempt file"
+        src = (_REPO / rel).read_text(encoding="utf-8-sig")
+        assert name in _called_names(_REPO / rel), (
+            f"{rel} no longer calls {name}() — remove the stale edge"
+        )
+        assert f"bind_tenant(" in src, (
+            f"{rel} holds a reviewed edge but no longer binds an explicit "
+            f"tenant anywhere — the edge's justification is gone"
+        )
+
+
 def test_get_db_sites_elsewhere_only_ratchet_down() -> None:
     total = sum(
         n for f, n in _get_db_sites().items()

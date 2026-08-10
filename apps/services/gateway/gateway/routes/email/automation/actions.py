@@ -451,9 +451,14 @@ async def _apply_rule_actions(
                         subject=subj, body=body,
                     )
                 # AI-written (non-template) drafts: remember for edit-learning.
+                # commit=False: every caller of _apply_rule_actions holds a
+                # _tenant_session — a mid-block commit would end that
+                # transaction and drop the tenant GUC for everything after it
+                # (H2; found by the adversarial review, not the suites).
                 if not tmpl and account_id:
                     await _store_ai_draft(
-                        db, account_id, email.get("thread_id") or "", body)
+                        db, account_id, email.get("thread_id") or "", body,
+                        commit=False)
             elif t == "FORWARD" and a.get("to_address"):
                 note = await _render_template(
                     (a.get("content") or "").strip(), email)

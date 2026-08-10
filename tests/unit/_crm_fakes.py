@@ -528,6 +528,15 @@ class FakeCrmDB:
                 raise RuntimeError(
                     f"fake driver error on statement containing {entry[0]!r}"
                 )
+        # The auto-lead H4 fix's owner-organization lookup: a `lower() =
+        # lower()` WHERE the generic reader rightly refuses to guess at.
+        # Statement-keyed like every special arm, R10 honoured on both sides.
+        if "FROM app_user" in statement and "lower(email)" in statement:
+            wanted = str(args.get("e") or "").lower()
+            return _Result([
+                SimpleNamespace(**r) for r in self.rows("app_user")
+                if str(r.get("email") or "").lower() == wanted
+            ])
         head = statement.split(None, 1)[0].upper()
         table = _table(statement)
         if head == "INSERT":

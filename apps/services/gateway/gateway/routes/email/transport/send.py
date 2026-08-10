@@ -6,7 +6,7 @@ from __future__ import annotations
 from acb_auth import UserContext, get_current_user
 from fastapi import BackgroundTasks, Depends, HTTPException
 from gateway.routes.email.core import (
-    _get_db,
+    _tenant_session,
     provider_session,
     router,
 )
@@ -98,8 +98,7 @@ async def send_email(
     user: UserContext = Depends(get_current_user),
 ):
     """Send a new email from a connected account."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         # Ownership check + auth + rotated-cred persist all live in the session
         # helper (401 on auth failure, 404 on a foreign account).
         async with provider_session(
@@ -169,7 +168,6 @@ async def send_email(
             )
 
         # Commit the rotated-cred persist the session wrote on clean exit.
-        await db.commit()
 
         # If this was a reply, learn from how the user edited the AI's draft.
         if req.reply_to_message_id and req.body_text and reply_thread_id:
@@ -195,8 +193,6 @@ async def send_email(
                 pass
 
         return {"id": msg_id, "ok": True}
-    finally:
-        await db.close()
 
 
 class ImportArtifactRequest(BaseModel):

@@ -16,6 +16,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from email_ingestion.providers.gmail import GmailProvider
+from tests.unit._email_fakes import bind_db
 
 
 def _gmail() -> GmailProvider:
@@ -201,7 +202,7 @@ async def test_any_filter_is_enough_to_proceed(kwargs) -> None:
         async def close(self): ...
 
     req = s.BulkActionRequest(action="archive", account_id="acc-1", **kwargs)
-    with patch.object(s, "_get_db", AsyncMock(return_value=_DB())):
+    with patch.object(s, "_tenant_session", bind_db(_DB())):
         res = await s.bulk_action(req, MagicMock(), MagicMock(email="u@x.io"))
     assert res == {"affected": 0}
 
@@ -232,7 +233,7 @@ async def test_archiving_a_sender_never_reaches_into_the_bin() -> None:
     captured: dict = {}
     req = s.BulkActionRequest(
         action="archive", account_id="acc-1", sender_email="news@site.com")
-    with patch.object(s, "_get_db", AsyncMock(return_value=_capture_db(captured))):
+    with patch.object(s, "_tenant_session", bind_db(_capture_db(captured))):
         await s.bulk_action(req, MagicMock(), MagicMock(email="u@x.io"))
 
     # Disposed mail (trash/junk/spam/drafts) is out of reach for an archive.
@@ -247,7 +248,7 @@ async def test_trashing_still_reaches_archived_mail() -> None:
     captured: dict = {}
     req = s.BulkActionRequest(
         action="trash", account_id="acc-1", sender_email="news@site.com")
-    with patch.object(s, "_get_db", AsyncMock(return_value=_capture_db(captured))):
+    with patch.object(s, "_tenant_session", bind_db(_capture_db(captured))):
         await s.bulk_action(req, MagicMock(), MagicMock(email="u@x.io"))
 
     # Only already-trashed mail is skipped; the disposed-folder guard (which
@@ -277,7 +278,7 @@ async def test_affected_counts_only_what_changed(action, already) -> None:
     captured: dict = {}
     req = s.BulkActionRequest(
         action=action, account_id="acc-1", sender_email="news@site.com")
-    with patch.object(s, "_get_db", AsyncMock(return_value=_capture_db(captured))):
+    with patch.object(s, "_tenant_session", bind_db(_capture_db(captured))):
         await s.bulk_action(req, MagicMock(), MagicMock(email="u@x.io"))
 
     assert f"NOT ({already})" in captured["sql"]
@@ -410,7 +411,7 @@ async def test_cleaner_excludes_archived_mail_by_default() -> None:
     from gateway.routes.email.automation import senders as s
 
     captured: dict = {}
-    with patch.object(s, "_get_db", AsyncMock(return_value=_senders_db(captured))):
+    with patch.object(s, "_tenant_session", bind_db(_senders_db(captured))):
         await s.list_senders(
             account_id="acc-1", folder=None, include_archived=False,
             limit=200, offset=0, user=MagicMock(email="u@x.io"))
@@ -427,7 +428,7 @@ async def test_cleaner_can_still_show_the_whole_mailbox() -> None:
     from gateway.routes.email.automation import senders as s
 
     captured: dict = {}
-    with patch.object(s, "_get_db", AsyncMock(return_value=_senders_db(captured))):
+    with patch.object(s, "_tenant_session", bind_db(_senders_db(captured))):
         await s.list_senders(
             account_id="acc-1", folder=None, include_archived=True,
             limit=200, offset=0, user=MagicMock(email="u@x.io"))
@@ -495,7 +496,7 @@ async def test_light_search_omits_message_bodies() -> None:
 
         async def close(self): ...
 
-    with patch.object(sr, "_get_db", AsyncMock(return_value=_DB())):
+    with patch.object(sr, "_tenant_session", bind_db(_DB())):
         await sr.search_messages(
             q=None, account_id="acc-1", folder="all", label=None, labels=None,
             uncategorized=False, from_addr="news@site.com", to_addr=None,

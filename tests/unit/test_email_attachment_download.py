@@ -27,10 +27,15 @@ def test_download_uses_provider_session_not_a_raw_instantiate() -> None:
 
 
 def test_download_commits_so_the_rotated_creds_land() -> None:
-    """provider_session only STAGES the credential UPDATE; the caller owns the
-    commit boundary. A download that never commits silently re-drops the token."""
+    """provider_session only STAGES the credential UPDATE; the commit boundary
+    is now the tenant session's clean-exit commit (H2). A download that opened
+    its session any other way would silently re-drop the token."""
     src = inspect.getsource(m.download_attachment)
-    assert "db.commit()" in src
+    assert "_tenant_session(" in src, (
+        "download_attachment left the tenant-bound seam — its clean-exit "
+        "commit is what lands the rotated-cred persist"
+    )
+    assert "_get_db(" not in src
 
 
 def test_download_requires_auth() -> None:

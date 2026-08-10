@@ -10,6 +10,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from gateway.routes import email as m
+from tests.unit._email_fakes import bind_db
 
 
 async def _run_list(label):
@@ -25,7 +26,7 @@ async def _run_list(label):
     db = AsyncMock()
     db.execute.side_effect = fake_execute
     user = SimpleNamespace(email="u@example.com")
-    with patch.object(m.transport.messages, "_get_db", AsyncMock(return_value=db)):
+    with patch.object(m.transport.messages, "_tenant_session", bind_db(db)):
         resp = await m.list_messages(
             account_id="acc-1", folder="inbox", label=label,
             query=None, thread_id=None,
@@ -76,7 +77,7 @@ async def _run_list_full(**kw):
         page=1, page_size=50, user=user,
     )
     args.update(kw)
-    with patch.object(m.transport.messages, "_get_db", AsyncMock(return_value=db)):
+    with patch.object(m.transport.messages, "_tenant_session", bind_db(db)):
         resp = await m.list_messages(**args)
     return resp, captured
 
@@ -154,8 +155,8 @@ async def test_priority_inbox_ranks_and_excludes_bulk():
     db = AsyncMock()
     db.execute.side_effect = fake_execute
     user = SimpleNamespace(email="u@example.com")
-    with patch.object(m.transport.messages, "_get_db",
-                      AsyncMock(return_value=db)), \
+    with patch.object(m.transport.messages, "_tenant_session",
+                      bind_db(db)), \
             patch.object(m.transport.messages, "_assert_account_owner",
                          AsyncMock()):
         resp = await m.priority_inbox(
@@ -209,7 +210,7 @@ async def _run_thread_list(*, thread_id, msg_row, att_rows):
     db = AsyncMock()
     db.execute.side_effect = fake_execute
     user = SimpleNamespace(email="u@example.com")
-    with patch.object(m.transport.messages, "_get_db", AsyncMock(return_value=db)):
+    with patch.object(m.transport.messages, "_tenant_session", bind_db(db)):
         resp = await m.list_messages(
             account_id="acc-1", folder=None, label=None, query=None,
             thread_id=thread_id, received_after=None, received_before=None,

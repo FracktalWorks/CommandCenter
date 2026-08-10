@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from gateway.routes import email as m
+from tests.unit._email_fakes import bind_db
 
 _actions_for_preset = m.automation.rules._actions_for_preset
 
@@ -64,7 +65,7 @@ async def test_install_presets_uses_folder_actions_for_outlook() -> None:
     )
     user = SimpleNamespace(email="u@example.com")
     captured: list = []
-    with patch.object(m.automation.rules, "_get_db", AsyncMock(return_value=db)), \
+    with patch.object(m.automation.rules, "_tenant_session", bind_db(db)), \
             patch.object(m.automation.rules, "_assert_account_owner", AsyncMock()), \
             patch.object(m.automation.rules, "_load_rules", AsyncMock(return_value=[])), \
             patch.object(m.automation.rules, "_replace_actions",
@@ -94,7 +95,7 @@ async def test_install_presets_creates_only_missing() -> None:
     # it — two conversation rules for one status would double-classify.
     db = _db_with_provider()
     user = SimpleNamespace(email="u@example.com")
-    with patch.object(m.automation.rules, "_get_db", AsyncMock(return_value=db)), \
+    with patch.object(m.automation.rules, "_tenant_session", bind_db(db)), \
             patch.object(m.automation.rules, "_assert_account_owner", AsyncMock()), \
             patch.object(m.automation.rules, "_load_rules",
                          AsyncMock(return_value=[{"name": "Reply"}])), \
@@ -111,7 +112,7 @@ async def test_install_presets_idempotent_when_all_present() -> None:
     db = _db_with_provider()
     user = SimpleNamespace(email="u@example.com")
     all_rules = [{"name": p["name"]} for p in m._PRESET_RULES]
-    with patch.object(m.automation.rules, "_get_db", AsyncMock(return_value=db)), \
+    with patch.object(m.automation.rules, "_tenant_session", bind_db(db)), \
             patch.object(m.automation.rules, "_assert_account_owner", AsyncMock()), \
             patch.object(m.automation.rules, "_load_rules", AsyncMock(return_value=all_rules)), \
             patch.object(m.automation.rules, "_replace_actions", AsyncMock()):
@@ -125,7 +126,7 @@ async def test_reset_rules_deletes_then_reinstalls_every_preset() -> None:
     db = _db_with_provider("microsoft")
     user = SimpleNamespace(email="u@example.com")
     existing = [{"name": p["name"]} for p in m._PRESET_RULES]  # all present…
-    with patch.object(m.automation.rules, "_get_db", AsyncMock(return_value=db)), \
+    with patch.object(m.automation.rules, "_tenant_session", bind_db(db)), \
             patch.object(m.automation.rules, "_assert_account_owner", AsyncMock()), \
             patch.object(m.automation.rules, "_load_rules", AsyncMock(return_value=existing)), \
             patch.object(m.automation.rules, "_replace_actions", AsyncMock()):
@@ -165,7 +166,7 @@ async def test_reset_preserves_learned_patterns_across_the_reseed() -> None:
     user = SimpleNamespace(email="u@example.com")
     reseeded = [{"id": f"new-{p['name']}", "name": p["name"]}
                 for p in m._PRESET_RULES]
-    with patch.object(m.automation.rules, "_get_db", AsyncMock(return_value=db)), \
+    with patch.object(m.automation.rules, "_tenant_session", bind_db(db)), \
             patch.object(m.automation.rules, "_assert_account_owner", AsyncMock()), \
             patch.object(m.automation.rules, "_load_rules",
                          AsyncMock(return_value=reseeded)), \

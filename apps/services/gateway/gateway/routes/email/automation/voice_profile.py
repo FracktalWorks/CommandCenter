@@ -28,6 +28,7 @@ from gateway.routes.email.automation.jobs import JobTracker
 from gateway.routes.email.core import (
     _assert_account_owner,
     _get_db,
+    _tenant_session,
     _llm_json,
     _log,
     _parse_iso_date,
@@ -345,6 +346,8 @@ async def _build_voice_profile_job(
     profile row's status moves BUILDING → READY / FAILED so the state survives
     the tracker (which is in-memory and dies with the process).
     """
+    # H4: background consumer — _build_voice_profile_job runs as a
+    # post-response BackgroundTask; no ambient tenant to inherit.
     db = await _get_db()
     try:
         _VOICE_JOBS.update(account_id, token, phase="collecting")
@@ -469,8 +472,7 @@ async def get_voice_profile(
 ):
     """The account's voice profile (or an EMPTY placeholder), plus how many
     suggested knowledge entries are waiting for review."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         await _assert_account_owner(db, account_id, user.email or "anonymous")
         row = (await db.execute(text(
             """SELECT enabled, status, style_guide, traits, sources,
@@ -480,8 +482,6 @@ async def get_voice_profile(
         ), {"aid": account_id})).fetchone()
         suggested = await _count_suggested(db, account_id)
         return _profile_dict(account_id, row, suggested)
-    finally:
-        await db.close()
 
 
 @router.get("/voice-profile/preview")
@@ -497,8 +497,7 @@ async def preview_voice_profile(
     src = _clean_sources([s.strip() for s in sources.split(",")])
     start = _parse_iso_date(start_date, end_of_day=False)
     end = _parse_iso_date(end_date, end_of_day=True)
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         await _assert_account_owner(db, account_id, user.email or "anonymous")
         counts: dict[str, int] = {}
         for folder in _VALID_SOURCES:
@@ -519,8 +518,6 @@ async def preview_voice_profile(
                 f"WHERE {' AND '.join(clauses)}"
             ), params)).fetchone()
             counts[folder] = int(row.c) if row else 0
-    finally:
-        await db.close()
     total = sum(counts.values())
     return {
         "sent": counts.get("sent", 0),
@@ -561,8 +558,7 @@ async def build_voice_profile(
     if start and end and start > end:
         raise HTTPException(status_code=400,
                             detail="Start date is after end date.")
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         await _assert_account_owner(db, req.account_id,
                                     user.email or "anonymous")
         # Seed/refresh the row first so status survives a process restart.
@@ -579,9 +575,6 @@ async def build_voice_profile(
         ), {"aid": req.account_id, "src": sources,
             "rs": start.date() if start else None,
             "re": end.date() if end else None})
-        await db.commit()
-    finally:
-        await db.close()
     token = _VOICE_JOBS.start(
         req.account_id, owner=user.email or "anonymous", status="running",
         phase="collecting", processed=0, total=0)
@@ -617,8 +610,7 @@ async def put_voice_profile(
 ):
     """Edit the profile in place: toggle it, or hand-tune the style guide the
     drafter reads (the built traits stay as the record of what was learned)."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         await _assert_account_owner(db, req.account_id,
                                     user.email or "anonymous")
         sets, params = [], {"aid": req.account_id}
@@ -635,7 +627,6 @@ async def put_voice_profile(
                 SET {', '.join(sets)}, updated_at = now()
                 WHERE account_id = :aid"""
         ), params)
-        await db.commit()
         if res.rowcount == 0:
             raise HTTPException(status_code=404, detail="No profile yet.")
         row = (await db.execute(text(
@@ -646,8 +637,6 @@ async def put_voice_profile(
         ), {"aid": req.account_id})).fetchone()
         suggested = await _count_suggested(db, req.account_id)
         return _profile_dict(req.account_id, row, suggested)
-    finally:
-        await db.close()
 
 
 @router.delete("/voice-profile", status_code=status.HTTP_204_NO_CONTENT)
@@ -657,8 +646,7 @@ async def delete_voice_profile(
 ):
     """Remove the profile — and the knowledge suggestions it proposed that were
     never approved (approved entries are the user's now and stay)."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         await _assert_account_owner(db, account_id, user.email or "anonymous")
         await db.execute(text(
             """DELETE FROM email_knowledge
@@ -668,9 +656,6 @@ async def delete_voice_profile(
         await db.execute(text(
             "DELETE FROM email_voice_profiles WHERE account_id = :aid"
         ), {"aid": account_id})
-        await db.commit()
-    finally:
-        await db.close()
 
 
 class VoiceProfileSampleRequest(BaseModel):
@@ -687,16 +672,13 @@ async def sample_voice_profile(
 ):
     """"Try it": write a short sample email in the profile's voice so the user
     can judge the profile before trusting it with real drafts."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         await _assert_account_owner(db, req.account_id,
                                     user.email or "anonymous")
         row = (await db.execute(text(
             """SELECT style_guide, traits FROM email_voice_profiles
                WHERE account_id = :aid AND status = 'READY'"""
         ), {"aid": req.account_id})).fetchone()
-    finally:
-        await db.close()
     if not row:
         raise HTTPException(status_code=404, detail="Build a profile first.")
     block = voice_profile_block(row.style_guide or "", row.traits)
@@ -733,8 +715,7 @@ async def approve_knowledge(
     user: UserContext = Depends(get_current_user),
 ):
     """Approve a suggested knowledge entry so it starts feeding drafts."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         res = await db.execute(text(
             """UPDATE email_knowledge ek SET status = 'active',
                       updated_at = now()
@@ -742,9 +723,6 @@ async def approve_knowledge(
                WHERE ek.id = :id AND ek.account_id = ea.id
                  AND ea.user_id = :uid"""
         ), {"id": kid, "uid": user.email or "anonymous"})
-        await db.commit()
         if res.rowcount == 0:
             raise HTTPException(status_code=404, detail="Not found")
         return {"id": kid, "status": "active"}
-    finally:
-        await db.close()

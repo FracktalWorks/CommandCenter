@@ -11,6 +11,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from gateway.routes.email.transport import messages as m
+from tests.unit._email_fakes import bind_db
 
 
 class _User:
@@ -47,7 +48,7 @@ _OFF = {
 async def _run(**kw):
     args = {**_OFF, **kw}
     db, seen = _capture_db()
-    with patch.object(m, "_get_db", AsyncMock(return_value=db)):
+    with patch.object(m, "_tenant_session", bind_db(db)):
         out = await m.list_messages(user=_User(), **args)
     return out, seen
 

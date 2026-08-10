@@ -29,6 +29,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from gateway.routes.email.automation import analytics as a
+from tests.unit._email_fakes import bind_db
 
 _PARAMS = {"uid": "u@example.com", "days": 30}
 _SCOPE = "m.account_id IN (SELECT id FROM email_accounts WHERE user_id = :uid)"
@@ -84,7 +85,7 @@ async def test_every_flow_figure_on_the_page_carries_the_window() -> None:
     page displayed all-time numbers. Only the assembled query text can tell.
     """
     db = _db(rows=[], row=_ANY_ROW, scalar=0)
-    with patch.object(a, "_get_db", AsyncMock(return_value=db)):
+    with patch.object(a, "_tenant_session", bind_db(db)):
         await a.analytics_overview(
             account_id=None, days=30,
             user=SimpleNamespace(email="u@example.com"))

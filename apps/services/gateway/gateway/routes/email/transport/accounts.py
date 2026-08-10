@@ -8,7 +8,7 @@ from uuid import uuid4
 
 from acb_auth import UserContext, get_current_user
 from fastapi import Depends, HTTPException, status
-from gateway.routes.email.core import _default_label, _get_db, router
+from gateway.routes.email.core import _default_label, _tenant_session, router
 from pydantic import BaseModel
 from sqlalchemy import text
 
@@ -45,8 +45,7 @@ async def list_accounts(
     user: UserContext = Depends(get_current_user),
 ):
     """List all connected email accounts for the current user."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         result = await db.execute(
             text(
                 """SELECT id, provider, email_address, label, avatar_color,
@@ -86,8 +85,6 @@ async def list_accounts(
                 is_default=bool(row.is_default),
             ))
         return accounts
-    finally:
-        await db.close()
 
 
 @router.post("/accounts", response_model=EmailAccountModel, status_code=201)
@@ -123,8 +120,7 @@ async def create_account(
     store = get_key_store()
     encrypted_creds = store.encrypt(json.dumps(req.credentials))
 
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         # Check for duplicate account
         existing = await db.execute(
             text(
@@ -170,7 +166,6 @@ async def create_account(
             },
         )
         created_default = bool(is_default_row.scalar())
-        await db.commit()
 
         # Start background sync for this account
         try:
@@ -191,8 +186,6 @@ async def create_account(
             unread_count=0,
             is_default=created_default,
         )
-    finally:
-        await db.close()
 
 
 @router.post("/accounts/{account_id}/default", response_model=EmailAccountModel)
@@ -205,8 +198,7 @@ async def set_default_account(
     Clears the flag on the user's other accounts first so the partial unique
     index (one default per user) is never violated, then sets it on this one.
     """
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         owner = user.email or "anonymous"
         # Verify ownership before mutating anything.
         owned = await db.execute(
@@ -237,7 +229,6 @@ async def set_default_account(
             {"id": account_id, "uid": owner},
         )
         row = result.fetchone()
-        await db.commit()
 
         unread_result = await db.execute(
             text(
@@ -261,8 +252,6 @@ async def set_default_account(
             unread_count=unread,
             is_default=bool(row.is_default),
         )
-    finally:
-        await db.close()
 
 
 @router.delete("/accounts/{account_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -271,8 +260,7 @@ async def delete_account(
     user: UserContext = Depends(get_current_user),
 ):
     """Remove an email account and all its synced messages."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         owner = user.email or "anonymous"
         result = await db.execute(
             text(
@@ -300,7 +288,6 @@ async def delete_account(
                 ),
                 {"uid": owner},
             )
-        await db.commit()
 
         # Stop background sync for this account
         try:
@@ -308,8 +295,6 @@ async def delete_account(
             await remove_account_sync(account_id)
         except Exception:
             pass
-    finally:
-        await db.close()
 
 
 @router.patch("/accounts/{account_id}", response_model=EmailAccountModel)
@@ -319,8 +304,7 @@ async def update_account(
     user: UserContext = Depends(get_current_user),
 ):
     """Update account settings (label, sync toggle)."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         set_clauses = []
         params: dict[str, Any] = {"id": account_id, "user_id": user.email or "anonymous"}
 
@@ -349,7 +333,6 @@ async def update_account(
         row = result.fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Account not found")
-        await db.commit()
 
         # Refresh background sync: start/stop loop for this account
         try:
@@ -372,5 +355,3 @@ async def update_account(
             last_synced_at=row.last_synced_at.isoformat()
             if row.last_synced_at else None,
         )
-    finally:
-        await db.close()

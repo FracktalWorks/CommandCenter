@@ -8,10 +8,12 @@ refuses a concurrent rebuild. These pin that, with the DB + classifier mocked.
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
 from unittest.mock import AsyncMock, patch
 
 from fastapi import BackgroundTasks
 from gateway.routes.email.automation import replyzero as r
+from tests.unit._email_fakes import bind_db
 
 _ACC = "acc-reclass"
 
@@ -20,9 +22,17 @@ class _User:
     email = "u@example.com"
 
 
+@contextmanager
 def _mock_db_ctx():
-    """_get_db() → an AsyncMock db whose execute/commit/close all no-op."""
-    return patch.object(r, "_get_db", AsyncMock(return_value=AsyncMock()))
+    """Both DB seams → an AsyncMock db whose execute/commit/close all no-op.
+
+    The routes here are converted to `_tenant_session` (H2) while the
+    background `_reclassify_reply_zero_job` deliberately stays on `_get_db`
+    until H4 — so this fixture doubles both.
+    """
+    with patch.object(r, "_get_db", AsyncMock(return_value=AsyncMock())), \
+            patch.object(r, "_tenant_session", bind_db(AsyncMock())):
+        yield
 
 
 async def test_drain_classifies_until_no_threads_need_a_status() -> None:

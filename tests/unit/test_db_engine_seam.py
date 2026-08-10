@@ -335,7 +335,10 @@ H2_WHATSAPP_EXEMPT_SITES: dict[str, int] = {
 #: meeting-bot worker's service-identity paths, each marked `# H4` in place).
 #: 433 → 395: routes/whatsapp's 38 request-handler sites (2026-08-10; its
 #: 14 B/C leftovers are pinned file-by-file by the whatsapp remainder test).
-H2_BASELINE_ELSEWHERE = 395
+#: 395 → 297: routes/email's 98 request-handler sites (2026-08-10); its 27
+#: leftovers are B/C-class (webhook, OAuth callback, scheduler hooks,
+#: BackgroundTask jobs), each with a per-site H4/H6 marker naming its tenant.
+H2_BASELINE_ELSEWHERE = 297
 
 
 def _get_db_sites() -> dict[str, int]:

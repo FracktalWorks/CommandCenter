@@ -14,6 +14,7 @@ import pytest
 from fastapi import HTTPException
 from gateway.routes.email import core
 from gateway.routes.email.transport import messages as m
+from tests.unit._email_fakes import bind_db
 
 
 class _User:
@@ -53,7 +54,7 @@ _OFF = {
 
 async def _list(**kw):
     db, seen = _capture_db()
-    with patch.object(m, "_get_db", AsyncMock(return_value=db)):
+    with patch.object(m, "_tenant_session", bind_db(db)):
         await m.list_messages(user=_User(), **{**_OFF, **kw})
     return "\n".join(seen)
 
@@ -100,7 +101,7 @@ def _snooze_db(row):
 async def test_snooze_stamps_the_whole_thread() -> None:
     row = SimpleNamespace(account_id="acc-1", thread_id="th-9")
     db = _snooze_db(row)
-    with patch.object(m, "_get_db", AsyncMock(return_value=db)):
+    with patch.object(m, "_tenant_session", bind_db(db)):
         out = await m.snooze_message(
             "msg-1", m.SnoozeRequest(until="2026-08-01T08:00:00Z"),
             user=_User())
@@ -114,7 +115,7 @@ async def test_snooze_stamps_the_whole_thread() -> None:
 async def test_unsnooze_clears_the_stamp() -> None:
     row = SimpleNamespace(account_id="acc-1", thread_id="th-9")
     db = _snooze_db(row)
-    with patch.object(m, "_get_db", AsyncMock(return_value=db)):
+    with patch.object(m, "_tenant_session", bind_db(db)):
         out = await m.snooze_message("msg-1", m.SnoozeRequest(until=None),
                                      user=_User())
     upd = [c for c in db.calls if "UPDATE" in c[0]][0]
@@ -125,7 +126,7 @@ async def test_unsnooze_clears_the_stamp() -> None:
 async def test_lone_message_snoozes_by_id() -> None:
     row = SimpleNamespace(account_id="acc-1", thread_id=None)
     db = _snooze_db(row)
-    with patch.object(m, "_get_db", AsyncMock(return_value=db)):
+    with patch.object(m, "_tenant_session", bind_db(db)):
         await m.snooze_message("msg-1", m.SnoozeRequest(until="2026-08-01T08:00:00Z"),
                                user=_User())
     upd = [c for c in db.calls if "UPDATE" in c[0]][0]
@@ -135,7 +136,7 @@ async def test_lone_message_snoozes_by_id() -> None:
 
 async def test_unowned_message_is_404() -> None:
     db = _snooze_db(None)
-    with patch.object(m, "_get_db", AsyncMock(return_value=db)):
+    with patch.object(m, "_tenant_session", bind_db(db)):
         with pytest.raises(HTTPException) as ei:
             await m.snooze_message("msg-1", m.SnoozeRequest(until=None),
                                    user=_User())

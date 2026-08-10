@@ -24,6 +24,7 @@ import pytest
 from fastapi import BackgroundTasks, HTTPException
 
 from gateway.routes.email.automation import runner as m
+from tests.unit._email_fakes import bind_db
 
 _ACC = "acc-cost"
 _USER = SimpleNamespace(email="u@example.com")
@@ -71,8 +72,8 @@ def test_an_open_ended_END_is_measured_to_today() -> None:
 async def test_the_endpoint_enforces_the_cap_before_touching_the_db() -> None:
     """A bound checked after the work has begun is not a bound. This also keeps
     the refusal cheap: no connection, no owner check, no count."""
-    get_db = AsyncMock()
-    with patch.object(m, "_get_db", get_db):
+    seam = bind_db(AsyncMock())
+    with patch.object(m, "_tenant_session", seam):
         with pytest.raises(HTTPException) as e:
             await m.process_past_emails(
                 m.RuleProcessPastRequest(
@@ -80,12 +81,12 @@ async def test_the_endpoint_enforces_the_cap_before_touching_the_db() -> None:
                     end_date="2026-07-01"),
                 background=BackgroundTasks(), user=_USER)
     assert e.value.status_code == 400
-    get_db.assert_not_awaited()
+    assert seam.calls == []  # no session was ever opened
 
 
 async def test_a_refused_range_schedules_nothing() -> None:
     bg = BackgroundTasks()
-    with patch.object(m, "_get_db", AsyncMock()), \
+    with patch.object(m, "_tenant_session", bind_db(AsyncMock())), \
             patch.object(m, "_assert_account_owner", AsyncMock()):
         with pytest.raises(HTTPException):
             await m.process_past_emails(
@@ -107,7 +108,7 @@ def _db_returning(*counts: int) -> AsyncMock:
 
 async def _estimate(*counts: int, limit: int = 1000) -> dict:
     db = _db_returning(*counts)
-    with patch.object(m, "_get_db", AsyncMock(return_value=db)), \
+    with patch.object(m, "_tenant_session", bind_db(db)), \
             patch.object(m, "_assert_account_owner", AsyncMock()):
         return await m.process_past_estimate(
             account_id=_ACC, start_date="2026-01-01", end_date="2026-07-01",
@@ -147,7 +148,7 @@ async def test_held_back_history_is_counted_separately() -> None:
 
 async def test_the_estimate_asks_the_db_for_held_back_mail_explicitly() -> None:
     db = _db_returning(10, 10, 3)
-    with patch.object(m, "_get_db", AsyncMock(return_value=db)), \
+    with patch.object(m, "_tenant_session", bind_db(db)), \
             patch.object(m, "_assert_account_owner", AsyncMock()):
         await m.process_past_estimate(
             account_id=_ACC, start_date="2026-01-01", user=_USER)

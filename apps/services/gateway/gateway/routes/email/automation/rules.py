@@ -12,7 +12,7 @@ from fastapi import Depends, HTTPException, Query, status
 from gateway.routes.email.automation.senders import DISPOSED_FOLDERS
 from gateway.routes.email.core import (
     _assert_account_owner,
-    _get_db,
+    _tenant_session,
     _llm_json,
     _log,
     provider_session,
@@ -155,12 +155,9 @@ async def list_rules(
     user: UserContext = Depends(get_current_user),
 ):
     """List assistant rules (with actions) for an account."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         await _assert_account_owner(db, account_id, user.email or "anonymous")
         return {"rules": await _load_rules(db, account_id)}
-    finally:
-        await db.close()
 
 
 # Default inbox-zero rule set. Each preset carries a provider-agnostic
@@ -307,19 +304,15 @@ async def install_preset_rules(
 ):
     """Install the default inbox-zero-style rule set (skips ones already present
     by name). Used by the UI's 'Add defaults' and the assistant's setup flow."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         await _assert_account_owner(db, account_id, user.email or "anonymous")
         # The account's provider decides whether cleanup categories become
         # folders (Outlook) or labels (Gmail) — inbox-zero parity.
         provider = await _account_provider(db, account_id)
         installed = await _seed_preset_rules(
             db, account_id, provider, skip_existing=True)
-        await db.commit()
         return {"installed": installed,
                 "total_presets": len(_PRESET_RULES)}
-    finally:
-        await db.close()
 
 
 @router.post("/rules/reset")
@@ -340,8 +333,7 @@ async def reset_rules(
     new id. Patterns belonging to a custom rule the user is deleting here are
     genuinely gone with it, which is the expected meaning of 'reset'.
     """
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         await _assert_account_owner(db, account_id, user.email or "anonymous")
         provider = await _account_provider(db, account_id)
         # Snapshot the learned patterns keyed by their rule's NAME — the reseed
@@ -387,11 +379,8 @@ async def reset_rules(
                     "reason": s.reason, "approved": s.approved_at,
                     "rejected": s.rejected_at})
                 restored += 1
-        await db.commit()
         return {"installed": installed, "total_presets": len(_PRESET_RULES),
                 "reset": True, "patterns_restored": restored}
-    finally:
-        await db.close()
 
 
 async def _replace_actions(db: Any, rule_id: str, actions: list[RuleActionModel]) -> None:
@@ -478,15 +467,11 @@ async def create_rule(
     user: UserContext = Depends(get_current_user),
 ):
     """Create an assistant rule with its actions."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         await _assert_account_owner(db, req.account_id, user.email or "anonymous")
         rule_id = await _insert_rule(db, req)
-        await db.commit()
         rules = await _load_rules(db, req.account_id)
         return next((r for r in rules if r["id"] == rule_id), {"id": rule_id})
-    finally:
-        await db.close()
 
 
 _GEN_ACTION_TYPES = {
@@ -596,8 +581,7 @@ async def rule_policies(
     auth failure degrade to ``provider_rules_supported: false`` rather than
     failing the screen — the local policies still render.
     """
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         await _assert_account_owner(db, account_id, user.email or "anonymous")
         cb_row = (await db.execute(text(
             "SELECT cold_email_blocker FROM email_assistant_settings "
@@ -634,7 +618,10 @@ async def rule_policies(
                     supported = True
         except Exception as exc:  # noqa: BLE001
             # Display-only extra — never fail the screen over it, but the
-            # session may be mid-transaction after a provider error.
+            # session may be mid-transaction after a provider error. The
+            # rollback ends this transaction (and with it the tenant GUC);
+            # nothing below touches the DB again, and the wrapper's exit
+            # commit closes out an empty transaction.
             await db.rollback()
             _log.warning("email.rule_policies_provider_failed",
                          account_id=account_id, error=str(exc)[:200])
@@ -645,8 +632,6 @@ async def rule_policies(
             "provider_rules": provider_rules,
             "provider_rules_supported": supported,
         }
-    finally:
-        await db.close()
 
 
 class RuleGenerateRequest(BaseModel):
@@ -663,8 +648,7 @@ async def generate_rules(
 
     The text may describe several rules at once; each is turned into a
     structured rule and created. Returns the created rules."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         await _assert_account_owner(db, req.account_id, user.email or "anonymous")
         if not (req.prompt or "").strip():
             return {"created": [], "error": "Describe at least one rule."}
@@ -684,12 +668,9 @@ async def generate_rules(
                 actions=[RuleActionModel(**a) for a in spec["actions"]],
             )
             created_ids.append(await _insert_rule(db, model))
-        await db.commit()
         rules = await _load_rules(db, req.account_id)
         created = [r for r in rules if r["id"] in set(created_ids)]
         return {"created": created}
-    finally:
-        await db.close()
 
 
 @router.patch("/rules/{rule_id}")
@@ -699,8 +680,7 @@ async def update_rule(
     user: UserContext = Depends(get_current_user),
 ):
     """Update a rule and replace its actions."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         owner = (await db.execute(text(
             """SELECT er.account_id FROM email_rules er
                JOIN email_accounts ea ON er.account_id = ea.id
@@ -724,11 +704,8 @@ async def update_rule(
             "tp": req.to_pattern, "sp": req.subject_pattern, "bp": req.body_pattern,
             "st": req.system_type})
         await _replace_actions(db, rule_id, req.actions)
-        await db.commit()
         rules = await _load_rules(db, str(owner.account_id))
         return next((r for r in rules if r["id"] == rule_id), {"id": rule_id})
-    finally:
-        await db.close()
 
 
 @router.delete("/rules/{rule_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -737,19 +714,15 @@ async def delete_rule(
     user: UserContext = Depends(get_current_user),
 ):
     """Delete a rule (cascades to actions)."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         res = await db.execute(text(
             """DELETE FROM email_rules er
                USING email_accounts ea
                WHERE er.id = :rid AND er.account_id = ea.id
                  AND ea.user_id = :uid"""
         ), {"rid": rule_id, "uid": user.email or "anonymous"})
-        await db.commit()
         if res.rowcount == 0:
             raise HTTPException(status_code=404, detail="Rule not found")
-    finally:
-        await db.close()
 
 
 # Sources that represent a deliberate human act, so the pattern needs no review:
@@ -894,8 +867,7 @@ async def list_rule_guidance(
 ):
     """Corrections that teach the classifier — the "improves the AI" half of the
     Learned Patterns screen."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         await _assert_account_owner(db, account_id, user.email or "anonymous")
         rows = (await db.execute(text(
             """SELECT g.id, g.rule_id, r.name AS rule_name, g.guidance,
@@ -913,8 +885,6 @@ async def list_rule_guidance(
              "thread_id": r.thread_id,
              "created_at": r.created_at.isoformat() if r.created_at else None}
             for r in rows]}
-    finally:
-        await db.close()
 
 
 @router.post("/rules/guidance")
@@ -926,15 +896,11 @@ async def add_rule_guidance(
     text_ = (req.guidance or "").strip()
     if not text_:
         raise HTTPException(status_code=400, detail="Guidance cannot be empty")
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         await _assert_account_owner(db, req.account_id, user.email or "anonymous")
         await _upsert_rule_guidance(
             db, req.account_id, req.rule_id, text_, "USER")
-        await db.commit()
         return {"ok": True}
-    finally:
-        await db.close()
 
 
 @router.delete("/rules/guidance/{gid}", status_code=status.HTTP_204_NO_CONTENT)
@@ -946,16 +912,12 @@ async def delete_rule_guidance(
     """Withdraw a correction. Deleted outright rather than deactivated — unlike a
     rejected PATTERN, nothing re-infers guidance, so there is no verdict to
     remember and a leftover row would just be clutter the user cannot see."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         await _assert_account_owner(db, account_id, user.email or "anonymous")
         await db.execute(text(
             "DELETE FROM email_rule_guidance "
             " WHERE id = :gid AND account_id = :aid"
         ), {"gid": gid, "aid": account_id})
-        await db.commit()
-    finally:
-        await db.close()
 
 
 class RuleFeedbackRequest(BaseModel):
@@ -993,8 +955,7 @@ async def rule_feedback(
 
     A correction can be taught on the sender (FROM), a subject keyword
     (SUBJECT), or both — whichever signals the request carries."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         await _assert_account_owner(db, req.account_id, user.email or "anonymous")
         sender = (req.sender or "").strip()
         subject_kw = (req.subject_keyword or "").strip()
@@ -1130,7 +1091,6 @@ async def rule_feedback(
                 db, req.account_id, target, taught, "FIX",
                 req.message_id, req.thread_id)
 
-        await db.commit()
         changed_label = bool(
             label_correction
             and (label_correction["removed"] or label_correction["added"]))
@@ -1142,8 +1102,6 @@ async def rule_feedback(
                 "signals": [t for t, _ in signals],
                 "status_correction": status_correction,
                 "label_correction": label_correction}
-    finally:
-        await db.close()
 
 
 @router.get("/rules/patterns")
@@ -1166,8 +1124,7 @@ async def list_rule_patterns(
     UI presents it as "about". One nested-loop join over the mailbox, on an
     explicitly-opened review screen.
     """
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         await _assert_account_owner(db, account_id, user.email or "anonymous")
         try:
             rows = (await db.execute(text(
@@ -1210,8 +1167,6 @@ async def list_rule_patterns(
              "created_at": r.created_at.isoformat() if r.created_at else None}
             for r in rows
         ]}
-    finally:
-        await db.close()
 
 
 class PatternReviewRequest(BaseModel):
@@ -1234,8 +1189,7 @@ async def review_rule_patterns(
     refuses to resurrect a rejected pattern unless the user themselves overturns
     it via Fix or a label change.
     """
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         await _assert_account_owner(db, req.account_id, user.email or "anonymous")
         params: dict[str, Any] = {"aid": req.account_id}
         where = "account_id = :aid"
@@ -1252,13 +1206,10 @@ async def review_rule_patterns(
                 else "rejected_at = now(), approved_at = NULL")
         res = await db.execute(text(
             f"UPDATE email_rule_patterns SET {sets} WHERE {where}"), params)
-        await db.commit()
         updated = int(getattr(res, "rowcount", 0) or 0)
         _log.info("email.rule_patterns_reviewed", account_id=req.account_id,
                   approved=req.approve, updated=updated)
         return {"updated": updated, "approved": req.approve}
-    finally:
-        await db.close()
 
 
 @router.delete("/rules/patterns/{pattern_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -1267,14 +1218,10 @@ async def delete_rule_pattern(
     user: UserContext = Depends(get_current_user),
 ):
     """Forget a learned classification pattern."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         res = await db.execute(text(
             """DELETE FROM email_rule_patterns p USING email_accounts ea
                WHERE p.id = :id AND p.account_id = ea.id AND ea.user_id = :uid"""
         ), {"id": pattern_id, "uid": user.email or "anonymous"})
-        await db.commit()
         if res.rowcount == 0:
             raise HTTPException(status_code=404, detail="Not found")
-    finally:
-        await db.close()

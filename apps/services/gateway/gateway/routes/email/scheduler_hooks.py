@@ -24,6 +24,8 @@ async def auto_run_rules_for_account(account_id: str) -> None:
     from gateway.routes.email.automation.runner import _run_rules_job
     from sqlalchemy import text
 
+    # H4: scheduler post-sync hook — runs outside any request; no ambient
+    # tenant to inherit (the runbook forbids jobs inheriting one).
     db = await _get_db()
     try:
         settings = (
@@ -159,6 +161,8 @@ async def learn_label_changes(account_id: str, changes: list) -> None:
         learn_from_label_change_events,
     )
 
+    # H4: scheduler post-sync hook — runs outside any request; no ambient
+    # tenant to inherit.
     db = await _get_db()
     try:
         await learn_from_label_change_events(db, account_id, changes)

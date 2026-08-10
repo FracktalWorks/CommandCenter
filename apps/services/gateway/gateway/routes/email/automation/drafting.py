@@ -23,6 +23,7 @@ from gateway.routes.email.core import (
     _attachment_summaries,
     _fmt_addr_list,
     _get_db,
+    _tenant_session,
     _llm_json,
     _log,
     _row_to_message,
@@ -317,6 +318,8 @@ async def _cleanup_thread_drafts(account_id: str, thread_id: str) -> None:
     the one consumed by the send. Best-effort background task."""
     if not thread_id:
         return
+    # H4: background consumer — _cleanup_thread_drafts runs as a post-response
+    # BackgroundTask (send paths); no ambient tenant to inherit.
     db = await _get_db()
     try:
         rows = (await db.execute(text(
@@ -398,10 +401,16 @@ async def _resolve_existing_thread_draft(
 
 
 async def _store_ai_draft(
-    db: Any, account_id: str, thread_id: str, draft_text: str
+    db: Any, account_id: str, thread_id: str, draft_text: str,
+    *, commit: bool = True,
 ) -> None:
     """Remember the assistant's original draft for a thread, so we can later
-    learn from how the user edits it before sending."""
+    learn from how the user edits it before sending.
+
+    ``commit=False`` is for callers holding a ``_tenant_session`` (H2): the
+    wrapper commits on clean exit, and a mid-block commit would end that
+    transaction and drop the tenant GUC. Background callers on their own
+    `_get_db` session keep the default and commit here as before."""
     if not account_id or not thread_id or not (draft_text or "").strip():
         return
     try:
@@ -411,7 +420,8 @@ async def _store_ai_draft(
                ON CONFLICT (account_id, thread_id) DO UPDATE SET
                  draft_text = EXCLUDED.draft_text, created_at = now()"""
         ), {"aid": account_id, "tid": thread_id, "txt": draft_text})
-        await db.commit()
+        if commit:
+            await db.commit()
     except Exception as exc:  # noqa: BLE001
         _log.warning("email.store_ai_draft_failed", error=str(exc)[:160])
 
@@ -511,6 +521,8 @@ async def _learn_from_sent(account_id: str, thread_id: str, sent_text: str) -> N
     # correspondent prose leaked into the learned preferences. Strip the quote so
     # both the unchanged-check and the extraction see only what the user wrote.
     sent_text = split_quoted_text(sent_text)[0]
+    # H4: background consumer — _learn_from_sent runs as a post-response
+    # BackgroundTask after a send; no ambient tenant to inherit.
     db = await _get_db()
     try:
         # The signature now rides IN draft bodies, but the /send path's body may
@@ -1660,8 +1672,7 @@ async def draft_reply_smart(
     """Draft a context-aware reply with the orchestrating drafter (memory +
     sales/task-manager). Returns the draft text; optionally also creates a
     provider draft in the user's Drafts."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         await _assert_account_owner(db, req.account_id, user.email or "anonymous")
         email = await _build_reply_context(
             db, req.account_id, req.message_id, user.email or "anonymous")
@@ -1696,7 +1707,10 @@ async def draft_reply_smart(
 
         # Remember this draft so we can learn from the user's edits on send.
         if not req.follow_up:
-            await _store_ai_draft(db, req.account_id, email["thread_id"], draft)
+            # commit=False: this db is the route's _tenant_session — the
+            # wrapper's exit commit lands the row (H2).
+            await _store_ai_draft(
+                db, req.account_id, email["thread_id"], draft, commit=False)
 
         created = False
         if req.create_draft:
@@ -1726,14 +1740,11 @@ async def draft_reply_smart(
                             subject=re_subject, body=draft,
                         )
                         created = True
-                if created:
-                    await db.commit()
+                # The wrapper's exit commit lands the mirrored local draft.
             except Exception as exc:  # noqa: BLE001
                 _log.warning("email.draft_reply_create_failed", error=str(exc)[:160])
 
         return {"draft": draft, "created": created}
-    finally:
-        await db.close()
 
 
 class ComposeAssistRequest(BaseModel):
@@ -1757,6 +1768,9 @@ async def _compose_assist_run(
     """The ONE compose-assist implementation behind both the JSON endpoint and
     the SSE streaming endpoint. Returns {"draft": ...} or
     {"draft": "", "skipped": "low_confidence"}."""
+    # H4: _compose_assist_run also runs via asyncio.create_task on the
+    # compose_assist_stream keep-alive path — a task must not inherit the
+    # ambient tenant; needs an explicit tenant threaded through the call.
     db = await _get_db()
     try:
         await _assert_account_owner(db, req.account_id, user.email or "anonymous")
@@ -2028,8 +2042,7 @@ async def upsert_draft(
     place (no duplicates); ``reply_to_message_id`` threads a new reply draft;
     neither → a standalone draft. Returns the persisted message so the UI can show
     it in the Drafts folder and in-thread at once."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         await _assert_account_owner(db, req.account_id, user.email or "anonymous")
         # The signature lives IN the draft body so the upstream (provider)
         # draft shows it too. The composer normally seeds it already — this is
@@ -2119,10 +2132,7 @@ async def upsert_draft(
                 subject=subject, body=body, cc=cc, bcc=bcc,
                 has_attachments=bool(atts),
             )
-        await db.commit()
         return await _fetch_message_dict(db, local_id)
-    finally:
-        await db.close()
 
 
 class DraftSendRequest(BaseModel):
@@ -2139,8 +2149,7 @@ async def send_draft_endpoint(
     """Send an existing draft natively (Drafts → Sent, no duplicate) and drop the
     local draft row. Falls back to send-new-then-trash for providers without a
     native send-draft primitive."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         await _assert_account_owner(db, req.account_id, user.email or "anonymous")
         drow = (await db.execute(text(
             "SELECT provider_message_id, subject, to_addresses, body_text,"
@@ -2212,7 +2221,6 @@ async def send_draft_endpoint(
                 text("DELETE FROM email_messages WHERE id = :id"),
                 {"id": req.draft_id},
             )
-        await db.commit()
         # Reply complete: learn from the sent body and move the thread out of
         # "Reply" → Awaiting Reply (same hooks as the full /send path).
         if drow.thread_id:
@@ -2229,8 +2237,6 @@ async def send_draft_endpoint(
             background.add_task(
                 _cleanup_thread_drafts, req.account_id, drow.thread_id)
         return {"sent": True}
-    finally:
-        await db.close()
 
 
 class SaveDraftRequest(BaseModel):
@@ -2249,8 +2255,7 @@ async def save_draft(
     Powers the chat's interactive draft card: the assistant proposes a draft,
     the user edits it inline, then saves it to their Drafts folder verbatim. The
     draft is mirrored locally so it shows in Drafts/in-thread immediately."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         await _assert_account_owner(db, req.account_id, user.email or "anonymous")
         row = (await db.execute(text(
             "SELECT subject, thread_id, from_address FROM email_messages "
@@ -2286,7 +2291,4 @@ async def save_draft(
                 owner_email="", to_email=to_email,
                 subject=re_subject, body=body,
             )
-        await db.commit()
         return {"created": True, "id": local_id}
-    finally:
-        await db.close()

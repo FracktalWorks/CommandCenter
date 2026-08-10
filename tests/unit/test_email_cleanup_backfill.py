@@ -28,6 +28,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from gateway.routes.email.automation import cleanup as c
+from tests.unit._email_fakes import bind_db
 
 _ACC = "acc-backfill"
 
@@ -194,7 +195,7 @@ async def test_a_second_run_is_refused_while_one_is_in_flight() -> None:
     row. Say so rather than silently start a second."""
     c._SWEEP_JOBS.set(_ACC, {"owner": "u@x", "status": "running"})
     try:
-        with patch.object(c, "_get_db", AsyncMock(return_value=AsyncMock())), \
+        with patch.object(c, "_tenant_session", bind_db(AsyncMock())), \
                 patch.object(c, "_assert_account_owner", AsyncMock()):
             from fastapi import BackgroundTasks
             res = await c.cleanup_backfill(
@@ -211,7 +212,7 @@ async def test_a_finished_run_does_not_block_the_next_one() -> None:
     c._SWEEP_JOBS.set(_ACC, {"owner": "u@x", "status": "done"})
     try:
         bg = None
-        with patch.object(c, "_get_db", AsyncMock(return_value=AsyncMock())), \
+        with patch.object(c, "_tenant_session", bind_db(AsyncMock())), \
                 patch.object(c, "_assert_account_owner", AsyncMock()):
             from fastapi import BackgroundTasks
             bg = BackgroundTasks()

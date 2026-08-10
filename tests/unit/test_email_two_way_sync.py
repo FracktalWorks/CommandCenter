@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi import HTTPException
 from gateway.routes import email as m
+from tests.unit._email_fakes import bind_db
 
 USER = SimpleNamespace(email="u@example.com")
 
@@ -44,7 +45,7 @@ async def test_update_message_provider_error_does_not_fail_action() -> None:
     db = _db_with_owned_row()
     prov = _provider(apply_flags=AsyncMock(side_effect=HTTPException(status_code=502)))
     sentinel = object()
-    with patch.object(m.transport.messages, "_get_db", AsyncMock(return_value=db)), \
+    with patch.object(m.transport.messages, "_tenant_session", bind_db(db)), \
             patch.object(m.transport.messages, "_provider_for_message",
                          AsyncMock(return_value=(prov, "OLD_PID", "acc-1", object()))), \
             patch.object(m.transport.messages, "_persist_rotated_creds", AsyncMock()), \
@@ -59,7 +60,7 @@ async def test_update_message_move_rekeys_provider_id() -> None:
     # Outlook /move returns a new id -> we must persist it.
     db = _db_with_owned_row()
     prov = _provider(move_to_folder=AsyncMock(return_value="NEW_PID"))
-    with patch.object(m.transport.messages, "_get_db", AsyncMock(return_value=db)), \
+    with patch.object(m.transport.messages, "_tenant_session", bind_db(db)), \
             patch.object(m.transport.messages, "_provider_for_message",
                          AsyncMock(return_value=(prov, "OLD_PID", "acc-1", object()))), \
             patch.object(m.transport.messages, "_persist_rotated_creds", AsyncMock()), \
@@ -76,7 +77,7 @@ async def test_update_message_move_rekeys_provider_id() -> None:
 async def test_delete_message_rekeys_and_swallows_provider_error() -> None:
     db = _db_with_owned_row()
     prov = _provider(trash_message=AsyncMock(return_value="NEW_PID"))
-    with patch.object(m.transport.messages, "_get_db", AsyncMock(return_value=db)), \
+    with patch.object(m.transport.messages, "_tenant_session", bind_db(db)), \
             patch.object(m.transport.messages, "_provider_for_message",
                          AsyncMock(return_value=(prov, "OLD_PID", "acc-1", object()))), \
             patch.object(m.transport.messages, "_persist_rotated_creds", AsyncMock()):

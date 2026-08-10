@@ -21,14 +21,14 @@
 > `pm_task_types.is_epic` and `pm_view_user_state`. **Migration 168 is NOT applied on prod**
 > (verified only against a scratch Postgres 16). The CSV-export third of the basket is a
 > separate slice. ·
-> 🟢 **ag BUILT 2026-08-10, on branch, NOT merged and NOT deployed** (§11.20) — the app joins
+> 🟢 **ag BUILT 2026-08-10 — MERGED to `main` and DEPLOYED** (#421) (§11.20) — the app joins
 > the house shell and gets a mobile layout at all: `AppShell` learns `isProjectsPage`
 > (Projects · Views · Search), the tree and the mode picker become drawer sheets, an opened
 > task is full-screen on a phone, the desktop rail collapses at Tasks' `w-60`, and the
 > six-purpose header splits into a title row and an action row. Frontend only — no migration,
 > no API change. ⚠️ **The phone-viewport and four-theme visual pass is still owed**: no
 > browser was runnable in the build environment (§11.20's closing note). ·
-> 🟢 **S1 BUILT 2026-08-10, on branch, NOT merged and NOT deployed** (§9.2, under WS-27ad) —
+> 🟢 **S1 BUILT 2026-08-10 — MERGED to `main` and DEPLOYED** (#421) (§9.2, under WS-27ad) —
 > the /tasks board card and column adopt /projects' chrome under the owner's ruling that
 > *"the Tasks app is only a slice of the Projects app"*: one column shape and surface, one
 > gutter, the shell's `completed` and `atCursor` props finally passed by their /tasks caller,
@@ -37,14 +37,14 @@
 > **amends ad's recorded "modal select-mode is KEPT" decision on the card side**. Frontend
 > only — no migration, no API change. ⚠️ Visual pass still owed for the same reason as af/ag. ·
 > 🟢 **S3 (selection/bulk parity) BUILT 2026-08-10 for the /tasks LIST surfaces, on branch
-> `ws-s3-selection-bulk-parity`, NOT merged and NOT deployed** (§9 ticket "S3") — WS-27ad's
+> `ws-s3-selection-bulk-parity`, **MERGED to `main` and DEPLOYED** (#421) (§9 ticket "S3") — WS-27ad's
 > kept modal select-mode is **reversed by owner ruling** ("Projects is canonical, Tasks
 > conforms"): `selectMode` is now a derived mirror of "something is selected" and gates only
 > the bulk bar, the checkbox is permanent and sits outside the row content, shift-sweep is
 > ungated, the bar moved to the top onto Projects' chrome and primitives, and select-all
 > exists. ⚠️ The board card (`TaskCard`/`TaskBoard`, sibling slice S1) and `WaitingForView`
 > are still modal, and no browser was run here either. ·
-> 🟢 **S4 BUILT 2026-08-10, on branch, NOT merged and NOT deployed** (§11.21) — the three
+> 🟢 **S4 BUILT 2026-08-10 — MERGED to `main` and DEPLOYED** (#421) (§11.21) — the three
 > findings where **Projects**, not Tasks, carried the defect: `MyWork`'s active pill moves
 > off `bg-accent` onto the house `bg-primary/10 text-primary` (now fenced by a **sixth
 > conformance rule**, per-file and ratcheted), `MyWork`'s bespoke fourth task row is rebuilt
@@ -74,7 +74,7 @@
 > visual sweep was actually run this time** (Playwright + the pre-installed Chromium, fixtures
 > at the network boundary), which closes the check af/ag/S1/S3/S4/S5 all left owed *for this
 > surface*; one honest finding recorded in §11.23 about Material dark's pale `--warning`. ·
-> 🟢 **WS-27ab BUILT 2026-08-10, on branch `ws-27ab-view-ergonomics`, NOT merged and NOT
+> 🟢 **WS-27ab BUILT 2026-08-10 — merged onto `claude/paca-research-task-management-a1f6zd`, in PR #422; NOT on `main` and NOT
 > deployed** (§11.25) — view ergonomics, from Plane research P-14/15/16: the task panel gains
 > **peek → side → full**, persisted per user, and Escape hands focus back to the card that
 > opened it; the saved-view association **survives an edit** and `FilterBar` grows a
@@ -86,7 +86,7 @@
 > moved**, both keys have been in `DEFAULT_SHOWN` since WS-27x. Frontend only — no migration,
 > no API change (the view update uses the existing `PATCH /projects/views/{id}`). ✅ Browser
 > driven, and the four-theme × two-mode sweep run. ·
-> 🟢 **WS-27ac BUILT 2026-08-10, on branch `ws-27ac-calendar-week`, NOT merged and NOT
+> 🟢 **WS-27ac BUILT 2026-08-10 — merged onto `claude/paca-research-task-management-a1f6zd`, in PR #422; NOT on `main` and NOT
 > deployed** (§11.24) — the calendar gains a **week** layout, an **exact** `+N more` that
 > expands, and a drop that says why it refused. The week is the month grid's own row, not a
 > second calculation: `mondayOffset` and `runOfDays` are shared, `MonthGrid` became
@@ -98,8 +98,8 @@
 > sweep and every gesture (overflow, quick-add, drag-reschedule, refusal) driven in a real
 > browser, pinned to UTC+5:30. ⚠️ One honest limit recorded in §11.24: of the two drop
 > refusals only the foreign-payload one is reachable today. ·
-> 🟢 **WS-27ae (EXPORT THIRD) BUILT 2026-08-10, on branch `ws-27ae-projects-csv-export`,
-> NOT merged and NOT deployed** (§11.26) — `GET /projects/export/tasks.csv`: the caller's
+> 🟢 **WS-27ae (EXPORT THIRD) BUILT 2026-08-10 — merged onto `claude/paca-research-task-management-a1f6zd`, in PR #422;
+> NOT on `main` and NOT deployed** (§11.26) — `GET /projects/export/tasks.csv`: the caller's
 > current filters through the one shared `build_task_filters`, the view's `shown_fields` as
 > the columns (in the vocabulary's order, which is what the table draws), `#` and `Title`
 > unconditional, and a toolbar `Export` button. **No migration** (R1: no number taken; 168 is
@@ -1491,7 +1491,7 @@ no two actions share a key sequence; (5) DESIGN_SYSTEM throughout — no raw col
 `Icon`/`Button`/`Input` primitives, theme suite green.
 
 **WS-27ac — calendar: week layout, per-day quick-add, honest overflow.** ✅ **BUILT
-2026-08-10** *(P-19; as built — **§11.24**; branch `ws-27ac-calendar-week`, not merged, not
+2026-08-10** *(P-19; as built — **§11.24**; merged onto the working branch, PR #422, not on `main`, not
 deployed)*.
 Done when: (1) `CalendarView` gains a **week** layout beside month, both driven by the
 existing `lib/calendar.ts` date math — one implementation, extended, never a second;
@@ -1665,8 +1665,8 @@ new fence mutation-measured red before being reverted byte-identical.
 **WS-27ae — export, delta-sync, small columns.** 🟢 AGENT-SAFE *(P-26, P-27, P-28 rest)*.
 A three-part basket, dispatched in parts after aa–ad.
 
-- **Export (P-26) — ✅ BUILT 2026-08-10**, branch `ws-27ae-projects-csv-export`, **not merged
-  and not deployed**. As-built: **§11.26**. ⚠️ **The "export-job pattern" this ticket named
+- **Export (P-26) — ✅ BUILT 2026-08-10**, merged onto the working branch (PR #422), **not on
+  `main` and not deployed**. As-built: **§11.26**. ⚠️ **The "export-job pattern" this ticket named
   does not exist** — searched and confirmed absent from `apps/`, `packages/`, `tests/` and
   `workbench/`; the only hits are vendored `.venv` code. What shipped is a **synchronous**
   bounded CSV over the same filtered query the list endpoint runs
@@ -1676,7 +1676,7 @@ A three-part basket, dispatched in parts after aa–ad.
   Cells opening `=`/`+`/`-`/`@` are neutralised, with plain numbers exempt so exported sums
   still work. No migration.
 - **Delta-sync + satellite `updated_at` bumps (P-27) and the small columns (P-28 rest) —
-  ✅ BUILT 2026-08-10**, branch `ws-27ae-delta-sync`, **not merged and not deployed**.
+  ✅ BUILT 2026-08-10**, merged onto the working branch (PR #422), **not on `main` and not deployed**.
   As-built: **§11.27**. `GET /projects/delta/tasks` (path chosen so `/projects/tasks/{task_id}`
   cannot shadow it), a `(updated_at, id)` keyset cursor with a horizon, and — the part a naive
   feed cannot do — an explicit `removed[]` fed by migration **168**'s `pm_task_tombstones`
@@ -1736,8 +1736,7 @@ accumulated tree-wide. ⚠️ Measured, and the ticket was wrong: `/tasks` held 
 🟢 AGENT-SAFE, frontend only, no migration. ✅ **BUILT 2026-08-10 for the LIST surfaces**
 *(owner observation: "Tasks shows the selection checkbox only when the appropriate setting
 is there in the select options on top; in the Projects app the checkbox for selecting a
-task is present." Owner ruling: Projects is canonical.)* Branch `ws-s3-selection-bulk-parity`
-— **not merged, not deployed.**
+task is present." Owner ruling: Projects is canonical.)* Branch `ws-s3-selection-bulk-parity` — **MERGED to `main` and DEPLOYED.**
 
 - **`selectMode` is no longer a mode.** It is a derived mirror of `selectedIds.size > 0`
   maintained in one helper (`taskStore.applySelection`), and it decides only whether the
@@ -1782,6 +1781,80 @@ common one — while af established the house scale as `text-sm`/`text-xs`/`text
 lives in `src/components/TaskCardShell.tsx:120`, which **both** apps render. The two
 decisions contradict; changing it repaints Projects as well as Tasks, so it was left alone
 rather than settled by whichever slice touched it last.
+
+---
+
+### 9.3 The Plane traceability queue (minted 2026-08-10 from the P-1…P-31 audit)
+
+The 2026-08-09 Plane research recorded 31 findings and a 14-item frontend list. Minting
+WS-27u–z and WS-27aa–ae carried most of them, but a re-derivation from the CODE (not from the
+write-ups) on 2026-08-10 found four that **nothing owns**, plus two adoption triggers that name
+tickets which do not exist. They are collected here so the loss is recorded once and closed
+deliberately, rather than rediscovered by a third reading of the same research.
+
+> **Why this happened, since the mechanism matters more than the four items.** The research
+> numbered its *findings* P-1…P-31 and its *frontend list* 1–14 **independently**, and §8's
+> consolidated verdict table — the table the minting actually read — maps only P-numbers. So
+> frontend item 14 was never eligible to be minted: it has no P-number, and a `P-\d+` grep over
+> the two documents can never reveal its absence. The fence against a repeat is not a test but
+> a rule: **anything that earns a verdict earns an identifier in the table that minting reads.**
+> Advisory — nothing in this tree can test a document's completeness.
+
+**WS-27ah — the four the mint dropped.** 🟢 AGENT-SAFE. Frontend plus one gateway aggregate;
+no migration.
+Done when: (1) **P-8, child category distribution** — `subtask_progress` returns the children's
+distribution across status *categories* beside `{done, total}`, and the panel's progress bar
+draws segments instead of one `bg-primary` fill. Cheap (one grouped aggregate in
+`relations.py`) and it unblocks (2). ⚠️ Its stated trigger — "when the panel draws segments" —
+has half-fired: `RelationsBlock.tsx` now draws a *bar*, which is the shape that wants segments,
+but the datum cannot express them. (2) **Click a progress segment to filter by that status
+group** (research §4 item 14). (3) **P-22, timeline polish** — zoom presets (week/month/quarter
+as px-per-day steps) replacing the fixed `PX_PER_DAY = 24`, drag-a-bar-edge to set dates, and
+hover-a-dateless-row to place it with a one-day default. ⚠️ **Read `TimelineView.tsx` before
+starting**: the dateless row currently renders static text whose `title` asserts *"there is
+nothing to place"* — the code argues the opposite of this ticket, so a future reader would not
+recognise the gap. Whichever way it lands, that comment must stop contradicting the product.
+**Keep** the dependency arrows and D-PM-12's warn-never-reschedule. (4) the rest of research §4
+item 14: **create-form draft restore** (one localStorage slot, restored on reopen),
+**pinned projects/views** at the tree top (flat, no folders), and a **capped recently-viewed
+list** in MyWork. (5) The fifth sub-item, the tiered `EmptyState` primitive, **already exists**
+— built incidentally by S4 at `src/components/EmptyState.tsx` rather than by this research —
+but it landed in `src/components/`, not `ui/` as §4 asked, and `app/tasks/components/ItemList.tsx`
+still declares a **second, local** `EmptyState`. Retire the duplicate and add the SEAM row to
+`src/lib/sharedTaskUi.test.ts`, or record why not.
+
+**WS-27ai — the notifications inbox (the half of P-20 that was descoped in flight).**
+🟢 AGENT-SAFE.
+WS-27v shipped the split unread counts (`NotificationBell.tsx`, `lib/notifications.ts`) and
+wrote "(P-20 **part**)". The remaining part was never minted, never banked, and appears in no
+deferred basket — the parenthetical is its only trace, which is how a descope becomes a
+disappearance.
+Done when: a two-pane inbox (list + the embedded task panel), all/mentions tabs each with their
+own unread count, **mark-read-on-open**, and snooze-later. ⚠️ The bell deliberately does the
+*opposite* of mark-read-on-open today and says so in its own header — that is a real decision,
+not an oversight, so this ticket must either reverse it explicitly or keep it and drop that
+done-when. Do not "fix" it silently.
+
+**WS-27aj — the two adoption triggers that name no ticket.** 🟡 One half needs an owner ruling.
+(1) **P-9 / generic import provenance.** `161_projects_tenancy.sql` defers the per-org ClickUp
+constraint to "the ticket that onboards the second tenant" — **no such ticket exists on WS-27 or
+WS-29.** Consequence, stated plainly: `clickup_id` is globally unique, so **two organisations
+cannot import the same ClickUp workspace**, and nothing on the board says so. The research's
+preferred shape is a generic `(external_source, external_id)` pair rather than a ClickUp-specific
+column. Cheap now, expensive after the second tenant exists — which is the definition of a
+retrofit trap. (2) **Research §6's "restricted" grant level** for contractors and clients: prose
+with no P-number, no D-number and no home. It self-defers ("hold until a real external
+collaborator shows up") but nothing will surface it when one does. ⚠️ A third visibility level
+would touch D12's two-axis model, so this half is an **owner decision, not an agent ticket**.
+
+**Two prose adoption instructions buried in research §2's "KEEP OURS" table** — the one table
+nobody re-reads, because it is framed as validation rather than as work. Recorded here so they
+are not lost a second time: (a) *"borrow their machine-readable error codes in per-task
+outcomes"* — `bulk.py` is half-converted (`"not_found"` and `"unchanged"` are codes,
+`"reason": str(exc)` is a human string a client cannot branch on); (b) *"every new list badge
+must be page-batched, never per-row"* — honoured today by `filters.attach_relation_counts`, but
+stated as a **requirement with no fence**, which is an R7 gap: nothing fails if the next badge
+is written per-row.
 
 ---
 
@@ -3005,8 +3078,8 @@ second answer to a question `lib/taskCard.isOverdue` already answers better (it 
 with `/tasks`' `ItemDetail` side by side: *"Task cards seem to be very different."* Like
 §11.21 this is a **reversed-direction** finding — the standing ruling is "Projects is
 canonical, Tasks conforms", and on this one surface Tasks was the designed one. Frontend
-only: no migration, no API change, no new dependency. Branch
-`ws-s5-projects-task-panel` — **not merged, not deployed.**
+only: no migration, no API change, no new dependency. Branch `ws-s5-projects-task-panel` — **MERGED to `main` and DEPLOYED** (#420, deploy verified
+by log evidence: SHA on the box + `Migrations complete`).**
 
 **The controls, before → after.** Measured on `main` `54e4b880`:
 
@@ -3091,7 +3164,8 @@ neither exists — the second is `test_projects_personal.py`. Run with those two
 **Owner-reported**, with a screenshot of a `/tasks` card beside a `/projects` one: *"we should
 have the relevant pills to show up in the cards of the projects app."* Frontend only: no
 migration, no API change, no new dependency, and **no change to the shown-fields vocabulary on
-either side of the wire**. Branch `ws-s6-projects-card-pills` — **not merged, not deployed.**
+either side of the wire**. Branch `ws-s6-projects-card-pills` — **MERGED to `main` and DEPLOYED** (#421 / `1aec373d`,
+deploy verified by log evidence).
 
 **The job was not to copy the Tasks pills.** Half of what that card carries is GTD-only —
 `@context`, energy, deep-work, the founder priority matrix, the ClickUp source badge — and
@@ -3170,7 +3244,7 @@ That is the theme's token doing what it says, not a hardcoded colour.
 
 **Plane research item P-19** (§11.19), promoted by §9.2. Frontend plus one test file on the
 gateway side: **no migration, no API change, no new endpoint, no new query parameter.** Branch
-`ws-27ac-calendar-week` — **not merged, not deployed.**
+`ws-27ac-calendar-week`, merged onto the working branch (PR #422) — **not on `main`, not deployed.**
 
 **The whole ticket is "extend the arithmetic", and the defect it exists to prevent is a second
 copy of it.** `lib/calendar.ts` already held every day decision as a pure function; a week
@@ -3283,8 +3357,8 @@ Plane research items **P-14/15/16** (§11.19), plus a sixth done-when added by t
 the S6 review: the `shown_fields` gap on the list. Frontend only: **no migration, no API
 change, no new dependency**, and no change to the shown-fields vocabulary on either side of
 the wire. The view update rides the existing `PATCH /projects/views/{id}`, which has accepted
-`config` (through `normalise_view_config`) since WS-27k. Branch `ws-27ab-view-ergonomics` —
-**not merged, not deployed.**
+`config` (through `normalise_view_config`) since WS-27k. Branch `ws-27ab-view-ergonomics`, merged onto the working
+branch — **in PR #422; not on `main`, not deployed.**
 
 **1 · Peek → side → full.** `lib/panelMode.ts` is the vocabulary: three stops, narrowest
 first, a `max-w-*` per stop (`xs` · `md` · `3xl`), `widerPanel`/`narrowerPanel` that **stop at

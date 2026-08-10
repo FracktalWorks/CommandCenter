@@ -15,8 +15,8 @@ import Icon from "@/components/Icon";
 import Button from "@/components/ui/Button";
 import { useMobileDrawer } from "@/components/AppShell";
 import { useViewMode } from "@/components/ViewModeProvider";
-import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
-import { useSearchParams } from "next/navigation";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 
 import {
   type GrantRow,
@@ -44,6 +44,7 @@ import { TableView } from "./components/TableView";
 import { TaskBoard } from "./components/TaskBoard";
 import { TaskList } from "./components/TaskList";
 import { TaskPanel } from "./components/TaskPanel";
+import { ShortcutsSheet } from "./components/ShortcutsSheet";
 import { TriageRail } from "./components/TriageRail";
 import { SAVED_VIEW_POSITION, orderBearingView, type planDrop } from "./lib/board";
 import {
@@ -53,6 +54,24 @@ import {
   dayKey,
   shiftGrid,
 } from "./lib/calendar";
+import {
+  type CommandActions,
+  type CommandContext,
+  SEQUENCE_TIMEOUT_MS,
+  VIEW_MODES,
+  type ViewMode,
+  availableCommands,
+  isSequenceKey,
+  isTypingTarget,
+  stepSequence,
+} from "./lib/commands";
+import {
+  DEFAULT_PANEL_MODE,
+  type PanelMode,
+  isOverlayMode,
+  readPanelMode,
+  writePanelMode,
+} from "./lib/panelMode";
 import { isOpenShortcut } from "./lib/search";
 import type { Edge } from "./lib/timeline";
 import {
@@ -63,6 +82,7 @@ import {
   NO_LANES,
   fromConfig,
   groupTasks,
+  isFiltered,
   toConfig,
   toQuery,
 } from "./lib/grouping";
@@ -80,22 +100,14 @@ import {
 import { fetchAccess } from "@/lib/access";
 import { filterByCenter, flatten } from "./lib/tree";
 
-type ViewMode = "board" | "list" | "table" | "calendar" | "timeline";
-
 /**
  * Five modes, not Tasks' two, because the domain genuinely has five — the
- * chrome around them is what gets unified, never the count. Icon names are
- * `icon-registry.ts` entries: an unmapped name falls back to Lucide on every
- * theme, which is the one glyph in a row of Material Symbols that reads as a
- * bug.
+ * chrome around them is what gets unified, never the count.
+ *
+ * `ViewMode` and `VIEW_MODES` moved to `lib/commands.ts` (WS-27ab): the
+ * palette offers the same five, and a second list here is how the toolbar and
+ * the palette come to disagree about what exists.
  */
-const VIEW_MODES: Array<{ id: ViewMode; icon: string }> = [
-  { id: "board", icon: "Kanban" },
-  { id: "list", icon: "List" },
-  { id: "table", icon: "Table" },
-  { id: "calendar", icon: "Calendar" },
-  { id: "timeline", icon: "Milestone" },
-];
 
 /** An empty calendar window — the shape before anything has been fetched, and
  *  the shape after a failure, so the view never renders a stale month. */
@@ -247,6 +259,7 @@ function ModeSwitch({
 
 function ProjectsWorkspace() {
   const searchParams = useSearchParams();
+  const router = useRouter();
   const center = searchParams.get("center");
 
   // WS-27ag — the shell. `/projects` had no mobile branch at all: a 240px nav
@@ -266,6 +279,19 @@ function ProjectsWorkspace() {
   const [statuses, setStatuses] = useState<StatusRow[]>([]);
   const [tasks, setTasks] = useState<TaskRow[]>([]);
   const [openTask, setOpenTask] = useState<TaskRow | null>(null);
+  // WS-27ab — peek · side · full, persisted per user (`lib/panelMode.ts`).
+  // Read in an effect rather than a lazy initialiser: `localStorage` does not
+  // exist while this renders on the server, and a first paint that disagreed
+  // with the second is a hydration mismatch.
+  const [panelMode, setPanelModeState] = useState<PanelMode>(DEFAULT_PANEL_MODE);
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setPanelModeState(readPanelMode());
+  }, []);
+  const setPanelMode = useCallback((next: PanelMode) => {
+    setPanelModeState(next);
+    writePanelMode(next);
+  }, []);
   // The panel's statuses are held apart from the selected project's, because a
   // task opened from My work can belong to a project that is not selected —
   // and a panel offering another project's statuses would offer transitions
@@ -334,6 +360,9 @@ function ProjectsWorkspace() {
   // WS-27r — the search palette. Held at the page rather than in a view,
   // because the whole point is that it works from wherever you already are.
   const [searching, setSearching] = useState(false);
+  // WS-27ab — the `?` sheet, printed from the same command registry the
+  // palette and the key sequences read.
+  const [showingShortcuts, setShowingShortcuts] = useState(false);
 
   // WS-27ac — the calendar's own anchor and layout. The TIMELINE reads the same
   // window and is always the month's, so the layout only reaches the calendar.
@@ -345,19 +374,6 @@ function ProjectsWorkspace() {
   const [anchor, setAnchor] = useState<string | null>(null);
   const [bulkBusy, setBulkBusy] = useState(false);
   const [bulkNotice, setBulkNotice] = useState<string | null>(null);
-
-  useEffect(() => {
-    // ⌘K from anywhere in Projects. `preventDefault` because the browser's own
-    // ⌘K is the address bar's search on some, and losing the app to it is a
-    // shortcut that works once.
-    function onKey(event: KeyboardEvent) {
-      if (!isOpenShortcut(event)) return;
-      event.preventDefault();
-      setSearching(true);
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, []);
 
   // WS-27ag — the phone's bottom bar (AppShell's `isProjectsPage` branch) talks
   // to this page over the same `cc-mobile-nav` channel Tasks, Notes and the App
@@ -747,6 +763,28 @@ function ProjectsWorkspace() {
     }
   }
 
+  /**
+   * WS-27ab — write what is on screen into the view that is applied.
+   *
+   * The same `toConfig` a create uses, so an updated view and a freshly saved
+   * one are byte-identical for the same board. The returned row replaces the
+   * stored one rather than being merged: the gateway's `normalise_view_config`
+   * may have dropped a key it does not know, and keeping the local copy would
+   * leave the bar comparing against a config the server never stored — which
+   * is a dirty marker that never clears.
+   */
+  async function updateView(view: ViewRow) {
+    try {
+      const saved = await projectsApi.patchView(view.id, {
+        config: toConfig(filters, groupBy, lanes, shownFields),
+      });
+      setViews((current) => current.map((v) => (v.id === view.id ? saved : v)));
+      setActiveViewId(saved.id);
+    } catch (err) {
+      setError(String((err as Error).message));
+    }
+  }
+
   async function deleteView(view: ViewRow) {
     try {
       await projectsApi.deleteView(view.id);
@@ -757,16 +795,22 @@ function ProjectsWorkspace() {
     }
   }
 
+  /**
+   * WS-27ab — editing a filter no longer DROPS the view.
+   *
+   * `setActiveViewId(null)` used to run here (and in the group, lane and
+   * shown-field handlers), so the association died on the first keystroke and
+   * there was no way to say *keep this*. The chip now stays lit, `FilterBar`
+   * marks it edited from `viewDivergence`, and the row it grows offers the
+   * three real answers: update, save as new, reset.
+   */
   function changeFilters(next: Filters) {
     setFilters(next);
-    // Editing after applying a view means the board is no longer that view.
-    setActiveViewId(null);
   }
 
   // WS-27x — same rule for the shown-fields set: it is part of a view.
   function changeShownFields(next: string[]) {
     setShownFields(next);
-    setActiveViewId(null);
   }
 
   // Opening a task always resolves ITS project's statuses. From the board that
@@ -829,6 +873,128 @@ function ProjectsWorkspace() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [deepLink]);
+
+  /**
+   * ── The keyboard, and what it can reach (WS-27ab item 3) ────────────────
+   *
+   * Everything a key sequence or the palette can do is declared in
+   * `lib/commands.ts`; this is the half that only the page can supply — the
+   * state each `run` moves. Keeping the two apart is what lets the shortcuts
+   * sheet be *generated* rather than written: the registry knows every action
+   * and its keys, and knows nothing about React.
+   */
+  const actions: CommandActions = useMemo(
+    () => ({
+      navigate: (href) => router.push(href),
+      setMode: (next) => setChosenMode(next),
+      setPanelMode,
+      showMyWork: (next) => setMine(next),
+      clearFilters: () => setFilters(EMPTY_FILTERS),
+      toggleRail: () => setRailOpen((open) => !open),
+      manage: (what) => {
+        if (what === "fields") setManagingFields(true);
+        else if (what === "tags") setManagingTags(true);
+        else if (what === "lifecycle") setManagingLifecycle(true);
+        else setImporting(true);
+      },
+      showShortcuts: () => setShowingShortcuts(true),
+    }),
+    [router, setPanelMode],
+  );
+
+  const commandCtx: CommandContext = {
+    mode,
+    hasProject: Boolean(selected),
+    isRoot: Boolean(selected && !selected.parent_project_id),
+    filtered: isFiltered(filters),
+    mine,
+    panelOpen: Boolean(openTask),
+    panelMode,
+    // A phone reaches the tree through the shell drawer; there is no rail to
+    // toggle, so the command is not offered rather than being a dead entry.
+    canToggleRail: !isMobile,
+  };
+
+  // Anything modal is up. Sequences are suppressed under it: `g` while the
+  // ClickUp importer is open must not navigate the page out from under a
+  // half-filled form.
+  const overlayOpen =
+    searching ||
+    showingShortcuts ||
+    importing ||
+    managingFields ||
+    managingTags ||
+    managingLifecycle;
+
+  // The listener is attached ONCE and reads through this, rather than being
+  // re-subscribed on every filter keystroke. Written from an effect rather
+  // than during render — a ref is not a render input, and a keydown cannot
+  // arrive before the commit that would have updated it.
+  const live = useRef({ actions, ctx: commandCtx, overlayOpen });
+  useEffect(() => {
+    live.current = { actions, ctx: commandCtx, overlayOpen };
+  });
+
+  useEffect(() => {
+    let pending: string[] = [];
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const forget = () => {
+      pending = [];
+      if (timer) clearTimeout(timer);
+      timer = null;
+    };
+    function onKey(event: KeyboardEvent) {
+      // ⌘K from anywhere in Projects. `preventDefault` because the browser's
+      // own ⌘K is the address bar's search on some, and losing the app to it
+      // is a shortcut that works once.
+      if (isOpenShortcut(event)) {
+        event.preventDefault();
+        forget();
+        setSearching(true);
+        return;
+      }
+      if (live.current.overlayOpen) return;
+      // Escape closes the task panel from the BOARD as well as from inside it.
+      // Opening a task leaves focus on the row that was clicked (deliberately —
+      // WS-27y's cursor has to keep working), so the panel's own handler never
+      // sees the key. Measured in the browser: without this, Esc did nothing
+      // unless you had first clicked into the panel. The panel's handler calls
+      // `stopPropagation`, so when focus IS inside it this never runs and the
+      // first-Escape-leaves-the-field rule survives.
+      if (event.key === "Escape") {
+        if (isTypingTarget(event.target as HTMLElement | null)) return;
+        if (!live.current.ctx.panelOpen) return;
+        event.preventDefault();
+        setOpenTask(null);
+        return;
+      }
+      if (!isSequenceKey(event)) return;
+      // A bare letter and a text field are the classic collision: without
+      // this, typing "go" into the quick-add box navigates away mid-word.
+      if (isTypingTarget(event.target as HTMLElement | null)) return;
+      const step = stepSequence(
+        pending,
+        event.key,
+        availableCommands(live.current.ctx),
+      );
+      if (timer) clearTimeout(timer);
+      timer = null;
+      pending = step.pending;
+      // A half-typed prefix is forgotten rather than waiting forever: `g`
+      // pressed by accident must not turn the next `p` into a navigation
+      // minutes later.
+      if (pending.length > 0)
+        timer = setTimeout(forget, SEQUENCE_TIMEOUT_MS);
+      if (!step.claimed) return;
+      event.preventDefault();
+      step.command?.run(live.current.actions, live.current.ctx);
+    }
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      if (timer) clearTimeout(timer);
+    };
+  }, []);
 
   async function submitProject(event: React.FormEvent) {
     event.preventDefault();
@@ -1058,9 +1224,8 @@ function ProjectsWorkspace() {
                 ? { ...current, subGroupBy: "none", collapsedLanes: [] }
                 : current
             );
-            setActiveViewId(null);
           }}
-          subGroupBy={lanes.subGroupBy}
+          lanes={lanes}
           onSubGroupBy={(next) => {
             // Collapsed-lane keys belong to the axis that made them.
             setLanes((current) => ({
@@ -1068,7 +1233,6 @@ function ProjectsWorkspace() {
               subGroupBy: next,
               collapsedLanes: [],
             }));
-            setActiveViewId(null);
           }}
           me={me}
           tags={tags}
@@ -1083,6 +1247,7 @@ function ProjectsWorkspace() {
           onApplyView={applyView}
           onSaveView={(name) => void saveView(name)}
           onDeleteView={(view) => void deleteView(view)}
+          onUpdateView={(view) => void updateView(view)}
           canSave={Boolean(selected)}
         />
       ) : null}
@@ -1244,12 +1409,22 @@ function ProjectsWorkspace() {
     </>
   );
 
+  /**
+   * WS-27ab — the panel, at whichever of the three stops is chosen.
+   *
+   * `mode`/`onMode` are passed only on desktop: a phone's panel already IS the
+   * screen, and three width buttons there would be a control that changes
+   * nothing. The escalation is one prop pair, not a second component — see
+   * `lib/panelMode.ts`.
+   */
   const taskPanel = openTask ? (
     <TaskPanel
       task={openTask}
       statuses={panelStatuses}
       fields={fields}
       tags={tags}
+      mode={isMobile ? undefined : panelMode}
+      onMode={isMobile ? undefined : setPanelMode}
       // WS-27p — opening a subtask or a linked task resolves ITS project's
       // statuses, which the panel has no tree to do.
       onOpenTask={(id) => void openTaskById(id)}
@@ -1274,7 +1449,16 @@ function ProjectsWorkspace() {
         open={searching}
         onClose={() => setSearching(false)}
         onOpenTask={(id) => void openTaskById(id)}
+        actions={actions}
+        context={commandCtx}
       />
+
+      {/* WS-27ab — `?`, and the palette's own Keyboard-shortcuts command. The
+          sheet is PRINTED from the registry, so it cannot advertise a key the
+          keyboard does not honour. */}
+      {showingShortcuts ? (
+        <ShortcutsSheet onClose={() => setShowingShortcuts(false)} />
+      ) : null}
 
       {managingTags && selected ? (
         <TagManager
@@ -1479,8 +1663,30 @@ function ProjectsWorkspace() {
           {workArea}
         </main>
 
-        {taskPanel}
+        {/* Peek and side DOCK — a third column beside the canvas, narrow or
+            wide. Full does not: it is mounted over the board below, because a
+            docked column cannot be wider than the space left over. */}
+        {isOverlayMode(panelMode) ? null : taskPanel}
       </div>
+
+      {/* WS-27ab — the `full` stop. A scrim plus the same panel, at the same
+          `max-w-3xl` reading width `/tasks`' maximise-out-of-the-pane uses.
+          Clicking the scrim closes it; the panel keeps its own ✕ and Escape. */}
+      {taskPanel && isOverlayMode(panelMode) ? (
+        <div
+          className="fixed inset-0 z-50 flex items-stretch justify-center bg-background/70 p-4 sm:p-8"
+          role="presentation"
+          onClick={() => setOpenTask(null)}
+        >
+          <div
+            className="flex min-h-0 w-full max-w-3xl overflow-hidden rounded-lg border border-border shadow-lg"
+            onClick={(event) => event.stopPropagation()}
+            role="presentation"
+          >
+            {taskPanel}
+          </div>
+        </div>
+      ) : null}
 
       {overlays}
     </div>

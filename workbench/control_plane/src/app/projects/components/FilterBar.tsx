@@ -14,6 +14,20 @@
  * `pm_views.config`, which is why applying one and typing the same thing by
  * hand must produce an identical board — `toConfig`/`fromConfig` are each
  * other's inverse and their round trip is tested.
+ *
+ * ## The dirty-view row (WS-27ab item 2)
+ *
+ * Applying a view and then touching a control used to **drop the association**:
+ * `activeViewId` was set to `null` on the first keystroke, so the chip went
+ * dark and the only way back to what had been saved was to click the chip
+ * again and lose the edit. There was no way to say *keep this*.
+ *
+ * Now the association survives the edit and the bar says so: the chip keeps a
+ * dot, and a row appears offering **Update view · Save as new · Reset**.
+ * Whether the state has diverged is `grouping.viewDivergence` — ONE pure
+ * function reading the `toConfig`/`fromConfig` round trip, never a comparison
+ * written here. A comparison in this file would be a second opinion about what
+ * a view IS, and the two would disagree the first time the config grew a key.
  */
 
 import Icon from "@/components/Icon";
@@ -24,11 +38,14 @@ import { useEffect, useState } from "react";
 
 import type { FieldRow, TagRow, ViewRow } from "../lib/api";
 import {
+  type BoardLanes,
   EMPTY_FILTERS,
   type Filters,
   GROUP_OPTIONS,
   type GroupBy,
+  describeDivergence,
   isFiltered,
+  viewDivergence,
 } from "../lib/grouping";
 import {
   DEFAULT_SHOWN,
@@ -68,8 +85,13 @@ interface Props {
   onFilters: (next: Filters) => void;
   groupBy: GroupBy;
   onGroupBy: (next: GroupBy) => void;
-  /** WS-27y — the board's second axis, drawn as swimlanes. `"none"` = flat. */
-  subGroupBy: GroupBy;
+  /**
+   * WS-27y — the board's second axis and the lane state that travels with a
+   * view. The whole object, not just the axis: WS-27ab's divergence check
+   * needs the collapsed lanes too, and two props that must agree is one prop
+   * too many (`grouping.BoardLanes`'s own note).
+   */
+  lanes: BoardLanes;
   onSubGroupBy: (next: GroupBy) => void;
   /** The signed-in member's address, for the "Mine" toggle. Empty while loading. */
   me: string;
@@ -85,6 +107,8 @@ interface Props {
   onApplyView: (view: ViewRow) => void;
   onSaveView: (name: string) => void;
   onDeleteView: (view: ViewRow) => void;
+  /** WS-27ab — write what is on screen into the view that is applied. */
+  onUpdateView: (view: ViewRow) => void;
   /** Saving needs a project to hang the view off; My work has none. */
   canSave: boolean;
 }
@@ -94,7 +118,7 @@ export function FilterBar({
   onFilters,
   groupBy,
   onGroupBy,
-  subGroupBy,
+  lanes,
   onSubGroupBy,
   me,
   tags,
@@ -106,8 +130,10 @@ export function FilterBar({
   onApplyView,
   onSaveView,
   onDeleteView,
+  onUpdateView,
   canSave,
 }: Props) {
+  const subGroupBy = lanes.subGroupBy;
   // The search box is held locally and pushed up on a delay. Refetching on
   // every keystroke turns a five-letter word into five round trips, and the
   // board flickering through four wrong answers reads as a broken filter.
@@ -128,6 +154,14 @@ export function FilterBar({
 
   const set = (patch: Partial<Filters>) => onFilters({ ...filters, ...patch });
   const mine = Boolean(me) && filters.assignee.toLowerCase() === me.toLowerCase();
+
+  // Resolved from the list rather than trusted: `activeViewId` outlives a
+  // project switch and a delete, and a chip lit for a view that is no longer
+  // in `views` would offer to update something that is not there.
+  const activeView = views.find((view) => view.id === activeViewId) ?? null;
+  const drift = activeView
+    ? viewDivergence({ filters, groupBy, lanes, shownFields }, activeView.config)
+    : { dirty: false, changed: [] as never[] };
 
   return (
     <div className="border-b border-border px-3 py-2">
@@ -340,13 +374,30 @@ export function FilterBar({
             <button
               type="button"
               onClick={() => onApplyView(view)}
+              // The house's active token (AGENTS.md rule 6). It was
+              // `bg-accent text-accent-foreground`, which resolves to a
+              // different colour per theme than every other selected thing in
+              // the app — so the applied view read as "selected" in one theme
+              // and as "highlighted" in the next.
               className={`rounded-l-md px-2 py-1 text-xs ${
                 view.id === activeViewId
-                  ? "bg-accent text-accent-foreground"
+                  ? "bg-primary/10 text-primary"
                   : "text-muted-foreground hover:bg-muted"
               }`}
             >
               {view.name}
+              {/* WS-27ab — the edited marker. A dot rather than a word: the
+                  row below says what changed, and this only has to answer
+                  "is this chip still telling the truth". */}
+              {view.id === activeViewId && drift.dirty ? (
+                <span
+                  className="ml-1 align-middle text-[10px]"
+                  aria-label="edited since it was saved"
+                  title="Edited since it was saved"
+                >
+                  ●
+                </span>
+              ) : null}
             </button>
             <button
               type="button"
@@ -418,6 +469,54 @@ export function FilterBar({
           </Badge>
         ) : null}
       </div>
+
+      {/* WS-27ab — the dirty-view row. Three ways out and no fourth:
+          keep the change on this view, keep it as a new one, or throw it away.
+          Reset re-applies the SAVED config through the same `onApplyView` the
+          chip uses — one path back, so "reset" and "click the chip again"
+          cannot come to mean different things. */}
+      {activeView && drift.dirty ? (
+        <div className="mt-2 flex flex-wrap items-center gap-2 rounded-md border border-border bg-muted px-2 py-1.5">
+          <Icon name="PencilLine" className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+          <p className="min-w-0 flex-1 text-[11px] text-foreground">
+            <span className="font-medium">{activeView.name}</span> has unsaved
+            changes to its {describeDivergence(drift.changed)}.
+          </p>
+          <Button size="sm" icon="Save" onClick={() => onUpdateView(activeView)}>
+            Update view
+          </Button>
+          <Button
+            variant="secondary"
+            size="sm"
+            // `Plus`, not the `Bookmark` on the Save-view button beside it:
+            // Bookmark has no entry in `icon-data/registry.json`, so it draws
+            // the Lucide glyph under Fluent and Material. Fixing the existing
+            // one is a registry ticket; adding a second is a choice.
+            icon="Plus"
+            disabled={!canSave}
+            title={
+              canSave
+                ? "Save these settings as a second view"
+                : "Saving needs a project selected"
+            }
+            onClick={() => {
+              setViewName(`${activeView.name} copy`);
+              setNaming(true);
+            }}
+          >
+            Save as new
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            icon="RotateCcw"
+            title={`Go back to ${activeView.name} as it was saved`}
+            onClick={() => onApplyView(activeView)}
+          >
+            Reset
+          </Button>
+        </div>
+      ) : null}
     </div>
   );
 }

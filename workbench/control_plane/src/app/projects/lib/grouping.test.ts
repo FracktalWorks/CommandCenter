@@ -19,8 +19,11 @@ import {
   groupTasks,
   isFiltered,
   personLabel,
+  type ViewState,
+  describeDivergence,
   toConfig,
   toQuery,
+  viewDivergence,
 } from "./grouping";
 import { DEFAULT_SHOWN } from "./shownFields";
 
@@ -417,5 +420,152 @@ describe("tag filters in the query", () => {
     // An older or hand-written config. Reading it as a string and getting
     // garbage would be worse than reading it as unset.
     expect(fromConfig({ filters: { tags: ["bug"] } }).filters.tags).toEqual([]);
+  });
+});
+
+describe("divergence — when the board stopped being the view (WS-27ab)", () => {
+  const live = (over: Partial<ViewState> = {}): ViewState => ({
+    filters: EMPTY_FILTERS,
+    groupBy: "status",
+    lanes: NO_LANES,
+    shownFields: [...DEFAULT_SHOWN],
+    ...over,
+  });
+
+  it("a state saved and read straight back is clean", () => {
+    const state = live({
+      filters: { ...EMPTY_FILTERS, q: "parser", overdue: true, tags: ["bug"] },
+      groupBy: "assignee",
+      lanes: { subGroupBy: "status", collapsedLanes: ["s1"], showEmptyLanes: true },
+      shownFields: ["status", "due_at"],
+    });
+    const saved = toConfig(
+      state.filters,
+      state.groupBy,
+      state.lanes,
+      state.shownFields,
+    );
+    expect(viewDivergence(state, saved)).toEqual({ dirty: false, changed: [] });
+  });
+
+  it("the default board against an empty config is clean", () => {
+    expect(viewDivergence(live(), {})).toEqual({ dirty: false, changed: [] });
+    expect(viewDivergence(live(), null)).toEqual({ dirty: false, changed: [] });
+  });
+
+  it("names the part that moved, and only that part", () => {
+    const saved = toConfig(EMPTY_FILTERS, "status", NO_LANES, DEFAULT_SHOWN);
+    expect(
+      viewDivergence(live({ filters: { ...EMPTY_FILTERS, overdue: true } }), saved),
+    ).toEqual({ dirty: true, changed: ["filters"] });
+    expect(viewDivergence(live({ groupBy: "assignee" }), saved)).toEqual({
+      dirty: true,
+      changed: ["grouping"],
+    });
+    // The sub-axis is part of the grouping, not of the lane state: turning
+    // swimlanes on changes what the board IS.
+    expect(
+      viewDivergence(live({ lanes: { ...NO_LANES, subGroupBy: "assignee" } }), saved),
+    ).toEqual({ dirty: true, changed: ["grouping"] });
+    // Folding a lane on an axis that was already saved is lane state alone.
+    expect(
+      viewDivergence(
+        live({
+          lanes: { subGroupBy: "assignee", collapsedLanes: ["x"], showEmptyLanes: false },
+        }),
+        toConfig(EMPTY_FILTERS, "status", {
+          subGroupBy: "assignee",
+          collapsedLanes: [],
+          showEmptyLanes: false,
+        }),
+      ),
+    ).toEqual({ dirty: true, changed: ["lanes"] });
+    expect(viewDivergence(live({ shownFields: ["status"] }), saved)).toEqual({
+      dirty: true,
+      changed: ["fields"],
+    });
+  });
+
+  it("reports several parts at once, in a stable order", () => {
+    const saved = toConfig(EMPTY_FILTERS, "status", NO_LANES, DEFAULT_SHOWN);
+    const { changed } = viewDivergence(
+      live({
+        filters: { ...EMPTY_FILTERS, q: "x" },
+        groupBy: "tag",
+        shownFields: ["tags"],
+      }),
+      saved,
+    );
+    expect(changed).toEqual(["filters", "grouping", "fields"]);
+    expect(describeDivergence(changed)).toBe("filters, grouping and shown fields");
+  });
+
+  it("reads a saved config by MEANING, not by its bytes", () => {
+    // Each of these is a config `fromConfig` normalises. A byte comparison
+    // would call an untouched board dirty on every one of them.
+    const state = live();
+    // A sub-axis equal to the main axis is normalised to "none".
+    expect(
+      viewDivergence(state, { group_by: "status", sub_group_by: "status" }).dirty,
+    ).toBe(false);
+    // A field key no vocabulary knows is dropped.
+    expect(
+      viewDivergence(state, { shown_fields: [...DEFAULT_SHOWN, "moon_phase"] }).dirty,
+    ).toBe(false);
+    // A stringly-typed toggle is not a toggle.
+    expect(viewDivergence(state, { filters: { overdue: "false" } }).dirty).toBe(false);
+    // A group_by nobody offers falls back to "status".
+    expect(viewDivergence(state, { group_by: "phase-of-the-moon" }).dirty).toBe(false);
+  });
+
+  it("does not care about the ORDER of a set", () => {
+    const saved = toConfig(
+      { ...EMPTY_FILTERS, tags: ["bug", "ops"] },
+      "status",
+      { subGroupBy: "assignee", collapsedLanes: ["a", "b"], showEmptyLanes: false },
+      ["status", "due_at"],
+    );
+    expect(
+      viewDivergence(
+        live({
+          filters: { ...EMPTY_FILTERS, tags: ["ops", "bug"] },
+          lanes: {
+            subGroupBy: "assignee",
+            collapsedLanes: ["b", "a"],
+            showEmptyLanes: false,
+          },
+          shownFields: ["due_at", "status"],
+        }),
+        saved,
+      ),
+    ).toEqual({ dirty: false, changed: [] });
+  });
+
+  it("treats an assignee's case as noise, because the server does", () => {
+    const saved = toConfig({ ...EMPTY_FILTERS, assignee: "Priya@x.io" }, "status");
+    expect(
+      viewDivergence(
+        live({ filters: { ...EMPTY_FILTERS, assignee: "priya@x.io" } }),
+        saved,
+      ).dirty,
+    ).toBe(false);
+  });
+
+  it("notices every column being hidden, which is not the default", () => {
+    const saved = toConfig(EMPTY_FILTERS, "status", NO_LANES, DEFAULT_SHOWN);
+    expect(viewDivergence(live({ shownFields: [] }), saved)).toEqual({
+      dirty: true,
+      changed: ["fields"],
+    });
+    // …and the reverse: a view that stored "nothing shown" is dirty the moment
+    // a column comes back.
+    expect(
+      viewDivergence(live({ shownFields: ["status"] }), { shown_fields: [] }).dirty,
+    ).toBe(true);
+  });
+
+  it("says nothing at all when nothing changed", () => {
+    expect(describeDivergence([])).toBe("");
+    expect(describeDivergence(["filters"])).toBe("filters");
   });
 });

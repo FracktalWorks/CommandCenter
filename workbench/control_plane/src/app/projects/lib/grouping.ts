@@ -213,6 +213,119 @@ export function isFiltered(filters: Filters): boolean {
   return Object.keys(toQuery(filters)).length > 0;
 }
 
+/**
+ * ── The saved view's live state, and whether it still matches (WS-27ab item 2)
+ *
+ * Everything a view stores, held together. The four values only mean anything
+ * as a set — `toConfig` already takes exactly these, and the divergence check
+ * below is the same four read back.
+ */
+export interface ViewState {
+  filters: Filters;
+  groupBy: GroupBy;
+  lanes: BoardLanes;
+  shownFields: readonly string[];
+}
+
+/** The parts of a view a person can diverge from, and what to call them. */
+export const DIVERGENCE_LABELS = {
+  filters: "filters",
+  grouping: "grouping",
+  lanes: "lanes",
+  fields: "shown fields",
+} as const;
+
+export type DivergenceKey = keyof typeof DIVERGENCE_LABELS;
+
+export interface ViewDivergence {
+  /** True when applying the saved view again would change the board. */
+  dirty: boolean;
+  /** Which parts differ, in `DIVERGENCE_LABELS` order. Empty when clean. */
+  changed: DivergenceKey[];
+}
+
+/** A CSV filter value is a SET on the wire (`split_csv`), so order is noise. */
+const sortedCsv = (value: unknown): string =>
+  typeof value === "string"
+    ? value.split(",").map((s) => s.trim()).filter(Boolean).sort().join(",")
+    : "";
+
+/**
+ * A view state → four comparable strings, one per part.
+ *
+ * **The config round trip is the single fact.** Both sides are pushed through
+ * `toConfig`, and the saved side through `fromConfig` first — so a view stored
+ * by an older client, or hand-edited into a shape `fromConfig` normalises
+ * (a sub-axis equal to the main axis, an unknown field key, `"false"` where a
+ * boolean belongs), compares by what it MEANS rather than by its bytes. A
+ * byte comparison would light the dirty affordance on a board nobody had
+ * touched, which is the failure that makes such an affordance ignored.
+ */
+function comparable(state: ViewState): Record<DivergenceKey, string> {
+  const config = toConfig(
+    state.filters,
+    state.groupBy,
+    state.lanes,
+    state.shownFields,
+  );
+  const stored = (config.filters ?? {}) as Record<string, unknown>;
+  return {
+    filters: JSON.stringify([
+      typeof stored.q === "string" ? stored.q : "",
+      typeof stored.status_category === "string" ? stored.status_category : "",
+      typeof stored.assignee === "string" ? stored.assignee.toLowerCase() : "",
+      stored.unassigned === true,
+      stored.overdue === true,
+      sortedCsv(stored.tags),
+    ]),
+    grouping: JSON.stringify([config.group_by, config.sub_group_by ?? "none"]),
+    lanes: JSON.stringify([
+      [...((config.collapsed_lanes as string[] | undefined) ?? [])].sort(),
+      config.show_empty_lanes === true,
+    ]),
+    // Absent means the default SET (`fromConfig` says why), and the set is
+    // compared sorted because `shown_fields` is a set, not a sequence.
+    fields: JSON.stringify(
+      [...((config.shown_fields as string[] | undefined) ?? DEFAULT_SHOWN)].sort(),
+    ),
+  };
+}
+
+/**
+ * How the board differs from the view it was applied from.
+ *
+ * ONE function, so no surface re-derives "is this dirty" from a comparison of
+ * its own — three near-identical comparisons in three components is how the
+ * Update button comes to disagree with the badge beside it.
+ *
+ * `saved` is a raw `pm_views.config` (or `null`/anything else, which reads as
+ * an empty config, i.e. the default board).
+ *
+ * Fence: `grouping.test.ts` — "divergence".
+ */
+export function viewDivergence(live: ViewState, saved: unknown): ViewDivergence {
+  const restored = fromConfig(saved);
+  const before = comparable({
+    filters: restored.filters,
+    groupBy: restored.groupBy,
+    lanes: restored.lanes,
+    shownFields: restored.shownFields,
+  });
+  const after = comparable(live);
+  const changed = (Object.keys(DIVERGENCE_LABELS) as DivergenceKey[]).filter(
+    (key) => before[key] !== after[key],
+  );
+  return { dirty: changed.length > 0, changed };
+}
+
+/** "filters and shown fields" — what the affordance says has moved. */
+export function describeDivergence(changed: readonly DivergenceKey[]): string {
+  const words = changed.map((key) => DIVERGENCE_LABELS[key]);
+  if (words.length === 0) return "";
+  if (words.length === 1) return words[0];
+  return `${words.slice(0, -1).join(", ")} and ${words[words.length - 1]}`;
+}
+
 const localPart = (address: string): string => address.split("@")[0] || address;
 
 /** How an assignee reads on a card: `priya`, or `builder` for an agent. */

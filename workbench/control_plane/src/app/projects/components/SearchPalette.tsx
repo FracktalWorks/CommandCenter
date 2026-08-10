@@ -18,6 +18,20 @@
  * is in `lib/search.ts` and tested there. Those are the rules that only break
  * under real typing speed on a real connection, which is not a thing a
  * component test reproduces.
+ *
+ * ## Commands (WS-27ab item 3)
+ *
+ * It is a command palette now, not only a task finder. **The commands are a
+ * declared registry** (`lib/commands.ts`), not branches in this file: one list
+ * that the palette lists, the key sequences run, and the `?` sheet is printed
+ * from — so the help cannot describe a behaviour this component does not have.
+ * Nothing about a command is decided here; this renders `paletteList` and
+ * calls `command.run`.
+ *
+ * **Commands sit above the task hits.** They are local and instant; the hits
+ * arrive after a debounce, and a list that reorders itself under the cursor
+ * when the response lands is a list that opens the wrong thing. Rows appearing
+ * *below* the cursor cannot move what is already under it.
  */
 
 import Icon from "@/components/Icon";
@@ -25,6 +39,14 @@ import { Input } from "@/components/ui/Input";
 import { useEffect, useRef, useState } from "react";
 
 import { projectsApi } from "../lib/api";
+import {
+  type CommandActions,
+  type CommandContext,
+  availableCommands,
+  matchCommands,
+  paletteList,
+  sequenceLabel,
+} from "../lib/commands";
 import {
   DEBOUNCE_MS,
   type Hit,
@@ -40,9 +62,19 @@ interface Props {
   open: boolean;
   onClose: () => void;
   onOpenTask: (taskId: string) => void;
+  /** WS-27ab — what a command is allowed to do; the page supplies every one. */
+  actions: CommandActions;
+  /** Where the app is, so a command that would no-op is not offered. */
+  context: CommandContext;
 }
 
-export function SearchPalette({ open, onClose, onOpenTask }: Props) {
+export function SearchPalette({
+  open,
+  onClose,
+  onOpenTask,
+  actions,
+  context,
+}: Props) {
   const [query, setQuery] = useState("");
   const [hits, setHits] = useState<Hit[] | null>(null);
   const [truncated, setTruncated] = useState(false);
@@ -101,11 +133,28 @@ export function SearchPalette({ open, onClose, onOpenTask }: Props) {
   if (!open) return null;
 
   const view = paletteState({ query, loading, hits, truncated, error });
-  const rows = view.kind === "results" ? view.hits : [];
+  const found = view.kind === "results" ? view.hits : [];
+  // Applicable commands first, then the ones the query names. Both halves are
+  // the registry's own functions — this file decides nothing about either.
+  const commands = matchCommands(availableCommands(context), query);
+  const { rows, pickable } = paletteList(commands, found);
+  const at = moveSelection(cursor, 0, pickable.length);
 
-  function activate(taskId: string) {
-    onOpenTask(taskId);
-    onClose();
+  function activate(index: number) {
+    const row = rows[pickable[index]];
+    if (!row) return;
+    if (row.kind === "task") {
+      onOpenTask(row.hit.id);
+      onClose();
+      return;
+    }
+    if (row.kind === "command") {
+      // Closed BEFORE the action runs: several commands open something of
+      // their own (the shortcuts sheet, the field manager), and a palette
+      // still up over them is a second dismissal nobody asked for.
+      onClose();
+      row.command.run(actions, context);
+    }
   }
 
   return (
@@ -127,8 +176,8 @@ export function SearchPalette({ open, onClose, onOpenTask }: Props) {
             ref={inputRef}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search every project you can see…"
-            aria-label="Search tasks"
+            placeholder="Search tasks, or type a command…"
+            aria-label="Search tasks and commands"
             className="border-0 focus:border-0"
             onKeyDown={(e) => {
               const action = paletteKey(e);
@@ -138,11 +187,11 @@ export function SearchPalette({ open, onClose, onOpenTask }: Props) {
               // selection and the cursor would both move on one key.
               e.preventDefault();
               if (action === "close") onClose();
-              if (action === "down") setCursor((c) => moveSelection(c, 1, rows.length));
-              if (action === "up") setCursor((c) => moveSelection(c, -1, rows.length));
-              if (action === "open" && rows.length > 0) {
-                activate(rows[moveSelection(cursor, 0, rows.length)].id);
-              }
+              if (action === "down")
+                setCursor((c) => moveSelection(c, 1, pickable.length));
+              if (action === "up")
+                setCursor((c) => moveSelection(c, -1, pickable.length));
+              if (action === "open" && pickable.length > 0) activate(at);
             }}
           />
           <kbd className="shrink-0 rounded border border-border px-1 text-[10px] text-muted-foreground">
@@ -150,58 +199,118 @@ export function SearchPalette({ open, onClose, onOpenTask }: Props) {
           </kbd>
         </div>
 
-        <div className="max-h-80 overflow-y-auto">
+        <div className="max-h-96 overflow-y-auto">
+          {/* The task-search states. They speak for the TASK half only now, so
+              each one is worded as such — a palette that says "nothing
+              matches" while eight commands are listed under the message is a
+              palette arguing with itself. */}
           {view.kind === "idle" ? (
-            <p className="px-3 py-4 text-xs text-muted-foreground">
-              Type at least two characters. A number like{" "}
-              <code className="text-foreground">#42</code> finds that task.
+            <p className="px-3 py-2 text-[11px] text-muted-foreground">
+              Two characters searches your tasks. A number like{" "}
+              <code className="text-foreground">#42</code> finds that one.
             </p>
           ) : null}
           {view.kind === "searching" || view.kind === "typing" ? (
-            <p className="px-3 py-4 text-xs text-muted-foreground">Searching…</p>
+            <p className="px-3 py-2 text-[11px] text-muted-foreground">
+              Searching tasks…
+            </p>
           ) : null}
           {view.kind === "empty" ? (
+            <p className="px-3 py-2 text-[11px] text-muted-foreground">
+              No task matches “{query.trim()}”.
+            </p>
+          ) : null}
+          {view.kind === "error" ? (
+            <p className="px-3 py-2 text-xs text-destructive">{view.message}</p>
+          ) : null}
+
+          {/* Nothing at all — no command and no task. Suppressed when the task
+              half already said so, or a short query would show this message
+              alongside "No task matches" for the same word. */}
+          {rows.length === 0 && view.kind !== "empty" && view.kind !== "error" ? (
             <p className="px-3 py-4 text-xs text-muted-foreground">
               Nothing matches “{query.trim()}”.
             </p>
           ) : null}
-          {view.kind === "error" ? (
-            <p className="px-3 py-4 text-xs text-destructive">{view.message}</p>
-          ) : null}
 
           <ul>
-            {rows.map((row, index) => (
-              <li key={row.id}>
-                <button
-                  type="button"
-                  onMouseEnter={() => setCursor(index)}
-                  onClick={() => activate(row.id)}
-                  className={`flex w-full items-baseline gap-2 px-3 py-2 text-left ${
-                    index === moveSelection(cursor, 0, rows.length)
-                      ? "bg-accent text-accent-foreground"
-                      : "hover:bg-muted"
-                  }`}
-                >
-                  <span
-                    className={`min-w-0 flex-1 truncate text-sm ${
-                      row.completed_at ? "line-through opacity-60" : ""
-                    }`}
+            {rows.map((row, index) => {
+              if (row.kind === "section")
+                return (
+                  <li
+                    key={row.key}
+                    className="px-3 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground"
                   >
-                    {highlight(row.title, query).map((part, i) => (
-                      <span
-                        key={`${row.id}:${i}`}
-                        className={part.match ? "font-semibold text-primary" : ""}
-                      >
-                        {part.text}
+                    {row.label}
+                  </li>
+                );
+              const pick = pickable.indexOf(index);
+              // AGENTS.md rule 6 — the house's active token. This row was the
+              // app's other `bg-accent text-accent-foreground`.
+              const selectedClass =
+                pick === at ? "bg-primary/10 text-primary" : "hover:bg-muted";
+              if (row.kind === "command")
+                return (
+                  <li key={row.key}>
+                    <button
+                      type="button"
+                      onMouseEnter={() => setCursor(pick)}
+                      onClick={() => activate(pick)}
+                      className={`flex w-full items-center gap-2 px-3 py-2 text-left ${selectedClass}`}
+                    >
+                      <Icon
+                        name={row.command.icon}
+                        className="h-3.5 w-3.5 shrink-0 text-muted-foreground"
+                      />
+                      <span className="min-w-0 flex-1 truncate text-sm">
+                        {row.command.label}
                       </span>
-                    ))}
-                  </span>
-                  <span className="shrink-0 text-[11px] text-muted-foreground">
-                    {hitContext(row)}
-                  </span>
-                </button>
-              </li>
-            ))}
+                      {row.command.sequence ? (
+                        <span className="flex shrink-0 items-center gap-0.5">
+                          {sequenceLabel(row.command)
+                            .split(" ")
+                            .map((key, i) => (
+                              <kbd
+                                key={`${row.key}:${i}`}
+                                className="rounded border border-border px-1 text-[10px] text-muted-foreground"
+                              >
+                                {key}
+                              </kbd>
+                            ))}
+                        </span>
+                      ) : null}
+                    </button>
+                  </li>
+                );
+              return (
+                <li key={row.key}>
+                  <button
+                    type="button"
+                    onMouseEnter={() => setCursor(pick)}
+                    onClick={() => activate(pick)}
+                    className={`flex w-full items-baseline gap-2 px-3 py-2 text-left ${selectedClass}`}
+                  >
+                    <span
+                      className={`min-w-0 flex-1 truncate text-sm ${
+                        row.hit.completed_at ? "line-through opacity-60" : ""
+                      }`}
+                    >
+                      {highlight(row.hit.title, query).map((part, i) => (
+                        <span
+                          key={`${row.key}:${i}`}
+                          className={part.match ? "font-semibold text-primary" : ""}
+                        >
+                          {part.text}
+                        </span>
+                      ))}
+                    </span>
+                    <span className="shrink-0 text-[11px] text-muted-foreground">
+                      {hitContext(row.hit)}
+                    </span>
+                  </button>
+                </li>
+              );
+            })}
           </ul>
 
           {view.kind === "results" && view.truncated ? (

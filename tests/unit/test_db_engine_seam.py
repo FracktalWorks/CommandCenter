@@ -311,7 +311,10 @@ H2_EXEMPT_FILES: dict[str, str] = {
 
 #: The unconverted remainder OUTSIDE routes/projects at the time the Projects
 #: slice landed (2026-08-10). Lower it as packages convert; never raise it.
-H2_BASELINE_ELSEWHERE = 494
+#: 494 → 468 with the routes/workflows slice (26 member-reached sites
+#: converted; the 17 that remain there are the unattended half — service,
+#: scheduler, triggers, hooks — each H4-annotated in place).
+H2_BASELINE_ELSEWHERE = 468
 
 
 def _get_db_sites() -> dict[str, int]:

@@ -31,6 +31,21 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
+# H4, DELIBERATELY NOT H2 (`saas_multitenancy_handover.md`): every session in
+# this module belongs to the UNATTENDED run lifecycle — engine node loads
+# (`_get_module_code`), run rows written by supervised background tasks that
+# outlive the request that may have started them (`start_run`, `_finish_run`,
+# `_hold_at_gate`), the startup sweep (`reconcile_orphaned_runs`), the health
+# policy (`evaluate_automation_health`), and the programmatic/agent entry
+# points (F13). Several are DUAL-USE — reached from a member's manual Run AND
+# from the scheduler/webhook/event paths (`start_run`, `resume_run`) — and the
+# H2 rule for that is LEAVE: a run must not behave differently depending on
+# who happened to trigger it, and inheriting the ambient request tenant is
+# exactly what H4 forbids. They stay on the unbound `get_db()` until H4
+# threads an explicit tenant (`tenant_session(org_id)` from the workflow row)
+# through the run lifecycle. `_pm_task_updater` / `_pm_lifecycle_sweeper` are
+# the Projects automation seam and are likewise H4 — do not change their
+# session acquisition here.
 from gateway.routes.workflows.core import (
     _get_db,
     _log,

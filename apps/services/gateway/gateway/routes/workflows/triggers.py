@@ -20,6 +20,12 @@ from __future__ import annotations
 
 from typing import Any
 
+# H4: event consumer, not a request handler — `dispatch_event` fires from the
+# webhook receivers' sink fan-out with no member session, so there is no bound
+# tenant to inherit and inheriting an ambient one is exactly what H4 forbids.
+# Stays on the unbound `get_db()` until H4 threads an explicit tenant through
+# the event payload (`tenant_session(org_id)` derived from the workflow row's
+# organization).
 from gateway.routes.workflows.core import _get_db, _log, parse_jsonb
 from gateway.routes.workflows.service import (
     RunRejected,

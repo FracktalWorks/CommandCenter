@@ -24,6 +24,15 @@ from fastapi import APIRouter, HTTPException
 # The shared gateway engine (BO-10) — see the DB section below.
 from gateway.db import get_db as _get_db  # noqa: F401
 from gateway.db import get_session_factory as _get_session_factory  # noqa: F401
+
+# The tenant-bound half of the seam (MT-1c / H2). `_tenant_session` IS
+# `acb_common.db.tenant_session`, aliased per-package exactly like
+# `routes/projects/core.py`: member-facing submodules import it from here BY
+# NAME, and the hermetic tests patch it on the module under test. The tenant
+# comes from the request context (bound in `_with_resolved_access`); a call
+# outside a bound request raises `TenantUnbound` — fail closed, never "the
+# usual org".
+from gateway.db import tenant_session as _tenant_session  # noqa: F401
 from sqlalchemy import text
 
 _log = get_logger("gateway.workflows")
@@ -47,11 +56,22 @@ HOOK_RATE_LIMIT_PER_MINUTE = 60  # per hook token
 # ── DB (the one shared gateway engine — gateway/db.py, BO-10) ────────────────
 #
 # This package used to build its own engine here with its own 5+10 pool. It now
-# has none: `_get_db` / `_get_session_factory` at the top of this module are
-# re-exports of the shared seam. The private names are kept so that every
-# `from .core import _get_db` in this package — and every test that
-# monkeypatches `_get_db` on the sibling module it is imported into — keeps
-# working unchanged.
+# has none: `_get_db` / `_get_session_factory` / `_tenant_session` at the top
+# of this module are re-exports of the shared seam.
+#
+# Two names, one pool, and the split is the H2 conversion boundary:
+#
+# * `_tenant_session` — every MEMBER-REACHED handler (crud, publish, catalog,
+#   search, modules, copilot, runs) acquires its session as
+#   `async with _tenant_session() as db:`; the wrapper owns the transaction
+#   (commit on clean exit, rollback on raise) and binds `app.tenant_id` from
+#   the request context.
+# * `_get_db` — still here for the UNATTENDED half of this package (service,
+#   scheduler, triggers, hooks): engine runs, cron ticks, event dispatch and
+#   token-authenticated webhooks have no member session to inherit a tenant
+#   from, and H4 owns threading an explicit one through (see the H4 notes in
+#   each of those modules). The H2 ratchet in `test_db_engine_seam.py` counts
+#   these sites; they only go down.
 
 
 # ── Small helpers ────────────────────────────────────────────────────────────

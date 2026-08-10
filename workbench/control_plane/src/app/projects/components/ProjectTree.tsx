@@ -6,6 +6,11 @@
  * Departments, projects and subprojects are one self-FK (D-PM-2), so this is
  * one recursive list rather than three panes — the indentation IS the
  * hierarchy.
+ *
+ * Rendered twice by the page and identically both times: the collapsible rail
+ * on desktop and the shell drawer's sheet on a phone (WS-27ag). The selected
+ * row wears the house active token, `bg-primary/10 text-primary` — the same one
+ * the sidebar, the tabs and every other nav in the tree use.
  */
 import Icon from "@/components/Icon";
 import Button from "@/components/ui/Button";
@@ -46,7 +51,7 @@ function Node({
       <div
         className={`flex items-center gap-1 rounded-md px-2 py-1.5 text-sm ${
           isSelected
-            ? "bg-accent text-accent-foreground"
+            ? "bg-primary/10 text-primary"
             : "text-foreground hover:bg-muted"
         }`}
         style={{ paddingLeft: `${depth * 12 + 8}px` }}

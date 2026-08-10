@@ -2,7 +2,8 @@
 
 > **Product:** CommandCenter · **Feature:** Projects (the People Center's primary work-management
 > module, sliced into every other Center) · **Created:** 2026-08-05 · **Updated: 2026-08-10**
-> (status truth pass + tenancy alignment — R4) ·
+> (status truth pass + tenancy alignment — R4; **WS-27ag shell/mobile slice built the same
+> day**) ·
 > **Status:** ✅ **WS-27 a–t MERGED AND DEPLOYED** (a b d e f i j k l m n via #390/#393/#394/#398;
 > o–t via **#399**; **u–z via #408**, 2026-08-10) — migrations **146, 147, 150, 152, 155, 156,
 > 160, 161, 164, 165, 166 are applied on prod** (164/165/166 log-verified on the 2026-08-10
@@ -11,6 +12,13 @@
 > 🟡 **c** two-way sync (waits on WS-1 BO-1a+BO-1b) · 🔴 **g** cutover/retirement · 🟡 **h**
 > `gtd_items` retirement (data move 🔴) · 🟢 **u–z shipped**, their owner activation steps in
 > HANDOVER §1 ·
+> 🟢 **ag BUILT 2026-08-10, on branch, NOT merged and NOT deployed** (§11.20) — the app joins
+> the house shell and gets a mobile layout at all: `AppShell` learns `isProjectsPage`
+> (Projects · Views · Search), the tree and the mode picker become drawer sheets, an opened
+> task is full-screen on a phone, the desktop rail collapses at Tasks' `w-60`, and the
+> six-purpose header splits into a title row and an action row. Frontend only — no migration,
+> no API change. ⚠️ **The phone-viewport and four-theme visual pass is still owed**: no
+> browser was runnable in the build environment (§11.20's closing note). ·
 > **Owner:** vjvarada · **Board row: WS-27**
 >
 > **Tenancy (audited 2026-08-10 — this spec previously cited no tenancy decision at all).**
@@ -2472,6 +2480,68 @@ the research doc's license wall is binding on every ticket below.
    but the sprints refusal now carries Plane's reference design (join-table membership,
    snapshot-on-close, carry-forward — research doc §3.7) so the eventual build starts from
    a settled shape rather than a blank page.
+
+### 11.20 WS-27ag — the house shell, and a mobile UI at all (built 2026-08-10)
+
+**The measured problem.** `/projects` shipped twenty-plus letters of function with **no
+mobile layout of any kind**. `page.tsx` imported neither `useViewMode` nor
+`useMobileDrawer` — the only cross-cutting app in the tree that did not — so a phone got
+the desktop tree: a fixed 256px `<nav>` beside a five-mode canvas inside `AppShell`'s
+`pb-nav` scroller, and a **third** column the moment a task was opened.
+`AppShell.tsx` enumerated `isChatPage`, `isEmailPage`, `isTasksPage`, `isNotesPage`,
+`isWhatsAppPage` and `isAppWorkshopEditPage`; there was no `isProjectsPage`, so the bottom
+bar offered nothing but Menu. Separately the app owned no page shell (Tasks and Email share
+a slim `h-10` bar; Projects went from a non-collapsible rail straight into one `<header>`
+carrying six unrelated things), and it was the tree's only systematic user of `bg-accent`
+where the house active token is `bg-primary/10 text-primary`.
+
+**Shipped.** Frontend only; no migration, no API change, no new dependency.
+
+1. **The mobile branch.** One pane. `ProjectTree` + My work move into the shell drawer as a
+   sheet; the view-mode picker becomes a second sheet; an opened `TaskPanel` becomes a
+   full-screen `fixed inset-0 z-[60]` surface (the panel's own `max-w-md` is a *docked
+   column* width, lifted by the shell rather than by the panel, which knows nothing about
+   which layout it is in).
+2. **`AppShell` gains `isProjectsPage`** and three tabs — **Projects · Views · Search** —
+   added beside the existing branches, never inside one. The set is exactly what the
+   desktop layout owns and a phone cannot otherwise reach: a 240px rail, a toolbar row of
+   five modes, and a ⌘K palette with no keyboard. **Notifications deliberately did not get
+   a tab**: `NotificationBell` is self-anchored with no external open control, so the bell
+   stays in the page's own title row where its 320px dropdown fits a phone.
+3. **The house shell on desktop** — a slim `h-10` bar (rail toggle · divider · app title ·
+   right-aligned app actions) over a **collapsible** rail at Tasks' `w-60`, replacing the
+   third sidebar width in three apps and the one rail that could not collapse.
+4. **The six-purpose header splits three ways**: app scope (search, notifications) to the
+   top bar; a **title row** (what you are looking at); an **action row** (the five modes
+   left, project actions right).
+5. **Three `bg-accent` sites → `bg-primary/10 text-primary`** (My work, the mode switch,
+   the selected tree node). Four more remain in `FilterBar`, `TaskList`, `MyWork`,
+   `SearchPalette` and `lib/tags.ts` — a later slice owns those files.
+6. **`"Loading projects…"` de-duplicated** into `LOADING_COPY`, reached through one
+   `renderState()` seam that also carries the empty and error surfaces; the failure strip
+   stopped wearing `bg-muted` (the token for *quiet*) and now wears `bg-destructive/10`.
+
+**Two seams left for the slice that follows**, both marked `── SEAM (WS-27ag) ──` in
+`page.tsx`: the shared `<Toast>` mount point inside `overlays` (one place, above both
+layouts, below every dialog), and `renderState()` as the single call site the shared
+`EmptyState` replaces.
+
+⚠️ **Two rules were learned here and are written in the code, not just recorded.**
+(1) **The shell drawer holds a snapshot** — `AppShell` keeps injected content in its own
+state, so a sheet handed over once keeps rendering the props it was built with; the page
+re-injects on every change to what the sheet draws, and every callback inside it is a
+`useState` setter so the re-injection cannot loop through the drawer's context.
+(2) **Dismissing the drawer from the outside must clear the page's `sheet` state**, or the
+next tree or mode change reopens the sheet the user just closed.
+
+**Not fenced, and said plainly:** this tree has **no structural or layout test at all** —
+`conformance.test.ts` checks colour, icon imports and solid-button chrome, and nothing
+checks that an app has a mobile branch, that a bottom-bar tab has a listener, or that a
+`cc-mobile-nav` detail string agrees at both ends. Every rule above is **advisory**;
+`tsc --noEmit`, the 1278 vitest cases and `npx vitest run src/lib/theme/` were green, and a
+production `next build` prerendered `/projects`, but **no browser check was possible in the
+build environment** (the Playwright chromium download is blocked), so the phone-viewport
+and four-theme pass is owed at review.
 
 ## Board record (2026-08-09) — moved from work_plan.md §2
 

@@ -1170,6 +1170,9 @@ function ProjectsWorkspace() {
           <TaskBoard
             groups={groups}
             groupBy={groupBy}
+            // S4 — the empty state has to know whether the filters emptied it.
+            filters={filters}
+            onClearFilters={() => changeFilters(EMPTY_FILTERS)}
             lanes={lanes}
             onToggleLane={(key) =>
               setLanes((current) => ({
@@ -1195,6 +1198,8 @@ function ProjectsWorkspace() {
           <TaskList
             groups={groups}
             groupBy={groupBy}
+            filters={filters}
+            onClearFilters={() => changeFilters(EMPTY_FILTERS)}
             statuses={statuses}
             projectId={selected.id}
             shownFields={shownFields}

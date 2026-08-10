@@ -8,7 +8,8 @@ every sub-app, and the overall architecture. *(The owner's suggested name
 was avoided because the Projects app's own spec lives inside and the collision
 would confuse exactly the agents this cleanup serves.)*
 
-**How an agent navigates:** start at **`work_plan.md` §1** (the spec contract and
+**How an agent navigates:** the repo root **`CLAUDE.md`** is loaded into every
+session (D30) and routes you here; then start at **`work_plan.md` §1** (the spec contract and
 the standing rules **R1–R8** — R6/R7/R8 are the engineering-practice rules from
 D28 and bind every PR), then **§2** (the dispatch board — ordering, states,
 gates). The board row names the **owning spec**; build

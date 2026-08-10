@@ -215,7 +215,7 @@ owning specs are the archive; this file owns ordering, gates and states only.
 | WS-28 | **People Center — directory, org chart, assignment seam** *(minted 2026-08-06)* | ✅ a+b+b-write | `specs/people_center_app.md` · board record 2026-08-09 | a (key shape, mig 148 + quarantine table) · b (directory + person page, mig 149, five-place registration) · b-write (create/edit UI restored; found three ways mig 148 had broken the write routes) — built 2026-08-06/07; **closes WS-13's directory item**. 🟢 c org chart · d capability search (**ranking EVAL-LOCKED**) · e Projects seams; 🔴 f seats/roles writes (§6 WS-24 (d) analogue). ⚠️ `schema.generated.sql` regeneration is **due**: stale since ~migration 113, and 148 reached prod ~2026-08-07 (after the #384 cast fix). (2026-08-07) |
 ---
 
-## 3. Decisions recorded (D1–D14: 2026-07-31→08-04 · D15/D16: 2026-08-08 · D17–D21: 2026-08-09 · D22–D29: 2026-08-10)
+## 3. Decisions recorded (D1–D14: 2026-07-31→08-04 · D15/D16: 2026-08-08 · D17–D21: 2026-08-09 · D22–D30: 2026-08-10)
 
 Resolutions for the cross-doc conflicts the audit surfaced. D1–D8, **D13**, **D14**,
 **D16** and **D17** are **proposed defaults, adopted unless the owner objects**
@@ -224,6 +224,29 @@ calls, taken and dated. ⚠️ Two entries below are superseded and kept as reco
 **D11** (re-taken by D15) and **D10 part 1's planning premise** (re-scoped by
 D15/D16) — read their banners before citing either.
 
+- **D30 — `CLAUDE.md` at the repo root is the always-loaded briefing.**
+  *(owner-directed 2026-08-10 — "any cloud instance must understand the
+  development philosophy, the work plan and the architecture at all times".)*
+  Claude Code auto-loads `CLAUDE.md` into **every** session including cloud and
+  headless ones; the repo had none, and the 16 KB root `AGENTS.md` is not
+  guaranteed to be in context at session start — so a cloud instance began
+  blind. `CLAUDE.md` is a **router plus the minimum that must be known before
+  the first tool call**, and deliberately duplicates nothing: where truth lives
+  and in what order (INDEX → §1 rules → §2 board → §6 gates → §3 decisions →
+  engineering practice → owning spec); the architecture in one screen (Centers
+  are projections · apps have two access paths and one permission model ·
+  modules are billing atoms and Center packages are what customers buy · tenancy
+  is a row and we are multi-tenant from customer #1 · visibility is
+  private→Center→org); the non-negotiables (never commit on main, refuse
+  owner-gated work by name, R5/R6/R7/R8/R1, verify delivery by evidence); the
+  development method (one narrowed slice, audit → implement → verify → review →
+  PR → stop, verifier ≠ implementer, adversarial reviewer, re-verify anchors,
+  extend seams never fork them, short branches); what NOT to do (re-litigate
+  D1–D29, refactor to conform, build a second way to do an existing thing, mark
+  done from the write-up); and the environment traps that waste the most time.
+  **Rule: `CLAUDE.md` stays a router.** Anything that grows into content belongs
+  in an owning spec with a pointer here — a briefing nobody finishes reading is
+  a briefing nobody follows.
 - **D29 — The agent harness is tracked in git; derived indexes are not.**
   *(owner-raised 2026-08-10 — "cloud instances should use the full development
   philosophy"; `agent-proposed, owner may overrule`.)* `.claude/` was a **blanket

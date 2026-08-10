@@ -12,7 +12,7 @@ from typing import Any
 
 from acb_auth import UserContext, get_current_user
 from fastapi import Depends
-from gateway.routes.whatsapp.core import _get_db, router
+from gateway.routes.whatsapp.core import _tenant_session, router
 from pydantic import BaseModel
 from sqlalchemy import text
 
@@ -82,8 +82,7 @@ async def digest(
     user: UserContext = Depends(get_current_user),
 ):
     """The WhatsApp section of the morning brief for the user's number(s)."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         params: dict[str, Any] = {"uid": user.email or "anonymous"}
         scope = "IN (SELECT id FROM wa_accounts WHERE user_id = :uid"
         if account_id:
@@ -187,5 +186,3 @@ async def digest(
             waiting_on=waiting_on,
             waiting_on_count=waiting_on_count,
         )
-    finally:
-        await db.close()

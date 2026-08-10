@@ -15,7 +15,7 @@ from uuid import uuid4
 
 from acb_auth import UserContext, get_current_user
 from fastapi import Depends, HTTPException
-from gateway.routes.whatsapp.core import _get_db, assert_account_owned, router
+from gateway.routes.whatsapp.core import _tenant_session, assert_account_owned, router
 from pydantic import BaseModel
 from sqlalchemy import text
 
@@ -102,16 +102,13 @@ async def list_categories(
     account_id: str, user: UserContext = Depends(get_current_user),
 ):
     """List an account's categories with their policies, in nav order."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         await assert_account_owned(db, account_id, user.email or "anonymous")
         rows = (await db.execute(
             text(_SELECT + " WHERE account_id = :aid ORDER BY sort_order, name"),
             {"aid": account_id},
         )).fetchall()
         return [_model(r) for r in rows]
-    finally:
-        await db.close()
 
 
 @router.post("/accounts/{account_id}/categories/bootstrap",
@@ -120,8 +117,7 @@ async def bootstrap_categories(
     account_id: str, user: UserContext = Depends(get_current_user),
 ):
     """Seed the default category policy set (idempotent — existing names kept)."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         await assert_account_owned(db, account_id, user.email or "anonymous")
         for c in default_categories():
             await db.execute(
@@ -138,14 +134,13 @@ async def bootstrap_categories(
                  "auto": c["auto_reply_policy"], "draft": c["draft_policy"],
                  "esc": c["escalate_after_mins"], "sort": c["sort_order"]},
             )
-        await db.commit()
+        # Same transaction as the seeding INSERTs — it reads its own writes,
+        # and the wrapper commits everything together on clean exit.
         rows = (await db.execute(
             text(_SELECT + " WHERE account_id = :aid ORDER BY sort_order, name"),
             {"aid": account_id},
         )).fetchall()
         return [_model(r) for r in rows]
-    finally:
-        await db.close()
 
 
 @router.patch("/categories/{category_id}", response_model=CategoryModel)
@@ -155,8 +150,7 @@ async def update_category(
 ):
     """Change a category's policy (the founder tuning behaviour per category)."""
     _validate_policies(req.notify_policy, req.auto_reply_policy, req.draft_policy)
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         row = (await db.execute(
             text("""SELECT c.id FROM wa_categories c
                     JOIN wa_accounts a ON a.id = c.account_id
@@ -175,10 +169,9 @@ async def update_category(
                      f"WHERE id = :cid"),
                 fields,
             )
-            await db.commit()
+        # Same transaction as the UPDATE, which sees its own write; the
+        # wrapper commits both together on clean exit.
         updated = (await db.execute(
             text(_SELECT + " WHERE id = :cid"), {"cid": category_id},
         )).fetchone()
         return _model(updated)
-    finally:
-        await db.close()

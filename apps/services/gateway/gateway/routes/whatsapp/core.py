@@ -17,6 +17,23 @@ from fastapi import APIRouter, HTTPException
 # The shared gateway engine (BO-10) — see the DB section below.
 from gateway.db import get_db as _get_db  # noqa: F401
 from gateway.db import get_session_factory as _get_session_factory  # noqa: F401
+
+# The tenant-bound seam (MT-1c/H2). `_tenant_session` IS
+# `acb_common.db.tenant_session`, aliased per-package exactly as
+# `routes/projects/core.py` does: every submodule imports it from here BY
+# NAME, which is the one seam the hermetic tests patch per module. The tenant
+# comes from the request context — bound centrally in `_with_resolved_access`
+# — so no call site passes one. A call outside a bound request raises
+# `TenantUnbound` rather than defaulting: fail closed, never "the usual org".
+#
+# ⚠️ NOT every site in this package uses it. This surface is ingestion-heavy:
+# the Meta webhook, the whatsmeow bridge's five push routes, the post-sync
+# hooks and the enrichment scheduler all run with NO ambient tenant (Meta and
+# the Go bridge authenticate with their own secrets, not a member session;
+# `system:internal` binds nothing). Those stay on `_get_db` with an H4/H6
+# marker at each site until an explicit tenant is threaded through — deriving
+# it ambiently there is exactly what the H2 runbook forbids.
+from gateway.db import tenant_session as _tenant_session  # noqa: F401
 from pydantic import BaseModel
 from acb_auth import require_feature_router
 
@@ -119,11 +136,12 @@ class WhatsAppMessageModel(BaseModel):
 # ── DB (the one shared gateway engine — gateway/db.py, BO-10) ────────────────
 #
 # This package used to build its own engine here with its own 5+10 pool. It now
-# has none: `_get_db` / `_get_session_factory` at the top of this module are
-# re-exports of the shared seam. The private names are kept so that every
-# `from .core import _get_db` in this package — and every test that
-# monkeypatches `_get_db` on the sibling module it is imported into — keeps
-# working unchanged.
+# has none: `_get_db` / `_get_session_factory` / `_tenant_session` at the top
+# of this module are re-exports of the shared seam. The private names are kept
+# so that every `from .core import _tenant_session` (or `_get_db`, on the
+# service-identity/background sites H4 owns) in this package — and every test
+# that monkeypatches the seam on the sibling module it is imported into —
+# keeps working unchanged.
 
 
 # ── provider adapter ──────────────────────────────────────────────────────────

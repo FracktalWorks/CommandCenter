@@ -25,7 +25,7 @@ from typing import Any
 
 from acb_auth import UserContext, get_current_user
 from fastapi import Depends, Query
-from gateway.routes.whatsapp.core import _get_db, router
+from gateway.routes.whatsapp.core import _tenant_session, router
 from pydantic import BaseModel
 from sqlalchemy import text
 
@@ -147,8 +147,7 @@ async def rules_preview(
 ):
     """Dry-run the auto-reply engine over recent needs-reply chats — what WOULD
     happen, no sends. Lets the founder see the automation before enabling it."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         params: dict[str, Any] = {
             "uid": user.email or "anonymous", "aid": account_id, "lim": limit,
         }
@@ -200,5 +199,3 @@ async def rules_preview(
             summary[decision.action] = summary.get(decision.action, 0) + 1
 
         return RulePreviewModel(items=items, summary=summary)
-    finally:
-        await db.close()

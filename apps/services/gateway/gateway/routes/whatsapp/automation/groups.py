@@ -22,7 +22,7 @@ from acb_auth import UserContext, get_current_user
 from acb_common import get_logger
 from fastapi import Depends, HTTPException
 from gateway.routes.whatsapp.automation.replyzero import _account_wa_ids
-from gateway.routes.whatsapp.core import _get_db, router
+from gateway.routes.whatsapp.core import _get_db, _tenant_session, router
 from pydantic import BaseModel
 from sqlalchemy import text
 
@@ -196,6 +196,8 @@ async def summarize_stale_groups(account_id: str) -> int:
     """Summarize group chats that have new activity since their last summary
     (or none yet). Bounded per pass. For a schedule/digest trigger, NOT the hot
     webhook path. Returns the number summarized. Own transaction."""
+    # H4: background enrichment pass (scheduler.run_enrichment_cycle) — no
+    # request, no ambient tenant; H4 threads an explicit one per account.
     db = await _get_db()
     try:
         rows = (await db.execute(
@@ -251,20 +253,16 @@ async def generate_group_summary(
     chat_id: str, user: UserContext = Depends(get_current_user),
 ):
     """Summarize one group on demand (and cache it)."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         account_id = await _assert_group_owned(db, chat_id, user.email or "anonymous")
         result = await summarize_group(db, account_id, chat_id)
         if result is None:
             raise HTTPException(
                 status_code=422, detail="No summary — nothing to summarize")
-        await db.commit()
         return GroupSummaryModel(chat_id=chat_id, **{
             k: result[k] for k in
             ("summary", "sentiment", "mentions_you", "key_points", "message_count")
         })
-    finally:
-        await db.close()
 
 
 @router.get("/groups/summaries", response_model=list[GroupSummaryModel])
@@ -275,8 +273,7 @@ async def list_group_summaries(
 ):
     """List cached group summaries, newest first; ``needs_you`` filters to the
     ones the founder was addressed in."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         params: dict[str, Any] = {"uid": user.email or "anonymous"}
         scope = "s.account_id IN (SELECT id FROM wa_accounts WHERE user_id = :uid"
         if account_id:
@@ -312,5 +309,3 @@ async def list_group_summaries(
                 generated_at=r.generated_at.isoformat() if r.generated_at else None,
             ))
         return out
-    finally:
-        await db.close()

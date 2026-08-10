@@ -18,7 +18,7 @@ from typing import Any
 
 from acb_auth import UserContext, get_current_user
 from fastapi import Depends, HTTPException
-from gateway.routes.whatsapp.core import _get_db, router
+from gateway.routes.whatsapp.core import _tenant_session, router
 from pydantic import BaseModel
 from sqlalchemy import text
 
@@ -107,8 +107,7 @@ async def chat_context(
 ):
     """Resolve the company context for a conversation."""
     uid = user.email or "anonymous"
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         chat = (await db.execute(
             text("""SELECT c.id, c.wa_chat_id, c.name, c.category, c.kind
                     FROM wa_chats c
@@ -196,5 +195,3 @@ async def chat_context(
             chat_id=chat_id, contact=contact, open_loops=open_loops,
             waiting_on=waiting_on, stats=stats,
         )
-    finally:
-        await db.close()

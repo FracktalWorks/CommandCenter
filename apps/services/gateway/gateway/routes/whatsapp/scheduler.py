@@ -54,6 +54,9 @@ def resolve_interval(raw: str | int | None) -> int:
 async def _live_account_ids() -> list[str]:
     """Every account not in a hard error state — the sweep set."""
     from gateway.routes.whatsapp.core import _get_db
+    # H4: background loop (asyncio.create_task, no request) — deliberately
+    # cross-tenant: it enumerates every account so each per-account pass can
+    # later run under that account's own explicit tenant.
     db = await _get_db()
     try:
         rows = (await db.execute(
@@ -69,6 +72,8 @@ async def _embed_account(account_id: str) -> int:
     No-op (0) when ``whatsapp_semantic_search_enabled`` is off (W10)."""
     from gateway.routes.whatsapp.core import _get_db
     from whatsapp_ingestion.wa_embeddings import embed_pending_messages
+    # H4: background loop — no request, no ambient tenant; H4 threads an
+    # explicit per-account tenant through the sweep.
     db = await _get_db()
     try:
         return await embed_pending_messages(db, account_id)

@@ -309,12 +309,33 @@ H2_EXEMPT_FILES: dict[str, str] = {
         "tenant through the event payload; ambient inheritance is forbidden",
 }
 
+#: routes/whatsapp's allowed remainder (H2 slice, 2026-08-10): file → site
+#: count. This package is ingestion-heavy, so unlike projects it cannot pin at
+#: zero — these are service-identity entry points (Meta webhook / the Go
+#: bridge's shared-secret pushes: `system:internal` and signature-authed
+#: callers bind NO tenant, so `tenant_session()` there would 500 every inbound
+#: batch) and background consumers (post-sync hooks, the enrichment loop, the
+#: Action Broker broadcast handler). H4/H6 owns threading an explicit tenant
+#: through each; every site carries the matching `# H4`/`# H4/H6` marker.
+H2_WHATSAPP_EXEMPT_SITES: dict[str, int] = {
+    "apps/services/gateway/gateway/routes/whatsapp/transport/webhook.py": 2,
+    "apps/services/gateway/gateway/routes/whatsapp/transport/bridge.py": 5,
+    "apps/services/gateway/gateway/routes/whatsapp/scheduler.py": 2,
+    "apps/services/gateway/gateway/routes/whatsapp/automation/intent.py": 1,
+    "apps/services/gateway/gateway/routes/whatsapp/automation/replyzero.py": 1,
+    "apps/services/gateway/gateway/routes/whatsapp/automation/transcription.py": 1,
+    "apps/services/gateway/gateway/routes/whatsapp/automation/groups.py": 1,
+    "apps/services/gateway/gateway/routes/whatsapp/automation/outbound.py": 1,
+}
+
 #: The unconverted remainder OUTSIDE routes/projects at the time the Projects
 #: slice landed (2026-08-10). Lower it as packages convert; never raise it.
 #: 494 → 433: routes/notes converted (61 handler sites → `_tenant_session`;
 #: 33 remain there — background pipeline/poller/copilot-task sites and the
 #: meeting-bot worker's service-identity paths, each marked `# H4` in place).
-H2_BASELINE_ELSEWHERE = 433
+#: 433 → 395: routes/whatsapp's 38 request-handler sites (2026-08-10; its
+#: 14 B/C leftovers are pinned file-by-file by the whatsapp remainder test).
+H2_BASELINE_ELSEWHERE = 395
 
 
 def _get_db_sites() -> dict[str, int]:
@@ -342,6 +363,27 @@ def test_routes_projects_is_converted_and_stays_converted() -> None:
     assert offenders == {}, (
         f"unbound get_db() in converted package: {offenders} — use "
         f"`async with _tenant_session() as db:` (core.py) instead"
+    )
+
+
+def test_routes_whatsapp_holds_at_its_named_remainder() -> None:
+    """The WhatsApp package's unbound sites are EXACTLY the named exemptions.
+
+    Two failure modes, both caught: a new `get_db()` handler (would silently
+    read nothing under RLS — convert it to `_tenant_session`), and a site
+    LEAVING the list (progress — bank it by shrinking the dict, so the
+    remainder can only ratchet down).
+    """
+    sites = {
+        f: n for f, n in _get_db_sites().items()
+        if f.startswith("apps/services/gateway/gateway/routes/whatsapp/")
+    }
+    assert sites == H2_WHATSAPP_EXEMPT_SITES, (
+        "routes/whatsapp unbound get_db() sites drifted from the named "
+        f"remainder.\n  measured: {sites}\n  pinned:   "
+        f"{H2_WHATSAPP_EXEMPT_SITES}\nA NEW site must use `async with "
+        "_tenant_session() as db:` (core.py); a RETIRED site must leave "
+        "H2_WHATSAPP_EXEMPT_SITES in this test."
     )
 
 

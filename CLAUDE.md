@@ -97,9 +97,11 @@ Rules that make it work:
   vocabulary, no hand-rolled control. `workbench/control_plane/DESIGN_SYSTEM.md`
   is the contract and `AGENTS.md` beside it carries the seven rules and their
   fences — both are auto-loaded when you touch UI code. Owner directive
-  2026-08-10. The conformance suite checks four regexes and **nothing tests
-  layout or cross-app continuity**, so the theme-switch check (Fluent →
-  Material → Graphite, on your surface *and* its neighbour) is the real gate.
+  2026-08-10. Categorical hues (contexts, tags, labels) go through the
+  `--cat-1…8` ramp via `src/lib/categorical.ts`, never a raw Tailwind palette
+  class. The conformance suite checks five regexes and **nothing tests layout
+  or cross-app continuity**, so the theme-switch check (Fluent → Material →
+  Graphite, on your surface *and* its neighbour) is the real gate.
 - **Keep branches short and integrate often.** Long branches are the root cause
   behind the migration-renumber collisions, the green-alone/red-together PRs and
   a duplicated tenancy design. Three or four in flight is the ceiling.

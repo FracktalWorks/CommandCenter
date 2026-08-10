@@ -1402,6 +1402,48 @@ P-27, P-28 rest)*. Filtered-list CSV export on the export-job pattern; a delta-s
 variant plus satellite `updated_at` bumps for agents/mobile; `is_epic`, per-user view state
 and the session `user_id` denorm. Minted so the basket has an owner; dispatch after aa–ad.
 
+**WS-27af — the themed categorical ramp.** 🟢 AGENT-SAFE. ✅ **BUILT 2026-08-10.**
+*(Owner-ruled the same day, choosing the ramp over tokenising to the semantic set or
+widening the DESIGN_SYSTEM exception.)* `--cat-1 … --cat-8` in all four theme manifests in
+both modes (64 values), bridged to Tailwind, with `src/lib/categorical.ts` as the shared
+vocabulary — slot chosen by hashing the item's **name**, never an array index, so nothing
+silently repaints when a list is reordered. `tasks/lib/contextColors.ts` became the worked
+adapter, the same shape `stageColors.ts` has over `statusAccent.ts`. Also retired: the two
+raw-palette sites no exception covered, `SourceBadge`'s hand-rolled chrome (now `<Badge>`,
+so it finally picks up Graphite's uppercase and Material's tracking), and the off-grid type
+scale (`text-[12px]`/`text-[13px]` → `text-xs`/`text-sm`, 167 sites — which also restores
+the user's density preference, since `--ui-scale` reaches rem and not px).
+**Its lasting deliverable is the fence, not the ramp:** conformance gained a fifth rule for
+raw Tailwind palette classes, per-file baselines that only go down. `bg-sky-500/10` passed
+every previous regex — it is a named class, not a bracket class — which is how ~950 of them
+accumulated tree-wide. ⚠️ Measured, and the ticket was wrong: `/tasks` held **142** across
+13 files, not 52; the tree holds **952** across 77.
+
+**WS-27ag — the house shell, and a mobile UI at all.** 🟢 AGENT-SAFE. ✅ **BUILT
+2026-08-10** — see §11.20 for the as-built record.
+
+> ### ⚠️ Owed at review — the check no test in this tree performs
+>
+> Neither af nor ag could run a browser (Playwright's download fails in the build
+> environment), so **the phone-viewport pass and the Fluent → Material → Graphite sweep did
+> not happen** for either slice. Both compensated honestly — a production `next build`,
+> icon names verified against the theme registry, a hand-traced z-order, and for the ramp,
+> the shipped values rendered to PNGs as real composites and inspected, including under a
+> simulated deuteranopia transform. That last produced a finding worth keeping: **eight
+> qualitative hues collapse to about four under dichromacy** (1/4, 2/8, 6/7 merge), which no
+> eight-hue palette survives — so every shipped use pairs the hue with the label it colours,
+> and the limit is written into `themes.ts`, `categorical.ts` and `DESIGN_SYSTEM.md` rather
+> than left implicit. None of that substitutes for looking at the running app on a phone in
+> four themes. That gate is still open.
+
+**Open, and needing an owner ruling** *(surfaced by af, 2026-08-10)*: WS-27ad standardised
+the **shared** card title on `text-[13px]` — deliberately choosing `/tasks`' size as the
+common one — while af established the house scale as `text-sm`/`text-xs`/`text-[11px]`/
+`text-[10px]` and removed every other off-grid size. So the one remaining off-grid size now
+lives in `src/components/TaskCardShell.tsx:120`, which **both** apps render. The two
+decisions contradict; changing it repaints Projects as well as Tasks, so it was left alone
+rather than settled by whichever slice touched it last.
+
 ---
 
 ## 10. Verification

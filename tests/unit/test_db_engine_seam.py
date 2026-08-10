@@ -330,7 +330,6 @@ H2_WHATSAPP_EXEMPT_SITES: dict[str, int] = {
 
 #: The unconverted remainder OUTSIDE routes/projects at the time the Projects
 #: slice landed (2026-08-10). Lower it as packages convert; never raise it.
-<<<<<<< HEAD
 #: 494 → 433: routes/notes converted (61 handler sites → `_tenant_session`;
 #: 33 remain there — background pipeline/poller/copilot-task sites and the
 #: meeting-bot worker's service-identity paths, each marked `# H4` in place).

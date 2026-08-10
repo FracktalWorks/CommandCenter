@@ -3,7 +3,7 @@
 > **Product:** CommandCenter · **Feature:** Projects (the People Center's primary work-management
 > module, sliced into every other Center) · **Created:** 2026-08-05 · **Updated: 2026-08-10**
 > (status truth pass + tenancy alignment — R4; **WS-27ag shell/mobile slice built the same
-> day**) ·
+> day**; **S4 convergence slice built the same day — §11.21**) ·
 > **Status:** ✅ **WS-27 a–t MERGED AND DEPLOYED** (a b d e f i j k l m n via #390/#393/#394/#398;
 > o–t via **#399**; **u–z via #408**, 2026-08-10) — migrations **146, 147, 150, 152, 155, 156,
 > 160, 161, 164, 165, 166 are applied on prod** (164/165/166 log-verified on the 2026-08-10
@@ -19,6 +19,15 @@
 > six-purpose header splits into a title row and an action row. Frontend only — no migration,
 > no API change. ⚠️ **The phone-viewport and four-theme visual pass is still owed**: no
 > browser was runnable in the build environment (§11.20's closing note). ·
+> 🟢 **S4 BUILT 2026-08-10, on branch, NOT merged and NOT deployed** (§11.21) — the three
+> findings where **Projects**, not Tasks, carried the defect: `MyWork`'s active pill moves
+> off `bg-accent` onto the house `bg-primary/10 text-primary` (now fenced by a **sixth
+> conformance rule**, per-file and ratcheted), `MyWork`'s bespoke fourth task row is rebuilt
+> on `TaskCardShell`/`TaskMeta`/`StatusChip`, and the board's one conflated empty state
+> becomes two — filtered-to-nothing (with **Clear filters**) vs genuinely empty — off the
+> existing `isFiltered` predicate, through a promoted `src/components/EmptyState.tsx`.
+> Frontend only — no migration, no API change. ⚠️ **The four-theme sweep is owed** for the
+> same reason: no browser runs in this environment. ·
 > **Owner:** vjvarada · **Board row: WS-27**
 >
 > **Tenancy (audited 2026-08-10 — this spec previously cited no tenancy decision at all).**
@@ -2584,6 +2593,72 @@ checks that an app has a mobile branch, that a bottom-bar tab has a listener, or
 production `next build` prerendered `/projects`, but **no browser check was possible in the
 build environment** (the Playwright chromium download is blocked), so the phone-viewport
 and four-theme pass is owed at review.
+
+### 11.21 S4 — the Projects side conforms, where Tasks is the better one (built 2026-08-10)
+
+The standing ruling on the two task surfaces is **"Projects is canonical, Tasks conforms"**
+(that is what WS-27ad and WS-27af did). **These three findings are the exceptions**, where
+the defect was on the Projects side. Convergence runs both ways when the evidence says so.
+Frontend only — no migration, no API change, no new dependency.
+
+1. **The active token.** `MyWork.tsx` painted its selected context pill
+   `bg-accent text-accent-foreground`; the measured house token for active/selected is
+   `bg-primary/10 text-primary` (AGENTS.md rule 6 — /tasks, /email, `src/components`).
+   Two call sites swapped, plus `aria-pressed` on both, which the toggles never carried.
+   **The lasting deliverable is the fence, not the two-line swap**: `conformance.test.ts`
+   gains a **sixth rule** — the PAIR `bg-accent text-accent-foreground`, ratcheted per file
+   exactly like rules 1/3/5, with `lib/statusAccent.ts` excepted **with the argument** (its
+   violet lane's `chip` is a hue, not a state). `hover:bg-accent` and `bg-accent/10` are
+   deliberately NOT matched: a gate that cries wolf is one somebody switches off. The
+   remaining Projects sites are baselined and can now only go down —
+   `FilterBar.tsx` 2 · `SearchPalette.tsx` 1 · `app/people/page.tsx` 1.
+2. **The fourth task card is gone.** `MyWork`'s `Row` bypassed `TaskCardShell`, `TaskMeta`
+   and `StatusChip` — and `MyWork` is the *personal task list inside Projects*, so it sits
+   directly opposite `/tasks` in the owner's comparison and was the one surface that looked
+   like neither app. It is now the shared shell, the shared title, the shared chip row
+   (`lib/card.cardChips` — so the hand-written "overdue · due · no date" line is replaced by
+   the same due/blocked/checklist chips the team board draws) and a `StatusChip` for the GTD
+   disposition. What stays local is the *interaction*: complete (which moves shared status)
+   and re-triage, the way `/tasks`' `TaskCard` keeps its GTD badges inside the same box.
+   The capture field and the triage buttons became `Input`/`Button` primitives.
+   **The disposition's hue goes through the shared vocabulary**, never a local class map:
+   `accentForDisposition` in `projects/lib/accent.ts` feeds hue NAMES to `statusAccent`, and
+   `accent.test.ts` asserts it **agrees with the name-keyword route wherever that route has
+   an opinion** (rule 5) — `Inbox` gray, `Waiting on` amber, i.e. whatever `/tasks` would
+   draw for a stage of the same name.
+3. **Two empty states where there was one.** The board said *"Nothing to show. Clear a
+   filter, or this project has no statuses yet"* — one sentence naming both causes and
+   asking the reader which was theirs — and the list said a flat "No tasks here yet" even
+   when a filter was hiding everything. `/tasks` solved this properly (`NoMatchState` with a
+   **Clear filters** action + `EmptyState`), so that shape is ported: **"No tasks match your
+   filters." / "Clear them to see everything here again." + Clear filters** when
+   `isFiltered(filters)` (the SAME predicate the toolbar's Clear button and `filtered` badge
+   read — not a second one), and otherwise **"This project has no statuses yet."** on the
+   status axis or **"No tasks here yet."** everywhere else. The box is promoted to
+   `src/components/EmptyState.tsx`; the *decision and the copy* are pure in
+   `projects/lib/emptyState.ts` and unit-tested, because vitest here is node-env and a
+   component test could not run.
+
+**Fences added** (R7): conformance rule 6 above · `sharedTaskUi.test.ts` gains
+`components/EmptyState.tsx` as a seam entry + `/projects` as a consumer ·
+`projects/lib/emptyState.test.ts` (9 cases, including *the filtered copy never mentions
+statuses and the empty copy never mentions filters* — the actual defect — and that **every
+icon it names is mapped in every pack**, which caught a `FilterX` that is mapped in none and
+would have rendered one Lucide outline in a screen of Material Symbols) ·
+`accent.test.ts` gains the disposition agreement + four-distinct-hues cases. `filters` and
+`onClearFilters` are **required** props on `TaskBoard`/`TaskList`, so `tsc` is the fence
+against an unwired call site. All four fences were mutation-checked (each was made to fail
+by reintroducing the defect, then restored).
+
+**Owed, and not claimed:** ⚠️ **no browser check was possible** — Playwright cannot install
+here — so the Fluent → Material → Graphite sweep on `/projects` *and* on `/tasks` beside it
+is owed at review; nothing in this tree tests layout. Also owed: retiring `/tasks`'
+`ItemList.tsx` `NoMatchState`/`EmptyState` onto the shared box (a `/tasks` file another
+slice held open — the `sharedTaskUi` consumer row for `tasks` is deliberately absent until
+then), `page.tsx`'s `renderState()` seam (WS-27ag left it marked for exactly this
+component), and `projects/lib/mywork.isOverdue`, which this change left caller-less and is a
+second answer to a question `lib/taskCard.isOverdue` already answers better (it also checks
+`completed_at`).
 
 ## Board record (2026-08-09) — moved from work_plan.md §2
 

@@ -25,6 +25,7 @@
  */
 import { AvatarStack, TaskMeta } from "@/components/TaskMeta";
 import { DropGap } from "@/components/DropGap";
+import { EmptyState } from "@/components/EmptyState";
 import Icon from "@/components/Icon";
 import { StatusChip } from "@/components/StatusChip";
 import { TaskCardShell, TaskCardTitle } from "@/components/TaskCardShell";
@@ -43,10 +44,13 @@ import {
 } from "../lib/board";
 import { taskRef, visibleChips } from "../lib/card";
 import { clampCursor, stepCursor } from "../lib/cursor";
+import { emptyStateCopy } from "../lib/emptyState";
 import {
   type BoardLanes,
+  type Filters,
   type GroupBy,
   type TaskGroup,
+  isFiltered,
   personLabel,
 } from "../lib/grouping";
 import { mergePlans, quickAddPrefill } from "../lib/quickAdd";
@@ -64,6 +68,15 @@ const NOBODY: ReadonlySet<string> = new Set();
 interface Props {
   groups: TaskGroup[];
   groupBy: GroupBy;
+  /**
+   * S4 — the view's filters, for the empty state alone.
+   *
+   * Required rather than optional: an unwired call site would silently blame
+   * the project's statuses for a board somebody filtered to nothing, which is
+   * the defect this props pair exists to end. `tsc` is the fence.
+   */
+  filters: Filters;
+  onClearFilters: () => void;
   /** WS-27y — the second axis and its lane state. */
   lanes: BoardLanes;
   onToggleLane: (key: string) => void;
@@ -92,6 +105,8 @@ interface Props {
 export function TaskBoard({
   groups,
   groupBy,
+  filters,
+  onClearFilters,
   lanes,
   onToggleLane,
   onShowEmptyLanes,
@@ -432,10 +447,26 @@ export function TaskBoard({
   );
 
   if (columns.length === 0) {
+    // S4 — the old copy named both causes in one sentence ("Clear a filter, or
+    // this project has no statuses yet") and left the reader to work out which
+    // one was theirs. `isFiltered` already knows, and off the status axis the
+    // statuses are not what is missing at all.
+    const copy = emptyStateCopy({
+      canvas: "board",
+      filtered: isFiltered(filters),
+      onStatusAxis: groupBy === "status",
+    });
     return (
-      <p className="p-6 text-sm text-muted-foreground">
-        Nothing to show. Clear a filter, or this project has no statuses yet.
-      </p>
+      <EmptyState
+        icon={copy.icon}
+        message={copy.message}
+        hint={copy.hint}
+        action={
+          copy.filtered
+            ? { label: "Clear filters", icon: "X", onClick: onClearFilters }
+            : undefined
+        }
+      />
     );
   }
 

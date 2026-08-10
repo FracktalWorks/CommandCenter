@@ -107,6 +107,11 @@ const SEAM: { what: string; home: string; declaration: RegExp }[] = [
     home: "components/TaskCardShell.tsx",
     declaration: /export\s+function\s+TaskCardShell\b/,
   },
+  {
+    what: "the empty state",
+    home: "components/EmptyState.tsx",
+    declaration: /export\s+function\s+EmptyState\b/,
+  },
 ];
 
 describe("one implementation, consumed twice", () => {
@@ -152,6 +157,11 @@ describe("both apps reach the shared modules", () => {
     ["projects", "components/TaskCardShell"],
     ["projects", "components/DropGap"],
     ["projects", "lib/boardDrop"],
+    // S4 — /tasks is deliberately absent: `ItemList.tsx` still holds the
+    // original local `NoMatchState`/`EmptyState` pair this was promoted FROM,
+    // and retiring them onto the shared box is a `/tasks` edit that another
+    // slice holds open. Add the row in the change that does it.
+    ["projects", "components/EmptyState"],
     ["tasks", "lib/cursor"],
     ["tasks", "lib/selection"],
     ["tasks", "components/QuickAdd"],

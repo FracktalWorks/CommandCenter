@@ -44,7 +44,7 @@ from datetime import UTC, datetime
 from acb_auth import UserContext, get_current_user
 from fastapi import Depends, HTTPException
 from gateway.routes.notes.actions import ApproveResponse, _create_task_from_action
-from gateway.routes.notes.core import _get_db, _log, router
+from gateway.routes.notes.core import _get_db, _log, _tenant_session, router
 from sqlalchemy import text
 
 #: Auto-dispatch only fires at or above this confidence — the same bar the
@@ -364,6 +364,9 @@ async def _dispatch_document(action, meeting, owner_email: str) -> str:
     workspace (blob store + disk). Returns ``artifact:<agent>/<path>``."""
     from gateway.routes.notes.summaries import _llm_json
 
+    # H4: reached from the background summary pipeline (`generate_notes` →
+    # `auto_dispatch`) and the meeting-bot poller — no ambient tenant; derive
+    # it from the meeting/action_item row.
     async with await _get_db() as db:
         excerpts = await _segment_texts(db, action.segment_ids)
 
@@ -421,6 +424,9 @@ async def _dispatch_document(action, meeting, owner_email: str) -> str:
 
 async def _mark(action_id: str, *, ref: str | None, task_id: str | None,
                 error: str | None) -> None:
+    # H4: reached from the background summary pipeline (`generate_notes` →
+    # `auto_dispatch`) and the meeting-bot poller — no ambient tenant; derive
+    # it from the meeting/action_item row.
     async with await _get_db() as db:
         if error is not None:
             await db.execute(
@@ -445,6 +451,8 @@ async def _mark(action_id: str, *, ref: str | None, task_id: str | None,
 async def _audit(actor: str, action_id: str, meeting_id: str, kind: str,
                  ref: str | None, error: str | None) -> None:
     with contextlib.suppress(Exception):
+        # H4: reached from the background summary pipeline and the meeting-bot
+        # poller — no ambient tenant; derive it from the meeting/action row.
         async with await _get_db() as db:
             await db.execute(
                 text(
@@ -488,6 +496,8 @@ async def _dispatch(action, meeting, actor: str) -> tuple[str | None, str | None
 
     try:
         if kind == "task":
+            # H4: reached from the background summary pipeline and the
+            # meeting-bot poller — no ambient tenant; derive from the row.
             async with await _get_db() as db:
                 task_id = await _create_task_from_action(db, owner, action)
                 await db.commit()
@@ -538,6 +548,9 @@ async def auto_dispatch(meeting_id: str, triggered_by: str) -> dict:
     """
     from gateway.routes.notes import settings as notes_settings
 
+    # H4: background entry point — called from `generate_notes` (a spawned
+    # task) and the meeting-bot ingest; no ambient tenant. Derive it from the
+    # meeting row (`triggered_by`/`owner_email`) when H4 threads it through.
     async with await _get_db() as db:
         meeting = await _load_meeting(db, meeting_id)
         if meeting is None:
@@ -600,7 +613,7 @@ async def dispatch_action(
     idempotent early return, which would otherwise hand a stranger the ref of
     a colleague's already-sent email.
     """
-    async with await _get_db() as db:
+    async with _tenant_session() as db:
         action = (
             await db.execute(
                 text(_ACTION_COLS + "WHERE id = :id"), {"id": action_id}

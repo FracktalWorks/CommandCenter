@@ -39,7 +39,7 @@ from collections.abc import AsyncIterator
 from acb_auth import UserContext, get_current_user
 from fastapi import Depends, Header, HTTPException
 from fastapi.responses import StreamingResponse
-from gateway.routes.notes.core import _get_db, _log, router
+from gateway.routes.notes.core import _log, _tenant_session, router
 from pydantic import BaseModel
 from sqlalchemy import text
 
@@ -267,7 +267,7 @@ async def say_into_meeting(
     text_ = (body.text or "").strip()
     if not text_:
         raise HTTPException(status_code=400, detail="empty text")
-    async with await _get_db() as db:
+    async with _tenant_session() as db:
         row = (
             await db.execute(
                 text(

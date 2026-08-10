@@ -38,6 +38,11 @@ async def run_transcription(
     forgetting it must be a ``TypeError``, not an anonymous send.
     """
     try:
+        # H4: background job — `run_transcription` runs as a spawned asyncio
+        # task (upload/complete/retranscribe handlers and the meeting-bot
+        # ingest all `_spawn` it) with no ambient tenant. Every `_get_db`
+        # block in this function stays unbound until H4 derives the tenant
+        # from the meeting row / threads it through the task arguments.
         async with await _get_db() as db:
             rec = (
                 await db.execute(

@@ -29,7 +29,7 @@ import re
 
 from acb_auth import UserContext, get_current_user
 from fastapi import Depends, HTTPException
-from gateway.routes.notes.core import _get_db, _log, router
+from gateway.routes.notes.core import _get_db, _log, _tenant_session, router
 from pydantic import BaseModel
 from sqlalchemy import text
 
@@ -180,6 +180,9 @@ async def infer_speaker_names(
 
     Returns the full merged map. Never raises: on any problem the existing map
     is returned unchanged."""
+    # H4: shared helper also consumed by the background transcription pipeline
+    # (`pipeline.run_transcription`, a spawned task) — no ambient tenant
+    # there; derive it from the meeting row.
     try:
         async with await _get_db() as db:
             m = (
@@ -216,6 +219,7 @@ async def infer_speaker_names(
         if not applied:
             return merged
 
+        # H4: see above — same background pipeline reach.
         async with await _get_db() as db:
             await db.execute(
                 text(
@@ -257,7 +261,7 @@ async def identify_speakers(
 
     Non-destructive: names already set (by the user or a prior run) are kept;
     only still-anonymous speakers can be filled."""
-    async with await _get_db() as db:
+    async with _tenant_session() as db:
         m = (
             await db.execute(
                 text("SELECT speaker_names FROM meeting WHERE id = :id"),

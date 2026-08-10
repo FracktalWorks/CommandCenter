@@ -384,6 +384,9 @@ async def apply_live_names(meeting_id: str, segments: list) -> dict[str, str]:
         from gateway.routes.notes.core import _get_db
         from gateway.routes.notes.speaker_id import merge_inferred
 
+        # H4: called from the background transcription pipeline
+        # (`pipeline.run_transcription`) — no ambient tenant; derive it from
+        # the meeting row.
         async with await _get_db() as db:
             row = (
                 await db.execute(

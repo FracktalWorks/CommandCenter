@@ -22,6 +22,17 @@ from fastapi import APIRouter, HTTPException
 # The shared gateway engine (BO-10) — see the DB section below.
 from gateway.db import get_db as _get_db  # noqa: F401
 from gateway.db import get_session_factory as _get_session_factory  # noqa: F401
+
+# The shared seam (BO-10 → MT-1c/H2). `_tenant_session` IS
+# `acb_common.db.tenant_session`, aliased per-package for the same reason
+# `_get_db` was: every submodule imports it from here BY NAME, which is the
+# seam the hermetic tests patch per module. The tenant comes from the request
+# context — bound once in `_with_resolved_access` — so no call site passes
+# one (H2). A call outside a bound request raises `TenantUnbound` rather than
+# defaulting: fail closed, never "the usual org". `_get_db` above remains for
+# the sites H2 cannot reach from a request: background jobs/pollers and the
+# meeting-bot worker's service-identity paths (H4 threads their tenant).
+from gateway.db import tenant_session as _tenant_session  # noqa: F401
 from pydantic import BaseModel
 from sqlalchemy import text
 from acb_auth import require_feature_router

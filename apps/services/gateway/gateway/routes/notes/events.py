@@ -16,7 +16,7 @@ from collections.abc import AsyncIterator
 from acb_auth import UserContext, get_current_user
 from fastapi import Depends
 from fastapi.responses import StreamingResponse
-from gateway.routes.notes.core import _get_db, _log, router
+from gateway.routes.notes.core import _log, _tenant_session, router
 from sqlalchemy import text
 
 _POLL_S = 1.5
@@ -24,7 +24,7 @@ _MAX_S = 1800  # safety ceiling so a stuck job can't hold a stream forever
 
 
 async def _snapshot(meeting_id: str) -> dict | None:
-    async with await _get_db() as db:
+    async with _tenant_session() as db:
         m = (
             await db.execute(
                 text(

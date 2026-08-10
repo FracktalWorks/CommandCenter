@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+from contextlib import asynccontextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -123,10 +124,16 @@ def db() -> FakeDB:
 
 
 def bind(monkeypatch, database: FakeDB) -> None:
-    async def _get_db():
-        return database
+    # H2: routes/tasks/people acquires sessions through the tenant-bound
+    # `_tenant_session` context manager (imported from core by name), so that
+    # is the seam this fake swaps in — commit-on-clean-exit like the real one.
+    @asynccontextmanager
+    async def _tenant_session(organization_id: str | None = None):
+        yield database
+        await database.commit()
 
-    monkeypatch.setattr(tasks_people, "_get_db", _get_db, raising=False)
+    monkeypatch.setattr(
+        tasks_people, "_tenant_session", _tenant_session, raising=False)
 
 
 def _user(email: str, *grants: str) -> UserContext:

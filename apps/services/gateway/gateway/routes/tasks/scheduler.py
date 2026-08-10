@@ -39,6 +39,17 @@ import contextlib
 from typing import Any
 
 from acb_common import get_logger
+
+# ⚠️ H4, DELIBERATELY NOT H2 (`saas_multitenancy_handover.md`): this module is
+# a BACKGROUND CONSUMER, not a request handler — every loop below runs from
+# `asyncio.create_task` long after any request (and its tenant binding) is
+# gone. The runbook's rule for that category is "do not let a job inherit an
+# ambient tenant", so converting these sites to the ambient `tenant_session()`
+# would be exactly the inheritance it forbids (and would raise `TenantUnbound`
+# anyway). They stay on the unbound `get_db()` until H4 threads an EXPLICIT
+# tenant — from the `task_accounts` row being synced — into
+# `tenant_session(org_id)`. Sequencing is safe: RLS phase 4 (which would starve
+# these reads) is gated on H2+H4 both being complete.
 from gateway.routes.tasks.core import _get_db
 from sqlalchemy import text
 
@@ -65,7 +76,7 @@ async def _run_one_cycle(account_id: str, *, refresh_schema: bool) -> None:
     """Pull tasks for one account (and, on schema cycles, re-fetch its full
     provider schema). Each step is isolated so one failing doesn't skip the
     other; the pull itself records ``sync_status``/``sync_error`` on the row."""
-    from gateway.routes.tasks.accounts import _refresh_schema
+    from gateway.routes.tasks.accounts import _reconcile_people, _refresh_schema
     from gateway.routes.tasks.sync import _sync_account
 
     db = await _get_db()
@@ -103,13 +114,27 @@ async def _run_one_cycle(account_id: str, *, refresh_schema: bool) -> None:
         #    clarify pickers (and the agent) rely on stay current.
         if refresh_schema:
             try:
+                # H2 note: `_refresh_schema` no longer commits or reconciles
+                # itself (request handlers run it inside a tenant transaction),
+                # so this unbound caller commits explicitly and sequences the
+                # roster reconcile — same effective behaviour as before.
                 await _refresh_schema(db, account_id, account.user_id)
+                await db.commit()
                 _log.info("tasks.scheduler.schema_refreshed",
                           account_id=account_id[:12])
             except Exception as exc:
                 await db.rollback()
                 _log.warning("tasks.scheduler.schema_refresh_failed",
                              account_id=account_id[:12], error=str(exc)[:160])
+            else:
+                try:
+                    await _reconcile_people(db, account.user_id)
+                    await db.commit()
+                except Exception as exc:  # best-effort, like the helper itself
+                    await db.rollback()
+                    _log.warning("tasks.scheduler.reconcile_failed",
+                                 account_id=account_id[:12],
+                                 error=str(exc)[:160])
     finally:
         await db.close()
 

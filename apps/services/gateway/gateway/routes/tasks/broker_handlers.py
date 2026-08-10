@@ -32,6 +32,14 @@ _WRITERS: dict[str, tuple[str, tuple[str, ...]]] = {
 
 async def _resolve_provider(account_id: str):
     """Rebuild a provider (with its token) from a ``task_accounts`` id."""
+    # ⚠️ H4, DELIBERATELY NOT H2 (`saas_multitenancy_handover.md`): this module
+    # is an ACTION-BROKER CONSUMER, not a request handler — `execute()` runs
+    # when an owner approves a queued proposal, outside the request (and tenant
+    # binding) that enqueued it. The runbook's rule for that category is "do
+    # not let a job inherit an ambient tenant", so this site stays on the
+    # unbound `get_db()` until H4 threads an EXPLICIT tenant through the queued
+    # proposal (`tenant_session(org_id)`). Sequencing is safe: RLS phase 4 is
+    # gated on H2+H4 both being complete.
     from gateway.routes.tasks.core import _get_db, _key_store
     from gateway.routes.tasks.providers import build_provider
     from sqlalchemy import text

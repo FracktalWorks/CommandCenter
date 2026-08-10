@@ -17,7 +17,7 @@ from uuid import uuid4
 
 from acb_auth import UserContext, get_current_user
 from fastapi import Depends, HTTPException
-from gateway.routes.tasks.core import _get_db, _uid, router
+from gateway.routes.tasks.core import _tenant_session, _uid, router
 from pydantic import BaseModel
 from sqlalchemy import text
 
@@ -56,8 +56,7 @@ async def local_hierarchy(user: UserContext = Depends(get_current_user)):
     client assembles into a tree). SYNCED projects are excluded — their tree
     lives on the connected account."""
     uid = _uid(user)
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         spaces = (await db.execute(
             text("""SELECT id, name FROM gtd_spaces WHERE user_id = :uid
                     ORDER BY sort_key ASC NULLS LAST, name"""),
@@ -89,8 +88,6 @@ async def local_hierarchy(user: UserContext = Depends(get_current_user)):
                 has_next_action=bool(p.has_next_action),
                 status=p.status) for p in projects],
         )
-    finally:
-        await db.close()
 
 
 class CreateSpaceRequest(BaseModel):
@@ -106,18 +103,14 @@ async def create_space(
     if not name:
         raise HTTPException(status_code=400, detail="Space needs a name")
     uid = _uid(user)
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         sid = str(uuid4())
         await db.execute(
             text("""INSERT INTO gtd_spaces (id, user_id, name)
                     VALUES (:id, :uid, :name)"""),
             {"id": sid, "uid": uid, "name": name},
         )
-        await db.commit()
         return SpaceModel(id=sid, name=name)
-    finally:
-        await db.close()
 
 
 class CreateFolderRequest(BaseModel):
@@ -134,8 +127,7 @@ async def create_folder(
     if not name:
         raise HTTPException(status_code=400, detail="Folder needs a name")
     uid = _uid(user)
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         await _assert_space_owner(db, req.space_id, uid)
         fid = str(uuid4())
         await db.execute(
@@ -143,10 +135,7 @@ async def create_folder(
                     VALUES (:id, :uid, :sid, :name)"""),
             {"id": fid, "uid": uid, "sid": req.space_id, "name": name},
         )
-        await db.commit()
         return FolderModel(id=fid, space_id=req.space_id, name=name)
-    finally:
-        await db.close()
 
 
 class CreateLocalProjectRequest(BaseModel):
@@ -168,8 +157,7 @@ async def create_local_project(
     if not outcome:
         raise HTTPException(status_code=400, detail="Project needs an outcome")
     uid = _uid(user)
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         space_id = req.space_id
         folder_id = req.folder_id
         if folder_id:
@@ -195,12 +183,9 @@ async def create_local_project(
              "purpose": (req.purpose or "").strip() or None,
              "sid": space_id, "fid": folder_id},
         )
-        await db.commit()
         return LocalProjectNode(
             id=pid, outcome=outcome, space_id=space_id, folder_id=folder_id,
             has_next_action=False, status="ACTIVE")
-    finally:
-        await db.close()
 
 
 async def _assert_space_owner(db: Any, space_id: str, uid: str) -> None:

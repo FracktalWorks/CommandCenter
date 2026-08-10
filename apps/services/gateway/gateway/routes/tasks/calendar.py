@@ -30,9 +30,13 @@ from acb_auth import UserContext, get_current_user
 from fastapi import Depends, HTTPException
 from gateway.routes.tasks.core import (
     ITEM_SELECT,
+    # `_get_db` is used ONLY by the auto-rollover background job at the bottom
+    # of this file (H4 — see the comment there); every request handler in this
+    # module uses `_tenant_session`.
     _get_db,
     _log,
     _row_to_item,
+    _tenant_session,
     _uid,
     router,
 )
@@ -115,8 +119,7 @@ async def get_day_state(
     if not d:
         raise HTTPException(status_code=400, detail="day must be YYYY-MM-DD.")
     uid = _uid(user)
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         row = (await db.execute(
             text("SELECT one_thing_id, seed_ids FROM gtd_day_state "
                  "WHERE user_id = :uid AND day = :day"),
@@ -132,8 +135,6 @@ async def get_day_state(
             if isinstance(raw, list):
                 seeds = [str(x) for x in raw if x]
         return DayStateModel(day=d.isoformat(), one_thing_id=one, seed_ids=seeds)
-    finally:
-        await db.close()
 
 
 @router.put("/calendar/day-state", response_model=DayStateModel)
@@ -147,8 +148,7 @@ async def put_day_state(
         raise HTTPException(status_code=400, detail="day must be YYYY-MM-DD.")
     uid = _uid(user)
     provided = patch.__pydantic_fields_set__
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         # Ensure a row exists, then update only the provided columns.
         await db.execute(
             text("INSERT INTO gtd_day_state (user_id, day) VALUES (:uid, :day) "
@@ -166,10 +166,9 @@ async def put_day_state(
                 text("UPDATE gtd_day_state SET seed_ids = CAST(:s AS jsonb), "
                      "updated_at = now() WHERE user_id = :uid AND day = :day"),
                 {"s": seeds, "uid": uid, "day": d})
-        await db.commit()
-        return await get_day_state(patch.day, user)  # echo the stored row
-    finally:
-        await db.close()
+    # Echo the stored row — get_day_state opens its own session, so it must run
+    # AFTER the block above committed (H2 restructure).
+    return await get_day_state(patch.day, user)
 
 
 # ── AI day-planner (P2) ──────────────────────────────────────────────────────
@@ -559,16 +558,13 @@ async def estimate_stats(user: UserContext = Depends(get_current_user)):
     """Planned-vs-actual accuracy over recent timed blocks — the learned-estimate
     signal shown in the end-of-day review (and used to pad the planner). §3 P3."""
     uid = _uid(user)
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         ratio, n = await _estimate_ratio(db, uid)
         return {
             "samples": n,
             "ratio": round(ratio, 2),
             "over_pct": round((ratio - 1) * 100),
         }
-    finally:
-        await db.close()
 
 
 _CANDIDATE_WHERE = (
@@ -1027,13 +1023,10 @@ async def plan_day(
             status_code=400, detail="Valid day_start/day_end (ISO) required.")
     uid = _uid(user)
     now = datetime.now(UTC)
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         one = await _one_thing_for(db, uid, win_start.date())
         return await _replan_core(
             db, uid, win_start, win_end, req, now, one, include_new=True)
-    finally:
-        await db.close()
 
 
 # ── Roll-over = RETURN unfinished tasks to the unscheduled list ──────────────
@@ -1063,8 +1056,7 @@ async def rollover_day(
             status_code=400, detail="Valid day_start/day_end (ISO) required.")
     uid = _uid(user)
     now = datetime.now(UTC)
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         over_rows = (await db.execute(
             text(ITEM_SELECT + _OVERDUE_WHERE), {"uid": uid, "now": now},
         )).fetchall()
@@ -1079,8 +1071,6 @@ async def rollover_day(
         return DayPlan(
             blocks=[], unplaced=[], evicted=evicted, notes=notes,
             used_mins=0, capacity_mins=req.capacity_mins)
-    finally:
-        await db.close()
 
 
 @router.post("/calendar/replan", response_model=DayPlan)
@@ -1100,13 +1090,10 @@ async def replan_day(
             status_code=400, detail="Valid day_start/day_end (ISO) required.")
     uid = _uid(user)
     now = datetime.now(UTC)
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         one = await _one_thing_for(db, uid, win_start.date())
         return await _replan_core(
             db, uid, win_start, win_end, req, now, one, include_new=False)
-    finally:
-        await db.close()
 
 
 # ── Agent-facing planner (no client geometry) ────────────────────────────────
@@ -1193,7 +1180,9 @@ async def _build_agent_request(
 async def _apply_plan_blocks(db: Any, uid: str, plan: DayPlan) -> None:
     """Write a proposed plan to the calendar: place the blocks (scheduled_start/
     end) AND clear any EVICTED blocks (schedule → NULL, back to the unscheduled
-    list). Only reached via the apply path, which replays a reviewed plan."""
+    list). Only reached via the apply path, which replays a reviewed plan.
+    Does NOT commit — the handler's `_tenant_session` block commits on clean
+    exit (H2), which also makes the whole apply atomic."""
     for b in plan.blocks:
         s, e = _parse_iso(b.start), _parse_iso(b.end)
         if not s or not e:
@@ -1208,7 +1197,6 @@ async def _apply_plan_blocks(db: Any, uid: str, plan: DayPlan) -> None:
                  " scheduled_end = NULL, updated_at = now()"
                  " WHERE id = :id AND user_id = :uid"),
             {"id": ev.item_id, "uid": uid})
-    await db.commit()
 
 
 # ── Reviewed-plan gate (R1/S1) ───────────────────────────────────────────────
@@ -1231,7 +1219,6 @@ async def _store_pending_plan(
              "ON CONFLICT (user_id, day) DO UPDATE SET "
              "pending_plan = CAST(:p AS jsonb), updated_at = now()"),
         {"uid": uid, "day": local_day, "p": payload})
-    await db.commit()
 
 
 async def _take_pending_plan(
@@ -1256,7 +1243,6 @@ async def _take_pending_plan(
         text("UPDATE gtd_day_state SET pending_plan = NULL, updated_at = now() "
              "WHERE user_id = :uid AND day = :day"),
         {"uid": uid, "day": local_day})
-    await db.commit()
     try:
         return DayPlan(**data["plan"])
     except Exception:
@@ -1271,6 +1257,10 @@ async def _resolve_agent_plan(
     - propose (apply=false): stash `fresh`, return it (applied=False).
     - apply (apply=true): replay the stored proposal verbatim and clear it;
       if none is pending, fall back to proposing `fresh` (never a blind write).
+
+    Neither this nor the helpers it calls commit — the handler's
+    `_tenant_session` block commits everything on clean exit (H2), which makes
+    take-pending + apply one atomic transaction.
     """
     # A plan is worth storing/applying if it either PLACES blocks or EVICTS/
     # RELEASES some (rollover returns only evicted — no blocks).
@@ -1301,8 +1291,7 @@ async def plan_today(
     settings, plans (One-Thing-aware), and — if `apply` — writes the blocks."""
     uid = _uid(user)
     now = datetime.now(UTC)
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         pdr, win_start, win_end, _tz, local_day = await _build_agent_request(
             db, uid, req.date, req.energy_note)
         one = await _one_thing_for(db, uid, local_day)
@@ -1310,8 +1299,6 @@ async def plan_today(
             db, uid, win_start, win_end, pdr, now, one, include_new=True)
         return await _resolve_agent_plan(
             db, uid, local_day, "plan", req.apply, plan, now)
-    finally:
-        await db.close()
 
 
 @router.post("/calendar/replan-today", response_model=DayPlan)
@@ -1323,15 +1310,12 @@ async def replan_today(
     `apply` replays the reviewed proposal (see _resolve_agent_plan)."""
     uid = _uid(user)
     now = datetime.now(UTC)
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         pdr, _ws, _we, _tz, local_day = await _build_agent_request(
             db, uid, req.date, None)
         plan = await replan_day(pdr, user)
         return await _resolve_agent_plan(
             db, uid, local_day, "replan", req.apply, plan, now)
-    finally:
-        await db.close()
 
 
 @router.post("/calendar/rollover-today", response_model=DayPlan)
@@ -1343,15 +1327,12 @@ async def rollover_today(
     reviewed proposal (see _resolve_agent_plan)."""
     uid = _uid(user)
     now = datetime.now(UTC)
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         pdr, _ws, _we, _tz, local_day = await _build_agent_request(
             db, uid, req.date, None)
         plan = await rollover_day(pdr, user)
         return await _resolve_agent_plan(
             db, uid, local_day, "rollover", req.apply, plan, now)
-    finally:
-        await db.close()
 
 
 @router.get("/calendar/day-summary")
@@ -1363,8 +1344,7 @@ async def day_summary(
     Thing, and estimate accuracy. See calendar_ai_review.md §4.4."""
     uid = _uid(user)
     now = datetime.now(UTC)
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         row = await _load_settings_row(db, uid)
         tz = _tz_of(row)
         local_day = _parse_day(date) or now.astimezone(tz).date()
@@ -1410,8 +1390,6 @@ async def day_summary(
             "one_thing": ({"id": one_id, "title": one_title} if one_id else None),
             "estimate_over_pct": round((ratio - 1) * 100) if samples >= 5 else None,
         }
-    finally:
-        await db.close()
 
 
 @router.get("/calendar/rollover/log")
@@ -1420,8 +1398,7 @@ async def rollover_log(
 ):
     """Recent automatic roll-overs (audit/history): what moved, from → to."""
     uid = _uid(user)
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         rows = (await db.execute(
             text("""SELECT item_id, title, rolled_from, rolled_to, created_at
                     FROM gtd_rollover_log WHERE user_id = :uid
@@ -1438,8 +1415,6 @@ async def rollover_log(
             }
             for r in rows
         ]
-    finally:
-        await db.close()
 
 
 # ── Automatic roll-over background job (nightly, per local day) ───────────────
@@ -1449,6 +1424,15 @@ async def rollover_log(
 # their overdue-incomplete blocks into the new day and APPLIES it (this is the
 # only place scheduling changes are written server-side, without the client).
 # Server-side geometry needs the user's timezone + prefs, all stored (mig 77/78).
+#
+# ⚠️ H4, DELIBERATELY NOT H2 (`saas_multitenancy_handover.md`): everything below
+# runs from `asyncio.create_task`, long after any request (and its tenant
+# binding) is gone — and the sweep itself is CROSS-tenant by construction (it
+# reads every user's gtd_settings row). The runbook's rule for background
+# consumers is "do not let a job inherit an ambient tenant", so these two sites
+# stay on the unbound `get_db()` until H4 threads an EXPLICIT per-user tenant
+# into `tenant_session(org_id)` inside the per-user loop. Sequencing is safe:
+# RLS phase 4 (which would starve these reads) is gated on H2+H4 both complete.
 
 _rollover_task: asyncio.Task | None = None
 _ROLLOVER_TICK_SECS = 900  # 15 min — catches each local day boundary promptly.

@@ -338,7 +338,11 @@ H2_WHATSAPP_EXEMPT_SITES: dict[str, int] = {
 #: 395 → 297: routes/email's 98 request-handler sites (2026-08-10); its 27
 #: leftovers are B/C-class (webhook, OAuth callback, scheduler hooks,
 #: BackgroundTask jobs), each with a per-site H4/H6 marker naming its tenant.
-H2_BASELINE_ELSEWHERE = 297
+#: 297 → 224: routes/tasks' 73 request-handler sites (2026-08-10); its 6
+#: leftovers are background consumers (broker_handlers, scheduler, calendar's
+#: rollover sweep), each with an H4 comment naming why ambient inheritance is
+#: forbidden for them.
+H2_BASELINE_ELSEWHERE = 224
 
 
 def _get_db_sites() -> dict[str, int]:

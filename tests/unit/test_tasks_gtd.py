@@ -1160,9 +1160,14 @@ def test_organize_synced_delegate_auto_pushes_to_the_tool():
     organize_src = inspect.getsource(tasks_items.organize_item)
     push_src = inspect.getsource(tasks_items._maybe_push_delegated)
     # organize commits the local clarify first, THEN runs the auto-push helper.
+    # H2 shape: the local write happens in the FIRST `_tenant_session` block
+    # (committed on its clean exit) and the push runs in a SECOND block — so
+    # the helper call must come after a later `async with _tenant_session()`.
     assert "_maybe_push_delegated(" in organize_src
-    assert organize_src.index("await db.commit()") < organize_src.index(
-        "_maybe_push_delegated(")
+    first_block = organize_src.index("async with _tenant_session()")
+    second_block = organize_src.index(
+        "async with _tenant_session()", first_block + 1)
+    assert second_block < organize_src.index("_maybe_push_delegated(")
     # The helper only pushes a SYNCED delegation with a chosen project, and a
     # push failure is tolerated (deferred), not fatal to the clarify.
     assert 'delegated and source == "SYNCED" and project_id' in push_src

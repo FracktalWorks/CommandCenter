@@ -1,31 +1,42 @@
 "use client";
 
 /**
- * Projects · the month calendar (WS-27q).
+ * Projects · the calendar (WS-27q; week layout, honest overflow — WS-27ac).
  *
  * The third view, after list and board. All of the arithmetic — which days the
- * grid covers, which cells a task occupies, what a drop should write — is in
- * `lib/calendar.ts` and tested there; this file only draws it and wires the
- * gestures, because a calendar bug is a task on the wrong Tuesday and that is
- * not something a component test would catch either.
+ * grid covers, which cells a task occupies, how many of them fit, what a drop
+ * should write and when it must be refused — is in `lib/calendar.ts` and tested
+ * there; this file only draws it and wires the gestures, because a calendar bug
+ * is a task on the wrong Tuesday and that is not something a component test
+ * would catch either.
  *
- * **Two honest admissions on the surface, both deliberate.** A calendar that
+ * **Month and week are one grid, not two views.** Both come out of
+ * `calendarGrid`, both render the same seven columns, and the only things that
+ * differ are how many rows there are, how tall a cell is and how many chips it
+ * shows before folding. A second component for the week is how the two layouts
+ * come to disagree about which day starts a week.
+ *
+ * **Three honest admissions on the surface, all deliberate.** A calendar that
  * silently omits tasks is worse than one that looks incomplete: `truncated`
- * says when the window hit its cap, and `undated` says how many tasks have no
- * dates at all and therefore cannot be here. Without those two the view reads
- * as the whole workspace while showing part of it.
+ * says when the window hit its cap, `undated` says how many tasks have no dates
+ * at all and therefore cannot be here, and a full day cell says `+N more` with
+ * the TRUE remainder rather than quietly drawing its first three.
  */
 
 import { TaskMeta } from "@/components/TaskMeta";
 import Button from "@/components/ui/Button";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 
 import type { TagRow, TaskRow } from "../lib/api";
 import { projectsApi } from "../lib/api";
 import {
-  type MonthGrid,
-  isOutsideMonth,
-  monthLabel,
+  type CalendarGrid,
+  type CalendarLayout,
+  DAY_LIMITS,
+  dayDropRefusal,
+  dayFill,
+  gridLabel,
+  isPadding,
   placeTasks,
   rescheduleTo,
 } from "../lib/calendar";
@@ -36,8 +47,20 @@ import { useFlash } from "./useFlash";
 
 const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
+/** How tall an empty cell stands. A week has one row to fill, so its cells are
+ *  the whole canvas; a month has four to six and must stay on one screen. */
+const CELL_HEIGHT: Record<CalendarLayout, string> = {
+  month: "min-h-24",
+  week: "min-h-64",
+};
+
+/** What "previous"/"next" step, per layout — the button says which. */
+const PERIOD: Record<CalendarLayout, string> = { month: "month", week: "week" };
+
+const LAYOUTS: CalendarLayout[] = ["month", "week"];
+
 interface Props {
-  grid: MonthGrid;
+  grid: CalendarGrid;
   tasks: TaskRow[];
   /** How many matching tasks have no dates and so cannot be drawn. */
   undated: number;
@@ -54,8 +77,12 @@ interface Props {
   onCreated: (task: TaskRow) => void;
   onSelect: (task: TaskRow) => void;
   onMove: (task: TaskRow, patch: Record<string, string | null>) => void;
-  onStep: (months: number) => void;
+  /** Step one PERIOD — a month in month layout, a week in week layout. */
+  onStep: (steps: number) => void;
   onToday: () => void;
+  onLayout: (layout: CalendarLayout) => void;
+  /** WS-27y — a refused drop says why, rather than doing nothing. */
+  onRefuse: (reason: string) => void;
 }
 
 export function CalendarView({
@@ -72,11 +99,24 @@ export function CalendarView({
   onMove,
   onStep,
   onToday,
+  onLayout,
+  onRefuse,
 }: Props) {
   const byDay = placeTasks(tasks, grid);
   const { flash, attach } = useFlash();
   // Once per registry, not once per card.
   const tagHues = useMemo(() => tagColours(tags ?? []), [tags]);
+
+  /** Days the viewer has unfolded. Per DAY rather than per cell index, so
+   *  stepping to the next period does not carry an expansion onto whatever
+   *  happens to land in the same slot. */
+  const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
+  /** The card under the cursor mid-drag, so a cell can refuse it BEFORE the
+   *  drop — the same order `TaskBoard` uses. */
+  const [dragging, setDragging] = useState<TaskRow | null>(null);
+  const [over, setOver] = useState<string | null>(null);
+
+  const limit = DAY_LIMITS[grid.layout];
 
   /** WS-27y — a title typed into a day creates a task DUE that day, through
    *  the same axis→payload mapping every other quick-add uses. */
@@ -91,6 +131,35 @@ export function CalendarView({
     onCreated(created);
   }
 
+  function toggleDay(day: string) {
+    setExpanded((current) => {
+      const next = new Set(current);
+      if (!next.delete(day)) next.add(day);
+      return next;
+    });
+  }
+
+  function applyDrop(day: string, id: string) {
+    setDragging(null);
+    setOver(null);
+    const task = tasks.find((t) => t.id === id);
+    const refusal = dayDropRefusal(task);
+    if (refusal || !task) {
+      onRefuse(refusal ?? "That task is not on this calendar.");
+      return;
+    }
+    // `rescheduleTo` returns null for a drop that changes nothing, so a task
+    // dropped back on its own day writes nothing rather than posting an
+    // activity saying it moved to where it was. That is a NO-OP, not a
+    // refusal: nothing was denied, so nothing is announced.
+    const patch = rescheduleTo(task, day);
+    if (!patch) return;
+    // The landing flash finds the card after the window reloads and re-keys it
+    // under its new day (WS-27y).
+    flash(task.id);
+    onMove(task, patch as Record<string, string | null>);
+  }
+
   return (
     <div className="flex flex-col gap-2 p-3">
       <header className="flex flex-wrap items-center gap-2">
@@ -98,20 +167,34 @@ export function CalendarView({
           variant="secondary"
           size="icon-sm"
           icon="ChevronLeft"
-          aria-label="Previous month"
+          aria-label={`Previous ${PERIOD[grid.layout]}`}
           onClick={() => onStep(-1)}
         />
         <Button
           variant="secondary"
           size="icon-sm"
           icon="ChevronRight"
-          aria-label="Next month"
+          aria-label={`Next ${PERIOD[grid.layout]}`}
           onClick={() => onStep(1)}
         />
         <Button variant="ghost" size="sm" onClick={onToday}>
           Today
         </Button>
-        <h2 className="text-sm font-medium text-foreground">{monthLabel(grid)}</h2>
+        <h2 className="text-sm font-medium text-foreground">{gridLabel(grid)}</h2>
+        <div className="flex items-center gap-1">
+          {LAYOUTS.map((option) => (
+            <Button
+              key={option}
+              variant={grid.layout === option ? "primary" : "ghost"}
+              size="sm"
+              aria-pressed={grid.layout === option}
+              className="capitalize"
+              onClick={() => onLayout(option)}
+            >
+              {option}
+            </Button>
+          ))}
+        </div>
         <span className="ml-auto flex items-center gap-3 text-xs text-muted-foreground">
           {undated > 0 ? (
             <span title="These have no start or due date, so no day to sit on.">
@@ -120,7 +203,7 @@ export function CalendarView({
           ) : null}
           {truncated ? (
             <span className="font-medium text-destructive">
-              Too many tasks in this month to show them all — narrow the filters.
+              Too many tasks in this window to show them all — narrow the filters.
             </span>
           ) : null}
         </span>
@@ -136,28 +219,34 @@ export function CalendarView({
           </div>
         ))}
         {grid.days.map((day) => {
-          const outside = isOutsideMonth(day, grid);
+          const padding = isPadding(day, grid);
+          const dayTasks = byDay.get(day) ?? [];
+          const fill = dayFill(dayTasks.length, limit, expanded.has(day));
+          const refusal = dragging ? dayDropRefusal(dragging) : null;
           return (
             <div
               key={day}
-              onDragOver={(e) => e.preventDefault()}
+              onDragOver={(e) => {
+                // preventDefault even when refusing — the browser must keep
+                // sending events or the overlay could never show; the refusal
+                // is enforced in `applyDrop`, and the cursor says "no" via
+                // dropEffect.
+                e.preventDefault();
+                if (!dragging) return;
+                e.dataTransfer.dropEffect = refusal ? "none" : "move";
+                setOver((current) => (current === day ? current : day));
+              }}
+              onDragLeave={(e) => {
+                if (e.currentTarget.contains(e.relatedTarget as Node)) return;
+                setOver((current) => (current === day ? null : current));
+              }}
               onDrop={(e) => {
                 e.preventDefault();
-                const id = e.dataTransfer.getData("text/plain");
-                const task = tasks.find((t) => t.id === id);
-                if (!task) return;
-                // `rescheduleTo` returns null for a drop that changes nothing,
-                // so a task dropped back on its own day writes nothing rather
-                // than posting an activity saying it moved to where it was.
-                const patch = rescheduleTo(task, day);
-                if (patch) {
-                  // The landing flash finds the card after the month reloads
-                  // and re-keys it under its new day (WS-27y).
-                  flash(task.id);
-                  onMove(task, patch as Record<string, string | null>);
-                }
+                applyDrop(day, e.dataTransfer.getData("text/plain"));
               }}
-              className={`min-h-24 bg-card p-1 ${outside ? "opacity-50" : ""}`}
+              className={`relative ${CELL_HEIGHT[grid.layout]} bg-card p-1 ${
+                padding ? "opacity-50" : ""
+              }`}
             >
               <div className="flex items-center justify-between px-1">
                 <span
@@ -171,12 +260,19 @@ export function CalendarView({
                 </span>
               </div>
               <ul className="mt-1 space-y-1">
-                {(byDay.get(day) ?? []).map((task) => (
+                {dayTasks.slice(0, fill.shown).map((task) => (
                   <li key={`${day}:${task.id}`} ref={attach(task.id)} className="rounded">
                     <button
                       type="button"
                       draggable
-                      onDragStart={(e) => e.dataTransfer.setData("text/plain", task.id)}
+                      onDragStart={(e) => {
+                        e.dataTransfer.setData("text/plain", task.id);
+                        setDragging(task);
+                      }}
+                      onDragEnd={() => {
+                        setDragging(null);
+                        setOver(null);
+                      }}
                       onClick={() => onSelect(task)}
                       className="w-full rounded border border-border bg-background px-1.5 py-1 text-left hover:border-ring"
                     >
@@ -199,6 +295,21 @@ export function CalendarView({
                   </li>
                 ))}
               </ul>
+              {/* WS-27ac — the count is the real remainder, and it EXPANDS.
+                  Drawing three and stopping makes a day with eleven tasks look
+                  exactly like a day with three. */}
+              {fill.hidden > 0 || expanded.has(day) ? (
+                <Button
+                  variant="text"
+                  size="none"
+                  layout="flex w-full items-center"
+                  className="mt-1 px-1.5 py-0.5 text-left text-[11px]"
+                  aria-expanded={expanded.has(day)}
+                  onClick={() => toggleDay(day)}
+                >
+                  {fill.hidden > 0 ? `+${fill.hidden} more` : "Show less"}
+                </Button>
+              ) : null}
               {/* WS-27y — a title typed here is due THIS day. */}
               <QuickAdd
                 compact
@@ -206,6 +317,11 @@ export function CalendarView({
                 onAdd={(title) => quickAdd(title, day)}
                 className="mt-1"
               />
+              {over === day && refusal ? (
+                <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-lg bg-background/85 p-2 text-center text-[11px] font-medium text-destructive">
+                  {refusal}
+                </div>
+              ) : null}
             </div>
           );
         })}

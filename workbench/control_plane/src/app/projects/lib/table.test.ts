@@ -22,6 +22,8 @@ import {
   importanceLabel,
   nextSort,
   sortQuery,
+  LIST_GATED_COLUMNS,
+  listColumns,
   tableColumns,
   treeRows,
 } from "./table";
@@ -229,5 +231,69 @@ describe("treeRows — sub-tasks indent under an on-page parent", () => {
 
   it("treats a self-parented row as a root rather than recursing", () => {
     expect(treeRows([t("a", "a")], NONE).map((r) => r.depth)).toEqual([0]);
+  });
+});
+
+describe("the list's columns (WS-27ab item 6)", () => {
+  it("draws the default view exactly as it drew it before the gate existed", () => {
+    // The whole point of the default: turning the gate on hides nothing from
+    // anybody who never touched the field picker.
+    expect(listColumns(DEFAULT_SHOWN, true)).toEqual([
+      "select",
+      "ref",
+      "title",
+      "status",
+      "assignees",
+      "details",
+    ]);
+    expect(listColumns(DEFAULT_SHOWN, false)).toEqual([
+      "ref",
+      "title",
+      "status",
+      "assignees",
+      "details",
+    ]);
+  });
+
+  it("drops the column a view hid, and only that one", () => {
+    expect(listColumns(["assignees", "due_at"], false)).toEqual([
+      "ref",
+      "title",
+      "assignees",
+      "details",
+    ]);
+    expect(listColumns(["status"], false)).toEqual([
+      "ref",
+      "title",
+      "status",
+      "details",
+    ]);
+  });
+
+  it("keeps the three fixed columns even when every field is hidden", () => {
+    // `#`, the title and the chip strip are the row itself, not fields — a
+    // list with no title column is not a list.
+    expect(listColumns([], false)).toEqual(["ref", "title", "details"]);
+  });
+
+  it("gates exactly the two the list can gate, both of them defaults", () => {
+    for (const key of LIST_GATED_COLUMNS) {
+      expect(FIELD_KEYS as readonly string[]).toContain(key);
+      expect(DEFAULT_SHOWN).toContain(key);
+    }
+  });
+
+  it("ignores a key the list has no column for", () => {
+    expect(listColumns(["tags", "custom.owner"], false)).toEqual([
+      "ref",
+      "title",
+      "details",
+    ]);
+  });
+
+  it("gives the header, the group heading and the quick-add one number", () => {
+    // The colSpan bug this exists to prevent: two hand-counted numbers.
+    expect(listColumns(DEFAULT_SHOWN, true)).toHaveLength(6);
+    expect(listColumns(["status"], true)).toHaveLength(5);
   });
 });

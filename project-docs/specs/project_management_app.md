@@ -4,7 +4,9 @@
 > module, sliced into every other Center) · **Created:** 2026-08-05 · **Updated: 2026-08-10**
 > (status truth pass + tenancy alignment — R4; **WS-27ag shell/mobile slice built the same
 > day**; **S4 convergence slice built the same day — §11.21**; **S6 card-pills slice built the
-> same day — §11.23**) ·
+> same day — §11.23**; **WS-27ac calendar week/overflow slice built the same day — §11.24**;
+> **WS-27ab view-ergonomics slice — §11.25**; **WS-27ae's export third — §11.26**;
+> **WS-27ae's delta-sync + small-columns thirds — §11.27, migration 168**) ·
 > **Status:** ✅ **WS-27 a–t MERGED AND DEPLOYED** (a b d e f i j k l m n via #390/#393/#394/#398;
 > o–t via **#399**; **u–z via #408**, 2026-08-10) — migrations **146, 147, 150, 152, 155, 156,
 > 160, 161, 164, 165, 166 are applied on prod** (164/165/166 log-verified on the 2026-08-10
@@ -13,14 +15,20 @@
 > 🟡 **c** two-way sync (waits on WS-1 BO-1a+BO-1b) · 🔴 **g** cutover/retirement · 🟡 **h**
 > `gtd_items` retirement (data move 🔴) · 🟢 **u–z shipped**, their owner activation steps in
 > HANDOVER §1 ·
-> 🟢 **ag BUILT 2026-08-10, on branch, NOT merged and NOT deployed** (§11.20) — the app joins
+> 🟢 **ae (delta-sync + small columns) BUILT 2026-08-10, on branch, NOT merged and NOT
+> deployed** (§11.27) — `GET /projects/delta/tasks` with a keyset cursor, an explicit
+> `removed[]` over migration **168**'s `pm_task_tombstones`, satellite `updated_at` bumps,
+> `pm_task_types.is_epic` and `pm_view_user_state`. **Migration 168 is NOT applied on prod**
+> (verified only against a scratch Postgres 16). The CSV-export third of the basket is a
+> separate slice. ·
+> 🟢 **ag BUILT 2026-08-10 — MERGED to `main` and DEPLOYED** (#421) (§11.20) — the app joins
 > the house shell and gets a mobile layout at all: `AppShell` learns `isProjectsPage`
 > (Projects · Views · Search), the tree and the mode picker become drawer sheets, an opened
 > task is full-screen on a phone, the desktop rail collapses at Tasks' `w-60`, and the
 > six-purpose header splits into a title row and an action row. Frontend only — no migration,
 > no API change. ⚠️ **The phone-viewport and four-theme visual pass is still owed**: no
 > browser was runnable in the build environment (§11.20's closing note). ·
-> 🟢 **S1 BUILT 2026-08-10, on branch, NOT merged and NOT deployed** (§9.2, under WS-27ad) —
+> 🟢 **S1 BUILT 2026-08-10 — MERGED to `main` and DEPLOYED** (#421) (§9.2, under WS-27ad) —
 > the /tasks board card and column adopt /projects' chrome under the owner's ruling that
 > *"the Tasks app is only a slice of the Projects app"*: one column shape and surface, one
 > gutter, the shell's `completed` and `atCursor` props finally passed by their /tasks caller,
@@ -29,14 +37,14 @@
 > **amends ad's recorded "modal select-mode is KEPT" decision on the card side**. Frontend
 > only — no migration, no API change. ⚠️ Visual pass still owed for the same reason as af/ag. ·
 > 🟢 **S3 (selection/bulk parity) BUILT 2026-08-10 for the /tasks LIST surfaces, on branch
-> `ws-s3-selection-bulk-parity`, NOT merged and NOT deployed** (§9 ticket "S3") — WS-27ad's
+> `ws-s3-selection-bulk-parity`, **MERGED to `main` and DEPLOYED** (#421) (§9 ticket "S3") — WS-27ad's
 > kept modal select-mode is **reversed by owner ruling** ("Projects is canonical, Tasks
 > conforms"): `selectMode` is now a derived mirror of "something is selected" and gates only
 > the bulk bar, the checkbox is permanent and sits outside the row content, shift-sweep is
 > ungated, the bar moved to the top onto Projects' chrome and primitives, and select-all
 > exists. ⚠️ The board card (`TaskCard`/`TaskBoard`, sibling slice S1) and `WaitingForView`
 > are still modal, and no browser was run here either. ·
-> 🟢 **S4 BUILT 2026-08-10, on branch, NOT merged and NOT deployed** (§11.21) — the three
+> 🟢 **S4 BUILT 2026-08-10 — MERGED to `main` and DEPLOYED** (#421) (§11.21) — the three
 > findings where **Projects**, not Tasks, carried the defect: `MyWork`'s active pill moves
 > off `bg-accent` onto the house `bg-primary/10 text-primary` (now fenced by a **sixth
 > conformance rule**, per-file and ratcheted), `MyWork`'s bespoke fourth task row is rebuilt
@@ -66,6 +74,47 @@
 > visual sweep was actually run this time** (Playwright + the pre-installed Chromium, fixtures
 > at the network boundary), which closes the check af/ag/S1/S3/S4/S5 all left owed *for this
 > surface*; one honest finding recorded in §11.23 about Material dark's pale `--warning`. ·
+> 🟢 **WS-27ab BUILT 2026-08-10 — merged onto `claude/paca-research-task-management-a1f6zd`, in PR #422; NOT on `main` and NOT
+> deployed** (§11.25) — view ergonomics, from Plane research P-14/15/16: the task panel gains
+> **peek → side → full**, persisted per user, and Escape hands focus back to the card that
+> opened it; the saved-view association **survives an edit** and `FilterBar` grows a
+> dirty-view row (**Update view · Save as new · Reset**) driven by ONE pure
+> `grouping.viewDivergence` over the `toConfig`/`fromConfig` round trip; the palette's
+> commands become a **declared registry** (`lib/commands.ts`) that `g`/`v` key sequences run
+> and the `?` sheet is *printed from*. Plus the WS-27x gap S6 recorded: the list's **Status
+> and Assignees columns now obey `shown_fields`** like every other field — **no default
+> moved**, both keys have been in `DEFAULT_SHOWN` since WS-27x. Frontend only — no migration,
+> no API change (the view update uses the existing `PATCH /projects/views/{id}`). ✅ Browser
+> driven, and the four-theme × two-mode sweep run. ·
+> 🟢 **WS-27ac BUILT 2026-08-10 — merged onto `claude/paca-research-task-management-a1f6zd`, in PR #422; NOT on `main` and NOT
+> deployed** (§11.24) — the calendar gains a **week** layout, an **exact** `+N more` that
+> expands, and a drop that says why it refused. The week is the month grid's own row, not a
+> second calculation: `mondayOffset` and `runOfDays` are shared, `MonthGrid` became
+> `CalendarGrid` with a `layout` discriminator, and `calendarWindow`/`taskDays`/`placeTasks`/
+> `rescheduleTo` never learned there was a second layout — so a week asks the SAME endpoint
+> for ten days and gets the same filters and the same `triage` default. Done-when 5 landed as
+> a window-shape parametrisation of the §11.16 coverage rule. Frontend plus one gateway test
+> file — **no migration, no API change, no new query parameter.** ✅ Four-theme × two-mode
+> sweep and every gesture (overflow, quick-add, drag-reschedule, refusal) driven in a real
+> browser, pinned to UTC+5:30. ⚠️ One honest limit recorded in §11.24: of the two drop
+> refusals only the foreign-payload one is reachable today. ·
+> 🟢 **WS-27ae (EXPORT THIRD) BUILT 2026-08-10 — merged onto `claude/paca-research-task-management-a1f6zd`, in PR #422;
+> NOT on `main` and NOT deployed** (§11.26) — `GET /projects/export/tasks.csv`: the caller's
+> current filters through the one shared `build_task_filters`, the view's `shown_fields` as
+> the columns (in the vocabulary's order, which is what the table draws), `#` and `Title`
+> unconditional, and a toolbar `Export` button. **No migration** (R1: no number taken; 168 is
+> the sibling agent's for the delta-sync and small-columns thirds, which are NOT built).
+> ⚠️ **The ticket's "export-job pattern" does not exist in this repo** — verified absent;
+> what shipped is a synchronous bounded response instead. ⚠️ **The cap is a refusal, not a
+> truncation**: past 5000 matching rows the endpoint answers 422 naming the real count,
+> because a partial CSV is byte-indistinguishable from a complete one. CSV-injection cells
+> (`=`/`+`/`-`/`@`/TAB/CR) are apostrophe-prefixed, bare numbers exempt. ⚠️ **A browser WAS
+> run for this slice** — the export triggered from the real toolbar with a filter applied,
+> the downloaded bytes are the gateway's own, and the four-theme × two-mode sweep plus a
+> 390 px viewport were checked; and it caught a real defect (`Response.text()` strips the
+> UTF-8 BOM, so the saved file differed from the bytes the endpoint produced). It also found
+> a **hermetic-fake defect**: `_projects_fakes` read `?status_category=` as "hide closed
+> work", so `status_category=done` returned the OPEN tasks — fixed here. ·
 > **Owner:** vjvarada · **Board row: WS-27**
 >
 > **Tenancy (audited 2026-08-10 — this spec previously cited no tenancy decision at all).**
@@ -962,6 +1011,42 @@ Until then the gateway's posture is unchanged: no anonymous tenant-data read rou
 
 ## 9. Tickets
 
+> ### 9.0 Reference links — the two upstream repositories, pinned
+>
+> *(Added 2026-08-10 on the owner's instruction: "link relevant files from their respective
+> repositories in those features… so that when we are developing it, we always have a
+> reference to the original file to study.")*
+>
+> Tickets below carry **REF:** lines pointing at the file that inspired them. Both repos are
+> pinned to a **commit SHA, never a branch** — `main` moves, and a line number against a
+> moving branch is a link to the wrong code within a week.
+>
+> | Repo | Licence | Pinned commit | Link prefix |
+> |---|---|---|---|
+> | `makeplane/plane` | **AGPL-3.0** | `31853ab2b8b7810c59dc30d22e52c8f4b5a71a47` (= `v1.4.1-rc2`) | `https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/` |
+> | `Paca-AI/paca` | **Apache-2.0** | `09dab28e3caee9e43891697998dcfa7fcf76991c` | `https://github.com/paca-ai/paca/blob/09dab28e3caee9e43891697998dcfa7fcf76991c/` |
+>
+> **⚠️ The two licences are not the same rule, and the difference is load-bearing.**
+>
+> * **Plane is AGPL-3.0.** Reading it and reimplementing a behaviour is fine — functionality
+>   and interaction design are not copyrightable. **Copying its source, markup, CSS or assets
+>   into this tree is not available to us**, at any size. A REF: link to Plane means *go read
+>   this to understand the behaviour*, and nothing more.
+> * **Paca is Apache-2.0** (verified: plain, no Commons Clause, no added terms, no NOTICE
+>   file). Permissive — reuse in a proprietary product **is** legally available, subject to
+>   retaining the copyright and licence notices, carrying the licence text, and stating that
+>   the file was modified. **We still default to reimplementation**, for an engineering
+>   reason rather than a legal one: anything on our surfaces has to satisfy
+>   `DESIGN_SYSTEM.md`, so a copied component gets rewritten anyway. If anyone ever does copy
+>   a Paca file substantially, that is a decision to record here with the attribution
+>   discharged in the same PR — not a thing to do quietly.
+>
+> A REF: is **evidence and a reading list, never an instruction to port.** Where the upstream
+> is a thin wrapper over a permissively-licensed library, the REF: names the **library**
+> instead — that is the more useful reference, and in several cases converts a blocked idea
+> into an `npm install`.
+
+
 **WS-27a — schema + feature registration + core API.** 🟢 AGENT-SAFE.
 Done when: (1) the migration exists at the next free number, idempotent, with the
 `feature_catalog` row — and the WS-26a-style **static idempotency test** over the migration
@@ -1423,8 +1508,9 @@ Mutation-measured: deleting the roots predicate turns 4 live checks red (includi
 for the resolver, which must stay unbound — while `routes/projects` goes from **2** unbound
 sites to **0** and `H2_EXEMPT_FILES` loses its Projects entry.
 
-**WS-27ab — view ergonomics: peek, dirty views, one palette registry.** 🟢 AGENT-SAFE
-*(P-14, P-15, P-16)*.
+**WS-27ab — view ergonomics: peek, dirty views, one palette registry.** ✅ **BUILT
+2026-08-10** *(P-14, P-15, P-16; as built, and the one place the ticket was wrong, in
+§11.25)*.
 Done when: (1) **peek escalation** — `TaskPanel` offers peek → side → full, the choice
 persists per user, and Esc returns focus to whatever opened the panel so the card/row keeps
 the cursor (WS-27y's cursor is the thing being returned to); (2) **dirty-view affordances**
@@ -1440,8 +1526,9 @@ action carries a label and section, every go-sequence resolves to a route that e
 no two actions share a key sequence; (5) DESIGN_SYSTEM throughout — no raw colours, the
 `Icon`/`Button`/`Input` primitives, theme suite green.
 
-**WS-27ac — calendar: week layout, per-day quick-add, honest overflow.** 🟢 AGENT-SAFE
-*(P-19)*.
+**WS-27ac — calendar: week layout, per-day quick-add, honest overflow.** ✅ **BUILT
+2026-08-10** *(P-19; as built — **§11.24**; merged onto the working branch, PR #422, not on `main`, not
+deployed)*.
 Done when: (1) `CalendarView` gains a **week** layout beside month, both driven by the
 existing `lib/calendar.ts` date math — one implementation, extended, never a second;
 (2) each day cell carries the shared group-context quick-add (`components/QuickAdd.tsx`)
@@ -1450,6 +1537,19 @@ shows `+N more` with the true count and expands rather than clipping silently; (
 between days reschedules through the existing `PATCH` path wearing WS-27y's drop-refusal
 reason and post-drop flash; (5) the §11.16 parameter-coverage test extends to the week
 range, so the `triage` exclusion (WS-27u) cannot be dropped by the new surface.
+
+**As built (§11.24).** `MonthGrid` → `CalendarGrid` with a `layout` discriminator;
+`monthGrid` and `weekGrid` share `mondayOffset` and `runOfDays`, fenced by a test that walks
+**every day of a month** asserting `weekGrid(d).days` equals the month row containing `d`,
+plus a structural read of `CalendarView.tsx` for `new Date(`/`.getDay()`/`.setDate(`.
+`monthLabel`/`isOutsideMonth`/`shiftMonth` became `gridLabel`/`isPadding`/`shiftGrid` — a
+week has no padding, and "next" means one of whatever is on screen. Overflow is
+`dayFill(count, limit, expanded)` with `hidden = count - shown`, `DAY_LIMITS` month 3 /
+week 8, no fold at one-over. `dayDropRefusal` names the two drops that previously did
+nothing silently — ⚠️ only the "not on this calendar" case is reachable today (§11.24).
+Quick-add and the drag `PATCH` were already correct and were re-verified in a browser.
+Done-when 5 landed as a **window-shape parametrisation** (`CLIENT_WINDOWS`) over the same
+endpoint. Browser-verified in four themes × two modes.
 
 **WS-27ad — Tasks ↔ Projects continuity, round 2.** ✅ **BUILT 2026-08-10** *(the backport
 agent's recorded gap list, HANDOVER §1; scope extended mid-ticket by the owner to put the
@@ -1598,10 +1698,41 @@ review, exactly as for af and ag. What was checked is `npx tsc --noEmit`, the fu
 `npx vitest run`, `npx vitest run src/lib/theme/`, `eslint` on the changed files, and each
 new fence mutation-measured red before being reverted byte-identical.
 
-**WS-27ae — export, delta-sync, small columns.** 🟢 AGENT-SAFE, **not this wave** *(P-26,
-P-27, P-28 rest)*. Filtered-list CSV export on the export-job pattern; a delta-sync list
-variant plus satellite `updated_at` bumps for agents/mobile; `is_epic`, per-user view state
-and the session `user_id` denorm. Minted so the basket has an owner; dispatch after aa–ad.
+**WS-27ae — export, delta-sync, small columns.** 🟢 AGENT-SAFE *(P-26, P-27, P-28 rest)*.
+A three-part basket, dispatched in parts after aa–ad.
+
+- **Export (P-26) — ✅ BUILT 2026-08-10**, merged onto the working branch (PR #422), **not on
+  `main` and not deployed**. As-built: **§11.26**. ⚠️ **The "export-job pattern" this ticket named
+  does not exist** — searched and confirmed absent from `apps/`, `packages/`, `tests/` and
+  `workbench/`; the only hits are vendored `.venv` code. What shipped is a **synchronous**
+  bounded CSV over the same filtered query the list endpoint runs
+  (`GET /projects/export/tasks.csv`), rather than a job queue invented to satisfy a phrase.
+  The cap is a **refusal**, not a truncation: past 5000 matching rows the endpoint answers
+  422 naming the count, because a partial CSV is byte-indistinguishable from a complete one.
+  Cells opening `=`/`+`/`-`/`@` are neutralised, with plain numbers exempt so exported sums
+  still work. No migration.
+- **Delta-sync + satellite `updated_at` bumps (P-27) and the small columns (P-28 rest) —
+  ✅ BUILT 2026-08-10**, merged onto the working branch (PR #422), **not on `main` and not deployed**.
+  As-built: **§11.27**. `GET /projects/delta/tasks` (path chosen so `/projects/tasks/{task_id}`
+  cannot shadow it), a `(updated_at, id)` keyset cursor with a horizon, and — the part a naive
+  feed cannot do — an explicit `removed[]` fed by migration **168**'s `pm_task_tombstones`
+  (written by an AFTER DELETE trigger, so a project CASCADE is recorded too) plus rows that
+  changed and fell out of scope. **Losing VISIBILITY stays inexpressible**, documented and
+  pinned as silence. Satellites bump the task through `record_activity` plus `core.touch_task`;
+  watchers, the personal overlay, notifications and per-view order deliberately do not.
+  Small columns: `pm_task_types.is_epic` (read by `core.is_epic_type`) and `pm_view_user_state`
+  (read by `views.list_views`); the session `user_id` denorm was **not built, because
+  `chat_session.user_id` already exists and is already indexed** (migration 02) — measured,
+  not assumed. Migration **168**, both tables tenant-scoped, generated phase files regenerated.
+  ⚠️ No UI consumes any of it yet, and tombstone retention is owed to a `/workflows` sweep (D6).
+
+> **Integration note (2026-08-10).** The two halves were built concurrently from the same
+> base and collided in three places that only integration could see: both registered a module
+> in `routes/projects/__init__.py`, both wrote an as-built section, and **both created
+> `tests/live/live_ws27ae.py`** — different files, same name, because they share a ticket
+> letter. Split into `live_ws27ae_export.py` and `live_ws27ae_delta.py`, with every reference
+> in code, tests, the migration and this spec repointed. A live script named in a comment but
+> absent from disk is the stale-mirror failure this repo keeps paying for.
 
 **WS-27af — the themed categorical ramp.** 🟢 AGENT-SAFE. ✅ **BUILT 2026-08-10.**
 *(Owner-ruled the same day, choosing the ramp over tokenising to the semantic set or
@@ -1641,8 +1772,7 @@ accumulated tree-wide. ⚠️ Measured, and the ticket was wrong: `/tasks` held 
 🟢 AGENT-SAFE, frontend only, no migration. ✅ **BUILT 2026-08-10 for the LIST surfaces**
 *(owner observation: "Tasks shows the selection checkbox only when the appropriate setting
 is there in the select options on top; in the Projects app the checkbox for selecting a
-task is present." Owner ruling: Projects is canonical.)* Branch `ws-s3-selection-bulk-parity`
-— **not merged, not deployed.**
+task is present." Owner ruling: Projects is canonical.)* Branch `ws-s3-selection-bulk-parity` — **MERGED to `main` and DEPLOYED.**
 
 - **`selectMode` is no longer a mode.** It is a derived mirror of `selectedIds.size > 0`
   maintained in one helper (`taskStore.applySelection`), and it decides only whether the
@@ -1687,6 +1817,649 @@ common one — while af established the house scale as `text-sm`/`text-xs`/`text
 lives in `src/components/TaskCardShell.tsx:120`, which **both** apps render. The two
 decisions contradict; changing it repaints Projects as well as Tasks, so it was left alone
 rather than settled by whichever slice touched it last.
+
+---
+
+### 9.3 The Plane traceability queue (minted 2026-08-10 from the P-1…P-31 audit)
+
+The 2026-08-09 Plane research recorded 31 findings and a 14-item frontend list. Minting
+WS-27u–z and WS-27aa–ae carried most of them, but a re-derivation from the CODE (not from the
+write-ups) on 2026-08-10 found four that **nothing owns**, plus two adoption triggers that name
+tickets which do not exist. They are collected here so the loss is recorded once and closed
+deliberately, rather than rediscovered by a third reading of the same research.
+
+> **Why this happened, since the mechanism matters more than the four items.** The research
+> numbered its *findings* P-1…P-31 and its *frontend list* 1–14 **independently**, and §8's
+> consolidated verdict table — the table the minting actually read — maps only P-numbers. So
+> frontend item 14 was never eligible to be minted: it has no P-number, and a `P-\d+` grep over
+> the two documents can never reveal its absence. The fence against a repeat is not a test but
+> a rule: **anything that earns a verdict earns an identifier in the table that minting reads.**
+> Advisory — nothing in this tree can test a document's completeness.
+
+**WS-27ah — the four the mint dropped.** 🟢 AGENT-SAFE. Frontend plus one gateway aggregate;
+no migration.
+Done when: (1) **P-8, child category distribution** — `subtask_progress` returns the children's
+distribution across status *categories* beside `{done, total}`, and the panel's progress bar
+draws segments instead of one `bg-primary` fill. Cheap (one grouped aggregate in
+`relations.py`) and it unblocks (2). ⚠️ Its stated trigger — "when the panel draws segments" —
+has half-fired: `RelationsBlock.tsx` now draws a *bar*, which is the shape that wants segments,
+but the datum cannot express them. (2) **Click a progress segment to filter by that status
+group** (research §4 item 14). (3) **P-22, timeline polish** — zoom presets (week/month/quarter
+as px-per-day steps) replacing the fixed `PX_PER_DAY = 24`, drag-a-bar-edge to set dates, and
+hover-a-dateless-row to place it with a one-day default. ⚠️ **Read `TimelineView.tsx` before
+starting**: the dateless row currently renders static text whose `title` asserts *"there is
+nothing to place"* — the code argues the opposite of this ticket, so a future reader would not
+recognise the gap. Whichever way it lands, that comment must stop contradicting the product.
+**Keep** the dependency arrows and D-PM-12's warn-never-reschedule. (4) the rest of research §4
+item 14: **create-form draft restore** (one localStorage slot, restored on reopen),
+**pinned projects/views** at the tree top (flat, no folders), and a **capped recently-viewed
+list** in MyWork. (5) The fifth sub-item, the tiered `EmptyState` primitive, **already exists**
+— built incidentally by S4 at `src/components/EmptyState.tsx` rather than by this research —
+but it landed in `src/components/`, not `ui/` as §4 asked, and `app/tasks/components/ItemList.tsx`
+still declares a **second, local** `EmptyState`. Retire the duplicate and add the SEAM row to
+`src/lib/sharedTaskUi.test.ts`, or record why not.
+
+**WS-27ai — the notifications inbox (the half of P-20 that was descoped in flight).**
+🟢 AGENT-SAFE.
+WS-27v shipped the split unread counts (`NotificationBell.tsx`, `lib/notifications.ts`) and
+wrote "(P-20 **part**)". The remaining part was never minted, never banked, and appears in no
+deferred basket — the parenthetical is its only trace, which is how a descope becomes a
+disappearance.
+Done when: a two-pane inbox (list + the embedded task panel), all/mentions tabs each with their
+own unread count, **mark-read-on-open**, and snooze-later. ⚠️ The bell deliberately does the
+*opposite* of mark-read-on-open today and says so in its own header — that is a real decision,
+not an oversight, so this ticket must either reverse it explicitly or keep it and drop that
+done-when. Do not "fix" it silently.
+
+**WS-27aj — the two adoption triggers that name no ticket.** 🟡 One half needs an owner ruling.
+(1) **P-9 / generic import provenance.** `161_projects_tenancy.sql` defers the per-org ClickUp
+constraint to "the ticket that onboards the second tenant" — **no such ticket exists on WS-27 or
+WS-29.** Consequence, stated plainly: `clickup_id` is globally unique, so **two organisations
+cannot import the same ClickUp workspace**, and nothing on the board says so. The research's
+preferred shape is a generic `(external_source, external_id)` pair rather than a ClickUp-specific
+column. Cheap now, expensive after the second tenant exists — which is the definition of a
+retrofit trap. (2) **Research §6's "restricted" grant level** for contractors and clients: prose
+with no P-number, no D-number and no home. It self-defers ("hold until a real external
+collaborator shows up") but nothing will surface it when one does. ⚠️ A third visibility level
+would touch D12's two-axis model, so this half is an **owner decision, not an agent ticket**.
+
+**Two prose adoption instructions buried in research §2's "KEEP OURS" table** — the one table
+nobody re-reads, because it is framed as validation rather than as work. Recorded here so they
+are not lost a second time: (a) *"borrow their machine-readable error codes in per-task
+outcomes"* — `bulk.py` is half-converted (`"not_found"` and `"unchanged"` are codes,
+`"reason": str(exc)` is a human string a client cannot branch on); (b) *"every new list badge
+must be page-batched, never per-row"* — honoured today by `filters.attach_relation_counts`, but
+stated as a **requirement with no fence**, which is an R7 gap: nothing fails if the next badge
+is written per-row.
+
+---
+
+### 9.4 The second-pass Plane queue (minted 2026-08-10 from a full-monorepo read)
+
+The first pass (§9.1, research §3/§4) ranked *features* and stopped there. On the owner's
+instruction — *"read the entire code and lift the features and the specifications from
+them"* — six agents read all ~3,000 TypeScript files plus the API: `apps/web`, the API and
+data model, `packages/editor` + `apps/live`, `packages/ui` + `propel`, `apps/space` +
+`admin` + i18n, and a traceability audit (§9.3). This section carries what the first pass
+could not see, because it was looking at the wrong layer.
+
+> ### The finding that reframes the whole exercise
+> **Almost none of Plane's interaction quality is Plane's.** `packages/propel` is a thin
+> wrapper over **Base UI** (MIT); the editor is **TipTap + ProseMirror** (MIT); the
+> collaboration layer is **Yjs + Hocuspocus** (MIT); the palette is **cmdk**, the date
+> picker **react-day-picker**, the charts **Recharts**, the drag-and-drop
+> **pragmatic-drag-and-drop** (Apache-2.0). The AGPL wall blocks their *glue and their
+> menus* — which we would have to rewrite for `DESIGN_SYSTEM.md` conformance anyway.
+> **The substrate is a shopping list, not a wall.** Verify each licence at install time;
+> `node_modules` was absent from the read clone, so versions come from their manifest.
+>
+> Two consequences worth stating plainly. **We already ship TipTap v3** and use it in
+> `src/app/email/components/SignatureEditor.tsx`, so a rich comment box is *extensions*,
+> not an engine. And **we ship no headless-primitive library at all**, which is why we have
+> seven hand-rolled modals and no focus trap anywhere in the tree.
+
+**Where we are AHEAD, recorded so nobody "improves" us backwards.** Plane has **zero**
+`prefers-reduced-motion` handling repo-wide; strips the focus ring from every button
+variant without replacing it; has no automated contrast test; runs one theme axis
+(light/dark/contrast) against our style × mode; imports `lucide-react` directly
+everywhere; and carries two parallel UI packages with duplicate primitives — the exact
+"second implementation of an existing seam" our CLAUDE.md §5 forbids, visible in someone
+else's tree as evidence for the rule. **Our theming engine is the better engine.** Every
+motion behaviour taken from below ships behind our existing reduced-motion rule; theirs is
+a counterexample, not a model.
+
+#### 9.4.1 Owner decisions owed — these gate the tickets under them
+
+**D-PM-15 (owed, but now evidenced) — the headless-primitive substrate.** Base UI vs Radix
+vs Headless UI. Everything in WS-27ak depends on it and **picking two would create the
+parallel seam our own rules forbid**, so this is one choice made once.
+
+> ✅ **The Paca read (2026-08-10) turns this from taste into evidence.** Paca ships
+> **Base UI** as the substrate for **17 of its 24 primitives**; Plane's `propel` is *also* a
+> thin Base UI wrapper. **Two independent products, independently, chose Base UI for exactly
+> the primitive set WS-27ak enumerates.** That is the strongest external signal this decision
+> is going to get.
+> Two riders that change the ticket rather than the choice. **(a) Base UI has no Combobox** —
+> every "pick from a long list" surface in Paca is a hand-rolled search input inside a
+> Popover. So the substrate closes WS-27ak items 1, 2, 3 and 5, and **item 4 stays a build
+> whichever library wins**; its behaviour is specified in §9.5 and can be written now.
+> **(b) The rule must bind vendored registries too.** Paca's `package.json` carries Base UI
+> **and** `radix-ui` — the second reaching exactly one file, inherited from a vendored
+> component registry. That is the second-substrate failure walking in the back door, which is
+> the mechanism this decision exists to prevent, observed happening in someone else's tree. What it buys: a real focus trap,
+focus return, scroll-lock with scrollbar compensation, collision-aware positioning,
+roving tabindex, typeahead — the behaviours nobody hand-rolls correctly. Every primitive
+still gets a CommandCenter wrapper in `src/components/ui/` carrying `.cc-control`,
+resolving icons through `<Icon name>`, using only semantic tokens; call sites import ours,
+never the library's, or the library's defaults become a second design system. **R7:** the
+conformance suite gains a rule naming the import restriction, or it is advisory.
+
+**D-PM-16 (owed) — org-wide vocabularies.** Plane's tags, custom fields and task types
+carry a **nullable** project scope, so a vocabulary is either workspace-wide or
+project-local, with paired partial-unique constraints. Ours are all `project_id NOT NULL`.
+⚠️ **This is the most expensive item in this section if we get it wrong.** Dropping NOT
+NULL later is trivial; what is not trivial is merging the duplicate rows twelve projects
+will each have accumulated — their own "Bug", "urgent", "Client" — which is a
+judgement-call migration nobody can automate. **Even if the answer is "no, vocabularies
+stay per-project", record it as a decision now**, because the answer is what stops the
+merge ever becoming necessary.
+
+**D-PM-17 (owed) — the i18n discipline (not i18n itself).** Plane's numbers are one
+forecast: 28 namespaces × 19 locales ≈ **5,181 keys per locale**, for a surface *smaller*
+than ours.
+
+> ⚠️ **Two corrections from the Paca read (2026-08-10), both of which make adoption look
+> cheaper than the Plane-only figure implied.** (1) **`i18next-icu` is not needed for
+> plurals.** Paca's Russian bundle carries `_one/_few/_many/_other`, i.e. CLDR plural
+> categories come from **i18next core via `Intl.PluralRules`**; ICU is only required for
+> select/ordinal/nested constructs. My earlier text named ICU as the plural mechanism and
+> that was wrong. (2) **The scale is not fixed by the library.** Paca does the same job in
+> **10 namespaces × 1,644 keys per locale** against Plane's 28 × 5,181 — so the honest
+> forecast is a range, and the shape of the surface drives it more than the tool does.
+> The recommendation below is unchanged, and the second correction strengthens it: the
+> cheap discipline is worth adopting precisely because the expensive half is not fixed. The cost splits in two and only one half is avoidable: translation is
+unavoidable and unchanged by anything we do today; **extraction** — walking every
+component, finding every literal, inventing a key — is the expensive, unreviewable,
+long-branch half, and it collides head-on with our "keep branches short" rule. The
+recommendation is deliberately modest: **do not adopt i18n now; stop making it more
+expensive every week.** New surfaces put user-facing strings in a per-surface keyed module
+rather than inline in JSX; never build a sentence by concatenation; never branch on count
+in TypeScript (ICU cannot absorb either). Then adoption is "move a file", not "read every
+component". Binds new and changed work only — the existing tree is a finding, not a
+refactor. The libraries are MIT (`i18next` + `i18next-icu`) if we ever do adopt.
+
+**D-PM-18 (owed) — RTL as a design-system rule.** Plane punted entirely, so adopting their
+i18n buys us **nothing** here. RTL is logical CSS properties (`margin-inline-start` over
+`margin-left`), mirrored iconography and directional layout — it lands on
+`DESIGN_SYSTEM.md`, not on strings. Writing logical properties in a centrally-themed system
+costs **nothing today** and is a full-surface sweep later. This is a one-line addition to
+an existing seam, which is exactly the kind of change that is free now and impossible to
+schedule later.
+
+#### 9.4.2 Tickets
+
+**WS-27ak — the primitive layer.** 🟡 Blocked on D-PM-15.
+Sequenced by debt, not by ease: (1) **`Modal`** first — seven hand-rolled copies, **zero
+focus traps**, and it proves the theming wrapper on the hardest case. The behaviour a
+dialog owes: focus moves in on open; Tab wraps at both ends; the background is `inert`, not
+merely covered (so find-in-page and a screen reader cannot walk into it); scroll locked
+with scrollbar-width compensation so the page does not shift; Escape captured *at the
+dialog*, not on `document` where it races every other listener — our current shape; focus
+returns to the opener, or a sensible fallback if it unmounted, never `<body>`; `role` +
+`aria-modal` + `aria-labelledby`/`describedby`; and outside-click dismissal only when the
+press both started *and* ended outside, so a text selection dragged out of the dialog does
+not close it. (2) **`Tooltip`** — we use the native `title` attribute in ~157 files.
+(3) **`Toast`**, with the promise-bound form (`loading → success | error` mutating one
+toast in place, actions derived from the resolved value) — it is also the delivery vehicle
+for the copy-link affordance. (4) **`Combobox`** — our `Select` is a styled native
+`<select>`, so every "pick from a long list" surface is unserved. (5) **`Skeleton`** —
+~20 files improvise `animate-pulse`.
+
+**WS-27al — the logic-only wins.** 🟢 AGENT-SAFE, no library, no design decision, no
+dependency on D-PM-15. The cheapest real quality in this whole section:
+(1) **`ControlLink`** — a row that is a real `<a href>` but intercepts plain left-click to
+open the panel, so cmd/ctrl/middle-click still open a new tab. Our clickable rows are
+`<div onClick>`; today we are the one place on the user's machine where that is broken.
+(2) **`data-prevent-outside-click`** — outside-click dismissal walks up from the target and
+bails on the attribute, so a picker portalled out of a dropdown stops closing the dropdown
+underneath it. ~15 lines, no ref plumbing between components that do not know each other.
+(3) **Lazy tooltip mounting** — mount positioning machinery on first hover, not for 1,200
+rows that will never be hovered. (4) **Selected-first ordering** in multi-selects, sorted
+**on open and frozen while open** (theirs re-sorts live, so the option you just ticked
+jumps under your cursor). (5) **One overdue predicate** — never true for a done or
+cancelled item, and **today counts as due**; ours must be one function, not seven.
+(6) **Selection self-heals**: when the filtered list changes, drop selected ids that are no
+longer present, so a bulk action cannot fire at something off-screen.
+
+**WS-27am — the three-state list surface.** 🟢 AGENT-SAFE.
+(1) The **empty-state triad**: filters-active-but-no-match (action: *Clear filters*),
+never-populated (action: *Create*), and no-permission — the last renders the CTA
+**disabled rather than hidden**, so the user learns the action exists and that they cannot
+do it. Our §4.14 asked for a tiered primitive; that is the shape, this is the decision
+rule. (2) One **loader/empty/error HOC** per layout so each surface stops hand-rolling its
+three states — with their judgement call kept: **an empty calendar still renders**, because
+empty chrome is meaningful there and not in a table. (3) A **per-layout error boundary**
+whose Retry re-mounts by bumping a key rather than clearing a flag (which re-crashes
+instantly). A malformed group shape must not blank the app.
+
+**WS-27an — the inline-autosave contract.** 🟢 AGENT-SAFE. Six behaviours, and the third is
+the one everybody omits: 1.5s debounce; save on blur with trim; **save on unmount if
+dirty**, so closing the panel mid-keystroke does not lose the edit; empty **reverts to the
+last good value** rather than persisting empty, with an inline required message; a
+character counter that appears only while focused; and a separate "Saving… → Saved"
+indicator. When not editable it renders as plain text, not a disabled input.
+
+**WS-27ao — a rich comment/description editor (Lite tier).** 🟢 AGENT-SAFE, **no new
+service**, no schema change. Supersedes the rich-text half of research §5's refusal, which
+bundled it with the collab server; the collab-server refusal stands. Smallest slice that
+makes the product feel modern: markdown-on-paste and markdown-on-copy (`tiptap-markdown`,
+MIT); **mention as a node**, not a text token — but *serialising back to the same
+`@address` form*, so `notifications.mentionsIn()` and the whole notification wiring stay
+untouched while the editor draws a proper chip; image paste/drop with an optimistic local
+preview before upload completes. ⚠️ Two traps read from their implementation: clearing the
+composer after submit must be flagged so the asset-GC pass does not delete the images you
+just posted; and the two heavy extensions (syntax highlighting, the emoji dataset) are
+statically imported there and roughly double the bundle — lazy-load both. **No slash
+commands, no collaboration, in this slice.** ⚠️ Their editor has **9 aria attributes across
+232 files** and a **Tab keyboard trap by default**; we implement the dropdowns properly and
+Tab always leaves the field unless inside a list.
+
+**WS-27ap — the boolean filter tree.** 🟢 AGENT-SAFE, needs a migration. **Expensive to
+retrofit.** Our filters are a flat dict, implicitly AND-ed, so "assigned to me **or**
+watching, **and not** done" is unexpressible. Theirs is a nested `and`/`or`/`not` grammar
+over leaf conditions, with a declared-field allowlist (an undeclared field is a 400, not a
+silent drop) and a max nesting depth. Our `build_task_filters` is **already pure, returning
+clauses + params** — it is exactly the leaf evaluator; what is missing is the tree walker,
+the depth cap and an allowlist we already have in `VIEW_FILTER_KEYS`. Do it their way:
+**a new column beside the old, both read, the old one dropped in a later release** (R6) —
+their own late converter drops a record's filters silently on failure, which is the lossy
+migration to avoid. Every saved view, dashboard widget, agent query and the delta feed's
+scope predicate reads that config, so the stored corpus only grows.
+
+**WS-27aq — notification preferences.** 🟢 AGENT-SAFE, needs a migration. One preference
+row with **nullable** workspace and project keys, so global default, per-Center override
+and per-project mute are one table; plus `snoozed_till`/`archived_at` beside `read_at`.
+**The argument for now rather than later: we already shipped watchers with
+auto-subscribe-on-touch**, which manufactures volume by design. Without a mute the next
+user action is turning the bell off, and the whole watcher feature becomes dead weight.
+Widening `pm_notifications.kind`'s three-value CHECK is also cheaper before three clients
+hard-code three values. ⚠️ **Their mistake, do not copy:** their preference flags gate the
+**email channel only** — the in-app bell is unmutable.
+
+**WS-27ar — favourites/pins and recent-visits.** 🟢 AGENT-SAFE, needs a migration (two
+small tables). §4 item 14 already asked for pinned projects/views and recently-viewed
+(§9.3's WS-27ah owns the UI). The design point: **one generic
+`(user, entity_type, entity_id)` table**, not an `is_pinned` column on `pm_projects`, then
+another on `pm_views`, then another on dashboards — four columns, four queries, no
+ordering, no folders, and a migration to unify. One table now costs the same as the first
+column. ⚠️ Cap recent-visits per user on write; theirs grows unbounded with no sweeper.
+
+**WS-27as — the join-table authorisation audit.** 🔴 SECURITY. Partly done.
+Reading Plane's **GHSA-4w5x-wc9w-f47x** (they scoped a cycle-issue join write by issue id
+alone, so a caller could re-point another tenant's rows) prompted a check of ours.
+✅ **`views.set_positions` FIXED 2026-08-10** — it validated the view and then wrote every
+`task_id` unchecked. Remaining: audit every other endpoint taking `task_ids[]` and writing
+a join row — `relations.py`, `tags.py`, `watchers.py`, `bulk.py` (bulk already resolves
+per task and is clean) — each with a test using **`member_user`, never `projects_user()`**:
+the latter holds `*` including `data:org:read`, and a scoping test written with it passes
+whether or not the code is correct. That is not hypothetical; the first draft of the
+positions fence had exactly that defect.
+
+**WS-27at — the living design-system gallery.** 🟢 AGENT-SAFE. The one item here that
+improves our *process* rather than the product, and it targets the gap CLAUDE.md names by
+name: the conformance suite checks seven regexes and **nothing tests layout or cross-app
+continuity, so the theme-switch sweep is the real gate** — a manual gate that every slice
+this session owed and several skipped. One internal route rendering every token, every
+control and every state across all four themes × both modes turns that sweep into one page.
+Plane documents its own elevation vocabulary as executable stories showing ✅ correct and
+❌ wrong nesting; that is the shape.
+
+#### 9.4.3 Banked, with the trigger that should wake them
+
+- **`?fields=`/`?expand=`** sparse fieldsets — one generic read affordance; the allowlist
+  must be server-side or `fields=` becomes a column-name oracle. *Trigger: the first mobile
+  or agent client that complains about payload size.*
+- **Composite type tokens** (size + leading + tracking + weight in one class, on a rem
+  ramp). Fixes a defect `AGENTS.md` already admits: our two arbitrary-px sizes opt out of
+  the user's density preference because `--ui-scale` reaches rem and not px. *Trigger: the
+  `text-[13px]` vs `text-sm` ruling, which is already owed.*
+- **Paired surface state variants** (`-hover`/`-active`/`-selected` per surface token) so
+  every surface stops inventing its own hover. Take the state-variant half, skip their
+  depth renumbering.
+- **Container queries** for panel-local layout — we use **zero** and 517 viewport-breakpoint
+  prefixes, while our documented layout is exactly the flex-content-plus-380px-panel case
+  container queries exist for.
+- **A page-gutter spacing token.** `DESIGN_SYSTEM.md` §6 currently documents `px-4 sm:px-6`
+  as a string to retype on every page — the shape of drift the rest of the document exists
+  to prevent.
+- **Sprint membership exclusivity.** When sprints are built (P-23), the join needs
+  `UNIQUE (task_id)`: theirs enforces exclusivity in one handler and not in the schema, so
+  one forgetful code path puts a task in two sprints and every burndown is silently wrong.
+  Trivial then, a migration later.
+- **Per-tenant settings store.** We have a settings *surface* and no settings *store*.
+  ~31 of their 36 instance-config keys must be per-tenant for us; the sharp edge is
+  **per-tenant OAuth**, which is not a storage problem but a **callback-routing** one (the
+  tenant must ride in `state` and be validated, and the login page must resolve tenant
+  before offering buttons). Cheap now, an auth-entry-path rewrite later. ⚠️ Credential
+  handling is owner-gated (work_plan §6) — this is written up and handed over, never built
+  against live credentials.
+- **A separate, short-lived admin session cookie.** Their instance admin is a different
+  table *and* a different cookie with a 1-hour age. This sharpens our owner-gate registry
+  from a behavioural rule into a mechanical one — an owner acting as owner would be on a
+  different session from an owner reading their inbox.
+- **A grouped-aggregate primitive** for dashboards — one allowlisted endpoint, so every
+  widget does not grow its own copy of the visibility predicate. ⚠️ Encode their trap: with
+  an M:N axis (tags, assignees) per-bucket counts are distinct but the row total is a sum
+  of buckets, so a two-tag task is counted twice and the total exceeds reality.
+- **Saved-view lock + archive** (two nullable columns). ⚠️ **Refuse** its sibling — their
+  view `access` private/public enum is a second visibility axis and collides with D12.
+- **Reactions** on tasks and comments. Adjacent to Chat; a product call, not a UI one.
+
+#### 9.4.4 Added to the refusal list (research §5), with reasons
+
+Their **pervasive soft-delete with an async recursive cascade** — a background task walks
+reverse relations and soft-deletes children, printing and skipping per-relation failures.
+Three reasons beyond the ones already recorded: it is not atomic with the delete, so
+children outlive their parent for an unbounded window; a partial failure leaves a
+permanently inconsistent graph with no record; and — **the one that matters for us** — it
+interacts badly with a change feed, because children get tombstoned at arbitrary later
+times and a delta client observes a parent disappear before its children with no way to
+order the two. Our archived-only posture plus the `AFTER DELETE` trigger is the better
+answer. · **Their role model**: three ordered integer roles, and a **workspace admin
+bypasses project role checks entirely** — a privilege-escalation shape, plus generic 403s
+that collide with our 404-never-403 doctrine. Nothing to take; ours is strictly richer. ·
+**`ProjectPublicMember`**, a shadow membership table created silently when a non-member
+comments on a public board — a second membership vocabulary; for us a public participant
+is a **grant**, not a table. · **Secrets decrypted into API responses** and a **Fernet key
+derived with the literal salt `"salt"`** — return set/unset, never the value. ·
+**`CORS_ALLOW_ALL_ORIGINS` failing open** when an env var is unset, with credentials
+enabled and secure cookies disabled — fail closed; refuse to boot. · **`fields = "__all__"`
+on public-facing serializers**, which auto-publishes every future column. · **Same-origin
+path mounting** of a public surface (it already caused an XSS mitigation in their tree) —
+if we ever expose one it goes on a **different origin**, decided before the first link
+exists. · **`class-variance-authority`** — a `cva` recipe is exactly the "documented class
+string" our `DESIGN_SYSTEM.md` §3 rejected, because a theme's control personality is not
+expressible in a class string. · **UA-sniffing for touch** — use `(hover: hover)` and
+`(pointer: fine)`. · **`Math.random()` in a skeleton render** — take the irregularity,
+derive it from a hash of the row index. · **Unmount-on-scroll virtualization for any
+subtree owning unsaved input** — browser find-in-page cannot see it and an in-progress edit
+is lost.
+
+---
+
+### 9.5 The Paca queue (minted 2026-08-10 from a full read of the second reference)
+
+Paca (**Apache-2.0**, pinned `09dab28e`) was our *first* reference and its research doc had
+**no UI section at all** — the same blind spot Plane's first pass had. Four agents re-read it
+in full: `apps/web`, `services/api`, the agent/MCP/realtime layer, and its e2e suite. That pass
+found **28 defects in our own Paca record** (recorded at `paca_pm_research_2026-08.md` §10–§11)
+and the queue below.
+
+> ### The cross-reference — the one thing neither single-repo pass could produce
+> **1. Paca ships Base UI too.** 17 of its 24 primitives. Plane's `propel` is also a Base UI
+> wrapper. **Two independent products, independently, chose the same substrate for exactly the
+> primitive set WS-27ak enumerates** — that is D-PM-15 answered with evidence instead of taste.
+> **2. Paca is ahead on exactly one axis, and it is ours.** Its ~4,500-line agent surface has
+> **no Plane counterpart at all** — Plane is not an AI product. Everything in §9.5.1 below is
+> therefore single-sourced, and it is the closest external analogue to our own thesis.
+> **3. On everything Plane's queue already covers, Paca is the WEAKER reference.** No
+> multi-select, no bulk edit, no keyboard cursor anywhere in 61k lines; native HTML5 drag only,
+> so its board cannot be reordered on a phone at all; a hand-rolled task modal with no focus
+> trap; one theme axis; raw Tailwind palette classes for every categorical hue. **Importing
+> from Paca on those axes would be a regression.** Where the two references disagree, we now
+> know which to follow.
+
+#### 9.5.1 The agent surface — where Paca is genuinely ahead of everything
+
+**WS-27au — the agent-run transcript.** 🟢 AGENT-SAFE.
+A run is not a log. Heterogeneous backend events (assistant message, tool call, observation,
+error, rejection) fold into one assistant *turn* per burst, and within a turn group into a
+collapsible **Reasoning** block, a collapsible **N tool calls** block, and the reply as prose.
+The details that make it correct: a synthetic terminal `finish` call is unwrapped so its
+message reads as the answer rather than an opaque card; a tool result arriving with no matching
+open call (a history gap after resume) still renders as a standalone complete card instead of
+vanishing; unknown event types fall through to plain text rather than disappearing; and a
+streaming tool part is created once and **mutated in place**, so a diff captured early is not
+cleared by a later update. This is the contract between an agent event bus (our AG-UI + Action
+Broker) and any chat renderer, and nothing in Plane specifies it.
+**REF:** [`apps/web/src/components/projects/agents/conversation-to-thread-messages.ts`](https://github.com/paca-ai/paca/blob/09dab28e3caee9e43891697998dcfa7fcf76991c/apps/web/src/components/projects/agents/conversation-to-thread-messages.ts)
+· their test file is the better spec: [`apps/web/src/components/projects/agents/conversation-to-thread-messages.test.ts`](https://github.com/paca-ai/paca/blob/09dab28e3caee9e43891697998dcfa7fcf76991c/apps/web/src/components/projects/agents/conversation-to-thread-messages.test.ts)
+
+**WS-27av — the inline tool-approval bar.** 🟢 AGENT-SAFE. **This is the Action Broker's
+human-in-the-loop surface, specified.**
+Allow/deny by default; a host-declared option list when present (allow-once / allow-always /
+reject-once / reject-always) with **allow options ordered first and only the first styled
+primary**; unknown custom kinds filtered out; and **a refusal path always preserved** — if the
+declared list contains no reject option, a Deny button is synthesised. An option may demand a
+second confirm step naming the **grants being conferred** as code chips. The card auto-expands
+exactly once on `requires-action` and never re-opens after the user collapses it.
+⚠️ **Read this together with the agent-layer finding that Paca's BACKEND has no approval
+primitive at all** (`paca_pm_research` §10): the protocol here comes from `@assistant-ui/react`
+(MIT), not from Paca. So the UI contract is adoptable and **the enforcement is ours to design**
+— which is exactly the split D-PM-19 below records.
+**REF:** [`apps/web/src/components/assistant-ui/tool-fallback.tsx`](https://github.com/paca-ai/paca/blob/09dab28e3caee9e43891697998dcfa7fcf76991c/apps/web/src/components/assistant-ui/tool-fallback.tsx) (approval bar, and the
+`isError`-separate-from-`status` rule: a tool that *returned* an error reports `complete`, so
+checking status alone renders a failure as a success)
+
+**WS-27aw — the agent activity ledger.** 🟢 AGENT-SAFE, needs a migration (two partial indexes).
+Per-agent, cross-entity: every task and doc the agent touched, typed, described in the **same
+sentence vocabulary as the task timeline**, deep-linked, with the entity title shown greyed and
+unlinked when the source was deleted — so the ledger survives its subjects. Filterable by
+source type, date range and text; keyset-paginated.
+**Not "here is a chat log" but "here is the ledger of changes this agent made to the
+business."** Neither we nor Plane have it. For us it is *cheaper than for them*: they must
+`UNION ALL` two activity tables, we have one `pm_activities` with the actor already recorded as
+`agent:<name>` — the read model is a filtered query over a table that exists.
+**REF:** [`services/api/internal/domain/agent/activity_feed.go`](https://github.com/paca-ai/paca/blob/09dab28e3caee9e43891697998dcfa7fcf76991c/services/api/internal/domain/agent/activity_feed.go) · [`apps/web/src/components/projects/agents/agent-activity-tab.tsx`](https://github.com/paca-ai/paca/blob/09dab28e3caee9e43891697998dcfa7fcf76991c/apps/web/src/components/projects/agents/agent-activity-tab.tsx)
+
+**WS-27ax — an agent assignee should LOOK like one.** 🟢 AGENT-SAFE. **Paca's own biggest
+miss, and the design space it leaves open for us.**
+Measured: `member_type === "agent"` is read in exactly two files in 61k lines, neither a card,
+a row, nor the properties panel. There is no bot glyph, no agent chip, no "an agent is working
+on this right now" state — the only visible trace is a timeline line. We already have the
+vocabulary (D-PM-4: agents and people are one assignee list, `agent:<name>`) and `TaskCardShell`
+already draws an avatar stack.
+Done when a card shows *an agent owns this*, *it is mid-run*, *here is how to watch it*, and
+*here is how to stop it*. The last two matter most: a running agent the user cannot see or stop
+is the failure mode this ticket exists to prevent.
+**REF:** no upstream — this is the gap, not the pattern. Nearest shape:
+[`apps/web/src/components/projects/agents/conversation-view.tsx`](https://github.com/paca-ai/paca/blob/09dab28e3caee9e43891697998dcfa7fcf76991c/apps/web/src/components/projects/agents/conversation-view.tsx) (status badge, always-reachable Stop, ~30s heartbeat so the sandbox reaper does not kill a run the user is watching)
+
+**WS-27ay — agent presets.** 🟢 AGENT-SAFE, trivial (data) + a slice (picker).
+Creating an agent starts from role-shaped templates — Software Engineer, Code Reviewer, QA,
+**Planner**, **Business Analyst**, Custom — each carrying provider, model and a system prompt
+that names the *tools* it should use and the output convention it should follow. Every field
+stays editable; the preset is a starting point, not a mould. For a Centers product this maps
+onto department-shaped agents almost one-for-one, and it is the cheap answer to an empty Agent
+Builder. ⚠️ Must live in our existing Agent Builder registry, never a second one.
+**REF:** [`apps/web/src/lib/agent-api.ts`](https://github.com/paca-ai/paca/blob/09dab28e3caee9e43891697998dcfa7fcf76991c/apps/web/src/lib/agent-api.ts) (the preset table with full prompts)
+
+#### 9.5.2 Tickets from the interaction surface
+
+**WS-27az — per-activity Revert and View diff, from the timeline.** 🟢 AGENT-SAFE.
+Hover a system entry → *View diff* (hunk-collapsed) and *Revert*, which reads the
+`{field, old, new}` record, resolves names back to ids, and applies an ordinary update — so
+**the revert is itself an auditable activity**. We adopted the schema from this reference and
+never built the affordance; `pm_activities` already carries the change record.
+⚠️ Two corrections to inherit deliberately rather than repeat: their `isRevertable` only checks
+that *some* change has an `old` key, so a field it cannot restore still offers an enabled menu
+item that silently does nothing — **ours computes revertability from the fields it can actually
+restore**; and their custom-field diffs record no old/new at all, so ours must.
+Disproportionately valuable in an agent product: undoing what an agent just did, one field at a
+time, is a trust mechanism. **Plane has nothing comparable.**
+**REF:** [`apps/web/src/components/projects/interactions/task-detail/activity-pane.tsx`](https://github.com/paca-ai/paca/blob/09dab28e3caee9e43891697998dcfa7fcf76991c/apps/web/src/components/projects/interactions/task-detail/activity-pane.tsx) (the field-by-field revert map, and the weak predicate to improve on)
+
+**WS-27ba — the saved-view filter that does not rot.** 🟢 AGENT-SAFE. **Cheap now, expensive
+later.**
+Their filter config is a **recursive, dimension-agnostic selector** — `all` plus per-item
+exceptions, nesting, named virtual groups, and per-custom-field range/contains blocks — not an
+ID array. "Every status except Archived" keeps working when someone adds a status; an ID
+snapshot silently starts hiding new work. With Center slices this matters more for us than for
+them: a Center's default view is created once and lives for years.
+⚠️ **Take the shape and resolve it SERVER-side.** Theirs is stored, handed back, and never read
+by the server — all filtering arrives as client-built query parameters, so their saved filters
+are advisory. Our `146_projects.sql` explicitly claims the opposite property; **we hold it and
+they do not, so Paca is not prior art for the split** — only for the shape.
+Composes with WS-27ap (the boolean filter tree from Plane): same JSONB config, one resolver.
+**REF:** [`services/api/internal/domain/sprint/entity.go`](https://github.com/paca-ai/paca/blob/09dab28e3caee9e43891697998dcfa7fcf76991c/services/api/internal/domain/sprint/entity.go) (the recursive `FilterConfig`)
+
+**WS-27bb — per-column board pagination.** 🟢 AGENT-SAFE. The largest scale gap between their
+board and ours: each column is its own paginated query with a **server-side total** in the
+header (or a summed numeric field — story points — instead of a count), so "Load more" never
+lies. The subtle part worth copying: when a realtime event forces a refetch, the column's
+**expanded depth is remembered and re-requested**, so a column the user expanded to 200 does not
+silently snap back to 20. Ours fetches one flat list.
+**REF:** [`apps/web/src/components/projects/interactions/interaction-layout.tsx`](https://github.com/paca-ai/paca/blob/09dab28e3caee9e43891697998dcfa7fcf76991c/apps/web/src/components/projects/interactions/interaction-layout.tsx)
+
+**WS-27bc — the long-list picker.** 🟢 AGENT-SAFE. **The behavioural half of WS-27ak(4), and it
+can be written before D-PM-15 resolves** — Base UI has no Combobox, so this is a build whichever
+substrate wins. Scroll-pagination at a 48px threshold; server-side search debounced at 300ms
+with a **minimum query length of 2**, below which it falls back to the unfiltered first page
+rather than firing a leading-wildcard scan with no index behind it. That minimum is a
+performance fence, not a nicety.
+**REF:** [`apps/web/src/lib/scroll-pagination.ts`](https://github.com/paca-ai/paca/blob/09dab28e3caee9e43891697998dcfa7fcf76991c/apps/web/src/lib/scroll-pagination.ts) · [`apps/web/src/components/projects/interactions/use-epic-search.ts`](https://github.com/paca-ai/paca/blob/09dab28e3caee9e43891697998dcfa7fcf76991c/apps/web/src/components/projects/interactions/use-epic-search.ts)
+
+**WS-27bd — the small rules, each removing a class of defect.** 🟢 AGENT-SAFE, all trivial.
+(1) **Shortcuts release unclaimed keys** — `Mod+F` opens page search only where a page
+registered one and otherwise falls through to the browser's find-in-page; the fence is a test
+asserting `preventDefault` is not called when no handler is registered. (2) **Per-row pending
+and per-row error** in lists, so three concurrent installs show three spinners and one failure
+is attributed to one row — against the usual single `isPending` that disables everything.
+(3) **Clipboard failure never claims success** — a denied or insecure-context write must not
+flip the button to "Copied", because the user may need to select the text by hand.
+(4) **Signature-keyed dismissal** for banners — dismiss *this* announcement, not the banner
+forever. (5) **Context menu on cards and rows**, reading the same action registry the palette
+already uses — one registry, two surfaces; measured, `/projects` has zero `onContextMenu`.
+**REF:** [`apps/web/src/lib/shortcuts/provider.tsx`](https://github.com/paca-ai/paca/blob/09dab28e3caee9e43891697998dcfa7fcf76991c/apps/web/src/lib/shortcuts/provider.tsx) · [`apps/web/src/components/plugins/PluginMarketplacePanel.tsx`](https://github.com/paca-ai/paca/blob/09dab28e3caee9e43891697998dcfa7fcf76991c/apps/web/src/components/plugins/PluginMarketplacePanel.tsx) · [`apps/web/src/components/home/UpdateBanner.tsx`](https://github.com/paca-ai/paca/blob/09dab28e3caee9e43891697998dcfa7fcf76991c/apps/web/src/components/home/UpdateBanner.tsx) · [`apps/web/src/components/projects/interactions/task-context-menu.tsx`](https://github.com/paca-ai/paca/blob/09dab28e3caee9e43891697998dcfa7fcf76991c/apps/web/src/components/projects/interactions/task-context-menu.tsx)
+
+#### 9.5.3 Decisions owed
+
+**D-PM-19 (owed) — the agent autonomy gate.** **The single most important gap in either
+reference.** Paca has **no approval or human-in-the-loop primitive anywhere in its agent
+layer** — a grep of the whole territory returns prose only. An agent's autonomy is exactly its
+project-role permission set, exercised unilaterally; the only human levers are pause and stop,
+after the fact. Its "you MUST invoke a skill before acting" rule is a paragraph in a prompt with
+nothing enforcing it. Plane has no agent surface at all.
+So: **neither reference is prior art, and we design it.** The natural seam is a **per-tool gate
+at the tool layer**, not a sentence in a system prompt — and the UI contract already exists as
+a library (WS-27av). Shapes the Action Broker and agent dispatch together, which is why it is a
+decision and not a ticket.
+
+**D-PM-20 (owed) — optimistic concurrency on `pm_tasks`.** Neither reference has any: no
+version column, no etag, read-modify-write throughout. **With agents writing concurrently with
+humans — which is the entire point of our product — last-write-wins is a data-loss design**,
+and a revert affordance (WS-27az) makes it worse by replaying stale values. An `updated_at`
+precondition on PATCH is nearly free *now* and breaks every client at once if added later.
+⚠️ It interacts with the delta feed: migration 168's `updated_at` serves both, so one semantic
+has to be chosen for both.
+
+#### 9.5.4 Added to the refusal list, with reasons
+
+**`is_public` as a boolean on the container.** One flag opens **26 anonymous read routes** —
+including the member list, comments, and presigned attachment download URLs. A visibility axis
+that is a column on the container has no granularity and no audit: you cannot make a board
+public without making its files public. Confirms **D-PM-14**, and is the second sighting of the
+same shape (Plane's anchor model was the first). · **`X-Agent-ID` as an identity over a shared
+install-wide key whose fallback principal is SUPER_ADMIN** — violates **R11** three ways, and
+its own narrowing step is skipped on any global-scope route. · **A migration runner with no
+ledger that re-executes every file on every boot**, plus an in-place `DROP COLUMN` in the same
+file that backfills — the direct negation of R1/R6 and of "verify delivery by evidence". ·
+**Producer-minted primary keys inserted without `ON CONFLICT` off an at-least-once stream** —
+one redelivery poisons the pending list permanently. · **Permission reads that ignore
+soft-delete**: their human path omits the predicate their agent path includes, so a removed
+member keeps every permission indefinitely. The fence for us is a test that revokes a grant and
+asserts 403 on the next read. · **A second activity spine per entity type**, and **a second
+project-role vocabulary** — both are our own CLAUDE.md §5 rule demonstrated in someone else's
+tree. · **Client-supplied fractional positions with no check that the task belongs to the
+view** — the third sighting of the join-table authorisation class we fixed in
+`views.set_positions`; it is a category, not an incident. · **Per-project agent rows**: the same
+assistant in ten projects is ten rows and ten secrets to rotate. · **`proOptions:
+hideAttribution`** on React Flow — MIT library, but removing the attribution mark requires a
+paid subscription; do not copy the flag. · **`class-variance-authority`**, again — it arrives
+*with* vendored component registries, which is exactly how the second substrate walks in.
+
+---
+
+### 9.6 Upstream reference index — Plane
+
+*Every link pinned to `31853ab2` per §9.0. All **128** references in the source report were
+mechanically checked: the file exists at that path and the cited end line is within the file.
+Two candidates failed that check and were corrected before inclusion — which is the argument
+for `tests/unit/test_reference_links.py` rather than trust.*
+
+**A REF is a reading list, not a port.** Plane is AGPL-3.0: read it, then write ours.
+
+#### P-1 … P-31 (the original research queue)
+
+| Item | Upstream reference | The part worth reading |
+|---|---|---|
+| P-1 intake/triage | [`issue.py#L92-L100`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/apps/api/plane/db/models/issue.py) | ⭐ the load-bearing trick: the **default manager excludes `state__group=triage`**, which is the whole "capture does not pollute a board" mechanism |
+| P-2 watchers + mention diffing | [`notification_task.py#L53-L111`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/apps/api/plane/bgtasks/notification_task.py) | set-difference of old vs new mentions; the fan-out excludes new mentions *and* the actor |
+| P-3 archive guard | [`archive.py#L255-L278`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/apps/api/plane/app/views/issue/archive.py) | one `state.group not in (completed, cancelled)` check; its bulk sibling is the counterexample (aborts mid-loop) |
+| P-4 lifecycle sweeper | [`issue_automation_task.py#L28-L149`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/apps/api/plane/bgtasks/issue_automation_task.py) | exempts issues in an unfinished cycle; stamps `automation: True` into the activity |
+| P-5 activity id+label | [`issue.py#L414-L437`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/apps/api/plane/db/models/issue.py) | `old_value`/`new_value` beside `old_identifier`/`new_identifier` |
+| P-6 category-ranked sort | [`order_queryset.py#L145-L193`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/apps/api/plane/utils/order_queryset.py) | ⚠️ their tiebreaker is only `-created_at`; **ours is `(created_at, id)` — we are a step ahead of the source we cited** |
+| P-7 picker exclusions | [`search/issue.py#L37-L83`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/apps/api/plane/app/views/search/issue.py) | four separate methods, not one param — ours is a consolidation, not a port |
+| P-8 child distribution | [`sub_issue.py#L165-L201`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/apps/api/plane/app/views/issue/sub_issue.py) | one `defaultdict(list)` keyed by state group, no denormalisation |
+| P-9 import provenance | [`api/views/issue.py#L616-L646`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/apps/api/plane/api/views/issue.py) | idempotent PUT-upsert keyed on the pair. ⚠️ uniqueness is enforced **at the query, not by a constraint** — we should add the constraint they lack |
+| P-10 spreadsheet | [`use-table-keyboard-navigation.tsx#L7-L62`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/apps/web/core/hooks/use-table-keyboard-navigation.tsx) | the arrow-cursor logic; row nesting caps at depth 3 |
+| P-11 swimlanes | [`swimlanes.tsx#L50-L59`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/apps/web/core/components/issues/issue-layouts/kanban/swimlanes.tsx) | the empty-lane visibility predicate |
+| P-12 shown-fields contract | [`with-display-properties-HOC.tsx#L18-L35`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/apps/web/core/components/issues/issue-layouts/properties/with-display-properties-HOC.tsx) | ⭐ **35 lines is the entire contract** |
+| P-13 group-context quick-add | [`quick-add/root.tsx#L100-L136`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/apps/web/core/components/issues/issue-layouts/quick-add/root.tsx) | `reset()` fires *before* the request, so typing continues immediately |
+| P-14 peek escalation | [`peek-overview/view.tsx#L102-L113`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/apps/web/core/components/issues/peek-overview/view.tsx) | focus return gated on "no modal / not in an input / no editor bar open" |
+| P-15 dirty-view affordances | [`rich-filters/filter.ts#L294-L312`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/packages/shared-state/src/store/rich-filters/filter.ts) | the store half is the instructive one |
+| P-16 palette registry | [`shortcut-handler.ts#L30-L140`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/apps/web/core/components/power-k/core/shortcut-handler.ts) | **library: `cmdk` (MIT)** for the list; this file is the registry + key-sequence machine |
+| P-17 keyboard cursor | [`use-multiple-select.ts#L290-L360`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/apps/web/core/hooks/use-multiple-select.ts) | Shift+Arrow extends from the cursor; both share one neighbour helper |
+| P-18 drop refusal + flash | [`group-drag-overlay.tsx#L27-L86`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/apps/web/core/components/issues/issue-layouts/group-drag-overlay.tsx) | **library: `pragmatic-drag-and-drop` (Apache-2.0)** owns the drag; only the reason overlay is theirs |
+| P-19 calendar | [`calendar/issue-blocks.tsx#L60-L113`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/apps/web/core/components/issues/issue-layouts/calendar/issue-blocks.tsx) | ⚠️ **correction: their per-day overflow is a paginated "Load more", not "+N more"** — WS-27ac shipped the better one |
+| P-20 notifications inbox | [`workspace-notifications/root.tsx#L85-L118`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/apps/web/core/components/workspace-notifications/root.tsx) | ⚠️ their split count is a `sender__icontains="mentioned"` **string match** — use a real column |
+| P-21 human task IDs | [`work-item/base.ts#L315-L340`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/packages/utils/src/work-item/base.ts) | `/browse/KEY-42/` is a real resolvable route, not a display string |
+| P-22 timeline polish | [`gantt-chart/add-block.tsx#L26-L80`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/apps/web/core/components/gantt-chart/helpers/add-block.tsx) | ⭐ the direct answer to our `TimelineView`'s "there is nothing to place" comment |
+| P-23 sprints | [`cycle_transfer_issues.py#L400-L470`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/apps/api/plane/utils/cycle_transfer_issues.py) | carry-forward as an explicit logged transfer |
+| P-24 webhooks | [`url_security.py#L160-L230`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/apps/api/plane/utils/url_security.py) | ⭐ resolve→validate→pin, closing the DNS-rebinding TOCTOU; its docstring explains why `requests` alone is unsafe |
+| P-25 email digest | [`email_notification_task.py#L46-L84`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/apps/api/plane/bgtasks/email_notification_task.py) | group per receiver → entity → actor, then one bulk `processed_at` |
+| P-26 export job | [`exporter_expired_task.py#L22-L53`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/apps/api/plane/bgtasks/exporter_expired_task.py) | the 8-day sweep deletes the object and nulls the URL, keeping the history row |
+| P-27 delta feed | [`issue_activities_task.py#L1526-L1538`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/apps/api/plane/bgtasks/issue_activities_task.py) | the unconditional satellite bump is the prerequisite. ⚠️ **their `cursor` is offset in costume — do not copy as keyset** (ours is a real keyset) |
+| P-28 small columns | [`session.py#L44-L56`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/apps/api/plane/db/models/session.py) | the `create_model_instance` override that denormalises the user id *is* the feature |
+| P-29 public boards | [`space/views/project.py#L54-L63`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/apps/api/plane/space/views/project.py) | ⚠️ the `AllowAny` **anchor-recovery** endpoint that defeats unpublish-as-rotation. `is_disabled`: **NO UPSTREAM — read by zero views and zero components** |
+| P-30 pages/wiki | [`page.py#L23-L175`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/apps/api/plane/db/models/page.py) | refused as PM; useful as the KB's eventual checklist (hierarchy, versions, backlinks) |
+| P-31 refusals | [`db/mixins.py#L48-L84`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/apps/api/plane/db/mixins.py) | the soft-delete tax every query then re-asserts |
+
+#### The active queue (§9.3 / §9.4)
+
+| Ticket | Upstream reference | Note |
+|---|---|---|
+| WS-27ah(1) segments | [`linear-progress-indicator.tsx#L21-L55`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/packages/ui/src/progress/linear-progress-indicator.tsx) | the renderer that consumes P-8's datum |
+| WS-27ah(2) click-to-filter | [`active-cycle/progress.tsx#L60-L90`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/apps/web/core/components/cycles/active-cycle/progress.tsx) | the click emits a `state_group in [...]` filter — exactly the behaviour |
+| WS-27ah(4a) draft restore | [`quick-actions.tsx#L40-L67`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/apps/web/core/components/workspace/sidebar/quick-actions.tsx) | one slot **per workspace**, cleared on submit |
+| WS-27ah(4b) pins | [`favorite.py#L14-L50`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/apps/api/plane/db/models/favorite.py) | ⚠️ theirs has **folders** via a `parent` self-FK; our ticket says flat — take the generic table + `sequence`, leave `parent` |
+| WS-27ah(4c) recently-viewed | [`recent_visited_task.py#L17-L52`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/apps/api/plane/bgtasks/recent_visited_task.py) | ⚠️ **correction to §9.4**: a cap *does* exist, but it is written `if count == 20` — an equality, so once the count ever exceeds 20 it never trims again. Copy the intent, not the comparison |
+| WS-27ai inbox | [`notification-card/item.tsx#L46-L67`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/apps/web/core/components/workspace-notifications/sidebar/notification-card/item.tsx) | mark-read-on-open; the right pane embeds peek with `embedIssue` (no portal) — that flag is the two-pane trick |
+| WS-27ak(1) Modal | [`propel/dialog/root.tsx#L1-L141`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/packages/propel/src/dialog/root.tsx) | **library: Base UI (MIT)** owns focus trap/inert/scroll-lock. Plane adds only sizing — go to the library |
+| WS-27ak(3) Toast | [`propel/toast/toast.tsx#L290-L324`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/packages/propel/src/toast/toast.tsx) | the promise-bound `loading → success \| error` one-toast mutation |
+| WS-27al(1) ControlLink | [`control-link.tsx#L19-L58`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/packages/ui/src/control-link/control-link.tsx) | ⚠️ theirs exempts meta/ctrl only — **middle-click is not exempted**; ours must be |
+| WS-27al(2) prevent-outside-click | [`use-peek-overview-outside-click.tsx#L16-L45`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/apps/web/core/hooks/use-peek-overview-outside-click.tsx) | `closest("[data-prevent-outside-click]")` plus a containment check |
+| WS-27al(3) lazy tooltip | [`ui/tooltip.tsx#L56-L82`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/packages/ui/src/tooltip/tooltip.tsx) | ⚠️ read the in-file FIXME: `renderByDefault` **defaults true**, so the optimisation is opt-in and mostly unused. Invert the default |
+| WS-27al(5) overdue predicate | [`work-item/base.ts#L171-L187`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/packages/utils/src/work-item/base.ts) | false for completed/cancelled; `<= 0` days makes **today count as due** |
+| WS-27al(6) selection self-heal | [`use-multiple-select.ts#L372-L384`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/apps/web/core/hooks/use-multiple-select.ts) | ten lines |
+| WS-27am(1) empty triad | [`empty-states/project-issues.tsx#L30-L71`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/apps/web/core/components/issues/issue-layouts/empty-states/project-issues.tsx) | the no-permission branch renders the CTA **disabled, not hidden** |
+| WS-27am(2) layout HOC | [`issue-layout-HOC.tsx#L45-L63`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/apps/web/core/components/issues/issue-layouts/issue-layout-HOC.tsx) | 19 lines, including the `layout !== CALENDAR` judgement call |
+| WS-27am(3) error boundary | [`layout-error-boundary.tsx#L36-L59`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/apps/web/core/components/common/layout-error-boundary.tsx) | Retry bumps a key so children genuinely remount |
+| WS-27an autosave | [`title-input.tsx#L46-L140`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/apps/web/core/components/issues/title-input.tsx) | ⭐ **best single-file reference in the queue** — all six behaviours, including save-on-unmount |
+| WS-27ao editor | [`editor/extensions.ts#L100-L120`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/packages/editor/src/core/extensions/extensions.ts) | **libraries: TipTap v3 + ProseMirror + tiptap-markdown (MIT)** — we already ship TipTap. Asset-GC sweeper: [`file_asset_task.py#L20-L26`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/apps/api/plane/bgtasks/file_asset_task.py) |
+| WS-27ap filter tree | [`filter_backend.py#L164-L217`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/apps/api/plane/utils/filters/filter_backend.py) | the `and`/`or`/`not` walker + allowlist + depth cap. ⚠️ the **lossy converter to avoid** is [`filter_migrations.py#L47-L57`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/apps/api/plane/utils/filters/filter_migrations.py) — per-record `except: log; continue` silently drops a view's filters |
+| WS-27aq notif prefs | [`notification.py#L81-L110`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/apps/api/plane/db/models/notification.py) | one row, nullable workspace **and** project. ⚠️ their flags only ever set `send_email` — **the in-app bell is unmutable**, verified |
+| WS-27as join-table audit | [`cycle/issue.py#L238-L262`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/apps/api/plane/app/views/cycle/issue.py) | ⭐ the **post-fix** code with GHSA-4w5x-wc9w-f47x named in-file — the pattern our remaining audit checks for |
+| WS-27at gallery | [`design-system-philosophy.stories.tsx#L70-L230`](https://github.com/makeplane/plane/blob/31853ab2b8b7810c59dc30d22e52c8f4b5a71a47/packages/propel/src/design-system/design-system-philosophy.stories.tsx) | ✅/❌ nesting pairs rendered live — read for *content*, not tooling |
+
+#### Where there is nothing to link — and that is the answer
+
+`is_disabled` per-board kill switch · `collaboration-cursor` (a string in a type union, no
+implementation) · **RTL** (zero occurrences repo-wide, so D-PM-18 gains nothing from Plane) ·
+**timeline dependency arrows** (not rendered in their OSS core, so **D-PM-12 stands
+unchallenged**) · **page-batched list badges** (their implementation is the anti-pattern; the
+rule is ours and their file is only the evidence for it) · **per-tenant OAuth callback routing**
+(instance-global upstream — the hard part is unsolved there).
 
 ---
 
@@ -2910,8 +3683,8 @@ second answer to a question `lib/taskCard.isOverdue` already answers better (it 
 with `/tasks`' `ItemDetail` side by side: *"Task cards seem to be very different."* Like
 §11.21 this is a **reversed-direction** finding — the standing ruling is "Projects is
 canonical, Tasks conforms", and on this one surface Tasks was the designed one. Frontend
-only: no migration, no API change, no new dependency. Branch
-`ws-s5-projects-task-panel` — **not merged, not deployed.**
+only: no migration, no API change, no new dependency. Branch `ws-s5-projects-task-panel` — **MERGED to `main` and DEPLOYED** (#420, deploy verified
+by log evidence: SHA on the box + `Migrations complete`).**
 
 **The controls, before → after.** Measured on `main` `54e4b880`:
 
@@ -2996,7 +3769,8 @@ neither exists — the second is `test_projects_personal.py`. Run with those two
 **Owner-reported**, with a screenshot of a `/tasks` card beside a `/projects` one: *"we should
 have the relevant pills to show up in the cards of the projects app."* Frontend only: no
 migration, no API change, no new dependency, and **no change to the shown-fields vocabulary on
-either side of the wire**. Branch `ws-s6-projects-card-pills` — **not merged, not deployed.**
+either side of the wire**. Branch `ws-s6-projects-card-pills` — **MERGED to `main` and DEPLOYED** (#421 / `1aec373d`,
+deploy verified by log evidence).
 
 **The job was not to copy the Tasks pills.** Half of what that card carries is GTD-only —
 `@context`, energy, deep-work, the founder priority matrix, the ClickUp source badge — and
@@ -3070,6 +3844,573 @@ tag in every theme. **One honest note:** Material dark's `--warning` is a pale p
 (`hsl(35 90% 78%)`), so the `High` chip reads faint against `Normal` there — the chevron-up vs
 dash glyph is what carries the distinction, which is why the four levels have four glyphs.
 That is the theme's token doing what it says, not a hardcoded colour.
+
+### 11.24 WS-27ac — the calendar's week layout, per-day quick-add, honest overflow (built 2026-08-10)
+
+**Plane research item P-19** (§11.19), promoted by §9.2. Frontend plus one test file on the
+gateway side: **no migration, no API change, no new endpoint, no new query parameter.** Branch
+`ws-27ac-calendar-week`, merged onto the working branch (PR #422) — **not on `main`, not deployed.**
+
+**The whole ticket is "extend the arithmetic", and the defect it exists to prevent is a second
+copy of it.** `lib/calendar.ts` already held every day decision as a pure function; a week
+layout is a natural place to write `const monday = d.getDate() - d.getDay() + 1` in the
+component and move on. That expression agrees with `monthGrid`'s padding on six days out of
+seven and moves **Sunday** a week forward, which is a bug that survives every demo that does
+not happen on a Sunday. So the two shapes now share both halves of the calculation:
+
+* `mondayOffset(date)` — the `(getDay() + 6) % 7` rotation that makes Monday the week start,
+  written once and read by the month grid's padding and the week grid's walk-back alike.
+* `runOfDays(startKey, count)` — the one place a grid's days are enumerated, in `YYYY-MM-DD`
+  keys, never through `new Date(iso)`.
+
+`MonthGrid` became **`CalendarGrid`** with a `layout` discriminator. Everything downstream —
+`calendarWindow`, `taskDays`, `placeTasks`, `rescheduleTo` — reads `grid.days` and **never
+learned there was a second layout**, which is why a week asks the same endpoint for ten days
+instead of forty-four and gets the same filters, the same triage default and the same
+placement. `monthLabel`/`isOutsideMonth`/`shiftMonth` became `gridLabel`/`isPadding`/
+`shiftGrid`: each was a month-only name for a question both layouts ask, and keeping the old
+name beside a new one is how the two answers drift.
+
+**A week grid has no padding, and that is a decision, not an omission.** `isPadding` returns
+false for every day of a week: all seven are the subject. Reusing the month's rule (day's
+month ≠ `grid.month`) would grey out part of five weeks a year for a reason no viewer could
+name. `grid.month` on a straddling week is its MONDAY's month, and `isPadding` is its only
+reader.
+
+**Overflow is exact, and one-over is not folded.** `dayFill(count, limit, expanded)` returns
+`{shown, hidden}` with `hidden = count - shown` and nothing else. The failure it replaces is
+the cell that renders its first three and stops: **a day with eleven tasks then looks exactly
+like a day with three**, which is the same dishonesty `truncated` and `undated` were added to
+prevent one level up. Two refinements are in the arithmetic rather than the component so they
+cannot drift from the limit they apply: folding fires at `limit + 2`, because a `+1 more` row
+occupies the row it would have saved; and an expanded cell reports `hidden: 0`, because a
+`+8 more` left under an expanded day is a count of tasks the viewer is already looking at.
+Limits are `DAY_LIMITS` — month 3, week 8 — beside the function, not in the JSX.
+
+**A refused drop says why.** `dayDropRefusal(task)` is the calendar's counterpart to
+`board.dropRefusal`: that one asks about the AXIS ("this column is computed"), this one about
+the TASK. Two questions, two functions, neither surface knowing the other's. Both cases it
+names already ended in `rescheduleTo` returning `null`, i.e. in *nothing happening*, which
+reads as a broken drag rather than as a refusal. A no-op drop (dropped back on its own day) is
+still silent — nothing was denied, so nothing is announced. ⚠️ **Honest limit:** of the two
+refusals, only "that task is not on this calendar" is reachable today (a stale or foreign
+drag payload), and it surfaces as the page's error banner. The undated one draws the hover
+overlay and cannot fire from the calendar's own cards, because an undated task is not drawn —
+it is the `undated` count. It is fenced by unit test and is the guard for the moment the
+unscheduled tally becomes a draggable tray; the alternative was to leave a gesture that
+sometimes silently does nothing.
+
+**The per-day quick-add and the drag were already right and are unchanged** —
+`components/QuickAdd.tsx` (the shared control) with `quickAddPrefill("day", key)`, and
+`PATCH /projects/tasks/{id}` with WS-27y's post-drop flash. Both were re-verified in a browser
+rather than assumed, because "already there" is exactly the claim a week layout can break
+without anyone noticing.
+
+**Fences added (R7).** `lib/calendar.test.ts` — 60 tests, of which the load-bearing ones are:
+*every day of August* asserts `weekGrid(d).days` equals the `monthGrid` row containing `d` (the
+one-implementation claim, behavioural), Sunday pinned by name (the one day the naive form
+differs), `shown + hidden === count` swept over both limits, `dayFill` agreeing with
+`rescheduleTo` about what cannot move, and a **structural** read of `CalendarView.tsx`
+asserting it contains no `new Date(`, `.getDay()`, `.setDate(` or `86400` — because the
+behavioural version of "there is no second week math" cannot see a duplicate that happens to
+be correct today. Mutation-measured: rewriting `weekGrid` in the naive form turns **2** tests
+red; `hidden: limit` instead of `count - limit` turns **3** red.
+`tests/unit/test_projects_calendar.py` — the §11.16 parameter-coverage rule extended to the
+**window shapes the browser actually sends** (`CLIENT_WINDOWS`: a month grid's forty-four days
+and a week grid's ten, each with its day of slack). Both are legal windows; both keep the
+board's filters and the same-filters `undated` count; and both hold the **`triage` exclusion**
+(WS-27u) with `include_triage` still the only way to ask. Plus a structural test that the week
+layout did not grow its own endpoint. Mutation-measured: deleting the triage predicate from
+`get_calendar` turns **both** parametrisations red.
+
+**Why a window parametrisation rather than another route assertion.** `include_triage` is
+declared once and `test_no_surface_can_silently_drop_include_triage` already pins the
+declaration. What that test cannot see is a new surface that keeps the parameter and stops
+sending it — or, worse, one that reaches for its own read and inherits a filter set nobody
+compared. Parametrising over the two windows is the assertion that survives either.
+
+**Visual check — done, not owed.** `next build` → `next start -p 3602` → Playwright against
+`/opt/pw-browsers/chromium`, fixtures at the **network boundary** only, the browser pinned to
+`Asia/Kolkata` (UTC+5:30 — the timezone the window's slack exists for) and to a fixed clock.
+Measured, not eyeballed: month draws **42 cells in 6 rows** at 96px; the 12th holds 8 tasks,
+shows **3** and says **`+5 more`**, expands to 8 with **Show less**, and folds back. Week draws
+**7 cells in 1 row** at 554px, labelled **`10 – 16 August 2026`**, and shows all 8 on the 12th
+(limit 8). The next/previous arrows read `Next week`/`Previous week` in week layout and
+`Next month`/`Previous month` in month, and stepping moves **`17 – 23 August 2026`**, i.e.
+seven days. A four-day bar (start 10th, due 13th) occupies four cells in **both** layouts; a
+`start_date`-only task sits on the day written. Quick-add on the 14th posted
+`due_at: 2026-08-14T06:30:00.000Z` — **noon local in IST**, the day clicked. Dragging
+"Calibrate the 0.8mm…" from the 10th to the 13th posted a single
+`PATCH {due_at: "2026-08-13T12:00:00.000Z"}` — the day moved, **17:30 IST preserved** — and the
+landing flash fired. A drop carrying a payload the window does not contain raised
+**"That task is not on this calendar."** DESIGN_SYSTEM §8 sweep run: RapidTool · Fluent ·
+Material · Graphite × dark and light, all four `--primary`/`--radius` pairs distinct in the
+DOM. The layout toggle and the `+N more` are `Button` primitives, so Graphite uppercases them
+(`MONTH` · `WEEK` · `+5 MORE`) and Material makes them pills without either being asked to.
+
+**Recorded, not done.** The calendar asymmetry stays out of scope and stays recorded (WS-27ad
+done-when 5): `/tasks` keeps its ten-file calendar module, `/projects` has one view. Under the
+owner's 2026-08-10 ruling that Projects is canonical and `/tasks` will derive from it (D-PM-6),
+`src/app/tasks/**` was not touched. Also left: the `undated` tally is still text, not a
+draggable tray — the affordance `dayDropRefusal`'s second case is waiting for; and the week
+layout has no time axis (an all-day grid, not `/tasks`' `TimeGrid`), which is a different
+ticket and a different data shape.
+
+### 11.25 WS-27ab — view ergonomics: peek escalation, dirty views, one palette registry (built 2026-08-10)
+
+Plane research items **P-14/15/16** (§11.19), plus a sixth done-when added by the owner from
+the S6 review: the `shown_fields` gap on the list. Frontend only: **no migration, no API
+change, no new dependency**, and no change to the shown-fields vocabulary on either side of
+the wire. The view update rides the existing `PATCH /projects/views/{id}`, which has accepted
+`config` (through `normalise_view_config`) since WS-27k. Branch `ws-27ab-view-ergonomics`, merged onto the working
+branch — **in PR #422; not on `main`, not deployed.**
+
+**1 · Peek → side → full.** `lib/panelMode.ts` is the vocabulary: three stops, narrowest
+first, a `max-w-*` per stop (`xs` · `md` · `3xl`), `widerPanel`/`narrowerPanel` that **stop at
+the ends rather than wrapping** (a cycling control makes "wider" mean "suddenly tiny" on the
+third press), and a `localStorage` read that degrades a corrupt value to the default rather
+than to a panel with no width class. Persistence is `localStorage`, the house idiom for a
+reading preference (`ViewModeProvider`, `Sidebar`'s folds) — a per-user server preference
+would be a table and an endpoint for a value with no meaning on another device. The panel is
+**one component at all three stops**; only its width class and, at `full`, where `page.tsx`
+mounts it (over the board, scrimmed, at `/tasks`' `max-w-3xl` reading width) change. Read in
+an **effect**, not a lazy initialiser: `localStorage` does not exist during SSR and the two
+renders would disagree.
+
+⚠️ **The ticket said "Esc returns focus to whatever opened the panel". Built as written, it
+did nothing** — and the browser is what said so. Opening a task leaves focus on the card (the
+board canvas is `tabIndex={0}` and the card is its focusable descendant), so the panel's own
+`onKeyDown` **never sees Escape at all**: measured, Esc did nothing unless you had first
+clicked *into* the panel. The fix is two handlers with one rule between them — the panel
+keeps its own (first Escape leaves a comment box holding text, second closes), and the page's
+window listener closes the panel when focus is outside it. The panel's handler calls
+`stopPropagation`, so exactly one of the two ever fires. Focus return is an unmount cleanup
+over the element captured at mount, guarded by `document.contains` (the board reloads under an
+open panel, and focusing a detached node silently moves focus to `<body>`).
+
+**2 · The dirty-view row.** The measured defect was not a missing affordance but a **dropped
+association**: `changeFilters`, `onGroupBy`, `onSubGroupBy` and `changeShownFields` each ran
+`setActiveViewId(null)`, so touching one control severed the board from the view on the first
+keystroke and the only way back was to re-apply and lose the edit. Those four lines are gone.
+The chip stays lit with an edited dot, and `FilterBar` grows a row offering **Update view ·
+Save as new · Reset** — three answers and no fourth. Divergence is **one exported pure
+function**, `grouping.viewDivergence`, beside the round trip it reads: both sides go through
+`toConfig`, and the saved side through `fromConfig` first, so a config stored by an older
+client or hand-edited into a shape `fromConfig` normalises compares **by meaning, not by
+bytes**. A byte comparison lights the marker on a board nobody touched, which is how such a
+marker comes to be ignored. Sets are compared as sets (tag CSV, collapsed lanes,
+`shown_fields`), an assignee's case is noise because the server treats it so, and the four
+parts are named back (`filters`, `grouping`, `lanes`, `shown fields`) so the row says *what*
+moved. `Reset` re-applies through the same `onApplyView` the chip uses — one path back, so
+"reset" and "click the chip again" cannot come to mean different things. `Update view`
+replaces the stored row with the **server's** response: `normalise_view_config` may drop a key,
+and keeping the local copy would leave the bar comparing against a config that was never
+stored, i.e. a dirty marker that never clears.
+
+**3 · The palette action registry.** The ticket says the palette's commands "become a declared
+registry instead of inline branches"; the palette had **no commands at all** — it was a task
+finder. So this adds them, in the shape the ticket demanded and never as branches:
+`lib/commands.ts` declares `id`, `label`, `section`, `keywords`, `icon`, optional `sequence`,
+optional `href`, `when`, `run`. Three consumers, one source — the palette lists them, the page
+runs their key sequences, and `ShortcutsSheet` is *printed from* `shortcutSections()`, so `?`
+cannot describe behaviour the keyboard does not have.
+
+* **The Go section is derived from `@/lib/nav`**, not written out. `GO_KEYS` assigns eight
+  letters and nothing else; the label, the glyph and the route are the `NavPane` the sidebar
+  draws, so `g t` says *Tasks* because that is what Tasks is called. A pane removed from the
+  nav produces no command, and the test makes that loud rather than quietly shorter help.
+* `ViewMode`/`VIEW_MODES` **moved out of `page.tsx`** into the registry's file. Two lists of
+  the five canvases is how the toolbar and the palette come to offer different sets.
+* `stepSequence` restarts on a dead prefix: `g` · `z` · `g` · `p` reaches Projects. Without
+  it the third key is swallowed clearing the prefix and the shortcut fails once per typo.
+  A prefix is forgotten after `SEQUENCE_TIMEOUT_MS`, sequences are suppressed while anything
+  modal is open, and `isTypingTarget` keeps a bare letter out of the quick-add box.
+* Commands lead the palette's list and task hits follow, because rows appearing **below** the
+  cursor cannot move what is already under it — the hits arrive after a debounce.
+
+**4 · `shown_fields` gates the list's last two columns** *(the sixth done-when)*. Every other
+field on `TaskList` gated; **Status and Assignees rendered unconditionally**, so un-ticking
+*Status* silenced its chip on the board and left the column standing on the list — the field
+picker was lying on that surface. **Before → after:**
+
+| Case | Before | After |
+|---|---|---|
+| a view nobody edited (`DEFAULT_SHOWN`) | `#` · Title · Status · Assignees · Details | **identical** — both keys are in `DEFAULT_SHOWN` |
+| *Status* un-ticked | column still drawn | column gone; `colSpan` 6 → 5 |
+| both un-ticked | both still drawn | both gone; `colSpan` 6 → 4 |
+| a saved view whose stored `shown_fields` omits them | columns drawn anyway | columns hidden — the stored choice is finally honoured |
+
+**No default moved**, so turning this on hides nothing from anyone who never opened the field
+picker. The one behaviour change that reaches existing data is the last row, and it is the
+point of the ticket. The column set is `table.listColumns` rather than a hand-counted number,
+because the header, every group heading's `colSpan` and the quick-add row's `colSpan` have to
+be the same figure — two hand-counts is how a heading comes to span four of five columns.
+
+**Fences added (R7).** `panelMode.test.ts` (17): escalation stops at the ends, a corrupt or
+absent stored value reads as the default, a `Storage` that throws does not take the panel with
+it, Escape blurs a field holding text and closes an empty one, every stop has a label, a glyph
+and a `max-w` class. `commands.test.ts` (38): **every action carries a label, a section and a
+glyph**; **every go-sequence resolves to a route in `nav.PANES`**; **no two actions share a key
+sequence** *and* none is a prefix of another (which would make the shorter one unreachable);
+every glyph is mapped in `icon-data/registry.json` for every pack; `when` hides what would
+no-op; the cursor never lands on a heading; and the sheet prints every command exactly once
+with the command's own keys. `grouping.test.ts` (+11): the round trip is clean, each part is
+named alone, four normalising configs are *not* dirty, set order is noise, `[]` shown-fields is
+a real choice in both directions. `table.test.ts` (+6): the default list is byte-identical to
+before the gate, each column drops independently, and the three fixed columns survive
+everything.
+
+**Conformance.** Two baselines came **down**, as the ratchet requires:
+`SearchPalette.tsx` left `ACTIVE_DEBT` entirely (its selected row is now
+`bg-primary/10 text-primary`) and `FilterBar.tsx` went **2 → 1** (the applied-view chip; only
+its pressed tag chip remains). Nothing was added: the new `ShortcutsSheet.tsx` and
+`commands.ts`/`panelMode.ts` carry no budget and are clean. One honest note — *Save as new*
+wears `Plus` rather than the `Bookmark` on the Save-view button beside it, because `Bookmark`
+has **no entry in `icon-data/registry.json`** and draws the Lucide glyph under Fluent and
+Material. Fixing the existing one is a registry ticket; adding a second was not on.
+
+**Verified in a browser, not asserted.** `next build` → `next start -p 3601` → Playwright
+against `/opt/pw-browsers/chromium`, fixtures at the **network boundary** only. Measured:
+the panel at 448 → 320 (peek) → 448 (side) → 766 in a `position: fixed` overlay (full), the
+choice surviving a reload, Escape from the *board* closing it with focus landing back on the
+card that opened it (identity-checked, not "not `<body>`") and ArrowDown then moving the board
+cursor; the dirty row absent on apply, present after an edit, worded *"Overdue firmware has
+unsaved changes to its filters."*, cleared by Reset with the filter restored, and cleared by
+Update view with the `PATCH` body captured; `?` drawing 24 rows in five sections with real
+keys; `g t` navigating to `/tasks`; the list's columns and `colSpan`s tracking the field
+picker exactly; and the phone branch carrying **no** width switch with the panel at the full
+390px even with `"full"` persisted. Then the DESIGN_SYSTEM §8 sweep — RapidTool · Fluent ·
+Material · Graphite × light and dark, on the panel, the dirty row, the palette and the sheet,
+with `/tasks` beside it: `data-theme` applied in all eight, *Update view* rendering as a
+Material pill (`9999px`), a Graphite 2px uppercase button and a Fluent 4px one, and **zero page
+errors** in every combination.
+### 11.26 WS-27ae (export third) — the filtered-list CSV export (built 2026-08-10)
+
+> **Numbering note (resolved at integration).** This was written as §11.26 on a branch cut
+> from `main` at `1aec373d`, where §11.24 and §11.25 did not yet exist — three slices were in
+> flight at once, each numbering against the same base. They were merged in ticket order
+> (§11.24 WS-27ac, §11.25 WS-27ab, §11.26 here), so the run is contiguous and **the gap this
+> note originally warned about does not exist.** Kept as a record of why parallel slices are
+> assigned numbers up front: the two before these both reached for §11.24 and had to be
+> renumbered by hand.
+
+**Scope: the export third of WS-27ae only.** Delta-sync (P-27), the satellite `updated_at`
+bumps, `is_epic`, per-user view state and the session `user_id` denorm (P-28 rest) are a
+sibling agent's, along with migration 168. **Nothing here needs a migration** (R1: no number
+taken).
+
+#### ⚠️ The ticket named a pattern that does not exist
+
+§9.2 says *"filtered-list CSV export on the export-job pattern"*. **There is no export-job
+pattern in this repo.** Measured, not assumed: `export_job` / `ExportJob` / `export-job`
+returns nothing under `apps/`, `packages/`, `tests/` or `workbench/` (the only hits are
+vendored `litellm` and `apscheduler` code in `.venv`), and `routes/projects/` had no export
+endpoint of any kind. So the phrase named an aspiration, not a seam to extend.
+
+**What was built instead: a synchronous, bounded CSV response over the SAME filtered query
+the list endpoint already runs.** One request, one `text/csv` body, no job row, no polling,
+no worker, no artefact to expire. Standing up a job queue to satisfy a phrase would have
+been infrastructure nobody asked for, carrying a genuinely new failure surface — orphaned
+jobs, expiring downloads, and a second place the tenant boundary has to hold — in exchange
+for nothing this app can measure. If exports ever outgrow one request, the thing to build is
+the queue, on evidence, as its own ticket.
+
+#### The endpoint
+
+`GET /projects/export/tasks.csv` — `apps/services/gateway/gateway/routes/projects/export.py`,
+mounted from `__init__.py` like every other feature module.
+
+⚠️ **The path is not `/projects/tasks/export.csv`.** That spelling would be shadowed by
+`/projects/tasks/{task_id}` and which handler answered would depend on router registration
+order — the one trap `__init__.py` promises this package does not have. A literal segment of
+its own keeps that promise true; `test_projects_export` asserts the shadowing spelling is
+absent as well as the real one present.
+
+**Three rules, each because the obvious implementation is wrong:**
+
+1. **The filters are the caller's, through the ONE pure builder.** The handler's query
+   parameters are `list_tasks`' verbatim minus pagination, and every one of them goes into
+   `filters.build_task_filters` — the same function the list, the board and the calendar use.
+   A second filter parser would drift and then the file and the screen would disagree about
+   what *"my open bugs in Ops"* means. Fenced two ways: a structural assertion that
+   `build_task_filters` and `task_visibility_clause` are both called, and — borrowed from the
+   calendar's version of the same problem — a test that reads BOTH route signatures off the
+   router and fails on a list parameter the export does not declare, because **FastAPI drops
+   an undeclared query parameter silently** and the file would look fine.
+2. **The columns are the view's `shown_fields`**, plus `#` and `Title` unconditionally (a row
+   you cannot identify is not a row). ⚠️ **Column ORDER is the vocabulary's, not the stored
+   list's** — the ticket said "in the view's own order", but `shownFields.ts` is explicit that
+   the stored list is a **SET** and `table.tableColumns` draws it in declaration order, so
+   honouring the stored order would have made the file's columns differ from the screen's.
+   Core keys in `filters.SHOWN_FIELDS` order, then custom fields in registry order; a
+   `custom.<key>` whose definition was deleted after the save produces no column, exactly as
+   the table renders nothing for it. The set is normalised by `normalise_view_config`, so the
+   endpoint cannot accept a key a saved view could not store. **An absent or empty
+   `shown_fields` yields only the unconditional pair** — not the client's `DEFAULT_SHOWN`,
+   which would be a second copy of a preference that drifts.
+3. **It is never truncated: it is complete, or it is refused.** `MAX_EXPORT_ROWS = 5000`,
+   checked with a `count(*)` over the same WHERE **before a single row is rendered**; past it
+   the answer is a **422 naming the real count and the cap** and no file at all. This is the
+   opposite branch from the calendar (WS-27q), which truncates and says so — and the
+   difference is the medium, not the taste: a short month is *drawn* with a "truncated"
+   banner beside it, while a downloaded spreadsheet has no banner and nobody scrolls to the
+   bottom of one to check whether it ended early. A partial CSV is byte-indistinguishable
+   from a complete one. `test_there_is_no_partial_file_path_at_all` pins that there is no
+   `OFFSET` and no `MAX_EXPORT_ROWS + 1` probe — the second assertion exists because copying
+   the calendar's truncate-and-say-so shape is the likeliest future regression.
+
+**Tenancy (R5/R11).** `_tenant_session()`, the ambient form every request handler in this
+package uses; **no `get_db()`, no engine, no second idiom**, so `routes/projects` stays at
+**zero** unbound sites with **no** H2 exemption and `test_converted_packages_stay_converted`
+needed no edit. The tenant is the one the request already bound from the authenticated
+session's `app_user` row; the identity is the `UserContext`. Neither is ever read from a
+header, query parameter or body — the endpoint has no parameter through which either could
+be supplied. The grant closure is the same `task_visibility_clause` every other read binds,
+so an export with no `project_id` (a real request — "everything I can see") carries only the
+caller's own grants, and an unreadable `project_id` is **404, not an empty file**.
+
+#### CSV correctness, and the injection decision
+
+Quoting is `csv.writer` with `QUOTE_MINIMAL` and RFC-4180 `\r\n` — comma, embedded quote and
+embedded newline are the module's problem, deliberately, because every hand-rolled CSV
+writer gets the newline case wrong.
+
+**Formula injection is NEUTRALISED, not documented away.** A cell whose first character is
+`=`, `+`, `-`, `@`, TAB or CR is prefixed with a single apostrophe: a task titled `=SUM(A1)`
+exports as `'=SUM(A1)`.
+
+- *Why guard rather than warn:* these strings are counterparty-authored — task titles, tags
+  and custom-field text, and an imported ClickUp workspace is thousands of them nobody here
+  typed. The payload is `=cmd|'/c calc'!A0`, which executes with the credentials of whoever
+  double-clicks the file.
+- *Why a prefix rather than quoting:* ⚠️ **quoting is not a mitigation.** A spreadsheet
+  evaluates the cell after the CSV quoting is stripped, so `QUOTE_ALL` changes nothing. That
+  is pinned by its own test, because "we quote everything" is the plausible wrong fix.
+- *Why the apostrophe is acceptable:* it is visible, reversible and one character, so
+  somebody who genuinely wanted a formula can see what happened. A formula that runs has no
+  such tell.
+- *The one exemption:* a cell that is **exactly** a number keeps its leading `-`. Without it
+  every negative number would arrive as text and the sums people export a CSV to compute
+  would silently stop working. `-5` is a number to Excel; `-5+cmd|…` is not a number and is
+  still guarded.
+
+A **UTF-8 BOM** leads the body, because Excel otherwise reads the file as the system code
+page and every non-ASCII title arrives mojibake.
+
+⚠️ **Two columns deliberately carry the STORED value rather than the label the table draws**:
+`importance` and `estimate`. Their formatting vocabularies (`table.IMPORTANCE_OPTIONS`,
+`durationLabel`) live in the browser, and copying either server-side would be a second
+vocabulary that drifts. A spreadsheet wants the number anyway — `2` sorts and sums, `High`
+does not.
+
+⚠️ **One column knows MORE than the screen**: `attachments`. The list endpoint does not count
+attachments (`lib/card.ts` says so honestly, and the table draws `—`), so the export
+aggregates `pm_task_attachments` over the exported ids in one query rather than exporting a
+column of nothing.
+
+#### The UI
+
+`Export` in the Projects toolbar (`FilterBar.tsx` — where the filter and the field set are
+chosen; anywhere else it would read as exporting the *project* rather than the *view*),
+built from the house `Button` with `icon="Download"`, never an `<a download>` dressed as one.
+
+⚠️ **It is FETCHED, not navigated to.** `window.location = …` would download the file and
+would turn the 422 refusal into a tab full of JSON — which would make refusing strictly worse
+than truncating. Fetching is what lets the gateway's own sentence (the matched count, the
+cap, and what to do) land on the board. Proven in a real browser: the refusal renders, no
+file is written, and the button recovers.
+
+⚠️ **`saveCsv` takes a `Blob`, and the first version did not — this was a real defect caught
+only by running it.** `Response.text()` decodes UTF-8 with `TextDecoder`, which **strips a
+leading byte order mark**, so the file the browser saved was measurably different from the
+bytes the endpoint produced and the server's Excel fix was silently undone. Keeping the body
+as bytes end to end is what makes them the same file.
+
+The BFF proxy (`src/app/api/projects/[...path]/route.ts`) previously stamped
+`Content-Type: application/json` on **every** response. It now forwards the gateway's own
+content type and its `Content-Disposition`; the filename is therefore the server's single
+choice, read back by `filenameFromDisposition` rather than composed a second time in the
+browser. A refusal from the same endpoint is still JSON and still arrives as JSON, because
+the proxy reads what upstream sent rather than what the route usually sends.
+
+#### A hermetic-fake defect this ticket found (worth more than the feature)
+
+⚠️ `tests/unit/_projects_fakes.py` read the **positive** `?status_category=` clause —
+`EXISTS (… s.category = ANY(:categories))` — as if it were the **negative** "hide closed
+work" clause, because its branch matched any subquery block naming `pm_task_statuses` and
+`category`. Every behavioural test in the tree filtered on `todo`, where the two answers
+coincide, so **`status_category=done` returned the OPEN tasks and the mirror agreed with
+itself**. It is now keyed on the bound parameter each clause actually carries, and the
+negative branch on the closed vocabulary (`'done', 'cancelled'` / `:closed`). Found by the
+live Postgres run, which is the entire argument for R8.
+
+#### Verification (R8 included)
+
+`tests/unit/test_projects_export.py` — 41 hermetic tests. `tests/live/live_ws27ae_export.py` — the
+same endpoint against a **real Postgres**, all checks green, covering what a text-matching
+mirror cannot answer: that the `count(*)` and the row query compose the **identical**
+predicate across seven filters (the never-truncated contract IS that equality), that
+`ANY(CAST(:ids AS uuid[]))` binds Python `str`s on both roll-ups, that the grant closure
+scopes an unscoped export, and that the hostile title survives a real writer and a real
+parse. Browser: the export was triggered from the real toolbar with a filter applied on
+screen (5 rows → 2), the downloaded bytes are the ones the gateway produced, and the
+Fluent → Material → Graphite sweep shows the button painting **identically to its neighbour**
+in all four themes × two modes (Material's pill radius, Graphite's uppercase) and visible at
+a 390 px viewport.
+
+**Not done, deliberately:** the delta-sync feed, the satellite `updated_at` bumps, and the
+P-28 remainder — the other two thirds of WS-27ae, owned by a sibling agent with migration
+168. Also not done: a scheduled/emailed export, an `.xlsx` writer, and exporting anything
+other than tasks. None is asked for.
+
+### 11.27 WS-27ae — delta-sync and the small columns (built 2026-08-10)
+
+*The delta-sync and small-columns thirds of the WS-27ae basket. The CSV-export third is
+a sibling slice and is recorded separately.* Migration **168** — number taken by listing
+`infra/postgres/` at file creation (highest on disk and on `origin/main` was
+`167_projects_seed_status_colours.sql`) and re-checked immediately before commit. R1.
+
+**The endpoint is `GET /projects/delta/tasks`, not `/projects/tasks/delta`.** The natural
+spelling would be matched by `/projects/tasks/{task_id}` and the answer would depend on
+import order — the route-shadowing trap `routes/workflows/__init__.py` documents and this
+package's `__init__` claims immunity from *because* every path is a literal. The claim is
+now also a test (`test_the_path_cannot_be_shadowed_by_the_task_id_route`).
+
+**The deletion answer, because a naive feed cannot express one.** `WHERE updated_at >
+:since` can never tell a client a task was DELETED — the row stops appearing, and an
+upsert client keeps the ghost for as long as it lives. Plane's feed has that hole. So the
+response is `{rows, removed, cursor, has_more, snapshot, reconcile_after}` and `removed[]`
+carries two shapes:
+
+1. **hard deletes**, from `pm_task_tombstones` (migration 168), written by an **AFTER
+   DELETE trigger on `pm_tasks`** rather than by `delete_task`. ⚠️ That choice is the
+   whole value of the table: `pm_projects` CASCADEs to `pm_tasks`, so an application-level
+   write would have recorded the one deletion path that has an endpoint and silently
+   missed the one that takes hundreds of tasks at once — which is precisely the deletion a
+   client is holding the most rows for.
+2. **fell out of scope** — a task that changed and no longer satisfies the feed's own
+   predicate (archived, moved into `triage`, moved out of the requested subtree). Stream A
+   therefore applies **no** project scoping, archive filter or triage exclusion; those are
+   applied in a second pass over the ids it returned, and whatever does not survive is a
+   removal. Filtering at the first step is exactly the naive feed's blind spot.
+
+⚠️ **One removal shape is NOT expressible, and is documented rather than pretended away:
+losing VISIBILITY.** A revoked grant simply makes the row stop matching the visibility
+clause; nothing records that it used to match, and manufacturing that would mean storing a
+per-member history of everything anybody could ever see. Clients are told to reconcile
+with a full pull (`reconcile_after`, on every response). `test_losing_VISIBILITY_is_silence_
+and_that_is_documented` pins the SILENCE, so the day somebody closes the gap the docs and
+the behaviour move together instead of the docs going quietly stale.
+
+**The boundary: a keyset, plus a horizon.** The cursor is the `(updated_at, id)` of the
+last row actually **delivered**, compared with SQL's row comparison — so a page of rows
+sharing one instant is delivered exactly once each, which `updated_at > :since` cannot do
+(it skips) and `>=` cannot do either (it loops). A bare ISO timestamp is still accepted for
+a first call and is treated as inclusive. On top of that the feed refuses to look at
+anything newer than `now() - HORIZON_LAG_SECONDS` (5): `now()` is TRANSACTION-start time,
+so a writer that began before the read can commit after it with an earlier stamp and land
+behind a cursor forever. **The residual is stated, not eliminated:** a write transaction
+that stays open longer than the lag while another commits after it can still be missed
+until the client's next full reconcile. Every write path in this package is one short
+request.
+
+**Satellites that bump the task, and the ones that deliberately do not.** The bump lives at
+ONE choke point — `core.record_activity` bumps whenever the entry names a task, because an
+activity naming a task *is* the statement that the task changed — plus `core.touch_task`
+at the writes that legitimately record no activity: link **target** on create, **both ends**
+on unlink, comment edit, comment soft-delete, the old and new **parent** on a re-parent, and
+the **promoted subtasks** plus the parent on a delete (their `parent_task_id` SET NULLs, so
+nothing in this package writes them). Covered: assignees, links, attachments, comments and
+timeline entries, subtask membership, plus tags/custom fields/status which already live on
+the task row. **Deliberately not bumped:** `pm_task_watchers` (one person's subscription —
+bumping would wake every synced device in the company each time somebody pressed Watch),
+`pm_task_personal` (the §6.1 per-user overlay), `pm_notifications` (one person's bell),
+`pm_view_task_positions` (per-VIEW order, D-PM-5), `pm_view_user_state`. The fence (R7) is
+`test_every_satellite_writer_bumps_its_task_or_is_named_here`, which scans the package for
+satellite writes and requires each writing module to reach the bump, with a named allow-list
+for modules that only write satellites of a task they created in the same transaction.
+
+**The small columns, and what reads each.**
+* `pm_task_types.is_epic` — read by the new `core.is_epic_type`, which `assert_epic_has_no_
+  parent` calls at its three sites. §3.4's rule stops keying off a SEED NAME, so a project
+  can call its top level "Initiative" and still get it. Written through `admin.create_type` /
+  `patch_type` and stamped by `tree._seed_root`; the migration backfills every type the old
+  predicate matched, and un-flagging the *system* Epic is a 409 (the seed-name arm would
+  still apply, so a 200 would be a write that reported itself applied while nothing changed).
+* `pm_view_user_state` — read by `views.list_views`, which now returns each view with the
+  **caller's own** overlay attached, plus `GET/PUT /projects/views/{id}/state`. It fixes
+  WS-27y storing `collapsed_lanes` in the SHARED config, i.e. one person's collapse
+  collapsing the lane for the whole company. Presentation only: `filters.
+  VIEW_USER_STATE_KEYS` excludes filters, because two people must never be looking at a
+  saved view that means two different sets of tasks. Its normaliser is **absent-preserving**
+  and therefore deliberately not `normalise_view_config` with a different key set — that one
+  fills a `group_by` default, which on an overlay would re-group the board for whoever
+  collapsed a lane.
+* ⚠️ **The session `user_id` denorm was NOT built, because it already exists.** Measured
+  before writing: `chat_session.user_id` is `TEXT NOT NULL` and indexed by
+  `chat_session_user_idx (user_id, updated_at DESC)` since migration 02, and
+  `public."Session"` carries a `user_id` with an FK. P-28 asks for a denormalisation that is
+  present in both session stores. `pm_task_statuses.color` was stored from migration 146 and
+  rendered nowhere for twenty-one migrations; a column with no reader is not a feature, and
+  the check that avoided repeating that is itself a test
+  (`test_the_session_user_id_denorm_is_already_there`).
+
+**R5 / tenancy.** Both new tables carry `organization_id NOT NULL REFERENCES organization`
+(D-MT-3), `pm_view_user_state` through migration 161's `pm_organization_from_parent` trigger
+(its 20th attachment), and both are in the regenerated `infra/postgres/generated/` phase
+files — MT-1b's own lesson, since `pm_intake` and `pm_task_watchers` were once absent from
+all four. `pm_task_types.is_epic` is a column on a table that already carries the key.
+`routes/projects` stays at **zero** unbound sites and holds no H2 exemption; the feed takes
+its tenant from `resolve_visibility` like every other read and declares no
+identity-shaped query parameter (asserted).
+
+⚠️ **The organization-delete trap, measured rather than reasoned about.** With a plain FK
+and no guard, deleting an `organization` cascades to `pm_projects` → `pm_tasks`, fires the
+tombstone trigger, and the insert references the organization the same statement has already
+removed:
+
+```
+ERROR:  insert or update on table "pm_task_tombstones" violates foreign key
+        constraint … Key (organization_id)=(860f107d…) is not present in table "organization".
+```
+
+i.e. the first version made an organization **undeletable**. Fixed in the trigger, not by
+dropping the constraint: it returns early when the tenant is already gone — which is also
+the right answer, since a deleted tenant has no clients left to tell. The FK therefore stays
+in migration 161's shape and `test_tenancy_boundary.py`'s new-table rule is satisfied on its
+own terms rather than by an exemption.
+
+⚠️ **A second hole the LIVE harness found and the hermetic suite could not.** A tombstone
+left by a project CASCADE names a project row that no longer exists, so the
+project-visibility closure — which resolves grants through `pm_projects` — can never match
+it. With the closure alone, the single deletion that strands the most rows on a client was
+the one deletion the feed could not report. The query gained a second arm for tombstones
+whose project is gone, still bounded by the tenant predicate; what a member can learn from
+it is the uuid and instant of a task in a project of their own company that has since been
+deleted, with no title and no content. **Measured:** deleting that arm leaves the whole
+hermetic suite green and turns `live_ws27ae_delta.py` red, so the comment above the line says the
+live script is its only fence.
+
+**Verification.** `tests/unit/test_projects_delta.py` — 41 hermetic cases. `tests/live/
+live_ws27ae_delta.py` — **32 checks against Postgres 16**, two organizations whose tasks are
+stamped at identical instants: alpha's feed never returns beta's row or removal and vice
+versa, paging one row at a time across a shared instant delivers each exactly once, a row
+written this second is withheld and the same row delivered once it ages past the lag, a
+project CASCADE leaves a tombstone the endpoint never touched, the human task id survives
+the row, the per-user overlay round-trips through JSONB with the tenant filled by 161's
+trigger, another tenant 404s on the view, and an organization is still deletable.
+Mutation-measured: degrading the keyset to a bare timestamp, deleting the horizon, dropping
+the tombstone stream, weakening `has_more`, removing `record_activity`'s bump and bumping
+only one end on an unlink each turn the hermetic suite red; removing the orphan-tombstone
+arm turns the LIVE script red and nothing else.
+
+**Owed, deliberately not built here.** (1) **Tombstone retention** — they are one small row
+per deleted task and never swept; a sweep is a scheduled job touching real data, which D6
+says belongs to `/workflows`, the shape WS-27z already had to hand over. (2) **No UI
+consumes any of this yet**: the per-user overlay is served by `list_views` and the board
+still reads `collapsed_lanes` from the shared config, so the behaviour changes only when a
+frontend slice adopts it. (3) The feed has **no client** in-tree — it is built for the
+agents/mobile consumers P-27 names.
 
 ## Board record (2026-08-09) — moved from work_plan.md §2
 

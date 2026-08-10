@@ -238,6 +238,11 @@ class TypeModel(BaseModel):
     color: str | None = None
     is_default: bool = False
     is_system: bool = False
+    #: WS-27ae / P-28 (migration 168). Carries §3.4's root-level rule. Read by
+    #: `core.is_epic_type`, written through `admin.create_type`/`patch_type`,
+    #: and on the wire so a picker can tell a member WHY a type refuses a
+    #: parent instead of surfacing it as an unexplained 422.
+    is_epic: bool = False
 
 
 class ActivityModel(BaseModel):
@@ -1034,22 +1039,42 @@ async def assert_no_task_cycle(
     )
 
 
+def is_epic_type(row: Any) -> bool:
+    """Does this ``pm_task_types`` row carry §3.4's root-level rule?
+
+    **The flag first** (WS-27ae / P-28, migration 168): ``is_epic`` is what the
+    rule keys off, so a project can name its top level "Initiative" and still
+    get the rule. The seed-name arm behind it is kept deliberately and is not
+    dead code — it is what an old row looks like in the window between the
+    migration applying and the write path stamping the flag, and it is the
+    predicate migration 168's backfill copies, so the two cannot disagree about
+    a type that existed before the column.
+
+    A user-created type merely *called* "Epic" still does not inherit the rule:
+    the second arm keeps its ``is_system`` guard.
+    """
+    if bool(getattr(row, "is_epic", False)):
+        return True
+    return (
+        bool(getattr(row, "is_system", False))
+        and getattr(row, "name", "") == EPIC_TYPE_NAME
+    )
+
+
 async def assert_epic_has_no_parent(
     db: Any, type_id: str | None, parent_task_id: str | None,
 ) -> None:
     """§3.4's one structural rule: an Epic-typed task cannot have a parent.
 
-    This is what makes Epic the root level without a ``level`` column. It is
-    checked against the type row's ``is_system`` flag as well as its name, so
-    renaming the seeded Epic does not silently switch the rule off — and a
-    user-created type merely *called* "Epic" does not switch it on.
+    This is what makes Epic the root level without a ``level`` column. Which
+    types carry the rule is :func:`is_epic_type`'s answer, in one place.
     """
     if parent_task_id is None or type_id is None:
         return
     row = await load_row(db, "pm_task_types", str(type_id))
     if row is None:
         return
-    if getattr(row, "is_system", False) and getattr(row, "name", "") == EPIC_TYPE_NAME:
+    if is_epic_type(row):
         raise HTTPException(
             status_code=422,
             detail="An Epic cannot have a parent task; it is the top level.",
@@ -1192,6 +1217,38 @@ async def apply_status_transition(
     }
 
 
+# ── The satellite bump (WS-27ae / P-27) ─────────────────────────────────────
+
+async def touch_task(db: Any, *task_ids: Any) -> None:
+    """Bump ``pm_tasks.updated_at`` for tasks whose SATELLITE rows changed.
+
+    P-27's prerequisite, and the reason the delta feed is not a lie: a task's
+    assignees, links, comments and attachments live in their own tables, so a
+    feed ordered by ``pm_tasks.updated_at`` misses every edit a user plainly
+    considers "the task changed". Plane hit this and bumps the parent from its
+    activity task; we bump from the same spine (:func:`record_activity`) plus
+    the handful of satellite writes that legitimately record no activity.
+
+    Bounded and idempotent: ids are de-duplicated, blanks dropped, and an empty
+    call issues no statement at all — so a caller does not have to guard it.
+
+    ⚠️ ``now()`` is TRANSACTION start time, which is exactly what is wanted: a
+    satellite write and this bump land on the same instant inside one request,
+    so a client cannot receive the parent row stamped before the child change
+    that caused it.
+    """
+    ids = sorted({str(t) for t in task_ids if t})
+    if not ids:
+        return
+    await db.execute(
+        text(
+            "UPDATE pm_tasks SET updated_at = now() "
+            "WHERE id = ANY(CAST(:touch_ids AS uuid[]))"
+        ),
+        {"touch_ids": ids},
+    )
+
+
 # ── The activity spine ──────────────────────────────────────────────────────
 
 async def record_activity(
@@ -1230,6 +1287,16 @@ async def record_activity(
         )
     if automation:
         meta = {**(meta or {}), "automation": True}
+    # WS-27ae / P-27 — the satellite bump, at the ONE choke point rather than at
+    # thirty call sites. An activity naming a task IS the statement "this task
+    # changed", so anything that earns a timeline entry earns a bump: comments,
+    # assignment, links, attachments, status moves, automation. The three
+    # satellite writes that record no activity call `touch_task` themselves and
+    # `test_projects_delta.py` fences the list.
+    #
+    # A project-level activity bumps nothing — there is no task to bump, and
+    # `pm_projects.updated_at` is not what any feed reads.
+    await touch_task(db, task_id)
     return await insert_row(db, "pm_activities", {
         "type": activity_type,
         "task_id": task_id,
@@ -1415,6 +1482,13 @@ async def record_field_change(
                 # The flag survives the fold — a coalesced automated edit must
                 # not quietly turn back into a human-looking row.
                 coalesced["automation"] = True
+            # WS-27ae — the coalescing arm returns without reaching
+            # `record_activity`, so it carries its own satellite bump. Every
+            # caller today has already written the task row itself, which makes
+            # this belt-and-braces; it is here so the invariant "a field change
+            # bumps the task" holds on the FUNCTION rather than on the habits of
+            # its callers.
+            await touch_task(db, task_id)
             # `created_at` is bumped too, not only `updated_at`: the coalesced
             # row now records the LATEST edit, the timeline orders on
             # `created_at`, and the row is already the task's newest — so the

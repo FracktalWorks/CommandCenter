@@ -309,3 +309,212 @@ adoption target (ADR-028: no second runtime).
 
 Everything above is annealed into `specs/project_management_app.md` (WS-27), which owns all
 work, decisions, and status. This file is evidence, not a plan.
+
+---
+
+## 10. Second-pass corrections — the agent layer (2026-08-10)
+
+*Pinned commit `09dab28e3caee9e43891697998dcfa7fcf76991c`. A full re-read of
+`services/ai-agent`, `apps/mcp`, `services/realtime`, `apps/acp-bridge` and `apps/e2e`
+**re-derived §4–§8 from the code rather than from this document.** Ten claims above are
+wrong, stale or overstated. The original text is left in place and corrected here rather
+than silently edited, because which way a claim was wrong is itself the useful information —
+several of these made Paca look like prior art for something it does not have.*
+
+**C1 — §5's "the AI service never writes to Postgres directly (a stated Boundary Rule)" is
+false, and the phrase is not in their tree.** The agent service owns its own asyncpg pool
+and writes on every run (conversation status, one row per event), reads five tables
+directly, and decrypts the LLM key itself. The real boundary is narrower and worth stating
+precisely: **domain writes go through MCP→API under the agent's identity; the runtime's own
+bookkeeping is direct DB.** ⚠️ For us that direct pool is exactly the shape R5 forbids — a
+DB connection site outside the `get_db()` seam.
+
+**C2 — §6's "internal UUIDs are never agent-facing; no read round-trip to write" is
+inverted.** Every write tool takes raw UUIDs and the tool descriptions *mandate* the
+discovery call ("Use `list_projects` to get the project ID"). The pattern we described is
+real **only for documents**, which are addressed by filesystem path with the MCP layer
+resolving path→UUID. That narrow case is the good idea; the generalisation was ours, not
+theirs.
+
+**C3 — §6's "permission-filtered ListTools" is true but the implication is not.** Filtering
+happens in `ListTools` only — `CallTool` consults no permission map, so a hidden tool still
+executes if named. Tools absent from the permission table are **allowed by default**, and
+seven currently-routable tools have no entry. The table is maintained parallel to the
+routing switch with **no completeness test**.
+
+**C4 — §6's "lenient removes" is not implemented.** Per-item outcomes are real and good; a
+removal of something missing is reported as a failure, not absorbed as a no-op. The
+"16 tools collapsed to 4" history could not be verified at this commit.
+
+**C5 — §4's action-consolidation claim is right about the engine and did not land
+end-to-end.** Three built-in actions exist; the agent-facing MCP schema still advertises
+**seven**, documenting the config shape of types the API now rejects. Nothing tests the two
+lists against each other. Cite Paca for the consolidation *design*, never as evidence that
+consolidating is cheap to finish.
+
+**C6 — §7's "durable Streams for at-least-once work" is not true on the agent path.** The
+Python consumer creates its group at `$` (anything published earlier is lost), reads only
+new entries, never reclaims — there is **no `XAUTOCLAIM`/`XPENDING`/`XCLAIM` anywhere in
+the repository** — and acks only on success, so a failed trigger is never retried and leaks
+a pending entry forever. Their Go consumer does it correctly, so this is a regression
+against their own house standard, not a design position.
+
+**C7 — §5's "spins an OpenHands sandbox" understates the deployment cost.** The sandbox is a
+sibling container spawned through the **host Docker socket**, bind-mounted into the agent
+service — root-equivalent host access. That belongs in the record as a prerequisite, not an
+implementation detail.
+
+**C8 — §5's "permission-checked as its own project member" is true at the API and the
+credential model is weaker than it sounds.** There is **one shared deployment-wide agent API
+key**, and which agent is acting is asserted by an `X-Agent-ID` **header the caller
+supplies**. Anything holding the key can act as any agent in any project. ⚠️ Direct
+collision with **R11** (never take an identity from request input) — a refusal, not a model.
+Their ACP bridge tokens are per-agent, hashed and rotatable, which is the shape to copy.
+
+**C9 — §8's "backend plugins are WASM (wazero)" is false for the agent-facing half.** Plugin
+MCP tools are arbitrary ES modules dynamically imported **into the MCP server process** and
+handed the API key — same process, same credential, no sandbox. They are not
+permission-filtered and are dispatched **before** core tools, so a plugin declaring
+`update_task` shadows the real one.
+
+**C10 — §5: `automation_message` is a fifth trigger type surviving only on a fallback
+branch.** Latent misrouting for any future control type carrying a `trigger_type` field.
+
+### What the re-read CONFIRMED
+§5's dispatch-chain shape (event-driven, one payload shape for all sources, session marker
+written on the task); the ACP watchdog; the DB-seeded event index; §7's "permission checked
+once at join" and "realtime never persists raw tokens"; §4's `call_api` reader-visible-header
+gap. Also confirmed, and useful to us: **their realtime service is an accelerant, not a hard
+dependency** — the publish path's own docstring says clients "see new messages without
+waiting for the next poll cycle", i.e. there is a poll fallback. That is the opposite of the
+Plane finding about their collaboration server, and it means nothing in the agent surface
+implies a sibling service.
+
+### ⚠️ The biggest finding is an absence
+**There is no approval or human-in-the-loop primitive anywhere in Paca's agent layer.** A
+grep of the whole territory for approve/approval/confirm/consent returns prose only. An
+agent's autonomy is exactly its project-role permission set, exercised unilaterally; the only
+human levers are pause and stop, both after the fact. The "you MUST invoke a skill before
+acting" rule is a paragraph in a prompt with nothing enforcing it.
+
+For an **AI-driven company operating system**, that is the single most important gap, and the
+correct conclusion is that **Paca is not prior art for it.** If we want "an agent may do X
+unilaterally but needs a human for Y", we design it ourselves, and the natural seam is a
+per-tool gate at the tool layer — not a sentence in a system prompt. Recorded as a decision
+owed rather than a ticket, because it shapes the Action Broker and the agent-dispatch chain
+together.
+
+Two more absences worth the same treatment: **their e2e suite specifies nothing about the
+agent layer at all** (21 Playwright specs and 20 Gherkin features covering auth, projects,
+tasks, views, sprints and docs — not one line touching agents, automations or websockets), so
+the mining instruction has an honest negative answer; and a **hard timeout that reports
+success** — an agent exhausting its hour is torn down and recorded as `FINISHED`, with no
+test covering the path. Whatever bound we set, exhausting it must be its own terminal state.
+
+
+---
+
+## 11. Second-pass corrections — the data model and API (2026-08-10)
+
+*Same pinned commit. A full re-read of `services/api` re-derived §2, §3 and §9 from the code.
+**Eighteen defects; six material.** With §10's ten, our Paca record carried ~28 errors — the
+cost of a first pass that read for features rather than for verification. Corrected here, not
+silently edited.*
+
+**C11 · MATERIAL · §2.6 "activities are written asynchronously" — only SYSTEM ones are.**
+Comments are written **synchronously straight to Postgres** and only realtime-published. Two
+paths, not one.
+
+**C12 · MATERIAL · §2.6 / §9 row 6 — "field-diff content powering diff & revert". There is no
+revert in the API at all.** No endpoint, no service method. The affordance exists in their web
+app as a **client-side reconstruction** that re-issues an ordinary PATCH. Three things break
+the story we told: `custom_fields` diffs are recorded with **no old and no new value**, so
+custom fields are structurally unrevertable; the diff is computed from the *request* against
+the pre-image rather than from the resulting row, so service-side defaulting is mis-recorded;
+and automation writes emit a **different content shape**, so automation changes are not
+revertable by the same reader. ⚠️ The affordance is still worth building (§9.5) — but as our
+design, on our schema, not as a lift.
+
+**C13 · MATERIAL · §2.4 — the fractional-indexing arithmetic is NOT in the API.** `MoveTask`
+accepts a **client-supplied** `position float64` and upserts it verbatim; the algorithm is a
+frontend contract. Worse, and directly relevant to us: **neither move method validates that
+`task_id` belongs to the view's project.** That is the same join-table authorisation class we
+just fixed in our own `views.set_positions` after reading Plane's advisory — now sighted a
+third time, in a second reference. It is a *category* of bug, not an incident.
+
+**C14 · MATERIAL · §2.2 "exactly two hard rules" — there are three, and enforcement is
+weaker.** `wouldCreateCycle` **fails open** past 50 ancestors or on any lookup error; `CreateTask`
+runs no cycle check at all; and **nothing checks the parent lives in the same project**, even
+though their task *links* have an explicit cross-project refusal. The asymmetry is in their
+code.
+
+**C15 · MATERIAL · §2.3 — `is_required` on custom fields is enforced nowhere**, and there is
+**no write-time type validation of custom-field values at all**; the repository works around it
+with regex-guarded casts so a stray value cannot abort a query. Our §2.3 presented `field_type`
+as a constraint. It is not.
+
+**C16 · MATERIAL · §2 preamble — "migrations re-run on every boot, every statement idempotent
+… independently converged with our `02+` rule". Overstated in our favour and against theirs.**
+Paca has **no migration ledger of any kind** and no numbering-collision check; every file
+re-executes on every boot forever. And one migration performs an in-place `DROP COLUMN` in the
+same file that backfills — the **opposite** of expand/contract. Our R1/R6/verify-by-ledger-line
+discipline is strictly stronger. **Not a convergence**, and the claim should never have been
+written as one.
+
+**C17 · §2.7 — BDD and time tracking were never in core.** Checklists and GitHub are real
+extractions; the other two appear only as *example* plugin identifiers in doc comments. Same
+error class as the Plane "kill switch" we credited and they do not have.
+
+**C18 · §2.1 — nothing in Paca is ever restorable.** `deleted_at` is set and never cleared;
+no trash, no undelete, no archived state distinct from deleted. Soft-delete there is a
+referential-integrity device, not an undo feature.
+
+**C19 · §2.5 — agents are PER-PROJECT rows** with their own key reference. There is no
+org-level agent registry: the same assistant used in ten projects is ten rows and ten secrets
+to rotate. ⚠️ Our registry is platform-level and should stay there.
+
+**C20 · MATERIAL · §3 — `config.filters` is not "id arrays", and this one we got wrong in the
+direction of UNDERSELLING it.** It is a **recursive, dimension-agnostic selector**:
+`{all: bool, items: {<uuid|virtual-group>: bool | nested}}` per dimension, plus per-custom-field
+range/contains blocks. "Every status except Archived" survives a status added next month; an
+ID snapshot silently starts hiding new work. **Materially better than what we recorded** — see
+§9.5, where it is minted.
+
+**C21 · MATERIAL · §3 — "one task-list endpoint serves every page; `view_id` enriches each
+task" is half true, and the missing half matters.** `view_id` loads positions and switches the
+sort. **It applies no filtering whatsoever.** The saved filter config is stored, handed back,
+and never read by the server; all ~20 dimensions arrive as query parameters the client builds.
+So the presentation-vs-query-constraints split is a **client-side convention, not a
+server-enforced property** — which is exactly the property our own `146_projects.sql` comment
+claims the split buys ("what stops a saved view from silently changing which rows a member may
+see"). **We must not cite Paca as prior art for it.** We hold that property; they do not.
+
+**C22 · MATERIAL · §9 row 5 "agents are ordinary members/actors" — true in the schema, false
+in the authentication, and the inversion matters.** The agent identity is the client-supplied
+header `X-Agent-ID`, trusted on presentation of a single shared static key that resolves to a
+seeded **SUPER_ADMIN** bot. Narrowing to the agent's project role happens *only* when the
+route's scope resolver yields a project — so on any global-scope route the request is evaluated
+as SUPER_ADMIN regardless of the header. ✅ Our §5 parenthetical — that our
+`EffectiveAccess.intersect()` narrows an agent by the acting member and Paca has nothing this
+strong — is **verified correct**.
+
+**C23 · §9 row 9 "idempotent everywhere" — true of the automation engine, false of the activity
+spine.** The activity's primary key is minted by the producer and carried on an at-least-once
+stream, and the consumer's insert has **no `ON CONFLICT`**; a redelivery raises a duplicate-key
+error, is deliberately not acked, and is re-read on every restart — a permanently poisoned
+pending list. Adopt the discipline from the engine, never from the spine.
+
+**C24 · §9 row 6 "single activity spine" — there are two**, `task_activities` and
+`doc_activities`, same shape, no common parent; the agent feed has to `UNION ALL` them. Our one
+`pm_activities` is the better shape, and it is *why* the agent activity feed (§9.5) is cheap
+for us and expensive for them.
+
+### Where the re-read says WE are ahead
+No delta/changed-since feed of any kind (we have tombstones + `/projects/delta/tasks`); no
+per-user view state, so collapsing a lane collapses it for everyone (our `pm_view_user_state`);
+no archive state distinct from delete; `ON DELETE SET NULL` on status so deleting a status
+silently orphans tasks to NULL, against our `RESTRICT` + a 409 naming the count; no foreign key
+on their position rows, so deleting a task leaves orphans forever; **66 `binding:"required"`
+validation tags with no validator in the module at all** — R7 stated as a failure, since a rule
+with no fence reads as protection to anyone skimming; and two parallel project-role
+vocabularies, which is our own "do not invent a second way" rule demonstrated.

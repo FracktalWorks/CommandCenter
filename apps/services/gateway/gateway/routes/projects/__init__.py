@@ -12,6 +12,14 @@ as an import side effect.
 can shadow another and alphabetising this list can never change which handler
 answers a request.
 
+⚠️ That immunity is a property of the PATHS, not a licence — it holds only while
+every new route keeps its literal segment ahead of any ``{id}``. WS-27ae's feed
+is ``/projects/delta/tasks`` rather than the more natural
+``/projects/tasks/delta`` for exactly this reason: the latter would be matched by
+``/projects/tasks/{task_id}`` and the answer would depend on this list's order.
+``test_projects_delta.py`` asserts the mounted path, so a later rename back to
+the colliding shape fails rather than 404ing at runtime.
+
 ⚠️ A feature module left out of this list mounts **nothing**, while every test
 that calls its route function directly still passes. That trap is documented in
 ``department_centers.md`` C1 and it is why ``tests/unit/test_projects_routes.py``
@@ -27,6 +35,8 @@ from gateway.routes.projects import attachments as _attachments  # noqa: F401
 from gateway.routes.projects import bulk as _bulk  # noqa: F401
 from gateway.routes.projects import calendar as _calendar  # noqa: F401
 from gateway.routes.projects import custom_fields as _custom_fields  # noqa: F401
+from gateway.routes.projects import delta as _delta  # noqa: F401
+from gateway.routes.projects import export as _export  # noqa: F401
 from gateway.routes.projects import import_clickup as _import_clickup  # noqa: F401
 from gateway.routes.projects import import_tasks as _import_tasks  # noqa: F401
 from gateway.routes.projects import intake as _intake  # noqa: F401

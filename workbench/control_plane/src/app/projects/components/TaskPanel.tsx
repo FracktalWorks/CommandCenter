@@ -38,6 +38,20 @@
  * would key off the VIEWPORT, so it would split the 448px docked column on a 4K
  * monitor — which is exactly the collision `/tasks`' detail hit when it was
  * docked at 380px. The surface, not the viewport, decides the column count.
+ *
+ * ## Peek → side → full (WS-27ab item 1)
+ *
+ * The width is now a per-user preference with three stops, owned by
+ * `lib/panelMode.ts` — this file renders the switch and asks the page to store
+ * the choice. Only the class on the `<aside>` and, at `full`, where the page
+ * mounts it, differ between the three: one panel, three widths, never a second
+ * "expanded task" component to keep in step.
+ *
+ * **Escape gives the keyboard back.** Closing returns focus to whatever was
+ * focused when the panel opened — on the board and the list that is the
+ * `tabIndex={0}` canvas holding WS-27y's cursor, so Esc lands the caret back on
+ * the row it came from and `j`/arrows keep working. Without it, Escape left
+ * focus on `<body>` and the next arrow key scrolled the window.
  */
 import Icon from "@/components/Icon";
 import Badge from "@/components/ui/Badge";
@@ -73,6 +87,15 @@ import {
   withoutAssignee,
 } from "../lib/assignees";
 import { insertMention, notDeliveredNotice } from "../lib/notifications";
+import {
+  PANEL_MODES,
+  PANEL_MODE_HINTS,
+  PANEL_MODE_ICONS,
+  PANEL_MODE_LABELS,
+  PANEL_WIDTH_CLASS,
+  type PanelMode,
+  panelEscape,
+} from "../lib/panelMode";
 
 interface Props {
   task: TaskRow;
@@ -100,6 +123,18 @@ interface Props {
    * a decision the panel does not have the tree to make.
    */
   onOpenTask?: (taskId: string) => void;
+  /**
+   * WS-27ab — how much room the panel takes. The page owns it because the page
+   * decides where a `full` panel is MOUNTED (over the board rather than docked
+   * beside it) and because the choice is persisted per user, which is a page
+   * concern, not a per-task one.
+   */
+  mode?: PanelMode;
+  /**
+   * Absent means "no escalation control here" — the phone branch, where the
+   * panel already IS the screen and three width buttons would be a lie.
+   */
+  onMode?: (next: PanelMode) => void;
 }
 
 function describe(activity: ActivityRow, defs: FieldRow[] = []): string {
@@ -207,6 +242,8 @@ export function TaskPanel({
   fields = [],
   tags = [],
   onOpenTask,
+  mode = "side",
+  onMode,
 }: Props) {
   const [timeline, setTimeline] = useState<ActivityRow[]>([]);
   const [comment, setComment] = useState("");
@@ -246,6 +283,31 @@ export function TaskPanel({
     Math.max(statusIndex, 0),
     statuses.length,
   );
+
+  /**
+   * WS-27ab — hand the keyboard back on close.
+   *
+   * Captured on MOUNT, not per task: opening a linked task from inside the
+   * panel must still return to the row on the board that started the trail,
+   * not to the link that was clicked half a panel ago. The cleanup runs on
+   * every close — the ✕, Escape, and the page dropping the panel for any other
+   * reason — so there is one path rather than three.
+   *
+   * `document.contains` is the guard that matters: the board reloads while a
+   * panel is open, and focusing a detached node silently moves focus to
+   * `<body>`, which is the state this exists to avoid.
+   */
+  useEffect(() => {
+    const opener = typeof document === "undefined" ? null : document.activeElement;
+    return () => {
+      if (
+        opener instanceof HTMLElement &&
+        opener !== document.body &&
+        document.contains(opener)
+      )
+        opener.focus();
+    };
+  }, []);
 
   useEffect(() => {
     let live = true;
@@ -462,8 +524,22 @@ export function TaskPanel({
     // arrangement and the reason the field cells below read as cards at all — a
     // `bg-card` cell on a `bg-card` panel is an invisible box with a border.
     // ⚠️ The root must stay an `<aside>`: `projects/page.tsx`'s phone branch
-    // lifts the width cap with `[&>aside]:max-w-none`.
-    <aside className="flex h-full w-full max-w-md flex-col border-l border-border bg-background">
+    // lifts the width cap with `[&>aside]:max-w-none`, and the `full` overlay
+    // rounds its corners the same way.
+    <aside
+      className={`flex h-full w-full ${PANEL_WIDTH_CLASS[mode]} flex-col border-l border-border bg-background`}
+      // Escape belongs to the panel, not to the window: a global listener
+      // would also fire for the search palette and the four dialogs that can
+      // be open over it, closing two things with one key.
+      onKeyDown={(event) => {
+        const target = event.target as HTMLElement | null;
+        const action = panelEscape(event, target);
+        if (!action) return;
+        event.stopPropagation();
+        if (action === "blur") target?.blur();
+        else onClose();
+      }}
+    >
       <header className="shrink-0 border-b border-border bg-card px-3 py-3">
         <div className="mb-1.5 flex items-start justify-between gap-2">
           <div className="flex min-w-0 items-center gap-0.5">
@@ -480,6 +556,36 @@ export function TaskPanel({
             />
           </div>
           <div className="flex shrink-0 items-center gap-0.5">
+            {/* WS-27ab — peek · side · full. A three-stop segmented control
+                rather than one cycling button: the stops are named, the
+                current one is `aria-pressed`, and nobody has to press a
+                button three times to find out what it does. Hidden entirely
+                where the page did not pass `onMode` (the phone, where the
+                panel already fills the screen). */}
+            {onMode ? (
+              <div
+                className="mr-1 flex items-center gap-0.5 rounded-md border border-border p-0.5"
+                role="group"
+                aria-label="Panel width"
+              >
+                {PANEL_MODES.map((option) => (
+                  <Button
+                    key={option}
+                    // The house's pressed-state idiom, as FilterBar's Mine /
+                    // Unassigned / Overdue toggles wear it — never a colour
+                    // class passed through `className`, which the primitive
+                    // reserves for layout.
+                    variant={mode === option ? "primary" : "ghost"}
+                    size="icon-xs"
+                    icon={PANEL_MODE_ICONS[option]}
+                    aria-label={PANEL_MODE_LABELS[option]}
+                    aria-pressed={mode === option}
+                    title={PANEL_MODE_HINTS[option]}
+                    onClick={() => onMode(option)}
+                  />
+                ))}
+              </div>
+            ) : null}
             {/* WS-27v — watch/unwatch. Watching means the bell hears about this
                 task; assignees hear regardless, so unwatching never silences
                 work you hold. Hidden (not disabled) until the state is known. */}

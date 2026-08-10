@@ -212,6 +212,13 @@ async def _seed_root(db: Any, project_id: str, created_by: str) -> None:
         await insert_row(db, "pm_task_types", {
             "project_id": project_id, "name": name, "icon": icon,
             "is_default": is_default, "is_system": is_system,
+            # WS-27ae / P-28 — the seed stamps the FLAG rather than relying on
+            # a later reader recognising the name. Migration 168 backfilled the
+            # roots that already existed; this is what keeps new ones true.
+            # Derived from `is_system`, not written as a fourth tuple field:
+            # `Epic` is the only system type §3.4 has, so a second source of
+            # truth in the same literal is a way for them to disagree.
+            "is_epic": is_system,
         })
     await insert_row(db, "pm_views", {
         "project_id": project_id, "name": "All tasks", "view_type": "list",

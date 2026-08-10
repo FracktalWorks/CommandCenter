@@ -523,11 +523,13 @@ describe("active and selected use the house token", () => {
    * one that got better fails until its number comes down.
    *
    * `app/projects/components/MyWork.tsx` was in this list at 2 and is not any
-   * more (S4). The three below are the rest of the Projects sweep.
+   * more (S4). `app/projects/components/SearchPalette.tsx` left it at 0 in
+   * WS-27ab, when its selected row became the house token; `FilterBar.tsx`
+   * came down to 1 in the same slice (the applied-view chip), leaving only its
+   * pressed tag chip.
    */
   const ACTIVE_DEBT: Record<string, number> = {
-    "app/projects/components/FilterBar.tsx": 2,
-    "app/projects/components/SearchPalette.tsx": 1,
+    "app/projects/components/FilterBar.tsx": 1,
     "app/people/page.tsx": 1,
   };
 

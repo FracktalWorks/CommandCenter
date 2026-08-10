@@ -236,6 +236,100 @@ def test_every_list_filter_is_accepted_by_the_calendar_or_named_as_excluded() ->
     )
 
 
+# ── WS-27ac — the week layout is the SAME read, at a different width ─────────
+
+#: The two windows the browser actually sends (`lib/calendar.calendarWindow`):
+#: a month grid padded to whole weeks, and a week grid — each with the day of
+#: slack the UTC reading needs, and each half-open. August 2026 runs Sat 1st to
+#: Mon 31st, so its grid is Mon 27 Jul to Sun 6 Sep; the week of the 12th is
+#: Mon 10 to Sun 16 Aug.
+CLIENT_WINDOWS = {
+    "month": ("2026-07-26", "2026-09-08"),
+    "week": ("2026-08-09", "2026-08-18"),
+}
+
+
+@pytest.mark.parametrize("shape", sorted(CLIENT_WINDOWS))
+def test_both_client_window_shapes_are_legal_windows(shape: str) -> None:
+    """The week layout asks the SAME endpoint for ten days instead of
+    forty-four. A week that tripped the minimum-width refusal, or that the
+    endpoint had to grow a second parameter for, would be a second read."""
+    start, end = window_bounds(*CLIENT_WINDOWS[shape])
+    assert 0 < (end - start).days <= MAX_WINDOW_DAYS
+
+
+@pytest.mark.parametrize("shape", sorted(CLIENT_WINDOWS))
+@pytest.mark.asyncio
+async def test_the_triage_exclusion_holds_at_every_window_width(
+    db, events, shape: str,
+) -> None:
+    """⚠️ WS-27ac done-when 5, and the reason it is written as a WINDOW
+    parametrisation rather than another route assertion.
+
+    ``include_triage`` is declared once on ``/projects/calendar`` and
+    ``test_no_surface_can_silently_drop_include_triage`` pins that. What that
+    test cannot see is a surface that keeps the parameter and stops sending it
+    — or, worse, a week layout that reached for its own read and inherited a
+    filter set nobody compared. Both windows go through this endpoint, so the
+    queue stays parked at whichever width is on screen, and asking still shows
+    it.
+    """
+    date_from, date_to = CLIENT_WINDOWS[shape]
+    project, todo, _ = _workspace(db)
+    triage = db.seed_status(project.id, name="Triage", category="triage",
+                            is_default=False, position=-10)
+    db.seed_task(project.id, todo.id, title="Real",
+                 due_at="2026-08-12T10:00:00Z")
+    db.seed_task(project.id, triage.id, title="Parked",
+                 due_at="2026-08-13T10:00:00Z")
+
+    hidden = await pm_calendar.get_calendar(
+        user=USER, date_from=date_from, date_to=date_to,
+    )
+    assert [r["title"] for r in hidden["rows"]] == ["Real"]
+
+    shown = await pm_calendar.get_calendar(
+        user=USER, date_from=date_from, date_to=date_to, include_triage=True,
+    )
+    assert {r["title"] for r in shown["rows"]} == {"Real", "Parked"}
+
+
+@pytest.mark.parametrize("shape", sorted(CLIENT_WINDOWS))
+@pytest.mark.asyncio
+async def test_the_boards_filters_survive_at_every_window_width(
+    db, events, shape: str,
+) -> None:
+    """The §11.16 rule — switching view changes the SHAPE of what is on screen,
+    never the set — extended to switching LAYOUT. `overdue` is carried too,
+    because it is the exclusion list's near-miss (see the test above it)."""
+    date_from, date_to = CLIENT_WINDOWS[shape]
+    project, todo, done = _workspace(db)
+    db.seed_task(project.id, todo.id, title="Open", due_at="2026-08-12T10:00:00Z")
+    db.seed_task(project.id, done.id, title="Closed", due_at="2026-08-13T10:00:00Z")
+    db.seed_task(project.id, todo.id, title="Undated")
+
+    result = await pm_calendar.get_calendar(
+        user=USER, date_from=date_from, date_to=date_to,
+        status_category="todo",
+    )
+
+    assert [r["title"] for r in result["rows"]] == ["Open"]
+    # ⚠️ Counted with the same filters at either width: "1 unscheduled" must
+    # mean one of the tasks being looked at, not one somewhere in the project.
+    assert result["undated"] == 1
+
+
+def test_the_week_layout_did_not_grow_its_own_endpoint() -> None:
+    """⚠️ WS-27ac's whole point, on the server side: one window read, two
+    renderings of it (three, counting the timeline — §11.17). A second path
+    would get its own filter set, its own triage default and its own bugs."""
+    from gateway.routes.projects import router
+
+    windows = [r for r in router.routes if "calendar" in r.path]
+    assert [r.path for r in windows] == ["/projects/calendar"]
+    assert not any("week" in r.path for r in router.routes)
+
+
 def test_the_window_is_not_also_a_due_date_filter() -> None:
     """`due_before` stays out: bounding the same column twice is how the two
     bounds come to disagree, and the loser leaves no trace."""

@@ -256,6 +256,10 @@ def test_no_surface_can_silently_drop_include_triage() -> None:
     applying on that surface, which reads as the FILTER breaking. Board and
     list share ``/projects/tasks``; calendar and timeline share
     ``/projects/calendar`` (§11.17); search is its own read.
+
+    WS-27ae added a fifth: ``/projects/delta/tasks``. A sync feed that leaked
+    the triage queue would be the worst of the five, because the client that
+    consumes it is a phone or an agent that caches what it receives.
     """
     from gateway.routes.projects import router
 
@@ -263,7 +267,10 @@ def test_no_surface_can_silently_drop_include_triage() -> None:
         route = next(r for r in router.routes if r.path == path)
         return {p.name for p in route.dependant.query_params}
 
-    for path in ("/projects/tasks", "/projects/calendar", "/projects/search"):
+    for path in (
+        "/projects/tasks", "/projects/calendar", "/projects/search",
+        "/projects/delta/tasks",
+    ):
         assert "include_triage" in params(path), (
             f"{path} does not declare include_triage — FastAPI will drop it "
             f"silently and the surface will hide the queue with no way to ask"

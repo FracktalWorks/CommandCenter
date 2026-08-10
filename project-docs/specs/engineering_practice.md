@@ -87,11 +87,24 @@ a non-event.
   the main reason merges rarely become incidents. Keep it.
 - **Release in rings, not broadcasts.** Ring 0 is **us** — Fracktal is customer
   #0 and dogfooding is a free canary. Ring 1 is one friendly customer. Ring 2 is
-  everyone. During the silo phase (customers 1–5, `saas_multitenancy.md` §5.1)
-  the rings are physical and cost nothing; treat that as an advantage of the silo
-  bridge rather than overhead to escape. After the pooled cutover, a ring is a
-  per-org feature flag — which **D25.2** already fixed as the only version-skew
-  mechanism we support (one codebase, one schema, always latest).
+  everyone.
+
+  > ⚠️ **"Silo" is about PLACEMENT, never about architecture. We are
+  > multi-tenant from customer #1.** `saas_multitenancy.md` §5.1 condition 2 is
+  > unambiguous: *every silo runs the pooled schema, with `organization_id`
+  > populated and **RLS enabled from day one**, even though the database holds
+  > one tenant — a silo is a pooled deployment with N=1, and cutover is a data
+  > move rather than a migration. Skipping this is what turns the bridge into a
+  > rewrite.* There is **no phase in which single-tenant code is acceptable**;
+  > D15 demoted the deployment from "the tenant boundary" to "a placement, a
+  > priced tier", and R5 binds every PR regardless of customer count. What
+  > changes at the 8–12 cutover is only N.
+
+  While customers 1–5 are separately *placed*, the rings are physical and cost
+  nothing — an advantage of the bridge rather than overhead to escape. After the
+  pooled cutover a ring is a per-org feature flag, which **D25.2** already fixed
+  as the only version-skew mechanism we support (one codebase, one schema, always
+  latest).
 - **A fixed clock is optional; the ring order is not.** "Midday every day" is
   fine, and matters far less than "us first, then one, then all".
 
@@ -251,7 +264,7 @@ board row.
 | 1 | **SHA in `/health`** | Without it "deployed" is a guess; four deploys were blessed while shipping nothing | WS-25 |
 | 2 | **`BACKUP_REMOTE`** — an off-box copy | One copy on the same provider account is not a backup; losing the account loses the customer's data | BO-23 / `backup_and_restore.md` §4.2 (owner-deferred 2026-08-05 — **revisit at customer #1**) |
 | 3 | **Migration rehearsal against a prod-shaped restore** (P-1, §1) | The ladder-from-zero replay cannot see the failures we actually get | WS-5 (CI gates) |
-| 4 | **Promote and rehearse the RLS set** | It is hand-applied in a window, and until 2026-08-10 it contained a statement that could not run | WS-29 (MT-1b/MT-1d) |
+| 4 | **Promote and rehearse the RLS set** — ⚠️ **a hard gate, not a nice-to-have** | §5.1 condition 2 requires RLS **enabled from day one on customer #1's silo**, so "the policies are still un-promoted" and "we have a paying customer" cannot both be true. It is hand-applied in a window, and until 2026-08-10 it contained a statement that could not run | WS-29 (MT-1b) |
 | 5 | **`run_lifecycle_sweep` tenant binding** | Sweeps every tenant's roots with no predicate, on a path H2 never reaches | WS-29 MT-1d |
 
 ---

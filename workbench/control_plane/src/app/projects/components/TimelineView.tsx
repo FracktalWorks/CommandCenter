@@ -27,8 +27,8 @@ import { TaskMeta } from "@/components/TaskMeta";
 import Button from "@/components/ui/Button";
 import { useMemo, useState } from "react";
 
-import type { TaskRow } from "../lib/api";
-import { visibleChips } from "../lib/card";
+import type { TagRow, TaskRow } from "../lib/api";
+import { tagColours, visibleChips } from "../lib/card";
 import { dayKey, shiftDay } from "../lib/calendar";
 import {
   type Edge,
@@ -54,6 +54,9 @@ interface Props {
   truncated: boolean;
   /** WS-27x — the view's shown fields; chips a hidden field earned are not drawn. */
   shownFields: readonly string[];
+  /** S6 — the project's tag registry, so a tag chip is the colour its owner
+   *  chose here too. One tag, one colour, on every surface of the project. */
+  tags?: readonly TagRow[];
   today?: string;
   onSelect: (task: TaskRow) => void;
   onLink: (blockerId: string, blockedId: string) => void;
@@ -67,6 +70,7 @@ export function TimelineView({
   truncated,
   today,
   shownFields,
+  tags,
   onSelect,
   onLink,
   onRefuse,
@@ -75,6 +79,8 @@ export function TimelineView({
   const [dragging, setDragging] = useState<string | null>(null);
   const todayKey = today ?? dayKey(new Date());
 
+  // Once per registry, not once per bar.
+  const tagHues = useMemo(() => tagColours(tags ?? []), [tags]);
   const rows = useMemo(() => timelineRows(tasks), [tasks]);
   const range = useMemo(() => timelineRange(rows, todayKey), [rows, todayKey]);
 
@@ -343,7 +349,14 @@ export function TimelineView({
                             />
                           ) : null}
                           <span className="truncate">{row.task.title}</span>
-                          <TaskMeta chips={visibleChips(row.task, shownFields)} />
+                          <TaskMeta
+                            chips={visibleChips(
+                              row.task,
+                              shownFields,
+                              undefined,
+                              tagHues
+                            )}
+                          />
                         </button>
                         {/* The link handle. Only on a real bar: a derived one
                             has no dates of its own, so a dependency drawn from

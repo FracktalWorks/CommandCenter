@@ -821,3 +821,77 @@ describe("the --cc-* contract matches its documentation", () => {
     ).toEqual([]);
   });
 });
+
+// ── The rule COUNT the docs quote stays the real one ─────────────────────────
+
+describe("the documented rule count is this file's own", () => {
+  /**
+   * Three files quoted three different numbers for the rules below — "five"
+   * in the root `CLAUDE.md`, "six" in `AGENTS.md`, seven in this file's own
+   * header — and every one of them had been true when it was written. That is
+   * a mirror going stale, which is the failure `AGENTS.md` rule 5 names in a
+   * different context: a copied fact is a fact that will eventually lie.
+   *
+   * A doc cannot derive a number, so the number is checked instead. The count
+   * comes from this file's numbered header list — the same list a reader is
+   * sent to — so adding rule 8 fails here until both docs say eight.
+   */
+  const SELF = fileURLToPath(new URL("./conformance.test.ts", import.meta.url));
+  const DOCS = [
+    fileURLToPath(new URL("../../../AGENTS.md", import.meta.url)),
+    fileURLToPath(new URL("../../../../../CLAUDE.md", import.meta.url)),
+  ];
+  const WORDS = ["zero", "one", "two", "three", "four", "five", "six", "seven",
+    "eight", "nine", "ten", "eleven", "twelve"];
+
+  /** The rules, as this file's header numbers them. */
+  function ruleCount(): number {
+    const header = readFileSync(SELF, "utf8").split("## Ratchet, not a wall")[0];
+    return [...header.matchAll(/^ \* (\d+)\. \*\*/gm)].length;
+  }
+
+  it("the header list is numbered 1..n with no gap", () => {
+    const header = readFileSync(SELF, "utf8").split("## Ratchet, not a wall")[0];
+    const numbers = [...header.matchAll(/^ \* (\d+)\. \*\*/gm)].map((m) => Number(m[1]));
+    // Guards the parser: a regex that matches nothing would make every
+    // assertion below vacuously true, which is worse than no fence.
+    expect(numbers.length, "The header rule list did not parse at all.").toBeGreaterThan(4);
+    expect(numbers).toEqual(numbers.map((_, i) => i + 1));
+  });
+
+  /**
+   * The counts in these docs that are about THIS suite.
+   *
+   * Scoped deliberately: `AGENTS.md` also says "Four rules on top of the three
+   * above", which is a true statement about a different list and must not fail
+   * here. A count only counts when the sentence around it names the suite —
+   * both docs write it as "conformance suite checks N regexes" or "enforced by
+   * conformance.test.ts (N rules)".
+   */
+  function suiteCounts(text: string): string[] {
+    const found: string[] = [];
+    for (const m of text.matchAll(/conformance/gi)) {
+      const window = text.slice(m.index, m.index + 400);
+      for (const hit of window.matchAll(/\*?\*?([a-z]+)\*?\*?\s+(?:rules?|regexes)\b/gi)) {
+        if (WORDS.includes(hit[1].toLowerCase())) found.push(hit[1].toLowerCase());
+      }
+    }
+    return [...new Set(found)];
+  }
+
+  it.each(DOCS)("%s quotes the real number of rules", (doc) => {
+    const n = ruleCount();
+    const quoted = suiteCounts(readFileSync(doc, "utf8"));
+    expect(
+      quoted,
+      `${doc} says nothing about how many rules the conformance suite has. ` +
+        "That sentence is how a reader learns the gate's shape without " +
+        "opening the suite — do not delete it to make this pass.",
+    ).not.toEqual([]);
+    expect(
+      quoted.filter((word) => word !== WORDS[n]),
+      `${doc} names a conformance-rule count that is not ${n} (${WORDS[n]}). ` +
+        "The rules live in conformance.test.ts's header; update the doc.",
+    ).toEqual([]);
+  });
+});

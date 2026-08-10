@@ -269,6 +269,17 @@ async def create_leads_from_new_mail(account_id: str) -> dict[str, int]:
     "considered 0" are different facts and one of them is a bug report.
     """
     stats = _new_stats()
+    # H4, DELIBERATELY NOT H2 (`saas_multitenancy_handover.md`): this is a
+    # BACKGROUND path, not a request handler — it is invoked from the email
+    # scheduler's shared new-mail hook (`routes/email/scheduler_hooks.py::
+    # process_new_mail`), which the background sync loop, the Graph webhook and
+    # the manual-sync route all fan into, and it runs under no member's request
+    # context. The runbook's rule for that category is "do not let a job
+    # inherit an ambient tenant", so it stays on the unbound `get_db()` until
+    # H4 threads an explicit tenant through — the natural source is the
+    # mailbox's own row (`email_accounts.user_id` → `app_user.organization_id`,
+    # i.e. `tenant_session(org_id)`). Named in `test_db_engine_seam.py`'s
+    # H2_EXEMPT_FILES.
     db = await _get_db()
     try:
         account = await _load_account(db, account_id)

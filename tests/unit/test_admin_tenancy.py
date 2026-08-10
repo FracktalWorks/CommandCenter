@@ -101,10 +101,14 @@ def db(monkeypatch: pytest.MonkeyPatch) -> _FakeDB:
     bind_admin_db(monkeypatch, fake, MODULES)
     # `/auth/me` is a read: it has the DB seam and neither of the write seams.
 
-    async def _get_db() -> _FakeDB:
-        return fake
+    from contextlib import asynccontextmanager
 
-    monkeypatch.setattr(me, "get_db", _get_db)
+    @asynccontextmanager
+    async def _tenant_session(organization_id=None):
+        yield fake
+        await fake.commit()
+
+    monkeypatch.setattr(me, "_tenant_session", _tenant_session)
 
     fake.seed_organization(ORG, "alpha", "Alpha Industries")
     fake.seed_organization(ORG_B, "beta", "Beta Consulting")

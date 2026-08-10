@@ -188,6 +188,15 @@ async def _handle_crm_zoho_write(proposal: Any) -> dict[str, Any]:
         )
         return result
 
+    # H4/H6, DELIBERATELY NOT H2 (`saas_multitenancy_handover.md`): this is an
+    # approval-time BROKER HANDLER acting as the service identity
+    # `crm:zoho-sync`, not a member's request — an operator may approve the
+    # queued proposal months after it was enqueued, from a context whose
+    # ambient tenant (if any) is the approver's, not the record's. The tenant
+    # source H4 must thread through is the PROPOSAL PAYLOAD (it already carries
+    # `table` + `native_id`, whose row carries `organization_id`), i.e.
+    # `tenant_session(org_id)` — never the ambient binding. Named in
+    # `test_db_engine_seam.py`'s H2_EXEMPT_FILES.
     db = await _get_db()
     try:
         await apply_push_result(

@@ -238,6 +238,7 @@ def test_gateway_makes_no_engine_of_its_own() -> None:
         "gateway.routes.crm.core",
         "gateway.routes.email.core",
         "gateway.routes.notes.core",
+        "gateway.routes.people.core",
         "gateway.routes.projects.core",
         "gateway.routes.tasks.core",
         "gateway.routes.whatsapp.core",
@@ -307,7 +308,30 @@ H2_EXEMPT_FILES: dict[str, str] = {
     "apps/services/gateway/gateway/routes/projects/agent_dispatch.py":
         "event consumer, not a request handler — H4 threads an explicit "
         "tenant through the event payload; ambient inheritance is forbidden",
+    "apps/services/gateway/gateway/routes/crm/auto_lead.py":
+        "background job fired from the email scheduler's new-mail hook — H4 "
+        "threads the mailbox owner's tenant explicitly; ambient inheritance "
+        "is forbidden",
+    "apps/services/gateway/gateway/routes/crm/sync_zoho.py":
+        "scheduled sync engine running as `crm:zoho-sync` with per-phase "
+        "commits — H4 threads an explicit tenant through the sync "
+        "configuration; ambient inheritance is forbidden",
+    "apps/services/gateway/gateway/routes/crm/broker_handlers.py":
+        "approval-time broker handler running as `crm:zoho-sync` — H4/H6 "
+        "derives the tenant from the proposal payload's native row, never "
+        "from the approver's ambient binding",
 }
+
+#: The route packages H2 has converted to ZERO unbound sites (modulo the
+#: named H2_EXEMPT_FILES): every session in them is acquired through
+#: `tenant_session`. Packages with a non-zero pinned remainder (whatsapp,
+#: apps) have their own exact-count tests below instead.
+H2_CONVERTED_PACKAGES: tuple[str, ...] = (
+    "apps/services/gateway/gateway/routes/projects/",
+    "apps/services/gateway/gateway/routes/crm/",
+    "apps/services/gateway/gateway/routes/people/",
+    "apps/services/gateway/gateway/routes/admin/",
+)
 
 #: routes/whatsapp's allowed remainder (H2 slice, 2026-08-10): file → site
 #: count. This package is ingestion-heavy, so unlike projects it cannot pin at
@@ -347,7 +371,10 @@ H2_WHATSAPP_EXEMPT_SITES: dict[str, int] = {
 #: the hook-token trigger route (B), each marked in place.
 #: 198 → 166: routes/apps' 32 member-facing sites (2026-08-10); its 6
 #: leftovers are pinned by H2_APPS_EXEMPT_SITES below.
-H2_BASELINE_ELSEWHERE = 166
+#: 166 → 111: routes/crm (28) + routes/people (4) + routes/admin (23)
+#: (2026-08-10); crm's 3 leaves are named in H2_EXEMPT_FILES and still
+#: count here.
+H2_BASELINE_ELSEWHERE = 111
 
 #: routes/apps (H2 slice, 2026-08-10): the sites that STAY on the unbound
 #: seam, as file → exact remaining count. Counts rather than whole files
@@ -382,21 +409,23 @@ def _get_db_sites() -> dict[str, int]:
     return out
 
 
-def test_routes_projects_is_converted_and_stays_converted() -> None:
-    """The Projects package acquires sessions ONLY through `tenant_session`.
+@pytest.mark.parametrize("package", H2_CONVERTED_PACKAGES)
+def test_converted_packages_stay_converted(package: str) -> None:
+    """A converted package acquires sessions ONLY through `tenant_session`.
 
     A new `get_db()` here is a handler whose queries will silently return
     nothing under RLS — the fail-closed symptom H2's runbook warns about.
+    Only the named H2_EXEMPT_FILES may stay on the unbound seam.
     """
     sites = _get_db_sites()
     offenders = {
         f: n for f, n in sites.items()
-        if f.startswith("apps/services/gateway/gateway/routes/projects/")
-        and f not in H2_EXEMPT_FILES
+        if f.startswith(package) and f not in H2_EXEMPT_FILES
     }
     assert offenders == {}, (
         f"unbound get_db() in converted package: {offenders} — use "
-        f"`async with _tenant_session() as db:` (core.py) instead"
+        f"`async with _tenant_session() as db:` (the package's central "
+        f"module) instead"
     )
 
 
@@ -439,6 +468,17 @@ def test_routes_apps_is_converted_and_stays_converted() -> None:
         f"`async with _tenant_session() as db:` (_common.py); a retired "
         f"exemption must shrink H2_APPS_EXEMPT_SITES in this test"
     )
+
+
+def test_h2_exempt_files_still_use_the_unbound_seam() -> None:
+    """An exemption that stopped calling `get_db()` leaves the list.
+
+    Same discipline as the engine allow-lists above: a stale entry is silent
+    permission for a regression nobody decided on.
+    """
+    sites = _get_db_sites()
+    stale = sorted(f for f in H2_EXEMPT_FILES if f not in sites)
+    assert stale == [], f"H2 exemptions with no get_db() call left: {stale}"
 
 
 def test_get_db_sites_elsewhere_only_ratchet_down() -> None:

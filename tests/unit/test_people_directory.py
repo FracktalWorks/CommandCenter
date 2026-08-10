@@ -122,11 +122,17 @@ def db() -> FakeDB:
 
 @pytest.fixture(autouse=True)
 def bind(monkeypatch, db):
-    async def _get_db():
-        return db
+    from contextlib import asynccontextmanager
+
+    @asynccontextmanager
+    async def _tenant_session(organization_id=None):
+        # Commit-on-clean-exit, like the real `tenant_session` wrapper (H2).
+        yield db
+        await db.commit()
 
     for module in (people_core, people_directory):
-        monkeypatch.setattr(module, "_get_db", _get_db, raising=False)
+        monkeypatch.setattr(module, "_tenant_session", _tenant_session,
+                            raising=False)
 
 
 def _user(email: str, *grants: str):

@@ -23,7 +23,7 @@ from acb_auth import UserContext, require_permission
 from fastapi import Depends, HTTPException
 from gateway.routes.admin._common import (
     _log,
-    get_db,
+    _tenant_session,
     get_member,
     get_org_id,
     invalidate_for,
@@ -175,8 +175,7 @@ async def list_groups(
     the roster) — the org has tens of people, so the full expansion is cheap
     and saves the UI a per-group round trip.
     """
-    db = await get_db()
-    async with db:
+    async with _tenant_session() as db:
         org_id = await get_org_id(db, admin)
         rows = (
             await db.execute(
@@ -202,8 +201,7 @@ async def create_group(
     admin: UserContext = Depends(require_admin_user),
 ) -> GroupEntry:
     slug = _clean_slug(req.slug)
-    db = await get_db()
-    async with db:
+    async with _tenant_session() as db:
         org_id = await get_org_id(db, admin)
         clash = (
             await db.execute(
@@ -228,7 +226,6 @@ async def create_group(
              "name": (req.display_name or slug).strip() or slug,
              "desc": req.description or "", "by": admin.email},
         )
-        await db.commit()
 
     _log.info("group_created", slug=slug, by=admin.email)
     record_admin_change(admin.email, "org.group_created", f"group:{slug}")
@@ -253,8 +250,7 @@ async def update_group(
     ``group:<slug>`` participant subjects, ``t:<slug>`` agent instance keys,
     the ``center.<slug>`` pairing — and renaming it would orphan all three.
     """
-    db = await get_db()
-    async with db:
+    async with _tenant_session() as db:
         org_id = await get_org_id(db, admin)
         group = await _get_group(db, org_id, slug)
         await db.execute(
@@ -268,7 +264,6 @@ async def update_group(
             {"name": patch.display_name, "desc": patch.description,
              "gid": group["id"]},
         )
-        await db.commit()
         group = await _get_group(db, org_id, slug)
         entry = await _entry(db, group)
 
@@ -291,8 +286,7 @@ async def delete_group(
     and silently emptying every room shared to ``group:<slug>`` — is a bigger
     action than the admin asked for.
     """
-    db = await get_db()
-    async with db:
+    async with _tenant_session() as db:
         org_id = await get_org_id(db, admin)
         group = await _get_group(db, org_id, slug)
         if slug in CENTER_GROUP_SLUGS:
@@ -324,7 +318,6 @@ async def delete_group(
             text("DELETE FROM org_group WHERE id = CAST(:gid AS uuid)"),
             {"gid": group["id"]},
         )
-        await db.commit()
 
     _log.info("group_deleted", slug=slug, by=admin.email)
     record_admin_change(admin.email, "org.group_deleted", f"group:{slug}")
@@ -366,8 +359,7 @@ async def add_group_member(
             ),
         )
 
-    db = await get_db()
-    async with db:
+    async with _tenant_session() as db:
         org_id = await get_org_id(db, admin)
         group = await _get_group(db, org_id, slug)
         member = await get_member(db, org_id, req.email)
@@ -395,7 +387,6 @@ async def add_group_member(
                  "reason": f"group membership: {slug}", "by": admin.email},
             )
             granted = bool(getattr(result, "rowcount", 0))
-        await db.commit()
 
     invalidate_for(member["email"])
     _log.info("group_member_added", group=slug, email=member["email"],
@@ -431,8 +422,7 @@ async def remove_group_member(
     DOES immediately remove the member from rooms shared to
     ``group:<slug>``: those expand membership at read time.)
     """
-    db = await get_db()
-    async with db:
+    async with _tenant_session() as db:
         org_id = await get_org_id(db, admin)
         group = await _get_group(db, org_id, slug)
         member = await get_member(db, org_id, email)
@@ -449,7 +439,6 @@ async def remove_group_member(
                 status_code=404,
                 detail=f"'{email}' is not a member of '{slug}'.",
             )
-        await db.commit()
 
     invalidate_for(member["email"])
     _log.info("group_member_removed", group=slug, email=member["email"],

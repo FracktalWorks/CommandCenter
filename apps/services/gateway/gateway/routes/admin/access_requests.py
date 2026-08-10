@@ -54,8 +54,8 @@ from fastapi import Depends, HTTPException
 from gateway.routes.admin._common import (
     _iso,
     _log,
+    _tenant_session,
     find_member,
-    get_db,
     get_org_id,
     invalidate_for,
     provision_member,
@@ -133,9 +133,9 @@ _REFUSAL_REASONS: dict[str, str] = {
 #: for :func:`_load_request`: read-then-write is two statements, so two admins
 #: clicking the same row both pass the read. Binding the same condition into
 #: the UPDATE makes the loser's row-count zero, and because this runs BEFORE
-#: ``db.commit()`` the 409 it raises discards that transaction's provisioning
-#: with it — approve stays all-or-nothing under concurrency, not just in
-#: sequence.
+#: the commit (`_tenant_session` commits only on clean exit) the 409 it raises
+#: discards that transaction's provisioning with it — approve stays
+#: all-or-nothing under concurrency, not just in sequence.
 _DECIDE_SQL = (
     "UPDATE access_request SET status = :status, decided_by = :by, "
     "       decided_at = now() "
@@ -298,7 +298,8 @@ async def _decide(
     without the condition here both writers would succeed and both callers
     would be told they won. Zero rows updated means the row moved, so the whole
     transaction — this stamp *and* any provisioning done above it — is
-    abandoned by raising before ``db.commit()``.
+    abandoned by raising before the commit (``_tenant_session`` commits only
+    on clean exit).
     """
     if status not in REQUEST_STATUSES:
         raise ValueError(f"unknown access_request status {status!r}")
@@ -370,8 +371,7 @@ async def list_access_requests(
     Sits on the package's ``admin:members:read`` floor like every other read —
     seeing who is locked out is part of reading the roster, not a new right.
     """
-    db = await get_db()
-    async with db:
+    async with _tenant_session() as db:
         rows = (await db.execute(text(_PENDING_REQUESTS_SQL))).mappings().all()
     return [_entry(dict(r)) for r in rows]
 
@@ -413,8 +413,7 @@ async def approve_access_request(
     person out of a queue that renders only `pending`, and recorded an
     `org.access_request_approved` for an approval that did not happen.
     """
-    db = await get_db()
-    async with db:
+    async with _tenant_session() as db:
         request = await _load_request(db, email, allowed_statuses=("pending",))
         org_id = await get_org_id(db, admin)
 
@@ -473,7 +472,6 @@ async def approve_access_request(
 
         await _decide(db, member["email"].lower(), "approved", admin,
                       allowed_statuses=("pending",))
-        await db.commit()
         roles = await roles_for_user(db, member["id"])
         status = member["status"]
 
@@ -516,14 +514,12 @@ async def deny_access_request(
     so the only thing it could achieve is a queue record that contradicts the
     roster. Suspend or remove them from the roster instead.
     """
-    db = await get_db()
-    async with db:
+    async with _tenant_session() as db:
         request = await _load_request(
             db, email, allowed_statuses=("pending", "denied"),
         )
         await _decide(db, request["email"].lower(), "denied", admin,
                       allowed_statuses=("pending", "denied"))
-        await db.commit()
 
     _log.info("access_request_denied", email=request["email"], by=admin.email,
               attempts=request["attempt_count"])

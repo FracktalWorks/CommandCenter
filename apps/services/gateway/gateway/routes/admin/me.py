@@ -19,7 +19,7 @@ from acb_auth import UserContext, get_current_user
 from acb_auth.permissions import CAPABILITIES
 from fastapi import APIRouter, Depends
 
-from gateway.routes.admin._common import get_db, get_org_id
+from gateway.routes.admin._common import _tenant_session, get_org_id
 
 me_router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -106,8 +106,7 @@ async def get_me(user: UserContext = Depends(get_current_user)) -> dict[str, Any
     organization: dict[str, str] = {}
     catalog: list[str] = []
     try:
-        db = await get_db()
-        async with db:
+        async with _tenant_session() as db:
             # The CALLER's organization, not the deployment's. This line used to
             # report the `default` org's slug and display name to every
             # signed-in member of every tenant, so the frontend's "which org am

@@ -36,10 +36,10 @@ from gateway.routes.admin._common import (
     PURGE_OUTCOME,
     _iso,
     _log,
+    _tenant_session,
     assert_not_self_demotion,
     assert_not_self_lockout,
     assert_owner_survives,
-    get_db,
     get_member,
     get_org_id,
     invalidate_for,
@@ -108,8 +108,7 @@ async def list_members(
     include_removed: bool = False,
     admin: UserContext = Depends(require_admin_user),
 ) -> list[MemberEntry]:
-    db = await get_db()
-    async with db:
+    async with _tenant_session() as db:
         org_id = await get_org_id(db, admin)
         sql = (
             "SELECT u.id::text AS id, u.email, u.display_name, u.avatar_url, "
@@ -164,8 +163,7 @@ async def invite_member(
     """
     email = (req.email or "").strip().lower()
 
-    db = await get_db()
-    async with db:
+    async with _tenant_session() as db:
         org_id = await get_org_id(db, admin)
         member, _assigned = await provision_member(
             db, org_id,
@@ -175,7 +173,6 @@ async def invite_member(
             admin=admin,
             status="invited",
         )
-        await db.commit()
         roles = await roles_for_user(db, member["id"])
 
     invalidate_for(email)
@@ -204,8 +201,7 @@ async def update_member(
             detail=f"status must be one of {list(VALID_STATUSES)}.",
         )
 
-    db = await get_db()
-    async with db:
+    async with _tenant_session() as db:
         org_id = await get_org_id(db, admin)
         member = await get_member(db, org_id, email)
 
@@ -241,7 +237,6 @@ async def update_member(
                 ),
                 {"name": patch.display_name, "uid": member["id"]},
             )
-        await db.commit()
         member = await get_member(db, org_id, email)
         roles = await roles_for_user(db, member["id"])
 
@@ -276,8 +271,7 @@ async def remove_member(
     actually matters for access is that the member resolves to nothing, which
     the `removed` status guarantees.
     """
-    db = await get_db()
-    async with db:
+    async with _tenant_session() as db:
         org_id = await get_org_id(db, admin)
         member = await get_member(db, org_id, email)
         # Invariant 4, from the same helper the PATCH above calls — this route
@@ -297,7 +291,6 @@ async def remove_member(
             ),
             {"uid": member["id"]},
         )
-        await db.commit()
 
     invalidate_for(member["email"])
     _log.info("member_removed", email=member["email"], by=admin.email)
@@ -561,8 +554,9 @@ async def purge_member(
     the last owner is not a recoverable mistake, it is a permanently ownerless
     org.
 
-    **One transaction.** Every statement runs on one session with a single
-    ``commit()`` at the end. A half-purge that deleted the credentials but left
+    **One transaction.** Every statement runs on one session, committed once —
+    by ``_tenant_session``, on clean exit of the block, and only then. A
+    half-purge that deleted the credentials but left
     the member active is worse than either outcome, and a half-purge that
     deleted the member row but left an OAuth token behind is worse still.
 
@@ -586,8 +580,7 @@ async def purge_member(
     Recorded rather than fixed: making one caller strict is a change to
     ``acb_audit``'s contract, not to this route.
     """
-    db = await get_db()
-    async with db:
+    async with _tenant_session() as db:
         org_id = await get_org_id(db, admin)
         member = await get_member(db, org_id, email)
 
@@ -627,7 +620,6 @@ async def purge_member(
         # Before the commit, on its own connection — see the docstring.
         record_admin_change(admin.email, "org.member_purged", f"user:{addr}",
                             deleted=deleted, kept=kept)
-        await db.commit()
 
     invalidate_for(member["email"])
     _log.info("member_purged", email=member["email"], by=admin.email,
@@ -650,8 +642,7 @@ async def set_member_roles(
     req: RoleAssignment,
     admin: UserContext = Depends(require_admin_user),
 ) -> MemberEntry:
-    db = await get_db()
-    async with db:
+    async with _tenant_session() as db:
         org_id = await get_org_id(db, admin)
         member = await get_member(db, org_id, email)
         role_ids = await resolve_assignable_roles(db, org_id, req.roles, admin)
@@ -682,7 +673,6 @@ async def set_member_roles(
             ),
             {"role": legacy, "uid": member["id"]},
         )
-        await db.commit()
         roles = await roles_for_user(db, member["id"])
 
     invalidate_for(member["email"])
@@ -799,8 +789,7 @@ async def get_member_access(
     admin: UserContext = Depends(require_admin_user),
 ) -> dict[str, Any]:
     """The member's effective access, with provenance for every decision."""
-    db = await get_db()
-    async with db:
+    async with _tenant_session() as db:
         org_id = await get_org_id(db, admin)
         member = await get_member(db, org_id, email)
         roles = await roles_for_user(db, member["id"])
@@ -885,8 +874,7 @@ async def set_member_overrides(
         seen.add(perm)
         cleaned.append((perm, entry.effect, entry.reason or ""))
 
-    db = await get_db()
-    async with db:
+    async with _tenant_session() as db:
         org_id = await get_org_id(db, admin)
         member = await get_member(db, org_id, email)
 
@@ -921,7 +909,6 @@ async def set_member_overrides(
                 {"uid": member["id"], "perm": perm, "effect": effect,
                  "reason": reason, "by": admin.email},
             )
-        await db.commit()
 
     invalidate_for(member["email"])
     _log.info("member_overrides_set", email=member["email"], by=admin.email,

@@ -68,6 +68,21 @@ const SEAM: { what: string; home: string; declaration: RegExp }[] = [
     declaration: /export\s+function\s+useFlash\b/,
   },
   {
+    what: "the selection grammar",
+    home: "lib/selection.ts",
+    declaration: /export\s+function\s+(clickSelect|range|toggle|prune)\b/,
+  },
+  {
+    what: "the drop-gap target",
+    home: "components/DropGap.tsx",
+    declaration: /export\s+function\s+DropGap\b/,
+  },
+  {
+    what: "the drop-index arithmetic",
+    home: "lib/boardDrop.ts",
+    declaration: /export\s+function\s+(dropIndexFor|gapKey)\b/,
+  },
+  {
     what: "the chip vocabulary",
     home: "lib/taskCard.ts",
     declaration: /export\s+type\s+MetaTone\b/,
@@ -129,17 +144,23 @@ describe("both apps reach the shared modules", () => {
 
   it.each([
     ["projects", "lib/cursor"],
+    ["projects", "lib/selection"],
     ["projects", "components/QuickAdd"],
     ["projects", "components/useFlash"],
     ["projects", "lib/statusAccent"],
     ["projects", "components/StatusChip"],
     ["projects", "components/TaskCardShell"],
+    ["projects", "components/DropGap"],
+    ["projects", "lib/boardDrop"],
     ["tasks", "lib/cursor"],
+    ["tasks", "lib/selection"],
     ["tasks", "components/QuickAdd"],
     ["tasks", "components/useFlash"],
     ["tasks", "lib/statusAccent"],
     ["tasks", "components/StatusChip"],
     ["tasks", "components/TaskCardShell"],
+    ["tasks", "components/DropGap"],
+    ["tasks", "lib/boardDrop"],
   ])("/%s consumes @/%s", (app, module) => {
     expect(
       reaches(app, module),

@@ -1282,8 +1282,9 @@ between days reschedules through the existing `PATCH` path wearing WS-27y's drop
 reason and post-drop flash; (5) the §11.16 parameter-coverage test extends to the week
 range, so the `triage` exclusion (WS-27u) cannot be dropped by the new surface.
 
-**WS-27ad — Tasks ↔ Projects continuity, round 2.** 🟢 AGENT-SAFE *(the backport agent's
-recorded gap list, HANDOVER §1)*.
+**WS-27ad — Tasks ↔ Projects continuity, round 2.** ✅ **BUILT 2026-08-10** *(the backport
+agent's recorded gap list, HANDOVER §1; scope extended mid-ticket by the owner to put the
+VISUAL layer — board/list/card/colour — first)*.
 The first backport promoted chips, cursor, quick-add and flash to shared code. These are
 the divergences it recorded and deliberately left.
 Done when: (1) **one selection grammar** — the shift-range anchor moves into shared code
@@ -1297,6 +1298,51 @@ the shared cursor and group-context quick-add, retiring the Inbox's local `j`/`k
 (4) a test asserts both apps import the shared modules rather than re-declaring them — the
 re-export shims stay, a third copy is a failure; (5) calendar asymmetry stays **out of
 scope** and stays recorded (Tasks has a ten-file module, Projects one view).
+
+**As built.** The seam is `src/lib/{statusAccent,selection,cursor,boardDrop,taskCard}.ts`
+and `src/components/{StatusChip,TaskCardShell,DropGap,QuickAdd,useFlash,TaskMeta}.tsx`,
+fenced by `src/lib/sharedTaskUi.test.ts` (each thing declared once, both apps importing it,
+shims staying shims, no second name→class palette).
+
+- **Colour (owner-directed).** Three vocabularies existed and a fourth fact was stored and
+  never drawn: `pm_task_statuses.color` (migration 146, on the API since) rendered
+  *nowhere*, so every Projects column was one `bg-muted` while Tasks' board was
+  colour-coded. `lib/statusAccent.ts` is now the one palette, resolved **stored colour →
+  status category (Projects' six) → name keyword (Tasks' user-named stages) → positional**,
+  with `lastIsDone` as Tasks' own rule. Projects' board caps/headers, swimlane headers,
+  list group headers and list/table status pills consume it; `projects/lib/tags.chipClass`
+  and `tasks/lib/stageColors` delegate. Tasks renders byte-identically (pinned).
+- **Card.** `components/TaskCardShell.tsx` — Tasks' `rounded-lg / bg-card / p-3 / shadow`
+  box wins over Projects' `bg-background / p-2` (which was the page colour, i.e. a
+  card-shaped hole in the column). `shown_fields` gating unchanged.
+- **Selection.** `lib/selection.ts` holds `clickSelect` / `range` / `toggle` / `prune` /
+  `allSelected`; `stepCursor`'s duplicated sweep now reads it. Projects' page and the Tasks
+  store both drive it, so shift-click and Shift+Arrow behave identically. **Tasks' modal
+  select-mode is KEPT**, with the reason in `tasks/components/ItemList.tsx`: `selectMode`
+  changes what a *click means*, and a permanent checkbox on a `TaskCard` would take the
+  drag-grip gutter or make one gesture mean two things. The mode is the entry; the grammar
+  inside it converged.
+- **Board chrome.** Drop-gap reorder beats append-on-drop and is now
+  `components/DropGap.tsx` + `lib/boardDrop.ts` (`gapKey`, `dropIndexFor` — the downward
+  intra-group off-by-one, previously buried in `taskStore.reorderItem`), consumed by both
+  boards; Projects' unconditional append is gone (a body drop still appends). Accent caps
+  went the other way. **Swimlanes stay Projects-only**, reason in `tasks/TaskBoard.tsx`:
+  Tasks' second axes are *computed* (priority/mode from flags × due date), so a lane grid
+  would be a grid whose cells refuse every drop — the same reason `lib/quickAdd` refuses
+  those axes.
+- **Flat surfaces.** `tasks/components/FlatList.tsx` (Done/Someday/Archive/Engage/Priority)
+  and `WaitingForView` now run the shared cursor, flash and selection. Per-view quick-add
+  is `lib/quickAdd.viewQuickAdd`: Someday incubates, Done logs, **Waiting and Archive
+  refuse with the reason in code** (a create can set the WAITING bucket but not the
+  delegation, so the box would file under "Unassigned" — a sibling group).
+- **Inbox.** The local `j`/`k` walk is retired; arrows and Enter are `lib/cursor`, the
+  triage keys (`e x t s r 2`) stay local, and the shortcuts sheet says `↑ / ↓`.
+
+**Recorded, not done:** the calendar asymmetry (out of scope, per done-when 5);
+`app/crm/lib/board.ts` holds a *third* name→class palette for pipeline stages, exempted in
+the seam test with its reason; `tasks/lib/contextColors.ts` uses raw Tailwind palette
+classes (`sky-500`…) rather than semantic tokens — legal under the conformance suite, off
+the token system, and a Tasks-only axis with no Projects counterpart.
 
 **WS-27ae — export, delta-sync, small columns.** 🟢 AGENT-SAFE, **not this wave** *(P-26,
 P-27, P-28 rest)*. Filtered-list CSV export on the export-job pattern; a delta-sync list

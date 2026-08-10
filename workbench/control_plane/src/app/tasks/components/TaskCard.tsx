@@ -57,7 +57,8 @@ export function TaskCard({
    *  instead of opening the focus modal. Drag is suppressed by the parent. */
   selectMode?: boolean;
   selected?: boolean;
-  onToggleSelected?: () => void;
+  /** `shift` extends the selection from the anchor (`@/lib/selection`). */
+  onToggleSelected?: (shift: boolean) => void;
   onDragStart?: (e: React.DragEvent) => void;
   onDragEnd?: (e: React.DragEvent) => void;
 }) {
@@ -234,8 +235,8 @@ export function TaskCard({
   // In select mode the card is a selection toggle, not a link: clicking checks
   // the box (drag is disabled by the parent) so a batch can be archived/deleted
   // right on the board. A selected card gets a primary ring.
-  const activate = () => {
-    if (selectMode) onToggleSelected?.();
+  const activate = (shift: boolean) => {
+    if (selectMode) onToggleSelected?.(shift);
     else openFocus(item.id);
   };
   return (
@@ -257,7 +258,9 @@ export function TaskCard({
           <input
             type="checkbox"
             checked={selected}
-            onChange={() => onToggleSelected?.()}
+            onChange={(e) =>
+              onToggleSelected?.((e.nativeEvent as MouseEvent).shiftKey)
+            }
             onClick={(e) => e.stopPropagation()}
             aria-label={selected ? "Deselect task" : "Select task"}
             className="absolute right-1.5 top-1.5 h-4 w-4 accent-primary"

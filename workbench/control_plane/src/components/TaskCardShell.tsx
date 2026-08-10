@@ -46,7 +46,13 @@ export function TaskCardShell({
   completed?: boolean;
   className?: string;
   innerRef?: (element: HTMLDivElement | null) => void;
-  onActivate?: () => void;
+  /**
+   * Click / Enter / Space. `shift` is passed through rather than swallowed
+   * because in a selection mode the card IS the checkbox, and a shift-click on
+   * it has to mean the same range-extend it means on a real one
+   * (`@/lib/selection`).
+   */
+  onActivate?: (shift: boolean) => void;
   onContextMenu?: (event: React.MouseEvent) => void;
   onDragStart?: (event: React.DragEvent) => void;
   onDragEnd?: (event: React.DragEvent) => void;
@@ -65,12 +71,12 @@ export function TaskCardShell({
       draggable={draggable}
       onDragStart={onDragStart}
       onDragEnd={onDragEnd}
-      onClick={onActivate}
+      onClick={(event) => onActivate?.(event.shiftKey)}
       onContextMenu={onContextMenu}
       onKeyDown={(event) => {
         if (event.key === "Enter" || event.key === " ") {
           event.preventDefault();
-          onActivate?.();
+          onActivate?.(event.shiftKey);
         }
       }}
       className={[

@@ -24,11 +24,13 @@
  * first drag into an unordered column.
  */
 import { AvatarStack, TaskMeta } from "@/components/TaskMeta";
+import { DropGap } from "@/components/DropGap";
 import Icon from "@/components/Icon";
 import { StatusChip } from "@/components/StatusChip";
 import { TaskCardShell, TaskCardTitle } from "@/components/TaskCardShell";
 import Button from "@/components/ui/Button";
-import { useMemo, useState } from "react";
+import { dropIndexFor, gapKey } from "@/lib/boardDrop";
+import { Fragment, useMemo, useState } from "react";
 
 import { accentForGroup, accentForStatus } from "../lib/accent";
 import type { StatusRow, TaskRow } from "../lib/api";
@@ -108,6 +110,8 @@ export function TaskBoard({
   const [over, setOver] = useState<{ col: string; lane: string | null } | null>(
     null
   );
+  /** The exact gap the card would land in, as `@/lib/boardDrop.gapKey`. */
+  const [dropAt, setDropAt] = useState<string | null>(null);
   const [cursor, setCursor] = useState(-1);
   const [anchor, setAnchor] = useState<number | null>(null);
   const { flash, attach, scrollTo } = useFlash();
@@ -223,18 +227,31 @@ export function TaskBoard({
   const refusalFor = (laneKey: string | null): string | null =>
     dropRefusal(groupBy, laneKey === null ? null : subBy, dragging ?? undefined);
 
-  function dropInto(
-    event: React.DragEvent,
+  /**
+   * WS-27ad — a drop lands where it was aimed.
+   *
+   * `gapIndex` omitted means the card was dropped on the column body rather
+   * than on a gap, which still appends: that is the honest reading of "somewhere
+   * in this column". What changed is that there are now gaps to aim at at all —
+   * this board used to append unconditionally, so dragging a card two rows up
+   * dropped it at the bottom and the gesture visibly failed.
+   */
+  function applyDrop(
     colKey: string,
     cellTasks: TaskRow[],
-    laneKey: string | null
+    laneKey: string | null,
+    gapIndex?: number
   ) {
-    event.preventDefault();
     setOver(null);
+    setDropAt(null);
     const task = dragging;
     setDragging(null);
     if (!task || refusalFor(laneKey)) return;
-    const writes = planDrop(cellTasks, task.id, cellTasks.length, colKey);
+    const index =
+      gapIndex === undefined
+        ? cellTasks.length
+        : dropIndexFor(cellTasks, task.id, gapIndex);
+    const writes = planDrop(cellTasks, task.id, index, colKey);
     const patch = buildCellDropPatch(
       task,
       groupBy,
@@ -255,7 +272,7 @@ export function TaskBoard({
       if (!dragging) return;
       // preventDefault even when refusing — the browser must keep sending
       // events or the overlay could never show; the refusal is enforced in
-      // `dropInto`, and the cursor says "no" via dropEffect.
+      // `applyDrop`, and the cursor says "no" via dropEffect.
       event.preventDefault();
       event.dataTransfer.dropEffect = refusalFor(laneKey) ? "none" : "move";
       setOver((current) =>
@@ -270,9 +287,48 @@ export function TaskBoard({
         current?.col === colKey && current?.lane === laneKey ? null : current
       );
     },
-    onDrop: (event: React.DragEvent) =>
-      dropInto(event, colKey, cellTasks, laneKey),
+    onDrop: (event: React.DragEvent) => {
+      // The column body — no gap was hit, so this appends (see `applyDrop`).
+      event.preventDefault();
+      applyDrop(colKey, cellTasks, laneKey);
+    },
   });
+
+  /**
+   * A cell's cards with a drop gap above each and one at the end.
+   *
+   * The gap keys are namespaced by lane as well as column: with a sub-grouping
+   * on, two cells in the same column are the same `colKey`, and a bare
+   * `col:index` would light the highlight up in both at once.
+   */
+  const cellCards = (
+    colKey: string,
+    cellTasks: TaskRow[],
+    laneKey: string | null
+  ) => {
+    const scope = laneKey === null ? colKey : `${colKey} ${laneKey}`;
+    const gap = (index: number) => (
+      <li key={`gap-${index}`}>
+        <DropGap
+          active={dropAt === gapKey(scope, index)}
+          dragging={Boolean(dragging)}
+          onOver={() => dragging && setDropAt(gapKey(scope, index))}
+          onDrop={() => applyDrop(colKey, cellTasks, laneKey, index)}
+        />
+      </li>
+    );
+    return (
+      <>
+        {cellTasks.map((task, index) => (
+          <Fragment key={task.id}>
+            {gap(index)}
+            {card(task)}
+          </Fragment>
+        ))}
+        {cellTasks.length > 0 ? gap(cellTasks.length) : null}
+      </>
+    );
+  };
 
   async function quickAdd(title: string, colKey: string, laneKey: string | null) {
     const plan =
@@ -347,6 +403,7 @@ export function TaskBoard({
         onDragEnd={() => {
           setDragging(null);
           setOver(null);
+          setDropAt(null);
         }}
       >
         {/* Off the status axis the column no longer says what the status is,
@@ -438,8 +495,8 @@ export function TaskBoard({
                   {column.tasks.length}
                 </span>
               </header>
-              <ul className="flex-1 space-y-2 p-2">
-                {column.tasks.map((task) => card(task))}
+              <ul className="flex-1 space-y-1 p-2">
+                {cellCards(column.key, column.tasks, null)}
                 {column.tasks.length === 0 ? (
                   <li className="rounded-md border border-dashed border-border p-3 text-center text-xs text-muted-foreground">
                     {droppable ? "Drop here" : "Nothing here"}
@@ -510,8 +567,8 @@ export function TaskBoard({
                             className="relative flex w-72 shrink-0 flex-col rounded-lg border border-border bg-card"
                           >
                             {refusalOverlay(lane.key, column.key)}
-                            <ul className="flex-1 space-y-2 p-2">
-                              {cell.map((task) => card(task))}
+                            <ul className="flex-1 space-y-1 p-2">
+                              {cellCards(column.key, cell, lane.key)}
                               {cell.length === 0 ? (
                                 <li className="rounded-md border border-dashed border-border p-2 text-center text-[11px] text-muted-foreground">
                                   {droppable ? "Drop here" : "—"}

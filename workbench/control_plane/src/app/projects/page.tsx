@@ -64,10 +64,9 @@ import { type TableSort, sortQuery } from "./lib/table";
 import {
   allSelected as everySelected,
   buildRequest,
+  clickSelect,
   describeOutcome,
   prune,
-  range as selectRange,
-  toggle as toggleId,
   visibleIds,
 } from "./lib/selection";
 import { fetchAccess } from "@/lib/access";
@@ -388,17 +387,15 @@ function ProjectsWorkspace() {
     });
   }, [onScreen]);
 
+  // WS-27ad — one transition, shared with /tasks (`@/lib/selection`): a plain
+  // click toggles and becomes the anchor, a shift-click adds the range and
+  // leaves the anchor put, and shift never removes. Inlining the three
+  // branches here is what let the two apps drift apart in the first place.
   function toggleSelection(id: string, shift: boolean) {
     setBulkNotice(null);
-    setPicked((current) => {
-      if (shift && anchor) {
-        const next = new Set(current);
-        for (const each of selectRange(onScreen, anchor, id)) next.add(each);
-        return next;
-      }
-      return toggleId(current, id);
-    });
-    if (!shift) setAnchor(id);
+    const next = clickSelect({ selected: picked, anchor }, onScreen, id, shift);
+    setPicked(next.selected);
+    setAnchor(next.anchor);
   }
 
   // WS-27y — the keyboard's Shift+Arrow grew the selection; `stepCursor` only

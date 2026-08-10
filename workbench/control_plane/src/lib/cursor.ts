@@ -17,9 +17,18 @@
  * extend: sweeping over rows adds them, and un-selecting is a click, exactly
  * as it already was. A second removal grammar here would make the keyboard
  * and the mouse disagree about what shift means. A surface with no
- * shift-selection model (the /tasks list today) simply never passes
- * `shift=true`, and the sweep branch stays dormant.
+ * shift-selection model simply never passes `shift=true`, and the sweep branch
+ * stays dormant.
+ *
+ * WS-27ad: the sweep's index walk was a private copy of
+ * `app/projects/lib/selection.range`, carried here because a shared lib must
+ * not import app code. It now reads `./selection`, which is that same walk
+ * promoted beside this file — the mouse's shift-click and the keyboard's
+ * shift-sweep are one gesture expressed twice, and two copies of it were
+ * already the beginning of two selection models.
  */
+
+import { range } from "./selection";
 
 export interface CursorState {
   /** Index into the visible rows. `-1` = no active row. */
@@ -37,27 +46,6 @@ export const NO_CURSOR: Pick<CursorState, "cursor" | "anchor"> = {
 export interface CursorNext extends CursorState {
   /** The row id Enter asked to open, else null. */
   open: string | null;
-}
-
-/**
- * The inclusive id range between two rows of `visible`, in render order.
- *
- * Mirrors `app/projects/lib/selection.range` (WS-27n), which stays where it is
- * because that module is the Projects selection model's home and this shared
- * module must not import app code. Same contract: either end missing from the
- * visible set means the anchor scrolled out from under the sweep, and
- * selecting just the target is the honest fallback.
- */
-function sweepRange(
-  visible: readonly string[],
-  anchor: string,
-  target: string
-): string[] {
-  const from = visible.indexOf(anchor);
-  const to = visible.indexOf(target);
-  if (from === -1 || to === -1) return [target];
-  const [lo, hi] = from <= to ? [from, to] : [to, from];
-  return visible.slice(lo, hi + 1);
 }
 
 /**
@@ -102,7 +90,7 @@ export function stepCursor(
   // cursor, and everything in between joins the selection.
   const anchor = state.anchor ?? (cursor >= 0 ? cursor : next);
   const selection = new Set(state.selection);
-  for (const id of sweepRange(rows, rows[anchor], rows[next])) selection.add(id);
+  for (const id of range(rows, rows[anchor], rows[next])) selection.add(id);
   return { cursor: next, anchor, selection, open: null };
 }
 

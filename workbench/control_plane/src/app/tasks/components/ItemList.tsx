@@ -8,7 +8,7 @@ import { isUntagged } from "../lib/priority";
 import { ViewKey } from "../lib/types";
 import { isWaitingOverdue } from "../lib/waiting";
 import { applyFilters, applySort, type GroupBy } from "../lib/ordering";
-import { TaskCard } from "./TaskCard";
+import { FlatList } from "./FlatList";
 import { TaskBoard } from "./TaskBoard";
 import { TaskListGrouped } from "./TaskListGrouped";
 import { TaskToolbar } from "./TaskToolbar";
@@ -73,10 +73,27 @@ export function ItemList() {
   // works on every Next-Actions surface — the flat lists (Done/Waiting/…), the
   // status-grouped list, AND the Kanban board — and survives the list/board
   // toggle within a view. The inbox keeps its own selection UI.
+  //
+  // ── WS-27ad · a divergence KEPT, and why ────────────────────────────────
+  // /projects has no mode: its rows carry a permanent checkbox column and
+  // shift-click extends. /tasks keeps this modal Select button, deliberately.
+  //
+  // The reason is not taste, it is that `selectMode` changes what a CLICK
+  // MEANS. A /projects row is a table row with a dedicated checkbox cell, so
+  // clicking the row opens and clicking the box selects — two targets, two
+  // outcomes. A /tasks row is a TaskCard: the whole card is the open affordance
+  // and it carries its own controls (the schedule button, the context menu, the
+  // status pill's stage menu). Giving every card a permanent checkbox would
+  // either steal the drag-grip gutter the manual sort needs or make one click
+  // mean two things — the exact trap /projects' own card comments name.
+  //
+  // What DID converge is the grammar INSIDE the mode: once you are selecting,
+  // shift-click and Shift+Arrow extend from an anchor through
+  // `@/lib/selection`, identically in both apps. The mode is the entry; the
+  // selection model underneath is now one.
   const selectMode = useTaskStore((s) => s.selectMode);
   const selectedIds = useTaskStore((s) => s.selectedIds);
   const setSelectMode = useTaskStore((s) => s.setSelectMode);
-  const toggleSelected = useTaskStore((s) => s.toggleSelected);
   const clearSelection = useTaskStore((s) => s.clearSelection);
 
   // The view's items (source/archive-filtered), then the toolbar's search/
@@ -318,33 +335,11 @@ export function ItemList() {
         // attribute); the list handles that internally.
         <TaskListGrouped items={visible} view={view} groupBy={groupAxis} />
       ) : (
-        <div className="flex-1 overflow-y-auto">
-          {visible.map((item) =>
-            selectMode ? (
-              <label
-                key={item.id}
-                className="flex cursor-pointer items-center gap-2 border-b border-border/60 pl-3 hover:bg-secondary/40"
-              >
-                <input
-                  type="checkbox"
-                  checked={selectedIds.has(item.id)}
-                  onChange={() => toggleSelected(item.id)}
-                  className="h-4 w-4 shrink-0 accent-primary"
-                />
-                <div className="pointer-events-none min-w-0 flex-1">
-                  <TaskCard item={item} variant="row" />
-                </div>
-              </label>
-            ) : (
-              <TaskCard
-                key={item.id}
-                item={item}
-                variant="row"
-                showPriority={view === "priority"}
-              />
-            ),
-          )}
-        </div>
+        // WS-27ad — the flat views (Done / Someday / Archive / Engage /
+        // Priority). Lifted into their own component when they gained the
+        // shared cursor, flash and per-view quick-add: they were the last
+        // /tasks surfaces where the arrow keys did nothing.
+        <FlatList items={visible} view={view} showPriority={view === "priority"} />
       )}
 
       {/* Bulk action bar — archive/restore/delete the current selection. */}

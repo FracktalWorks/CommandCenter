@@ -1,7 +1,9 @@
 "use client";
 
+import { DropGap } from "@/components/DropGap";
 import { QuickAdd } from "@/components/QuickAdd";
 import { useFlash } from "@/components/useFlash";
+import { gapKey } from "@/lib/boardDrop";
 import { clampCursor, stepCursor } from "@/lib/cursor";
 import { useCallback, useMemo, useState } from "react";
 import { GtdItem, ViewKey } from "../lib/types";
@@ -31,9 +33,26 @@ import { formatStatus } from "../lib/utils";
 //
 // The board is only offered for Next Actions (see ItemList `boardable`); other
 // views render list-only until their own status model is designed.
+//
+// ── WS-27ad · what this board shares, and the one thing it does not ────────
+// Shared with /projects' board: the keyboard cursor and its Shift-sweep
+// (`@/lib/cursor`), the selection grammar (`@/lib/selection`), the landing
+// flash (`@/components/useFlash`), the group-context quick-add
+// (`@/components/QuickAdd`), the column accent (`@/lib/statusAccent` via
+// lib/stageColors), the card shell (`@/components/TaskCardShell`) and — as of
+// this ticket, in the other direction — the drop-gap reorder
+// (`@/components/DropGap` + `@/lib/boardDrop`), which /projects lacked.
+//
+// NOT shared: /projects' SWIMLANES (a second grouping axis drawn as rows).
+// Deliberate, and the reason is this app's data rather than effort: /tasks'
+// board axis is the fixed workflow-stage set, and its other axes are COMPUTED
+// projections — priority and mode come from important × leveraged × urgent-from-
+// dueAt, which no drop can write (`lib/quickAdd` refuses a quick-add on them for
+// the same reason, and `lib/dropRules` refuses the drag). A lane grid here would
+// be a grid most of whose cells refuse every gesture. If /tasks ever grows a
+// second SETTABLE axis, this is the note to delete.
 
-/** The cursor never carries a selection here — see the note in onKeyDown. */
-const EMPTY_SELECTION: ReadonlySet<string> = new Set();
+const NOBODY: ReadonlySet<string> = new Set();
 
 export function TaskBoard({
   items,
@@ -60,6 +79,7 @@ export function TaskBoard({
   const selectMode = useTaskStore((s) => s.selectMode);
   const selectedIds = useTaskStore((s) => s.selectedIds);
   const toggleSelected = useTaskStore((s) => s.toggleSelected);
+  const extendSelection = useTaskStore((s) => s.extendSelection);
 
   // Columns: an explicit stage set (the per-project view's real ClickUp
   // statuses) or the user's 4 fixed workflow stages. A LOCAL task keys off its
@@ -84,6 +104,7 @@ export function TaskBoard({
   // WS-27y backport: the keyboard cursor and the landing flash — the same
   // shared machinery the Projects board runs (`@/lib/cursor`, `useFlash`).
   const [cursor, setCursor] = useState(-1);
+  const [anchor, setAnchor] = useState<number | null>(null);
   const { flash, attach, scrollTo } = useFlash();
 
   // An unstaged task sits in the FIRST column of the axis.
@@ -134,19 +155,23 @@ export function TaskBoard({
       )
     )
       return;
-    // Plain cursor + Enter only. /tasks has no shift-range selection model
-    // (`selectedIds` is a bare toggle set with no anchor — see taskStore), so
-    // the shared cursor's shift-sweep stays dormant here rather than
-    // half-growing a second selection grammar on one surface.
+    // WS-27ad — Shift+Arrow sweeps a range, exactly as the /projects board
+    // does, but ONLY inside select mode. Outside it there is no selection on
+    // screen and no bulk bar, so a shift-arrow would grow a set nobody can
+    // see; the mode is what makes the gesture legible here (see the note on
+    // `selectMode` in ItemList).
+    const picked = selectMode ? selectedIds : NOBODY;
     const next = stepCursor(
       rows,
-      { cursor: cursorAt, anchor: null, selection: EMPTY_SELECTION },
+      { cursor: cursorAt, anchor, selection: picked },
       event.key,
-      false,
+      selectMode && event.shiftKey,
     );
     if (!next) return;
     event.preventDefault();
     setCursor(next.cursor);
+    setAnchor(next.anchor);
+    if (next.selection !== picked) extendSelection([...next.selection]);
     if (next.open) openFocus(next.open);
     if (next.cursor >= 0) scrollTo(rows[next.cursor]);
   }
@@ -298,8 +323,9 @@ export function TaskBoard({
                   {/* drop gap ABOVE this card (manual reorder) */}
                   {manual && (
                     <DropGap
-                      active={dropAt === `${col.key}:${idx}`}
-                      onOver={() => dragId && setDropAt(`${col.key}:${idx}`)}
+                      active={dropAt === gapKey(col.key, idx)}
+                      dragging={Boolean(dragId)}
+                      onOver={() => dragId && setDropAt(gapKey(col.key, idx))}
                       onDrop={() => dropAtIndex(col.key, idx)}
                     />
                   )}
@@ -322,7 +348,7 @@ export function TaskBoard({
                       // The column IS the stage here — a per-card status pill
                       // would just repeat it, so it's off on the board.
                       showStage={false}
-                      onToggleSelected={() => toggleSelected(i.id)}
+                      onToggleSelected={(shift) => toggleSelected(i.id, shift, rows)}
                       onDragStart={() => setDragId(i.id)}
                       onDragEnd={() => { setDragId(null); setOverCol(null); setDropAt(null); }}
                     />
@@ -332,8 +358,9 @@ export function TaskBoard({
               {/* trailing gap → drop at the end */}
               {manual && colItems.length > 0 && (
                 <DropGap
-                  active={dropAt === `${col.key}:${colItems.length}`}
-                  onOver={() => dragId && setDropAt(`${col.key}:${colItems.length}`)}
+                  active={dropAt === gapKey(col.key, colItems.length)}
+                  dragging={Boolean(dragId)}
+                  onOver={() => dragId && setDropAt(gapKey(col.key, colItems.length))}
                   onDrop={() => dropAtIndex(col.key, colItems.length)}
                 />
               )}
@@ -356,35 +383,5 @@ export function TaskBoard({
         );
       })}
     </div>
-  );
-}
-
-/** A thin, highlight-on-hover drop target between cards for manual reorder. */
-function DropGap({
-  active,
-  onOver,
-  onDrop,
-}: {
-  active: boolean;
-  onOver: () => void;
-  onDrop: () => void;
-}) {
-  return (
-    <div
-      onDragOver={(e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        onOver();
-      }}
-      onDrop={(e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        onDrop();
-      }}
-      className={[
-        "-my-1 h-2 rounded transition-colors",
-        active ? "bg-primary/40" : "bg-transparent",
-      ].join(" ")}
-    />
   );
 }

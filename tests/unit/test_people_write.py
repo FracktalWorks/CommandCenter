@@ -335,11 +335,16 @@ def test_the_directory_tells_the_caller_whether_they_may_write(monkeypatch):
     """Read as a whole response, because the flag is only useful if it ships."""
     database = FakeDB()
 
-    async def _get_db():
-        return database
+    from contextlib import asynccontextmanager
+
+    @asynccontextmanager
+    async def _tenant_session(organization_id=None):
+        yield database
+        await database.commit()
 
     for module in (people_core, people_directory):
-        monkeypatch.setattr(module, "_get_db", _get_db, raising=False)
+        monkeypatch.setattr(module, "_tenant_session", _tenant_session,
+                            raising=False)
 
     for user, expected in ((ADMIN, True), (READER, False)):
         res = run(people_directory.list_directory(user=user))
@@ -352,11 +357,16 @@ def test_the_person_page_carries_can_manage_independently_of_hr_visible(monkeypa
     skills strip restricted and the Edit button present."""
     database = FakeDB()
 
-    async def _get_db():
-        return database
+    from contextlib import asynccontextmanager
+
+    @asynccontextmanager
+    async def _tenant_session(organization_id=None):
+        yield database
+        await database.commit()
 
     for module in (people_core, people_directory):
-        monkeypatch.setattr(module, "_get_db", _get_db, raising=False)
+        monkeypatch.setattr(module, "_tenant_session", _tenant_session,
+                            raising=False)
 
     editor_only = _user("ops@fracktal.in", "feature:people", PEOPLE_WRITE_PERMISSION)
     person = run(people_directory.get_person(PERSON.id, user=editor_only))

@@ -33,7 +33,7 @@ from gateway.routes.crm.core import (
     DealModel,
     Entity,
     StatusModel,
-    _get_db,
+    _tenant_session,
     actor,
     has_column,
     insert_row,
@@ -219,8 +219,7 @@ async def get_pipeline(
     of rows returned, or the header would lie about a lane with more than
     ``per_lane`` deals in it.
     """
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         lanes = (await db.execute(
             text("SELECT * FROM crm_deal_statuses ORDER BY position, name"), {},
         )).fetchall()
@@ -276,8 +275,6 @@ async def get_pipeline(
                 ),
             ))
         return PipelineResponse(lanes=out)
-    finally:
-        await db.close()
 
 
 # ── Lead → deal conversion ──────────────────────────────────────────────────
@@ -325,8 +322,7 @@ async def convert_lead(
     """
     body = body or ConvertRequest()
     who = actor(user)
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         lead = await require_row(db, LEADS.table, lead_id, "Lead")
         if getattr(lead, "converted_deal_id", None):
             raise HTTPException(
@@ -338,7 +334,6 @@ async def convert_lead(
         organization = await _resolve_organization(db, lead, body)
         deal = await _create_deal(db, lead, body, contact, organization, who)
         lead = await _stamp_converted(db, lead, contact, organization, deal, who)
-        await db.commit()
 
         return ConvertResponse(
             lead=row_to_dict(lead, LEADS.model),
@@ -352,8 +347,6 @@ async def convert_lead(
             ),
             deal=row_to_dict(deal, DealModel),
         )
-    finally:
-        await db.close()
 
 
 async def _resolve_contact(db: Any, lead: Any, body: ConvertRequest) -> Any | None:

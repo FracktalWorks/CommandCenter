@@ -48,8 +48,19 @@ from fastapi import APIRouter, Depends, HTTPException
 
 # The shared gateway engine (BO-10) — see the DB section below for why the
 # names are re-exported rather than imported at each call site.
+#
+# H2 (MT-1c): `_tenant_session` IS `acb_common.db.tenant_session` — the
+# tenant-bound context manager every request handler in this package now
+# acquires its session through. The tenant is bound centrally from the
+# caller's `app_user` row (`_with_resolved_access` → `bind_tenant`), which is
+# the SAME source `get_org_id` below resolves — S1-1's explicit
+# `organization_id` predicates stay as defense in depth on top of it.
+# `get_db` (unbound) remains re-exported ONLY for `routes/agent_skills.py`,
+# which reaches the seam through this module and is not this package's to
+# convert.
 from gateway.db import get_db  # noqa: F401
 from gateway.db import get_session_factory as _get_session_factory  # noqa: F401
+from gateway.db import tenant_session as _tenant_session  # noqa: F401
 
 # The ONE answer to "which tenant is this caller" (WS-29b, D-MT-1 (a)). Imported
 # rather than re-derived: two implementations of that question is exactly how
@@ -95,14 +106,15 @@ NON_ASSIGNABLE_ROLES = frozenset({"agent_service"})
 # ── DB (the one shared gateway engine — gateway/db.py, BO-10) ────────────────
 #
 # This package used to build its own engine here, with its own pool of 5+10.
-# It now has none: `get_db` and `_get_session_factory` at the top of this module
-# are re-exports of the shared seam, so every `from ._common import get_db` in
-# this package keeps working with a single pool behind it.
+# It now has none: `_tenant_session` and `_get_session_factory` at the top of
+# this module are re-exports of the shared seam, so every
+# `from ._common import _tenant_session` in this package keeps working with a
+# single pool behind it.
 #
 # The re-export is deliberate rather than pointing each caller at `gateway.db`.
 # Sibling modules import the name from here and the tests monkeypatch it *on the
-# sibling* (`monkeypatch.setattr(groups, "get_db", ...)`), so the name has to
-# stay resolvable through this module for both to keep working.
+# sibling* (`monkeypatch.setattr(groups, "_tenant_session", ...)`), so the name
+# has to stay resolvable through this module for both to keep working.
 
 
 # ── Auth gate ───────────────────────────────────────────────────────────────
@@ -655,7 +667,8 @@ async def provision_member(
     hand-rolled INSERT would quietly skip. Spec ``colleague_onboarding.md`` §6
     done-when 8.
 
-    Deliberately left to the CALLER: ``db.commit()`` (so an approval can mark
+    Deliberately left to the CALLER: the commit — the caller's
+    ``_tenant_session`` block commits on clean exit (so an approval can mark
     its request decided in the same transaction), ``invalidate_for``,
     ``record_admin_change`` (the audit action differs — `org.member_invited`
     vs `org.access_request_approved`) and the response model.

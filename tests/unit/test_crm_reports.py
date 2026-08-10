@@ -154,7 +154,8 @@ async def test_pipeline_report_never_writes(db: FakeCrmDB) -> None:
     await crm_reports.funnel_report(user=USER)
     await crm_reports.win_loss_report(user=USER)
     await crm_reports.owner_leaderboard(user=USER)
-    assert db.committed == 0
+    # H2: `tenant_session` commits an EMPTY transaction on clean exit even for
+    # reads, so "writes nothing" is asserted on the statements themselves.
     for statement in db.statements:
         assert statement.split(None, 1)[0].upper() == "SELECT", statement
 

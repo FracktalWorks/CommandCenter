@@ -1858,6 +1858,274 @@ is written per-row.
 
 ---
 
+### 9.4 The second-pass Plane queue (minted 2026-08-10 from a full-monorepo read)
+
+The first pass (§9.1, research §3/§4) ranked *features* and stopped there. On the owner's
+instruction — *"read the entire code and lift the features and the specifications from
+them"* — six agents read all ~3,000 TypeScript files plus the API: `apps/web`, the API and
+data model, `packages/editor` + `apps/live`, `packages/ui` + `propel`, `apps/space` +
+`admin` + i18n, and a traceability audit (§9.3). This section carries what the first pass
+could not see, because it was looking at the wrong layer.
+
+> ### The finding that reframes the whole exercise
+> **Almost none of Plane's interaction quality is Plane's.** `packages/propel` is a thin
+> wrapper over **Base UI** (MIT); the editor is **TipTap + ProseMirror** (MIT); the
+> collaboration layer is **Yjs + Hocuspocus** (MIT); the palette is **cmdk**, the date
+> picker **react-day-picker**, the charts **Recharts**, the drag-and-drop
+> **pragmatic-drag-and-drop** (Apache-2.0). The AGPL wall blocks their *glue and their
+> menus* — which we would have to rewrite for `DESIGN_SYSTEM.md` conformance anyway.
+> **The substrate is a shopping list, not a wall.** Verify each licence at install time;
+> `node_modules` was absent from the read clone, so versions come from their manifest.
+>
+> Two consequences worth stating plainly. **We already ship TipTap v3** and use it in
+> `src/app/email/components/SignatureEditor.tsx`, so a rich comment box is *extensions*,
+> not an engine. And **we ship no headless-primitive library at all**, which is why we have
+> seven hand-rolled modals and no focus trap anywhere in the tree.
+
+**Where we are AHEAD, recorded so nobody "improves" us backwards.** Plane has **zero**
+`prefers-reduced-motion` handling repo-wide; strips the focus ring from every button
+variant without replacing it; has no automated contrast test; runs one theme axis
+(light/dark/contrast) against our style × mode; imports `lucide-react` directly
+everywhere; and carries two parallel UI packages with duplicate primitives — the exact
+"second implementation of an existing seam" our CLAUDE.md §5 forbids, visible in someone
+else's tree as evidence for the rule. **Our theming engine is the better engine.** Every
+motion behaviour taken from below ships behind our existing reduced-motion rule; theirs is
+a counterexample, not a model.
+
+#### 9.4.1 Owner decisions owed — these gate the tickets under them
+
+**D-PM-15 (owed) — the headless-primitive substrate.** Base UI vs Radix vs Headless UI.
+Everything in WS-27ak depends on it and **picking two would create the parallel seam our
+own rules forbid**, so this is one choice made once. What it buys: a real focus trap,
+focus return, scroll-lock with scrollbar compensation, collision-aware positioning,
+roving tabindex, typeahead — the behaviours nobody hand-rolls correctly. Every primitive
+still gets a CommandCenter wrapper in `src/components/ui/` carrying `.cc-control`,
+resolving icons through `<Icon name>`, using only semantic tokens; call sites import ours,
+never the library's, or the library's defaults become a second design system. **R7:** the
+conformance suite gains a rule naming the import restriction, or it is advisory.
+
+**D-PM-16 (owed) — org-wide vocabularies.** Plane's tags, custom fields and task types
+carry a **nullable** project scope, so a vocabulary is either workspace-wide or
+project-local, with paired partial-unique constraints. Ours are all `project_id NOT NULL`.
+⚠️ **This is the most expensive item in this section if we get it wrong.** Dropping NOT
+NULL later is trivial; what is not trivial is merging the duplicate rows twelve projects
+will each have accumulated — their own "Bug", "urgent", "Client" — which is a
+judgement-call migration nobody can automate. **Even if the answer is "no, vocabularies
+stay per-project", record it as a decision now**, because the answer is what stops the
+merge ever becoming necessary.
+
+**D-PM-17 (owed) — the i18n discipline (not i18n itself).** Their numbers are our
+forecast: 28 namespaces × 19 locales ≈ **5,181 keys per locale**, for a surface *smaller*
+than ours. The cost splits in two and only one half is avoidable: translation is
+unavoidable and unchanged by anything we do today; **extraction** — walking every
+component, finding every literal, inventing a key — is the expensive, unreviewable,
+long-branch half, and it collides head-on with our "keep branches short" rule. The
+recommendation is deliberately modest: **do not adopt i18n now; stop making it more
+expensive every week.** New surfaces put user-facing strings in a per-surface keyed module
+rather than inline in JSX; never build a sentence by concatenation; never branch on count
+in TypeScript (ICU cannot absorb either). Then adoption is "move a file", not "read every
+component". Binds new and changed work only — the existing tree is a finding, not a
+refactor. The libraries are MIT (`i18next` + `i18next-icu`) if we ever do adopt.
+
+**D-PM-18 (owed) — RTL as a design-system rule.** Plane punted entirely, so adopting their
+i18n buys us **nothing** here. RTL is logical CSS properties (`margin-inline-start` over
+`margin-left`), mirrored iconography and directional layout — it lands on
+`DESIGN_SYSTEM.md`, not on strings. Writing logical properties in a centrally-themed system
+costs **nothing today** and is a full-surface sweep later. This is a one-line addition to
+an existing seam, which is exactly the kind of change that is free now and impossible to
+schedule later.
+
+#### 9.4.2 Tickets
+
+**WS-27ak — the primitive layer.** 🟡 Blocked on D-PM-15.
+Sequenced by debt, not by ease: (1) **`Modal`** first — seven hand-rolled copies, **zero
+focus traps**, and it proves the theming wrapper on the hardest case. The behaviour a
+dialog owes: focus moves in on open; Tab wraps at both ends; the background is `inert`, not
+merely covered (so find-in-page and a screen reader cannot walk into it); scroll locked
+with scrollbar-width compensation so the page does not shift; Escape captured *at the
+dialog*, not on `document` where it races every other listener — our current shape; focus
+returns to the opener, or a sensible fallback if it unmounted, never `<body>`; `role` +
+`aria-modal` + `aria-labelledby`/`describedby`; and outside-click dismissal only when the
+press both started *and* ended outside, so a text selection dragged out of the dialog does
+not close it. (2) **`Tooltip`** — we use the native `title` attribute in ~157 files.
+(3) **`Toast`**, with the promise-bound form (`loading → success | error` mutating one
+toast in place, actions derived from the resolved value) — it is also the delivery vehicle
+for the copy-link affordance. (4) **`Combobox`** — our `Select` is a styled native
+`<select>`, so every "pick from a long list" surface is unserved. (5) **`Skeleton`** —
+~20 files improvise `animate-pulse`.
+
+**WS-27al — the logic-only wins.** 🟢 AGENT-SAFE, no library, no design decision, no
+dependency on D-PM-15. The cheapest real quality in this whole section:
+(1) **`ControlLink`** — a row that is a real `<a href>` but intercepts plain left-click to
+open the panel, so cmd/ctrl/middle-click still open a new tab. Our clickable rows are
+`<div onClick>`; today we are the one place on the user's machine where that is broken.
+(2) **`data-prevent-outside-click`** — outside-click dismissal walks up from the target and
+bails on the attribute, so a picker portalled out of a dropdown stops closing the dropdown
+underneath it. ~15 lines, no ref plumbing between components that do not know each other.
+(3) **Lazy tooltip mounting** — mount positioning machinery on first hover, not for 1,200
+rows that will never be hovered. (4) **Selected-first ordering** in multi-selects, sorted
+**on open and frozen while open** (theirs re-sorts live, so the option you just ticked
+jumps under your cursor). (5) **One overdue predicate** — never true for a done or
+cancelled item, and **today counts as due**; ours must be one function, not seven.
+(6) **Selection self-heals**: when the filtered list changes, drop selected ids that are no
+longer present, so a bulk action cannot fire at something off-screen.
+
+**WS-27am — the three-state list surface.** 🟢 AGENT-SAFE.
+(1) The **empty-state triad**: filters-active-but-no-match (action: *Clear filters*),
+never-populated (action: *Create*), and no-permission — the last renders the CTA
+**disabled rather than hidden**, so the user learns the action exists and that they cannot
+do it. Our §4.14 asked for a tiered primitive; that is the shape, this is the decision
+rule. (2) One **loader/empty/error HOC** per layout so each surface stops hand-rolling its
+three states — with their judgement call kept: **an empty calendar still renders**, because
+empty chrome is meaningful there and not in a table. (3) A **per-layout error boundary**
+whose Retry re-mounts by bumping a key rather than clearing a flag (which re-crashes
+instantly). A malformed group shape must not blank the app.
+
+**WS-27an — the inline-autosave contract.** 🟢 AGENT-SAFE. Six behaviours, and the third is
+the one everybody omits: 1.5s debounce; save on blur with trim; **save on unmount if
+dirty**, so closing the panel mid-keystroke does not lose the edit; empty **reverts to the
+last good value** rather than persisting empty, with an inline required message; a
+character counter that appears only while focused; and a separate "Saving… → Saved"
+indicator. When not editable it renders as plain text, not a disabled input.
+
+**WS-27ao — a rich comment/description editor (Lite tier).** 🟢 AGENT-SAFE, **no new
+service**, no schema change. Supersedes the rich-text half of research §5's refusal, which
+bundled it with the collab server; the collab-server refusal stands. Smallest slice that
+makes the product feel modern: markdown-on-paste and markdown-on-copy (`tiptap-markdown`,
+MIT); **mention as a node**, not a text token — but *serialising back to the same
+`@address` form*, so `notifications.mentionsIn()` and the whole notification wiring stay
+untouched while the editor draws a proper chip; image paste/drop with an optimistic local
+preview before upload completes. ⚠️ Two traps read from their implementation: clearing the
+composer after submit must be flagged so the asset-GC pass does not delete the images you
+just posted; and the two heavy extensions (syntax highlighting, the emoji dataset) are
+statically imported there and roughly double the bundle — lazy-load both. **No slash
+commands, no collaboration, in this slice.** ⚠️ Their editor has **9 aria attributes across
+232 files** and a **Tab keyboard trap by default**; we implement the dropdowns properly and
+Tab always leaves the field unless inside a list.
+
+**WS-27ap — the boolean filter tree.** 🟢 AGENT-SAFE, needs a migration. **Expensive to
+retrofit.** Our filters are a flat dict, implicitly AND-ed, so "assigned to me **or**
+watching, **and not** done" is unexpressible. Theirs is a nested `and`/`or`/`not` grammar
+over leaf conditions, with a declared-field allowlist (an undeclared field is a 400, not a
+silent drop) and a max nesting depth. Our `build_task_filters` is **already pure, returning
+clauses + params** — it is exactly the leaf evaluator; what is missing is the tree walker,
+the depth cap and an allowlist we already have in `VIEW_FILTER_KEYS`. Do it their way:
+**a new column beside the old, both read, the old one dropped in a later release** (R6) —
+their own late converter drops a record's filters silently on failure, which is the lossy
+migration to avoid. Every saved view, dashboard widget, agent query and the delta feed's
+scope predicate reads that config, so the stored corpus only grows.
+
+**WS-27aq — notification preferences.** 🟢 AGENT-SAFE, needs a migration. One preference
+row with **nullable** workspace and project keys, so global default, per-Center override
+and per-project mute are one table; plus `snoozed_till`/`archived_at` beside `read_at`.
+**The argument for now rather than later: we already shipped watchers with
+auto-subscribe-on-touch**, which manufactures volume by design. Without a mute the next
+user action is turning the bell off, and the whole watcher feature becomes dead weight.
+Widening `pm_notifications.kind`'s three-value CHECK is also cheaper before three clients
+hard-code three values. ⚠️ **Their mistake, do not copy:** their preference flags gate the
+**email channel only** — the in-app bell is unmutable.
+
+**WS-27ar — favourites/pins and recent-visits.** 🟢 AGENT-SAFE, needs a migration (two
+small tables). §4 item 14 already asked for pinned projects/views and recently-viewed
+(§9.3's WS-27ah owns the UI). The design point: **one generic
+`(user, entity_type, entity_id)` table**, not an `is_pinned` column on `pm_projects`, then
+another on `pm_views`, then another on dashboards — four columns, four queries, no
+ordering, no folders, and a migration to unify. One table now costs the same as the first
+column. ⚠️ Cap recent-visits per user on write; theirs grows unbounded with no sweeper.
+
+**WS-27as — the join-table authorisation audit.** 🔴 SECURITY. Partly done.
+Reading Plane's **GHSA-4w5x-wc9w-f47x** (they scoped a cycle-issue join write by issue id
+alone, so a caller could re-point another tenant's rows) prompted a check of ours.
+✅ **`views.set_positions` FIXED 2026-08-10** — it validated the view and then wrote every
+`task_id` unchecked. Remaining: audit every other endpoint taking `task_ids[]` and writing
+a join row — `relations.py`, `tags.py`, `watchers.py`, `bulk.py` (bulk already resolves
+per task and is clean) — each with a test using **`member_user`, never `projects_user()`**:
+the latter holds `*` including `data:org:read`, and a scoping test written with it passes
+whether or not the code is correct. That is not hypothetical; the first draft of the
+positions fence had exactly that defect.
+
+**WS-27at — the living design-system gallery.** 🟢 AGENT-SAFE. The one item here that
+improves our *process* rather than the product, and it targets the gap CLAUDE.md names by
+name: the conformance suite checks seven regexes and **nothing tests layout or cross-app
+continuity, so the theme-switch sweep is the real gate** — a manual gate that every slice
+this session owed and several skipped. One internal route rendering every token, every
+control and every state across all four themes × both modes turns that sweep into one page.
+Plane documents its own elevation vocabulary as executable stories showing ✅ correct and
+❌ wrong nesting; that is the shape.
+
+#### 9.4.3 Banked, with the trigger that should wake them
+
+- **`?fields=`/`?expand=`** sparse fieldsets — one generic read affordance; the allowlist
+  must be server-side or `fields=` becomes a column-name oracle. *Trigger: the first mobile
+  or agent client that complains about payload size.*
+- **Composite type tokens** (size + leading + tracking + weight in one class, on a rem
+  ramp). Fixes a defect `AGENTS.md` already admits: our two arbitrary-px sizes opt out of
+  the user's density preference because `--ui-scale` reaches rem and not px. *Trigger: the
+  `text-[13px]` vs `text-sm` ruling, which is already owed.*
+- **Paired surface state variants** (`-hover`/`-active`/`-selected` per surface token) so
+  every surface stops inventing its own hover. Take the state-variant half, skip their
+  depth renumbering.
+- **Container queries** for panel-local layout — we use **zero** and 517 viewport-breakpoint
+  prefixes, while our documented layout is exactly the flex-content-plus-380px-panel case
+  container queries exist for.
+- **A page-gutter spacing token.** `DESIGN_SYSTEM.md` §6 currently documents `px-4 sm:px-6`
+  as a string to retype on every page — the shape of drift the rest of the document exists
+  to prevent.
+- **Sprint membership exclusivity.** When sprints are built (P-23), the join needs
+  `UNIQUE (task_id)`: theirs enforces exclusivity in one handler and not in the schema, so
+  one forgetful code path puts a task in two sprints and every burndown is silently wrong.
+  Trivial then, a migration later.
+- **Per-tenant settings store.** We have a settings *surface* and no settings *store*.
+  ~31 of their 36 instance-config keys must be per-tenant for us; the sharp edge is
+  **per-tenant OAuth**, which is not a storage problem but a **callback-routing** one (the
+  tenant must ride in `state` and be validated, and the login page must resolve tenant
+  before offering buttons). Cheap now, an auth-entry-path rewrite later. ⚠️ Credential
+  handling is owner-gated (work_plan §6) — this is written up and handed over, never built
+  against live credentials.
+- **A separate, short-lived admin session cookie.** Their instance admin is a different
+  table *and* a different cookie with a 1-hour age. This sharpens our owner-gate registry
+  from a behavioural rule into a mechanical one — an owner acting as owner would be on a
+  different session from an owner reading their inbox.
+- **A grouped-aggregate primitive** for dashboards — one allowlisted endpoint, so every
+  widget does not grow its own copy of the visibility predicate. ⚠️ Encode their trap: with
+  an M:N axis (tags, assignees) per-bucket counts are distinct but the row total is a sum
+  of buckets, so a two-tag task is counted twice and the total exceeds reality.
+- **Saved-view lock + archive** (two nullable columns). ⚠️ **Refuse** its sibling — their
+  view `access` private/public enum is a second visibility axis and collides with D12.
+- **Reactions** on tasks and comments. Adjacent to Chat; a product call, not a UI one.
+
+#### 9.4.4 Added to the refusal list (research §5), with reasons
+
+Their **pervasive soft-delete with an async recursive cascade** — a background task walks
+reverse relations and soft-deletes children, printing and skipping per-relation failures.
+Three reasons beyond the ones already recorded: it is not atomic with the delete, so
+children outlive their parent for an unbounded window; a partial failure leaves a
+permanently inconsistent graph with no record; and — **the one that matters for us** — it
+interacts badly with a change feed, because children get tombstoned at arbitrary later
+times and a delta client observes a parent disappear before its children with no way to
+order the two. Our archived-only posture plus the `AFTER DELETE` trigger is the better
+answer. · **Their role model**: three ordered integer roles, and a **workspace admin
+bypasses project role checks entirely** — a privilege-escalation shape, plus generic 403s
+that collide with our 404-never-403 doctrine. Nothing to take; ours is strictly richer. ·
+**`ProjectPublicMember`**, a shadow membership table created silently when a non-member
+comments on a public board — a second membership vocabulary; for us a public participant
+is a **grant**, not a table. · **Secrets decrypted into API responses** and a **Fernet key
+derived with the literal salt `"salt"`** — return set/unset, never the value. ·
+**`CORS_ALLOW_ALL_ORIGINS` failing open** when an env var is unset, with credentials
+enabled and secure cookies disabled — fail closed; refuse to boot. · **`fields = "__all__"`
+on public-facing serializers**, which auto-publishes every future column. · **Same-origin
+path mounting** of a public surface (it already caused an XSS mitigation in their tree) —
+if we ever expose one it goes on a **different origin**, decided before the first link
+exists. · **`class-variance-authority`** — a `cva` recipe is exactly the "documented class
+string" our `DESIGN_SYSTEM.md` §3 rejected, because a theme's control personality is not
+expressible in a class string. · **UA-sniffing for touch** — use `(hover: hover)` and
+`(pointer: fine)`. · **`Math.random()` in a skeleton render** — take the irregularity,
+derive it from a hash of the row index. · **Unmount-on-scroll virtualization for any
+subtree owning unsaved input** — browser find-in-page cannot see it and an in-progress edit
+is lost.
+
+---
+
 ## 10. Verification
 
 ⚠️ Never `uv run pytest tests/unit/` bare — whole-directory collection hangs on the

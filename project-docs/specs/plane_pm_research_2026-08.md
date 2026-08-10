@@ -34,7 +34,7 @@
 ## 1. What Plane is, and why it maps onto us
 
 Plane is a production open-source Jira/Linear alternative: Django/DRF + Celery over
-Postgres/Redis, a Next.js member app, and — this is its most interesting architectural
+Postgres/Redis, a member app (⚠️ **corrected 2026-08-10**: at the commit we read it is **React Router 7**, not Next.js, behind a hand-written `next/*` compatibility shim — the migration technique is worth banking, nothing more), and — this is its most interesting architectural
 property — **four user-facing surfaces over one API**: `apps/web` (members), `apps/space`
 (anonymous public boards, with its own separate view tree), `apps/admin` (instance
 god-mode), `apps/live` (a Node Hocuspocus/Yjs server for collaborative page editing).
@@ -278,6 +278,19 @@ Verdicts here anneal into the UI work queue; each is an interaction spec, not a 
   every save (makes search/email/export free); and if we ever add rich text, start from
   TipTap-the-MIT-library, markdown-stored, mention-autocomplete first — our
   mention→notification wiring already exists, which is the hard part.
+
+  > ⚠️ **AMENDED 2026-08-10 — this refusal bundled two separable things, and the bundling
+  > was the error.** A second-pass read established that **`apps/live` is not required for
+  > an editor at all**: Plane ships three editor tiers off one core, and the collaborative
+  > provider is `undefined` for two of them. Verified — the *only* consumer of the realtime
+  > server anywhere in their web app is the Pages body; task descriptions and comments never
+  > open a socket. So "rich text" and "a second realtime stack" are independent decisions
+  > and only the second is refused here. **The refusal of the collab stack stands unchanged.
+  > The refusal of rich text does not survive its own reasoning** — it is a client-side
+  > dependency with zero new services, on a library (**TipTap v3**) we ALREADY ship and use
+  > in `src/app/email/components/SignatureEditor.tsx`. Minted as a ticket in
+  > `project_management_app.md` §9.4 rather than left inside a refusal that no longer
+  > applies to it.
 - **Pervasive soft-delete**: every query in their tree re-asserts `deleted_at IS NULL`;
   a missed guard resurrects ghosts. Our archived-only posture stands. If any pm table
   ever gains `deleted_at`, the non-obvious part to copy is **paired partial-unique
@@ -301,7 +314,7 @@ Verdicts here anneal into the UI work queue; each is an interaction spec, not a 
 > The analyses below are kept as the record each answer was given against.
 
 **Q1 — Public read-only boards.** Plane publishes any container under a capability URL
-(`anchor = uuid4().hex`, per-board kill switch, physically separate view tree +
+(`anchor = uuid4().hex`, physically separate view tree +
 serializers so the public surface is reviewable in one directory — `apps/space`,
 `deploy_board.py`). A client-facing roadmap view is real product value. But for us it
 would be **the first anonymous tenant-data READ route**: `/workflows/hooks/{token}`
@@ -312,6 +325,21 @@ ever built: dedicated `routes/pm_public/` module with its own read-only models (
 flag on member endpoints), no member-roster endpoint (Plane exposes member names/avatars
 to anyone with the anchor — refuse that), per-board disable, rate limits, and a
 leak-audit entry. The honest alternative is invite-as-restricted-guest.
+
+> ⚠️ **Three corrections from the second-pass read (2026-08-10).** All three make the
+> deferred feature look *less* safe than this paragraph did, so they matter to the revisit.
+> (1) **There is no per-board kill switch.** `is_disabled` and `is_activity_enabled` exist
+> on the model and are read by no view or component anywhere in the tree. Revocation is
+> unpublish — which soft-deletes the row and loses every existing link — and republishing
+> mints a new anchor. "Per-board disable" above is therefore a thing we would have to
+> BUILD, not adopt. (2) **Refusing the roster endpoint would not close the leak.**
+> `created_by` rides in the list projection and vote/reaction payloads carry each actor's
+> name and avatar, so member identity escapes twice more by other routes. (3) **The
+> capability URL is recoverable from the identity URL**: an unauthenticated endpoint answers
+> "give me the anchor for this workspace slug + project id", so anyone who ever knew a
+> project's UUID can recover its current anchor forever — which defeats unpublish/republish
+> as a rotation. Generalises to our own `/workflows/hooks/{token}` category: a capability
+> scheme is only as strong as the weakest endpoint that will hand the capability out.
 **ANSWERED — D-PM-14: deferred.** *"For now, let's leave out public read-only boards. We
 will revisit it when needed."* This paragraph is the starting point for that revisit.
 

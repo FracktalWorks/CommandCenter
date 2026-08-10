@@ -152,17 +152,38 @@ const COLOR_ALIASES: Record<string, AccentHue> = {
 /**
  * `pm_task_statuses.category` → hue.
  *
- * Matches the seeded statuses' own colours (`routes/projects/tree.py`
- * `_SEED_STATUSES`: Backlog gray, To do blue, In progress amber, Done green) so
- * a project whose owner cleared a colour does not suddenly repaint. `triage`
- * (WS-27u) is the parked-at-the-front-door lane and gets the one remaining
- * distinct hue; `cancelled` is terminal-and-not-successful, which is what the
- * destructive tone means everywhere else in this UI.
+ * **Agrees with `keywordHue` below, lane for lane — that agreement IS the
+ * feature.** A category and a name are two ways of learning the same thing, so
+ * if they disagreed, the same lane would render one colour in /projects (which
+ * has categories) and another in /tasks (which has only names), which is the
+ * exact divergence this module exists to end. `test_category_and_keyword_agree`
+ * is the fence.
+ *
+ * It was briefly the other way round: this map was written to match the seeded
+ * colours in `routes/projects/tree.py` (`To do` blue, `In progress` amber), and
+ * the result was that two of the four default lanes still read differently in
+ * the two apps. The seed moved to match this instead — the semantics belong to
+ * the token vocabulary, not to whatever four rows a migration happened to
+ * insert. `bg-primary` is this UI's "active" tone everywhere else, so
+ * `in_progress` is blue; nothing has started in `backlog` or `todo`, so both
+ * stay muted.
+ *
+ * `cancelled` is terminal-and-not-successful, which is what the destructive
+ * tone means everywhere else here. `triage` (WS-27u) is the
+ * parked-at-the-front-door lane; /tasks has no counterpart, so it takes the one
+ * remaining distinct hue freely.
+ *
+ * ⚠️ `backlog` and `todo` are both gray, so a board carrying both draws two
+ * muted lanes side by side. That is /tasks' existing behaviour (its keyword
+ * rule maps both words to grey) and matching it is the point of this change,
+ * not a regression introduced by it. An owner who wants them distinct now has a
+ * working lever for the first time: `status.color` outranks this map, and as of
+ * WS-27ad it is actually rendered.
  */
 const CATEGORY_HUES: Record<string, AccentHue> = {
   backlog: "gray",
-  todo: "blue",
-  in_progress: "amber",
+  todo: "gray",
+  in_progress: "blue",
   done: "green",
   cancelled: "red",
   triage: "violet",

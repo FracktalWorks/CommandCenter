@@ -38,8 +38,9 @@ describe("precedence", () => {
   });
 
   it("a category beats a name that disagrees with it", () => {
-    // A lane named "Shipped" whose category is `in_progress` is in progress.
-    expect(resolveHue({ category: "in_progress", name: "Shipped" })).toBe("amber");
+    // A lane named "Shipped" whose category is `in_progress` is in progress —
+    // the name would have said green, and the category is the better fact.
+    expect(resolveHue({ category: "in_progress", name: "Shipped" })).toBe("blue");
   });
 
   it("a name keyword beats position", () => {
@@ -84,8 +85,8 @@ describe("the six status categories all resolve", () => {
   // gateway can store and this cannot colour is a lane that silently goes grey.
   it.each([
     ["backlog", "gray"],
-    ["todo", "blue"],
-    ["in_progress", "amber"],
+    ["todo", "gray"],
+    ["in_progress", "blue"],
     ["done", "green"],
     ["cancelled", "red"],
     ["triage", "violet"],
@@ -95,6 +96,28 @@ describe("the six status categories all resolve", () => {
 
   it("falls through an unknown category", () => {
     expect(resolveHue({ category: "parked", name: "Done" })).toBe("green");
+  });
+
+  // THE fence for this module's whole reason to exist.
+  //
+  // /projects learns what a lane means from its `category`; /tasks can only
+  // read the words in its name. If those two routes disagreed, the same lane
+  // would draw one colour in one app and another colour next door — which is
+  // the divergence this module was built to end, reintroduced one layer down.
+  //
+  // It happened: the category map originally mirrored the seeded colours
+  // (`todo` blue, `in_progress` amber) while the keyword rules said gray and
+  // blue, so a default board still mismatched in two of its four lanes.
+  //
+  // Each pair below is a category and a lane name a person would plausibly type
+  // for it. `backlog`/`todo` share a hue on purpose (see CATEGORY_HUES).
+  it.each([
+    ["backlog", "Backlog"],
+    ["todo", "To do"],
+    ["in_progress", "In progress"],
+    ["done", "Done"],
+  ])("category %s and the name %j resolve to the same hue", (category, name) => {
+    expect(resolveHue({ category })).toBe(resolveHue({ name }));
   });
 });
 

@@ -41,7 +41,11 @@ from gateway.routes.workflows.engine.handlers import (
     execute_node,
 )
 
-from tests.unit._projects_fakes import FakeProjectsDB, bind_db
+from tests.unit._projects_fakes import (
+    DEFAULT_ORGANIZATION,
+    FakeProjectsDB,
+    bind_db,
+)
 
 # ── Fixtures ────────────────────────────────────────────────────────────────
 
@@ -335,6 +339,20 @@ def test_a_ref_that_resolves_to_nothing_fails_the_node_rather_than_patching_noth
 
 
 # ── U7 — assignment is dispatch ─────────────────────────────────────────────
+#
+# ⚠️ Every payload here carries `organization_id` because the REAL emitter
+# does (`tasks.set_assignees`, WS-27aa) and the sink refuses without it. The
+# helper exists so that is one fact in one place: a test that hand-built the
+# dict would drift from the emitter, and the drift would read as "dispatch
+# is broken".
+
+
+def _assigned(task_id, assignees, org: str | None = DEFAULT_ORGANIZATION):
+    payload = {"task_id": str(task_id), "assignees": assignees}
+    if org is not None:
+        payload["organization_id"] = org
+    return payload
+
 
 def test_agent_targets_selects_agents_and_ignores_people():
     assert agent_dispatch.agent_targets(
@@ -391,7 +409,7 @@ def test_assigning_a_person_dispatches_nothing(monkeypatch, db, project):
     )
     run(agent_dispatch.on_event(
         "projects", "pm.task.assigned",
-        {"task_id": project.task.id, "assignees": ["priya@fracktal.in"]},
+        _assigned(project.task.id, ["priya@fracktal.in"]),
     ))
     assert calls == []
     assert db.activities("agent_run") == []
@@ -407,13 +425,13 @@ def test_assigning_an_agent_records_the_handoff_BEFORE_the_run(monkeypatch, db, 
     bind_db(monkeypatch, db, (agent_dispatch,))
     seen_at_dispatch: list[int] = []
 
-    async def _fake_run(agent: str, message: str, task_id: str) -> None:
+    async def _fake_run(agent, message, task_id, organization_id) -> None:
         seen_at_dispatch.append(len(db.activities("agent_run")))
 
     monkeypatch.setattr(agent_dispatch, "_run_and_record", _fake_run)
     run(agent_dispatch.on_event(
         "projects", "pm.task.assigned",
-        {"task_id": project.task.id, "assignees": ["agent:researcher"]},
+        _assigned(project.task.id, ["agent:researcher"]),
     ))
     assert seen_at_dispatch == [1]
     activity = db.activities("agent_run")[0]
@@ -429,8 +447,7 @@ def test_a_missing_task_dispatches_nothing(monkeypatch, db):
     )
     run(agent_dispatch.on_event(
         "projects", "pm.task.assigned",
-        {"task_id": "00000000-0000-0000-0000-000000000000",
-         "assignees": ["agent:researcher"]},
+        _assigned("00000000-0000-0000-0000-000000000000", ["agent:researcher"]),
     ))
     assert calls == []
 
@@ -439,15 +456,106 @@ def test_two_agents_on_one_assignment_each_get_a_run(monkeypatch, db, project):
     bind_db(monkeypatch, db, (agent_dispatch,))
     dispatched: list[str] = []
 
-    async def _fake_run(agent: str, message: str, task_id: str) -> None:
+    async def _fake_run(agent, message, task_id, organization_id) -> None:
         dispatched.append(agent)
 
     monkeypatch.setattr(agent_dispatch, "_run_and_record", _fake_run)
     run(agent_dispatch.on_event(
         "projects", "pm.task.assigned",
-        {"task_id": project.task.id, "assignees": ["agent:a", "agent:b"]},
+        _assigned(project.task.id, ["agent:a", "agent:b"]),
     ))
     assert dispatched == ["a", "b"]
+
+
+# ── U7's tenant (WS-27aa / H4) ──────────────────────────────────────────────
+#
+# This module was the H2 ratchet's one Projects exemption. It stopped being one
+# by taking an EXPLICIT tenant off the event, not by converting to the ambient
+# `tenant_session()` — which for a sink fired from `emit_event`'s fan-out would
+# have inherited whoever's request happened to be in context.
+
+
+@pytest.mark.parametrize("org", [None, "", "   "])
+def test_an_event_without_a_tenant_refuses_instead_of_running_unbound(
+    monkeypatch, db, project, org,
+):
+    """No tenant → no session, no activity, no run. The refusal is a log line
+    (`projects.agent_dispatch_refused`), NOT a timeline row: `pm_activities`
+    is tenant data, so recording it there would need the very unbound session
+    being refused — and under RLS phase 4 would write nothing anyway."""
+    bind_db(monkeypatch, db, (agent_dispatch,))
+    calls: list = []
+    monkeypatch.setattr(
+        agent_dispatch, "_run_and_record",
+        lambda *a: calls.append(a) or _noop(),
+    )
+    run(agent_dispatch.on_event(
+        "projects", "pm.task.assigned",
+        _assigned(project.task.id, ["agent:researcher"], org=org),
+    ))
+    assert calls == []
+    assert db.activities("agent_run") == []
+    assert db.bound_tenants == []
+    assert db.statements == []
+
+
+def test_the_sink_binds_the_events_tenant_explicitly(monkeypatch, db, project):
+    """`[None]` here would mean the ambient form — the inheritance H4 forbids."""
+    bind_db(monkeypatch, db, (agent_dispatch,))
+
+    async def _fake_run(agent, message, task_id, organization_id) -> None:
+        return None
+
+    monkeypatch.setattr(agent_dispatch, "_run_and_record", _fake_run)
+    run(agent_dispatch.on_event(
+        "projects", "pm.task.assigned",
+        _assigned(project.task.id, ["agent:researcher"]),
+    ))
+    assert db.bound_tenants == [DEFAULT_ORGANIZATION]
+
+
+@pytest.mark.parametrize("ok", [True, False])
+def test_the_outcome_write_opens_its_session_under_the_threaded_tenant(
+    monkeypatch, db, project, ok,
+):
+    """`_record_outcome` outlives the transaction that dispatched it, so the
+    org is THREADED down rather than re-read — there is nothing left to read
+    it from, and re-resolving would be a second answer to a settled question.
+
+    Both arms, because the failure arm is the one that writes when everything
+    else has already gone wrong, and it is the one a refactor forgets.
+    """
+    bind_db(monkeypatch, db, (agent_dispatch,))
+    run(agent_dispatch._record_outcome(
+        str(project.task.id), "researcher", DEFAULT_ORGANIZATION,
+        ok=ok, detail="the agent exploded",
+    ))
+    assert db.bound_tenants == [DEFAULT_ORGANIZATION]
+    last = db.activities("agent_run")[-1]
+    assert last["meta"]["state"] == ("finished" if ok else "failed")
+    assert "exploded" in str(last["body"])
+
+
+def test_the_dispatch_loop_hands_the_events_tenant_to_every_run(
+    monkeypatch, db, project,
+):
+    """The thread from payload → `_run_and_record` → `_record_outcome`, pinned
+    at the one join a unit test can see without importing the orchestrator."""
+    bind_db(monkeypatch, db, (agent_dispatch,))
+    seen: list[tuple] = []
+
+    async def _fake_run(agent, message, task_id, organization_id) -> None:
+        seen.append((agent, task_id, organization_id))
+
+    monkeypatch.setattr(agent_dispatch, "_run_and_record", _fake_run)
+    run(agent_dispatch.on_event(
+        "projects", "pm.task.assigned",
+        _assigned(project.task.id, ["agent:a", "agent:b"]),
+    ))
+    assert seen == [
+        ("a", str(project.task.id), DEFAULT_ORGANIZATION),
+        ("b", str(project.task.id), DEFAULT_ORGANIZATION),
+    ]
 
 
 async def _noop() -> None:

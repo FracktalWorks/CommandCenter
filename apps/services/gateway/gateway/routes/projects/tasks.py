@@ -622,11 +622,23 @@ async def set_assignees(
 
     The emitted ``pm.task.assigned`` event is what WS-27f keys agent dispatch
     off, so it carries the added assignees rather than the whole set: a
-    re-assert of an existing assignee must not re-dispatch a run.
+    re-assert of an existing assignee must not re-dispatch a run. It also
+    carries the task's ``organization_id`` (WS-27aa): the sink runs with no
+    request behind it, so this is the one place its tenant can come from a
+    stored fact instead of an ambient binding.
     """
     async with _tenant_session() as db:
         vis = await resolve_visibility(db, user)
-        await load_visible_task(db, vis, task_id)
+        task = await load_visible_task(db, vis, task_id)
+        # WS-27aa / H4 — the tenant the dispatch sink will bind, read HERE:
+        # inside the request's already-bound session, off the task's own
+        # `organization_id` (NOT NULL since migration 161). It is a stored
+        # fact about the row, never anything the caller sent (R11), and it is
+        # read here because this is the last place a tenant legitimately
+        # exists: `agent_dispatch.on_event` fires with no request behind it,
+        # and a sink that looked the tenant up itself would have to do so on
+        # an unbound session — the exact thing H4 forbids.
+        task_org = str(getattr(task, "organization_id", "") or "")
 
         wanted = {
             a.strip().lower() for a in payload.assignees if (a or "").strip()
@@ -690,6 +702,9 @@ async def set_assignees(
     if added:
         await emit("pm.task.assigned", {
             "task_id": task_id, "assignees": sorted(added),
+            # The sink's ONLY tenant source. `agent_dispatch.on_event` refuses
+            # a payload without it rather than running unbound.
+            "organization_id": task_org,
         })
     return {
         "task_id": task_id,

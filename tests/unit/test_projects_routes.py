@@ -29,6 +29,7 @@ from gateway.routes.projects import tree as pm_tree
 from gateway.routes.projects import views as pm_views
 
 from tests.unit._projects_fakes import (
+    DEFAULT_ORGANIZATION,
     FakeProjectsDB,
     bind_db,
     page,
@@ -522,7 +523,13 @@ async def test_assigning_emits_only_the_added_assignees(
 ) -> None:
     """WS-27f dispatches an agent run off ``pm.task.assigned``, so a re-assert
     of an existing assignee must not re-dispatch: the event carries the added
-    set, never the whole set."""
+    set, never the whole set.
+
+    It also carries the task's ``organization_id`` (WS-27aa) — the sink's only
+    tenant source, read here inside the request's bound session. Asserted as
+    the WHOLE payload rather than key-by-key, so a field silently leaving it
+    fails this test.
+    """
     project, todo, _ = _project_with_statuses(db)
     task = db.seed_task(project.id, todo.id)
     db.seed(
@@ -537,7 +544,10 @@ async def test_assigning_emits_only_the_added_assignees(
     )
 
     assigned = [payload for name, payload in events if name == "pm.task.assigned"]
-    assert assigned == [{"task_id": str(task.id), "assignees": ["agent:triage"]}]
+    assert assigned == [{
+        "task_id": str(task.id), "assignees": ["agent:triage"],
+        "organization_id": DEFAULT_ORGANIZATION,
+    }]
 
 
 async def test_re_asserting_the_same_assignees_emits_nothing(

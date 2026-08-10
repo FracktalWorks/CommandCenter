@@ -24,12 +24,14 @@ from __future__ import annotations
 
 import asyncio
 import re
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
+from gateway.db import TenantUnbound
 from gateway.routes.projects import tree
 from gateway.routes.projects.automation import (
     apply_task_patch,
@@ -57,6 +59,7 @@ from gateway.routes.workflows.engine.handlers import (
 )
 
 from tests.unit._projects_fakes import (
+    DEFAULT_ORGANIZATION,
     FakeProjectsDB,
     bind_db,
     projects_user,
@@ -239,6 +242,11 @@ def test_the_validator_refuses_a_boolean_month() -> None:
 
 NOW = datetime(2026, 8, 9, 12, 0, tzinfo=UTC)
 ACTOR = workflow_actor("wf-sweep")
+#: WS-27aa — the sweep is per-tenant and takes the tenant explicitly. The
+#: fake seeds root projects into its own organization, so this is the one the
+#: single-tenant cases sweep; ``ORG_B`` below is what proves the predicate.
+ORG = DEFAULT_ORGANIZATION
+ORG_B = "00000000-0000-4000-8000-0000000000bb"
 
 
 def _months_ago(days: int) -> datetime:
@@ -280,7 +288,7 @@ def test_an_old_closed_task_is_archived_with_an_automation_activity(
         swept.project.id, swept.done.id, title="Shipped long ago",
         updated_at=_months_ago(60),
     )
-    out = run(run_lifecycle_sweep(db, actor=ACTOR, now=NOW))
+    out = run(run_lifecycle_sweep(db, organization_id=ORG, actor=ACTOR, now=NOW))
     assert out["archived"] == 1 and out["projects"] == 1
     row = next(r for r in db.rows("pm_tasks") if str(r["id"]) == str(old.id))
     assert row["archived_at"] is not None
@@ -297,7 +305,7 @@ def test_a_recently_touched_closed_task_is_left_alone(
         swept.project.id, swept.done.id, title="Fresh",
         updated_at=_months_ago(5),
     )
-    out = run(run_lifecycle_sweep(db, actor=ACTOR, now=NOW))
+    out = run(run_lifecycle_sweep(db, organization_id=ORG, actor=ACTOR, now=NOW))
     assert out["archived"] == 0 and out["skipped"] is True
 
 
@@ -312,7 +320,7 @@ def test_an_old_open_task_is_closed_not_archived(
         swept.project.id, swept.doing.id, title="Stalled",
         updated_at=_months_ago(90),
     )
-    out = run(run_lifecycle_sweep(db, actor=ACTOR, now=NOW))
+    out = run(run_lifecycle_sweep(db, organization_id=ORG, actor=ACTOR, now=NOW))
     assert out["closed"] == 1 and out["archived"] == 0
     row = next(r for r in db.rows("pm_tasks") if str(r["id"]) == str(stale.id))
     assert row["archived_at"] is None
@@ -336,7 +344,7 @@ def test_close_falls_back_to_done_when_no_cancelled_lane(
     )
     stale = db.seed_task(proj.id, db.rows("pm_task_statuses")[0]["id"],
                          title="Old", updated_at=_months_ago(90))
-    run(run_lifecycle_sweep(db, actor=ACTOR, now=NOW))
+    run(run_lifecycle_sweep(db, organization_id=ORG, actor=ACTOR, now=NOW))
     row = next(r for r in db.rows("pm_tasks") if str(r["id"]) == str(stale.id))
     assert str(row["status_id"]) == str(done.id)
 
@@ -350,7 +358,7 @@ def test_triage_tasks_are_exempt_from_both_passes(
         swept.project.id, swept.triage.id, title="Waiting at the door",
         updated_at=_months_ago(400),
     )
-    out = run(run_lifecycle_sweep(db, actor=ACTOR, now=NOW))
+    out = run(run_lifecycle_sweep(db, organization_id=ORG, actor=ACTOR, now=NOW))
     assert out["archived"] == 0 and out["closed"] == 0
     row = next(r for r in db.rows("pm_tasks") if str(r["id"]) == str(parked.id))
     assert row["archived_at"] is None
@@ -366,10 +374,10 @@ def test_the_sweep_is_idempotent(db: FakeProjectsDB, swept) -> None:
         swept.project.id, swept.todo.id, title="Old open",
         updated_at=_months_ago(90),
     )
-    first = run(run_lifecycle_sweep(db, actor=ACTOR, now=NOW))
+    first = run(run_lifecycle_sweep(db, organization_id=ORG, actor=ACTOR, now=NOW))
     assert first["archived"] == 1 and first["closed"] == 1
     rows_before = len(db.rows("pm_activities"))
-    second = run(run_lifecycle_sweep(db, actor=ACTOR, now=NOW))
+    second = run(run_lifecycle_sweep(db, organization_id=ORG, actor=ACTOR, now=NOW))
     assert second == {
         "projects": 1, "archived": 0, "closed": 0, "skipped": True,
     }
@@ -381,7 +389,7 @@ def test_a_project_with_no_policy_is_never_touched(db: FakeProjectsDB) -> None:
     status = db.seed_status(proj.id, name="Done", category="done")
     db.seed_task(proj.id, status.id, title="Ancient",
                  updated_at=_months_ago(1000))
-    out = run(run_lifecycle_sweep(db, actor=ACTOR, now=NOW))
+    out = run(run_lifecycle_sweep(db, organization_id=ORG, actor=ACTOR, now=NOW))
     assert out == {"projects": 0, "archived": 0, "closed": 0, "skipped": True}
 
 
@@ -394,7 +402,7 @@ def test_subprojects_inherit_the_roots_policy(db: FakeProjectsDB, swept) -> None
         str(child.id), swept.done.id, root=str(swept.project.id),
         title="Done, in the sub", updated_at=_months_ago(60),
     )
-    out = run(run_lifecycle_sweep(db, actor=ACTOR, now=NOW))
+    out = run(run_lifecycle_sweep(db, organization_id=ORG, actor=ACTOR, now=NOW))
     assert out["archived"] == 1
     row = next(r for r in db.rows("pm_tasks") if str(r["id"]) == str(old.id))
     assert row["archived_at"] is not None
@@ -423,11 +431,118 @@ def test_the_projects_midnight_wins_over_utcs(db: FakeProjectsDB) -> None:
         proj.id, done.id, title="Outside even the LA window",
         updated_at=datetime(2026, 7, 8, 6, 0, tzinfo=UTC),
     )
-    out = run(run_lifecycle_sweep(db, actor=ACTOR, now=early))
+    out = run(run_lifecycle_sweep(db, organization_id=ORG, actor=ACTOR, now=early))
     assert out["archived"] == 1
     rows = {str(r["id"]): r for r in db.rows("pm_tasks")}
     assert rows[str(kept.id)]["archived_at"] is None
     assert rows[str(swept_task.id)]["archived_at"] is not None
+
+
+# ── 3b · the sweep's tenant (WS-27aa / H4) ──────────────────────────────────
+#
+# Before this ticket the roots query was `SELECT * FROM pm_projects WHERE
+# parent_project_id IS NULL` — no tenant predicate at all, on a scheduled
+# path. One customer's schedule archived and closed everybody's work.
+
+
+@pytest.mark.parametrize("missing", ["", "   ", None])
+def test_a_sweep_without_a_tenant_refuses_instead_of_sweeping_everyone(
+    db: FakeProjectsDB, swept, missing,
+) -> None:
+    """H4's rule: a job that forgets doesn't leak one row, it leaks unbounded.
+
+    So the absence of a tenant is an ERROR, never "all of them". Asserting on
+    `db.statements` as well as the exception is what stops a later refactor
+    moving the guard below the query.
+    """
+    db.seed_task(
+        swept.project.id, swept.done.id, title="Shipped long ago",
+        updated_at=_months_ago(60),
+    )
+    before = len(db.statements)
+    with pytest.raises(TenantUnbound):
+        run(run_lifecycle_sweep(
+            db, organization_id=missing, actor=ACTOR, now=NOW,
+        ))
+    assert db.statements[before:] == []
+
+
+def test_a_sweep_bound_to_one_org_leaves_the_others_stale_tasks_alone(
+    db: FakeProjectsDB, swept,
+) -> None:
+    """The two-org proof, hermetically. `live_ws27aa.py` proves it on Postgres.
+
+    Two roots with IDENTICAL policies and IDENTICALLY stale tasks — so the
+    only thing that can tell them apart is the tenant.
+    """
+    mine = db.seed_task(
+        swept.project.id, swept.done.id, title="Alpha, shipped long ago",
+        updated_at=_months_ago(60),
+    )
+    theirs_project = db.seed_project(
+        name="Beta delivery", archive_after_months=1, close_after_months=2,
+        organization_id=ORG_B,
+    )
+    theirs_done = db.seed_status(
+        theirs_project.id, name="Shipped", category="done", is_default=False,
+    )
+    theirs = db.seed_task(
+        theirs_project.id, theirs_done.id, title="Beta, shipped long ago",
+        updated_at=_months_ago(60),
+    )
+
+    out = run(run_lifecycle_sweep(db, organization_id=ORG, actor=ACTOR, now=NOW))
+
+    assert out["projects"] == 1 and out["archived"] == 1
+    rows = {str(r["id"]): r for r in db.rows("pm_tasks")}
+    assert rows[str(mine.id)]["archived_at"] is not None
+    assert rows[str(theirs.id)]["archived_at"] is None, (
+        "org B's stale task was archived by org A's sweep"
+    )
+
+
+def test_the_other_org_sweeps_its_own_when_it_is_the_one_bound(
+    db: FakeProjectsDB, swept,
+) -> None:
+    """The mirror of the test above — without it, a sweep that silently
+    matched NOTHING would pass the isolation assertion for the wrong reason."""
+    mine = db.seed_task(
+        swept.project.id, swept.done.id, title="Alpha, shipped long ago",
+        updated_at=_months_ago(60),
+    )
+    theirs_project = db.seed_project(
+        name="Beta delivery", archive_after_months=1, organization_id=ORG_B,
+    )
+    theirs_done = db.seed_status(
+        theirs_project.id, name="Shipped", category="done", is_default=False,
+    )
+    theirs = db.seed_task(
+        theirs_project.id, theirs_done.id, title="Beta, shipped long ago",
+        updated_at=_months_ago(60),
+    )
+
+    out = run(run_lifecycle_sweep(db, organization_id=ORG_B, actor=ACTOR, now=NOW))
+
+    assert out["projects"] == 1 and out["archived"] == 1
+    rows = {str(r["id"]): r for r in db.rows("pm_tasks")}
+    assert rows[str(theirs.id)]["archived_at"] is not None
+    assert rows[str(mine.id)]["archived_at"] is None
+
+
+def test_the_roots_query_carries_the_tenant_predicate(
+    db: FakeProjectsDB, swept,
+) -> None:
+    """R7's fence, stated against the SQL itself.
+
+    The behavioural tests above go green if the fake merely *happens* to
+    filter; this one fails the moment the predicate leaves the statement.
+    """
+    run(run_lifecycle_sweep(db, organization_id=ORG, actor=ACTOR, now=NOW))
+    roots = [s for s in db.statements if "FROM pm_projects" in s
+             and "parent_project_id IS NULL" in s]
+    assert roots, "the sweep no longer reads root projects at all"
+    for statement in roots:
+        assert "organization_id = CAST(:org AS uuid)" in statement, statement
 
 
 # ── 4 · the automation flag ─────────────────────────────────────────────────
@@ -575,11 +690,16 @@ def test_the_handler_fails_loudly_when_projects_is_not_wired() -> None:
         run(execute_node({"type": "pm_lifecycle", "config": {}}, {}, _services()))
 
 
-def test_the_service_binding_sweeps_as_the_workflow_and_commits(
-    monkeypatch,
-) -> None:
-    """`_pm_lifecycle_sweeper` mirrors `_pm_task_updater`: closure import, the
-    workflow's identity bound in, one commit around the whole sweep."""
+WF_ID = "11111111-0000-4000-8000-000000000009"
+OWNER = "lead@alpha.example"
+
+
+def _sweeper_world(monkeypatch, *, owner_org: str | None = ORG):
+    """A fake carrying one root project, one workflow and its owner.
+
+    ``owner_org=None`` seeds an owner with **no** organization — the case
+    `_workflow_organization` must refuse rather than guess at.
+    """
     from gateway.routes.workflows import service as wf_service
 
     fake = FakeProjectsDB()
@@ -587,18 +707,72 @@ def test_the_service_binding_sweeps_as_the_workflow_and_commits(
     done = fake.seed_status(proj.id, name="Done", category="done")
     fake.seed_task(proj.id, done.id, title="Old",
                    updated_at=datetime.now(UTC) - timedelta(days=90))
+    fake.seed("workflows", id=WF_ID, owner_email=OWNER)
+    fake.seed("app_user", email=OWNER, organization_id=owner_org)
 
     async def _get_db():
         return fake
 
+    @asynccontextmanager
+    async def _tenant_session(organization_id=None):
+        fake.bound_tenants.append(organization_id)
+        yield fake
+        await fake.commit()
+
     monkeypatch.setattr(wf_service, "_get_db", _get_db)
-    result = run(wf_service._pm_lifecycle_sweeper("wf-9")())
+    monkeypatch.setattr(wf_service, "_tenant_session", _tenant_session)
+    return wf_service, fake
+
+
+def test_the_service_binding_sweeps_as_the_workflow_and_commits(
+    monkeypatch,
+) -> None:
+    """`_pm_lifecycle_sweeper` mirrors `_pm_task_updater`: closure import, the
+    workflow's identity bound in, one commit around the whole sweep."""
+    wf_service, fake = _sweeper_world(monkeypatch)
+    result = run(wf_service._pm_lifecycle_sweeper(WF_ID)())
     assert result["archived"] == 1
     assert fake.committed == 1
     assert fake.closed is True
     entry = fake.activities("system")[-1]
-    assert entry["created_by"] == "system:workflow:wf-9"
+    assert entry["created_by"] == f"system:workflow:{WF_ID}"
     assert entry["meta"]["automation"] is True
+
+
+def test_the_sweeper_binds_the_workflow_owners_organization_explicitly(
+    monkeypatch,
+) -> None:
+    """WS-27aa / H4 — the sweep's session is opened with an EXPLICIT tenant.
+
+    `bound_tenants` is what the fake records, so the ambient no-argument form
+    (`tenant_session()`), which would inherit whoever tripped the schedule,
+    fails here as `[None]`.
+    """
+    wf_service, fake = _sweeper_world(monkeypatch)
+    run(wf_service._pm_lifecycle_sweeper(WF_ID)())
+    assert fake.bound_tenants == [ORG]
+
+
+def test_the_sweeper_refuses_a_workflow_whose_owner_has_no_organization(
+    monkeypatch,
+) -> None:
+    """Fail closed — never "the usual tenant" (handover §5 rule 3).
+
+    And nothing is written: the refusal happens on the resolving session,
+    before the tenant-bound one is ever opened.
+    """
+    wf_service, fake = _sweeper_world(monkeypatch, owner_org=None)
+    with pytest.raises(NodeExecutionError):
+        run(wf_service._pm_lifecycle_sweeper(WF_ID)())
+    assert fake.bound_tenants == []
+    assert fake.activities("system") == []
+
+
+def test_the_sweeper_refuses_a_workflow_it_cannot_find(monkeypatch) -> None:
+    wf_service, fake = _sweeper_world(monkeypatch)
+    with pytest.raises(NodeExecutionError):
+        run(wf_service._pm_lifecycle_sweeper("22222222-0000-4000-8000-00000000000f")())
+    assert fake.bound_tenants == []
 
 
 def test_build_node_services_carries_the_sweep_seam() -> None:

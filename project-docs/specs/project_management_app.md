@@ -1230,8 +1230,8 @@ the continuity audit. None needs a migration, so R1 costs this wave nothing; all
 inherit the standing protocol (hermetic tests against the fake, a live Postgres run, and
 for anything tenant-shaped, **R8** — verified against a real database, never a fake alone).
 
-**WS-27aa — the two tenancy residues Projects owns.** 🟢 AGENT-SAFE *(D27 (2); MT-1d's
-named site; the H2 ratchet's one Projects exemption)*.
+**WS-27aa — the two tenancy residues Projects owns.** ✅ **BUILT 2026-08-10** *(D27 (2);
+MT-1d's named site; the H2 ratchet's one Projects exemption — both now struck)*.
 Two scheduled/background paths in this app still touch the database with no tenant.
 Done when: (1) **`run_lifecycle_sweep` takes an explicit tenant and refuses without one** —
 the signature gains a required `organization_id`, the roots query gains
@@ -1245,14 +1245,59 @@ nothing is an error, not a fallback; `_pm_lifecycle_sweeper` binds it with
 moment phase 4 lands; (3) **`agent_dispatch` carries its tenant on the event payload** —
 `pm.task.assigned` emits the task's own `organization_id`, read inside the request's bound
 session at emit time, and `on_event`/`_run_and_record` bind that explicitly instead of
-inheriting an ambient one; a payload without an org refuses and records the refusal on the
-task timeline rather than running unbound; (4) **two-org proof against a real database**: a
+inheriting an ambient one; a payload without an org refuses rather than running unbound;
+(4) **two-org proof against a real database**: a
 sweep bound to org A leaves org B's stale tasks untouched, and a dispatch bound to A writes
 A's activity row — plus a refusal test for each path; (5) the `projects/agent_dispatch`
 entry leaves `H2_EXEMPT_FILES` (the file no longer needs it), every seam ratchet stays
 green, and the handover's MT-1d site + D27 finding 2 are struck with the measurement that
 replaced them. **Not in scope:** the other H4 consumers (ingestion, reconciler, broker) —
 they belong to WS-29's own H4 slice; this ticket closes only what Projects owns.
+
+**As built (2026-08-10), and the three places the ticket above was wrong.**
+
+*The sweep.* `run_lifecycle_sweep(db, *, organization_id, actor, now)` — required,
+never defaulted; a blank one raises `TenantUnbound` (the seam's own exception, not a
+second vocabulary) **before any statement is issued**, and the roots query is now
+`WHERE parent_project_id IS NULL AND organization_id = CAST(:org AS uuid)`. The fence is
+on the roots query alone because everything below reaches its rows through `project.id`.
+`workflows/service._pm_lifecycle_sweeper` resolves the tenant on an unbound session
+(`SELECT au.organization_id FROM workflows w JOIN app_user au ON lower(au.email) =
+lower(w.owner_email) WHERE w.id = CAST(:wid AS uuid)`) and then opens
+`tenant_session(org)` for the sweep — auto_lead's shape, re-derived, not a second one.
+
+⚠️ **The tenant source is the workflow OWNER, not the workflow row.** Verified against
+`infra/postgres/132_workflows.sql` *and* a live catalog: `workflows` has **no
+`organization_id` column** — it exists only in the unapplied `generated/01_add_columns.sql`
+(H3 phase 1). `live_ws27aa.py` asserts that absence, so the day phase 1 lands this script
+goes red and `_workflow_organization` becomes a one-column read.
+
+⚠️ **MT-1d's "it needs a per-tenant loop" is wrong and is struck.** A loop inside the
+sweep would be one tenant's scheduled workflow acting for every other tenant — the
+unbounded-job shape H4 exists to forbid. The loop is over **workflows**: each tenant
+schedules its own, and each one sweeps exactly its own.
+
+*The dispatch.* `set_assignees` reads the task's `organization_id` inside its already-bound
+session (NOT NULL since migration 161) and puts it on `pm.task.assigned`; `on_event`,
+`_run_and_record` and `_record_outcome` all open `tenant_session(that_org)` — the argument
+form, never the ambient one.
+
+⚠️ **Done-when 3's "records the refusal on the task timeline" cannot be built and is
+struck.** The timeline is `pm_activities`, which is tenant data: writing the refusal there
+needs precisely the unbound session being refused, and under phase-4 policies it would
+write nothing anyway. The refusal is a WARNING log line
+(`projects.agent_dispatch_refused`, carrying task and agents) and **no** write. Since the
+emitter always stamps the field, it fires only for a foreign or replayed emitter.
+
+*Evidence.* `tests/live/live_ws27aa.py` — 23 checks against Postgres 16, two organizations
+with identical policies and identically stale tasks: alpha's sweep archives alpha's task
+and leaves beta's, beta's sweep then archives its own, both activity rows are stamped with
+the sweeping tenant, both refusal paths refuse, and no ambient tenant leaks out.
+Mutation-measured: deleting the roots predicate turns 4 live checks red (including
+`BETA's stale task is untouched: got True, want False`) and 3 hermetic ones.
+`H2_BASELINE_ELSEWHERE` is unchanged at **111** — the sweeper trades its unbound session
+for the resolver, which must stay unbound — while `routes/projects` goes from **2** unbound
+sites to **0** and `H2_EXEMPT_FILES` loses its Projects entry.
 
 **WS-27ab — view ergonomics: peek, dirty views, one palette registry.** 🟢 AGENT-SAFE
 *(P-14, P-15, P-16)*.

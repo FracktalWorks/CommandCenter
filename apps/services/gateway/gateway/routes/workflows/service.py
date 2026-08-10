@@ -43,12 +43,18 @@ from typing import Any
 # who happened to trigger it, and inheriting the ambient request tenant is
 # exactly what H4 forbids. They stay on the unbound `get_db()` until H4
 # threads an explicit tenant (`tenant_session(org_id)` from the workflow row)
-# through the run lifecycle. `_pm_task_updater` / `_pm_lifecycle_sweeper` are
-# the Projects automation seam and are likewise H4 — do not change their
-# session acquisition here.
+# through the run lifecycle. `_pm_task_updater` is the Projects automation
+# seam and is likewise H4 — do not change its session acquisition here.
+#
+# ⚠️ ONE EXCEPTION, and it is done: `_pm_lifecycle_sweeper` (WS-27aa). It
+# resolves the workflow owner's organization on an unbound session and then
+# opens `_tenant_session(org)` for the sweep — an EXPLICIT tenant from a stored
+# fact, which is what H4 asks for, not the ambient inheritance it forbids. It
+# is the shape the rest of this module's sites will take.
 from gateway.routes.workflows.core import (
     _get_db,
     _log,
+    _tenant_session,
     parse_jsonb,
     publish_workflow_activity,
 )
@@ -196,15 +202,68 @@ def _pm_task_updater(workflow_id: str) -> Any:
     return _update
 
 
-def _pm_lifecycle_sweeper(workflow_id: str) -> Any:
-    """The Projects lifecycle sweep (WS-27z), identity bound in.
+async def _workflow_organization(db: Any, workflow_id: str) -> str:
+    """The tenant a workflow's unattended writes belong to. **A stored fact.**
 
-    Mirrors ``_pm_task_updater`` exactly — closure import so the workflows
-    package gains no import-time dependency on an app package, the workflow's
-    ``system:workflow:<id>`` actor bound in, one commit around the whole
-    sweep. The seam takes no arguments because the policy lives in the
-    Projects app's own columns; the workflow supplies nothing but the
-    schedule and the node.
+    ⚠️ **The `workflows` table has no `organization_id` column today** —
+    checked against `infra/postgres/132_workflows.sql` and against a live
+    catalog, not inferred: that column exists only in the unapplied
+    `generated/01_add_columns.sql` (H3 phase 1). So the tenant is resolved the
+    way `routes/crm/auto_lead._owner_organization` resolves the mailbox
+    owner's: the workflow's ``owner_email`` through ``app_user``. One shape for
+    "which tenant does this background unit act for", not two. When H3 phase 1
+    lands, this becomes a one-column read on the workflow row and this
+    function is where that change goes.
+
+    Reads on the CALLER's (unbound) session because it is what DECIDES the
+    tenant — the same ordering identity resolution has on the request path.
+    **Raises rather than returning None**: a workflow whose owner has no
+    organization must fail its run loudly, never sweep "the usual" tenant
+    (`saas_multitenancy_handover.md` §5 rule 3 — fail closed, everywhere).
+    """
+    row = (
+        await db.execute(
+            text(
+                "SELECT au.organization_id FROM workflows w "
+                "JOIN app_user au ON lower(au.email) = lower(w.owner_email) "
+                "WHERE w.id = CAST(:wid AS uuid)"
+            ),
+            {"wid": workflow_id},
+        )
+    ).fetchone()
+    org = getattr(row, "organization_id", None) if row is not None else None
+    if not org:
+        raise NodeExecutionError(
+            f"workflow {workflow_id} has no resolvable organization "
+            f"(owner_email -> app_user.organization_id) — an unattended sweep "
+            f"cannot choose a tenant"
+        )
+    return str(org)
+
+
+def _pm_lifecycle_sweeper(workflow_id: str) -> Any:
+    """The Projects lifecycle sweep (WS-27z), identity AND tenant bound in.
+
+    Mirrors ``_pm_task_updater`` for the identity half — closure import so the
+    workflows package gains no import-time dependency on an app package, the
+    workflow's ``system:workflow:<id>`` actor bound in, one transaction around
+    the whole sweep.
+
+    ⚠️ **WS-27aa / H4 — this one is no longer an unbound background site.**
+    ``run_lifecycle_sweep`` used to walk `pm_projects` with no tenant
+    predicate, so one workflow's schedule archived and closed every customer's
+    work. It now takes a required ``organization_id`` and refuses without one,
+    and the tenant is resolved here from a stored fact
+    (:func:`_workflow_organization`) and bound **explicitly** on the session
+    the sweep writes through — never inherited from whoever happened to
+    trigger the run, which is the inheritance H4 forbids. Two sessions, in
+    this order and for the reason auto_lead has them:
+
+    1. an unbound one to RESOLVE the tenant (it is the decision, so it cannot
+       already be inside it), closed before anything is written;
+    2. ``tenant_session(org)`` for the sweep itself, which issues the
+       ``SET LOCAL app.tenant_id`` the RLS policies will read the moment H3's
+       phase 4 lands, and commits on clean exit.
     """
 
     async def _sweep() -> dict[str, Any]:
@@ -215,15 +274,19 @@ def _pm_lifecycle_sweeper(workflow_id: str) -> Any:
             )
         except Exception as exc:  # pragma: no cover — Projects ships with the gateway
             raise NodeExecutionError("the Projects app is not available") from exc
-        db = await _get_db()
+        # H4: unbound ON PURPOSE — this session's whole job is to decide the
+        # tenant, and it writes nothing.
+        resolver = await _get_db()
         try:
-            result = await run_lifecycle_sweep(
-                db, actor=workflow_actor(workflow_id),
-            )
-            await db.commit()
-            return result
+            organization_id = await _workflow_organization(resolver, workflow_id)
         finally:
-            await db.close()
+            await resolver.close()
+        async with _tenant_session(organization_id) as db:
+            return await run_lifecycle_sweep(
+                db,
+                organization_id=organization_id,
+                actor=workflow_actor(workflow_id),
+            )
 
     return _sweep
 

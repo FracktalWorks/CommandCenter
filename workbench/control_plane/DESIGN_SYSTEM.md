@@ -232,7 +232,12 @@ Use the utilities; they read theme tokens, so a flat theme flattens them.
 | `tech-glow` | primary glow — **off** where `glowStrength: 0` |
 | `pb-safe` / `pt-safe` | iOS safe-area padding |
 
-Radius comes from `--radius` via `rounded-sm/md/lg`. Don't write `rounded-[14px]`.
+Radius comes from `--radius`. The **entire** named scale is derived from it in
+`globals.css`'s `@theme` block — `sm`/`md` step down, `lg` and `xl` both equal
+`--radius`, `2xl`/`3xl` step up — so every `rounded-<name>` utility is themed.
+Don't write `rounded-[14px]`: an arbitrary value is the only radius that escapes
+the theme. *(Spelled out 2026-08-10 because listing only `sm/md/lg` here read as
+"the others are unthemed", and an agent acted on that reading.)*
 
 Motion: `duration-[var(--motion-duration)]` / `ease-[var(--motion-easing)]`, or
 just `tech-transition`. Respect `prefers-reduced-motion`.

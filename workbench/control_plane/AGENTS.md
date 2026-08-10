@@ -71,9 +71,20 @@ Four rules on top of the three above. Each one exists because it was broken:
    overrides the shared vocabulary on every uncustomised project.
 6. **Use the house tokens, not a synonym.** Active/selected is
    `bg-primary/10 text-primary` (the measured norm across `/tasks`, `/email` and
-   `src/components`), not `bg-accent`. Radius comes from `--radius` via
-   `rounded-sm/md/lg` — `rounded-xl` is a fixed 12px that ignores Graphite's
-   `0.125rem` and Material's `1rem`.
+   `src/components`), not `bg-accent`.
+   Radius: **the whole named scale is derived from `--radius`** in `globals.css`'s
+   `@theme` block — `sm`/`md` step down, `lg` and `xl` both *equal* `--radius`,
+   `2xl`/`3xl` step up. So every `rounded-<name>` utility is themed and none of
+   them is a violation; only an arbitrary value (`rounded-[14px]`) escapes the
+   theme. What still matters is **consistency between surfaces**: two boards
+   drawing their columns at different radii look like two products even when both
+   are themed.
+   *(Corrected 2026-08-10. This rule previously claimed `rounded-xl` was a fixed
+   12px that ignored Graphite and Material. It is not — `--radius-xl:
+   var(--radius)`, i.e. identical to `rounded-lg`. The claim was mine and it was
+   wrong; acting on it would have baselined ~274 correctly-themed occurrences
+   across ~70 files as debt, which is a fence against a non-violation and worse
+   than no fence at all.)*
 7. **Categorical hues are a theme decision too.** A set of colours that only
    has to be *mutually distinguishable* (contexts, tags, labels) still belongs to
    the theme. **The ramp now exists**: `--cat-1` … `--cat-8`, eight slots every

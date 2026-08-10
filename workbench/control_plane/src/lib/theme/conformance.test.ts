@@ -731,9 +731,22 @@ describe("selects and file pickers go through the primitives", () => {
       /type=["']file["']/.test(tag),
     );
 
+  /**
+   * Hidden by a CLASS, not merely by a tag that says "hidden" somewhere.
+   *
+   * ⚠️ `/\bhidden\b/` over the whole tag is what this checked first, and
+   * `aria-hidden` satisfied it — so deleting `className="hidden"` from the one
+   * file input this ticket converted left the fence green. Measured, not
+   * reasoned: the mutation was run and the suite passed. `sr-only` counts too;
+   * it is the other legitimate way to park an input off-screen behind a real
+   * control.
+   */
+  const HIDDEN_CLASS =
+    /className=(?:["'`][^"'`]*\b(?:hidden|sr-only)\b|\{[^}]*\b(?:hidden|sr-only)\b)/;
+
   /** File inputs that are the visible control rather than a hidden trigger. */
   const visibleFileInputs = (rel: string) =>
-    fileInputs(rel).filter((tag) => !/\bhidden\b/.test(tag)).length;
+    fileInputs(rel).filter((tag) => !HIDDEN_CLASS.test(tag)).length;
 
   /**
    * No budget, on purpose. Measured across the whole tree at S5: every other

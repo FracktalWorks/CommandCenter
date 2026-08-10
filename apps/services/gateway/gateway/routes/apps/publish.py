@@ -29,8 +29,8 @@ from fastapi import Depends, HTTPException, Query
 from fastapi.responses import HTMLResponse
 from gateway.routes.apps import tools as _tools
 from gateway.routes.apps._common import (
-    _get_db,
     _log,
+    _tenant_session,
     _uid,
     app_workspace,
     can_edit,
@@ -123,8 +123,7 @@ async def publish_app(
     """Snapshot the draft as the next immutable version and go live."""
     if body.visibility is not None and body.visibility not in VISIBILITIES:
         raise HTTPException(status_code=422, detail="Invalid visibility")
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         row, _grants = await get_app_or_404(db, slug, user, edit=True)
         await ensure_workspace(db, row)
         data, manifest = await asyncio.get_event_loop().run_in_executor(
@@ -200,9 +199,8 @@ async def publish_app(
                 sets += ", visibility = :visibility"
                 params["visibility"] = body.visibility
             await db.execute(text(f"UPDATE apps SET {sets} WHERE id = :id"), params)
-        await db.commit()
-    finally:
-        await db.close()
+    # ^ block exit commits — the version row is durable BEFORE the review
+    # proposal below is submitted, preserving the pre-H2 ordering.
 
     if needs_review:
         # SUGGEST always → NEEDS_APPROVAL, so this unconditionally queues —
@@ -245,8 +243,7 @@ async def rollback_app(
     user: UserContext = Depends(require_app_author),
 ) -> dict[str, Any]:
     """Repoint the live version at an existing snapshot."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         row, _grants = await get_app_or_404(db, slug, user, edit=True)
         exists = (await db.execute(
             text(
@@ -264,9 +261,6 @@ async def rollback_app(
             ),
             {"version": body.version, "id": str(row.id)},
         )
-        await db.commit()
-    finally:
-        await db.close()
     await record_app_audit(
         app_id=str(row.id), user_email=_uid(user), kind="rollback",
         app_version=body.version, detail={"to_version": body.version},
@@ -283,8 +277,7 @@ async def list_app_versions(
     user: UserContext = Depends(require_app_user),
 ) -> list[VersionEntry]:
     """Version history, newest first (view-gated — feeds the info popover)."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         row, _grants = await get_app_or_404(db, slug, user)
         rows = (await db.execute(
             text(
@@ -294,8 +287,6 @@ async def list_app_versions(
             ),
             {"app_id": str(row.id)},
         )).fetchall()
-    finally:
-        await db.close()
     return [
         VersionEntry(
             version=r.version,
@@ -318,8 +309,7 @@ async def get_app_bundle(
     current workspace entry file; ``live``/N (viewers) serve the immutable
     snapshot. ``track=1`` marks a real open (the run page) so preview
     refreshes don't flood the audit trail."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         row, grants = await get_app_or_404(db, slug, user)
         if version == "draft":
             if not can_edit(row, user, grants):
@@ -356,8 +346,6 @@ async def get_app_bundle(
         )).fetchone()
         if vrow is None:
             raise HTTPException(status_code=404, detail="Version not found")
-    finally:
-        await db.close()
     if track:
         await record_app_audit(
             app_id=str(row.id), user_email=_uid(user), kind="open",

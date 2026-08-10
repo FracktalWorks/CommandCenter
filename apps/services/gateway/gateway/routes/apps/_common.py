@@ -28,6 +28,15 @@ from fastapi import APIRouter, Depends, HTTPException
 # The shared gateway engine (BO-10) — see the DB section below.
 from gateway.db import get_db as _get_db
 from gateway.db import get_session_factory as _get_session_factory  # noqa: F401
+
+# The tenant-bound seam (BO-10 → MT-1c/H2). `_tenant_session` IS
+# `acb_common.db.tenant_session`, aliased per-package for the same reason
+# `_get_db` was: every submodule imports it from here BY NAME, which is the
+# per-module seam the hermetic tests patch. The tenant comes from the request
+# context — bound once in `_with_resolved_access` — so no call site passes
+# one (H2). A call outside a bound request raises `TenantUnbound` rather than
+# defaulting: fail closed, never "the usual org".
+from gateway.db import tenant_session as _tenant_session  # noqa: F401
 from sqlalchemy import text
 
 _log = get_logger("gateway.apps")
@@ -73,11 +82,11 @@ DEFAULT_AI_TIER = "tier-fast"
 # ── DB (the one shared gateway engine — gateway/db.py, BO-10) ────────────────
 #
 # This package used to build its own engine here with its own 10+20 pool. It now
-# has none: `_get_db` / `_get_session_factory` at the top of this module are
-# re-exports of the shared seam. The private names are kept so that every
-# `from ._common import _get_db` in this package — and every test that
-# monkeypatches `_get_db` on the sibling module it is imported into — keeps
-# working unchanged.
+# has none: `_get_db` / `_get_session_factory` / `_tenant_session` at the top of
+# this module are re-exports of the shared seam. Since H2 the request handlers
+# acquire sessions through `_tenant_session` only; `_get_db` remains ONLY for
+# the named H4-deferred sites (`record_app_audit` below, and `actions.py`'s
+# dual-audience dispatch), which `test_db_engine_seam.py` pins by exact count.
 
 
 # ── Auth gate ────────────────────────────────────────────────────────────────
@@ -498,7 +507,20 @@ async def record_app_audit(
     model: str = "",
 ) -> None:
     """Append one ``app_audit`` row. Best-effort: opens its own session so a
-    failed audit can neither raise nor poison the caller's transaction."""
+    failed audit can neither raise nor poison the caller's transaction.
+
+    ⚠️ H4, DELIBERATELY NOT H2 (`saas_multitenancy_handover.md`): this helper
+    is reached from OUTSIDE any request — `actions.execute_app_action` audits
+    every dispatch, and the orchestrator's agent tools call that function
+    in-process during an agent run with no request and no bound tenant
+    (`orchestrator/app_tools.py`). Converting this site to the ambient
+    `tenant_session()` would raise `TenantUnbound` there, and this except-all
+    wrapper would then silently DROP the audit row — a security trail. It
+    stays on the unbound `get_db()` until H4 threads the explicit tenant (the
+    app row's organization, resolvable from ``app_id``) through the call —
+    `tenant_session(org_id)`. The H2 ratchet in `test_db_engine_seam.py`
+    carries this site as a named, counted exemption.
+    """
     try:
         db = await _get_db()
         try:

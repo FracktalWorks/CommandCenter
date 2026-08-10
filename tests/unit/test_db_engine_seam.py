@@ -311,7 +311,31 @@ H2_EXEMPT_FILES: dict[str, str] = {
 
 #: The unconverted remainder OUTSIDE routes/projects at the time the Projects
 #: slice landed (2026-08-10). Lower it as packages convert; never raise it.
-H2_BASELINE_ELSEWHERE = 494
+#: 494 → 462: the routes/apps slice (32 sites converted, 6 named exemptions —
+#: see H2_APPS_EXEMPT_SITES below).
+H2_BASELINE_ELSEWHERE = 462
+
+#: routes/apps (H2 slice, 2026-08-10): the sites that STAY on the unbound
+#: seam, as file → exact remaining count. Counts rather than whole files
+#: because ``tools.py`` is mixed — its request handlers are converted while
+#: its broker-invoked ``_apply_publish_review`` stays. Each entry is a
+#: decision, not a grandfathering — H4 owns retiring them, and each site's
+#: own ``H4`` comment names the reason and the tenant source (the app row's
+#: organization):
+#:
+#:   * ``actions.py`` (4) — ``execute_app_action`` + its ``_run_storage_*``
+#:     helpers are dual-audience: the HTTP route AND the orchestrator's
+#:     in-process agent tools (``orchestrator/app_tools.py``), which run with
+#:     no request and no bound tenant.
+#:   * ``_common.py`` (1) — ``record_app_audit``, reached from that same
+#:     agent path; converting it would silently drop agent-action audit rows.
+#:   * ``tools.py`` (1) — ``_apply_publish_review``, an Action Broker
+#:     handler that runs when an admin approves a queued proposal.
+H2_APPS_EXEMPT_SITES: dict[str, int] = {
+    "apps/services/gateway/gateway/routes/apps/_common.py": 1,
+    "apps/services/gateway/gateway/routes/apps/actions.py": 4,
+    "apps/services/gateway/gateway/routes/apps/tools.py": 1,
+}
 
 
 def _get_db_sites() -> dict[str, int]:
@@ -339,6 +363,26 @@ def test_routes_projects_is_converted_and_stays_converted() -> None:
     assert offenders == {}, (
         f"unbound get_db() in converted package: {offenders} — use "
         f"`async with _tenant_session() as db:` (core.py) instead"
+    )
+
+
+def test_routes_apps_is_converted_and_stays_converted() -> None:
+    """The Custom Apps package acquires sessions through `tenant_session`,
+    except the named H4 sites — pinned by EXACT count, both directions.
+
+    A count above an entry (or a new file) is a handler whose queries will
+    silently return nothing under RLS; a count below it is banked progress
+    that must lower the entry, or the headroom becomes new-debt budget.
+    """
+    sites = {
+        f: n for f, n in _get_db_sites().items()
+        if f.startswith("apps/services/gateway/gateway/routes/apps/")
+    }
+    assert sites == H2_APPS_EXEMPT_SITES, (
+        f"routes/apps unbound get_db() sites {sites} != the named exemptions "
+        f"{H2_APPS_EXEMPT_SITES} — new sites must use "
+        f"`async with _tenant_session() as db:` (_common.py); a retired "
+        f"exemption must shrink H2_APPS_EXEMPT_SITES in this test"
     )
 
 

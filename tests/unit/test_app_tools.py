@@ -21,6 +21,8 @@ publish-time admin review gate it adds to ``gateway.routes.apps.publish``:
 from __future__ import annotations
 
 import json
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from typing import Any
 
@@ -189,8 +191,14 @@ def _patch_common(
     row = row or _row()
     shared_grants = grants if grants is not None else set()
 
-    async def _get_db() -> _FakeDB:
-        return _FakeDB(shared_grants)
+    @asynccontextmanager
+    async def _tenant_session() -> AsyncIterator[_FakeDB]:
+        # H2: the handlers' seam is the tenant-bound context manager; a fresh
+        # fake per block sharing `shared_grants` keeps the state-per-table
+        # convention, and commit-on-clean-exit mirrors the real wrapper.
+        db = _FakeDB(shared_grants)
+        yield db
+        await db.commit()
 
     async def _get_app_or_404(_db: Any, _slug: str, _user: UserContext) -> Any:
         return row, []
@@ -201,7 +209,7 @@ def _patch_common(
     async def _common_get_db() -> _FakeDB:
         return _FakeDB()  # keeps record_app_audit best-effort + DB-free
 
-    monkeypatch.setattr(tools, "_get_db", _get_db)
+    monkeypatch.setattr(tools, "_tenant_session", _tenant_session)
     monkeypatch.setattr(tools, "get_app_or_404", _get_app_or_404)
     monkeypatch.setattr(tools, "_load_live_manifest", _load_live_manifest)
     monkeypatch.setattr(_common, "_get_db", _common_get_db)
@@ -494,14 +502,16 @@ def _patch_publish(
     ) -> Any:
         return row, []
 
-    async def _get_db() -> _PublishFakeDB:
-        return fake_db
+    @asynccontextmanager
+    async def _tenant_session() -> AsyncIterator[_PublishFakeDB]:
+        yield fake_db
+        await fake_db.commit()
 
     async def _noop(*_a: Any, **_k: Any) -> None:
         return None
 
     monkeypatch.setattr(publish, "get_app_or_404", _fake_get_app_or_404)
-    monkeypatch.setattr(publish, "_get_db", _get_db)
+    monkeypatch.setattr(publish, "_tenant_session", _tenant_session)
     monkeypatch.setattr(publish, "sync_workspace_best_effort", _noop)
     monkeypatch.setattr(publish, "record_app_audit", _noop)
     monkeypatch.setattr(publish, "publish_app_activity", lambda *a, **k: None)

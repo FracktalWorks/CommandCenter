@@ -17,6 +17,7 @@
  * value (`lib/quickAdd.ts` owns that mapping), and an arrow-key cursor walks
  * the rows — Shift extends the WS-27n selection, Enter opens the panel.
  */
+import { EmptyState } from "@/components/EmptyState";
 import Icon from "@/components/Icon";
 import { StatusChip } from "@/components/StatusChip";
 import { AvatarStack, TaskMeta } from "@/components/TaskMeta";
@@ -28,7 +29,14 @@ import { projectsApi } from "../lib/api";
 import { sortForView } from "../lib/board";
 import { taskRef, visibleChips } from "../lib/card";
 import { clampCursor, stepCursor } from "../lib/cursor";
-import { type GroupBy, type TaskGroup, personLabel } from "../lib/grouping";
+import { emptyStateCopy } from "../lib/emptyState";
+import {
+  type Filters,
+  type GroupBy,
+  type TaskGroup,
+  isFiltered,
+  personLabel,
+} from "../lib/grouping";
 import { quickAddPrefill } from "../lib/quickAdd";
 import { QuickAdd } from "./QuickAdd";
 import { useFlash } from "./useFlash";
@@ -38,6 +46,15 @@ const NOBODY: ReadonlySet<string> = new Set();
 interface Props {
   groups: TaskGroup[];
   groupBy: GroupBy;
+  /**
+   * S4 — the view's filters, for the empty state alone.
+   *
+   * Required rather than optional: an unwired call site would silently draw
+   * "no tasks here yet" over a filtered-to-nothing list, which is the exact
+   * defect this props pair exists to end. `tsc` is the fence.
+   */
+  filters: Filters;
+  onClearFilters: () => void;
   statuses: StatusRow[];
   /** WS-27y — where a quick-added task is created (the selected node). */
   projectId: string;
@@ -57,6 +74,8 @@ interface Props {
 export function TaskList({
   groups,
   groupBy,
+  filters,
+  onClearFilters,
   statuses,
   projectId,
   shownFields,
@@ -167,7 +186,23 @@ export function TaskList({
   }
 
   if (total === 0) {
-    return <p className="p-6 text-sm text-muted-foreground">No tasks here yet.</p>;
+    // S4 — two states, never one. "No tasks here yet" told somebody who had
+    // filtered the list that their project was empty; `isFiltered` is the same
+    // predicate the toolbar's Clear button reads, so the state and the control
+    // that caused it cannot disagree.
+    const copy = emptyStateCopy({ canvas: "list", filtered: isFiltered(filters) });
+    return (
+      <EmptyState
+        icon={copy.icon}
+        message={copy.message}
+        hint={copy.hint}
+        action={
+          copy.filtered
+            ? { label: "Clear filters", icon: "X", onClick: onClearFilters }
+            : undefined
+        }
+      />
+    );
   }
 
   const columnCount = onToggle ? 6 : 5;

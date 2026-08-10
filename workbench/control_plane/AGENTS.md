@@ -20,9 +20,10 @@ The short version, because these are the three mistakes that actually happen:
    `src/components/ui/`. Material makes every button a pill, Graphite uppercases
    every label; no class string can express that.
 
-All three are enforced by `src/lib/theme/conformance.test.ts` (five rules:
+All three are enforced by `src/lib/theme/conformance.test.ts` (**six** rules:
 literals, `lucide-react`, bracket classes, solid-button chrome, raw palette
-classes), which carries a frozen baseline for existing debt: a file with no
+classes, and — since S4 — the `bg-accent text-accent-foreground` active pair
+rule 6 below forbids), which carries a frozen baseline for existing debt: a file with no
 budget must be clean, a baselined file may not get worse, and a baselined file
 that got *better* fails until you lower its number — so the debt figures never
 quietly become fiction. **If your change improves a baselined file, lowering
@@ -71,9 +72,26 @@ Four rules on top of the three above. Each one exists because it was broken:
    overrides the shared vocabulary on every uncustomised project.
 6. **Use the house tokens, not a synonym.** Active/selected is
    `bg-primary/10 text-primary` (the measured norm across `/tasks`, `/email` and
-   `src/components`), not `bg-accent`. Radius comes from `--radius` via
-   `rounded-sm/md/lg` — `rounded-xl` is a fixed 12px that ignores Graphite's
-   `0.125rem` and Material's `1rem`.
+   `src/components`), not `bg-accent`.
+   Radius: **the whole named scale is derived from `--radius`** in `globals.css`'s
+   `@theme` block — `sm`/`md` step down, `lg` and `xl` both *equal* `--radius`,
+   `2xl`/`3xl` step up. So every `rounded-<name>` utility is themed and none of
+   them is a violation; only an arbitrary value (`rounded-[14px]`) escapes the
+   theme. What still matters is **consistency between surfaces**: two boards
+   drawing their columns at different radii look like two products even when both
+   are themed.
+   *(Corrected 2026-08-10. This rule previously claimed `rounded-xl` was a fixed
+   12px that ignored Graphite and Material. It is not — `--radius-xl:
+   var(--radius)`, i.e. identical to `rounded-lg`. The claim was mine and it was
+   wrong; acting on it would have baselined ~274 correctly-themed occurrences
+   across ~70 files as debt, which is a fence against a non-violation and worse
+   than no fence at all.)*
+   **Fence (S4):** conformance rule 6 matches the PAIR
+   `bg-accent text-accent-foreground` — a file with no budget must be clean, the
+   four remaining sites are baselined per file and can only go down, and
+   `lib/statusAccent.ts` is excepted with its argument. `hover:bg-accent` and
+   `bg-accent/10` are deliberately not matched. The radius half is **advisory**: nothing tests it, and
+   nothing should — see the correction above.
 7. **Categorical hues are a theme decision too.** A set of colours that only
    has to be *mutually distinguishable* (contexts, tags, labels) still belongs to
    the theme. **The ramp now exists**: `--cat-1` … `--cat-8`, eight slots every
@@ -94,7 +112,10 @@ Four rules on top of the three above. Each one exists because it was broken:
 
 **What CI cannot catch, and you must.** There is no structural or layout test in
 this tree: nothing asserts panel counts, shell adoption, mobile branches, or that
-two apps draw a card the same way. The conformance suite checks five regexes.
+two apps draw a card the same way. The conformance suite checks six regexes.
+(`src/lib/sharedTaskUi.test.ts` is the nearest thing to a structural test and is
+narrower than it sounds: it pins that a shared module is declared **once** and
+that each app still imports it — never that a surface actually uses it.)
 So the real check is `DESIGN_SYSTEM.md` §8: **switch the theme to Fluent, then
 Material, then Graphite, and look at the surface you changed** — and at the
 neighbouring app, because continuity between two apps is exactly what no test in

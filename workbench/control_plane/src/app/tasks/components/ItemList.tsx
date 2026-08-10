@@ -1,8 +1,10 @@
 "use client";
 
+import Badge from "@/components/ui/Badge";
 import Button from "@/components/ui/Button";
 import AppIcon, { themedIcon, type ThemedIcon } from "@/components/Icon";
-import { useMemo, useState, useSyncExternalStore } from "react";
+import { allSelected } from "@/lib/selection";
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { useTaskStore, itemsForView } from "../lib/taskStore";
 import { isUntagged } from "../lib/priority";
 import { ViewKey } from "../lib/types";
@@ -74,26 +76,29 @@ export function ItemList() {
   // status-grouped list, AND the Kanban board — and survives the list/board
   // toggle within a view. The inbox keeps its own selection UI.
   //
-  // ── WS-27ad · a divergence KEPT, and why ────────────────────────────────
-  // /projects has no mode: its rows carry a permanent checkbox column and
-  // shift-click extends. /tasks keeps this modal Select button, deliberately.
+  // ── The divergence WS-27ad kept, and why it did not survive ─────────────
+  // That slice left /tasks with a modal "Select" button and wrote the reason
+  // here: a /tasks row is a TaskCard, the whole card is the open affordance, so
+  // a permanent checkbox would either steal the drag-grip gutter the manual
+  // sort needs or make one click mean two things.
   //
-  // The reason is not taste, it is that `selectMode` changes what a CLICK
-  // MEANS. A /projects row is a table row with a dedicated checkbox cell, so
-  // clicking the row opens and clicking the box selects — two targets, two
-  // outcomes. A /tasks row is a TaskCard: the whole card is the open affordance
-  // and it carries its own controls (the schedule button, the context menu, the
-  // status pill's stage menu). Giving every card a permanent checkbox would
-  // either steal the drag-grip gutter the manual sort needs or make one click
-  // mean two things — the exact trap /projects' own card comments name.
+  // **Owner ruling, 2026-08-10: /projects is canonical and /tasks conforms** —
+  // and the code shows the old reason was never structural. /projects solved
+  // exactly this by putting the checkbox OUTSIDE the card, a sibling in the row
+  // (`projects/components/TaskBoard.tsx`), so the card surface stays the open
+  // affordance and the box is a second target. /tasks put it INSIDE, absolutely
+  // positioned over the same corner as the drag grip — so the collision the old
+  // comment predicted was one this app had built for itself.
   //
-  // What DID converge is the grammar INSIDE the mode: once you are selecting,
-  // shift-click and Shift+Arrow extend from an anchor through
-  // `@/lib/selection`, identically in both apps. The mode is the entry; the
-  // selection model underneath is now one.
-  const selectMode = useTaskStore((s) => s.selectMode);
+  // What that leaves: **`selectMode` is no longer a mode.** It is a derived
+  // mirror of "something is selected" (see the store), it decides only whether
+  // the bulk bar is up, and it never again changes what a click means. The
+  // checkbox is always drawn, selection is always available, and shift-click /
+  // Shift+Arrow extend through `@/lib/selection` — the grammar this app already
+  // shared with /projects, now reachable without entering anything first.
   const selectedIds = useTaskStore((s) => s.selectedIds);
-  const setSelectMode = useTaskStore((s) => s.setSelectMode);
+  const selectAllVisible = useTaskStore((s) => s.selectAllVisible);
+  const pruneSelection = useTaskStore((s) => s.pruneSelection);
   const clearSelection = useTaskStore((s) => s.clearSelection);
 
   // The view's items (source/archive-filtered), then the toolbar's search/
@@ -112,6 +117,19 @@ export function ItemList() {
       view === "priority" ? ({ field: "priority", dir: "asc" } as const) : sort;
     return applySort(applyFilters(inView, filters), effectiveSort);
   }, [inView, filters, sort, view]);
+  // The ids the view is actually showing — what "select all" means, and what a
+  // surviving selection is measured against. Derived here rather than in each
+  // surface because every surface (grouped list, flat list, board, waiting)
+  // renders this same set.
+  const visibleIds = useMemo(() => visible.map((i) => i.id), [visible]);
+  const allChecked = allSelected(selectedIds, visibleIds);
+  // A selection that outlives its filter is how a bulk action hits rows nobody
+  // can see any more (`@/lib/selection.prune` says it at length). /projects
+  // prunes on every change of its visible set; this is the same effect.
+  useEffect(() => {
+    pruneSelection(visibleIds);
+  }, [visibleIds, pruneSelection]);
+
   // Offer "auto-assign contexts" when Next Actions has context-less tasks (the
   // synced ClickUp tasks that never went through Clarify → @no context bucket).
   const contextlessCount = useMemo(
@@ -249,28 +267,33 @@ export function ItemList() {
           {hasSynced && contextlessCount > 0 && (
             <ContextBackfillButton count={contextlessCount} />
           )}
-          {/* Multi-select toggle for bulk archive/restore/delete. */}
+          {/* Select-all — /projects' header checkbox (`TaskList.tsx`), which
+              /tasks had no equivalent of at all. It selects what the view is
+              SHOWING (filtered, not the whole store) and unticks to nothing
+              when everything already is. This is not the old "Select" button
+              wearing a checkbox: selection needs no entry point now, every row
+              carries its own box, and this is the shortcut. */}
           {bulkSelectable && visible.length > 0 && (
-            <button
-              type="button"
-              onClick={() => (selectMode ? clearSelection() : setSelectMode(true))}
-              aria-pressed={selectMode}
-              title={selectMode ? "Cancel selection" : "Select tasks"}
+            <label
+              title="Select every task this view is showing"
               className={[
-                "tech-transition inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[11px] font-medium",
+                "inline-flex cursor-pointer items-center gap-1.5 text-[11px] font-medium text-muted-foreground hover:text-foreground",
                 boardable ||
                 (hasSynced && sourceFilter !== "all") ||
                 (hasSynced && contextlessCount > 0)
                   ? "ml-2"
                   : "ml-auto",
-                selectMode
-                  ? "border-primary/40 bg-primary/10 text-primary"
-                  : "border-border text-muted-foreground hover:border-primary/40 hover:text-foreground",
               ].join(" ")}
             >
-              <AppIcon name="CheckSquare" className="h-3 w-3" />
-              Select
-            </button>
+              <input
+                type="checkbox"
+                checked={allChecked}
+                onChange={() => selectAllVisible(visibleIds)}
+                aria-label="Select every task this view is showing"
+                className="h-3.5 w-3.5 accent-primary"
+              />
+              Select all
+            </label>
           )}
           <span
             className={
@@ -306,6 +329,68 @@ export function ItemList() {
         <TaskToolbar items={inView} />
       )}
 
+      {/* The bulk bar — TOP-mounted, directly above the rows it acts on, where
+          /projects puts it (`projects/components/BulkBar.tsx`: `border-b` +
+          `bg-muted`, built from Button/Badge). It was bottom-mounted here with
+          hand-rolled `<button>`s, which is AGENTS.md rule 3 and invisible to
+          the conformance suite — those regexes only catch solid-fill chrome,
+          and these were outline buttons. Appears only when something is
+          selected: a bar of controls that mostly do nothing is a bar people
+          learn to ignore. */}
+      {selectedIds.size > 0 && (
+        <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border bg-muted px-3 py-2">
+          <Badge tone="primary">{selectedIds.size} selected</Badge>
+          {isArchiveView ? (
+            <Button
+              variant="secondary"
+              size="sm"
+              icon="ArchiveRestore"
+              onClick={() => {
+                bulkArchive([...selectedIds], false);
+                clearSelection();
+              }}
+            >
+              Restore
+            </Button>
+          ) : (
+            <Button
+              variant="secondary"
+              size="sm"
+              icon="Archive"
+              onClick={() => {
+                bulkArchive([...selectedIds], true);
+                clearSelection();
+              }}
+            >
+              Archive
+            </Button>
+          )}
+          <Button
+            variant="destructive"
+            size="sm"
+            icon="Trash2"
+            onClick={() => {
+              requestDelete([...selectedIds]);
+              clearSelection();
+            }}
+          >
+            Delete
+          </Button>
+          <Button variant="ghost" size="sm" icon="X" onClick={clearSelection}>
+            Clear
+          </Button>
+          {/* Why this bar is shorter than /projects', and is not unfinished:
+              its status / assignee / tags / priority controls drive ONE
+              endpoint, `POST /projects/tasks/bulk`, which resolves each field
+              per task and reports per-task refusals. /tasks has no counterpart
+              — `/items/bulk` takes a disposition and `/items/bulk-archive` an
+              archive flag, and that is the whole bulk surface; `gtd_items` has
+              no tags column at all (its nearest axis, @context, is single
+              valued). So archive/restore/delete is the honest set. Widening it
+              is a gateway ticket, not a bar redesign. */}
+        </div>
+      )}
+
       {loading ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-2 p-8 text-center">
           <AppIcon name="Loader2" className="h-6 w-6 animate-spin text-muted-foreground/60" />
@@ -322,9 +407,12 @@ export function ItemList() {
         // is a PERSON rather than a stage (spec §1 line 46, §6).
         <WaitingForView items={visible} />
       ) : isBoard ? (
-        // The Kanban board (drag-to-refile). Multi-select works on the board
-        // itself now: in select mode the cards become checkboxes and drag is
-        // suppressed, so a batch can be archived/deleted without leaving the board.
+        // The Kanban board (drag-to-refile). ⚠️ The board's cards still draw
+        // their checkbox only while `selectMode` is true, and `selectMode` is
+        // now derived from "something is selected" — so on the board the FIRST
+        // pick comes from Select all (or from a list surface) until the card
+        // gains its permanent box the way /projects' board card has one. That
+        // move belongs to `TaskCard`/`TaskBoard`, not to this file.
         <div className="min-h-0 flex-1">
           <TaskBoard items={visible} view={view} />
         </div>
@@ -341,77 +429,7 @@ export function ItemList() {
         // /tasks surfaces where the arrow keys did nothing.
         <FlatList items={visible} view={view} showPriority={view === "priority"} />
       )}
-
-      {/* Bulk action bar — archive/restore/delete the current selection. */}
-      {selectMode && selectedIds.size > 0 && (
-        <div className="flex shrink-0 items-center gap-2 border-t border-border bg-card px-4 py-2">
-          <span className="text-xs text-muted-foreground">
-            {selectedIds.size} selected
-          </span>
-          <div className="ml-auto flex items-center gap-1.5">
-            {isArchiveView ? (
-              <BulkAction
-                icon={themedIcon("ArchiveRestore")}
-                label="Restore"
-                onClick={() => {
-                  bulkArchive([...selectedIds], false);
-                  clearSelection();
-                }}
-              />
-            ) : (
-              <BulkAction
-                icon={themedIcon("Archive")}
-                label="Archive"
-                onClick={() => {
-                  bulkArchive([...selectedIds], true);
-                  clearSelection();
-                }}
-              />
-            )}
-            <BulkAction
-              icon={themedIcon("Trash2")}
-              label="Delete"
-              danger
-              onClick={() => {
-                requestDelete([...selectedIds]);
-                clearSelection();
-              }}
-            />
-            <Button variant="text" size="icon-xs" radius="keep" layout="" type="button" onClick={clearSelection} aria-label="Cancel selection" className="rounded-md">
-              <AppIcon name="X" className="h-4 w-4" />
-            </Button>
-          </div>
-        </div>
-      )}
     </div>
-  );
-}
-
-function BulkAction({
-  icon: Icon,
-  label,
-  onClick,
-  danger = false,
-}: {
-  icon: ThemedIcon;
-  label: string;
-  onClick: () => void;
-  danger?: boolean;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={[
-        "tech-transition inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs font-medium",
-        danger
-          ? "border-border text-muted-foreground hover:border-destructive/40 hover:bg-destructive/10 hover:text-destructive"
-          : "border-border text-muted-foreground hover:border-primary/40 hover:text-primary",
-      ].join(" ")}
-    >
-      <Icon className="h-3.5 w-3.5" />
-      {label}
-    </button>
   );
 }
 

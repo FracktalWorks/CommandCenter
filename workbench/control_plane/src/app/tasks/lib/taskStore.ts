@@ -1,6 +1,11 @@
 import { create } from "zustand";
 import { dropIndexFor } from "@/lib/boardDrop";
-import { clickSelect } from "@/lib/selection";
+import {
+  allSelected,
+  clickSelect,
+  prune,
+  type SelectionState,
+} from "@/lib/selection";
 import {
   Disposition,
   Energy,
@@ -569,9 +574,22 @@ interface TaskState {
   confirmPendingDelete: () => void;
   /** Dismiss the confirm dialog without deleting. */
   cancelPendingDelete: () => void;
-  /** Multi-select for bulk archive/delete. Lifted into the store (not local to
-   *  ItemList) so the board and grouped list can offer checkboxes too — the
-   *  selection survives switching between list/board mode within a view. */
+  /**
+   * True exactly when something is selected — i.e. when the bulk bar is up.
+   *
+   * ⚠️ **This is a DERIVED mirror of `selectedIds.size > 0`, not a mode**
+   * (owner ruling 2026-08-10: /projects is canonical, /tasks conforms). It used
+   * to be a mode you entered from a "Select" button, and entering it changed
+   * what a click MEANT — the same row opened a task before the button and
+   * toggled a checkbox after it. /projects never had that, and neither does
+   * this app now: every list surface draws its checkbox unconditionally, beside
+   * the row rather than over it, so clicking the row still opens it.
+   *
+   * It survives only because `TaskBoard` / `TaskCard` / `WaitingForView` still
+   * read it while their own checkbox move lands. **Nothing may gate an
+   * affordance on it again**; the invariant and the three surfaces that must
+   * not consult it are pinned by `selectionParity.test.ts`.
+   */
   selectMode: boolean;
   selectedIds: Set<string>;
   /** The last row picked WITHOUT shift — what a shift-click measures from.
@@ -581,8 +599,6 @@ interface TaskState {
    *  (`@/lib/selection.clickSelect`), so a member who learns shift-click on one
    *  surface has learnt it on both. */
   selectAnchor: string | null;
-  /** Enter/leave select mode (leaving clears the selection). */
-  setSelectMode: (on: boolean) => void;
   /**
    * Pick one id.
    *
@@ -598,7 +614,27 @@ interface TaskState {
   ) => void;
   /** Replace the selection outright — Shift+Arrow's swept superset. */
   extendSelection: (ids: readonly string[]) => void;
-  /** Clear the selection and leave select mode. */
+  /**
+   * Select every row the view is currently showing, or clear if they already
+   * all are — the header checkbox, /projects' `onToggleAll` (page.tsx) written
+   * once here instead of at the call site.
+   *
+   * `visible` is the FILTERED set, never the whole store: "select all" on a
+   * screen showing three of forty tasks has to mean those three, or the next
+   * click archives thirty-seven rows nobody could see.
+   */
+  selectAllVisible: (visible: readonly string[]) => void;
+  /**
+   * Drop selected ids that are no longer on screen.
+   *
+   * A selection that outlives its filter is how a bulk action hits rows nobody
+   * can see: select forty, type a search that leaves three, press Archive
+   * believing you are acting on the three in front of you. /projects prunes on
+   * every change of its visible set (`page.tsx`, `@/lib/selection.prune`); this
+   * is the same rule on this side.
+   */
+  pruneSelection: (visible: readonly string[]) => void;
+  /** Clear the selection (which also takes the bulk bar down). */
   clearSelection: () => void;
   /** Delete an item. SOFT delete (tombstone) → lossless Undo within the window,
    *  then purge (+ ClickUp propagation for synced tasks) on dismiss. */
@@ -776,6 +812,27 @@ interface TaskState {
   closeWorkspaces: () => void;
 }
 
+/**
+ * The one place a selection transition becomes store state.
+ *
+ * Every selection write goes through here so `selectMode` cannot drift from
+ * `selectedIds.size > 0` — the drift is what made it a *mode* rather than a
+ * fact about the bulk bar, and a mode is what changed the meaning of a click.
+ * Keeping the derivation in one function is why the invariant is testable in
+ * one place (`selectionParity.test.ts`) instead of at five call sites.
+ */
+function applySelection(next: SelectionState): Pick<
+  TaskState,
+  "selectedIds" | "selectAnchor" | "selectMode"
+> {
+  const selected = new Set(next.selected);
+  return {
+    selectedIds: selected,
+    selectAnchor: next.anchor,
+    selectMode: selected.size > 0,
+  };
+}
+
 export const useTaskStore = create<TaskState>((set, get) => ({
   // Start EMPTY + loading. hydrate() fills from the gateway (live) or, only if
   // the gateway is truly absent, falls back to the bundled mocks (demo/local
@@ -837,25 +894,41 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   selectedIds: new Set<string>(),
   selectAnchor: null,
 
-  setSelectMode: (on) =>
-    set(
-      on
-        ? { selectMode: true }
-        : { selectMode: false, selectedIds: new Set(), selectAnchor: null },
-    ),
   toggleSelected: (id, shift = false, visible = []) =>
+    set((s) =>
+      applySelection(
+        clickSelect(
+          { selected: s.selectedIds, anchor: s.selectAnchor },
+          visible,
+          id,
+          shift,
+        ),
+      ),
+    ),
+  extendSelection: (ids) =>
+    set((s) => applySelection({ selected: new Set(ids), anchor: s.selectAnchor })),
+  selectAllVisible: (visible) =>
+    set((s) =>
+      applySelection({
+        // Already all on? Then the box is ticked and clicking it unticks —
+        // the same transition /projects' header checkbox makes.
+        selected: allSelected(s.selectedIds, visible)
+          ? new Set<string>()
+          : new Set(visible),
+        anchor: null,
+      }),
+    ),
+  pruneSelection: (visible) =>
     set((s) => {
-      const next = clickSelect(
-        { selected: s.selectedIds, anchor: s.selectAnchor },
-        visible,
-        id,
-        shift,
-      );
-      return { selectedIds: new Set(next.selected), selectAnchor: next.anchor };
+      const kept = prune(s.selectedIds, visible);
+      // Referentially stable when nothing left the screen: this runs from an
+      // effect keyed on the visible set, and returning a fresh Set every time
+      // would re-render every subscriber on every filter keystroke.
+      if (kept.size === s.selectedIds.size) return {};
+      return applySelection({ selected: kept, anchor: s.selectAnchor });
     }),
-  extendSelection: (ids) => set({ selectedIds: new Set(ids) }),
   clearSelection: () =>
-    set({ selectedIds: new Set(), selectMode: false, selectAnchor: null }),
+    set(applySelection({ selected: new Set(), anchor: null })),
 
   selectView: (view) =>
     set({
@@ -866,10 +939,10 @@ export const useTaskStore = create<TaskState>((set, get) => ({
       // stale query doesn't silently hide items in the next view.
       filters: DEFAULT_FILTERS,
       // A multi-selection is scoped to its view too — drop it on nav so you
-      // don't archive/delete rows you can no longer see.
-      selectMode: false,
-      selectedIds: new Set(),
-      selectAnchor: null,
+      // don't archive/delete rows you can no longer see. Through the same
+      // helper as every other selection write, so this one cannot be the site
+      // that reintroduces a `selectMode` disagreeing with the selection.
+      ...applySelection({ selected: new Set(), anchor: null }),
     }),
 
   selectContext: (context) =>

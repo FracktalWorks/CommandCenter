@@ -240,7 +240,7 @@ let _ctxSig: string | null = null;
 /** Stable list of docs open for `sessionId` (same ref until it actually changes). */
 export function getOpenDocsForSession(sessionId: string): OpenDoc[] {
   const fresh = _state.docs.filter((d) => d.sessionId === sessionId);
-  const sig = fresh.map((d) => d.path).join(" ");
+  const sig = fresh.map((d) => d.path).join("\0");
   if (_ctxCache && _ctxSig === sig) return _ctxCache;
   _ctxCache = fresh;
   _ctxSig = sig;

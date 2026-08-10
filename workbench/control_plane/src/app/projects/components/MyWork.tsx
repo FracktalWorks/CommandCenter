@@ -13,13 +13,22 @@
  * context, defer. That is why this file selects and triages but never edits
  * shared fields, other than through `complete`, which is deliberately shared.
  */
+import Icon from "@/components/Icon";
+import { StatusChip } from "@/components/StatusChip";
+import { TaskCardShell, TaskCardTitle } from "@/components/TaskCardShell";
+import { TaskMeta } from "@/components/TaskMeta";
+import Badge from "@/components/ui/Badge";
+import Button from "@/components/ui/Button";
+import { Input } from "@/components/ui/Input";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
+import { accentForDisposition } from "../lib/accent";
 import { myWorkApi, type TaskRow } from "../lib/api";
+import { cardChips } from "../lib/card";
 import {
+  LANE_LABELS,
   actionLine,
   groupByDisposition,
-  isOverdue,
   twoMinuteTasks,
   untriagedCount,
   type MyTaskRow,
@@ -31,6 +40,23 @@ const TRIAGE: Array<{ value: string; label: string }> = [
   { value: "SOMEDAY", label: "Someday" },
   { value: "REFERENCE", label: "File" },
 ];
+
+/**
+ * How a disposition reads on a card.
+ *
+ * The lane labels first (they are what the section headings say, so a card in
+ * "Waiting on" must not call itself something else), then the triage buttons'
+ * own words for the dispositions that are not lanes — `REFERENCE` is "File" on
+ * the button and would otherwise shout `REFERENCE` on the chip. Anything left
+ * is a server value no surface has named, and showing it raw beats hiding it.
+ */
+function dispositionLabel(disposition: string): string {
+  return (
+    LANE_LABELS[disposition] ??
+    TRIAGE.find((t) => t.value === disposition)?.label ??
+    disposition
+  );
+}
 
 interface Props {
   onSelect: (task: TaskRow) => void;
@@ -120,12 +146,16 @@ export function MyWork({ onSelect }: Props) {
           getting a thought out of your head must cost nothing. No project to
           pick, no status to choose — a title and Enter. */}
       <form onSubmit={submitCapture} className="border-b border-border p-3">
-        <input
+        {/* The house text primitive rather than a hand-rolled field: the focus
+            treatment is a theme decision (`DESIGN_SYSTEM.md` rule 3) and the
+            geometry is unchanged — `lg` IS this field's old px-3/py-2/text-sm. */}
+        <Input
+          inputSize="lg"
+          icon="Plus"
           value={capture}
           onChange={(e) => setCapture(e.target.value)}
           placeholder="Capture a thought…"
           aria-label="Capture a task"
-          className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground"
         />
       </form>
 
@@ -142,14 +172,20 @@ export function MyWork({ onSelect }: Props) {
             : "Everything here has been triaged"}
         </span>
         {contexts.length > 0 ? (
+          // S4 — the selected pill is `bg-primary/10 text-primary`, the house
+          // active token measured across /tasks, /email and src/components
+          // (AGENTS.md rule 6). Projects was the tree's only systematic
+          // `bg-accent`-as-active user, which is a different colour on every
+          // theme from the one every other app's selection wears.
           <span className="ml-auto flex flex-wrap gap-1">
             <button
               type="button"
+              aria-pressed={context === null}
               onClick={() => setContext(null)}
-              className={`rounded-md px-2 py-1 ${
+              className={`tech-transition rounded-md px-2 py-1 ${
                 context === null
-                  ? "bg-accent text-accent-foreground"
-                  : "text-muted-foreground hover:bg-muted"
+                  ? "bg-primary/10 font-medium text-primary"
+                  : "text-muted-foreground hover:bg-secondary hover:text-foreground"
               }`}
             >
               All contexts
@@ -158,11 +194,12 @@ export function MyWork({ onSelect }: Props) {
               <button
                 key={c.context}
                 type="button"
+                aria-pressed={context === c.context}
                 onClick={() => setContext(c.context)}
-                className={`rounded-md px-2 py-1 ${
+                className={`tech-transition rounded-md px-2 py-1 ${
                   context === c.context
-                    ? "bg-accent text-accent-foreground"
-                    : "text-muted-foreground hover:bg-muted"
+                    ? "bg-primary/10 font-medium text-primary"
+                    : "text-muted-foreground hover:bg-secondary hover:text-foreground"
                 }`}
               >
                 {c.context} ({c.total})
@@ -225,6 +262,22 @@ export function MyWork({ onSelect }: Props) {
   );
 }
 
+/**
+ * One task, in the shared card vocabulary (S4).
+ *
+ * This used to be the fourth bespoke way this workspace drew a task: a bordered
+ * flex row with its own title size, its own hand-written "overdue · due · no
+ * date" line and a hand-rolled square for the tick. It is the *personal* task
+ * list inside Projects, so it sits directly opposite the /tasks app in the
+ * owner's comparison — and it was the one surface that looked like neither.
+ *
+ * So the box is `TaskCardShell`, the title is `TaskCardTitle`, the due /
+ * blocked / checklist facts are `TaskMeta` chips off `lib/card.cardChips`, and
+ * the disposition is a `StatusChip`. Nothing here draws a colour or a shape of
+ * its own; what stays local is the GTD *interaction* — completing (which moves
+ * shared status) and re-triaging — exactly as `TaskCard` keeps its own GTD
+ * badges inside the same shell on the /tasks side.
+ */
 function Row({
   task,
   now,
@@ -238,59 +291,89 @@ function Row({
   onSelect: (task: TaskRow) => void;
   onRun: (taskId: string, work: () => Promise<unknown>) => Promise<void>;
 }) {
-  const overdue = isOverdue(task, now);
+  const completed = Boolean(task.completed_at);
   return (
-    <div
-      className={`flex items-center gap-2 border-b border-border px-1 py-2 last:border-0 ${
-        busy ? "opacity-50" : ""
-      }`}
+    <TaskCardShell
+      className={`mb-1.5 ${busy ? "pointer-events-none opacity-50" : ""}`}
+      completed={completed}
+      // Stated, not omitted: My work is a flat personal list with no keyboard
+      // cursor — it is not a board lane or a grouped list, so there is nothing
+      // for Arrow keys to walk. `sharedTaskUi`'s fence requires the literal
+      // precisely so "this surface has no cursor" cannot be confused with
+      // "somebody forgot the prop", which is how the /tasks board lost the
+      // treatment for a whole release.
+      atCursor={false}
+      ariaLabel={actionLine(task)}
+      onActivate={() => onSelect(task)}
     >
-      <button
-        type="button"
-        disabled={busy}
-        aria-label={`Complete ${task.title}`}
-        title="Completing this moves the task's status for everyone — there is one row."
-        onClick={() => void onRun(task.id, () => myWorkApi.complete(task.id))}
-        className="size-4 shrink-0 rounded-sm border border-border hover:bg-accent"
-      />
-      <button
-        type="button"
-        onClick={() => onSelect(task)}
-        className="min-w-0 flex-1 text-left"
+      <div className="flex items-start gap-2">
+        {/* A real checkbox, `stopPropagation`'d — the same grammar both boards
+            use for a control that lives inside a card that opens on click. */}
+        <input
+          type="checkbox"
+          checked={completed}
+          disabled={busy}
+          aria-label={`Complete ${task.title}`}
+          title="Completing this moves the task's status for everyone — there is one row."
+          onClick={(e) => e.stopPropagation()}
+          onChange={() => void onRun(task.id, () => myWorkApi.complete(task.id))}
+          className="mt-0.5 shrink-0"
+        />
+        <div className="flex min-w-0 flex-1 flex-col gap-1">
+          <span className="flex flex-wrap items-center gap-1.5">
+            <StatusChip
+              accent={accentForDisposition(task.disposition)}
+              label={dispositionLabel(task.disposition)}
+            />
+            {/* Untriaged is stated, not implied by a missing badge — it is the
+                Weekly Review's whole question. */}
+            {!task.is_triaged ? (
+              <Badge
+                tone="warning"
+                size="xs"
+                icon="Inbox"
+                title="Nobody has decided what this is yet — the disposition above was derived, not chosen."
+              >
+                untriaged
+              </Badge>
+            ) : null}
+            {task.context ? (
+              <span className="inline-flex items-center gap-1 rounded-md bg-secondary px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                <Icon name="Tag" className="h-3 w-3" aria-hidden />
+                <span className="max-w-[120px] truncate">{task.context}</span>
+              </span>
+            ) : null}
+          </span>
+          <TaskCardTitle completed={completed}>{actionLine(task)}</TaskCardTitle>
+          {/* The shared chip row: due (and overdue, in the danger tone with its
+              own icon), blocked-by, checklist progress, tags. It replaces this
+              row's hand-written date line, so a due date reads identically here
+              and on the team board. A fact a task does not have earns no chip —
+              which is why the old "no date" is gone rather than translated. */}
+          <TaskMeta chips={cardChips(task, now.getTime())} />
+        </div>
+      </div>
+      <span
+        className="flex flex-wrap gap-1"
+        // The triage buttons act on the row; they must not also open it.
+        onClick={(e) => e.stopPropagation()}
       >
-        <span className="block truncate text-sm text-foreground">{actionLine(task)}</span>
-        <span className="block truncate text-xs text-muted-foreground">
-          {/* Untriaged is stated, not implied by a missing badge — it is the
-              Weekly Review's whole question. */}
-          {!task.is_triaged ? "untriaged · " : ""}
-          {task.context ? `${task.context} · ` : ""}
-          {task.due_at ? (
-            <span className={overdue ? "text-foreground" : ""}>
-              {overdue ? "overdue " : "due "}
-              {new Date(task.due_at).toLocaleDateString()}
-            </span>
-          ) : (
-            "no date"
-          )}
-        </span>
-      </button>
-      <span className="flex shrink-0 gap-1">
         {TRIAGE.filter((t) => t.value !== task.disposition).map((t) => (
-          <button
+          <Button
             key={t.value}
-            type="button"
+            variant="ghost"
+            size="sm"
             disabled={busy}
             onClick={() =>
               void onRun(task.id, () =>
                 myWorkApi.setPersonal(task.id, { disposition: t.value })
               )
             }
-            className="rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-muted"
           >
             {t.label}
-          </button>
+          </Button>
         ))}
       </span>
-    </div>
+    </TaskCardShell>
   );
 }

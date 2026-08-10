@@ -473,6 +473,87 @@ describe("no raw Tailwind palette colours", () => {
   });
 });
 
+// ── Rule 6: active/selected wears the house token ───────────────────────────
+
+describe("active and selected use the house token", () => {
+  /**
+   * `bg-accent text-accent-foreground` — the synonym, not the norm.
+   *
+   * AGENTS.md rule 6 names the measured house token for active/selected:
+   * `bg-primary/10 text-primary`, which is what /tasks, /email and
+   * `src/components` draw. `accent` is a *different* token in every theme (on
+   * Graphite it is barely distinguishable from `secondary`, on Material it is
+   * a tinted surface), so a pill selected in Projects and a pill selected in
+   * Tasks were two different colours on every theme at once — one product,
+   * two selections. Nothing in the five rules above could see it: both halves
+   * are perfectly legal theme tokens, wrongly paired.
+   *
+   * Deliberately narrow — the PAIR, not `bg-accent` alone. `hover:bg-accent`
+   * is an ordinary hover tint and `bg-accent/10` is a chip; flagging those
+   * would make this the gate somebody switches off.
+   */
+  const ACCENT_ACTIVE = /\bbg-accent\s+text-accent-foreground\b/g;
+
+  /**
+   * Where the pair is a hue rather than a state, with the argument.
+   *
+   * The bar is the same as COLOR_EXCEPTIONS': it has to be the wrong rule, not
+   * merely inconvenient to migrate.
+   */
+  const ACTIVE_EXCEPTIONS: Record<string, string> = {
+    "lib/statusAccent.ts":
+      "the violet lane's CHIP — a tag/status hue, not a selection; `accent` is " +
+      "the one token pair that reads distinctly without competing with primary " +
+      "(see the constant's own note)",
+  };
+
+  /**
+   * The remaining call sites, per file. Same ratchet as the rules above: a
+   * file with no budget must be clean, a baselined file may not get worse, and
+   * one that got better fails until its number comes down.
+   *
+   * `app/projects/components/MyWork.tsx` was in this list at 2 and is not any
+   * more (S4). The three below are the rest of the Projects sweep.
+   */
+  const ACTIVE_DEBT: Record<string, number> = {
+    "app/projects/components/FilterBar.tsx": 2,
+    "app/projects/components/SearchPalette.tsx": 1,
+    "app/people/page.tsx": 1,
+  };
+
+  const activeExcepted = (rel: string) => matches(rel, Object.keys(ACTIVE_EXCEPTIONS));
+
+  it("a file with no budget uses bg-primary/10 text-primary", () => {
+    const offenders = sourceFiles()
+      .filter((f) => !(f in ACTIVE_DEBT) && !activeExcepted(f))
+      .map((f) => [f, count(read(f), ACCENT_ACTIVE)] as const)
+      .filter(([, n]) => n > 0);
+    expect(
+      offenders,
+      "Active/selected is `bg-primary/10 text-primary` (AGENTS.md rule 6) — the " +
+        "token every other app in this tree selects with. `bg-accent " +
+        "text-accent-foreground` resolves to a different colour per theme, so " +
+        "the same selection reads two ways in two apps.",
+    ).toEqual([]);
+  });
+
+  it("no baselined file gets worse, and none is stale", () => {
+    const drift = Object.entries(ACTIVE_DEBT)
+      .map(([f, budget]) => ({ file: f, budget, actual: count(read(f), ACCENT_ACTIVE) }))
+      .filter((r) => r.actual !== r.budget);
+    expect(drift, "Update ACTIVE_DEBT to match reality — down only.").toEqual([]);
+  });
+
+  it("every exception names a file that still needs one", () => {
+    for (const f of Object.keys(ACTIVE_EXCEPTIONS)) {
+      expect(
+        count(read(f), ACCENT_ACTIVE),
+        `${f} no longer uses the pair — drop it from ACTIVE_EXCEPTIONS`,
+      ).toBeGreaterThan(0);
+    }
+  });
+});
+
 // ── The published contract stays published ──────────────────────────────────
 
 describe("the --cc-* contract matches its documentation", () => {

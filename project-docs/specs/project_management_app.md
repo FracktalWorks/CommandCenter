@@ -3,7 +3,7 @@
 > **Product:** CommandCenter · **Feature:** Projects (the People Center's primary work-management
 > module, sliced into every other Center) · **Created:** 2026-08-05 · **Updated: 2026-08-10**
 > (status truth pass + tenancy alignment — R4; **WS-27ag shell/mobile slice built the same
-> day**) ·
+> day**; **S4 convergence slice built the same day — §11.21**) ·
 > **Status:** ✅ **WS-27 a–t MERGED AND DEPLOYED** (a b d e f i j k l m n via #390/#393/#394/#398;
 > o–t via **#399**; **u–z via #408**, 2026-08-10) — migrations **146, 147, 150, 152, 155, 156,
 > 160, 161, 164, 165, 166 are applied on prod** (164/165/166 log-verified on the 2026-08-10
@@ -19,6 +19,31 @@
 > six-purpose header splits into a title row and an action row. Frontend only — no migration,
 > no API change. ⚠️ **The phone-viewport and four-theme visual pass is still owed**: no
 > browser was runnable in the build environment (§11.20's closing note). ·
+> 🟢 **S1 BUILT 2026-08-10, on branch, NOT merged and NOT deployed** (§9.2, under WS-27ad) —
+> the /tasks board card and column adopt /projects' chrome under the owner's ruling that
+> *"the Tasks app is only a slice of the Projects app"*: one column shape and surface, one
+> gutter, the shell's `completed` and `atCursor` props finally passed by their /tasks caller,
+> the shared `AvatarStack` instead of a private copy, the selection checkbox moved OUT of the
+> card as a sibling target, and the title clamped to two lines in the shared file — which
+> **amends ad's recorded "modal select-mode is KEPT" decision on the card side**. Frontend
+> only — no migration, no API change. ⚠️ Visual pass still owed for the same reason as af/ag. ·
+> 🟢 **S3 (selection/bulk parity) BUILT 2026-08-10 for the /tasks LIST surfaces, on branch
+> `ws-s3-selection-bulk-parity`, NOT merged and NOT deployed** (§9 ticket "S3") — WS-27ad's
+> kept modal select-mode is **reversed by owner ruling** ("Projects is canonical, Tasks
+> conforms"): `selectMode` is now a derived mirror of "something is selected" and gates only
+> the bulk bar, the checkbox is permanent and sits outside the row content, shift-sweep is
+> ungated, the bar moved to the top onto Projects' chrome and primitives, and select-all
+> exists. ⚠️ The board card (`TaskCard`/`TaskBoard`, sibling slice S1) and `WaitingForView`
+> are still modal, and no browser was run here either. ·
+> 🟢 **S4 BUILT 2026-08-10, on branch, NOT merged and NOT deployed** (§11.21) — the three
+> findings where **Projects**, not Tasks, carried the defect: `MyWork`'s active pill moves
+> off `bg-accent` onto the house `bg-primary/10 text-primary` (now fenced by a **sixth
+> conformance rule**, per-file and ratcheted), `MyWork`'s bespoke fourth task row is rebuilt
+> on `TaskCardShell`/`TaskMeta`/`StatusChip`, and the board's one conflated empty state
+> becomes two — filtered-to-nothing (with **Clear filters**) vs genuinely empty — off the
+> existing `isFiltered` predicate, through a promoted `src/components/EmptyState.tsx`.
+> Frontend only — no migration, no API change. ⚠️ **The four-theme sweep is owed** for the
+> same reason: no browser runs in this environment. ·
 > **Owner:** vjvarada · **Board row: WS-27**
 >
 > **Tenancy (audited 2026-08-10 — this spec previously cited no tenancy decision at all).**
@@ -565,6 +590,75 @@ independent of the ClickUp work, because it is a move between two tables we own:
 
 ⚠️ **Not started, and it is the largest single piece of WS-27 remaining.** Until it lands
 there are two personal task stores, which is the state this decision exists to end.
+
+#### 7.5.1 The destination table — every column, named *(added 2026-08-10)*
+
+> **Why this exists.** Step 2 above says "a copy rather than a translation." That sentence is
+> true of the **seven** overlay columns `pm_task_personal` already mirrors, and false of the
+> rest. `gtd_items` carries **thirty-one** columns plus a `gtd_waiting` side table; fifteen of
+> them have no `pm_tasks` home at all. Executed as written, this migration would be a
+> **feature deletion wearing the word "copy"** — the founder priority matrix, all of
+> timeboxing, and the entire Waiting-For view would simply stop existing. Nobody would notice
+> until the data was already gone, because the migration would report success.
+>
+> So the destination of every column is named here **before** the migration is written. A
+> column that reaches the day of the move without a row in this table is a bug in this spec,
+> not a judgement call for whoever happens to be executing.
+
+**The governing question for each column is *whose fact is it?*** — because that decides the
+table, and getting it wrong is what a mirror-shaped design does to you later:
+
+* a **task** fact is true for everyone looking at the row → `pm_tasks`
+* a **member** fact can differ between two people on the same task → `pm_task_personal`
+
+The test that settles the hard cases: *if Ana and Ben are both on this task, can their answers
+legitimately differ?* If yes, it is per-member. This is the same argument `147_projects_personal.sql`
+already makes for `disposition` (one person is doing it, the other is waiting on it), applied
+consistently rather than only where it was first noticed.
+
+| `gtd_items` column | Destination | Why |
+|---|---|---|
+| `disposition`, `next_action`, `context`, `energy`, `time_estimate_mins`, `is_two_minute`, `defer_until`, `clarified_at` | **`pm_task_personal`** ✅ exists | The seven-plus-one already mirrored 1:1 by migration 147. This is the part that genuinely is a copy. |
+| `title`, `description`, `due_at`, `completed_at`, `created_at`, `updated_at` | **`pm_tasks`** ✅ exists | Same name, same meaning. |
+| `parent_item_id` | `pm_tasks.parent_task_id` ✅ | Same shape. |
+| `archived_at` | `pm_tasks.archived_at` ✅ | Same shape. |
+| `assignees` (JSONB, mig 91) | `pm_task_assignees` ✅ | Rows, not JSONB. `assignee` (the older singular, mig 48) folds into the same set. |
+| `attachments` (JSONB, mig 52) | `pm_task_attachments` ✅ | Rows, not JSONB. |
+| `sort_key` (mig 58) | `pm_view_task_positions` ✅ | D-PM-5: order is per view, not a column on the task. |
+| `project_id` → `gtd_projects` | `pm_tasks.project_id` | `LOCAL` rows land in the owner's personal project (§3.11). |
+| `workflow_stage` (mig 57) | `pm_tasks.status_id` | Free text → a real status row. The status→stage map already exists; the **colour** already agrees via `src/lib/statusAccent.ts`. |
+| **`important`, `leveraged`, `kept_mine`, `urgent_window_hours`** (mig 68) | **`pm_task_personal`** — 🔴 **NEW columns** | The founder priority matrix. Ana may rate a shared task important and Ben may not; it is a judgement, not a property of the work. Per-member by the test above. |
+| **`scheduled_start`, `scheduled_end`** (76), **`flexible`** (79), **`actual_start`, `actual_end`** (80) | **`pm_task_personal`** — 🔴 **NEW columns** | Timeboxing. *When I plan to do it* and *when I actually did* are mine; two people on one task book their own calendars. Note `pm_tasks.start_date` is a **different** fact (when the work starts, shared) and must not be conflated. |
+| **`deep_work`** (mig 96) | **`pm_task_personal`** — 🔴 **NEW column** | A sibling of `energy`, which is already per-member. My concentration classification, not the task's. |
+| `is_hard_date` | **`pm_tasks`** — 🔴 **NEW column** | The one calendar-shaped flag that is *not* personal: a deadline is either immovable or it is not, and that is true for everyone. |
+| **`origin`** (JSONB, mig 65) | **`pm_tasks`** — 🔴 **NEW**, or the P-9 `(external_source, external_id)` pair | Email-capture provenance: where this task came from. A task fact. Prefer the generic provenance pair (`plane_pm_research_2026-08.md` P-9) over a second JSONB blob — one provenance vocabulary, not two. |
+| `source`, `account_id`, `provider_task_id`, `provider_url`, `provider_status`, `sync_state` | **Retire with WS-27g**, not here | These are the ClickUp arm. They become meaningless when the provider retires, so they are a *legitimate* drop — **but only if WS-27g lands first or concurrently**. ⚠️ If WS-27h runs first, the `SourceBadge` loses its data while the integration is still live. Sequencing constraint, recorded. |
+| `is_mine` | **Derived, dropped** | `personal.derive_disposition` already computes it from `pm_task_assignees`. A stored copy of a derivable fact is the mirror problem in miniature. |
+| `deleted_at` (mig 67) | **Dropped → `archived_at`** | `pm_*` has no soft-delete and gains none: pervasive soft-delete was **refused** (P-31). Rows with `deleted_at` migrate as archived, and the reason travels with them. |
+| `user_id` | **Dissolved** | Becomes `pm_projects.personal_owner` (which project) plus `pm_task_personal.member_email` (whose overlay). One column becomes two because it was doing two jobs. |
+| `synced_at` | **Dropped** | Meaningless without the provider arm. |
+| `horizon_id` → `gtd_horizons` | 🔴 **BLOCKED — WS-21 owns Horizons and is DO-NOT-DISPATCH** (`work_plan.md` §4) | This migration **cannot** decide the fate of a feature another workstream owns. Either WS-21 rules first, or `gtd_horizons` and this FK outlive the retirement as an explicitly-parked island. Do not quietly drop it. |
+| **`gtd_waiting`** (table: `item_id`, `waiting_on`, `delegated_at`, `expected_by`, `last_nudged_at`, `resolved`, `created_at`) | 🔴 **NEW table `pm_task_waiting`**, keyed `(task_id, member_email)` | The whole Waiting-For view (WS-18, built 2026-08-02) rests on this. Per-member for the same reason as `disposition`: Ana waits on Ben while Ben waits on a vendor, about one task. A single delegation row per task cannot express that. `item_id` becomes `task_id`; the member half of the key is **new** — the legacy table had no such column because the legacy store was single-user by construction (`gtd_items.user_id`), which is precisely the assumption one store removes. |
+
+**What this changes about the ticket.** WS-27h is no longer "move rows between two tables we
+own." It is:
+
+1. a **schema** step — 🔴 twelve new columns on `pm_task_personal`, one on `pm_tasks`, one new
+   `pm_task_waiting` table, plus the provenance decision. Expand/contract per **R6**: nullable
+   with defaults, tighten later, never rename in place.
+2. the **union read** (step 1 above), which is independently valuable — it is what lets the
+   Tasks app show a Projects view of the same person's work without the two disagreeing about
+   what "my tasks" means. **This is the step to build first**; it unblocks UI parity work
+   without touching a single row.
+3. the **data move**, which is 🔴 owner-gated.
+4. the **predicate retirement** (step 3 above).
+
+**Sequencing constraints, both load-bearing:** WS-27g before or with the provider-column drop;
+WS-21's Horizons ruling before `horizon_id` can be resolved either way.
+
+**Done-when, added:** a test asserts every `gtd_items` column and every `gtd_waiting` column
+appears in this table with a destination, so a column added to the legacy store after this was
+written cannot reach the migration unnoticed — the failure mode this section exists to prevent.
 
 ### 7.4 Retirement inventory (WS-27g, second half)
 System A ClickUp arm: `ingestion/sources/clickup/` (client, normaliser, webhook),
@@ -1370,11 +1464,20 @@ shims staying shims, no second name→class palette).
   card-shaped hole in the column). `shown_fields` gating unchanged.
 - **Selection.** `lib/selection.ts` holds `clickSelect` / `range` / `toggle` / `prune` /
   `allSelected`; `stepCursor`'s duplicated sweep now reads it. Projects' page and the Tasks
-  store both drive it, so shift-click and Shift+Arrow behave identically. **Tasks' modal
+  store both drive it, so shift-click and Shift+Arrow behave identically. ~~**Tasks' modal
   select-mode is KEPT**, with the reason in `tasks/components/ItemList.tsx`: `selectMode`
   changes what a *click means*, and a permanent checkbox on a `TaskCard` would take the
-  drag-grip gutter or make one gesture mean two things. The mode is the entry; the grammar
-  inside it converged.
+  drag-grip gutter or make one gesture mean two things.~~ **Struck on the card side by S1
+  below** — the checkbox went *outside* the card instead of into it, so it takes no gutter
+  from the grip and no gesture means two things; the premise that those were the only two
+  options was the error.
+  select-mode is KEPT**, with the reason in `tasks/components/ItemList.tsx`.~~
+  **REVERSED by owner ruling 2026-08-10 — "Projects is canonical, Tasks conforms" — and
+  built for the list surfaces the same day (S3, below).** The kept reason (a permanent
+  checkbox would take the drag-grip gutter or make one gesture mean two things) was never
+  structural: Projects had already solved it by putting the box OUTSIDE the card as a
+  sibling in the row, while Tasks put it INSIDE, absolutely positioned over the grip — so
+  the collision was one Tasks had built for itself.
 - **Board chrome.** Drop-gap reorder beats append-on-drop and is now
   `components/DropGap.tsx` + `lib/boardDrop.ts` (`gapKey`, `dropIndexFor` — the downward
   intra-group off-by-one, previously buried in `taskStore.reorderItem`), consumed by both
@@ -1396,6 +1499,82 @@ shims staying shims, no second name→class palette).
 the seam test with its reason; `tasks/lib/contextColors.ts` uses raw Tailwind palette
 classes (`sky-500`…) rather than semantic tokens — legal under the conformance suite, off
 the token system, and a Tasks-only axis with no Projects counterpart.
+
+**S1 — board card and column convergence (round 3).** ✅ **BUILT 2026-08-10**, on branch,
+NOT merged. *(Owner ruling, not re-litigated: "the Tasks app is only a slice of the Projects
+app" — **Projects is canonical**; where the two disagree and neither is clearly better,
+Tasks conforms. A GTD-specific need Projects has no equivalent for is a legitimate reason to
+diverge, provided the reason is written next to the code.)* Frontend only, three files:
+`app/tasks/components/{TaskCard,TaskBoard}.tsx` and the shared
+`components/TaskCardShell.tsx`. Nothing in `app/projects/` was edited — the Projects-side
+effect (item 6) travels through the shell.
+
+1. **Column chrome.** `rounded-xl` + `bg-secondary/30` → `rounded-lg border border-border
+   bg-card`, refusal overlay `rounded-lg`, cards spaced by the column's `space-y-1` instead
+   of a per-card `mb-2`. Cards and drop gaps are now siblings, because `space-y-*` only
+   reaches direct children. The drag-over highlight and the accent cap stay.
+2. **Completed treatment.** `TaskCardShell` had accepted `completed` since ad and **nothing
+   under `app/tasks/` had ever passed it**, so a done task was dimmed and struck through on
+   one board and drawn as live work on the other, from one component, with every test green.
+   `completed={Boolean(item.completedAt)}` now reaches both the shell and `TaskCardTitle`.
+3. **Cursor ring.** The board's wrapper `<div className="ring-2 ring-ring">` is gone; the
+   card takes `atCursor` and the shell draws the ring on the card's own radius. `useFlash`'s
+   `attach` moved onto the card element too, so the thing that flashes is the card.
+4. **Avatars.** `TaskCard`'s private `Avatar`/`AvatarStack` are deleted for
+   `components/TaskMeta`'s shared pair, `max={1}` on this app's narrow rows.
+5. **The checkbox.** Out of the card and into a left gutter as a sibling in a `flex
+   items-start gap-1.5` row with `stopPropagation` — /projects' pattern — and **always
+   present**, not mode-gated. `selectMode` no longer changes what a click on a card means;
+   `TaskCard` has no `selectMode` prop at all. The **drag grip is dropped, not relocated**:
+   the whole card is `draggable`, so it was never a handle, only a hint pointing at a spot
+   that is not special; /projects draws none; and the shell's hover lift is the affordance
+   both boards already use. The `pr-5` the grip reserved is gone with it.
+6. **Title truncation** — *the one judgement call, taken in the shared file.* /projects
+   clamped to one line, /tasks wrapped without limit. `TaskCardTitle` now clamps to
+   `line-clamp-2` **for both apps** and strips a caller-supplied `truncate`/`line-clamp-*`
+   rather than merging it, because `white-space: nowrap` and `display: -webkit-box` on one
+   element resolve by CSS source order — invisible in review. Cost: a /tasks next action
+   longer than two lines ends in an ellipsis where it used to wrap in full (the full text is
+   in the focus modal); a /projects card is up to one line taller. `truncate` is still
+   passed at `projects/components/TaskBoard.tsx` and is now a no-op — deleting it is a
+   one-line follow-up for whoever next owns that file.
+
+**Kept, deliberately** (structural, backed by fields `pm_tasks` does not have): the priority
+badge and suggestion badge, the project chip, the `SourceBadge`, the inline `ScheduleButton`,
+`item.nextAction` under the title, and `StatusPill`'s interactivity — though its
+`!selectMode` gate is gone, since that gate only existed because the card *was* the checkbox.
+
+**Fences** (R7). All three are source scans in `src/lib/sharedTaskUi.test.ts`, and the file
+now says why they cannot be render tests: `vitest.config.ts` is `environment: "node"` with
+`include: ["src/**/*.test.ts"]`, so there is no DOM and `.tsx` test files are not collected —
+adding jsdom to fence one prop is a larger change than the thing fenced. (1) *every caller of
+`TaskCardShell` passes `completed` and `atCursor`* — the tag scanner is brace-aware, because
+a lazy regex stops at the `>` of the first arrow function and would pass for the wrong
+reason; (2) *no board re-implements the card cursor ring* (`ring-ring` absent from both
+`TaskBoard.tsx` files, present in the shell); (3) *both boards' columns use the same radius*.
+`AvatarStack` and `TaskCardTitle` joined the `SEAM` table, and `SEAM` rows gained an
+`except` map with a per-file argument plus a staleness check — `components/room/Identity.tsx`
+exports a different `AvatarStack` (room participants, photographs, presence rings, and the
+per-person identity hues conformance deliberately excepts from theming). All scans strip
+comments first: the first run failed on the code comment explaining which class had just
+been *removed*, and a gate a comment can trip teaches people not to comment.
+
+⚠️ **The audit's premise about `rounded-xl` is wrong in this tree, and the fence was written
+to the true rule instead.** `AGENTS.md` rule 6 and `DESIGN_SYSTEM.md` §4 say `rounded-xl` is
+"a fixed 12px that ignores Graphite's 0.125rem" — but `src/app/globals.css` (the `@theme`
+block, ~ll. 217-227) derives the **whole** `--radius-*` scale from `--radius`, and
+`--radius-xl` is literally `var(--radius)`, i.e. the same value `rounded-lg` resolves to.
+`rounded-xl` is therefore fully themed here, and a tree-wide ratchet on it would have
+baselined **274 correctly-themed occurrences across ~70 files**. What was actually wrong is
+narrower and is what shipped: two boards drew one object at two radii on two surfaces. The
+doc claim should be corrected by whoever owns `AGENTS.md`; it is left alone here rather than
+edited from a ticket that owns three component files.
+
+⚠️ **Not verified: how any of this looks.** No browser is runnable here (Playwright cannot
+install), so the Fluent → Material → Graphite sweep and the phone-viewport pass are owed at
+review, exactly as for af and ag. What was checked is `npx tsc --noEmit`, the full
+`npx vitest run`, `npx vitest run src/lib/theme/`, `eslint` on the changed files, and each
+new fence mutation-measured red before being reverted byte-identical.
 
 **WS-27ae — export, delta-sync, small columns.** 🟢 AGENT-SAFE, **not this wave** *(P-26,
 P-27, P-28 rest)*. Filtered-list CSV export on the export-job pattern; a delta-sync list
@@ -1435,6 +1614,49 @@ accumulated tree-wide. ⚠️ Measured, and the ticket was wrong: `/tasks` held 
 > and the limit is written into `themes.ts`, `categorical.ts` and `DESIGN_SYSTEM.md` rather
 > than left implicit. None of that substitutes for looking at the running app on a phone in
 > four themes. That gate is still open.
+
+**S3 — selection and bulk-action grammar parity (`/tasks` conforms to `/projects`).**
+🟢 AGENT-SAFE, frontend only, no migration. ✅ **BUILT 2026-08-10 for the LIST surfaces**
+*(owner observation: "Tasks shows the selection checkbox only when the appropriate setting
+is there in the select options on top; in the Projects app the checkbox for selecting a
+task is present." Owner ruling: Projects is canonical.)* Branch `ws-s3-selection-bulk-parity`
+— **not merged, not deployed.**
+
+- **`selectMode` is no longer a mode.** It is a derived mirror of `selectedIds.size > 0`
+  maintained in one helper (`taskStore.applySelection`), and it decides only whether the
+  bulk bar is up. The "Select" button and `setSelectMode` are gone; `ItemList`,
+  `TaskListGrouped` and `FlatList` do not read `selectMode` at all.
+- **The checkbox is unconditional and OUTSIDE the row content** — its own gutter beside the
+  drag grip, so a click on the row still opens the task and the two gestures stop competing
+  for one gutter. Drag-reorder is therefore no longer switched off while something is
+  selected.
+- **Shift-sweep is ungated** on both list surfaces (it required select mode; Projects never
+  did), through the same `@/lib/selection` + `@/lib/cursor` both apps already shared.
+- **The bulk bar converged on Projects'**: top-mounted on the same `border-b border-border
+  bg-muted px-3 py-2` chrome, built from `Button`/`Badge` instead of the hand-rolled
+  outline `<button>`s (AGENTS.md rule 3 — the conformance regexes only see solid fills, so
+  CI had been silent on them).
+- **Select-all added** (`selectAllVisible`), and it means the FILTERED set, not the store.
+  With it, `pruneSelection` — a selection that outlived its filter is how a bulk archive
+  hits rows nobody can see, the same defect Projects' page already prunes for.
+- **Bulk power parity is not faked.** `/items/bulk` takes a disposition and
+  `/items/bulk-archive` an archive flag; that is the entire /tasks bulk surface, and
+  `gtd_items` has no tags column at all. Archive/restore/delete is the honest set and the
+  bar says so. ⚠️ The ticket's premise that status/assignee/importance "do not exist on
+  `gtd_items`" is wrong — the *fields* exist (`workflowStage`, `assignee(s)`,
+  `important`/`leveraged`); what is missing is any bulk endpoint for them. Widening the bar
+  is a gateway ticket.
+- **Fence:** `app/tasks/lib/selectionParity.test.ts` (13 cases) — the store invariant after
+  every transition, the absence of `setSelectMode`, the three surfaces not reading
+  `selectMode` or drawing a conditional checkbox, and both apps' bar carrying the same
+  chrome string. Verified by mutation: forcing `selectMode: true` fails 3 cases, re-gating
+  FlatList's checkbox fails 2.
+- ⚠️ **Not this slice, and still modal:** `TaskCard`/`TaskBoard` (the board's card checkbox
+  — owned by S1) and `WaitingForView` (owned by nobody in this wave) still draw their box
+  only while `selectMode` is true. Since `selectMode` is now derived, the FIRST pick on
+  those two surfaces has to come from Select-all or from a list surface until the card-side
+  move lands. **No browser was run**, so the phone-viewport and four-theme pass is owed
+  here as it is for af/ag.
 
 **Open, and needing an owner ruling** *(surfaced by af, 2026-08-10)*: WS-27ad standardised
 the **shared** card title on `text-[13px]` — deliberately choosing `/tasks`' size as the
@@ -2584,6 +2806,72 @@ checks that an app has a mobile branch, that a bottom-bar tab has a listener, or
 production `next build` prerendered `/projects`, but **no browser check was possible in the
 build environment** (the Playwright chromium download is blocked), so the phone-viewport
 and four-theme pass is owed at review.
+
+### 11.21 S4 — the Projects side conforms, where Tasks is the better one (built 2026-08-10)
+
+The standing ruling on the two task surfaces is **"Projects is canonical, Tasks conforms"**
+(that is what WS-27ad and WS-27af did). **These three findings are the exceptions**, where
+the defect was on the Projects side. Convergence runs both ways when the evidence says so.
+Frontend only — no migration, no API change, no new dependency.
+
+1. **The active token.** `MyWork.tsx` painted its selected context pill
+   `bg-accent text-accent-foreground`; the measured house token for active/selected is
+   `bg-primary/10 text-primary` (AGENTS.md rule 6 — /tasks, /email, `src/components`).
+   Two call sites swapped, plus `aria-pressed` on both, which the toggles never carried.
+   **The lasting deliverable is the fence, not the two-line swap**: `conformance.test.ts`
+   gains a **sixth rule** — the PAIR `bg-accent text-accent-foreground`, ratcheted per file
+   exactly like rules 1/3/5, with `lib/statusAccent.ts` excepted **with the argument** (its
+   violet lane's `chip` is a hue, not a state). `hover:bg-accent` and `bg-accent/10` are
+   deliberately NOT matched: a gate that cries wolf is one somebody switches off. The
+   remaining Projects sites are baselined and can now only go down —
+   `FilterBar.tsx` 2 · `SearchPalette.tsx` 1 · `app/people/page.tsx` 1.
+2. **The fourth task card is gone.** `MyWork`'s `Row` bypassed `TaskCardShell`, `TaskMeta`
+   and `StatusChip` — and `MyWork` is the *personal task list inside Projects*, so it sits
+   directly opposite `/tasks` in the owner's comparison and was the one surface that looked
+   like neither app. It is now the shared shell, the shared title, the shared chip row
+   (`lib/card.cardChips` — so the hand-written "overdue · due · no date" line is replaced by
+   the same due/blocked/checklist chips the team board draws) and a `StatusChip` for the GTD
+   disposition. What stays local is the *interaction*: complete (which moves shared status)
+   and re-triage, the way `/tasks`' `TaskCard` keeps its GTD badges inside the same box.
+   The capture field and the triage buttons became `Input`/`Button` primitives.
+   **The disposition's hue goes through the shared vocabulary**, never a local class map:
+   `accentForDisposition` in `projects/lib/accent.ts` feeds hue NAMES to `statusAccent`, and
+   `accent.test.ts` asserts it **agrees with the name-keyword route wherever that route has
+   an opinion** (rule 5) — `Inbox` gray, `Waiting on` amber, i.e. whatever `/tasks` would
+   draw for a stage of the same name.
+3. **Two empty states where there was one.** The board said *"Nothing to show. Clear a
+   filter, or this project has no statuses yet"* — one sentence naming both causes and
+   asking the reader which was theirs — and the list said a flat "No tasks here yet" even
+   when a filter was hiding everything. `/tasks` solved this properly (`NoMatchState` with a
+   **Clear filters** action + `EmptyState`), so that shape is ported: **"No tasks match your
+   filters." / "Clear them to see everything here again." + Clear filters** when
+   `isFiltered(filters)` (the SAME predicate the toolbar's Clear button and `filtered` badge
+   read — not a second one), and otherwise **"This project has no statuses yet."** on the
+   status axis or **"No tasks here yet."** everywhere else. The box is promoted to
+   `src/components/EmptyState.tsx`; the *decision and the copy* are pure in
+   `projects/lib/emptyState.ts` and unit-tested, because vitest here is node-env and a
+   component test could not run.
+
+**Fences added** (R7): conformance rule 6 above · `sharedTaskUi.test.ts` gains
+`components/EmptyState.tsx` as a seam entry + `/projects` as a consumer ·
+`projects/lib/emptyState.test.ts` (9 cases, including *the filtered copy never mentions
+statuses and the empty copy never mentions filters* — the actual defect — and that **every
+icon it names is mapped in every pack**, which caught a `FilterX` that is mapped in none and
+would have rendered one Lucide outline in a screen of Material Symbols) ·
+`accent.test.ts` gains the disposition agreement + four-distinct-hues cases. `filters` and
+`onClearFilters` are **required** props on `TaskBoard`/`TaskList`, so `tsc` is the fence
+against an unwired call site. All four fences were mutation-checked (each was made to fail
+by reintroducing the defect, then restored).
+
+**Owed, and not claimed:** ⚠️ **no browser check was possible** — Playwright cannot install
+here — so the Fluent → Material → Graphite sweep on `/projects` *and* on `/tasks` beside it
+is owed at review; nothing in this tree tests layout. Also owed: retiring `/tasks`'
+`ItemList.tsx` `NoMatchState`/`EmptyState` onto the shared box (a `/tasks` file another
+slice held open — the `sharedTaskUi` consumer row for `tasks` is deliberately absent until
+then), `page.tsx`'s `renderState()` seam (WS-27ag left it marked for exactly this
+component), and `projects/lib/mywork.isOverdue`, which this change left caller-less and is a
+second answer to a question `lib/taskCard.isOverdue` already answers better (it also checks
+`completed_at`).
 
 ## Board record (2026-08-09) — moved from work_plan.md §2
 

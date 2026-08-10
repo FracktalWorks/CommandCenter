@@ -87,6 +87,13 @@ interface Props {
   onDeleteView: (view: ViewRow) => void;
   /** Saving needs a project to hang the view off; My work has none. */
   canSave: boolean;
+  /**
+   * WS-27ae — export the filter that is on screen, with the columns it shows.
+   * Lives in this bar because that is where the filter and the field set are
+   * chosen: an Export button anywhere else would look like it exported the
+   * project rather than the view.
+   */
+  onExport: () => Promise<void>;
 }
 
 export function FilterBar({
@@ -107,6 +114,7 @@ export function FilterBar({
   onSaveView,
   onDeleteView,
   canSave,
+  onExport,
 }: Props) {
   // The search box is held locally and pushed up on a delay. Refetching on
   // every keystroke turns a five-letter word into five round trips, and the
@@ -116,6 +124,10 @@ export function FilterBar({
   const [viewName, setViewName] = useState("");
   // WS-27x — the shown-fields picker's popover.
   const [pickingFields, setPickingFields] = useState(false);
+  // WS-27ae — the export is a round trip that can REFUSE (a filter wider than
+  // the server's row cap answers 422 rather than handing back a partial file),
+  // so the button has to be able to say "working" and cannot be a link.
+  const [exporting, setExporting] = useState(false);
 
   useEffect(() => setDraft(filters.q), [filters.q]);
 
@@ -283,6 +295,27 @@ export function FilterBar({
             </div>
           ) : null}
         </div>
+
+        {/* WS-27ae — what you export is what you are looking at: these
+            filters, those columns. The house `Button`, never an `<a download>`
+            dressed as one: this is a fetch whose refusal has to be shown. */}
+        <Button
+          variant="secondary"
+          size="sm"
+          icon="Download"
+          disabled={exporting}
+          title="Export these filters and columns as a CSV"
+          onClick={async () => {
+            setExporting(true);
+            try {
+              await onExport();
+            } finally {
+              setExporting(false);
+            }
+          }}
+        >
+          {exporting ? "Exporting…" : "Export"}
+        </Button>
 
         {isFiltered(filters) ? (
           <Button

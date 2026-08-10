@@ -3,7 +3,8 @@
 > **Product:** CommandCenter · **Feature:** Projects (the People Center's primary work-management
 > module, sliced into every other Center) · **Created:** 2026-08-05 · **Updated: 2026-08-10**
 > (status truth pass + tenancy alignment — R4; **WS-27ag shell/mobile slice built the same
-> day**; **S4 convergence slice built the same day — §11.21**) ·
+> day**; **S4 convergence slice built the same day — §11.21**; **WS-27ae's export third built
+> the same day — §11.26**) ·
 > **Status:** ✅ **WS-27 a–t MERGED AND DEPLOYED** (a b d e f i j k l m n via #390/#393/#394/#398;
 > o–t via **#399**; **u–z via #408**, 2026-08-10) — migrations **146, 147, 150, 152, 155, 156,
 > 160, 161, 164, 165, 166 are applied on prod** (164/165/166 log-verified on the 2026-08-10
@@ -44,6 +45,23 @@
 > existing `isFiltered` predicate, through a promoted `src/components/EmptyState.tsx`.
 > Frontend only — no migration, no API change. ⚠️ **The four-theme sweep is owed** for the
 > same reason: no browser runs in this environment. ·
+> 🟢 **WS-27ae (EXPORT THIRD) BUILT 2026-08-10, on branch `ws-27ae-projects-csv-export`,
+> NOT merged and NOT deployed** (§11.26) — `GET /projects/export/tasks.csv`: the caller's
+> current filters through the one shared `build_task_filters`, the view's `shown_fields` as
+> the columns (in the vocabulary's order, which is what the table draws), `#` and `Title`
+> unconditional, and a toolbar `Export` button. **No migration** (R1: no number taken; 168 is
+> the sibling agent's for the delta-sync and small-columns thirds, which are NOT built).
+> ⚠️ **The ticket's "export-job pattern" does not exist in this repo** — verified absent;
+> what shipped is a synchronous bounded response instead. ⚠️ **The cap is a refusal, not a
+> truncation**: past 5000 matching rows the endpoint answers 422 naming the real count,
+> because a partial CSV is byte-indistinguishable from a complete one. CSV-injection cells
+> (`=`/`+`/`-`/`@`/TAB/CR) are apostrophe-prefixed, bare numbers exempt. ⚠️ **A browser WAS
+> run for this slice** — the export triggered from the real toolbar with a filter applied,
+> the downloaded bytes are the gateway's own, and the four-theme × two-mode sweep plus a
+> 390 px viewport were checked; and it caught a real defect (`Response.text()` strips the
+> UTF-8 BOM, so the saved file differed from the bytes the endpoint produced). It also found
+> a **hermetic-fake defect**: `_projects_fakes` read `?status_category=` as "hide closed
+> work", so `status_category=done` returned the OPEN tasks — fixed here. ·
 > **Owner:** vjvarada · **Board row: WS-27**
 >
 > **Tenancy (audited 2026-08-10 — this spec previously cited no tenancy decision at all).**
@@ -1576,10 +1594,21 @@ review, exactly as for af and ag. What was checked is `npx tsc --noEmit`, the fu
 `npx vitest run`, `npx vitest run src/lib/theme/`, `eslint` on the changed files, and each
 new fence mutation-measured red before being reverted byte-identical.
 
-**WS-27ae — export, delta-sync, small columns.** 🟢 AGENT-SAFE, **not this wave** *(P-26,
-P-27, P-28 rest)*. Filtered-list CSV export on the export-job pattern; a delta-sync list
-variant plus satellite `updated_at` bumps for agents/mobile; `is_epic`, per-user view state
-and the session `user_id` denorm. Minted so the basket has an owner; dispatch after aa–ad.
+**WS-27ae — export, delta-sync, small columns.** 🟢 AGENT-SAFE *(P-26, P-27, P-28 rest)*.
+A three-part basket, dispatched in parts after aa–ad.
+
+- **Export (P-26) — ✅ BUILT 2026-08-10**, branch `ws-27ae-projects-csv-export`, **not merged
+  and not deployed**. See **§11.26** for the as-built. ⚠️ **The "export-job pattern" this
+  ticket named does not exist** — searched and confirmed absent from `apps/`, `packages/`,
+  `tests/` and `workbench/`; the only hits are vendored `.venv` code. What shipped is a
+  **synchronous** bounded CSV over the same filtered query the list endpoint runs
+  (`GET /projects/export/tasks.csv`), rather than a job queue invented to satisfy a phrase.
+  The cap is a **refusal**, not a truncation: past 5000 matching rows the endpoint answers
+  422 naming the count, because a partial CSV is byte-indistinguishable from a complete one.
+  No migration.
+- **Delta-sync list variant + satellite `updated_at` bumps (P-27)** — 🟢 not built.
+- **`is_epic`, per-user view state, session `user_id` denorm (P-28 rest)** — 🟢 not built.
+  These two thirds own migration 168; the export third took no migration number (R1).
 
 **WS-27af — the themed categorical ramp.** 🟢 AGENT-SAFE. ✅ **BUILT 2026-08-10.**
 *(Owner-ruled the same day, choosing the ramp over tokenising to the semantic set or
@@ -2872,6 +2901,182 @@ then), `page.tsx`'s `renderState()` seam (WS-27ag left it marked for exactly thi
 component), and `projects/lib/mywork.isOverdue`, which this change left caller-less and is a
 second answer to a question `lib/taskCard.isOverdue` already answers better (it also checks
 `completed_at`).
+
+### 11.26 WS-27ae (export third) — the filtered-list CSV export (built 2026-08-10)
+
+> ⚠️ **Numbering note.** Taken as **§11.26** on the branch `ws-27ae-projects-csv-export`,
+> cut from `main` at `1aec373d`, where the highest section present is **§11.23**. §11.24 and
+> §11.25 exist on sibling branches that have not merged, so this section deliberately skips
+> two numbers rather than colliding with either.
+
+**Scope: the export third of WS-27ae only.** Delta-sync (P-27), the satellite `updated_at`
+bumps, `is_epic`, per-user view state and the session `user_id` denorm (P-28 rest) are a
+sibling agent's, along with migration 168. **Nothing here needs a migration** (R1: no number
+taken).
+
+#### ⚠️ The ticket named a pattern that does not exist
+
+§9.2 says *"filtered-list CSV export on the export-job pattern"*. **There is no export-job
+pattern in this repo.** Measured, not assumed: `export_job` / `ExportJob` / `export-job`
+returns nothing under `apps/`, `packages/`, `tests/` or `workbench/` (the only hits are
+vendored `litellm` and `apscheduler` code in `.venv`), and `routes/projects/` had no export
+endpoint of any kind. So the phrase named an aspiration, not a seam to extend.
+
+**What was built instead: a synchronous, bounded CSV response over the SAME filtered query
+the list endpoint already runs.** One request, one `text/csv` body, no job row, no polling,
+no worker, no artefact to expire. Standing up a job queue to satisfy a phrase would have
+been infrastructure nobody asked for, carrying a genuinely new failure surface — orphaned
+jobs, expiring downloads, and a second place the tenant boundary has to hold — in exchange
+for nothing this app can measure. If exports ever outgrow one request, the thing to build is
+the queue, on evidence, as its own ticket.
+
+#### The endpoint
+
+`GET /projects/export/tasks.csv` — `apps/services/gateway/gateway/routes/projects/export.py`,
+mounted from `__init__.py` like every other feature module.
+
+⚠️ **The path is not `/projects/tasks/export.csv`.** That spelling would be shadowed by
+`/projects/tasks/{task_id}` and which handler answered would depend on router registration
+order — the one trap `__init__.py` promises this package does not have. A literal segment of
+its own keeps that promise true; `test_projects_export` asserts the shadowing spelling is
+absent as well as the real one present.
+
+**Three rules, each because the obvious implementation is wrong:**
+
+1. **The filters are the caller's, through the ONE pure builder.** The handler's query
+   parameters are `list_tasks`' verbatim minus pagination, and every one of them goes into
+   `filters.build_task_filters` — the same function the list, the board and the calendar use.
+   A second filter parser would drift and then the file and the screen would disagree about
+   what *"my open bugs in Ops"* means. Fenced two ways: a structural assertion that
+   `build_task_filters` and `task_visibility_clause` are both called, and — borrowed from the
+   calendar's version of the same problem — a test that reads BOTH route signatures off the
+   router and fails on a list parameter the export does not declare, because **FastAPI drops
+   an undeclared query parameter silently** and the file would look fine.
+2. **The columns are the view's `shown_fields`**, plus `#` and `Title` unconditionally (a row
+   you cannot identify is not a row). ⚠️ **Column ORDER is the vocabulary's, not the stored
+   list's** — the ticket said "in the view's own order", but `shownFields.ts` is explicit that
+   the stored list is a **SET** and `table.tableColumns` draws it in declaration order, so
+   honouring the stored order would have made the file's columns differ from the screen's.
+   Core keys in `filters.SHOWN_FIELDS` order, then custom fields in registry order; a
+   `custom.<key>` whose definition was deleted after the save produces no column, exactly as
+   the table renders nothing for it. The set is normalised by `normalise_view_config`, so the
+   endpoint cannot accept a key a saved view could not store. **An absent or empty
+   `shown_fields` yields only the unconditional pair** — not the client's `DEFAULT_SHOWN`,
+   which would be a second copy of a preference that drifts.
+3. **It is never truncated: it is complete, or it is refused.** `MAX_EXPORT_ROWS = 5000`,
+   checked with a `count(*)` over the same WHERE **before a single row is rendered**; past it
+   the answer is a **422 naming the real count and the cap** and no file at all. This is the
+   opposite branch from the calendar (WS-27q), which truncates and says so — and the
+   difference is the medium, not the taste: a short month is *drawn* with a "truncated"
+   banner beside it, while a downloaded spreadsheet has no banner and nobody scrolls to the
+   bottom of one to check whether it ended early. A partial CSV is byte-indistinguishable
+   from a complete one. `test_there_is_no_partial_file_path_at_all` pins that there is no
+   `OFFSET` and no `MAX_EXPORT_ROWS + 1` probe — the second assertion exists because copying
+   the calendar's truncate-and-say-so shape is the likeliest future regression.
+
+**Tenancy (R5/R11).** `_tenant_session()`, the ambient form every request handler in this
+package uses; **no `get_db()`, no engine, no second idiom**, so `routes/projects` stays at
+**zero** unbound sites with **no** H2 exemption and `test_converted_packages_stay_converted`
+needed no edit. The tenant is the one the request already bound from the authenticated
+session's `app_user` row; the identity is the `UserContext`. Neither is ever read from a
+header, query parameter or body — the endpoint has no parameter through which either could
+be supplied. The grant closure is the same `task_visibility_clause` every other read binds,
+so an export with no `project_id` (a real request — "everything I can see") carries only the
+caller's own grants, and an unreadable `project_id` is **404, not an empty file**.
+
+#### CSV correctness, and the injection decision
+
+Quoting is `csv.writer` with `QUOTE_MINIMAL` and RFC-4180 `\r\n` — comma, embedded quote and
+embedded newline are the module's problem, deliberately, because every hand-rolled CSV
+writer gets the newline case wrong.
+
+**Formula injection is NEUTRALISED, not documented away.** A cell whose first character is
+`=`, `+`, `-`, `@`, TAB or CR is prefixed with a single apostrophe: a task titled `=SUM(A1)`
+exports as `'=SUM(A1)`.
+
+- *Why guard rather than warn:* these strings are counterparty-authored — task titles, tags
+  and custom-field text, and an imported ClickUp workspace is thousands of them nobody here
+  typed. The payload is `=cmd|'/c calc'!A0`, which executes with the credentials of whoever
+  double-clicks the file.
+- *Why a prefix rather than quoting:* ⚠️ **quoting is not a mitigation.** A spreadsheet
+  evaluates the cell after the CSV quoting is stripped, so `QUOTE_ALL` changes nothing. That
+  is pinned by its own test, because "we quote everything" is the plausible wrong fix.
+- *Why the apostrophe is acceptable:* it is visible, reversible and one character, so
+  somebody who genuinely wanted a formula can see what happened. A formula that runs has no
+  such tell.
+- *The one exemption:* a cell that is **exactly** a number keeps its leading `-`. Without it
+  every negative number would arrive as text and the sums people export a CSV to compute
+  would silently stop working. `-5` is a number to Excel; `-5+cmd|…` is not a number and is
+  still guarded.
+
+A **UTF-8 BOM** leads the body, because Excel otherwise reads the file as the system code
+page and every non-ASCII title arrives mojibake.
+
+⚠️ **Two columns deliberately carry the STORED value rather than the label the table draws**:
+`importance` and `estimate`. Their formatting vocabularies (`table.IMPORTANCE_OPTIONS`,
+`durationLabel`) live in the browser, and copying either server-side would be a second
+vocabulary that drifts. A spreadsheet wants the number anyway — `2` sorts and sums, `High`
+does not.
+
+⚠️ **One column knows MORE than the screen**: `attachments`. The list endpoint does not count
+attachments (`lib/card.ts` says so honestly, and the table draws `—`), so the export
+aggregates `pm_task_attachments` over the exported ids in one query rather than exporting a
+column of nothing.
+
+#### The UI
+
+`Export` in the Projects toolbar (`FilterBar.tsx` — where the filter and the field set are
+chosen; anywhere else it would read as exporting the *project* rather than the *view*),
+built from the house `Button` with `icon="Download"`, never an `<a download>` dressed as one.
+
+⚠️ **It is FETCHED, not navigated to.** `window.location = …` would download the file and
+would turn the 422 refusal into a tab full of JSON — which would make refusing strictly worse
+than truncating. Fetching is what lets the gateway's own sentence (the matched count, the
+cap, and what to do) land on the board. Proven in a real browser: the refusal renders, no
+file is written, and the button recovers.
+
+⚠️ **`saveCsv` takes a `Blob`, and the first version did not — this was a real defect caught
+only by running it.** `Response.text()` decodes UTF-8 with `TextDecoder`, which **strips a
+leading byte order mark**, so the file the browser saved was measurably different from the
+bytes the endpoint produced and the server's Excel fix was silently undone. Keeping the body
+as bytes end to end is what makes them the same file.
+
+The BFF proxy (`src/app/api/projects/[...path]/route.ts`) previously stamped
+`Content-Type: application/json` on **every** response. It now forwards the gateway's own
+content type and its `Content-Disposition`; the filename is therefore the server's single
+choice, read back by `filenameFromDisposition` rather than composed a second time in the
+browser. A refusal from the same endpoint is still JSON and still arrives as JSON, because
+the proxy reads what upstream sent rather than what the route usually sends.
+
+#### A hermetic-fake defect this ticket found (worth more than the feature)
+
+⚠️ `tests/unit/_projects_fakes.py` read the **positive** `?status_category=` clause —
+`EXISTS (… s.category = ANY(:categories))` — as if it were the **negative** "hide closed
+work" clause, because its branch matched any subquery block naming `pm_task_statuses` and
+`category`. Every behavioural test in the tree filtered on `todo`, where the two answers
+coincide, so **`status_category=done` returned the OPEN tasks and the mirror agreed with
+itself**. It is now keyed on the bound parameter each clause actually carries, and the
+negative branch on the closed vocabulary (`'done', 'cancelled'` / `:closed`). Found by the
+live Postgres run, which is the entire argument for R8.
+
+#### Verification (R8 included)
+
+`tests/unit/test_projects_export.py` — 41 hermetic tests. `tests/live/live_ws27ae.py` — the
+same endpoint against a **real Postgres**, all checks green, covering what a text-matching
+mirror cannot answer: that the `count(*)` and the row query compose the **identical**
+predicate across seven filters (the never-truncated contract IS that equality), that
+`ANY(CAST(:ids AS uuid[]))` binds Python `str`s on both roll-ups, that the grant closure
+scopes an unscoped export, and that the hostile title survives a real writer and a real
+parse. Browser: the export was triggered from the real toolbar with a filter applied on
+screen (5 rows → 2), the downloaded bytes are the ones the gateway produced, and the
+Fluent → Material → Graphite sweep shows the button painting **identically to its neighbour**
+in all four themes × two modes (Material's pill radius, Graphite's uppercase) and visible at
+a 390 px viewport.
+
+**Not done, deliberately:** the delta-sync feed, the satellite `updated_at` bumps, and the
+P-28 remainder — the other two thirds of WS-27ae, owned by a sibling agent with migration
+168. Also not done: a scheduled/emailed export, an `.xlsx` writer, and exporting anything
+other than tasks. None is asked for.
 
 ## Board record (2026-08-09) — moved from work_plan.md §2
 

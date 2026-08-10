@@ -60,6 +60,7 @@ import {
   toConfig,
   toQuery,
 } from "./lib/grouping";
+import { exportPath, filenameFromDisposition, saveCsv } from "./lib/export";
 import { DEFAULT_SHOWN } from "./lib/shownFields";
 import { toggleLane } from "./lib/swimlanes";
 import { type TableSort, sortQuery } from "./lib/table";
@@ -538,6 +539,47 @@ function ProjectsWorkspace() {
   useEffect(() => {
     if (selected) void loadProject(selected);
   }, [selected, loadProject]);
+
+  // WS-27ae — export the filter that is on screen, with the columns it shows.
+  //
+  // ⚠️ Fetched rather than navigated to. The endpoint REFUSES a filter wider
+  // than its row cap (422 naming the matched count) rather than handing back a
+  // partial file, and `window.location = …` would turn that refusal into a tab
+  // full of JSON. Fetching is what lets the refusal arrive as a sentence on the
+  // board — which is the whole reason the server refuses instead of truncating.
+  const exportCsv = useCallback(async () => {
+    setError(null);
+    try {
+      const res = await fetch(
+        exportPath({
+          projectId: selected?.id ?? null,
+          filters,
+          shownFields,
+          sort: tableSort,
+        })
+      );
+      if (!res.ok) {
+        const body = await res.text();
+        let detail = `Export failed (${res.status})`;
+        try {
+          detail = (JSON.parse(body) as { detail?: string }).detail ?? detail;
+        } catch {
+          // A non-JSON error body came from the proxy, not the gateway.
+        }
+        setError(detail);
+        return;
+      }
+      // ⚠️ `blob()`, never `text()`: decoding to a string strips the UTF-8 BOM
+      // the gateway emits so Excel reads non-ASCII titles correctly, and the
+      // saved file would then differ from the bytes the endpoint produced.
+      saveCsv(
+        await res.blob(),
+        filenameFromDisposition(res.headers.get("content-disposition"))
+      );
+    } catch (err) {
+      setError(String((err as Error).message));
+    }
+  }, [selected, filters, shownFields, tableSort]);
 
   // WS-27q — the calendar's own fetch, because it reads a WINDOW rather than a
   // page. `grid` is derived so the effect re-runs when the month steps, and
@@ -1066,6 +1108,7 @@ function ProjectsWorkspace() {
           onSaveView={(name) => void saveView(name)}
           onDeleteView={(view) => void deleteView(view)}
           canSave={Boolean(selected)}
+          onExport={exportCsv}
         />
       ) : null}
 

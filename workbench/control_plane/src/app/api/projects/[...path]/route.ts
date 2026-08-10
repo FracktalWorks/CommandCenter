@@ -79,10 +79,22 @@ async function forward(
 
     const text = await res.text();
     if (!text) return new NextResponse(null, { status: res.status });
-    return new NextResponse(text, {
-      status: res.status,
-      headers: { "Content-Type": "application/json" },
-    });
+    // ⚠️ The response type is the GATEWAY's, not a constant. This used to
+    // stamp `application/json` on everything, which is right for every route
+    // but one: WS-27ae's `GET /export/tasks.csv` answers `text/csv` with a
+    // `Content-Disposition`, and relabelling it as JSON made the browser
+    // treat a download as a document. A refusal from that same endpoint is
+    // still JSON and still arrives as JSON, because this reads what upstream
+    // actually sent rather than what the route usually sends.
+    const upstreamType = res.headers.get("content-type");
+    const headers: Record<string, string> = {
+      "Content-Type": upstreamType ?? "application/json",
+    };
+    const disposition = res.headers.get("content-disposition");
+    // Forwarded because the FILENAME is the server's to choose — dropping it
+    // would leave the client inventing a second one that drifts.
+    if (disposition) headers["Content-Disposition"] = disposition;
+    return new NextResponse(text, { status: res.status, headers });
   } catch (err) {
     return NextResponse.json(
       { detail: `Projects gateway unreachable: ${String(err)}` },

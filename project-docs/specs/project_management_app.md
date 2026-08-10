@@ -1208,15 +1208,100 @@ beyond the window and closes stale open ones to the project's default closing st
 distinctly in the timeline; (4) tasks in `triage` (WS-27u) are exempt; (5) the manual
 archive guard (WS-27w item 1) ships first — this ticket depends on it.
 
-**Deferred small basket** *(no ticket yet — pull individually when adjacent code is
-touched)*: peek size escalation + Esc-returns-focus (P-14), Save/**Update view** dirty
-affordances (P-15), palette action registry + go-sequences (P-16), calendar week layout +
-per-day quick-add/overflow (P-19), filtered-list CSV export (P-26), delta-sync feed +
-satellite `updated_at` bump (P-27), `is_epic` flag + per-user view state + session
-`user_id` denorm (P-28 rest). Banked for their trigger events: sprints (P-23, when
-sprints are wanted), webhook-out checklist (P-24, when `/workflows` grows the node),
-email digest outbox (P-25, when PM emails). Owner-decided: docs = knowledge base
-(D-PM-13); public boards deferred (D-PM-14).
+**Deferred small basket** *(pull individually when adjacent code is touched)*: peek size
+escalation + Esc-returns-focus (P-14), Save/**Update view** dirty affordances (P-15),
+palette action registry + go-sequences (P-16), calendar week layout + per-day
+quick-add/overflow (P-19), filtered-list CSV export (P-26), delta-sync feed + satellite
+`updated_at` bump (P-27), `is_epic` flag + per-user view state + session `user_id` denorm
+(P-28 rest). **§9.2 promotes P-14/15/16 (WS-27ab), P-19 (WS-27ac) and banks the rest as
+WS-27ae.** Banked for their trigger events: sprints (P-23, when sprints are wanted),
+webhook-out checklist (P-24, when `/workflows` grows the node), email digest outbox (P-25,
+when PM emails). Owner-decided: docs = knowledge base (D-PM-13); public boards deferred
+(D-PM-14).
+
+---
+
+### 9.2 The post-tenancy queue (minted 2026-08-10, after H2 landed on `main`)
+
+Four tickets. The first exists because the **Projects app owns two of the residues that
+gate WS-29's phase-4 promotion** (D27 findings 2 and 3) — closing them here means Projects
+is not the reason RLS cannot be switched on. The other three drain the deferred basket and
+the continuity audit. None needs a migration, so R1 costs this wave nothing; all four
+inherit the standing protocol (hermetic tests against the fake, a live Postgres run, and
+for anything tenant-shaped, **R8** — verified against a real database, never a fake alone).
+
+**WS-27aa — the two tenancy residues Projects owns.** 🟢 AGENT-SAFE *(D27 (2); MT-1d's
+named site; the H2 ratchet's one Projects exemption)*.
+Two scheduled/background paths in this app still touch the database with no tenant.
+Done when: (1) **`run_lifecycle_sweep` takes an explicit tenant and refuses without one** —
+the signature gains a required `organization_id`, the roots query gains
+`AND organization_id = :org`, and a sweep constructed without a tenant raises rather than
+sweeping every customer's projects (H4's rule: *a job that forgets doesn't leak one row, it
+leaks unbounded*); (2) the tenant comes from a **stored fact, never request input** (R11) —
+the workflow's owner resolved through `app_user`, the shape
+`routes/crm/auto_lead._owner_organization` already uses, and a resolution that finds
+nothing is an error, not a fallback; `_pm_lifecycle_sweeper` binds it with
+`bind_tenant`/`release_tenant` around the sweep so the writes carry the right GUC the
+moment phase 4 lands; (3) **`agent_dispatch` carries its tenant on the event payload** —
+`pm.task.assigned` emits the task's own `organization_id`, read inside the request's bound
+session at emit time, and `on_event`/`_run_and_record` bind that explicitly instead of
+inheriting an ambient one; a payload without an org refuses and records the refusal on the
+task timeline rather than running unbound; (4) **two-org proof against a real database**: a
+sweep bound to org A leaves org B's stale tasks untouched, and a dispatch bound to A writes
+A's activity row — plus a refusal test for each path; (5) the `projects/agent_dispatch`
+entry leaves `H2_EXEMPT_FILES` (the file no longer needs it), every seam ratchet stays
+green, and the handover's MT-1d site + D27 finding 2 are struck with the measurement that
+replaced them. **Not in scope:** the other H4 consumers (ingestion, reconciler, broker) —
+they belong to WS-29's own H4 slice; this ticket closes only what Projects owns.
+
+**WS-27ab — view ergonomics: peek, dirty views, one palette registry.** 🟢 AGENT-SAFE
+*(P-14, P-15, P-16)*.
+Done when: (1) **peek escalation** — `TaskPanel` offers peek → side → full, the choice
+persists per user, and Esc returns focus to whatever opened the panel so the card/row keeps
+the cursor (WS-27y's cursor is the thing being returned to); (2) **dirty-view affordances**
+— `FilterBar` shows when live filter/sort/group/shown-field state diverges from the saved
+view, offering *Update view*, *Save as new* and *Reset*; divergence is **one exported pure
+function** over the config with its own tests, never scattered comparisons — the config
+round-trip (`toConfig`/`fromConfig`) is the single fact it reads; (3) **palette action
+registry** — `SearchPalette`'s commands become a declared registry (`id`, `label`,
+`section`, `keywords`, `run`, `when`) instead of inline branches, `g`-sequences navigate
+(`g p`, `g m`, `g t`…), and `?` renders a shortcuts sheet **generated from that same
+registry** so the help cannot drift from the behaviour; (4) tests over the registry: every
+action carries a label and section, every go-sequence resolves to a route that exists, and
+no two actions share a key sequence; (5) DESIGN_SYSTEM throughout — no raw colours, the
+`Icon`/`Button`/`Input` primitives, theme suite green.
+
+**WS-27ac — calendar: week layout, per-day quick-add, honest overflow.** 🟢 AGENT-SAFE
+*(P-19)*.
+Done when: (1) `CalendarView` gains a **week** layout beside month, both driven by the
+existing `lib/calendar.ts` date math — one implementation, extended, never a second;
+(2) each day cell carries the shared group-context quick-add (`components/QuickAdd.tsx`)
+pre-filled with that day's date; (3) **overflow is exact** — a day with more tasks than fit
+shows `+N more` with the true count and expands rather than clipping silently; (4) dragging
+between days reschedules through the existing `PATCH` path wearing WS-27y's drop-refusal
+reason and post-drop flash; (5) the §11.16 parameter-coverage test extends to the week
+range, so the `triage` exclusion (WS-27u) cannot be dropped by the new surface.
+
+**WS-27ad — Tasks ↔ Projects continuity, round 2.** 🟢 AGENT-SAFE *(the backport agent's
+recorded gap list, HANDOVER §1)*.
+The first backport promoted chips, cursor, quick-add and flash to shared code. These are
+the divergences it recorded and deliberately left.
+Done when: (1) **one selection grammar** — the shift-range anchor moves into shared code
+beside the cursor, both apps consume it, and Tasks' modal select-mode either becomes the
+shared range behaviour or is kept with the reason written next to it (a divergence with a
+recorded reason is a decision; an undocumented one is drift); (2) **board chrome
+converges** — Tasks' accent caps + drop-gap reorder and Projects' swimlanes +
+append-on-drop are reconciled, the winning behaviour implemented once and consumed twice;
+(3) Tasks' flat lists (Done/Waiting/Someday/Archive), `WaitingForView` and the Inbox gain
+the shared cursor and group-context quick-add, retiring the Inbox's local `j`/`k` idiom;
+(4) a test asserts both apps import the shared modules rather than re-declaring them — the
+re-export shims stay, a third copy is a failure; (5) calendar asymmetry stays **out of
+scope** and stays recorded (Tasks has a ten-file module, Projects one view).
+
+**WS-27ae — export, delta-sync, small columns.** 🟢 AGENT-SAFE, **not this wave** *(P-26,
+P-27, P-28 rest)*. Filtered-list CSV export on the export-job pattern; a delta-sync list
+variant plus satellite `updated_at` bumps for agents/mobile; `is_epic`, per-user view state
+and the session `user_id` denorm. Minted so the basket has an owner; dispatch after aa–ad.
 
 ---
 

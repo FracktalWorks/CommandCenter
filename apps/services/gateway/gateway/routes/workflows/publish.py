@@ -27,8 +27,8 @@ from typing import Any
 from acb_auth import UserContext, get_current_user, require_permission
 from fastapi import Depends, HTTPException
 from gateway.routes.workflows.core import (
-    _get_db,
     _log,
+    _tenant_session,
     _uid,
     iso,
     load_workflow_or_404,
@@ -51,8 +51,7 @@ async def publish_workflow(
     workflow_id: str,
     user: UserContext = Depends(get_current_user),
 ) -> dict[str, Any]:
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         row = await load_workflow_or_404(db, workflow_id)
         graph = parse_jsonb(row.graph, {"nodes": [], "edges": []})
         ready_modules = (
@@ -112,9 +111,6 @@ async def publish_workflow(
             ),
             {"id": workflow_id, "v": version},
         )
-        await db.commit()
-    finally:
-        await db.close()
     return {
         "workflow_id": workflow_id,
         "version": version,
@@ -142,8 +138,7 @@ async def rollback_workflow(
     instead. The draft edit-model (``workflows.graph``) is untouched: runs
     execute versions, never the draft, and unpublished edits must survive.
     """
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         row = await load_workflow_or_404(db, workflow_id)
         vrow = (
             await db.execute(
@@ -191,9 +186,6 @@ async def rollback_workflow(
                 text("SELECT id FROM workflow_modules WHERE status = 'ready'"),
             )
         ).fetchall()
-        await db.commit()
-    finally:
-        await db.close()
 
     warnings: list[dict[str, Any]] = []
     try:
@@ -236,8 +228,7 @@ async def disable_workflow(
     own, so the gallery answers "why is this off?" identically whether a human
     or the platform switched it off.
     """
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         await load_workflow_or_404(db, workflow_id)
         reason = f"Disabled by {_uid(user)}"
         await db.execute(
@@ -249,9 +240,6 @@ async def disable_workflow(
             ),
             {"id": workflow_id, "reason": reason},
         )
-        await db.commit()
-    finally:
-        await db.close()
     return {"workflow_id": workflow_id, "status": "disabled", "disabled_reason": reason}
 
 
@@ -274,8 +262,7 @@ async def enable_workflow(
     It carries the same authority as publish because it arms the automation
     just as surely.
     """
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         row = await load_workflow_or_404(db, workflow_id)
         if not row.latest_version:
             raise HTTPException(
@@ -298,9 +285,6 @@ async def enable_workflow(
             ),
             {"id": workflow_id},
         )
-        await db.commit()
-    finally:
-        await db.close()
     _log.info("workflows.re_enabled", workflow_id=workflow_id, by=_uid(user))
     return {
         "workflow_id": workflow_id,

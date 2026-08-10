@@ -187,6 +187,80 @@ stated values, **and** the baseline test set still passes.
 
 ## H2 · Convert 561 session-acquisition sites to `tenant_session()` · 🟢 AGENT-SAFE · **the long pole**
 
+> ### ◐◐ H2 NEARLY DONE 2026-08-10 (same day) — nine packages converted, 111 sites left, ALL classified
+>
+> Two waves of parallel slice-agents converted the rest of the gateway's request
+> handlers on top of the Projects slice below: **notes** (61 converted/33 left),
+> **whatsapp** (38/14), **email** (98/27), **tasks** (73/6), **workflows** (26/17),
+> **apps** (32/6), **crm** (28/3), **people** (4/0), **admin** (23/0).
+> `H2_BASELINE_ELSEWHERE` banked stepwise **494 → 111**, and every one of the 111
+> remaining sites is CLASSIFIED in place: a `# H4:` (background consumer — scheduler,
+> pipeline, sink, broker handler, `asyncio.create_task`) or `# H4/H6:`
+> (service-identity route — provider webhook, bridge secret, hook token, OAuth
+> callback) marker naming the tenant-derivation source for the conversion H4/H6 owns.
+> Zero-remainder packages are pinned by the parametrized
+> `test_converted_packages_stay_converted` (projects/crm/people/admin +
+> `H2_EXEMPT_FILES`); whatsapp and apps hold at exact per-file counts
+> (`H2_WHATSAPP_EXEMPT_SITES`, `H2_APPS_EXEMPT_SITES`).
+>
+> **Live verification (R8):** every wave ended with a real-Postgres smoke — wave 1
+> and wave 2 integration smokes drove one converted read per package under a bound
+> GUC on a migrated scratch cluster; the tasks slice additionally proved actual
+> FORCE-RLS org-A/org-B row isolation; unbound sessions raise `TenantUnbound`
+> everywhere.
+>
+> **What "H2 done" still needs:** the 111 H4/H6 sites are NOT H2's — they convert
+> with explicit tenants in H4 (jobs/consumers) and H6 (service-identity + identity
+> cutover). H2's own remaining act is nothing in `apps/` or `packages/` — the
+> original done-when ("grep returns 0") is superseded by this classification: the
+> grep now returns exactly the named, pinned, owned remainder.
+
+> ### ◐ H2 STARTED 2026-08-10 — central binding SHIPPED + the Projects slice converted
+>
+> **The "do this first" step is done:** `_with_resolved_access` (acb_auth/deps.py) calls
+> `bind_tenant(organization_id)` when identity resolves — the one place, from the
+> `app_user` row, never a header (R11) — and the gateway's `TenantScopeMiddleware`
+> (main.py) opens a fresh scope per request and releases it after the response.
+> `tests/unit/test_tenant_request_binding.py` pins both, including
+> "`system:internal` binds nothing" and no-leak-across-sequential-requests.
+>
+> **`routes/projects` is converted** (84 sites, the largest single package): every
+> handler is `async with _tenant_session() as db:` where `_tenant_session` IS the
+> shared seam (identity asserted in `test_db_engine_seam.py`). ~~One named exemption:
+> `agent_dispatch.py` (2 sites)~~ ✅ **that exemption is GONE (WS-27aa, 2026-08-10)** —
+> not by converting it to the ambient `tenant_session()`, which would have been the
+> inheritance H4 forbids, but by giving it an EXPLICIT tenant: `pm.task.assigned` now
+> carries the task's own `organization_id`, stamped by `set_assignees` inside the
+> request's bound session, and every session in the sink is `tenant_session(that_org)`.
+> An event without one is refused (a WARNING log line, no write — recording the refusal
+> on the task timeline is impossible without the unbound session being refused).
+> **`routes/projects` is therefore at ZERO unbound sites and holds no H2 exemption at
+> all**, so Projects is not what gates the phase-4 promotion.
+>
+> **Ratchets** (test_db_engine_seam.py): `routes/projects` must stay at ZERO
+> unconverted sites; the remainder elsewhere is frozen at **`H2_BASELINE_ELSEWHERE =
+> 494`** and only ratchets down (progress must be banked by lowering the constant).
+>
+> ⚠️ **A live run found a defect in `tenant_session()` itself:** the literal
+> `SET LOCAL app.tenant_id = :tenant` is a Postgres syntax error through the extended
+> protocol — `SET` cannot bind a parameter, and every hermetic test was green with it.
+> Fixed to `SELECT set_config('app.tenant_id', :tenant, true)` (identical
+> transaction-local semantics), pinned by `test_tenant_session.py`, and proven by a
+> live scratch-Postgres smoke: unbound → `TenantUnbound`; converted handlers write
+> under the GUC; rows stamped with the bound org. **Converters of the remaining
+> packages: the runbook below stands unchanged** — but test against real Postgres at
+> least once per package; this class of defect is invisible to fakes.
+>
+> Conversion notes that generalize (learned on the Projects slice): handlers' explicit
+> `await db.commit()` goes away (the wrapper commits on clean exit — and a mid-block
+> commit would END the transaction and drop the GUC for everything after it, so a
+> handler that genuinely needs two transactions needs two `async with` blocks);
+> read-only endpoints now commit an empty transaction, so tests asserting
+> `committed == 0` as a "writes nothing" proxy must assert on statements/rows instead;
+> hermetic fakes swap in via an `asynccontextmanager` patched over the package's
+> `_tenant_session` alias, commit-on-clean-exit so one-transaction contracts stay
+> observable.
+
 `acb_common.db.tenant_session()` exists and is tested. `get_db()` still exists, is
 documented as **not** tenant-bound, and every one of the 561 sites still uses it.
 
@@ -210,8 +284,17 @@ shape changes, not just the name.
 >    modules** (projects, people, admin `members`/`_common`, rooms,
 >    `acb_auth/access`) — H6's "`app_user` reads are gone or reduced to a
 >    compatibility view" is a bigger surface than that sentence suggests.
-> 2. **Background jobs** — see MT-1d's named site in the parent spec
->    (`run_lifecycle_sweep`): a scheduled path H2 does not reach at all.
+> 2. **Background jobs** — ~~see MT-1d's named site in the parent spec
+>    (`run_lifecycle_sweep`): a scheduled path H2 does not reach at all.~~
+>    ✅ **That site is CLOSED (WS-27aa, 2026-08-10)** and it is the worked
+>    example for the rest of H4: **resolve on an unbound session, then bind
+>    explicitly.** Two sessions, in that order — the first decides the tenant
+>    (so it cannot already be inside one) and writes nothing; the second is
+>    `tenant_session(org)` and does the work. The stored fact was the workflow
+>    **owner** (`workflows.owner_email` → `app_user.organization_id`), because
+>    `workflows` carries no `organization_id` until H3 phase 1. The remaining
+>    background sites in `workflows/service.py` (`_pm_task_updater`, the run
+>    lifecycle) still need it.
 
 ```python
 # before
@@ -315,6 +398,18 @@ Jobs have no request, so no session to inherit from. Cover: the ingestion schedu
 **Done when:** every queued/scheduled unit carries `organization_id` on its record and
 binds it before any DB access; a job constructed **without** one **refuses to run** rather
 than defaulting; a test proves the refusal.
+
+> ✅ **Two of these are done, and they are the pattern to copy** (2026-08-10):
+> `routes/crm/auto_lead` (the mailbox owner's org) and, by **WS-27aa**,
+> `routes/projects` — `run_lifecycle_sweep` (the workflow owner's org) and
+> `agent_dispatch` (the task's own org, carried **on the event payload**).
+> Three shapes, one rule: **resolve on an unbound session, bind explicitly,
+> refuse if the resolution finds nothing.** The dispatch case adds the one worth
+> generalising — when the unit is an *event consumer*, the tenant belongs on the
+> **event**, stamped by the emitter inside its bound session, because the
+> consumer has nowhere legitimate to look it up. And note what refusing costs:
+> a consumer with no tenant cannot record its own refusal in tenant data
+> either — it logs and returns.
 
 Also here: **`scripts/import_hr_people.py:177`** (§0.1 path 9) — it opens its own engine and
 **upserts people rows**, which are tenant data. It must take a tenant from argv. Under

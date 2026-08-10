@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import inspect
 import io
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 
 import pytest
@@ -228,10 +229,28 @@ class _FakeDb:
 
 
 def _install_db(monkeypatch, module, db: _FakeDb) -> _FakeDb:
+    """Point a notes module's DB seam(s) at ``db``.
+
+    H2 note: converted request handlers acquire sessions through the module's
+    ``_tenant_session`` alias (an ``asynccontextmanager`` over the shared
+    tenant-bound seam), while background/service paths still use ``_get_db``.
+    Both are patched when present — a module mid-conversion has both — and the
+    fake context manager mirrors the real wrapper's commit-on-clean-exit so
+    one-transaction contracts stay observable. GUC plumbing is out of scope
+    here; ``test_tenant_session.py`` owns that.
+    """
     async def _get_db():
         return db
 
-    monkeypatch.setattr(module, "_get_db", _get_db)
+    @asynccontextmanager
+    async def _tenant_session(organization_id: str | None = None):
+        yield db
+        await db.commit()
+
+    if hasattr(module, "_tenant_session"):
+        monkeypatch.setattr(module, "_tenant_session", _tenant_session)
+    if hasattr(module, "_get_db"):
+        monkeypatch.setattr(module, "_get_db", _get_db)
     return db
 
 

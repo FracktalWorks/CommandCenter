@@ -38,7 +38,7 @@ from gateway.routes.projects.core import (
     ListResponse,
     Page,
     TaskModel,
-    _get_db,
+    _tenant_session,
     actor,
     clean_payload,
     coerce_write_values,
@@ -202,26 +202,19 @@ async def ensure_personal_project(db: Any, email: str) -> Any:
 async def get_my_project(user: UserContext = Depends(get_current_user)) -> dict:
     """My personal project, or 404 if I have never captured anything."""
     email = actor(user).lower()
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         row = await _load_personal_project(db, email)
         if row is None:
             raise HTTPException(status_code=404, detail="No personal project yet")
         return {"id": str(row.id), "name": row.name}
-    finally:
-        await db.close()
 
 
 @router.post("/my/project", status_code=201)
 async def create_my_project(user: UserContext = Depends(get_current_user)) -> dict:
     email = actor(user).lower()
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         row = await ensure_personal_project(db, email)
-        await db.commit()
         return {"id": str(row.id), "name": row.name}
-    finally:
-        await db.close()
 
 
 @router.post("/my/tasks", status_code=201)
@@ -240,8 +233,7 @@ async def capture(
         raise HTTPException(status_code=422, detail="A task needs a title.")
 
     email = actor(user).lower()
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         project = await ensure_personal_project(db, email)
         project_id = str(project.id)
         status = await load_default_status(db, project_id)
@@ -273,10 +265,7 @@ async def capture(
             db, activity_type="system", created_by=email, task_id=task_id,
             body="Captured",
         )
-        await db.commit()
         result = row_to_dict(task, TaskModel)
-    finally:
-        await db.close()
 
     await emit("pm.task.created", {"task_id": task_id, "project_id": project_id,
                                    "title": title})
@@ -333,8 +322,7 @@ async def set_personal(
         )
 
     email = actor(user).lower()
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         vis = await resolve_visibility(db, user)
         # Seeing the task is the floor. Assignment already satisfies it
         # (`load_visible_task`), so a task delegated across a Center boundary is
@@ -347,10 +335,7 @@ async def set_personal(
         # member looking at it.
         values["clarified_at"] = now()
         row = await _upsert_personal(db, task_id, email, values)
-        await db.commit()
         return _personal_to_dict(row)
-    finally:
-        await db.close()
 
 
 def _personal_to_dict(row: Any) -> dict[str, Any]:
@@ -452,12 +437,9 @@ async def my_inbox(
         params["context"] = context.strip().lower()
 
     sql = _MY_TASKS_SQL + ("".join(f" AND {c}" for c in clauses))
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         params["vis_org"] = await resolve_organization_id(db, email)
         rows = (await db.execute(text(sql), params)).fetchall()
-    finally:
-        await db.close()
 
     items: list[dict[str, Any]] = []
     for row in rows:
@@ -495,8 +477,7 @@ async def my_contexts(user: UserContext = Depends(get_current_user)) -> dict:
     and GTD contexts are personal by nature.
     """
     email = actor(user).lower()
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         rows = (await db.execute(
             text(
                 "SELECT p.context AS context, count(*) AS total "
@@ -514,8 +495,6 @@ async def my_contexts(user: UserContext = Depends(get_current_user)) -> dict:
             ],
             "total": len(rows),
         }
-    finally:
-        await db.close()
 
 
 # ── Completion, from the personal side ──────────────────────────────────────
@@ -536,8 +515,7 @@ async def complete_task(
     from gateway.routes.projects.core import apply_status_transition
 
     email = actor(user).lower()
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         vis = await resolve_visibility(db, user)
         task = await load_visible_task(db, vis, task_id)
         done = (await db.execute(
@@ -559,10 +537,7 @@ async def complete_task(
         # And the member's own view of it follows, so a completed task does not
         # sit in their Next list contradicting the board.
         await _upsert_personal(db, task_id, email, {"disposition": "DONE"})
-        await db.commit()
         result = row_to_dict(moved["row"], TaskModel)
-    finally:
-        await db.close()
 
     await emit("pm.task.status_changed", {
         "task_id": task_id, "from": moved["from"].name, "to": moved["to"].name,
@@ -584,14 +559,10 @@ async def defer_task(
     unaffected, because deferring is a statement about my attention, not about
     the work."""
     email = actor(user).lower()
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         vis = await resolve_visibility(db, user)
         await load_visible_task(db, vis, task_id)
         row = await _upsert_personal(db, task_id, email, {
             "defer_until": payload.until, "disposition": "SOMEDAY",
         })
-        await db.commit()
         return _personal_to_dict(row)
-    finally:
-        await db.close()

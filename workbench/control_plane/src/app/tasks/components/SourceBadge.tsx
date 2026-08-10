@@ -1,11 +1,18 @@
 "use client";
 
-import AppIcon from "@/components/Icon";
+import Badge from "@/components/ui/Badge";
 import { ProviderKind, Source } from "../lib/types";
 import { sourceBadge } from "../lib/utils";
 
 // A small badge showing whether an item is LOCAL (we own it) or SYNCED
 // (mirrors a connected PM tool). Central to the dual-source model (§5.1).
+//
+// This is a thin wrapper over the shared `Badge` primitive, not its own chip:
+// it used to hand-roll the same span with the same tint classes, which meant it
+// was themed for COLOUR and frozen for everything else — no `cc-control`, so
+// Graphite did not upper-case it and Material did not apply its label tracking,
+// and this badge sat next to ones that did. All this file decides now is which
+// tone, which icon and what the tooltip says.
 export function SourceBadge({
   source,
   provider,
@@ -16,21 +23,15 @@ export function SourceBadge({
   size?: "sm" | "xs";
 }) {
   const { label, tone } = sourceBadge(source, provider);
-  const iconName = tone === "local" ? "HardDrive" : "Cloud";
-  const dim = size === "xs" ? "h-2.5 w-2.5" : "h-3 w-3";
+  const local = tone === "local";
   return (
-    <span
-      className={[
-        "inline-flex items-center gap-1 rounded px-1.5 py-0.5 font-medium",
-        size === "xs" ? "text-[9px]" : "text-[10px]",
-        tone === "local"
-          ? "bg-muted text-muted-foreground"
-          : "bg-primary/10 text-primary",
-      ].join(" ")}
-      title={tone === "local" ? "Local — stored in CommandCenter" : `Synced — ${label}`}
+    <Badge
+      tone={local ? "neutral" : "primary"}
+      size={size}
+      icon={local ? "HardDrive" : "Cloud"}
+      title={local ? "Local — stored in CommandCenter" : `Synced — ${label}`}
     >
-      <AppIcon name={iconName} className={dim} />
       {label}
-    </span>
+    </Badge>
   );
 }

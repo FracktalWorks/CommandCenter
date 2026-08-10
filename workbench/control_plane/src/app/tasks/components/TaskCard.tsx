@@ -1,13 +1,13 @@
 "use client";
 
 import Icon, { themedIcon } from "@/components/Icon";
-import { TaskMeta } from "@/components/TaskMeta";
+import { TaskCardShell, TaskCardTitle } from "@/components/TaskCardShell";
+import { AvatarStack, TaskMeta } from "@/components/TaskMeta";
 import { useState } from "react";
 import { GtdItem } from "../lib/types";
 import { gtdMetaChips } from "../lib/cardMeta";
 import { useTaskStore } from "../lib/taskStore";
 import { useCardActions } from "../lib/useCardActions";
-import { initials } from "../lib/utils";
 import { contextAccent } from "../lib/contextColors";
 import { SourceBadge } from "./SourceBadge";
 import { PriorityBadge, SuggestionBadge } from "./PriorityControls";
@@ -33,8 +33,9 @@ export function TaskCard({
   draggable = false,
   showPriority = false,
   showStage = true,
-  selectMode = false,
   selected = false,
+  atCursor = false,
+  innerRef,
   onToggleSelected,
   onDragStart,
   onDragEnd,
@@ -52,11 +53,19 @@ export function TaskCard({
    *  isn't otherwise visible (Engage, Priority, a lens-grouped list, the flat
    *  lists) it stays on so the status lives on the card itself. */
   showStage?: boolean;
-  /** Multi-select mode (board): show a checkbox and toggle selection on click
-   *  instead of opening the focus modal. Drag is suppressed by the parent. */
-  selectMode?: boolean;
   selected?: boolean;
-  onToggleSelected?: () => void;
+  /** The keyboard cursor stands on this card (`@/lib/cursor`). Handed to the
+   *  shell, which owns the ring — the board must not draw its own (S1). */
+  atCursor?: boolean;
+  /** Registers the card's own element with the landing flash (`useFlash`), the
+   *  same element /projects attaches: the thing that flashes is the card. */
+  innerRef?: (element: HTMLElement | null) => void;
+  /** Toggles this card's membership of the bulk selection; `shift` extends the
+   *  range from the anchor (`@/lib/selection`). Its presence is what puts the
+   *  checkbox on the card — there is no selection *mode* on the card any more
+   *  (S1, /projects' pattern): the checkbox is a second target beside the card,
+   *  so a click on the card always means "open" and never "select". */
+  onToggleSelected?: (shift: boolean) => void;
   onDragStart?: (e: React.DragEvent) => void;
   onDragEnd?: (e: React.DragEvent) => void;
 }) {
@@ -66,8 +75,18 @@ export function TaskCard({
   const project = item.projectId
     ? projects.find((p) => p.id === item.projectId)
     : undefined;
+  // The owner set, as the shared `AvatarStack` wants it — plain identifiers.
+  // `assignees` is the full list and `assignee` its first entry, but only the
+  // singular one is filled for a local task, so fall back rather than draw a
+  // named owner with no avatar.
+  const assignees = item.assignees?.length
+    ? item.assignees
+    : item.assignee
+      ? [item.assignee]
+      : [];
   // Owners beyond the primary (shown as a "+N" on the avatar).
-  const extraAssignees = Math.max(0, (item.assignees?.length ?? 0) - 1);
+  const extraAssignees = Math.max(0, assignees.length - 1);
+  const assigneeNames = assignees.map((p) => p.name);
 
   // Shared actions (schedule / stage / done / eliminate) power both the inline
   // controls and the right-click menu, so they never drift.
@@ -136,7 +155,7 @@ export function TaskCard({
       {item.deepWork && (
         <span
           title="Deep work — needs an unbroken flow state"
-          className="inline-flex items-center gap-1 rounded border border-sky-500/30 bg-sky-500/10 px-1.5 py-0.5 text-[10px] font-medium text-sky-600 dark:text-sky-400"
+          className="inline-flex items-center gap-1 rounded border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary"
         >
           <Icon name="Waves" className="h-3 w-3" />
           Deep
@@ -190,6 +209,7 @@ export function TaskCard({
     return (
       <>
         <div
+          ref={innerRef}
           role="button"
           tabIndex={0}
           onClick={() => openFocus(item.id)}
@@ -219,9 +239,11 @@ export function TaskCard({
               </span>
             )}
             <ScheduleButton onClick={actions.schedule} />
-            {item.assignee && (
-              <AvatarStack primary={item.assignee} extra={extraAssignees} />
-            )}
+            {/* `max={1}` keeps this app's one-avatar-plus-"+N" reading, which
+                is what the deleted local AvatarStack drew; /projects shows up
+                to three because its rows are wider. Same component either way
+                (S1) — the cap is a caller's decision, the pixels are not. */}
+            <AvatarStack people={assigneeNames} max={1} />
             <SourceBadge source={item.source} provider={item.provider} size="xs" />
           </div>
         </div>
@@ -230,97 +252,108 @@ export function TaskCard({
     );
   }
 
-  // In select mode the card is a selection toggle, not a link: clicking checks
-  // the box (drag is disabled by the parent) so a batch can be archived/deleted
-  // right on the board. A selected card gets a primary ring.
-  const activate = () => {
-    if (selectMode) onToggleSelected?.();
-    else openFocus(item.id);
-  };
+  // The card opens the task. Always — there is no mode in which a click on it
+  // means something else (S1, /projects' rule). Selecting is the checkbox's
+  // job, and it is a different target; `shift` is ignored here because the
+  // range-extend gesture belongs to the control that starts a range.
+  const activate = () => openFocus(item.id);
+  const done = Boolean(item.completedAt);
   return (
     <>
-      <div
-        role="button"
-        tabIndex={0}
-        draggable={draggable}
-        onDragStart={onDragStart}
-        onDragEnd={onDragEnd}
-        onClick={activate}
-        onContextMenu={openMenu}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" || e.key === " ") {
-            e.preventDefault();
-            activate();
-          }
-        }}
-        className={[
-          "group tech-transition relative flex cursor-pointer flex-col gap-2 rounded-lg border bg-card p-3 shadow-sm hover:shadow-md",
-          selected
-            ? "border-primary ring-1 ring-primary"
-            : "border-border hover:border-primary/40",
-        ].join(" ")}
-      >
-        {selectMode ? (
+      {/* WS-27ad: the box is `@/components/TaskCardShell`, the same one the
+          /projects board draws — same radius, padding, `bg-card` surface,
+          border and shadow lift. What goes INSIDE stays this app's: the GTD
+          badges, the context menu and the priority pair are not concepts
+          /projects has.
+
+          S1: the checkbox is a SIBLING of the box, not a child of it — the
+          same `flex items-start gap-1.5` row /projects lays out. Inside the
+          card it sat on top of the drag grip in the one corner both wanted,
+          and a card that is also a checkbox is one gesture with two meanings.
+          Outside, there are two targets and the card's whole surface stays the
+          open affordance. */}
+      <div className="flex items-start gap-1.5">
+        {onToggleSelected ? (
           <input
             type="checkbox"
             checked={selected}
-            onChange={() => onToggleSelected?.()}
+            onChange={(e) =>
+              onToggleSelected((e.nativeEvent as MouseEvent).shiftKey)
+            }
+            // The click must not also open the task.
             onClick={(e) => e.stopPropagation()}
             aria-label={selected ? "Deselect task" : "Select task"}
-            className="absolute right-1.5 top-1.5 h-4 w-4 accent-primary"
+            className="mt-3 h-4 w-4 shrink-0 accent-primary"
           />
-        ) : (
-          draggable && (
-            <Icon name="GripVertical" className="absolute right-1.5 top-1.5 h-3.5 w-3.5 text-muted-foreground/30 opacity-0 transition-opacity group-hover:opacity-100" />
-          )
-        )}
-        {/* Top corners: priority pill top-LEFT (above the title — always shown
-            on the board, it's the ranking signal) · the action nudge top-RIGHT.
-            pr-5 keeps the nudge clear of the absolute grip/checkbox. */}
-        <div className="flex items-start gap-2 pr-5">
-          <PriorityBadge item={item} urgentWindowHours={urgentWindowHours} />
-          <span className="ml-auto shrink-0">
-            <SuggestionBadge
-              item={item}
-              urgentWindowHours={urgentWindowHours}
-              compact
-            />
-          </span>
-        </div>
-        <div className="flex items-start gap-2">
-          {!selectMode && showStage && <StatusPill item={item} />}
-          <p className="text-[13px] font-medium leading-snug text-foreground">
-            {item.title}
-          </p>
-        </div>
-        {item.nextAction && item.nextAction !== item.title && (
-          <p className="line-clamp-2 text-[11px] text-muted-foreground">
-            {item.nextAction}
-          </p>
-        )}
-        {project && (
-          <span className="inline-flex w-fit items-center gap-1 rounded bg-secondary px-1.5 py-0.5 text-[10px] text-muted-foreground">
-            <Icon name="FolderKanban" className="h-3 w-3" />
-            <span className="max-w-[160px] truncate">{project.outcome}</span>
-          </span>
-        )}
-        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">{meta}</div>
-        <div className="mt-0.5 flex items-center justify-between">
-          <SourceBadge source={item.source} provider={item.provider} size="xs" />
-          <div className="flex items-center gap-1.5">
-            <ScheduleButton onClick={actions.schedule} />
-            {item.assignee && (
-              <span className="inline-flex items-center gap-1 text-[10px] text-muted-foreground">
-                <AvatarStack primary={item.assignee} extra={extraAssignees} />
-                <span className="max-w-[90px] truncate">
-                  {extraAssignees > 0
-                    ? `${item.assignee.name} +${extraAssignees}`
-                    : item.assignee.name}
-                </span>
-              </span>
-            )}
+        ) : null}
+        <TaskCardShell
+          className="w-full min-w-0"
+          innerRef={innerRef}
+          draggable={draggable}
+          completed={done}
+          atCursor={atCursor}
+          onDragStart={onDragStart}
+          onDragEnd={onDragEnd}
+          onActivate={activate}
+          onContextMenu={openMenu}
+          selected={selected}
+        >
+          {/* Top corners: priority pill top-LEFT (above the title — always
+              shown on the board, it's the ranking signal) · the action nudge
+              top-RIGHT. No `pr-5` any more: the corner the grip and the
+              checkbox used to share is free. The drag grip is GONE rather than
+              relocated — the whole card is `draggable`, so it never was a
+              handle, only a hint pointing at a spot that is not special;
+              /projects draws none; and the shell's hover lift is the affordance
+              both boards already use to say "pick me up". */}
+          <div className="flex items-start gap-2">
+            <PriorityBadge item={item} urgentWindowHours={urgentWindowHours} />
+            <span className="ml-auto shrink-0">
+              <SuggestionBadge
+                item={item}
+                urgentWindowHours={urgentWindowHours}
+                compact
+              />
+            </span>
           </div>
-        </div>
+          <div className="flex items-start gap-2">
+            {/* Shown whenever the surface does not already say what the stage
+                is — the board passes `showStage={false}` because its columns
+                ARE the stage. It used to be hidden in select mode too, which
+                was a consequence of the card being the checkbox; it is not one
+                any more. The pill stays interactive (S1). */}
+            {showStage && <StatusPill item={item} />}
+            <TaskCardTitle completed={done}>{item.title}</TaskCardTitle>
+          </div>
+          {item.nextAction && item.nextAction !== item.title && (
+            <p className="line-clamp-2 text-[11px] text-muted-foreground">
+              {item.nextAction}
+            </p>
+          )}
+          {project && (
+            <span className="inline-flex w-fit items-center gap-1 rounded bg-secondary px-1.5 py-0.5 text-[10px] text-muted-foreground">
+              <Icon name="FolderKanban" className="h-3 w-3" />
+              <span className="max-w-[160px] truncate">{project.outcome}</span>
+            </span>
+          )}
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">{meta}</div>
+          <div className="mt-0.5 flex items-center justify-between">
+            <SourceBadge source={item.source} provider={item.provider} size="xs" />
+            <div className="flex items-center gap-1.5">
+              <ScheduleButton onClick={actions.schedule} />
+              {item.assignee && (
+                <span className="inline-flex items-center gap-1 text-[10px] text-muted-foreground">
+                  <AvatarStack people={assigneeNames} max={1} />
+                  <span className="max-w-[90px] truncate">
+                    {extraAssignees > 0
+                      ? `${item.assignee.name} +${extraAssignees}`
+                      : item.assignee.name}
+                  </span>
+                </span>
+              )}
+            </div>
+          </div>
+        </TaskCardShell>
       </div>
       {contextMenu}
     </>
@@ -346,25 +379,10 @@ function ScheduleButton({ onClick }: { onClick: () => void }) {
   );
 }
 
-function Avatar({ name }: { name: string }) {
-  return (
-    <span className="flex h-4 w-4 items-center justify-center rounded-full bg-primary/15 text-[8px] font-bold text-primary">
-      {initials(name)}
-    </span>
-  );
-}
-
-/** The primary owner's avatar with a small "+N" when a task has more than one
- *  assignee, so a shared task reads as shared at a glance. */
-function AvatarStack({ primary, extra }: { primary: { name: string }; extra: number }) {
-  return (
-    <span className="inline-flex items-center">
-      <Avatar name={primary.name} />
-      {extra > 0 && (
-        <span className="-ml-1 flex h-4 items-center justify-center rounded-full bg-secondary px-1 text-[8px] font-bold text-muted-foreground ring-1 ring-card">
-          +{extra}
-        </span>
-      )}
-    </span>
-  );
-}
+// S1: the local `Avatar` / `AvatarStack` that used to live here are gone. They
+// were a second copy of `@/components/TaskMeta`'s pair — same initials, same
+// "+N" badge, same ring — differing only in that this one took a Person and a
+// count while the shared one takes identifiers. A second implementation of a
+// shared seam is a defect (AGENTS.md rule 4), and this one was the reason a
+// /tasks avatar and a /projects avatar could drift apart without either app's
+// tests noticing.

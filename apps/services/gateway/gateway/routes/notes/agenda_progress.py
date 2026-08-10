@@ -30,7 +30,7 @@ from collections import deque
 from acb_auth import UserContext, get_current_user
 from fastapi import Depends
 from gateway.routes.notes.copilot_agenda import get_agenda, item_covered
-from gateway.routes.notes.core import _get_db, _log, router
+from gateway.routes.notes.core import _log, _tenant_session, router
 from sqlalchemy import text
 
 #: Words of recent speech kept per meeting. ~2000 words is roughly fifteen
@@ -109,7 +109,7 @@ async def _stored_transcript(meeting_id: str) -> str:
     """The finished meeting's transcript — the fallback source of coverage once
     the live state is gone."""
     try:
-        async with await _get_db() as db:
+        async with _tenant_session() as db:
             row = (
                 await db.execute(
                     text(

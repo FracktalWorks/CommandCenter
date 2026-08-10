@@ -20,8 +20,8 @@ from typing import Any
 from acb_auth import UserContext, get_current_user
 from fastapi import Depends, HTTPException
 from gateway.routes.workflows.core import (
-    _get_db,
     _log,
+    _tenant_session,
     _uid,
     load_workflow_or_404,
     parse_jsonb,
@@ -268,13 +268,10 @@ async def workflow_copilot(
     body: CopilotRequest,
     user: UserContext = Depends(get_current_user),
 ) -> dict[str, Any]:
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         row = await load_workflow_or_404(db, workflow_id)
         graph = parse_jsonb(row.graph, {"nodes": [], "edges": []})
         context = await _capability_context(body.message, db)
-    finally:
-        await db.close()
 
     messages: list[dict[str, str]] = [
         {"role": "system", "content": COPILOT_SYSTEM_PROMPT},
@@ -375,8 +372,7 @@ async def _apply_round(
         graph = None
 
     if not problems and (new_modules or graph is not None):
-        db = await _get_db()
-        try:
+        async with _tenant_session() as db:
             for module in new_modules:
                 module_id = await _save_module(
                     db,
@@ -392,9 +388,6 @@ async def _apply_round(
                     text("SELECT id, name FROM workflow_modules WHERE status = 'ready'"),
                 )
             ).fetchall()
-            await db.commit()
-        finally:
-            await db.close()
         name_to_id = {r.name: str(r.id) for r in existing} | created
 
         if graph is not None:

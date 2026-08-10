@@ -21,7 +21,7 @@ from uuid import uuid4
 from acb_auth import UserContext, get_current_user
 from fastapi import Depends, HTTPException, UploadFile
 from fastapi.responses import FileResponse
-from gateway.routes.tasks.core import _get_db, _uid, router
+from gateway.routes.tasks.core import _tenant_session, _uid, router
 from sqlalchemy import text
 
 _MAX_BYTES = 15 * 1024 * 1024  # 15 MB per attachment
@@ -66,17 +66,13 @@ async def upload_attachment(
     dest = _storage_dir() / f"{att_id}{Path(name).suffix.lower()}"
     dest.write_bytes(content)
 
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         await db.execute(text(
             """INSERT INTO gtd_attachments
                (id, user_id, name, mime, size_bytes, path)
                VALUES (:id, :uid, :name, :mime, :size, :path)"""),
             {"id": att_id, "uid": _uid(user), "name": name, "mime": mime,
              "size": len(content), "path": str(dest)})
-        await db.commit()
-    finally:
-        await db.close()
 
     return {
         "attachment_id": att_id,
@@ -94,14 +90,11 @@ async def serve_attachment(
     filename: str,  # cosmetic — the row's stored name wins
     user: UserContext = Depends(get_current_user),
 ):
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         row = (await db.execute(text(
             """SELECT name, mime, path FROM gtd_attachments
                WHERE id = :id AND user_id = :uid"""),
             {"id": attachment_id, "uid": _uid(user)})).fetchone()
-    finally:
-        await db.close()
     if row is None or not Path(row.path).is_file():
         raise HTTPException(status_code=404, detail="Attachment not found")
     return FileResponse(row.path, media_type=row.mime or "application/octet-stream",

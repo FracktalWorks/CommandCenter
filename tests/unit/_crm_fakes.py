@@ -7,7 +7,8 @@ drifts is the one that stops failing (the ``_admin_fakes.py`` lesson).
 Not named ``test_*``, so pytest imports it without collecting it.
 
 Convention: the route functions are called directly as async functions with
-``core._get_db`` monkeypatched, so nothing here touches Postgres and no
+``core._tenant_session`` (H2) monkeypatched — and ``core._get_db`` for the H4
+leaves that stay on the unbound seam — so nothing here touches Postgres and no
 TestClient is started. Same shape as ``test_tasks_people_scoping.py``.
 
 ⚠️ **This is a MIRROR, and a mirror can only agree with itself.** It reads the
@@ -34,6 +35,7 @@ from __future__ import annotations
 
 import json
 import re
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
@@ -526,6 +528,15 @@ class FakeCrmDB:
                 raise RuntimeError(
                     f"fake driver error on statement containing {entry[0]!r}"
                 )
+        # The auto-lead H4 fix's owner-organization lookup: a `lower() =
+        # lower()` WHERE the generic reader rightly refuses to guess at.
+        # Statement-keyed like every special arm, R10 honoured on both sides.
+        if "FROM app_user" in statement and "lower(email)" in statement:
+            wanted = str(args.get("e") or "").lower()
+            return _Result([
+                SimpleNamespace(**r) for r in self.rows("app_user")
+                if str(r.get("email") or "").lower() == wanted
+            ])
         head = statement.split(None, 1)[0].upper()
         table = _table(statement)
         if head == "INSERT":
@@ -1025,13 +1036,34 @@ def crm_user(email: str = "vjvarada@fracktal.in", *, features: str = "*") -> Any
 
 
 def bind_db(monkeypatch: Any, fake: FakeCrmDB, modules: tuple[Any, ...]) -> None:
-    """Point each CRM submodule's ``_get_db`` seam at ``fake``.
+    """Point each CRM submodule's DB seam at ``fake``.
 
-    Per-module and not per-package because each module imports ``_get_db`` from
+    Per-module and not per-package because each module imports its seam from
     ``core`` by name, so patching ``core`` alone would not reach them.
+
+    H2 note: the request-handler modules now acquire sessions through
+    ``_tenant_session`` — an async context manager that begins a transaction,
+    issues ``SET LOCAL app.tenant_id`` and commits on clean exit. The fake
+    mirrors only the SHAPE (``async with … as db``) plus commit-on-clean-exit,
+    so "these writes share one transaction" stays an OBSERVABLE fact
+    (``db.committed == 1``) and a handler that raises mid-block commits
+    nothing here just as it commits nothing against Postgres. Transaction/GUC
+    plumbing stays out of the mirror — ``test_tenant_session.py`` owns that.
+
+    The three H4 leaves (``sync_zoho``, ``auto_lead``, ``broker_handlers``)
+    deliberately stay on the unbound ``_get_db`` seam, so both names are
+    patched wherever a module carries them.
     """
+    @asynccontextmanager
+    async def _tenant_session(organization_id: str | None = None) -> Any:
+        yield fake
+        await fake.commit()
+
     async def _get_db() -> FakeCrmDB:
         return fake
 
     for module in modules:
-        monkeypatch.setattr(module, "_get_db", _get_db)
+        if hasattr(module, "_tenant_session"):
+            monkeypatch.setattr(module, "_tenant_session", _tenant_session)
+        if hasattr(module, "_get_db"):
+            monkeypatch.setattr(module, "_get_db", _get_db)

@@ -23,6 +23,18 @@ from fastapi import APIRouter, HTTPException
 # why these keep their private names.
 from gateway.db import get_db as _get_db  # noqa: F401
 from gateway.db import get_session_factory as _get_session_factory  # noqa: F401
+
+# The tenant-bound seam (MT-1c / H2). `_tenant_session` IS
+# `acb_common.db.tenant_session`, aliased per-package for the same reason
+# `_get_db` was: every request handler in this package imports it from here BY
+# NAME, which is the seam the hermetic tests patch per module (mirrors
+# `routes/projects/core.py`). The tenant comes from the request context — bound
+# once in `_with_resolved_access` — so no call site passes one (H2). A call
+# outside a bound request raises `TenantUnbound` rather than defaulting: fail
+# closed, never "the usual org". `_get_db` above remains ONLY for the package's
+# background consumers (broker_handlers, scheduler, calendar's rollover sweep),
+# which are H4's to convert — a job must not inherit an ambient tenant.
+from gateway.db import tenant_session as _tenant_session  # noqa: F401
 from pydantic import BaseModel
 from sqlalchemy import text
 

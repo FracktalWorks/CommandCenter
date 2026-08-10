@@ -20,6 +20,17 @@ from fastapi import APIRouter, HTTPException
 
 # The shared gateway engine (BO-10) — see the DB section below.
 from gateway.db import get_session_factory as _get_session_factory
+
+# The shared tenant-bound seam (BO-10 → MT-1c/H2). `_tenant_session` IS
+# `acb_common.db.tenant_session`, aliased per-package for the same reason
+# `_get_db` was: every submodule imports it from here BY NAME, which is the
+# seam the hermetic tests patch per module. The tenant comes from the request
+# context — bound once in `_with_resolved_access` — so no call site passes
+# one (H2). A call outside a bound request raises `TenantUnbound` rather than
+# defaulting: fail closed, never "the usual org". Background jobs, webhooks
+# and the OAuth callback stay on `_get_db` below until H4/H6 thread an
+# explicit tenant to them — service identity binds NO ambient tenant.
+from gateway.db import tenant_session as _tenant_session
 from pydantic import BaseModel
 from sqlalchemy import text
 from acb_auth import require_feature_router
@@ -371,7 +382,12 @@ async def hydrate_message_body(db: Any, message_id: str, user_email: str) -> str
                 ),
                 {"id": message_id, "bt": body_text, "bh": body_html},
             )
-        await db.commit()
+        # No commit here: the CALLER owns the transaction boundary. Converted
+        # request handlers pass a `_tenant_session` session, and a mid-block
+        # commit would end that transaction and silently drop the tenant GUC
+        # for everything after it (H2); background callers commit their own
+        # session as before, and a rolled-back hydrate persist just re-fetches
+        # next time — it is a cache write, not state.
         return body_text
     except HTTPException:
         raise

@@ -259,7 +259,7 @@ export function AssistantRail({ onClose }: { onClose?: () => void } = {}) {
               key={qa.label}
               type="button"
               onClick={() => setPendingInput(qa.prompt)}
-              className="tech-transition rounded-lg border border-border bg-background/40 px-3 py-2 text-left text-[13px] text-foreground hover:border-primary/50 hover:bg-secondary/50"
+              className="tech-transition rounded-lg border border-border bg-background/40 px-3 py-2 text-left text-sm text-foreground hover:border-primary/50 hover:bg-secondary/50"
             >
               {qa.label}
             </button>

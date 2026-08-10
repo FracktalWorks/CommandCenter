@@ -1,9 +1,11 @@
 "use client";
 
+import { DropGap } from "@/components/DropGap";
 import { QuickAdd } from "@/components/QuickAdd";
 import { useFlash } from "@/components/useFlash";
+import { gapKey } from "@/lib/boardDrop";
 import { clampCursor, stepCursor } from "@/lib/cursor";
-import { useCallback, useMemo, useState } from "react";
+import { Fragment, useCallback, useMemo, useState } from "react";
 import { GtdItem, ViewKey } from "../lib/types";
 import { useTaskStore } from "../lib/taskStore";
 import { TaskCard } from "./TaskCard";
@@ -31,9 +33,26 @@ import { formatStatus } from "../lib/utils";
 //
 // The board is only offered for Next Actions (see ItemList `boardable`); other
 // views render list-only until their own status model is designed.
+//
+// ── WS-27ad · what this board shares, and the one thing it does not ────────
+// Shared with /projects' board: the keyboard cursor and its Shift-sweep
+// (`@/lib/cursor`), the selection grammar (`@/lib/selection`), the landing
+// flash (`@/components/useFlash`), the group-context quick-add
+// (`@/components/QuickAdd`), the column accent (`@/lib/statusAccent` via
+// lib/stageColors), the card shell (`@/components/TaskCardShell`) and — as of
+// this ticket, in the other direction — the drop-gap reorder
+// (`@/components/DropGap` + `@/lib/boardDrop`), which /projects lacked.
+//
+// NOT shared: /projects' SWIMLANES (a second grouping axis drawn as rows).
+// Deliberate, and the reason is this app's data rather than effort: /tasks'
+// board axis is the fixed workflow-stage set, and its other axes are COMPUTED
+// projections — priority and mode come from important × leveraged × urgent-from-
+// dueAt, which no drop can write (`lib/quickAdd` refuses a quick-add on them for
+// the same reason, and `lib/dropRules` refuses the drag). A lane grid here would
+// be a grid most of whose cells refuse every gesture. If /tasks ever grows a
+// second SETTABLE axis, this is the note to delete.
 
-/** The cursor never carries a selection here — see the note in onKeyDown. */
-const EMPTY_SELECTION: ReadonlySet<string> = new Set();
+const NOBODY: ReadonlySet<string> = new Set();
 
 export function TaskBoard({
   items,
@@ -54,12 +73,20 @@ export function TaskBoard({
   const updateItem = useTaskStore((s) => s.updateItem);
   const quickAddNext = useTaskStore((s) => s.quickAddNext);
   const openFocus = useTaskStore((s) => s.openFocus);
-  // Multi-select for bulk archive/delete — works right on the board now. While
-  // selecting, cards become selection toggles and drag is suppressed (a checkbox
-  // and a drag handle on the same card would fight each other).
+  // Multi-select for bulk archive/delete — works right on the board.
+  //
+  // S1: a card is no longer a selection toggle. Its checkbox is a permanent
+  // sibling of the card (see `TaskCard`), so clicking a card always opens it and
+  // `selectMode` no longer changes what a click MEANS. What it still does here
+  // is suppress the drag: `lib/dropRules.dropRefusal` treats select mode as a
+  // refusal with its own user-facing copy, so making cards draggable while that
+  // stands would offer a gesture every column then refuses. Un-gating the drag
+  // is a change to `dropRules` and the bulk bar together, not to this file
+  // alone — recorded here rather than half-done.
   const selectMode = useTaskStore((s) => s.selectMode);
   const selectedIds = useTaskStore((s) => s.selectedIds);
   const toggleSelected = useTaskStore((s) => s.toggleSelected);
+  const extendSelection = useTaskStore((s) => s.extendSelection);
 
   // Columns: an explicit stage set (the per-project view's real ClickUp
   // statuses) or the user's 4 fixed workflow stages. A LOCAL task keys off its
@@ -84,6 +111,7 @@ export function TaskBoard({
   // WS-27y backport: the keyboard cursor and the landing flash — the same
   // shared machinery the Projects board runs (`@/lib/cursor`, `useFlash`).
   const [cursor, setCursor] = useState(-1);
+  const [anchor, setAnchor] = useState<number | null>(null);
   const { flash, attach, scrollTo } = useFlash();
 
   // An unstaged task sits in the FIRST column of the axis.
@@ -134,19 +162,23 @@ export function TaskBoard({
       )
     )
       return;
-    // Plain cursor + Enter only. /tasks has no shift-range selection model
-    // (`selectedIds` is a bare toggle set with no anchor — see taskStore), so
-    // the shared cursor's shift-sweep stays dormant here rather than
-    // half-growing a second selection grammar on one surface.
+    // WS-27ad — Shift+Arrow sweeps a range, exactly as the /projects board
+    // does, but ONLY inside select mode. Outside it there is no selection on
+    // screen and no bulk bar, so a shift-arrow would grow a set nobody can
+    // see; the mode is what makes the gesture legible here (see the note on
+    // `selectMode` in ItemList).
+    const picked = selectMode ? selectedIds : NOBODY;
     const next = stepCursor(
       rows,
-      { cursor: cursorAt, anchor: null, selection: EMPTY_SELECTION },
+      { cursor: cursorAt, anchor, selection: picked },
       event.key,
-      false,
+      selectMode && event.shiftKey,
     );
     if (!next) return;
     event.preventDefault();
     setCursor(next.cursor);
+    setAnchor(next.anchor);
+    if (next.selection !== picked) extendSelection([...next.selection]);
     if (next.open) openFocus(next.open);
     if (next.cursor >= 0) scrollTo(rows[next.cursor]);
   }
@@ -260,14 +292,23 @@ export function TaskBoard({
             onDragLeave={() => setOverCol((c) => (c === col.key ? null : c))}
             onDrop={() => dropColumn(col.key)}
             className={[
-              "relative flex h-full w-72 shrink-0 flex-col overflow-hidden rounded-xl border bg-secondary/30",
+              // S1: the column's chrome is /projects' — `rounded-lg border
+              // border-border bg-card`, where this board drew `rounded-xl` on a
+              // `bg-secondary/30` well. Both radii are themed here (globals.css
+              // derives the whole `--radius-*` scale from `--radius`, and
+              // `--radius-xl` IS `--radius`), so this is a convergence, not a
+              // theming fix: two boards side by side drew the same object at two
+              // corner radii on two surfaces. The drop highlight stays —
+              // /projects has no equivalent, and a column that does not react
+              // while a card hovers over it reads as a refusal.
+              "relative flex h-full w-72 shrink-0 flex-col overflow-hidden rounded-lg border bg-card",
               isOver ? "border-primary bg-primary/5" : "border-border",
             ].join(" ")}
           >
             {/* WS-27y backport: the refusal, said on the target while the
                 card hovers — same overlay grammar as the Projects board. */}
             {refusal ? (
-              <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-xl bg-background/85 p-3 text-center text-xs font-medium text-destructive">
+              <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-lg bg-background/85 p-3 text-center text-xs font-medium text-destructive">
                 {refusal}
               </div>
             ) : null}
@@ -292,48 +333,52 @@ export function TaskBoard({
                 {colItems.length}
               </span>
             </div>
-            <div className="flex flex-1 flex-col overflow-y-auto p-2">
+            {/* S1: `space-y-1` on the column, /projects' gutter, rather than a
+                `mb-2` on each card — the gap belongs to the list, and putting
+                it on the child left the drop gaps spaced differently from the
+                cards they sit between. Cards and gaps are siblings here for the
+                same reason they are on /projects: `space-y-*` only reaches
+                direct children, so a card wrapped in a div of its own opts out
+                of the spacing the column just set. */}
+            <div className="flex flex-1 flex-col space-y-1 overflow-y-auto p-2">
               {colItems.map((i, idx) => (
-                <div key={i.id}>
+                <Fragment key={i.id}>
                   {/* drop gap ABOVE this card (manual reorder) */}
                   {manual && (
                     <DropGap
-                      active={dropAt === `${col.key}:${idx}`}
-                      onOver={() => dragId && setDropAt(`${col.key}:${idx}`)}
+                      active={dropAt === gapKey(col.key, idx)}
+                      dragging={Boolean(dragId)}
+                      onOver={() => dragId && setDropAt(gapKey(col.key, idx))}
                       onDrop={() => dropAtIndex(col.key, idx)}
                     />
                   )}
-                  <div
-                    ref={attach(i.id)}
-                    className={[
-                      "mb-2 rounded-lg",
-                      // The keyboard cursor's ring — same classes the
-                      // Projects board draws on its active card.
-                      cursorAt >= 0 && rows[cursorAt] === i.id
-                        ? "ring-2 ring-ring"
-                        : "",
-                    ].join(" ")}
-                  >
-                    <TaskCard
-                      item={i}
-                      draggable={!selectMode}
-                      selectMode={selectMode}
-                      selected={selectedIds.has(i.id)}
-                      // The column IS the stage here — a per-card status pill
-                      // would just repeat it, so it's off on the board.
-                      showStage={false}
-                      onToggleSelected={() => toggleSelected(i.id)}
-                      onDragStart={() => setDragId(i.id)}
-                      onDragEnd={() => { setDragId(null); setOverCol(null); setDropAt(null); }}
-                    />
-                  </div>
-                </div>
+                  <TaskCard
+                    item={i}
+                    // S1: the cursor ring and the flash target are the CARD's,
+                    // handed to the shared shell through the card. This board
+                    // used to wrap every card in a div and re-draw `ring-2
+                    // ring-ring` on it — a second implementation of a prop the
+                    // shell already had, and the wrapper is what made the ring
+                    // sit a pixel off the card's own radius.
+                    innerRef={attach(i.id)}
+                    atCursor={cursorAt >= 0 && rows[cursorAt] === i.id}
+                    draggable={!selectMode}
+                    selected={selectedIds.has(i.id)}
+                    // The column IS the stage here — a per-card status pill
+                    // would just repeat it, so it's off on the board.
+                    showStage={false}
+                    onToggleSelected={(shift) => toggleSelected(i.id, shift, rows)}
+                    onDragStart={() => setDragId(i.id)}
+                    onDragEnd={() => { setDragId(null); setOverCol(null); setDropAt(null); }}
+                  />
+                </Fragment>
               ))}
               {/* trailing gap → drop at the end */}
               {manual && colItems.length > 0 && (
                 <DropGap
-                  active={dropAt === `${col.key}:${colItems.length}`}
-                  onOver={() => dragId && setDropAt(`${col.key}:${colItems.length}`)}
+                  active={dropAt === gapKey(col.key, colItems.length)}
+                  dragging={Boolean(dragId)}
+                  onOver={() => dragId && setDropAt(gapKey(col.key, colItems.length))}
                   onDrop={() => dropAtIndex(col.key, colItems.length)}
                 />
               )}
@@ -356,35 +401,5 @@ export function TaskBoard({
         );
       })}
     </div>
-  );
-}
-
-/** A thin, highlight-on-hover drop target between cards for manual reorder. */
-function DropGap({
-  active,
-  onOver,
-  onDrop,
-}: {
-  active: boolean;
-  onOver: () => void;
-  onDrop: () => void;
-}) {
-  return (
-    <div
-      onDragOver={(e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        onOver();
-      }}
-      onDrop={(e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        onDrop();
-      }}
-      className={[
-        "-my-1 h-2 rounded transition-colors",
-        active ? "bg-primary/40" : "bg-transparent",
-      ].join(" ")}
-    />
   );
 }

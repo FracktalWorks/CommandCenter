@@ -31,7 +31,7 @@ from typing import Any
 
 from acb_auth import UserContext, get_current_user
 from fastapi import Depends, HTTPException
-from gateway.routes.notes.core import _get_db, _log, router
+from gateway.routes.notes.core import _get_db, _log, _tenant_session, router
 from pydantic import BaseModel
 from sqlalchemy import text
 
@@ -183,6 +183,9 @@ async def draft_agenda(
 # ── Storage ─────────────────────────────────────────────────────────────────
 
 async def get_agenda(meeting_id: str) -> list[dict]:
+    # H4: shared helper also consumed by the copilot orchestrator background
+    # task (`copilot._run`), which has no ambient tenant; derive it from the
+    # meeting row before moving this off `_get_db`.
     try:
         async with await _get_db() as db:
             row = (
@@ -201,7 +204,7 @@ async def get_instructions(owner_email: str) -> str:
     if not owner_email:
         return ""
     try:
-        async with await _get_db() as db:
+        async with _tenant_session() as db:
             row = (
                 await db.execute(
                     text("SELECT instructions FROM copilot_config WHERE owner_email = :e"),
@@ -215,6 +218,8 @@ async def get_instructions(owner_email: str) -> str:
 
 async def instructions_for_meeting(meeting_id: str) -> str:
     """Standing instructions of whoever owns this meeting."""
+    # H4: copilot-oriented helper (no request caller today); a background
+    # caller has no ambient tenant — derive it from the meeting row.
     try:
         async with await _get_db() as db:
             row = (
@@ -258,7 +263,7 @@ async def write_agenda(
 ) -> dict:
     """Set the agenda directly (hand-edited, or accepted from the chat)."""
     items = normalize_agenda(body.agenda)
-    async with await _get_db() as db:
+    async with _tenant_session() as db:
         res = await db.execute(
             text(
                 "UPDATE meeting SET agenda = CAST(:a AS JSONB) "
@@ -268,7 +273,6 @@ async def write_agenda(
         )
         if res.rowcount == 0:
             raise HTTPException(status_code=404, detail="meeting not found")
-        await db.commit()
     # The copilot's cached background embeds the agenda — rebuild it.
     from gateway.routes.notes import copilot_context
 
@@ -289,7 +293,7 @@ async def chat_agenda(
     if not message:
         raise HTTPException(status_code=400, detail="empty message")
 
-    async with await _get_db() as db:
+    async with _tenant_session() as db:
         row = (
             await db.execute(
                 text(
@@ -308,7 +312,7 @@ async def chat_agenda(
         instructions=await get_instructions(getattr(user, "email", "") or ""),
         brief=(row.copilot_brief or ""),
     )
-    async with await _get_db() as db:
+    async with _tenant_session() as db:
         await db.execute(
             text(
                 "UPDATE meeting SET agenda = CAST(:a AS JSONB) "
@@ -316,7 +320,6 @@ async def chat_agenda(
             ),
             {"a": json.dumps(agenda), "id": meeting_id},
         )
-        await db.commit()
     from gateway.routes.notes import copilot_context
 
     copilot_context.forget(meeting_id)
@@ -341,7 +344,7 @@ async def write_instructions(
     if not email:
         raise HTTPException(status_code=400, detail="no user")
     value = (body.instructions or "").strip()[:_MAX_INSTRUCTIONS]
-    async with await _get_db() as db:
+    async with _tenant_session() as db:
         await db.execute(
             text(
                 "INSERT INTO copilot_config (owner_email, instructions) "
@@ -350,5 +353,4 @@ async def write_instructions(
             ),
             {"e": email, "i": value or None},
         )
-        await db.commit()
     return {"instructions": value}

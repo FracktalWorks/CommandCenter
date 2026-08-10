@@ -13,7 +13,7 @@ from typing import Any
 
 from acb_auth import UserContext, get_current_user
 from fastapi import Depends, Query
-from gateway.routes.whatsapp.core import _get_db, router
+from gateway.routes.whatsapp.core import _tenant_session, router
 from pydantic import BaseModel
 from sqlalchemy import text
 
@@ -93,8 +93,7 @@ async def pulse(
 ):
     """WhatsApp health over the last ``days``: reply speed, who's waited longest,
     inbound load by intent, and the busiest chats."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         params: dict[str, Any] = {"uid": user.email or "anonymous", "days": days}
         scope = "IN (SELECT id FROM wa_accounts WHERE user_id = :uid"
         if account_id:
@@ -197,5 +196,3 @@ async def pulse(
             by_intent=by_intent,
             busiest=busiest,
         )
-    finally:
-        await db.close()

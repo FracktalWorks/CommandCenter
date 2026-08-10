@@ -35,7 +35,7 @@ from acb_auth import UserContext, get_current_user
 from fastapi import Depends, Query
 from gateway.routes.projects.core import (
     Page,
-    _get_db,
+    _tenant_session,
     actor,
     insert_row,
     resolve_visibility,
@@ -292,8 +292,7 @@ async def list_notifications(
     address (R3).
     """
     me = actor(user).lower()
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         vis = await resolve_visibility(db, user)
         clause = vis.project_clause("t.root_project_id")
         sql = _LIST_SQL.format(
@@ -319,8 +318,6 @@ async def list_notifications(
             ),
             {"me": me, **vis.params},
         )).fetchone()
-    finally:
-        await db.close()
     return {
         "rows": [_row(r) for r in rows],
         "total": len(rows),
@@ -351,8 +348,7 @@ async def mark_read(
     me = actor(user).lower()
     if not payload.all and not payload.ids:
         return {"marked": 0}
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         if payload.all:
             sql = (
                 "UPDATE pm_notifications SET read_at = now() "
@@ -367,9 +363,6 @@ async def mark_read(
             )
             params = {"me": me, "ids": list(payload.ids)}
         result = await db.execute(text(sql), params)
-        await db.commit()
-    finally:
-        await db.close()
     return {"marked": int(getattr(result, "rowcount", 0) or 0)}
 
 

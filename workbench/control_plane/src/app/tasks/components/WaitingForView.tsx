@@ -1,7 +1,9 @@
 "use client";
 
 import Icon from "@/components/Icon";
-import { useMemo } from "react";
+import { useFlash } from "@/components/useFlash";
+import { clampCursor, stepCursor } from "@/lib/cursor";
+import { useMemo, useState } from "react";
 import { GtdItem } from "../lib/types";
 import { useTaskStore } from "../lib/taskStore";
 import { initials, relativeTime } from "../lib/utils";
@@ -31,12 +33,30 @@ import {
 // The predicates live in lib/waiting.ts (pure, unit-tested, and the same
 // 5-day rule the gateway's /tasks/insights uses). Drafting and sending the
 // nudge itself is NOT here — that write is Action-Broker/owner-gated.
+//
+// WS-27ad: this view now walks with the shared keyboard cursor
+// (`@/lib/cursor`) like every other /tasks and /projects surface — arrows move,
+// Shift extends the selection inside select mode, Enter opens the focus pane.
+//
+// It gets NO quick-add, and that is a decision rather than an omission
+// (`lib/quickAdd.viewQuickAdd` records it in the one place the mapping lives):
+// this view's groups are PEOPLE, and a create can set the WAITING bucket but
+// not the delegation — who owes it and since when comes from the delegate path,
+// which asks. A box under "Priya" that filed its task into "Unassigned" would
+// be a lie about where the task went.
+
+const NOBODY: ReadonlySet<string> = new Set();
 
 export function WaitingForView({ items }: { items: GtdItem[] }) {
   const openFocus = useTaskStore((s) => s.openFocus);
   const selectMode = useTaskStore((s) => s.selectMode);
   const selectedIds = useTaskStore((s) => s.selectedIds);
   const toggleSelected = useTaskStore((s) => s.toggleSelected);
+  const extendSelection = useTaskStore((s) => s.extendSelection);
+
+  const [cursor, setCursor] = useState(-1);
+  const [anchor, setAnchor] = useState<number | null>(null);
+  const { attach, scrollTo } = useFlash();
 
   // ONE wall-clock read, threaded through every predicate below, so a single
   // list can never disagree with itself about what "now" is. Real time is the
@@ -48,8 +68,47 @@ export function WaitingForView({ items }: { items: GtdItem[] }) {
     return { now: nowMs, groups: groupByWaitingOn(items, nowMs) };
   }, [items]);
 
+  // The cursor's world: every row in render order — person by person, in the
+  // order the groups are drawn.
+  const rows = useMemo(
+    () => groups.flatMap((group) => group.items.map((item) => item.id)),
+    [groups],
+  );
+  const cursorAt = clampCursor(rows.length, cursor);
+
+  function onKeyDown(event: React.KeyboardEvent) {
+    if (event.defaultPrevented) return;
+    if (
+      (event.target as HTMLElement).closest(
+        "input, textarea, select, [contenteditable=true]",
+      )
+    )
+      return;
+    const picked = selectMode ? selectedIds : NOBODY;
+    const next = stepCursor(
+      rows,
+      { cursor: cursorAt, anchor, selection: picked },
+      event.key,
+      selectMode && event.shiftKey,
+    );
+    if (!next) return;
+    event.preventDefault();
+    setCursor(next.cursor);
+    setAnchor(next.anchor);
+    if (next.selection !== picked) extendSelection([...next.selection]);
+    if (next.open) openFocus(next.open);
+    if (next.cursor >= 0) scrollTo(rows[next.cursor]);
+  }
+
+  const atCursor = (id: string) => cursorAt >= 0 && rows[cursorAt] === id;
+
   return (
-    <div className="flex-1 overflow-y-auto">
+    <div
+      tabIndex={0}
+      onKeyDown={onKeyDown}
+      aria-label="Waiting for — arrow keys move, Enter opens"
+      className="flex-1 overflow-y-auto outline-none"
+    >
       {groups.map((g) => (
         <section key={g.key}>
           {/* WHO — carried by the group header, since it's the same person for
@@ -70,33 +129,41 @@ export function WaitingForView({ items }: { items: GtdItem[] }) {
               </span>
             )}
           </div>
-          {g.items.map((item) =>
-            selectMode ? (
-              <label
-                key={item.id}
-                className="flex cursor-pointer items-center gap-2 border-b border-border/60 pl-3 hover:bg-secondary/40"
-              >
-                <input
-                  type="checkbox"
-                  checked={selectedIds.has(item.id)}
-                  onChange={() => toggleSelected(item.id)}
-                  className="h-4 w-4 shrink-0 accent-primary"
-                />
-                <div className="pointer-events-none min-w-0 flex-1">
+          {g.items.map((item) => (
+            <div
+              key={item.id}
+              ref={attach(item.id)}
+              className={atCursor(item.id) ? "bg-muted/60 ring-2 ring-inset ring-ring" : ""}
+            >
+              {selectMode ? (
+                <label className="flex cursor-pointer items-center gap-2 border-b border-border/60 pl-3 hover:bg-secondary/40">
+                  <input
+                    type="checkbox"
+                    checked={selectedIds.has(item.id)}
+                    onChange={(e) =>
+                      toggleSelected(
+                        item.id,
+                        (e.nativeEvent as MouseEvent).shiftKey,
+                        rows,
+                      )
+                    }
+                    className="h-4 w-4 shrink-0 accent-primary"
+                  />
+                  <div className="pointer-events-none min-w-0 flex-1">
+                    <WaitingRow item={item} who={g.label} nowMs={now} />
+                  </div>
+                </label>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => openFocus(item.id)}
+                  className="tech-transition block w-full border-b border-border/60 text-left hover:bg-secondary/40"
+                >
                   <WaitingRow item={item} who={g.label} nowMs={now} />
-                </div>
-              </label>
-            ) : (
-              <button
-                key={item.id}
-                type="button"
-                onClick={() => openFocus(item.id)}
-                className="tech-transition block w-full border-b border-border/60 text-left hover:bg-secondary/40"
-              >
-                <WaitingRow item={item} who={g.label} nowMs={now} />
-              </button>
-            ),
-          )}
+                </button>
+              )}
+            </div>
+          ))}
         </section>
       ))}
     </div>
@@ -126,7 +193,7 @@ function WaitingRow({
     <div className="flex min-w-0 items-start gap-2 px-3 py-2">
       <div className="min-w-0 flex-1">
         {/* WHAT — the clarified next action if there is one, else the title. */}
-        <p className="truncate text-[13px] text-foreground">
+        <p className="truncate text-sm text-foreground">
           {item.nextAction || item.title}
         </p>
         <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1">

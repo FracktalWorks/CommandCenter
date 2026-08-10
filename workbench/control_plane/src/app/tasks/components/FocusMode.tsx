@@ -370,7 +370,7 @@ function FocusRoom({ itemId }: { itemId: string }) {
               {timeText}
             </span>
             <span className="min-w-0 flex-1">
-              <span className="block truncate text-[12px] font-medium text-foreground">
+              <span className="block truncate text-xs font-medium text-foreground">
                 {item.title}
               </span>
               <span className="block truncate text-[10px] text-muted-foreground">
@@ -453,7 +453,7 @@ function FocusRoom({ itemId }: { itemId: string }) {
             <h1 className="mt-4 max-w-lg text-lg font-semibold text-foreground">
               {item.title}
             </h1>
-            <p className="mt-1 text-[13px] text-muted-foreground">
+            <p className="mt-1 text-sm text-muted-foreground">
               Done
               {finished.actualMins != null && (
                 <>
@@ -485,7 +485,7 @@ function FocusRoom({ itemId }: { itemId: string }) {
                     setFinished(null);
                     startBreak(b.key);
                   }}
-                  className="tech-transition inline-flex items-center gap-1.5 rounded-md bg-secondary px-3 py-2 text-[12px] font-medium text-muted-foreground hover:text-foreground"
+                  className="tech-transition inline-flex items-center gap-1.5 rounded-md bg-secondary px-3 py-2 text-xs font-medium text-muted-foreground hover:text-foreground"
                 >
                   <b.icon className="h-3.5 w-3.5" />
                   {b.label} {timerCfg.brk}m
@@ -498,13 +498,13 @@ function FocusRoom({ itemId }: { itemId: string }) {
               <button
                 type="button"
                 onClick={clearSession}
-                className="tech-transition mt-4 inline-flex items-center gap-1.5 rounded-md bg-primary/10 px-3 py-2 text-[12px] font-medium text-primary hover:bg-primary/20"
+                className="tech-transition mt-4 inline-flex items-center gap-1.5 rounded-md bg-primary/10 px-3 py-2 text-xs font-medium text-primary hover:bg-primary/20"
               >
                 Next · {nextBlock.item.title} at {fmtClock(nextBlock.start)}
                 <Icon name="ChevronRight" className="h-3.5 w-3.5" />
               </button>
             )}
-            <Button variant="text" size="none" layout="" type="button" onClick={clearSession} className="mt-3 text-[12px]">
+            <Button variant="text" size="none" layout="" type="button" onClick={clearSession} className="mt-3 text-xs">
               Back to calendar
             </Button>
           </>
@@ -521,7 +521,7 @@ function FocusRoom({ itemId }: { itemId: string }) {
               {item.title}
             </h1>
             {item.nextAction && item.nextAction !== item.title && (
-              <p className="mt-1 max-w-lg truncate text-[12px] text-muted-foreground">
+              <p className="mt-1 max-w-lg truncate text-xs text-muted-foreground">
                 next action: {item.nextAction}
               </p>
             )}
@@ -564,7 +564,7 @@ function FocusRoom({ itemId }: { itemId: string }) {
             {/* work segment elapsed (pomodoro) → offer the break */}
             {workDone && pausedAt == null && (
               <div className="mt-4 flex flex-wrap items-center justify-center gap-2 rounded-lg border border-success/40 bg-success/5 px-3 py-2">
-                <span className="text-[12px] font-medium text-success">
+                <span className="text-xs font-medium text-success">
                   {timerCfg.work}m done — take {timerCfg.brk}?
                 </span>
                 {BREAK_KINDS.map((b) => (
@@ -624,7 +624,7 @@ function FocusRoom({ itemId }: { itemId: string }) {
               <button
                 type="button"
                 onClick={togglePause}
-                className="tech-transition inline-flex items-center gap-1.5 rounded-md bg-secondary px-3 py-2 text-[12px] font-medium text-muted-foreground hover:text-foreground"
+                className="tech-transition inline-flex items-center gap-1.5 rounded-md bg-secondary px-3 py-2 text-xs font-medium text-muted-foreground hover:text-foreground"
               >
                 {pausedAt != null ? (
                   <>
@@ -639,7 +639,7 @@ function FocusRoom({ itemId }: { itemId: string }) {
               <button
                 type="button"
                 onClick={complete}
-                className="tech-transition inline-flex items-center gap-1.5 rounded-md bg-success px-4 py-2 text-[12px] font-semibold text-success-foreground hover:opacity-90"
+                className="tech-transition inline-flex items-center gap-1.5 rounded-md bg-success px-4 py-2 text-xs font-semibold text-success-foreground hover:opacity-90"
               >
                 <Icon name="Check" className="h-3.5 w-3.5" strokeWidth={3} />
                 Done
@@ -649,7 +649,7 @@ function FocusRoom({ itemId }: { itemId: string }) {
                   type="button"
                   onClick={extend15}
                   title="Running over? Extend this block 15m — the flexible rest of today shifts with it. No guilt, the plan reflows."
-                  className="tech-transition inline-flex items-center gap-1 rounded-md bg-secondary px-3 py-2 text-[12px] font-medium text-muted-foreground hover:text-foreground"
+                  className="tech-transition inline-flex items-center gap-1 rounded-md bg-secondary px-3 py-2 text-xs font-medium text-muted-foreground hover:text-foreground"
                 >
                   <Icon name="Plus" className="h-3.5 w-3.5" />
                   15 min

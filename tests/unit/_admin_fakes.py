@@ -15,6 +15,7 @@ touches Postgres.
 from __future__ import annotations
 
 import re
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from typing import Any, ClassVar
 
@@ -656,14 +657,25 @@ def bind_admin_db(monkeypatch: Any, fake: _FakeDB, modules: tuple[Any, ...]) -> 
     """Point each admin submodule's DB / cache / audit seams at ``fake``.
 
     Per-module and not per-package because the routes import the seams by name
-    (``from _common import get_db``), so patching ``_common`` alone would not
-    reach them.
+    (``from _common import _tenant_session``), so patching ``_common`` alone
+    would not reach them.
+
+    H2 note: the real seam is ``acb_common.db.tenant_session`` — an async
+    context manager that begins a transaction, issues ``SET LOCAL
+    app.tenant_id`` and commits on clean exit. The fake mirrors the SHAPE plus
+    commit-on-clean-exit, so "one transaction, committed once" stays an
+    OBSERVABLE fact (``db.committed == 1``) and a refusal that raises
+    mid-block commits nothing here just as it commits nothing against
+    Postgres. GUC plumbing stays out of the mirror — ``test_tenant_session.py``
+    owns that.
     """
-    async def _get_db() -> _FakeDB:
-        return fake
+    @asynccontextmanager
+    async def _tenant_session(organization_id: str | None = None) -> Any:
+        yield fake
+        await fake.commit()
 
     for module in modules:
-        monkeypatch.setattr(module, "get_db", _get_db)
+        monkeypatch.setattr(module, "_tenant_session", _tenant_session)
         monkeypatch.setattr(
             module, "invalidate_for",
             lambda *e: fake.invalidated.extend(x for x in e if x),

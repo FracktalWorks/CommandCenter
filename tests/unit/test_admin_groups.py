@@ -255,10 +255,16 @@ class _FakeDB:
 def db(monkeypatch: pytest.MonkeyPatch) -> _FakeDB:
     fake = _FakeDB()
 
-    async def _get_db() -> _FakeDB:
-        return fake
+    from contextlib import asynccontextmanager
 
-    monkeypatch.setattr(groups, "get_db", _get_db)
+    @asynccontextmanager
+    async def _tenant_session(organization_id=None):
+        # Commit-on-clean-exit, like the real `tenant_session` wrapper (H2) —
+        # a refusal that raises mid-block commits nothing.
+        yield fake
+        await fake.commit()
+
+    monkeypatch.setattr(groups, "_tenant_session", _tenant_session)
     # Cache invalidation reaches into acb_auth's resolver cache; keep the
     # tests hermetic (and assert it fires for access-affecting writes).
     fake.invalidated: list[str] = []

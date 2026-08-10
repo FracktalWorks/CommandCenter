@@ -16,6 +16,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from gateway.routes.email import core
+from tests.unit._email_fakes import bind_db
 
 
 # ── the shared vocabulary ───────────────────────────────────────────────────
@@ -86,8 +87,8 @@ async def test_facets_report_counts_per_label_plus_the_two_scalars() -> None:
     ]
     totals = MagicMock(total=5000, unread=42, uncategorized=311)
 
-    with patch("gateway.routes.email.transport.messages._get_db",
-               AsyncMock(return_value=_facet_db(rows, totals))):
+    with patch("gateway.routes.email.transport.messages._tenant_session",
+               bind_db(_facet_db(rows, totals))):
         res = await message_facets(
             account_id="acc-1", folder="inbox",
             user=MagicMock(email="u@x.io"))
@@ -105,8 +106,8 @@ async def test_a_label_with_no_mail_in_this_folder_is_simply_absent() -> None:
     the same, but an explicit 0 would imply we looked and found a bucket."""
     from gateway.routes.email.transport.messages import message_facets
 
-    with patch("gateway.routes.email.transport.messages._get_db",
-               AsyncMock(return_value=_facet_db(
+    with patch("gateway.routes.email.transport.messages._tenant_session",
+               bind_db(_facet_db(
                    [], MagicMock(total=90, unread=0, uncategorized=90)))):
         res = await message_facets(
             account_id="acc-1", folder="sent",
@@ -136,8 +137,8 @@ async def test_facets_tally_custom_rule_labels_too() -> None:
 
         async def close(self): ...
 
-    with patch("gateway.routes.email.transport.messages._get_db",
-               AsyncMock(return_value=_DB())):
+    with patch("gateway.routes.email.transport.messages._tenant_session",
+               bind_db(_DB())):
         res = await message_facets(
             account_id="acc-1", folder="inbox",
             user=MagicMock(email="u@x.io"))
@@ -156,8 +157,8 @@ async def test_facets_bind_the_shared_label_vocabulary() -> None:
     from gateway.routes.email.transport.messages import message_facets
 
     db = _facet_db([], MagicMock(total=1, unread=0, uncategorized=1))
-    with patch("gateway.routes.email.transport.messages._get_db",
-               AsyncMock(return_value=db)):
+    with patch("gateway.routes.email.transport.messages._tenant_session",
+               bind_db(db)):
         await message_facets(account_id="acc-1", folder="inbox",
                              user=MagicMock(email="u@x.io"))
 

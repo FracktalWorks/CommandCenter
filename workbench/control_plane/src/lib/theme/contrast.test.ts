@@ -22,6 +22,7 @@ import { describe, expect, it } from "vitest";
 
 import { AA_LARGE_TEXT, AA_NORMAL_TEXT, accentInk, contrast, parseColor } from "./contrast";
 import { THEMES } from "./themes";
+import { CATEGORICAL_TOKENS } from "./types";
 import type { ColorTokens } from "./types";
 
 type Pair = {
@@ -55,6 +56,15 @@ const PAIRS: Pair[] = [
   { fg: "destructive", bg: "card", min: AA_LARGE_TEXT },
   { fg: "success", bg: "card", min: AA_LARGE_TEXT },
   { fg: "warning", bg: "card", min: AA_LARGE_TEXT },
+  // The categorical ramp, at the BODY-TEXT threshold rather than the 3.0 used
+  // for dots and icons: a `--cat-*` slot's main job is `text-cat-3` on a
+  // context chip, i.e. small words, and a chip is measured against both the
+  // card it sits on and the page behind it (Fluent's light page is 95% grey,
+  // a full stop darker than its white card, so the two are not the same test).
+  ...CATEGORICAL_TOKENS.flatMap((token) => [
+    { fg: token, bg: "card", min: AA_NORMAL_TEXT } as Pair,
+    { fg: token, bg: "background", min: AA_NORMAL_TEXT } as Pair,
+  ]),
 ];
 
 const key = (themeId: string, mode: string, p: Pair) => `${themeId}/${mode}/${p.fg}-on-${p.bg}`;

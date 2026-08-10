@@ -23,8 +23,8 @@ from gateway.routes.apps._common import (
     MAX_SOURCE_FILE_BYTES,
     MAX_WORKSPACE_FILES,
     WORKSPACE_SKIP_DIRS,
-    _get_db,
     _log,
+    _tenant_session,
     get_app_or_404,
     read_workspace_manifest,
     require_app_author,
@@ -87,12 +87,9 @@ def _walk_files(workspace: Path) -> list[AppFileEntry]:
 async def _edit_workspace(slug: str, user: UserContext) -> tuple[Any, Path]:
     """Edit-gated row + workspace path — rehydrated from ``app_files`` first
     when the on-disk draft is missing (the durability choke point)."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         row, _grants = await get_app_or_404(db, slug, user, edit=True)
         workspace = await ensure_workspace(db, row)
-    finally:
-        await db.close()
     return row, workspace
 
 

@@ -190,7 +190,7 @@ export function EndOfDayReview({
           {oneThing && (
             <div
               className={[
-                "mb-3 flex items-center gap-2 rounded-lg border p-2.5 text-[12px]",
+                "mb-3 flex items-center gap-2 rounded-lg border p-2.5 text-xs",
                 oneThingDone
                   ? "border-amber-500/40 bg-amber-500/10 text-foreground"
                   : "border-border bg-background/60 text-muted-foreground",
@@ -219,7 +219,7 @@ export function EndOfDayReview({
 
           {/* Estimate accuracy — the learned-estimate signal */}
           {stats && stats.samples >= 5 ? (
-            <div className="mb-3 rounded-lg bg-primary/5 p-2.5 text-[12px] text-foreground">
+            <div className="mb-3 rounded-lg bg-primary/5 p-2.5 text-xs text-foreground">
               <span className="font-medium">Estimate accuracy.</span> Over{" "}
               {stats.samples} timed tasks you typically run{" "}
               <span
@@ -252,7 +252,7 @@ export function EndOfDayReview({
             Done today
           </p>
           {done.length === 0 ? (
-            <p className="mb-3 text-[12px] text-muted-foreground">
+            <p className="mb-3 text-xs text-muted-foreground">
               Nothing marked done yet — no shame, tomorrow is a fresh plan.
             </p>
           ) : (
@@ -371,10 +371,10 @@ export function EndOfDayReview({
         )}
 
         <div className="flex items-center justify-end gap-2 border-t border-border px-4 py-3">
-          <Button variant="text" size="none" radius="keep" layout="" type="button" onClick={onClose} className="rounded-md px-3 py-2 text-[12px]">
+          <Button variant="text" size="none" radius="keep" layout="" type="button" onClick={onClose} className="rounded-md px-3 py-2 text-xs">
             Not yet
           </Button>
-          <Button size="none" radius="keep" layout="inline-flex items-center" type="button" onClick={closeDay} title="Save tomorrow's seeds and end the work day — permission to stop" className="gap-1.5 rounded-md px-3 py-2 text-[12px]">
+          <Button size="none" radius="keep" layout="inline-flex items-center" type="button" onClick={closeDay} title="Save tomorrow's seeds and end the work day — permission to stop" className="gap-1.5 rounded-md px-3 py-2 text-xs">
             <Icon name="Moon" className="h-3.5 w-3.5" />
             Close the day
           </Button>

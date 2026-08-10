@@ -27,7 +27,7 @@ import json
 
 from acb_auth import UserContext, get_current_user
 from fastapi import Depends, HTTPException
-from gateway.routes.notes.core import _get_db, _log, router
+from gateway.routes.notes.core import _get_db, _log, _tenant_session, router
 from gateway.routes.notes.templates import TEMPLATES
 from pydantic import BaseModel
 from sqlalchemy import text
@@ -176,6 +176,9 @@ async def load(owner_email: str) -> NotesSettings:
     if not owner_email:
         return NotesSettings()
     try:
+        # H4: shared helper also consumed by background paths (`auto_dispatch`
+        # from the summary pipeline task, `load_for_meeting` below) — no
+        # ambient tenant there; derive it from the owner's app_user/meeting row.
         async with await _get_db() as db:
             row = (
                 await db.execute(
@@ -191,6 +194,9 @@ async def load(owner_email: str) -> NotesSettings:
 
 async def load_for_meeting(meeting_id: str) -> tuple[NotesSettings, str | None]:
     """Settings of whoever owns this meeting, plus its template key."""
+    # H4: consumed by the copilot orchestrator task and the meeting-bot
+    # worker's `/live/wanted` (service identity) — no ambient tenant; derive
+    # it from the meeting row.
     try:
         async with await _get_db() as db:
             row = (
@@ -249,7 +255,7 @@ async def put_settings(
         for k, v in (body.template_instructions or {}).items()
         if k in TEMPLATES and (v or "").strip()
     }
-    async with await _get_db() as db:
+    async with _tenant_session() as db:
         await db.execute(
             text(
                 "INSERT INTO copilot_config (owner_email, instructions, "
@@ -285,6 +291,5 @@ async def put_settings(
                 "add": body.auto_dispatch_docs,
             },
         )
-        await db.commit()
     _log.info("notes.settings_saved", overrides=len(overrides))
     return {"settings": (await load(email)).model_dump()}

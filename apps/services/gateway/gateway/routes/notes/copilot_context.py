@@ -36,7 +36,7 @@ from typing import Any
 
 from acb_auth import UserContext, get_current_user
 from fastapi import Depends, HTTPException
-from gateway.routes.notes.core import _get_db, _log, router
+from gateway.routes.notes.core import _get_db, _log, _tenant_session, router
 from pydantic import BaseModel
 from sqlalchemy import text
 
@@ -149,6 +149,9 @@ def summarise_past(title: str | None, when: Any, summary: str | None) -> str:
 # ── Layers 1 + 2: brief and our own records (no external dependency) ────────
 
 async def _local_context(meeting_id: str) -> ContextPack:
+    # H4: shared helper also consumed by the copilot orchestrator background
+    # task (`copilot._run` via `get()`), which has no ambient tenant; derive
+    # it from the meeting row before moving this off `_get_db`.
     pack = ContextPack()
     async with await _get_db() as db:
         m = (
@@ -342,14 +345,13 @@ async def set_brief(
     FOR). Editable before or during; invalidates the cached pack so a mid-meeting
     edit takes effect on the next suggestion."""
     brief = _clip(body.brief or "", _MAX_BRIEF_CHARS)
-    async with await _get_db() as db:
+    async with _tenant_session() as db:
         res = await db.execute(
             text("UPDATE meeting SET copilot_brief = :b WHERE id = CAST(:id AS UUID)"),
             {"b": brief or None, "id": meeting_id},
         )
         if res.rowcount == 0:
             raise HTTPException(status_code=404, detail="meeting not found")
-        await db.commit()
     forget(meeting_id)
     return {"brief": brief}
 
@@ -385,7 +387,7 @@ async def set_deep_context(
     """Opt this session into asking the business agents (CRM, tasks) for
     background. Off by default because the fan-out spends tokens before the
     meeting starts — worth it for a customer call, not for a standup."""
-    async with await _get_db() as db:
+    async with _tenant_session() as db:
         res = await db.execute(
             text(
                 "UPDATE live_session SET deep_context = :e, updated_at = now() "
@@ -395,6 +397,5 @@ async def set_deep_context(
         )
         if res.rowcount == 0:
             raise HTTPException(status_code=404, detail="no live session")
-        await db.commit()
     forget(meeting_id)   # rebuild with (or without) the agent lookups
     return {"deep_context": body.enabled}

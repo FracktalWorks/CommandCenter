@@ -34,13 +34,13 @@ class _FakeDB:
 
     def __init__(self, row):
         self._row = row
-        self.closed = False
+        self.committed = 0
 
     async def execute(self, *_a, **_kw):
         return _Result(self._row)
 
-    async def close(self):
-        self.closed = True
+    async def commit(self):
+        self.committed += 1
 
 
 class _User:
@@ -49,12 +49,23 @@ class _User:
 
 
 def _patch_db(monkeypatch, row) -> _FakeDB:
+    """Point the module's ``_tenant_session`` seam at a fake (H2).
+
+    Mirrors ``_projects_fakes.bind_db``: an ``asynccontextmanager`` that
+    commits on clean exit — so "the guard read one transaction" stays an
+    observable fact — and commits nothing when the block raises, just as the
+    real wrapper rolls back.
+    """
+    from contextlib import asynccontextmanager
+
     db = _FakeDB(row)
 
-    async def _get_db():
-        return db
+    @asynccontextmanager
+    async def _tenant_session(organization_id=None):
+        yield db
+        await db.commit()
 
-    monkeypatch.setattr(calls, "_get_db", _get_db)
+    monkeypatch.setattr(calls, "_tenant_session", _tenant_session)
     return db
 
 
@@ -88,10 +99,12 @@ async def test_account_still_pairing_is_409(monkeypatch) -> None:
     assert "pairing" in exc.value.detail.lower()
 
 
-async def test_live_account_passes_and_closes_db(monkeypatch) -> None:
+async def test_live_account_passes_and_releases_session(monkeypatch) -> None:
     db = _patch_db(monkeypatch, _Row("live"))
     await calls._assert_owns_account("acct", _User())
-    assert db.closed is True
+    # Clean exit of the tenant-session block — the wrapper committed the
+    # (read-only) transaction, i.e. the session was released properly.
+    assert db.committed == 1
 
 
 async def test_missing_account_id_is_400(monkeypatch) -> None:

@@ -146,7 +146,7 @@ export function SchedulePopup() {
               onClick={() => commit(p.at)}
               className="tech-transition flex items-center justify-between gap-2 rounded-lg border border-border bg-background/60 px-3 py-2.5 text-left hover:border-primary/50 active:bg-primary/5"
             >
-              <span className="text-[13px] font-medium text-foreground">
+              <span className="text-sm font-medium text-foreground">
                 {p.label}
               </span>
               <span className="shrink-0 text-[11px] tabular-nums text-primary">
@@ -165,7 +165,7 @@ export function SchedulePopup() {
                 type="datetime-local"
                 value={custom || toLocalInput(presets[0]?.at ?? now)}
                 onChange={(e) => setCustom(e.target.value)}
-                className="min-w-0 flex-1 rounded-md border border-border bg-background px-2 py-1.5 text-[12px] text-foreground focus:border-primary/50 focus:outline-none"
+                className="min-w-0 flex-1 rounded-md border border-border bg-background px-2 py-1.5 text-xs text-foreground focus:border-primary/50 focus:outline-none"
               />
               <Button size="sm" radius="keep" layout="inline-flex items-center" type="button" onClick={() => {
                   const v = custom || toLocalInput(presets[0]?.at ?? now);
@@ -185,7 +185,7 @@ export function SchedulePopup() {
                 updateItem(item.id, { scheduledStart: "", scheduledEnd: "" });
                 closeSchedule();
               }}
-              className="tech-transition mt-0.5 inline-flex items-center justify-center gap-1.5 rounded-md px-3 py-2 text-[12px] font-medium text-muted-foreground hover:bg-secondary hover:text-destructive"
+              className="tech-transition mt-0.5 inline-flex items-center justify-center gap-1.5 rounded-md px-3 py-2 text-xs font-medium text-muted-foreground hover:bg-secondary hover:text-destructive"
             >
               <Icon name="CalendarX" className="h-3.5 w-3.5" />
               Unschedule

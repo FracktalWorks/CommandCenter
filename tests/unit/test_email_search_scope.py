@@ -13,6 +13,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from gateway.routes import email as m
+from tests.unit._email_fakes import bind_db
 
 
 async def _run_search(**kw):
@@ -37,7 +38,7 @@ async def _run_search(**kw):
         user=SimpleNamespace(email="u@example.com"),
     )
     args.update(kw)
-    with patch.object(m.transport.search, "_get_db", AsyncMock(return_value=db)):
+    with patch.object(m.transport.search, "_tenant_session", bind_db(db)):
         resp = await m.search_messages(**args)
     sql = " ".join(s for s, _ in captured)
     params: dict = {}
@@ -248,7 +249,7 @@ async def _run_messages_list(folder: str) -> tuple[str, dict]:
 
     db = AsyncMock()
     db.execute.side_effect = fake_execute
-    with patch.object(m.transport.messages, "_get_db", AsyncMock(return_value=db)):
+    with patch.object(m.transport.messages, "_tenant_session", bind_db(db)):
         await m.list_messages(
             account_id="acc-1", folder=folder, label=None, query=None,
             thread_id=None, received_after=None, received_before=None,
@@ -316,7 +317,7 @@ async def test_facet_chips_count_the_same_mail_the_list_shows():
 
     db = AsyncMock()
     db.execute.side_effect = fake_execute
-    with patch.object(m.transport.messages, "_get_db", AsyncMock(return_value=db)):
+    with patch.object(m.transport.messages, "_tenant_session", bind_db(db)):
         await m.transport.messages.message_facets(
             account_id="acc-1", folder="all",
             user=SimpleNamespace(email="u@example.com"),

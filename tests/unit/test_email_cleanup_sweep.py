@@ -12,6 +12,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from gateway.routes.email.automation import cleanup as c
+from tests.unit._email_fakes import bind_db
 
 
 def _msg(sender, subject="Hi", mid="m1"):
@@ -193,7 +194,7 @@ async def test_restore_only_touches_messages_the_provider_reports() -> None:
         "pm-3": ["Newsletter"],
     })
 
-    with patch.object(c, "_get_db", AsyncMock(return_value=_DB())), \
+    with patch.object(c, "_tenant_session", bind_db(_DB())), \
             patch.object(c, "_instantiate_provider", MagicMock(return_value=provider)), \
             patch.object(c, "_persist_rotated_creds", AsyncMock()), \
             patch("acb_llm.key_store.get_key_store",
@@ -517,7 +518,7 @@ async def test_restore_says_unsupported_rather_than_no_labels() -> None:
     provider.authenticate = AsyncMock(
         side_effect=AssertionError("must not even authenticate"))
 
-    with patch.object(c, "_get_db", AsyncMock(return_value=_DB())), \
+    with patch.object(c, "_tenant_session", bind_db(_DB())), \
             patch.object(c, "_instantiate_provider", MagicMock(return_value=provider)), \
             patch("acb_llm.key_store.get_key_store",
                   MagicMock(return_value=MagicMock(decrypt=MagicMock(
@@ -557,7 +558,7 @@ async def test_restore_reports_auth_failure_instead_of_wiping() -> None:
     provider = MagicMock()
     provider.authenticate = AsyncMock(return_value=False)
 
-    with patch.object(c, "_get_db", AsyncMock(return_value=_DB())), \
+    with patch.object(c, "_tenant_session", bind_db(_DB())), \
             patch.object(c, "_instantiate_provider", MagicMock(return_value=provider)), \
             patch("acb_llm.key_store.get_key_store",
                   MagicMock(return_value=MagicMock(decrypt=MagicMock(

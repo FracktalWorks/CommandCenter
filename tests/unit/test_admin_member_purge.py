@@ -913,19 +913,28 @@ async def test_the_whole_purge_is_one_transaction(db: _FakeDB) -> None:
 def test_the_route_holds_exactly_one_commit() -> None:
     """The structural half of the test above.
 
-    A single ``commit()`` reached twelve times in a loop would also count 12,
-    but a purge restructured into "commit per table" could conceivably reach
-    ``db.committed == 1`` in a fake that only models one session. Source is
-    the direct evidence, and it also pins that the commit is the LAST write —
-    everything destructive happens before it, inside the transaction.
+    Since H2 the one commit is ``_tenant_session``'s, issued on clean exit of
+    the ``async with`` block — so the structural facts to pin are that the
+    route opens exactly ONE tenant-bound block, writes no commit of its own
+    (a hand-rolled ``db.commit()`` inside the block would END the transaction
+    early and drop the tenant GUC for everything after it), and keeps every
+    destructive statement INSIDE the block, before that commit.
     """
     from gateway.routes.admin.members import purge_member
 
     src = inspect.getsource(purge_member)
-    assert src.count("await db.commit()") == 1
-    assert src.index("await db.commit()") > src.rindex("rows.delete_sql"), (
-        "something is deleted after the transaction is committed"
+    assert src.count("async with _tenant_session() as db:") == 1
+    assert src.count("await db.commit()") == 0, (
+        "a mid-block commit would end the transaction (and the tenant "
+        "binding) before the wrapper's own commit"
     )
+    block_indent = " " * 8
+    after_block = src[src.index("async with _tenant_session() as db:"):]
+    for line in after_block.splitlines()[1:]:
+        if "rows.delete_sql" in line:
+            assert line.startswith(block_indent), (
+                "something is deleted outside the one transaction"
+            )
 
 
 async def test_the_purge_is_audited_before_it_is_committed(

@@ -86,6 +86,19 @@
   --warning: hsl(47 96% 53%);
   --warning-foreground: hsl(220 13% 8%);
 
+  /* Categorical ramp — eight mutually distinguishable hues for sets whose
+     members have no ranking and no meaning (@contexts, tags, custom-field
+     options). NOT semantic: use --success/--warning/--destructive for state.
+     Defined per theme in src/lib/theme/themes.ts; these are RapidTool's. */
+  --cat-1: hsl(215 85% 61%);
+  --cat-2: hsl(27 85% 47%);
+  --cat-3: hsl(142 85% 35%);
+  --cat-4: hsl(264 85% 70%);
+  --cat-5: hsl(358 85% 64%);
+  --cat-6: hsl(182 85% 34%);
+  --cat-7: hsl(324 85% 61%);
+  --cat-8: hsl(66 85% 32%);
+
   --radius: 0.75rem;
 
   /* Sidebar-specific tokens */
@@ -136,6 +149,17 @@
   --warning: hsl(47 96% 53%);
   --warning-foreground: hsl(210 40% 98%);
 
+  /* Categorical ramp — light mode. Deeper than the dark-mode values because
+     these have to clear AA against a white card, not a near-black one. */
+  --cat-1: hsl(215 85% 47%);
+  --cat-2: hsl(27 85% 36%);
+  --cat-3: hsl(142 85% 26%);
+  --cat-4: hsl(264 85% 59%);
+  --cat-5: hsl(358 85% 45%);
+  --cat-6: hsl(182 85% 26%);
+  --cat-7: hsl(324 85% 43%);
+  --cat-8: hsl(66 85% 24%);
+
   /* Sidebar — light */
   --sidebar-background: hsl(0 0% 98%);
   --sidebar-foreground: hsl(222.2 84% 4.9%);
@@ -171,6 +195,18 @@
   --color-success-foreground: var(--success-foreground);
   --color-warning: var(--warning);
   --color-warning-foreground: var(--warning-foreground);
+  /* Categorical ramp → `bg-cat-3`, `text-cat-3`, `border-cat-3/30`. Written
+     out one per slot because Tailwind v4 resolves `--color-*` entries
+     literally; there is no loop form, and a missing entry silently drops that
+     slot's whole family of utilities. */
+  --color-cat-1: var(--cat-1);
+  --color-cat-2: var(--cat-2);
+  --color-cat-3: var(--cat-3);
+  --color-cat-4: var(--cat-4);
+  --color-cat-5: var(--cat-5);
+  --color-cat-6: var(--cat-6);
+  --color-cat-7: var(--cat-7);
+  --color-cat-8: var(--cat-8);
   --color-sidebar: var(--sidebar-background);
   --color-sidebar-foreground: var(--sidebar-foreground);
   --color-sidebar-primary: var(--sidebar-primary);

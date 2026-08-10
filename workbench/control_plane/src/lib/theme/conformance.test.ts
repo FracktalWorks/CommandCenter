@@ -22,6 +22,23 @@
  *    have Material's pill radius and state layer, Fluent's outline on solid
  *    fills, or an uppercase label, because none of that is expressible in a
  *    class string. `<Button>` is where those tokens are applied.
+ * 5. **No raw Tailwind PALETTE classes.** `bg-sky-500/10` is the one that got
+ *    away: it is a named class, not a bracket class, so rules 1 and 3 both let
+ *    it through, and the app accumulated ~950 of them. It is every bit as
+ *    unthemed as `#0ea5e9` — switch the org to Material and a chip painted
+ *    `sky-500` keeps its hue while every surface around it moves. Categorical
+ *    hues have their own themed home now (`--cat-1` … `--cat-8`); state has
+ *    `--success` / `--warning` / `--destructive`.
+ * 6. **Active/selected wears the house token.** `bg-accent text-accent-foreground`
+ *    is a legal pair of tokens meaning the wrong thing — see that rule's own note.
+ * 7. **Single-choice and file pickers use the primitives.** A bare `<select>`
+ *    wears the OS's own disclosure triangle and a raw `<input type="file">`
+ *    wears the browser's *"Choose Files / No file chosen"*. Neither follows the
+ *    theme, the icon pack or the label transform, and both were sitting on
+ *    `/projects`' task panel when the owner compared it with `/tasks`' detail
+ *    side by side. Use `<Select>` from `components/ui/Input.tsx`, and keep the
+ *    file input hidden behind a `<Button>` — which is what every correct call
+ *    site in this tree already does.
  *
  * ## Ratchet, not a wall
  *
@@ -94,7 +111,21 @@ function strip(text: string): string {
 }
 
 const COLOR_LITERAL = /#[0-9a-fA-F]{6}\b|#[0-9a-fA-F]{3}\b|\brgba?\(|\bhsla?\(/g;
-const ARBITRARY_CLASS = /\b(?:bg|text|border|ring|fill|stroke|from|via|to|shadow|outline|decoration|accent|caret)-\[(?:#|rgb|hsl)[^\]]*\]/g;
+const COLOR_UTILITY =
+  "(?:bg|text|border|ring|fill|stroke|from|via|to|shadow|outline|decoration|accent|caret)";
+const ARBITRARY_CLASS = new RegExp(`\\b${COLOR_UTILITY}-\\[(?:#|rgb|hsl)[^\\]]*\\]`, "g");
+/**
+ * Tailwind's own palette, named. Every family and every step, because the
+ * point is that NONE of them is a theme token — `text-slate-400` is as
+ * unreachable as `text-fuchsia-600`. Deliberately does not match `text-cat-3`:
+ * the ramp is ours and is defined per theme.
+ */
+const PALETTE_CLASS = new RegExp(
+  `\\b${COLOR_UTILITY}-(?:slate|gray|zinc|neutral|stone|red|orange|amber|yellow|lime|` +
+    `green|emerald|teal|cyan|sky|blue|indigo|violet|purple|fuchsia|pink|rose)-` +
+    `(?:50|100|200|300|400|500|600|700|800|900|950)\\b`,
+  "g",
+);
 const BUTTON_TAG = /<button\b(?:[^>]|\n)*?>/g;
 /**
  * A SOLID fill — `bg-primary`, and nothing else that merely contains it.
@@ -162,8 +193,11 @@ const COLOR_DEBT: Record<string, number> = {
   "components/ThinkingContainer.tsx": 4,
 };
 
-const excepted = (rel: string) =>
-  Object.keys(COLOR_EXCEPTIONS).some((k) => (k.endsWith("/") ? rel.startsWith(k) : rel === k));
+/** A key ending in `/` is a directory prefix; anything else is an exact path. */
+const matches = (rel: string, keys: string[]) =>
+  keys.some((k) => (k.endsWith("/") ? rel.startsWith(k) : rel === k));
+
+const excepted = (rel: string) => matches(rel, Object.keys(COLOR_EXCEPTIONS));
 
 describe("no hardcoded colour", () => {
   it("a file with no budget has no colour literals", () => {
@@ -270,7 +304,7 @@ describe("solid controls go through the Button primitive", () => {
    * stating is "this number goes down". New files are covered separately and
    * absolutely below — which is the half that governs work we have not done yet.
    */
-  const SOLID_BUTTON_DEBT = 30;
+  const SOLID_BUTTON_DEBT = 29;
 
   function solidButtons(): Record<string, number> {
     const out: Record<string, number> = {};
@@ -302,6 +336,448 @@ describe("solid controls go through the Button primitive", () => {
     // Guards the one way a total can lie: deleting five in an old file and
     // writing five in a new one nets zero while the invariant gets worse.
     expect([...BASELINE_FILES].length).toBeGreaterThan(0);
+  });
+});
+
+// ── Rule 5: no raw Tailwind palette classes ─────────────────────────────────
+
+describe("no raw Tailwind palette colours", () => {
+  /**
+   * Palette classes that are NOT a theme decision. Same bar as rule 1's list:
+   * the value has to be wrong to theme, not merely expensive to migrate.
+   */
+  const PALETTE_EXCEPTIONS: Record<string, string> = {
+    "app/observability/office-topdown.tsx":
+      "the isometric office scene — depiction, not chrome; a floor recoloured " +
+      "per theme is broken art, which is the same argument COLOR_EXCEPTIONS makes " +
+      "for this file's literals",
+  };
+
+  /**
+   * The tree as it stands. This baseline is large on purpose: it is the debt
+   * that rules 1 and 3 could not see, written down where it can only shrink.
+   *
+   * Three of these are ramps in the same sense `contextColors.ts` was, and are
+   * the natural next customers for `--cat-*`: `app/workflows/lib/types.ts`
+   * (node categories), `lib/providers.ts` + `lib/model-types.ts` (per-provider
+   * accents), `app/tasks/components/PriorityControls.tsx` (matrix cells).
+   */
+  const PALETTE_DEBT: Record<string, number> = {
+    "app/agents/page.tsx": 17,
+    "app/artifacts/page.tsx": 18,
+    "app/chat/page.tsx": 5,
+    "app/email/components/AccountSidebar.tsx": 3,
+    "app/email/components/ComposePanel.tsx": 1,
+    "app/email/components/EmailAssistantChat.tsx": 1,
+    "app/email/components/EmailDetail.tsx": 5,
+    "app/email/components/EmailList.tsx": 7,
+    "app/email/components/MessageTimelineModal.tsx": 1,
+    "app/email/components/TaskCaptureModal.tsx": 4,
+    "app/email/components/automation/AISettingsView.tsx": 1,
+    "app/email/components/automation/AnalyticsView.tsx": 4,
+    "app/email/components/automation/BulkUnsubscribeView.tsx": 41,
+    "app/email/components/automation/DashboardView.tsx": 4,
+    "app/email/components/automation/ai-settings/HistoryTab.tsx": 2,
+    "app/email/components/automation/ai-settings/RulesTab.tsx": 25,
+    "app/email/components/automation/ai-settings/SettingsTab.tsx": 22,
+    "app/email/components/automation/ai-settings/TestTab.tsx": 4,
+    "app/email/components/automation/ai-settings/VoiceProfileDialog.tsx": 6,
+    "app/email/components/automation/ai-settings/actionFormat.tsx": 56,
+    "app/email/components/automation/ai-settings/common.tsx": 6,
+    "app/email/components/automation/ai-settings/fixDialog.tsx": 6,
+    "app/email/oauth/callback/page.tsx": 2,
+    "app/email/page.tsx": 35,
+    "app/integrations/page.tsx": 110,
+    "app/notes/components/BotIdentitySection.tsx": 8,
+    "app/notes/components/LiveDock.tsx": 2,
+    "app/notes/meeting/[id]/page.tsx": 3,
+    "app/observability/page.tsx": 29,
+    "app/settings/models/page.tsx": 3,
+    "app/signin/page.tsx": 5,
+    "app/tasks/components/AssistantRail.tsx": 1,
+    "app/tasks/components/ClarifyPanel.tsx": 5,
+    "app/tasks/components/DeleteConfirmModal.tsx": 4,
+    "app/tasks/components/FocusMode.tsx": 2,
+    "app/tasks/components/PriorityControls.tsx": 48,
+    "app/tasks/components/StartupRitual.tsx": 6,
+    "app/tasks/components/calendar/EndOfDayReview.tsx": 6,
+    "app/tasks/components/calendar/ScheduleSheet.tsx": 1,
+    "app/tasks/components/calendar/TimeGrid.tsx": 8,
+    "app/tasks/components/calendar/UnscheduledRail.tsx": 9,
+    "app/whatsapp/connect/page.tsx": 19,
+    "app/whatsapp/insights/page.tsx": 2,
+    "app/whatsapp/numbers/page.tsx": 4,
+    "app/whatsapp/page.tsx": 4,
+    "app/whatsapp/settings/categories/page.tsx": 2,
+    "app/whatsapp/settings/replies/page.tsx": 3,
+    "app/whatsapp/settings/rules/page.tsx": 1,
+    "app/workflows/[id]/page.tsx": 4,
+    "app/workflows/components/CopilotPanel.tsx": 3,
+    "app/workflows/components/ModuleStudio.tsx": 1,
+    "app/workflows/components/NodePalette.tsx": 1,
+    "app/workflows/components/TriggerPanel.tsx": 1,
+    "app/workflows/lib/types.ts": 60,
+    "components/AddAgentWizard.tsx": 19,
+    "components/AgentChat.tsx": 33,
+    "components/AgentStatusBar.tsx": 4,
+    "components/ArtifactCard.tsx": 5,
+    "components/ArtifactSidebar.tsx": 11,
+    "components/ArtifactViewerModal.tsx": 24,
+    "components/ChatErrorCard.tsx": 7,
+    "components/ConfirmationCard.tsx": 8,
+    "components/FileUploadButton.tsx": 10,
+    "components/GenerativeUINode.tsx": 31,
+    "components/GenerativeUIPanel.tsx": 6,
+    "components/GitHubAccountBadge.tsx": 1,
+    "components/IntegrationSetup.tsx": 1,
+    "components/MarkdownMessage.tsx": 11,
+    "components/MessageBubble.tsx": 4,
+    "components/Sidebar.tsx": 2,
+    "components/ThinkingContainer.tsx": 44,
+    "components/TodoPanel.tsx": 1,
+    "components/email/EmailToolCards.tsx": 20,
+    "components/tasks/TaskToolCards.tsx": 6,
+    "lib/model-types.ts": 39,
+    "lib/providers.ts": 33,
+  };
+
+  const paletteExcepted = (rel: string) => matches(rel, Object.keys(PALETTE_EXCEPTIONS));
+
+  it("a file with no budget uses only themed colour", () => {
+    const offenders = sourceFiles()
+      .filter((f) => !(f in PALETTE_DEBT) && !paletteExcepted(f))
+      .map((f) => [f, count(read(f), PALETTE_CLASS)] as const)
+      .filter(([, n]) => n > 0);
+    expect(
+      offenders,
+      "`bg-sky-500` is a hardcoded colour with a friendly name. For STATE use " +
+        "`text-success` / `bg-warning/10` / `border-destructive/30`; for a set " +
+        "of things with no meaning and no ranking — @contexts, tags, chart " +
+        "series — use the categorical ramp, `bg-cat-3/10 text-cat-3`, which " +
+        "every theme defines in both modes (src/lib/theme/themes.ts).",
+    ).toEqual([]);
+  });
+
+  it("no baselined file gets worse", () => {
+    const worse = Object.entries(PALETTE_DEBT)
+      .map(([f, budget]) => ({ file: f, budget, actual: count(read(f), PALETTE_CLASS) }))
+      .filter((r) => r.actual > r.budget);
+    expect(worse, "Palette debt grew. Use tokens or the --cat-* ramp.").toEqual([]);
+  });
+
+  it("no baseline is stale", () => {
+    const improved = Object.entries(PALETTE_DEBT)
+      .map(([f, budget]) => ({ file: f, budget, actual: count(read(f), PALETTE_CLASS) }))
+      .filter((r) => r.actual < r.budget);
+    expect(improved, "Thank you — now lower these numbers in PALETTE_DEBT.").toEqual([]);
+  });
+
+  it("every exception names a file that still needs one", () => {
+    // An exception outliving its reason is latitude nobody asked for.
+    for (const f of Object.keys(PALETTE_EXCEPTIONS)) {
+      expect(
+        count(read(f), PALETTE_CLASS),
+        `${f} has no palette classes left — drop it from PALETTE_EXCEPTIONS`,
+      ).toBeGreaterThan(0);
+    }
+  });
+});
+
+// ── Rule 6: active/selected wears the house token ───────────────────────────
+
+describe("active and selected use the house token", () => {
+  /**
+   * `bg-accent text-accent-foreground` — the synonym, not the norm.
+   *
+   * AGENTS.md rule 6 names the measured house token for active/selected:
+   * `bg-primary/10 text-primary`, which is what /tasks, /email and
+   * `src/components` draw. `accent` is a *different* token in every theme (on
+   * Graphite it is barely distinguishable from `secondary`, on Material it is
+   * a tinted surface), so a pill selected in Projects and a pill selected in
+   * Tasks were two different colours on every theme at once — one product,
+   * two selections. Nothing in the five rules above could see it: both halves
+   * are perfectly legal theme tokens, wrongly paired.
+   *
+   * Deliberately narrow — the PAIR, not `bg-accent` alone. `hover:bg-accent`
+   * is an ordinary hover tint and `bg-accent/10` is a chip; flagging those
+   * would make this the gate somebody switches off.
+   */
+  const ACCENT_ACTIVE = /\bbg-accent\s+text-accent-foreground\b/g;
+
+  /**
+   * Where the pair is a hue rather than a state, with the argument.
+   *
+   * The bar is the same as COLOR_EXCEPTIONS': it has to be the wrong rule, not
+   * merely inconvenient to migrate.
+   */
+  const ACTIVE_EXCEPTIONS: Record<string, string> = {
+    "lib/statusAccent.ts":
+      "the violet lane's CHIP — a tag/status hue, not a selection; `accent` is " +
+      "the one token pair that reads distinctly without competing with primary " +
+      "(see the constant's own note)",
+  };
+
+  /**
+   * The remaining call sites, per file. Same ratchet as the rules above: a
+   * file with no budget must be clean, a baselined file may not get worse, and
+   * one that got better fails until its number comes down.
+   *
+   * `app/projects/components/MyWork.tsx` was in this list at 2 and is not any
+   * more (S4). The three below are the rest of the Projects sweep.
+   */
+  const ACTIVE_DEBT: Record<string, number> = {
+    "app/projects/components/FilterBar.tsx": 2,
+    "app/projects/components/SearchPalette.tsx": 1,
+    "app/people/page.tsx": 1,
+  };
+
+  const activeExcepted = (rel: string) => matches(rel, Object.keys(ACTIVE_EXCEPTIONS));
+
+  it("a file with no budget uses bg-primary/10 text-primary", () => {
+    const offenders = sourceFiles()
+      .filter((f) => !(f in ACTIVE_DEBT) && !activeExcepted(f))
+      .map((f) => [f, count(read(f), ACCENT_ACTIVE)] as const)
+      .filter(([, n]) => n > 0);
+    expect(
+      offenders,
+      "Active/selected is `bg-primary/10 text-primary` (AGENTS.md rule 6) — the " +
+        "token every other app in this tree selects with. `bg-accent " +
+        "text-accent-foreground` resolves to a different colour per theme, so " +
+        "the same selection reads two ways in two apps.",
+    ).toEqual([]);
+  });
+
+  it("no baselined file gets worse, and none is stale", () => {
+    const drift = Object.entries(ACTIVE_DEBT)
+      .map(([f, budget]) => ({ file: f, budget, actual: count(read(f), ACCENT_ACTIVE) }))
+      .filter((r) => r.actual !== r.budget);
+    expect(drift, "Update ACTIVE_DEBT to match reality — down only.").toEqual([]);
+  });
+
+  it("every exception names a file that still needs one", () => {
+    for (const f of Object.keys(ACTIVE_EXCEPTIONS)) {
+      expect(
+        count(read(f), ACCENT_ACTIVE),
+        `${f} no longer uses the pair — drop it from ACTIVE_EXCEPTIONS`,
+      ).toBeGreaterThan(0);
+    }
+  });
+});
+
+// ── Rule 7: single-choice and file pickers use the primitives ───────────────
+
+describe("selects and file pickers go through the primitives", () => {
+  /**
+   * Why this rule exists, and why it is two halves of one thing (S5).
+   *
+   * `/projects`' task panel changed status through a bare `<select>` and
+   * attached files through a raw `<input type="file">`. Both are *themed for
+   * colour* — they carried `border-border` and `bg-background` — and both are
+   * unreachable by everything else the engine does: the disclosure triangle is
+   * drawn by the OS, "Choose Files / No file chosen" is the browser's own
+   * string in the browser's own font, and neither picks up Graphite's uppercase
+   * labels, Material's state layer or the theme's focus ring. That is the same
+   * argument rule 4 makes about `<button className="bg-primary">`, and the same
+   * blind spot: rules 1/3/5 look only at colour, so CI was silent while an owner
+   * spotted it from a screenshot of the deployed app.
+   *
+   * The file half is deliberately narrower than "no `<input type='file'>`": the
+   * hidden input is the ONLY way to raise the OS dialog, so every correct
+   * implementation has one. What must not happen is the input being the visible
+   * control. So the fence is *a file input that is not hidden*.
+   */
+  const SELECT_TAG = /<select\b/g;
+
+  /**
+   * Comments removed — this rule's own version, because the shared `strip()`
+   * cannot be used here and neither can raw source.
+   *
+   * * Raw source counts the *documentation*: the first run of this rule failed
+   *   `TaskPanel.tsx` twice over, on the two comments explaining why its raw
+   *   controls were replaced. A gate a code comment can trip teaches people not
+   *   to comment (`sharedTaskUi.test.ts` learned the same thing).
+   * * The shared `strip()` deletes `/* … *\/` wherever it appears, and
+   *   `accept="image/*"` opens one — so it swallowed the remainder of
+   *   `SignatureEditor.tsx` into one `<input>` tag and reported an
+   *   already-hidden picker as visible.
+   *
+   * So a block comment is only removed when its `/*` sits on a token boundary,
+   * which `{/* … *\/}` and `/** … *\/` do and an attribute value does not.
+   */
+  const stripTags = (text: string) =>
+    text
+      .replace(/(?<=^|[\s{(])\/\*[\s\S]*?\*\//g, "")
+      .replace(/(?<![:"'/])\/\/[^\n]*/g, "");
+
+  /** The primitive's own implementation. Same shape as ICON_SOURCES. */
+  const SELECT_SOURCES = ["components/ui/Input.tsx"];
+
+  /**
+   * Every hand-rolled `<select>` left in the tree, per file.
+   *
+   * Large because `<Select>` did not exist until S5 — each of these predates the
+   * primitive and carries its own copy of the class string. Same ratchet as
+   * rules 1/3/5/6: an unbudgeted file must be clean, a budgeted one may not get
+   * worse, and one that improved fails until its number comes down.
+   *
+   * `app/projects/components/TaskPanel.tsx` is deliberately absent: it was the
+   * first file converted and is the worked example.
+   */
+  const SELECT_DEBT: Record<string, number> = {
+    "app/artifacts/page.tsx": 3,
+    "app/crm/components/PipelineSettings.tsx": 2,
+    "app/email/components/SignatureEditor.tsx": 1,
+    "app/email/components/TaskCaptureModal.tsx": 2,
+    "app/email/components/automation/DigestSettingsDialog.tsx": 2,
+    "app/email/components/automation/ai-settings/HistoryTab.tsx": 1,
+    "app/email/components/automation/ai-settings/RulesTab.tsx": 3,
+    "app/email/components/automation/ai-settings/SettingsTab.tsx": 3,
+    "app/email/components/automation/ai-settings/VoiceProfileDialog.tsx": 1,
+    "app/notes/components/FollowupEmailModal.tsx": 1,
+    "app/notes/components/MeetingPrep.tsx": 1,
+    "app/notes/components/NotesSettingsModal.tsx": 1,
+    "app/notes/meeting/[id]/page.tsx": 1,
+    "app/people/components/PersonEditor.tsx": 2,
+    "app/projects/components/BulkBar.tsx": 2,
+    "app/projects/components/CustomFieldValues.tsx": 1,
+    "app/projects/components/FieldManager.tsx": 1,
+    "app/projects/components/FilterBar.tsx": 3,
+    "app/projects/components/ImportClickUp.tsx": 2,
+    "app/projects/components/RelationsBlock.tsx": 1,
+    "app/projects/components/RepeatEditor.tsx": 3,
+    "app/projects/components/TableView.tsx": 3,
+    "app/projects/components/TagManager.tsx": 1,
+    "app/settings/groups/page.tsx": 2,
+    "app/settings/members/page.tsx": 2,
+    "app/tasks/components/EngageView.tsx": 2,
+    "app/tasks/components/TaskSettingsModal.tsx": 2,
+    "app/tasks/components/TaskToolbar.tsx": 3,
+    "app/tasks/components/calendar/CalendarSettings.tsx": 3,
+    "app/tasks/components/calendar/PlanDayPanel.tsx": 1,
+    "app/whatsapp/calls/page.tsx": 1,
+    "app/whatsapp/settings/categories/page.tsx": 1,
+    "app/workflows/components/NodeInspector.tsx": 6,
+    "app/workflows/components/TriggerPanel.tsx": 1,
+    "components/TierCard.tsx": 1,
+    "components/genUITemplates.tsx": 1,
+    "components/room/ShareSheet.tsx": 1,
+  };
+
+  const selects = (rel: string) =>
+    SELECT_SOURCES.includes(rel)
+      ? 0
+      : (stripTags(read(rel)).match(SELECT_TAG) ?? []).length;
+
+  it("a file with no budget uses <Select>", () => {
+    const offenders = sourceFiles()
+      .filter((f) => f.endsWith(".tsx") && !(f in SELECT_DEBT))
+      .map((f) => [f, selects(f)] as const)
+      .filter(([, n]) => n > 0);
+    expect(
+      offenders,
+      "Use `<Select>` from components/ui/Input.tsx. A bare <select> is themed " +
+        "for colour and frozen for everything else — the disclosure glyph comes " +
+        "from the OS rather than the active icon pack, and the label transform " +
+        "and focus ring never reach it.",
+    ).toEqual([]);
+  });
+
+  it("no baselined file gets worse, and none is stale", () => {
+    const drift = Object.entries(SELECT_DEBT)
+      .map(([f, budget]) => ({ file: f, budget, actual: selects(f) }))
+      .filter((r) => r.actual !== r.budget);
+    expect(drift, "Update SELECT_DEBT to match reality — down only.").toEqual([]);
+  });
+
+  it("the primitive's allowlist has no stale entry", () => {
+    for (const f of SELECT_SOURCES) {
+      expect(
+        count(read(f), SELECT_TAG),
+        `${f} no longer renders a <select> — drop it from SELECT_SOURCES`,
+      ).toBeGreaterThan(0);
+    }
+  });
+
+  /**
+   * Every `<input …>` opening tag, brace-aware.
+   *
+   * Not `/<input\b[^>]*>/`: a JSX attribute routinely contains `>` inside an
+   * arrow function, so the lazy version ends the tag at `onChange={(e) =>` and
+   * whether `className="hidden"` was seen would depend on the order somebody
+   * happened to write the attributes in. That is a fence that passes for the
+   * wrong reason — the same trap `sharedTaskUi.test.ts` documents for
+   * `<TaskCardShell>`.
+   *
+   * Fed by `stripTags`, not the shared `strip()` — see that helper's note.
+   */
+  const inputTags = (text: string): string[] => {
+    const out: string[] = [];
+    for (const m of text.matchAll(/<input\b/g)) {
+      let depth = 0;
+      let i = m.index + m[0].length;
+      for (; i < text.length; i++) {
+        const c = text[i];
+        if (c === "{") depth++;
+        else if (c === "}") depth--;
+        else if (c === ">" && depth === 0) break;
+      }
+      out.push(text.slice(m.index, i));
+    }
+    return out;
+  };
+
+  const fileInputs = (rel: string) =>
+    inputTags(stripTags(read(rel))).filter((tag) =>
+      /type=["']file["']/.test(tag),
+    );
+
+  /**
+   * Hidden by a CLASS, not merely by a tag that says "hidden" somewhere.
+   *
+   * ⚠️ `/\bhidden\b/` over the whole tag is what this checked first, and
+   * `aria-hidden` satisfied it — so deleting `className="hidden"` from the one
+   * file input this ticket converted left the fence green. Measured, not
+   * reasoned: the mutation was run and the suite passed. `sr-only` counts too;
+   * it is the other legitimate way to park an input off-screen behind a real
+   * control.
+   */
+  const HIDDEN_CLASS =
+    /className=(?:["'`][^"'`]*\b(?:hidden|sr-only)\b|\{[^}]*\b(?:hidden|sr-only)\b)/;
+
+  /** File inputs that are the visible control rather than a hidden trigger. */
+  const visibleFileInputs = (rel: string) =>
+    fileInputs(rel).filter((tag) => !HIDDEN_CLASS.test(tag)).length;
+
+  /**
+   * No budget, on purpose. Measured across the whole tree at S5: every other
+   * file picker here — chat uploads, the résumé parser, the signature image,
+   * the meeting-audio drop, the email composer — was already a hidden input
+   * behind a real control, and `TaskPanel` was the only surface showing the
+   * browser's own. A rule with no exceptions is worth more than a budget nobody
+   * reads (rule 2 learned the same thing about `lucide-react`).
+   */
+  it("a file picker is a Button, not the browser's own control", () => {
+    const offenders = sourceFiles()
+      .filter((f) => f.endsWith(".tsx"))
+      .map((f) => [f, visibleFileInputs(f)] as const)
+      .filter(([, n]) => n > 0);
+    expect(
+      offenders,
+      'Hide the input (`className="hidden"`) and raise it from a <Button> — ' +
+        '"Choose Files / No file chosen" is the browser\'s string in the ' +
+        "browser's font, and no theme can reach it. The chosen filenames belong " +
+        "on the surface, listed by the app.",
+    ).toEqual([]);
+  });
+
+  it("the file-picker scan sees the real ones", () => {
+    // Guards the shape of the assertion above: a scanner that matches nothing
+    // passes it forever. There are hidden file inputs in this tree, and this is
+    // the count that says the regex still finds them.
+    const seen = sourceFiles()
+      .filter((f) => f.endsWith(".tsx"))
+      .reduce((n, f) => n + fileInputs(f).length, 0);
+    expect(seen, "No file inputs found at all — the scan broke.").toBeGreaterThan(5);
   });
 });
 
@@ -342,6 +818,80 @@ describe("the --cc-* contract matches its documentation", () => {
       phantom,
       "These are documented but never defined. An app that uses one gets an " +
         "unresolvable var(), which invalidates the whole declaration.",
+    ).toEqual([]);
+  });
+});
+
+// ── The rule COUNT the docs quote stays the real one ─────────────────────────
+
+describe("the documented rule count is this file's own", () => {
+  /**
+   * Three files quoted three different numbers for the rules below — "five"
+   * in the root `CLAUDE.md`, "six" in `AGENTS.md`, seven in this file's own
+   * header — and every one of them had been true when it was written. That is
+   * a mirror going stale, which is the failure `AGENTS.md` rule 5 names in a
+   * different context: a copied fact is a fact that will eventually lie.
+   *
+   * A doc cannot derive a number, so the number is checked instead. The count
+   * comes from this file's numbered header list — the same list a reader is
+   * sent to — so adding rule 8 fails here until both docs say eight.
+   */
+  const SELF = fileURLToPath(new URL("./conformance.test.ts", import.meta.url));
+  const DOCS = [
+    fileURLToPath(new URL("../../../AGENTS.md", import.meta.url)),
+    fileURLToPath(new URL("../../../../../CLAUDE.md", import.meta.url)),
+  ];
+  const WORDS = ["zero", "one", "two", "three", "four", "five", "six", "seven",
+    "eight", "nine", "ten", "eleven", "twelve"];
+
+  /** The rules, as this file's header numbers them. */
+  function ruleCount(): number {
+    const header = readFileSync(SELF, "utf8").split("## Ratchet, not a wall")[0];
+    return [...header.matchAll(/^ \* (\d+)\. \*\*/gm)].length;
+  }
+
+  it("the header list is numbered 1..n with no gap", () => {
+    const header = readFileSync(SELF, "utf8").split("## Ratchet, not a wall")[0];
+    const numbers = [...header.matchAll(/^ \* (\d+)\. \*\*/gm)].map((m) => Number(m[1]));
+    // Guards the parser: a regex that matches nothing would make every
+    // assertion below vacuously true, which is worse than no fence.
+    expect(numbers.length, "The header rule list did not parse at all.").toBeGreaterThan(4);
+    expect(numbers).toEqual(numbers.map((_, i) => i + 1));
+  });
+
+  /**
+   * The counts in these docs that are about THIS suite.
+   *
+   * Scoped deliberately: `AGENTS.md` also says "Four rules on top of the three
+   * above", which is a true statement about a different list and must not fail
+   * here. A count only counts when the sentence around it names the suite —
+   * both docs write it as "conformance suite checks N regexes" or "enforced by
+   * conformance.test.ts (N rules)".
+   */
+  function suiteCounts(text: string): string[] {
+    const found: string[] = [];
+    for (const m of text.matchAll(/conformance/gi)) {
+      const window = text.slice(m.index, m.index + 400);
+      for (const hit of window.matchAll(/\*?\*?([a-z]+)\*?\*?\s+(?:rules?|regexes)\b/gi)) {
+        if (WORDS.includes(hit[1].toLowerCase())) found.push(hit[1].toLowerCase());
+      }
+    }
+    return [...new Set(found)];
+  }
+
+  it.each(DOCS)("%s quotes the real number of rules", (doc) => {
+    const n = ruleCount();
+    const quoted = suiteCounts(readFileSync(doc, "utf8"));
+    expect(
+      quoted,
+      `${doc} says nothing about how many rules the conformance suite has. ` +
+        "That sentence is how a reader learns the gate's shape without " +
+        "opening the suite — do not delete it to make this pass.",
+    ).not.toEqual([]);
+    expect(
+      quoted.filter((word) => word !== WORDS[n]),
+      `${doc} names a conformance-rule count that is not ${n} (${WORDS[n]}). ` +
+        "The rules live in conformance.test.ts's header; update the doc.",
     ).toEqual([]);
   });
 });

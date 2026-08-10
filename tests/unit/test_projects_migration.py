@@ -542,3 +542,124 @@ def test_no_row_level_security_is_declared(tenancy: str) -> None:
         assert forbidden not in shouted, (
             f"the tenancy migration declares {forbidden}; D-MT-2 is open"
         )
+
+
+# ── 167: repainting the seeded status colours nobody chose ───────────────────
+#
+# `pm_task_statuses.color` was stored from migration 146 and rendered nowhere
+# until WS-27ad, so these values were never seen by a human and never chosen by
+# one. When the column finally rendered, a stored colour was made to OUTRANK the
+# one derived from the category — that is what lets an owner choose — which
+# means a seed disagreeing with the shared vocabulary silently overrides it on
+# every project nobody customised. 167 repaints exactly those rows.
+#
+# The two properties worth fencing are the ones that would hurt if they broke:
+# it must not touch a row a human has edited, and its target colours must equal
+# what the shared vocabulary derives.
+
+
+@pytest.fixture(scope="module")
+def seed_colour_sql() -> str:
+    return (MIGRATIONS / "167_projects_seed_status_colours.sql").read_text(
+        encoding="utf-8",  # Windows defaults to cp1252 and crashes.
+    )
+
+
+def test_the_repaint_matches_the_whole_seed_tuple_not_just_the_name(
+    seed_colour_sql: str,
+) -> None:
+    """Name AND category AND the old colour, on every UPDATE.
+
+    Matching on the name alone would repaint a lane whose owner had already
+    picked a colour — silently overwriting the one decision this column exists
+    to carry.
+    """
+    statements = [
+        block for block in seed_colour_sql.split(";") if "UPDATE pm_task_statuses" in block
+    ]
+    assert len(statements) == 2, f"expected two UPDATEs, found {len(statements)}"
+    for statement in statements:
+        assert "name =" in statement, statement
+        assert "category =" in statement, statement
+        assert re.search(r"AND color = '\w+'", statement), (
+            "no old-colour predicate — this would overwrite an owner's choice: "
+            f"{statement}"
+        )
+
+
+def test_the_repaint_is_idempotent_by_construction(seed_colour_sql: str) -> None:
+    """Each UPDATE's own WHERE stops matching once it has run: it selects on the
+    OLD colour and writes a different one. Re-running touches zero rows, so no
+    guard is needed and none should be added — a guard would be a second thing
+    to keep true."""
+    for statement in seed_colour_sql.split(";"):
+        if "UPDATE pm_task_statuses" not in statement:
+            continue
+        new = re.search(r"SET color = '(\w+)'", statement)
+        old = re.search(r"AND color = '(\w+)'", statement)
+        assert new and old, statement
+        assert new.group(1) != old.group(1), (
+            f"writes the colour it selects on ({new.group(1)}) — not idempotent"
+        )
+
+
+def test_the_repaint_targets_agree_with_the_shared_vocabulary(
+    seed_colour_sql: str,
+) -> None:
+    """The colours 167 writes must equal what `CATEGORY_HUES` derives, or the
+    migration re-creates the divergence it was written to remove.
+
+    Reads the TypeScript rather than mirroring it — a mirror goes stale and then
+    lies, which is how the seed and the vocabulary drifted apart in the first
+    place."""
+    source = (
+        Path(__file__).resolve().parents[2]
+        / "workbench" / "control_plane" / "src" / "lib" / "statusAccent.ts"
+    ).read_text(encoding="utf-8")
+    block = re.search(
+        r"const CATEGORY_HUES: Record<string, AccentHue> = \{(.*?)\}", source, re.S,
+    )
+    assert block, "CATEGORY_HUES not found — did statusAccent.ts move or rename it?"
+    hues = dict(re.findall(r"(\w+):\s*\"(\w+)\"", block.group(1)))
+
+    for statement in seed_colour_sql.split(";"):
+        if "UPDATE pm_task_statuses" not in statement:
+            continue
+        new = re.search(r"SET color = '(\w+)'", statement)
+        category = re.search(r"AND category = '(\w+)'", statement)
+        assert new and category, statement
+        assert new.group(1) == hues[category.group(1)], (
+            f"167 writes {new.group(1)} for category {category.group(1)}, but the "
+            f"shared vocabulary derives {hues[category.group(1)]}"
+        )
+
+
+def test_the_repaint_covers_every_lane_the_seed_gets_wrong() -> None:
+    """The companion direction: a seeded lane whose colour disagrees with the
+    vocabulary and which 167 does NOT repaint is a lane that stays divergent on
+    every existing project — invisible, because new projects look right."""
+    from gateway.routes.projects import tree as pm_tree
+
+    source = (
+        Path(__file__).resolve().parents[2]
+        / "workbench" / "control_plane" / "src" / "lib" / "statusAccent.ts"
+    ).read_text(encoding="utf-8")
+    block = re.search(
+        r"const CATEGORY_HUES: Record<string, AccentHue> = \{(.*?)\}", source, re.S,
+    )
+    assert block
+    hues = dict(re.findall(r"(\w+):\s*\"(\w+)\"", block.group(1)))
+
+    # The seed agrees with the vocabulary today (its own fence says so), so any
+    # lane needing a repaint would have to be a NEW disagreement — and whoever
+    # introduces one owes a migration beside it, exactly as 167 is.
+    divergent = [
+        name
+        for name, colour, _position, category, _default in pm_tree._SEED_STATUSES
+        if category in hues and colour != hues[category]
+    ]
+    assert not divergent, (
+        f"seeded lanes disagree with the shared vocabulary: {divergent}. New "
+        "projects will render them differently from /tasks, and existing ones "
+        "need a repaint migration beside the seed change."
+    )

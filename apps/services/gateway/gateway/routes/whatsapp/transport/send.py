@@ -17,7 +17,7 @@ from uuid import uuid4
 
 from acb_auth import UserContext, get_current_user
 from fastapi import Depends, HTTPException
-from gateway.routes.whatsapp.core import _get_db, _provider_for_account, router
+from gateway.routes.whatsapp.core import _provider_for_account, _tenant_session, router
 from pydantic import BaseModel
 from sqlalchemy import text
 
@@ -66,8 +66,7 @@ async def send_message(
     user: UserContext = Depends(get_current_user),
 ):
     """Send a message to a chat, respecting the 24h window, and store the row."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         chat = (await db.execute(
             text("""SELECT c.id, c.account_id, c.wa_chat_id,
                            c.service_window_expires_at
@@ -121,7 +120,4 @@ async def send_message(
                     WHERE id = :cid"""),
             {"now": now, "cid": chat_id},
         )
-        await db.commit()
         return {"wa_message_id": wamid, "send_regime": regime}
-    finally:
-        await db.close()

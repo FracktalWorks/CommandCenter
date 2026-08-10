@@ -47,6 +47,7 @@ fake cannot read must never silently mean "the whole table".
 from __future__ import annotations
 
 import re
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
@@ -412,6 +413,10 @@ class FakeProjectsDB:
         #: ``(statement, params)`` in order — how a test proves a write happened
         #: with the values it expects rather than merely that a write happened.
         self.calls: list[tuple[str, dict[str, Any]]] = []
+        #: What each `_tenant_session(...)` opened by `bind_db` was handed —
+        #: `None` for the ambient form. WS-27aa's background paths must never
+        #: appear here as `None`.
+        self.bound_tenants: list[str | None] = []
         self.committed = 0
         self.closed = False
 
@@ -530,11 +535,40 @@ class FakeProjectsDB:
     async def close(self) -> None:
         self.closed = True
 
+    def _workflow_owner_org(self, args: dict) -> list[Any]:
+        """One workflow owner's organization, or NO ROW.
+
+        No row is the answer for all three misses — the workflow is unknown,
+        its owner is not in the directory, or the owner has no organization —
+        because the caller must refuse identically in every one of them rather
+        than sort them into a default.
+        """
+        owners = {
+            str(w.get("id")): str(w.get("owner_email") or "").lower()
+            for w in self.rows("workflows")
+        }
+        who = owners.get(str(args.get("wid") or ""))
+        if who is None:
+            return []
+        for row in self.rows("app_user"):
+            if str(row.get("email") or "").lower() == who:
+                org = row.get("organization_id")
+                return [SimpleNamespace(organization_id=org)] if org else []
+        return []
+
     async def execute(self, sql: Any, params: dict | None = None) -> _Result:
         statement = " ".join(str(sql).split())
         args = dict(params or {})
         self.statements.append(statement)
         self.calls.append((statement, args))
+        # WS-27aa's tenant source for the scheduled lifecycle sweep:
+        # `workflows.owner_email` → `app_user.organization_id`
+        # (`routes/workflows/service._workflow_organization`). Taught
+        # explicitly — a JOIN is not a shape the generic WHERE reader can
+        # parse — and fingerprinted on the JOIN itself, so a caller that stops
+        # resolving through `app_user` stops being answered here.
+        if "FROM workflows w JOIN app_user" in statement:
+            return _Result(self._workflow_owner_org(args))
         # WS-29b's tenant lookup: `X-User-Email` → `app_user.organization_id`.
         # Answered from seeded `app_user` rows when a test has them — the
         # two-tenant tests do — and otherwise from this fake's single
@@ -1571,16 +1605,49 @@ def page(number: int = 1, size: int = 50) -> Any:
 
 
 def bind_db(monkeypatch: Any, fake: FakeProjectsDB, modules: tuple[Any, ...]) -> None:
-    """Point each submodule's ``_get_db`` seam at ``fake``.
+    """Point each submodule's ``_tenant_session`` seam at ``fake``.
 
-    Per-module and not per-package because each module imports ``_get_db`` from
+    Per-module and not per-package because each module imports the seam from
     ``core`` by name, so patching ``core`` alone would not reach them.
+
+    H2 note: the real seam is ``acb_common.db.tenant_session`` — an async
+    context manager that begins a transaction, issues ``SET LOCAL
+    app.tenant_id`` and commits on exit. The fake mirrors only the SHAPE
+    (``async with … as db``); transaction semantics stay out of the mirror
+    exactly as ``commit``/``close`` no-ops did before, because what these
+    tests pin is SQL behaviour, not the GUC plumbing —
+    ``test_tenant_session.py`` owns that.
+
+    ⚠️ One thing the mirror DOES record: the argument. ``fake.bound_tenants``
+    collects what each ``_tenant_session(...)`` was opened with, so a test can
+    assert an EXPLICIT tenant was passed (WS-27aa / H4) rather than the
+    ambient no-argument form. A fake that swallowed the argument would agree
+    with either, which is exactly the class of blindness the live harnesses
+    exist for — ``tests/live/live_ws27aa.py`` proves the rows.
     """
+    @asynccontextmanager
+    async def _tenant_session(organization_id: str | None = None) -> Any:
+        # Commit-on-clean-exit, exactly like the real wrapper — so "these
+        # writes share one transaction" stays an OBSERVABLE fact
+        # (`db.committed == 1`) rather than a comment, and a handler that
+        # raises mid-block commits nothing here just as it commits nothing
+        # against Postgres.
+        fake.bound_tenants.append(organization_id)
+        yield fake
+        await fake.commit()
+
     async def _get_db() -> FakeProjectsDB:
         return fake
 
     for module in modules:
-        monkeypatch.setattr(module, "_get_db", _get_db)
+        if hasattr(module, "_tenant_session"):
+            monkeypatch.setattr(module, "_tenant_session", _tenant_session)
+        else:  # pragma: no cover — no Projects module is on `_get_db` today
+            # Kept for the shape, not for a current caller: WS-27aa retired
+            # the package's last unbound site (`agent_dispatch`, which now
+            # takes its tenant off the event payload). A module that reappears
+            # here is a new H4 exemption and needs the ratchet entry to match.
+            monkeypatch.setattr(module, "_get_db", _get_db)
 
 
 def silence_events(monkeypatch: Any, modules: tuple[Any, ...]) -> list[tuple[str, dict]]:

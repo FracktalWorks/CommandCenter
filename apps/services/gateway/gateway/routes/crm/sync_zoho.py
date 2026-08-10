@@ -1149,6 +1149,17 @@ async def _run_cycle_locked(actor_email: str) -> SyncCycleReport:
         owners = {}
         report.errors.append(f"owner mapping unavailable: {str(exc)[:200]}")
 
+    # H4, DELIBERATELY NOT H2 (`saas_multitenancy_handover.md`): one cycle is
+    # a BACKGROUND engine run — the scheduled loop below fires it with no
+    # request in flight, and the `POST /crm/sync/zoho` hand-run shares this
+    # exact code path, acting as the service identity `crm:zoho-sync` (an
+    # admin *starts* a cycle; the cycle does not act as them). It also commits
+    # per phase and per record, which `tenant_session()`'s one-transaction
+    # contract cannot express. The runbook's rule for the category is "do not
+    # let a job inherit an ambient tenant": it stays on the unbound `get_db()`
+    # until H4 threads an explicit tenant through the sync configuration
+    # (`tenant_session(org_id)` per phase). Named in `test_db_engine_seam.py`'s
+    # H2_EXEMPT_FILES.
     db = await _get_db()
     try:
         # ONE snapshot, before anything moves. `pull_phase` writes cursors as it

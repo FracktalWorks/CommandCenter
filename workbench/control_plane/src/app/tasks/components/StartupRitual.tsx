@@ -193,7 +193,7 @@ export function StartupRitual({
                   </div>
                 </div>
               </div>
-              <p className="mt-3 max-w-[260px] text-[12px] text-muted-foreground">
+              <p className="mt-3 max-w-[260px] text-xs text-muted-foreground">
                 Settle before you plan. One slow minute — in through the nose,
                 out longer than in.
               </p>
@@ -202,7 +202,7 @@ export function StartupRitual({
                   <Button size="none" radius="keep" layout="inline-flex items-center" type="button" onClick={() => {
                       setBreatheLeft(BREATHE_SECS);
                       setBreathing(true);
-                    }} className="gap-1.5 rounded-md px-3 py-2 text-[12px] font-semibold">
+                    }} className="gap-1.5 rounded-md px-3 py-2 text-xs font-semibold">
                     <Icon name="Wind" className="h-3.5 w-3.5" />
                     Begin
                   </Button>
@@ -213,13 +213,13 @@ export function StartupRitual({
                       setBreathing(false);
                       setStep(1);
                     }}
-                    className="tech-transition rounded-md bg-secondary px-3 py-2 text-[12px] font-medium text-muted-foreground hover:text-foreground"
+                    className="tech-transition rounded-md bg-secondary px-3 py-2 text-xs font-medium text-muted-foreground hover:text-foreground"
                   >
                     End early
                   </button>
                 )}
                 {!breathing && (
-                  <Button variant="text" size="none" radius="keep" layout="inline-flex items-center" type="button" onClick={() => setStep(1)} className="gap-1 rounded-md px-3 py-2 text-[12px]">
+                  <Button variant="text" size="none" radius="keep" layout="inline-flex items-center" type="button" onClick={() => setStep(1)} className="gap-1 rounded-md px-3 py-2 text-xs">
                     Skip
                     <Icon name="ArrowRight" className="h-3.5 w-3.5" />
                   </Button>
@@ -232,7 +232,7 @@ export function StartupRitual({
             <div className="flex flex-col gap-3">
               {carryForward.length > 0 ? (
                 <div className="rounded-lg border border-border bg-background/60 p-3">
-                  <p className="text-[12px] text-foreground">
+                  <p className="text-xs text-foreground">
                     <span className="font-semibold">
                       {carryForward.length} carry-forward
                       {carryForward.length === 1 ? "" : "s"}
@@ -265,19 +265,19 @@ export function StartupRitual({
                   </button>
                 </div>
               ) : (
-                <div className="rounded-lg bg-success/5 p-3 text-[12px] text-success">
+                <div className="rounded-lg bg-success/5 p-3 text-xs text-success">
                   <Icon name="Check" className="mr-1 inline h-3.5 w-3.5" />
                   Nothing carried over — clean slate.
                 </div>
               )}
               {dueSoonCount > 0 && (
-                <div className="flex items-center gap-2 rounded-lg bg-warning/10 p-3 text-[12px] text-foreground">
+                <div className="flex items-center gap-2 rounded-lg bg-warning/10 p-3 text-xs text-foreground">
                   <Icon name="AlertTriangle" className="h-4 w-4 shrink-0 text-warning" />
                   {dueSoonCount} unscheduled task{dueSoonCount === 1 ? "" : "s"}{" "}
                   due within 2 weeks — the planner will weigh them.
                 </div>
               )}
-              <Button size="none" radius="keep" type="button" onClick={() => setStep(2)} className="gap-1.5 rounded-md px-3 py-2 text-[12px] font-semibold">
+              <Button size="none" radius="keep" type="button" onClick={() => setStep(2)} className="gap-1.5 rounded-md px-3 py-2 text-xs font-semibold">
                 Pick the One Thing
                 <Icon name="ArrowRight" className="h-3.5 w-3.5" />
               </Button>
@@ -286,13 +286,13 @@ export function StartupRitual({
 
           {step === 2 && (
             <div className="flex flex-col gap-2">
-              <p className="text-[12px] text-muted-foreground">
+              <p className="text-xs text-muted-foreground">
                 If only <span className="font-semibold text-foreground">one thing</span>{" "}
                 gets done today, it should be… (the planner puts it in your first
                 peak-energy window)
               </p>
               {candidates.length === 0 ? (
-                <p className="py-4 text-center text-[12px] text-muted-foreground">
+                <p className="py-4 text-center text-xs text-muted-foreground">
                   No unscheduled next actions — plan or capture first.
                 </p>
               ) : (
@@ -347,10 +347,10 @@ export function StartupRitual({
 
         {step === 2 && (
           <div className="flex items-center justify-end gap-2 border-t border-border px-4 py-3">
-            <Button variant="text" size="none" radius="keep" layout="" type="button" onClick={() => finish(false)} className="rounded-md px-3 py-2 text-[12px]">
+            <Button variant="text" size="none" radius="keep" layout="" type="button" onClick={() => finish(false)} className="rounded-md px-3 py-2 text-xs">
               Just start
             </Button>
-            <Button size="none" radius="keep" layout="inline-flex items-center" type="button" onClick={() => finish(true)} className="gap-1.5 rounded-md px-3 py-2 text-[12px] font-semibold">
+            <Button size="none" radius="keep" layout="inline-flex items-center" type="button" onClick={() => finish(true)} className="gap-1.5 rounded-md px-3 py-2 text-xs font-semibold">
               <Icon name="Wand2" className="h-3.5 w-3.5" />
               Rebuild my day
             </Button>

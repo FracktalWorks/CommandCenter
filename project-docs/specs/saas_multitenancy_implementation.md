@@ -168,7 +168,10 @@ async def tenant_session(tenant_id: str | None = None):
     try:
         await session.begin()                       # SET LOCAL needs a transaction
         await session.execute(
-            text("SET LOCAL app.tenant_id = :t"), {"t": str(tid)})
+            # ⚠️ corrected 2026-08-10: the SET LOCAL literal cannot bind a
+            # parameter (extended-protocol syntax error, found live);
+            # set_config(..., true) is the same transaction-local semantics.
+            text("SELECT set_config('app.tenant_id', :t, true)"), {"t": str(tid)})
         yield session
         await session.commit()
     except Exception:

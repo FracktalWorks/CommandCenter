@@ -25,7 +25,7 @@ from typing import Any
 
 from acb_auth import UserContext, get_current_user
 from fastapi import Depends
-from gateway.routes.workflows.core import _get_db, _log, router
+from gateway.routes.workflows.core import _log, _tenant_session, router
 from sqlalchemy import text
 
 DEFAULT_LIMIT = 20
@@ -105,10 +105,16 @@ def collect_catalog_entries() -> list[CatalogEntry]:
 
 
 async def _module_entries() -> list[CatalogEntry]:
-    """Modules from the library — best-effort (search works without the DB)."""
+    """Modules from the library — best-effort (search works without the DB).
+
+    Reached only from member requests (the `/catalog/search` route and the
+    copilot's shortlist), so the tenant is bound in context. The best-effort
+    `except` stays OUTSIDE the `async with`: a failure mid-read rolls back and
+    is swallowed here, exactly as before — including `TenantUnbound` from a
+    caller outside a bound request, which degrades to "no module entries".
+    """
     try:
-        db = await _get_db()
-        try:
+        async with _tenant_session() as db:
             rows = (
                 await db.execute(
                     text(
@@ -117,8 +123,6 @@ async def _module_entries() -> list[CatalogEntry]:
                     ),
                 )
             ).fetchall()
-        finally:
-            await db.close()
     except Exception as exc:
         _log.warning("workflows.search_modules_failed", error=str(exc)[:120])
         return []

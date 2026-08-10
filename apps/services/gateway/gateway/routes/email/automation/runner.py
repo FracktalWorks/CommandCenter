@@ -48,6 +48,7 @@ from gateway.routes.email.core import (
     _attachment_summaries,
     _date_range_clause,
     _get_db,
+    _tenant_session,
     _instantiate_provider,
     _log,
     _parse_iso_date,
@@ -85,8 +86,7 @@ async def test_rules(
     user: UserContext = Depends(get_current_user),
 ):
     """Test the rules against one email (selected message or a pasted sample)."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         await _assert_account_owner(db, req.account_id, user.email or "anonymous")
         if req.email_id:
             email = await _email_payload_from_id(db, req.email_id, user.email or "anonymous")
@@ -109,8 +109,6 @@ async def test_rules(
             "reason": match["reason"],
             "actions": match["rule"]["actions"],
         }
-    finally:
-        await db.close()
 
 
 class RuleTestRecentRequest(BaseModel):
@@ -128,8 +126,7 @@ async def test_rules_recent(
     Returns, per email, which rule would match and the actions it would take —
     inbox-zero's "test on your real inbox" preview. Applies nothing.
     """
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         await _assert_account_owner(db, req.account_id, user.email or "anonymous")
         self_email = await _account_self_email(db, req.account_id)
         about, _ = await _load_assistant_about(db, req.account_id)
@@ -165,8 +162,6 @@ async def test_rules_recent(
                 if match else [],
             })
         return {"results": results}
-    finally:
-        await db.close()
 
 
 @router.get("/rules/history")
@@ -182,8 +177,7 @@ async def rules_history(
     TRASH by delta reconciliation — e.g. an AI draft the user discarded) are
     hidden, so History reflects the live mailbox. Pass ``include_deleted=true``
     to see the full immutable log."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         params: dict[str, Any] = {"uid": user.email or "anonymous", "limit": limit}
         scope = ("er.account_id IN (SELECT id FROM email_accounts WHERE user_id = :uid")
         if account_id:
@@ -272,8 +266,6 @@ async def rules_history(
                 for r in rows
             ]
         }
-    finally:
-        await db.close()
 
 
 @router.get("/messages/{message_id}/timeline")
@@ -290,8 +282,7 @@ async def message_timeline(
     moved, or failed on it (including corrections that re-ran later). Reuses the
     same `email_executed_rules` audit rows, scoped to this one message and to the
     caller's own accounts."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         # Anchor: the message itself (received event) + ownership check. A message
         # the caller doesn't own — or one we never synced — yields 404, never a
         # cross-account peek.
@@ -350,8 +341,6 @@ async def message_timeline(
             "subject": msg.subject or "",
             "events": events,
         }
-    finally:
-        await db.close()
 
 
 # Actions a retry will never perform, however the original rule was configured.
@@ -378,8 +367,7 @@ async def retry_failed_executions(
     Safe to run repeatedly: LABEL and MOVE_FOLDER are idempotent, and a row that
     succeeds is flipped to APPLIED so it is not retried again.
     """
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         owner = user_email
         if owner is None:
             owner = (await db.execute(text(
@@ -464,15 +452,12 @@ async def retry_failed_executions(
                 "aerr": json.dumps(errors)})
 
         await _persist_rotated_creds(db, store, account_id, provider)
-        await db.commit()
         _log.info("email.retry_failed_done", account_id=account_id,
                   considered=len(rows), repaired=repaired,
                   still_failing=still_failing)
         return {"considered": len(rows), "repaired": repaired,
                 "still_failing": still_failing,
                 "skipped_actions": sorted(skipped)}
-    finally:
-        await db.close()
 
 
 class RetryFailedRequest(BaseModel):
@@ -486,11 +471,8 @@ async def retry_failed(
     user: UserContext = Depends(get_current_user),
 ):
     """Repair rule runs the mail server refused. Never drafts or sends."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         await _assert_account_owner(db, req.account_id, user.email or "anonymous")
-    finally:
-        await db.close()
     return await retry_failed_executions(
         req.account_id, limit=max(1, min(req.limit, 1000)),
         user_email=user.email or "anonymous")
@@ -502,8 +484,7 @@ async def approve_execution(
     user: UserContext = Depends(get_current_user),
 ):
     """Apply a PENDING (proposed) rule execution — the approval queue."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         row = (await db.execute(text(
             """SELECT er.status, er.rule_id, er.message_id, er.provider_message_id,
                       er.thread_id, er.subject, er.from_address, er.account_id,
@@ -550,10 +531,7 @@ async def approve_execution(
             await _stamp_processed_watermark(
                 db, row.message_id, provider=provider)
         await _persist_rotated_creds(db, store, str(row.account_id), provider)
-        await db.commit()
         return {"ok": True, "status": "APPLIED", "actions": taken}
-    finally:
-        await db.close()
 
 
 @router.post("/rules/history/{exec_id}/reject")
@@ -562,8 +540,7 @@ async def reject_execution(
     user: UserContext = Depends(get_current_user),
 ):
     """Dismiss a PENDING rule execution without applying it."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         res = await db.execute(text(
             """UPDATE email_executed_rules er
                SET status = 'REJECTED'
@@ -571,12 +548,9 @@ async def reject_execution(
                WHERE er.id = :eid AND er.account_id = ea.id
                  AND ea.user_id = :uid AND er.status = 'PENDING'"""
         ), {"eid": exec_id, "uid": user.email or "anonymous"})
-        await db.commit()
         if res.rowcount == 0:
             raise HTTPException(status_code=404, detail="Pending execution not found")
         return {"ok": True, "status": "REJECTED"}
-    finally:
-        await db.close()
 
 
 @router.post("/rules/history/{exec_id}/undo")
@@ -586,8 +560,7 @@ async def undo_execution(
 ):
     """Reverse an APPLIED rule execution where possible: restore the message to
     the inbox (archive/move/trash/spam) and remove any labels the rule added."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         row = (await db.execute(text(
             """SELECT er.status, er.rule_id, er.message_id, er.provider_message_id,
                       er.actions_taken, ea.provider, ea.credentials_encrypted
@@ -638,10 +611,7 @@ async def undo_execution(
         await db.execute(text(
             "UPDATE email_executed_rules SET status='UNDONE' WHERE id=:eid"
         ), {"eid": exec_id})
-        await db.commit()
         return {"status": "UNDONE", "reversed": reversed_actions}
-    finally:
-        await db.close()
 
 
 class RuleRunRequest(BaseModel):
@@ -662,11 +632,8 @@ async def run_rules(
     to actually apply the matched actions. Poll GET /email/rules/history for
     results.
     """
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         await _assert_account_owner(db, req.account_id, user.email or "anonymous")
-    finally:
-        await db.close()
     background.add_task(
         _run_rules_job, req.account_id, min(req.limit, 50), req.dry_run,
         user.email or "anonymous",
@@ -888,8 +855,7 @@ async def process_past_estimate(
     start_dt = _parse_iso_date(start_date, end_of_day=False)
     end_dt = _parse_iso_date(end_date, end_of_day=True)
     only_unread = not include_read
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         await _assert_account_owner(db, account_id, user.email or "anonymous")
 
         async def _count(extra: str = "", unprocessed: bool = False) -> int:
@@ -910,8 +876,6 @@ async def process_past_estimate(
         # know this range is mostly freshly-fetched history.
         held_back = await _count(
             extra=" AND em.rules_held_back_at IS NOT NULL", unprocessed=True)
-    finally:
-        await db.close()
     capped = max(0, min(limit, 2000))
     return {
         "in_range": in_range,
@@ -946,8 +910,7 @@ async def process_past_emails(
     end_dt = _parse_iso_date(req.end_date, end_of_day=True)
     _assert_span_within_cap(start_dt, end_dt)
     only_unread = not req.include_read
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         await _assert_account_owner(db, req.account_id, user.email or "anonymous")
         # Best-effort pre-count of what's ALREADY synced locally — just a hint for
         # the caller. The job downloads the range from upstream first, so the real
@@ -971,8 +934,6 @@ async def process_past_emails(
                 f"WHERE {all_clause}"
             ), all_params)).fetchone()
             already_processed = max(0, (int(n_all.c) if n_all else 0) - count)
-    finally:
-        await db.close()
     # Always schedule: the job first downloads [start, end] from the provider so a
     # range that predates the local sync still has mail to process, THEN counts +
     # applies. The tracker starts in the 'downloading' phase and the UI polls it
@@ -1024,8 +985,7 @@ async def run_rules_on_message(
     mailbox. `is_test=False` applies the matched rule's actions, logs an APPLIED
     (or SKIPPED) row to the history, and marks the message processed.
     """
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         await _assert_account_owner(db, req.account_id, user.email or "anonymous")
         row = (await db.execute(text(
             """SELECT id, provider_message_id, thread_id, subject, body_text,
@@ -1078,7 +1038,6 @@ async def run_rules_on_message(
             ), {"aid": req.account_id, "mid": str(row.id),
                 "pmid": row.provider_message_id, "tid": row.thread_id,
                 "subj": row.subject or "", "frm": frm.get("email", "")})
-            await db.commit()
             return {"matched": False, "applied": False, "rule": None,
                     "reason": "No rule matched.", "actions": []}
 
@@ -1124,7 +1083,6 @@ async def run_rules_on_message(
         )
         await _stamp_processed_watermark(db, row.id, provider=provider)
         await _persist_rotated_creds(db, store, req.account_id, provider)
-        await db.commit()
         # Return the row's POST-apply category + folder so the caller can refresh
         # its inbox row in place — the "Uncategorized" pill in the list reruns
         # this endpoint and needs the applied label to resolve without a full
@@ -1142,8 +1100,6 @@ async def run_rules_on_message(
             "categories": list(fresh.categories or []) if fresh else [],
             "folder": fresh.folder if fresh else None,
         }
-    finally:
-        await db.close()
 
 
 async def _apply_and_log_match(
@@ -1445,6 +1401,8 @@ async def _process_past_emails_job(
     # hidden precisely because it thinks a run is in flight.
     db = None
     try:
+        # H4: background consumer — _process_past_emails_job runs as a
+        # post-response BackgroundTask; no ambient tenant to inherit.
         db = await _get_db()
         clause, params = _date_range_clause(
             account_id, start, end, only_unread, skip_processed)
@@ -1601,6 +1559,8 @@ async def _run_rules_job(
     a "No match found" entry (inbox-zero parity). Dry runs only log a PENDING
     preview and never touch the mailbox.
     """
+    # H4: background consumer — _run_rules_job runs as a BackgroundTask and
+    # from the scheduler's auto-run hook; no ambient tenant to inherit.
     db = await _get_db()
     try:
         rows = (await db.execute(text(

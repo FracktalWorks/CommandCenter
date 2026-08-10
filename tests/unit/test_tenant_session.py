@@ -70,19 +70,30 @@ def calls(monkeypatch):
 # ==========================================================================
 # 1 — SET LOCAL, not SET.
 # ==========================================================================
-def test_the_seam_uses_set_local_not_set() -> None:
+def test_the_seam_uses_transaction_local_set_config() -> None:
     """A string assertion, deliberately.
 
-    ``SET`` vs ``SET LOCAL`` is a one-word difference whose only symptom is a
-    cross-tenant read under connection reuse. No behavioural unit test
-    reproduces that reliably, so the source is pinned instead.
+    Transaction-local vs session-scoped is a one-argument difference whose
+    only symptom is a cross-tenant read under connection reuse. No behavioural
+    unit test reproduces that reliably, so the source is pinned instead.
+
+    ⚠️ The encoding is ``set_config('app.tenant_id', :tenant, true)`` and NOT
+    the literal ``SET LOCAL app.tenant_id = :tenant`` — the latter is a
+    Postgres SYNTAX ERROR through the extended protocol (``SET`` cannot take
+    a bind parameter). Every hermetic run was green with the broken literal;
+    the first live handler run failed on it (2026-08-10). ``set_config``'s
+    third argument ``true`` is what makes it ``SET LOCAL`` semantics; ``false``
+    (or omitting it) is the session-scoped poison this test exists to refuse.
     """
     src = inspect.getsource(tenant_session.__wrapped__)  # type: ignore[attr-defined]
-    assert "SET LOCAL app.tenant_id" in src
-    assert "SET app.tenant_id" not in src.replace("SET LOCAL app.tenant_id", ""), (
-        "a session-scoped SET survives the connection's return to the pool — "
-        "the next borrower reads the previous tenant"
-    )
+    assert "set_config('app.tenant_id', :tenant, true)" in src
+    # Pin the EXECUTED statement, not the prose around it: no text("SET ...")
+    # may reappear (the literal form cannot bind a parameter — it only ever
+    # worked against fakes), and no is_local=false variant may sneak in (a
+    # session-scoped set survives the connection's return to the pool and the
+    # next borrower reads the previous tenant).
+    assert 'text("SET' not in src and "text('SET" not in src
+    assert "set_config('app.tenant_id', :tenant, false" not in src
 
 
 @pytest.mark.asyncio
@@ -92,7 +103,7 @@ async def test_binding_is_issued_as_a_bound_parameter(calls) -> None:
     sets = [c for c in calls if c[0] == "execute"]
     assert len(sets) == 1
     sql, params = sets[0][1]
-    assert "SET LOCAL app.tenant_id" in sql
+    assert "set_config('app.tenant_id'" in sql
     assert params == {"tenant": _ORG_A}
     assert _ORG_A not in sql, "the tenant id was interpolated into the statement"
 

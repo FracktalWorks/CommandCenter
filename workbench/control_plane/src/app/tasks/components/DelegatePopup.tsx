@@ -152,7 +152,7 @@ function DelegateBody({
                 value={q}
                 onChange={(e) => setQ(e.target.value)}
                 placeholder="Search people…"
-                className="w-full rounded-md border border-border bg-background/60 py-1.5 pl-8 pr-3 text-base text-foreground focus:border-primary/50 focus:outline-none sm:text-[13px]"
+                className="w-full rounded-md border border-border bg-background/60 py-1.5 pl-8 pr-3 text-base text-foreground focus:border-primary/50 focus:outline-none sm:text-sm"
               />
             </div>
           )}
@@ -173,7 +173,7 @@ function DelegateBody({
                     aria-pressed={on}
                     onClick={() => (isSynced ? toggle(p) : setPromoteTo(p))}
                     className={[
-                      "tech-transition flex w-full items-center gap-2.5 rounded-md border px-3 py-2 text-left text-[13px]",
+                      "tech-transition flex w-full items-center gap-2.5 rounded-md border px-3 py-2 text-left text-sm",
                       on
                         ? "border-primary bg-primary/10 text-primary"
                         : "border-border text-foreground hover:bg-secondary",
@@ -198,7 +198,7 @@ function DelegateBody({
             <button
               type="button"
               onClick={onClose}
-              className="tech-transition rounded-md px-3 py-1.5 text-[12px] font-medium text-muted-foreground hover:bg-secondary hover:text-foreground"
+              className="tech-transition rounded-md px-3 py-1.5 text-xs font-medium text-muted-foreground hover:bg-secondary hover:text-foreground"
             >
               Cancel
             </button>
@@ -206,7 +206,7 @@ function DelegateBody({
               type="button"
               disabled={busy}
               onClick={apply}
-              className="tech-transition inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-[12px] font-medium text-primary-foreground hover:opacity-90 disabled:opacity-40"
+              className="tech-transition inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90 disabled:opacity-40"
             >
               {busy ? (
                 <Icon name="Loader2" className="h-3.5 w-3.5 animate-spin" />

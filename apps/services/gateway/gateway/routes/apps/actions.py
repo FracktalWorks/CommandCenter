@@ -91,6 +91,22 @@ from typing import Any
 from acb_auth import UserContext, UserRole
 from action_broker import AuthorityTier, propose, submit
 from fastapi import Depends, HTTPException
+
+# ⚠️ H4, DELIBERATELY NOT H2 (`saas_multitenancy_handover.md`): this module's
+# four `_get_db()` sites (`execute_app_action` + the `_run_storage_*` helpers
+# it dispatches to) stay on the UNBOUND seam on purpose. `execute_app_action`
+# is the package's one dual-audience entry point: the HTTP route below calls
+# it with a member's request identity (tenant bound by `_with_resolved_access`),
+# but the orchestrator's agent tools call the SAME function in-process during
+# an agent run (`orchestrator/app_tools.py::_make_action_tool`) with
+# `UserContext(email=<agent>, role=AGENT)` — no request, no bound tenant.
+# Converting these sites to the ambient `tenant_session()` would raise
+# `TenantUnbound` for every agent-invoked app action, and letting the agent
+# path inherit an ambient tenant is exactly what the H2 runbook forbids for
+# non-request callers. H4 threads the EXPLICIT tenant (the app row's
+# organization) through the dispatch — `tenant_session(org_id)` — for both
+# audiences. The H2 ratchet in `test_db_engine_seam.py` carries these sites
+# as named, counted exemptions.
 from gateway.routes.apps._common import (
     MAX_STORAGE_ROWS_PER_APP,
     MAX_STORAGE_VALUE_BYTES,

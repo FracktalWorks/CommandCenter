@@ -23,7 +23,7 @@ from acb_auth import UserContext, get_current_user
 from acb_common import get_logger
 from fastapi import Depends, HTTPException
 from gateway.routes.whatsapp.automation.drafting import detect_language
-from gateway.routes.whatsapp.core import _get_db, router
+from gateway.routes.whatsapp.core import _tenant_session, router
 from pydantic import BaseModel
 from sqlalchemy import text
 
@@ -136,8 +136,7 @@ async def list_commitments(
     user: UserContext = Depends(get_current_user),
 ):
     """List commitments for an account — ours (digest watch) or theirs (chase)."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         params: dict[str, Any] = {
             "uid": user.email or "anonymous", "aid": account_id, "status": status,
         }
@@ -163,8 +162,6 @@ async def list_commitments(
             )
             for r in rows
         ]
-    finally:
-        await db.close()
 
 
 # ── waiting-on nudge drafts (W4.2) ────────────────────────────────────────────
@@ -310,8 +307,7 @@ async def draft_commitment_nudge(
     The result is a DRAFT the founder reviews and sends via the composer — this
     endpoint never sends, so it needs no 24h-window / template logic.
     """
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         account_id = await _assert_theirs_commitment_owned(
             db, commitment_id, user.email or "anonymous")
         result = await draft_nudge(db, account_id, commitment_id)
@@ -322,5 +318,3 @@ async def draft_commitment_nudge(
         chat_id, nudge_text, language = result
         return NudgeModel(commitment_id=commitment_id, chat_id=chat_id,
                           nudge_text=nudge_text, language=language)
-    finally:
-        await db.close()

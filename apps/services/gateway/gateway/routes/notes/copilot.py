@@ -46,6 +46,7 @@ from gateway.routes.notes.copilot_policy import (
 from gateway.routes.notes.core import (
     _get_db,
     _log,
+    _tenant_session,
     load_owned_meeting,
     router,
 )
@@ -103,6 +104,9 @@ async def _persist(meeting_id: str, ev: dict) -> None:
     """Record what the agent said. Best-effort: an audit-trail write must never
     take down the copilot, let alone the meeting."""
     try:
+        # H4: background consumer — called from the copilot orchestrator task
+        # (`_run`, spawned by `start()` via asyncio.create_task), which outlives
+        # the request scope; derive the tenant from the meeting row.
         async with await _get_db() as db:
             row = (
                 await db.execute(
@@ -275,6 +279,8 @@ async def _deep_context(meeting_id: str) -> bool:
     start. ON for new sessions (migration 129) — the whole point of a briefed
     copilot — and still a per-session toggle for anyone who wants it quiet."""
     try:
+        # H4: background consumer — called only from the `_run` orchestrator
+        # task; derive the tenant from the meeting/live_session row.
         async with await _get_db() as db:
             row = (
                 await db.execute(
@@ -499,7 +505,7 @@ async def copilot_stream(
     ``refs.window`` carries up to 400 characters of what was just said — the
     live transcript underneath them. A 404 raised inside an already-started
     ``StreamingResponse`` would arrive as a broken stream, not a refusal."""
-    async with await _get_db() as db:
+    async with _tenant_session() as db:
         await load_owned_meeting(db, meeting_id, user.email, columns="m.id")
     return StreamingResponse(
         _sse(meeting_id),
@@ -521,7 +527,7 @@ async def copilot_events(
 
     Owner only — the same content as the stream, durable and without needing
     to be there while it happened."""
-    async with await _get_db() as db:
+    async with _tenant_session() as db:
         await load_owned_meeting(db, meeting_id, user.email, columns="m.id")
         rows = (
             await db.execute(

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Icon from "@/components/Icon";
 import { useViewMode } from "@/components/ViewModeProvider";
 import { useMobileDrawer } from "@/components/AppShell";
@@ -8,6 +8,7 @@ import { useTaskStore } from "./lib/taskStore";
 import { ListsSidebar } from "./components/ListsSidebar";
 import { CaptureBar } from "./components/CaptureBar";
 import { ItemList } from "./components/ItemList";
+import { ItemDetail } from "./components/ItemDetail";
 import { AssistantRail } from "./components/AssistantRail";
 import { InboxView } from "./components/InboxView";
 import { EngageView } from "./components/EngageView";
@@ -36,13 +37,55 @@ export default function TasksPage() {
   const quickCaptureOpen = useTaskStore((s) => s.quickCaptureOpen);
   const clarifyModalOpen = useTaskStore((s) => s.clarifyModalOpen);
   const hydrate = useTaskStore((s) => s.hydrate);
+  const selectedItemId = useTaskStore((s) => s.selectedItemId);
+  const focusedItemId = useTaskStore((s) => s.focusedItemId);
+  const selectItem = useTaskStore((s) => s.selectItem);
+  const closeFocus = useTaskStore((s) => s.closeFocus);
   const [leftOpen, setLeftOpen] = useState(true);
   // The AI assistant opens as a scene from the left sidebar (email-app pattern),
   // not an always-on right rail.
   const [assistantOpen, setAssistantOpen] = useState(false);
+  // Maximise: the docked pane raised into TaskFocusModal for reading width.
+  // Holds the id it was raised FOR, and the overlay is derived from it below —
+  // a bare boolean would need an effect to unset itself when the selection goes
+  // away (deleting the task from the overlay is the ordinary way), and a stale
+  // one would open the next task the user clicked straight into the overlay.
+  const [maximisedFor, setMaximisedFor] = useState<string | null>(null);
   const isInbox = selectedView === "inbox";
   const isEngage = selectedView === "engage";
   const isCalendar = selectedView === "calendar";
+
+  // The list/board surface is the only one with a docked detail column: Inbox
+  // clarifies in place (its own ClarifyModal), Engage and Calendar are
+  // full-width by design, and the Assistant replaces the panes entirely.
+  const paneDocked =
+    !isMobile && !assistantOpen && !isInbox && !isEngage && !isCalendar;
+
+  // On the docked surface the pane IS the detail view, so a row that calls the
+  // app-wide `openFocus` verb (TaskCard, TaskBoard, WaitingForView, the grouped
+  // list) must select into the pane rather than raise the overlay. `openFocus`
+  // sets `selectedItemId` as well as `focusedItemId`, so dropping the focus
+  // half is the whole change — and it has to be dropped rather than ignored, or
+  // a stale id would pop the overlay open the moment the user switched to
+  // Calendar, which reads the same store field.
+  useEffect(() => {
+    if (paneDocked && focusedItemId) closeFocus();
+  }, [paneDocked, focusedItemId, closeFocus]);
+
+  // Which task the overlay is showing, derived — never stored. Maximise is a
+  // mode of THIS selection: leave the surface, delete the task, or navigate to
+  // another one (a subtask opened from inside the overlay moves
+  // `selectedItemId`) and the overlay drops back to the docked pane on whatever
+  // is selected now, rather than hanging on the task you navigated away from.
+  const maximisedId =
+    paneDocked && maximisedFor === selectedItemId ? selectedItemId : null;
+
+  const openMaximised = useCallback(
+    () => setMaximisedFor(selectedItemId),
+    [selectedItemId],
+  );
+  const closeMaximised = useCallback(() => setMaximisedFor(null), []);
+  const closeDetail = useCallback(() => selectItem(null), [selectItem]);
 
   // Load live data from the gateway once; stays on the bundled mock data when
   // the backend isn't reachable (UI-first demo mode).
@@ -111,8 +154,10 @@ export default function TasksPage() {
   if (isMobile) {
     // Single-pane mobile flow. Section switching + capture live in the AppShell
     // bottom bar; here we render just the current surface full-width. Tapping a
-    // task opens it as a pop-up card (TaskFocusModal — full-screen on mobile),
-    // the same detail surface as desktop.
+    // task opens the detail full-screen (TaskFocusModal, store-driven) — a
+    // phone has no room for a docked column, which is the same move Projects
+    // makes when it wraps its own `<aside>` in a `fixed inset-0` on mobile
+    // (`projects/page.tsx`). Desktop docks the same detail beside the list.
     return (
       <div className="flex h-full w-full flex-col overflow-hidden bg-background">
         {isInbox ? (
@@ -212,22 +257,46 @@ export default function TasksPage() {
             <CalendarView />
           </div>
         ) : (
-          /* Task views (Next/Waiting/Someday/Calendar): a full-width list/board.
-             Clicking a task opens it as a pop-up card (TaskFocusModal,
-             Jira/ClickUp-style) rather than a persistent detail sidebar. */
-          <div className="flex min-w-0 flex-1 flex-col overflow-hidden border-r border-border">
-            <CaptureBar />
-            <div className="min-h-0 flex-1">
-              <ItemList />
+          /* Task views (Next/Waiting/Someday/…): list/board plus the docked
+             detail column — the house layout (DESIGN_SYSTEM §6: content, then
+             an optional side panel) and the same composition Projects uses,
+             where `taskPanel` is the last child of the desktop row. Like
+             Projects, the column is present only while something is selected,
+             so the board keeps its full width when nothing is open. */
+          <>
+            <div className="flex min-w-0 flex-1 flex-col overflow-hidden border-r border-border">
+              <CaptureBar />
+              <div className="min-h-0 flex-1">
+                <ItemList />
+              </div>
             </div>
-          </div>
+            {selectedItemId && (
+              /* `w-[380px]` is DESIGN_SYSTEM §6's side-panel width, not
+                 Projects' `max-w-md`: Projects writes `w-full max-w-md` because
+                 the same <aside> becomes the phone screen with the cap lifted,
+                 and this one never does — the phone gets TaskFocusModal. No
+                 `border-l`: the list column left of it already draws the
+                 divider, and two hairlines is a 2px rule. */
+              <aside className="flex h-full w-[380px] shrink-0 flex-col overflow-hidden bg-card">
+                <ItemDetail onMaximize={openMaximised} onClose={closeDetail} />
+              </aside>
+            )}
+          </>
         )}
       </div>
 
       <QuickCapture />
       <WorkspacesModal />
       <TaskSettingsModal />
-      <TaskFocusModal />
+      {/* Where a detail column is docked the overlay is CONTROLLED — it opens
+          only from that pane's maximise. Everywhere else on desktop (Inbox,
+          Engage, Calendar, Assistant) it stays store-driven, because those
+          surfaces call `openFocus` and have nowhere else to show a task. */}
+      {paneDocked ? (
+        <TaskFocusModal itemId={maximisedId} onClose={closeMaximised} />
+      ) : (
+        <TaskFocusModal />
+      )}
       <ReclarifyModal />
       <UndoToast />
       <DeleteConfirmModal />

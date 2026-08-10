@@ -26,8 +26,8 @@ from typing import Any
 from acb_auth import UserContext
 from fastapi import Depends, HTTPException
 from gateway.routes.apps._common import (
-    _get_db,
     _log,
+    _tenant_session,
     _uid,
     get_app_or_404,
     iso,
@@ -104,8 +104,7 @@ async def list_app_grants(
     slug: str,
     user: UserContext = Depends(require_app_user),
 ) -> list[GrantEntry]:
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         row, _grants = await get_app_or_404(db, slug, user, edit=True)
         rows = (await db.execute(
             text(
@@ -116,8 +115,6 @@ async def list_app_grants(
             ),
             {"app_id": str(row.id)},
         )).fetchall()
-    finally:
-        await db.close()
     return [_to_entry(r) for r in rows]
 
 
@@ -136,8 +133,7 @@ async def upsert_app_grant(
         )
     if not is_valid_subject(body.subject):
         raise HTTPException(status_code=422, detail="Invalid subject")
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         row, _grants = await get_app_or_404(db, slug, user, edit=True)
         rec = (await db.execute(
             text(
@@ -153,9 +149,6 @@ async def upsert_app_grant(
                 "role": body.role, "granted_by": _uid(user),
             },
         )).fetchone()
-        await db.commit()
-    finally:
-        await db.close()
     await record_app_audit(
         app_id=str(row.id), user_email=_uid(user), kind="action",
         detail={"action": "grant_upsert", "subject": body.subject,
@@ -174,8 +167,7 @@ async def revoke_app_grant(
     subject: str,
     user: UserContext = Depends(require_app_user),
 ) -> dict[str, Any]:
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         row, _grants = await get_app_or_404(db, slug, user, edit=True)
         await db.execute(
             text(
@@ -184,9 +176,6 @@ async def revoke_app_grant(
             ),
             {"app_id": str(row.id), "subject": subject},
         )
-        await db.commit()
-    finally:
-        await db.close()
     await record_app_audit(
         app_id=str(row.id), user_email=_uid(user), kind="action",
         detail={"action": "grant_revoke", "subject": subject},
@@ -212,8 +201,7 @@ async def consent_app(
     re-fetch + re-show the interstitial rather than silently recording
     consent to an outdated scope set.
     """
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         row, _grants = await get_app_or_404(db, slug, user)
         if row.live_version is None:
             raise HTTPException(
@@ -241,9 +229,6 @@ async def consent_app(
             ),
             {"app_id": str(row.id), "email": email, "hash": live_hash},
         )
-        await db.commit()
-    finally:
-        await db.close()
     await record_app_audit(
         app_id=str(row.id), user_email=_uid(user), kind="action",
         detail={"action": "consent", "scope_set_hash": live_hash},

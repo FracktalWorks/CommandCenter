@@ -8,6 +8,7 @@
 > - **`expected_by IS NOT NULL` ⇒ a person actually promised this date.** It stands on its own and is deliberately independent of `due_at`, in both directions: a promise for next week keeps an item past my deadline off the overdue list, and a promise for yesterday flags an item whose deadline is still ahead.
 >
 > Implementation: all four INSERT sites (`items.py` delegate + clarify-delegate, `capture_email.py` ×2, `sync.py` provider pull) write **no** `expected_by` — at each of them the value on offer was literally the item's own due date under another name. `isWaitingOverdue(item)` judges `expectedBy ?? dueAt` (with `waitingLine()` naming *which* fact, so the row reads "promised by …" or "due …" rather than a bare date). A promise is stated explicitly through **`PATCH /tasks/items/{id}` `{expected_by}`** — the same endpoint, auth and ISO/`""`-clears convention as the due-date edit, applied to the item's OPEN `gtd_waiting` row (it is the only field on that patch that lands on another table); the control is the "Promised by" editor in the Waiting-on section of `ItemDetail.tsx`. **No migration** — mig-48 columns, unchanged. **Data note:** rows delegated between the previous deploy and this change carry a snapshot `expected_by`. They keep it and stay judged on it, exactly as if that date had been promised. There is no backfill and no data migration; clearing one is a normal edit ("Promised by" → ✕).
+> **Update 2026-08-10 (S2, detail surface docked — owner ruling: "Projects is canonical, Tasks conforms").** `/tasks` was the only app in the product that opened a record as a pop-up; `DESIGN_SYSTEM.md` §6 has specified the house layout as an optional `w-[380px]` desktop side panel (bottom sheet on mobile) all along, and `/projects` implements it. **Desktop list/board views now dock the detail** as a third column — `page.tsx` renders `<aside className="w-[380px] …"><ItemDetail /></aside>` beside `ItemList`, driven by the store's `selectedItemId`, which is the composition `projects/page.tsx` uses for `TaskPanel`. The pane is present only while something is selected (Projects' behaviour) and closes from its own ✕. **`TaskFocusModal` keeps two lives:** the **phone** branch, full-screen, exactly as Projects goes `fixed inset-0` on a phone; and an explicit **maximise** from the docked pane, because the pane is narrower than the modal's `max-w-3xl` and this detail is far denser than Projects' — that is the mitigation for the reading width the dock costs. Two exports that were imported nowhere came back rather than being deleted: `ItemDetail()` (the pane's entry, which restores the INBOX → `ClarifyPanel` branch) and the "Open full page" button, which now has an unfocused mount to live on. `openFocus` stays the app-wide "open this task" verb — on the docked surface the page drops its focus half so the row selects into the pane, and Inbox/Engage/Calendar/Assistant, which have no pane, keep raising the overlay. **Frontend only; no migration, no API change.** Fences, stated honestly: `npx tsc --noEmit`, `npx vitest run` and `npx vitest run src/lib/theme/` all pass, and `sm:rounded-2xl` on the modal sheet became `sm:rounded-lg` (§4 radius) — but **nothing in this tree tests layout, panel counts or mobile branches**, so "the detail is docked" is advisory, held by review and by the Fluent/Material/Graphite pass, which could not be run here (Playwright cannot install in the build environment).
 > **v0.2 review pass:** reconciled the GTD "lightweight project" vs "first-class project" framing (§5.1); clarified the delegation-write vs Action-Broker sequencing (§6, Phase 3); pinned the migration (`48_*`, idempotent, FK-dependency apply order — §4); placed the new GTD tools in `skill-task-gtd` over the canonical store and demoted `skill-clickup-sync` to the reference connector (§3.1); matched the gateway route to the `routes/<app>/` package precedent (§8); de-duplicated horizon levels vs projects/items (§4); aligned F1 capture channels with the phasing (Q3); added a build-order summary (§9).
 > **Sibling spec:** [`archive/email_ai_assistant.md`](archive/email_ai_assistant.md) — the Task Manager app deliberately mirrors its architecture (multi-panel client + AI assistant + provider abstraction + Postgres sync + automation engine + follow-up tracking). Read it first; this doc reuses its patterns by reference. (Email's living plan is now [`email_app_master_plan.md`](email_app_master_plan.md).)
 
@@ -625,10 +626,10 @@ src/app/tasks/
 │   ├── ListsSidebar.tsx      — Inbox · Next (by @context) · Waiting · Projects · Calendar · Someday · Horizons
 │   ├── CaptureBar.tsx        — universal quick-add (global hotkey)
 │   ├── ItemList.tsx          — processed-task views with a List ⇄ Board toggle
-│   ├── TaskCard.tsx          — rich PM-tool task card (board card + dense row); opens the focus modal
+│   ├── TaskCard.tsx          — rich PM-tool task card (board card + dense row); opens the task (docked pane on desktop, focus modal on a phone)
 │   ├── TaskBoard.tsx         — Kanban board (columns by @context / stage / disposition), native HTML5 drag-to-refile → updateItem (back-syncs to ClickUp)
-│   ├── ItemDetail.tsx        — editable task detail (+ ClickUp back-sync, comments/attachments/subtasks)
-│   ├── TaskFocusModal.tsx    — full-page focused task view (the "task card pops up" surface)
+│   ├── ItemDetail.tsx        — editable task detail (+ ClickUp back-sync, comments/attachments/subtasks); `ItemDetail()` is the docked pane's entry, `TaskDetail` the editor both surfaces share
+│   ├── TaskFocusModal.tsx    — full-page focused task view: the phone's detail surface, and desktop's **maximise** out of the docked pane
 │   ├── ClarifyPanel.tsx      — GTD decision-tree UI (agent proposal + approve/edit)
 │   ├── ProjectPlanner.tsx    — natural-planning flow
 │   ├── EngageView.tsx        — "Now": filter by context/time/energy/priority
@@ -717,9 +718,10 @@ extended (`_build_item_update`). (2) **ClickUp back-sync** — `provider.update_
 (add/rem assignee delta) + `_push_patch_upstream` best-effort back-sync of a SYNCED
 task's edits. (3) **Rich ClickUp detail** — `provider.get_task_detail` + `GET
 /items/{id}/detail` → comments/attachments/subtasks rendered in the panel.
-(4) **Full-page view** — `TaskFocusModal` (store `focusedItemId`/`openFocus`).
-(5) **List ⇄ Board** — `TaskCard` (rich card, board + dense-row variants; click →
-focus modal) + `TaskBoard` (Kanban; columns by workflow stage [Next] / provider
+(4) **Full-page view** — `TaskFocusModal` (store `focusedItemId`/`openFocus`;
+since 2026-08-10 the phone's detail surface and desktop's *maximise*, not the
+desktop default — see the status header). (5) **List ⇄ Board** — `TaskCard`
+(rich card, board + dense-row variants; click → the detail surface) + `TaskBoard` (Kanban; columns by workflow stage [Next] / provider
 stage [Waiting/Someday] / disposition; **native HTML5 drag** — no DnD lib);
 `ItemList` gained a sticky List/Board toggle (Calendar/Archive stay list-only).
 

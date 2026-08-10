@@ -39,7 +39,7 @@ from fastapi import Depends, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from gateway.routes.projects.core import (
     ListResponse,
-    _get_db,
+    _tenant_session,
     actor,
     emit,
     load_visible_task,
@@ -90,8 +90,7 @@ async def attach_file(
     would mean an unauthorised caller could still make the server do the work.
     """
     email = actor(user)
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         vis = await resolve_visibility(db, user)
         task = await load_visible_task(db, vis, task_id)
 
@@ -138,7 +137,6 @@ async def attach_file(
             meta={"attachment_id": att_id, "name": name, "mime": mime,
                   "size": len(content)},
         )
-        await db.commit()
         result = {
             "attachment_id": att_id, "name": name, "mime": mime,
             "size": len(content), "added_by": email,
@@ -146,8 +144,6 @@ async def attach_file(
             "url": f"/api/projects/attachments/{att_id}/{name}",
         }
         project_id = str(task.project_id)
-    finally:
-        await db.close()
 
     await emit("pm.task.updated", {"task_id": task_id, "project_id": project_id,
                                    "attachment_added": att_id})
@@ -158,8 +154,7 @@ async def attach_file(
 async def list_attachments(
     task_id: str, user: UserContext = Depends(get_current_user),
 ) -> ListResponse:
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         vis = await resolve_visibility(db, user)
         await load_visible_task(db, vis, task_id)
         rows = (await db.execute(
@@ -173,8 +168,6 @@ async def list_attachments(
             ),
             {"tid": task_id},
         )).fetchall()
-    finally:
-        await db.close()
     items = [descriptor(r) for r in rows]
     return ListResponse(rows=items, total=len(items))
 
@@ -194,8 +187,7 @@ async def serve_attachment(
     404 for "not attached to anything you can see" as well as "no such file"
     (R5). A 403 here would confirm the file exists.
     """
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         vis = await resolve_visibility(db, user)
         params: dict[str, Any] = {"aid": attachment_id}
         clauses = ["ta.attachment_id = CAST(:aid AS uuid)"]
@@ -216,8 +208,6 @@ async def serve_attachment(
             ),
             params,
         )).fetchone()
-    finally:
-        await db.close()
     if row is None or not Path(row.path).is_file():
         raise HTTPException(status_code=404, detail="Attachment not found")
     return FileResponse(
@@ -243,8 +233,7 @@ async def detach_file(
     half-failed request safe.
     """
     email = actor(user)
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         vis = await resolve_visibility(db, user)
         await load_visible_task(db, vis, task_id)
         result = await db.execute(
@@ -262,7 +251,4 @@ async def detach_file(
                 task_id=task_id, body="Removed an attachment",
                 meta={"attachment_id": attachment_id, "removed": True},
             )
-        await db.commit()
-    finally:
-        await db.close()
     return {"task_id": task_id, "attachment_id": attachment_id, "removed": removed}

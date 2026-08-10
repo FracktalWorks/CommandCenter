@@ -24,11 +24,17 @@
  * first drag into an unordered column.
  */
 import { AvatarStack, TaskMeta } from "@/components/TaskMeta";
+import { DropGap } from "@/components/DropGap";
+import { EmptyState } from "@/components/EmptyState";
 import Icon from "@/components/Icon";
+import { StatusChip } from "@/components/StatusChip";
+import { TaskCardShell, TaskCardTitle } from "@/components/TaskCardShell";
 import Button from "@/components/ui/Button";
-import { useMemo, useState } from "react";
+import { dropIndexFor, gapKey } from "@/lib/boardDrop";
+import { Fragment, useMemo, useState } from "react";
 
-import type { StatusRow, TaskRow } from "../lib/api";
+import { accentForGroup, accentForStatus } from "../lib/accent";
+import type { StatusRow, TagRow, TaskRow } from "../lib/api";
 import { projectsApi } from "../lib/api";
 import {
   buildCellDropPatch,
@@ -36,12 +42,15 @@ import {
   planDrop,
   sortForView,
 } from "../lib/board";
-import { taskRef, visibleChips } from "../lib/card";
+import { tagColours, taskRef, visibleChips } from "../lib/card";
 import { clampCursor, stepCursor } from "../lib/cursor";
+import { emptyStateCopy } from "../lib/emptyState";
 import {
   type BoardLanes,
+  type Filters,
   type GroupBy,
   type TaskGroup,
+  isFiltered,
   personLabel,
 } from "../lib/grouping";
 import { mergePlans, quickAddPrefill } from "../lib/quickAdd";
@@ -59,12 +68,31 @@ const NOBODY: ReadonlySet<string> = new Set();
 interface Props {
   groups: TaskGroup[];
   groupBy: GroupBy;
+  /**
+   * S4 — the view's filters, for the empty state alone.
+   *
+   * Required rather than optional: an unwired call site would silently blame
+   * the project's statuses for a board somebody filtered to nothing, which is
+   * the defect this props pair exists to end. `tsc` is the fence.
+   */
+  filters: Filters;
+  onClearFilters: () => void;
   /** WS-27y — the second axis and its lane state. */
   lanes: BoardLanes;
   onToggleLane: (key: string) => void;
   onShowEmptyLanes: (show: boolean) => void;
   /** Context the lane computation needs — same as the page's `groupTasks` call. */
   statuses: StatusRow[];
+  /**
+   * S6 — the project's tag registry, for the colour of a tag chip alone.
+   *
+   * The card names its tags now, and a tag has to be the SAME colour here, in
+   * the picker inside the panel and in the filter bar — `pm_tags.color` is the
+   * owner's choice and there is one of it. Optional so a surface that has no
+   * registry (a cross-project list) draws named chips in the gray fallback
+   * rather than the wrong colour.
+   */
+  tags?: readonly TagRow[];
   projectName?: (id: string) => string;
   /** Where a quick-added task is created (the selected node). */
   projectId: string;
@@ -87,10 +115,13 @@ interface Props {
 export function TaskBoard({
   groups,
   groupBy,
+  filters,
+  onClearFilters,
   lanes,
   onToggleLane,
   onShowEmptyLanes,
   statuses,
+  tags,
   projectName,
   projectId,
   shownFields,
@@ -105,6 +136,8 @@ export function TaskBoard({
   const [over, setOver] = useState<{ col: string; lane: string | null } | null>(
     null
   );
+  /** The exact gap the card would land in, as `@/lib/boardDrop.gapKey`. */
+  const [dropAt, setDropAt] = useState<string | null>(null);
   const [cursor, setCursor] = useState(-1);
   const [anchor, setAnchor] = useState<number | null>(null);
   const { flash, attach, scrollTo } = useFlash();
@@ -117,6 +150,31 @@ export function TaskBoard({
   const columns = useMemo(
     () => groups.map((group) => ({ ...group, tasks: sortForView(group.tasks) })),
     [groups]
+  );
+
+  const statusById = useMemo(
+    () => new Map(statuses.map((row) => [row.id, row])),
+    [statuses]
+  );
+
+  // Once per registry, not once per card: a board draws hundreds of rows.
+  const tagHues = useMemo(() => tagColours(tags ?? []), [tags]);
+
+  /**
+   * WS-27ad — the column's colour.
+   *
+   * `pm_task_statuses.color` has been stored since migration 146 and drawn
+   * nowhere: every column header was the same `bg-muted`, so a Done lane and a
+   * Backlog lane were indistinguishable while the /tasks board next door was
+   * colour-coded per stage. The owner's stored colour answers first, then the
+   * status category (`accentForGroup`), then position.
+   */
+  const columnAccents = useMemo(
+    () =>
+      columns.map((column, index) =>
+        accentForGroup(groupBy, column.key, index, columns.length, statuses)
+      ),
+    [columns, groupBy, statuses]
   );
 
   const swimlanes = useMemo<Swimlane[] | null>(
@@ -198,18 +256,31 @@ export function TaskBoard({
   const refusalFor = (laneKey: string | null): string | null =>
     dropRefusal(groupBy, laneKey === null ? null : subBy, dragging ?? undefined);
 
-  function dropInto(
-    event: React.DragEvent,
+  /**
+   * WS-27ad — a drop lands where it was aimed.
+   *
+   * `gapIndex` omitted means the card was dropped on the column body rather
+   * than on a gap, which still appends: that is the honest reading of "somewhere
+   * in this column". What changed is that there are now gaps to aim at at all —
+   * this board used to append unconditionally, so dragging a card two rows up
+   * dropped it at the bottom and the gesture visibly failed.
+   */
+  function applyDrop(
     colKey: string,
     cellTasks: TaskRow[],
-    laneKey: string | null
+    laneKey: string | null,
+    gapIndex?: number
   ) {
-    event.preventDefault();
     setOver(null);
+    setDropAt(null);
     const task = dragging;
     setDragging(null);
     if (!task || refusalFor(laneKey)) return;
-    const writes = planDrop(cellTasks, task.id, cellTasks.length, colKey);
+    const index =
+      gapIndex === undefined
+        ? cellTasks.length
+        : dropIndexFor(cellTasks, task.id, gapIndex);
+    const writes = planDrop(cellTasks, task.id, index, colKey);
     const patch = buildCellDropPatch(
       task,
       groupBy,
@@ -230,7 +301,7 @@ export function TaskBoard({
       if (!dragging) return;
       // preventDefault even when refusing — the browser must keep sending
       // events or the overlay could never show; the refusal is enforced in
-      // `dropInto`, and the cursor says "no" via dropEffect.
+      // `applyDrop`, and the cursor says "no" via dropEffect.
       event.preventDefault();
       event.dataTransfer.dropEffect = refusalFor(laneKey) ? "none" : "move";
       setOver((current) =>
@@ -245,9 +316,48 @@ export function TaskBoard({
         current?.col === colKey && current?.lane === laneKey ? null : current
       );
     },
-    onDrop: (event: React.DragEvent) =>
-      dropInto(event, colKey, cellTasks, laneKey),
+    onDrop: (event: React.DragEvent) => {
+      // The column body — no gap was hit, so this appends (see `applyDrop`).
+      event.preventDefault();
+      applyDrop(colKey, cellTasks, laneKey);
+    },
   });
+
+  /**
+   * A cell's cards with a drop gap above each and one at the end.
+   *
+   * The gap keys are namespaced by lane as well as column: with a sub-grouping
+   * on, two cells in the same column are the same `colKey`, and a bare
+   * `col:index` would light the highlight up in both at once.
+   */
+  const cellCards = (
+    colKey: string,
+    cellTasks: TaskRow[],
+    laneKey: string | null
+  ) => {
+    const scope = laneKey === null ? colKey : `${colKey}\0${laneKey}`;
+    const gap = (index: number) => (
+      <li key={`gap-${index}`}>
+        <DropGap
+          active={dropAt === gapKey(scope, index)}
+          dragging={Boolean(dragging)}
+          onOver={() => dragging && setDropAt(gapKey(scope, index))}
+          onDrop={() => applyDrop(colKey, cellTasks, laneKey, index)}
+        />
+      </li>
+    );
+    return (
+      <>
+        {cellTasks.map((task, index) => (
+          <Fragment key={task.id}>
+            {gap(index)}
+            {card(task)}
+          </Fragment>
+        ))}
+        {cellTasks.length > 0 ? gap(cellTasks.length) : null}
+      </>
+    );
+  };
 
   async function quickAdd(title: string, colKey: string, laneKey: string | null) {
     const plan =
@@ -286,11 +396,11 @@ export function TaskBoard({
     ) : null;
 
   const card = (task: TaskRow) => (
-    <li key={task.id} ref={attach(task.id)} className="flex items-start gap-1.5 rounded-md">
+    <li key={task.id} className="flex items-start gap-1.5 rounded-md">
       {onToggle ? (
         <input
           type="checkbox"
-          className="mt-2 shrink-0"
+          className="mt-3 shrink-0"
           aria-label={`Select ${task.title}`}
           checked={selected?.has(task.id) ?? false}
           // The click must not also open the task — a checkbox inside a card
@@ -301,9 +411,19 @@ export function TaskBoard({
           }
         />
       ) : null}
-      <button
-        type="button"
+      {/* WS-27ad: the same box /tasks draws (`@/components/TaskCardShell`) —
+          `bg-card` on the column's `bg-card` well, the shadow lift that says
+          "draggable", one radius, one padding, one title treatment. This card
+          used to be `bg-background`, i.e. the page colour, which read as a
+          hole in the column rather than a card on it. */}
+      <TaskCardShell
+        innerRef={attach(task.id)}
+        className="w-full min-w-0"
         draggable
+        completed={Boolean(task.completed_at)}
+        selected={selected?.has(task.id) ?? false}
+        atCursor={cursorAt >= 0 && rows[cursorAt] === task.id}
+        onActivate={() => onSelect(task)}
         onDragStart={(e) => {
           e.dataTransfer.effectAllowed = "move";
           e.dataTransfer.setData("text/plain", task.id);
@@ -312,36 +432,58 @@ export function TaskBoard({
         onDragEnd={() => {
           setDragging(null);
           setOver(null);
+          setDropAt(null);
         }}
-        onClick={() => onSelect(task)}
-        className={`w-full rounded-md border bg-background p-2 text-left text-sm hover:border-ring ${
-          selected?.has(task.id) ? "border-primary" : "border-border"
-        } ${cursorAt >= 0 && rows[cursorAt] === task.id ? "ring-2 ring-ring" : ""}`}
       >
-        <span
-          className={`block truncate text-foreground ${
-            task.completed_at ? "line-through opacity-60" : ""
-          }`}
-        >
+        {/* Off the status axis the column no longer says what the status is,
+            so the card carries it — the same rule /tasks applies with
+            `showStage` on a lens-grouped list, and the same pill. */}
+        {groupBy === "status" ? null : (
+          <StatusChip
+            accent={accentForStatus(statusById.get(task.status_id))}
+            label={statusById.get(task.status_id)?.name ?? "No status"}
+            className="w-fit"
+          />
+        )}
+        <TaskCardTitle completed={Boolean(task.completed_at)} className="truncate">
           {task.title}
-        </span>
+        </TaskCardTitle>
         {/* The chip row and the owner strip are the shared card vocabulary
             (WS-27s) — the same components /tasks draws, so a task looks like
-            the same kind of thing in both. */}
-        <TaskMeta chips={visibleChips(task, shownFields)} className="mt-1.5" />
-        <span className="mt-1.5 flex items-center justify-between gap-2 text-[10px] text-muted-foreground">
+            the same kind of thing in both. S6 added the two facts the row
+            already carried and the card threw away: the priority the view's
+            `shown_fields` has always asked for, and the tags by NAME in the
+            colour their registry gives them, instead of a bare count. */}
+        <TaskMeta chips={visibleChips(task, shownFields, undefined, tagHues)} />
+        <span className="flex items-center justify-between gap-2 text-[10px] text-muted-foreground">
           <span>{taskRef(task)}</span>
           <AvatarStack people={task.assignees} label={personLabel} />
         </span>
-      </button>
+      </TaskCardShell>
     </li>
   );
 
   if (columns.length === 0) {
+    // S4 — the old copy named both causes in one sentence ("Clear a filter, or
+    // this project has no statuses yet") and left the reader to work out which
+    // one was theirs. `isFiltered` already knows, and off the status axis the
+    // statuses are not what is missing at all.
+    const copy = emptyStateCopy({
+      canvas: "board",
+      filtered: isFiltered(filters),
+      onStatusAxis: groupBy === "status",
+    });
     return (
-      <p className="p-6 text-sm text-muted-foreground">
-        Nothing to show. Clear a filter, or this project has no statuses yet.
-      </p>
+      <EmptyState
+        icon={copy.icon}
+        message={copy.message}
+        hint={copy.hint}
+        action={
+          copy.filtered
+            ? { label: "Clear filters", icon: "X", onClick: onClearFilters }
+            : undefined
+        }
+      />
     );
   }
 
@@ -375,23 +517,34 @@ export function TaskBoard({
 
       {!laned ? (
         <div className="flex gap-3 overflow-x-auto p-3">
-          {columns.map((column) => (
+          {columns.map((column, columnIndex) => {
+            const accent = columnAccents[columnIndex];
+            return (
             <section
               key={column.key}
               {...targetProps(column.key, column.tasks, null)}
-              className="relative flex w-72 shrink-0 flex-col rounded-lg border border-border bg-card"
+              className="relative flex w-72 shrink-0 flex-col overflow-hidden rounded-lg border border-border bg-card"
             >
               {refusalOverlay(null, column.key)}
-              <header className="flex items-center justify-between rounded-t-lg bg-muted px-3 py-2">
-                <span className="truncate text-sm font-medium text-foreground">
-                  {column.label}
+              {/* The accent cap — /tasks' board grammar, now shared: a 1px
+                  band of the lane's colour above a faintly tinted header, so
+                  "where is Done" is a glance rather than a read. */}
+              <div className={`h-1 w-full ${accent.dot}`} />
+              <header
+                className={`flex items-center justify-between px-3 py-2 ${accent.soft}`}
+              >
+                <span className="flex min-w-0 items-center gap-1.5">
+                  <span className={`h-2 w-2 shrink-0 rounded-full ${accent.dot}`} />
+                  <span className={`truncate text-sm font-medium ${accent.text}`}>
+                    {column.label}
+                  </span>
                 </span>
-                <span className="text-xs text-muted-foreground">
+                <span className="shrink-0 rounded-full bg-background/60 px-1.5 py-0.5 text-[10px] font-semibold text-muted-foreground">
                   {column.tasks.length}
                 </span>
               </header>
-              <ul className="flex-1 space-y-2 p-2">
-                {column.tasks.map((task) => card(task))}
+              <ul className="flex-1 space-y-1 p-2">
+                {cellCards(column.key, column.tasks, null)}
                 {column.tasks.length === 0 ? (
                   <li className="rounded-md border border-dashed border-border p-3 text-center text-xs text-muted-foreground">
                     {droppable ? "Drop here" : "Nothing here"}
@@ -405,26 +558,34 @@ export function TaskBoard({
                 />
               </div>
             </section>
-          ))}
+            );
+          })}
         </div>
       ) : (
         <div className="overflow-x-auto p-3">
           <div className="min-w-max">
-            {/* Column headers once, up top — every lane below shares them. */}
+            {/* Column headers once, up top — every lane below shares them, and
+                they carry the same accent the flat board's headers do. */}
             <div className="mb-2 flex gap-3">
-              {columns.map((column) => (
-                <div
-                  key={column.key}
-                  className="flex w-72 shrink-0 items-center justify-between rounded-md bg-muted px-3 py-2"
-                >
-                  <span className="truncate text-sm font-medium text-foreground">
-                    {column.label}
-                  </span>
-                  <span className="text-xs text-muted-foreground">
-                    {column.tasks.length}
-                  </span>
-                </div>
-              ))}
+              {columns.map((column, columnIndex) => {
+                const accent = columnAccents[columnIndex];
+                return (
+                  <div
+                    key={column.key}
+                    className={`flex w-72 shrink-0 items-center justify-between rounded-md border-l-2 px-3 py-2 ${accent.soft} ${accent.bar}`}
+                  >
+                    <span className="flex min-w-0 items-center gap-1.5">
+                      <span className={`h-2 w-2 shrink-0 rounded-full ${accent.dot}`} />
+                      <span className={`truncate text-sm font-medium ${accent.text}`}>
+                        {column.label}
+                      </span>
+                    </span>
+                    <span className="shrink-0 rounded-full bg-background/60 px-1.5 py-0.5 text-[10px] font-semibold text-muted-foreground">
+                      {column.tasks.length}
+                    </span>
+                  </div>
+                );
+              })}
             </div>
 
             {(shownLanes ?? []).map((lane) => {
@@ -454,8 +615,8 @@ export function TaskBoard({
                             className="relative flex w-72 shrink-0 flex-col rounded-lg border border-border bg-card"
                           >
                             {refusalOverlay(lane.key, column.key)}
-                            <ul className="flex-1 space-y-2 p-2">
-                              {cell.map((task) => card(task))}
+                            <ul className="flex-1 space-y-1 p-2">
+                              {cellCards(column.key, cell, lane.key)}
                               {cell.length === 0 ? (
                                 <li className="rounded-md border border-dashed border-border p-2 text-center text-[11px] text-muted-foreground">
                                   {droppable ? "Drop here" : "—"}

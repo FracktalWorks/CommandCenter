@@ -261,7 +261,7 @@ export function PlanDayPanel({
                 if (plan) void run(note, v);
               }}
               disabled={loading}
-              className="min-w-0 flex-1 rounded-md border border-border bg-background/60 px-2 py-1.5 text-[12px] text-foreground focus:border-primary/50 focus:outline-none disabled:opacity-50"
+              className="min-w-0 flex-1 rounded-md border border-border bg-background/60 px-2 py-1.5 text-xs text-foreground focus:border-primary/50 focus:outline-none disabled:opacity-50"
             >
               <option value="work">
                 Working hours · till {fmt(workEndAt().toISOString())}
@@ -293,7 +293,7 @@ export function PlanDayPanel({
                   if (plan) void run(note, "custom");
                 }}
                 disabled={loading}
-                className="rounded-md border border-border bg-background/60 px-2 py-1.5 text-[12px] text-foreground focus:border-primary/50 focus:outline-none disabled:opacity-50"
+                className="rounded-md border border-border bg-background/60 px-2 py-1.5 text-xs text-foreground focus:border-primary/50 focus:outline-none disabled:opacity-50"
               />
               <span className="truncate text-[11px] text-muted-foreground">
                 {planningToday &&
@@ -342,7 +342,7 @@ export function PlanDayPanel({
               placeholder="e.g. “low energy”, “calls only”, “deep work”, “work for 2 more hours”, “until 2am”"
               className="min-w-0 flex-1 rounded-md border border-border bg-background/60 px-3 py-2 text-base text-foreground focus:border-primary/50 focus:outline-none sm:text-sm"
             />
-            <Button size="none" radius="keep" layout="inline-flex items-center" type="button" onClick={() => void run(note)} disabled={loading} className="shrink-0 gap-1.5 rounded-md px-3 py-2 text-[12px]">
+            <Button size="none" radius="keep" layout="inline-flex items-center" type="button" onClick={() => void run(note)} disabled={loading} className="shrink-0 gap-1.5 rounded-md px-3 py-2 text-xs">
               {loading ? (
                 <Icon name="Loader2" className="h-3.5 w-3.5 animate-spin" />
               ) : (
@@ -360,11 +360,11 @@ export function PlanDayPanel({
 
         <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
           {error ? (
-            <p className="flex items-center gap-1.5 text-[12px] text-destructive">
+            <p className="flex items-center gap-1.5 text-xs text-destructive">
               <Icon name="AlertTriangle" className="h-4 w-4 shrink-0" /> {error}
             </p>
           ) : loading && !plan ? (
-            <p className="flex items-center gap-1.5 py-6 text-[12px] text-muted-foreground">
+            <p className="flex items-center gap-1.5 py-6 text-xs text-muted-foreground">
               <Icon name="Loader2" className="h-4 w-4 animate-spin" /> Planning your day…
             </p>
           ) : plan ? (
@@ -393,7 +393,7 @@ export function PlanDayPanel({
                   </p>
                 ))}
               {plan.notes && (
-                <p className="mb-2 rounded-md bg-primary/5 px-2.5 py-2 text-[12px] text-muted-foreground">
+                <p className="mb-2 rounded-md bg-primary/5 px-2.5 py-2 text-xs text-muted-foreground">
                   {plan.notes}
                 </p>
               )}
@@ -461,7 +461,7 @@ export function PlanDayPanel({
               {plan.blocks.length === 0 &&
                 plan.unplaced.length === 0 &&
                 plan.evicted.length === 0 && (
-                  <p className="py-4 text-center text-[12px] text-muted-foreground">
+                  <p className="py-4 text-center text-xs text-muted-foreground">
                     {isReplan
                       ? "Nothing to reshuffle — the rest of your day is clear."
                       : "Nothing to schedule — no unscheduled next actions."}
@@ -498,10 +498,10 @@ export function PlanDayPanel({
           className="flex shrink-0 items-center justify-end gap-2 border-t border-border px-4 py-3"
           style={{ paddingBottom: "max(0.75rem, env(safe-area-inset-bottom))" }}
         >
-          <Button variant="text" size="none" radius="keep" layout="" type="button" onClick={onClose} className="rounded-md px-3 py-2 text-[12px]">
+          <Button variant="text" size="none" radius="keep" layout="" type="button" onClick={onClose} className="rounded-md px-3 py-2 text-xs">
             Cancel
           </Button>
-          <Button size="none" radius="keep" layout="inline-flex items-center" type="button" onClick={apply} disabled={!plan || (plan.blocks.length === 0 && plan.evicted.length === 0)} className="gap-1.5 rounded-md px-3 py-2 text-[12px]">
+          <Button size="none" radius="keep" layout="inline-flex items-center" type="button" onClick={apply} disabled={!plan || (plan.blocks.length === 0 && plan.evicted.length === 0)} className="gap-1.5 rounded-md px-3 py-2 text-xs">
             <Icon name="Check" className="h-3.5 w-3.5" />
             Apply
             {plan?.blocks.length

@@ -36,7 +36,7 @@ from typing import Any
 from acb_auth import UserContext, get_current_user
 from fastapi import Depends, HTTPException
 from gateway.routes.projects.core import (
-    _get_db,
+    _tenant_session,
     actor,
     clean_payload,
     load_visible_project,
@@ -270,8 +270,7 @@ async def list_tags(
     you which of two near-duplicate tags to merge into the other, and computing
     it per row in the browser would mean shipping every task to get it.
     """
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         vis = await resolve_visibility(db, user)
         root = await _root_for(db, vis, project_id)
         rows = (await db.execute(
@@ -292,8 +291,6 @@ async def list_tags(
             "rows": [_row(r, int(r.task_count or 0)) for r in rows],
             "total": len(rows),
         }
-    finally:
-        await db.close()
 
 
 @router.post("/nodes/{project_id}/tags", status_code=201)
@@ -305,8 +302,7 @@ async def create_tag(
     name = normalise_tag(values.get("name"))
     if name is None:
         raise HTTPException(status_code=422, detail="A tag needs a name.")
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         vis = await resolve_visibility(db, user)
         root = await _root_for(db, vis, project_id)
         registry = await load_registry(db, root)
@@ -330,10 +326,7 @@ async def create_tag(
             row = await update_row(db, "pm_tags", str(row.id), {
                 k: v for k, v in values.items() if k in ("color", "description")
             })
-        await db.commit()
         return _row(row, 0)
-    finally:
-        await db.close()
 
 
 @router.patch("/tags/{tag_id}")
@@ -353,8 +346,7 @@ async def patch_tag(
     if "name" in values and new_name is None:
         raise HTTPException(status_code=422, detail="A tag needs a name.")
 
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         existing = await require_row(db, "pm_tags", tag_id, "Tag")
         vis = await resolve_visibility(db, user)
         await load_visible_project(db, vis, str(existing.project_id))
@@ -376,10 +368,7 @@ async def patch_tag(
         if new_name:
             write["name"] = new_name
         row = await update_row(db, "pm_tags", tag_id, write) if write else existing
-        await db.commit()
         return {**_row(row), "retagged": renamed}
-    finally:
-        await db.close()
 
 
 @router.post("/tags/{tag_id}/merge")
@@ -394,8 +383,7 @@ async def merge_tag(
     ends with the target **once** — `merged_tags` is where that is decided, and
     it is pure so the case can be asserted directly.
     """
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         source = await require_row(db, "pm_tags", tag_id, "Tag")
         target = await require_row(db, "pm_tags", payload.into_tag_id, "Tag")
         vis = await resolve_visibility(db, user)
@@ -418,12 +406,9 @@ async def merge_tag(
             text("DELETE FROM pm_tags WHERE id = CAST(:tid AS uuid)"),
             {"tid": tag_id},
         )
-        await db.commit()
         return {
             "merged": source.name, "into": target.name, "retagged": moved,
         }
-    finally:
-        await db.close()
 
 
 @router.delete("/tags/{tag_id}")
@@ -437,8 +422,7 @@ async def delete_tag(
     recreates the name. The count is reported (R7/R8), because losing data
     silently is what makes people distrust a delete.
     """
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         existing = await require_row(db, "pm_tags", tag_id, "Tag")
         vis = await resolve_visibility(db, user)
         await load_visible_project(db, vis, str(existing.project_id))
@@ -454,13 +438,10 @@ async def delete_tag(
             text("DELETE FROM pm_tags WHERE id = CAST(:tid AS uuid)"),
             {"tid": tag_id},
         )
-        await db.commit()
         return {
             "deleted": tag_id, "name": existing.name,
             "cascaded": {"tasks_untagged": int(stripped)},
         }
-    finally:
-        await db.close()
 
 
 async def _rewrite(db: Any, root: str, before: str, after: str) -> int:

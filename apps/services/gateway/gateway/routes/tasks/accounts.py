@@ -25,10 +25,10 @@ from gateway.routes.tasks.core import (
     PersonModel,
     TaskAccountModel,
     _assert_account_owner,
-    _get_db,
     _key_store,
     _log,
     _parse_jsonb,
+    _tenant_session,
     _uid,
     router,
 )
@@ -102,16 +102,13 @@ async def list_provider_workspaces(
 
 @router.get("/accounts", response_model=list[TaskAccountModel])
 async def list_accounts(user: UserContext = Depends(get_current_user)):
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         rows = (await db.execute(
             text("""SELECT * FROM task_accounts WHERE user_id = :uid
                     ORDER BY created_at"""),
             {"uid": _uid(user)},
         )).fetchall()
         return [_row_to_account(r) for r in rows]
-    finally:
-        await db.close()
 
 
 @router.post("/accounts", response_model=TaskAccountModel, status_code=201)
@@ -134,8 +131,7 @@ async def create_account(
     encrypted = _key_store().encrypt(json.dumps({"api_token": req.api_token}))
     label = req.label or workspaces[req.workspace_id].get("name") or req.provider
 
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         dup = (await db.execute(
             text("""SELECT 1 FROM task_accounts
                     WHERE user_id = :uid AND provider = :p AND workspace_id = :w"""),
@@ -154,29 +150,32 @@ async def create_account(
             {"id": account_id, "uid": _uid(user), "p": req.provider,
              "w": req.workspace_id, "label": label, "creds": encrypted},
         )
-        await db.commit()
-        try:
+    # The account row is committed above; the first schema fetch runs in its
+    # own transaction so a provider failure can't undo the connect (H2
+    # restructure of the old commit-then-continue shape).
+    try:
+        async with _tenant_session() as db:
             await _refresh_schema(db, account_id, _uid(user))
-        except Exception as exc:
+            await _reconcile_people(db, _uid(user))
+    except Exception as exc:
+        async with _tenant_session() as db:
             await db.execute(
                 text("""UPDATE task_accounts SET sync_status='error',
                         sync_error=:e, updated_at=now() WHERE id=:id"""),
                 {"id": account_id, "e": str(exc)[:500]},
             )
-            await db.commit()
+    async with _tenant_session() as db:
         row = (await db.execute(
             text("SELECT * FROM task_accounts WHERE id = :id"), {"id": account_id},
         )).fetchone()
-        # Launch this workspace's background sync loop now (no gateway restart).
-        try:
-            from gateway.routes.tasks.scheduler import refresh_account_sync
-            await refresh_account_sync(account_id)
-        except Exception as exc:
-            _log.warning("tasks.accounts.scheduler_start_failed",
-                         account_id=account_id[:12], error=str(exc)[:160])
-        return _row_to_account(row)
-    finally:
-        await db.close()
+    # Launch this workspace's background sync loop now (no gateway restart).
+    try:
+        from gateway.routes.tasks.scheduler import refresh_account_sync
+        await refresh_account_sync(account_id)
+    except Exception as exc:
+        _log.warning("tasks.accounts.scheduler_start_failed",
+                     account_id=account_id[:12], error=str(exc)[:160])
+    return _row_to_account(row)
 
 
 @router.patch("/accounts/{account_id}", response_model=TaskAccountModel)
@@ -185,8 +184,7 @@ async def update_account(
     req: AccountUpdateRequest,
     user: UserContext = Depends(get_current_user),
 ):
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         await _assert_account_owner(db, account_id, _uid(user))
         sets, params = [], {"id": account_id}
         if req.label is not None:
@@ -203,22 +201,21 @@ async def update_account(
                  "WHERE id = :id RETURNING *"),
             params,
         )).fetchone()
-        await db.commit()
-        # Reflect a sync_enabled toggle in the background scheduler at runtime.
-        if req.sync_enabled is not None:
-            try:
-                if req.sync_enabled:
-                    from gateway.routes.tasks.scheduler import refresh_account_sync
-                    await refresh_account_sync(account_id)
-                else:
-                    from gateway.routes.tasks.scheduler import remove_account_sync
-                    await remove_account_sync(account_id)
-            except Exception as exc:
-                _log.warning("tasks.accounts.scheduler_toggle_failed",
-                             account_id=account_id[:12], error=str(exc)[:160])
-        return _row_to_account(row)
-    finally:
-        await db.close()
+    # Reflect a sync_enabled toggle in the background scheduler at runtime —
+    # AFTER the block above committed, because the scheduler re-reads the row
+    # on its own session and must see the new value.
+    if req.sync_enabled is not None:
+        try:
+            if req.sync_enabled:
+                from gateway.routes.tasks.scheduler import refresh_account_sync
+                await refresh_account_sync(account_id)
+            else:
+                from gateway.routes.tasks.scheduler import remove_account_sync
+                await remove_account_sync(account_id)
+        except Exception as exc:
+            _log.warning("tasks.accounts.scheduler_toggle_failed",
+                         account_id=account_id[:12], error=str(exc)[:160])
+    return _row_to_account(row)
 
 
 @router.delete("/accounts/{account_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -227,8 +224,7 @@ async def delete_account(
     user: UserContext = Depends(get_current_user),
 ):
     """Disconnect a workspace. Its mirrored rows cascade away (FK ON DELETE)."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         res = (await db.execute(
             text("""DELETE FROM task_accounts
                     WHERE id = :id AND user_id = :uid RETURNING id"""),
@@ -236,16 +232,13 @@ async def delete_account(
         )).fetchone()
         if res is None:
             raise HTTPException(status_code=404, detail="Account not found")
-        await db.commit()
-        # Stop this workspace's background sync loop.
-        try:
-            from gateway.routes.tasks.scheduler import remove_account_sync
-            await remove_account_sync(account_id)
-        except Exception as exc:
-            _log.warning("tasks.accounts.scheduler_remove_failed",
-                         account_id=account_id[:12], error=str(exc)[:160])
-    finally:
-        await db.close()
+    # Stop this workspace's background sync loop (after the delete committed).
+    try:
+        from gateway.routes.tasks.scheduler import remove_account_sync
+        await remove_account_sync(account_id)
+    except Exception as exc:
+        _log.warning("tasks.accounts.scheduler_remove_failed",
+                     account_id=account_id[:12], error=str(exc)[:160])
 
 
 @router.post("/accounts/{account_id}/schema/refresh", response_model=TaskAccountModel)
@@ -254,16 +247,14 @@ async def refresh_account_schema(
     user: UserContext = Depends(get_current_user),
 ):
     """Re-fetch the provider schema (projects/members/statuses) on demand."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         await _assert_account_owner(db, account_id, _uid(user))
         await _refresh_schema(db, account_id, _uid(user))
+        await _reconcile_people(db, _uid(user))
         row = (await db.execute(
             text("SELECT * FROM task_accounts WHERE id = :id"), {"id": account_id},
         )).fetchone()
         return _row_to_account(row)
-    finally:
-        await db.close()
 
 
 class CreateProjectRequest(BaseModel):
@@ -280,8 +271,7 @@ async def refresh_account_members(
 ):
     """LIVE member pull (delegate-picker freshness): people removed in the
     tool disappear immediately, without the heavier full schema refresh."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         row = await _assert_account_owner(db, account_id, _uid(user))
         creds = json.loads(_key_store().decrypt(row.credentials_encrypted))
         provider = build_provider(row.provider, creds, row.workspace_id)
@@ -294,16 +284,16 @@ async def refresh_account_members(
                     WHERE id = :id"""),
             {"id": account_id, "cache": json.dumps(cache)},
         )
-        await db.commit()
-        # Keep the org roster in step with live membership (§6).
+    # The member cache is committed above; keep the org roster in step with
+    # live membership (§6) in its own transaction, so a reconcile hiccup never
+    # loses the refreshed cache (H2 restructure).
+    async with _tenant_session() as db:
         await _reconcile_people(db, _uid(user))
         fresh = (await db.execute(
             text("SELECT * FROM task_accounts WHERE id = :id"),
             {"id": account_id},
         )).fetchone()
         return _row_to_account(fresh)
-    finally:
-        await db.close()
 
 
 @router.post("/accounts/{account_id}/projects", status_code=201)
@@ -320,8 +310,7 @@ async def create_account_project(
     name = (req.name or "").strip()
     if not name:
         raise HTTPException(status_code=400, detail="Project name is required")
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         row = await _assert_account_owner(db, account_id, _uid(user))
         creds = json.loads(_key_store().decrypt(row.credentials_encrypted))
         provider = build_provider(
@@ -373,14 +362,11 @@ async def create_account_project(
                     WHERE id = :id"""),
             {"id": account_id, "cache": json.dumps(cache)},
         )
-        await db.commit()
         return {
             "project_id": str(proj_row.id),
             "provider_ref": created["id"],
             "name": name,
         }
-    finally:
-        await db.close()
 
 
 class CreateAccountFolderRequest(BaseModel):
@@ -401,8 +387,7 @@ async def create_account_folder(
     name = (req.name or "").strip()
     if not name:
         raise HTTPException(status_code=400, detail="Folder name is required")
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         row = await _assert_account_owner(db, account_id, _uid(user))
         creds = json.loads(_key_store().decrypt(row.credentials_encrypted))
         provider = build_provider(
@@ -424,14 +409,11 @@ async def create_account_folder(
                     WHERE id = :id"""),
             {"id": account_id, "cache": json.dumps(cache)},
         )
-        await db.commit()
         return {
             "folder_id": created["id"],
             "space_id": req.space_id,
             "name": created["name"],
         }
-    finally:
-        await db.close()
 
 
 async def _refresh_schema(db: Any, account_id: str, user_id: str) -> None:
@@ -440,6 +422,12 @@ async def _refresh_schema(db: Any, account_id: str, user_id: str) -> None:
     Mirrored provider lists become SYNCED ``gtd_projects`` rows (upsert on
     (account_id, provider_ref)) so projects from every source render in the
     one unified picker (§5.1).
+
+    Does NOT commit, and no longer calls ``_reconcile_people`` itself — the
+    caller owns the transaction and sequences the reconcile (H2: a mid-helper
+    commit inside a ``_tenant_session`` block would drop the tenant GUC for
+    every statement after it). Request handlers run inside a tenant block whose
+    clean exit commits; the background scheduler commits explicitly.
     """
     row = (await db.execute(
         text("SELECT * FROM task_accounts WHERE id = :id"), {"id": account_id},
@@ -468,10 +456,6 @@ async def _refresh_schema(db: Any, account_id: str, user_id: str) -> None:
             {"id": str(uuid4()), "uid": user_id, "aid": account_id,
              "ref": str(proj.get("id")), "outcome": name},
         )
-    await db.commit()
-    # Reflect current ClickUp membership into the org roster (§6): add joiners,
-    # link matches, deactivate people we auto-added who have since left.
-    await _reconcile_people(db, user_id)
 
 
 async def _reconcile_people(db: Any, user_id: str) -> None:
@@ -490,6 +474,10 @@ async def _reconcile_people(db: Any, user_id: str) -> None:
 
     NEVER touches manually-added or seed-imported people's status (the user owns
     those). Best-effort — a reconcile failure never breaks the sync/refresh.
+
+    Does NOT commit — the caller owns the transaction (a request handler's
+    ``_tenant_session`` block commits on clean exit; the background scheduler
+    commits explicitly). H2: a mid-block commit would drop the tenant GUC.
     """
     try:
         acct_rows = (await db.execute(
@@ -569,6 +557,5 @@ async def _reconcile_people(db: Any, user_id: str) -> None:
                            updated_at = now()"""),
                 {"id": str(uuid4()), "name": name,
                  "email": m.get("email"), "pid": pid})
-        await db.commit()
     except Exception as exc:  # noqa: BLE001
         _log.warning("tasks.reconcile_people_failed", error=str(exc)[:200])

@@ -24,7 +24,7 @@ from typing import Any
 from acb_auth import UserContext, get_current_user
 from acb_common import get_logger
 from fastapi import Depends, HTTPException
-from gateway.routes.whatsapp.core import _get_db, assert_chat_owned, router
+from gateway.routes.whatsapp.core import _tenant_session, assert_chat_owned, router
 from pydantic import BaseModel
 from sqlalchemy import text
 
@@ -174,8 +174,7 @@ async def generate_draft(
     chat_id: str, user: UserContext = Depends(get_current_user),
 ):
     """Generate (and cache) an AI reply draft for a chat."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         account_id = await assert_chat_owned(db, chat_id, user.email or "anonymous")
         draft = await draft_reply(db, account_id, chat_id)
         if draft is None:
@@ -192,10 +191,7 @@ async def generate_draft(
                       generated_at = now()"""),
             {"aid": account_id, "cid": chat_id, "text": draft, "lang": language},
         )
-        await db.commit()
         return DraftModel(chat_id=chat_id, draft_text=draft, language=language)
-    finally:
-        await db.close()
 
 
 @router.get("/chats/{chat_id}/draft", response_model=DraftModel | None)
@@ -203,8 +199,7 @@ async def get_cached_draft(
     chat_id: str, user: UserContext = Depends(get_current_user),
 ):
     """Return the cached draft for a chat, or null if none has been generated."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         await assert_chat_owned(db, chat_id, user.email or "anonymous")
         row = (await db.execute(
             text("""SELECT draft_text, language FROM wa_ai_drafts
@@ -215,5 +210,3 @@ async def get_cached_draft(
             return None
         return DraftModel(
             chat_id=chat_id, draft_text=row.draft_text, language=row.language)
-    finally:
-        await db.close()

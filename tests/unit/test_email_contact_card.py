@@ -20,6 +20,7 @@ from gateway.routes.email.transport.contacts import (
     _preview,
     _signature_block,
 )
+from tests.unit._email_fakes import bind_db
 
 
 class _Row:
@@ -225,7 +226,7 @@ async def test_suggest_unions_sent_contacts_and_senders_ranked() -> None:
 
         async def close(self): ...
 
-    with patch.object(C, "_get_db", AsyncMock(return_value=_DB())):
+    with patch.object(C, "_tenant_session", bind_db(_DB())):
         out = await C.suggest_contacts(
             q="Ayu", account_id="acc-1", limit=8,
             user=MagicMock(email="me@fracktal.in"))
@@ -253,7 +254,7 @@ async def test_suggest_is_best_effort_on_failure() -> None:
 
     db = AsyncMock()
     db.execute.side_effect = RuntimeError("relation email_contacts missing")
-    with patch.object(C, "_get_db", AsyncMock(return_value=db)):
+    with patch.object(C, "_tenant_session", bind_db(db)):
         out = await C.suggest_contacts(
             q="ay", account_id=None, limit=8, user=MagicMock(email="me@x.io"))
     assert out == []

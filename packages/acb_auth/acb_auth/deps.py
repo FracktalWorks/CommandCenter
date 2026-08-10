@@ -62,6 +62,7 @@ from typing import Annotated
 from fastapi import Depends, Header, HTTPException, Request
 
 from acb_common import get_logger
+from acb_common.db import bind_tenant
 
 from acb_auth.access import SERVICE_ACCESS, resolve_access, resolve_identity
 from acb_auth.permissions import NO_ACCESS
@@ -273,6 +274,19 @@ async def _with_resolved_access(user: UserContext) -> UserContext:
     enriched = user.with_access(
         access, user_id=user_id, organization_id=organization_id
     )
+
+    # MT-1c / H2 — the ONE place a request binds its tenant
+    # (`saas_multitenancy_handover.md` H2: "bind once, centrally, from the
+    # authenticated session", never from a header/query/body — R11; the
+    # organization_id above came from the app_user row, not from the caller).
+    # `tenant_session()` then needs no argument anywhere on the request path.
+    # No release here: the gateway's TenantScopeMiddleware opened this
+    # request's scope and releases it after the response, so the binding
+    # cannot outlive the request even on servers that reuse a task. An
+    # unresolved identity (no app_user row) binds nothing, and a converted
+    # handler then fails closed with TenantUnbound rather than defaulting.
+    if enriched.organization_id:
+        bind_tenant(enriched.organization_id)
 
     # Keep the legacy coarse role consistent with the org model, so a member
     # promoted to `admin` in the members UI immediately passes the

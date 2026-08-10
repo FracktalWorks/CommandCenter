@@ -26,7 +26,7 @@ from typing import Any
 from acb_auth import UserContext, get_current_user
 from acb_common import get_logger
 from fastapi import Depends
-from gateway.routes.tasks.core import _get_db, require_people_write, router
+from gateway.routes.tasks.core import _tenant_session, require_people_write, router
 from sqlalchemy import text
 
 _log = get_logger("gateway.tasks.capability")
@@ -236,9 +236,9 @@ async def backfill_people_embeddings(
     if not _semantic_enabled():
         return {"enabled": False, "embedded": 0,
                 "detail": "task_semantic_match_enabled is off."}
-    db = await _get_db()
-    try:
+    # `embed_pending_people` commits as its LAST database action, so it may be
+    # the sole occupant of this tenant block (H2): every statement runs under
+    # the GUC and the wrapper's exit commit is an empty no-op.
+    async with _tenant_session() as db:
         n = await embed_pending_people(db)
         return {"enabled": True, "embedded": n}
-    finally:
-        await db.close()

@@ -40,7 +40,7 @@ from gateway.routes.projects.automation import (
     apply_task_patch,
 )
 from gateway.routes.projects.core import (
-    _get_db,
+    _tenant_session,
     actor,
     emit,
     load_visible_task,
@@ -341,8 +341,7 @@ async def bulk_edit(
     newly_assigned: dict[str, list[str]] = {}
     changed_ids: list[str] = []
 
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         vis = await resolve_visibility(db, user)
         for task_id in ids:
             try:
@@ -383,9 +382,6 @@ async def bulk_edit(
                     f"and {len(tasks) - 1} other task(s)" if len(tasks) > 1 else None
                 ),
             )
-        await db.commit()
-    finally:
-        await db.close()
 
     # Emitted after the commit, and per task: `emit` is best-effort by
     # construction, so an automation that fails cannot roll back a re-triage.

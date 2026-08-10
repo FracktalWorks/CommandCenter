@@ -16,6 +16,7 @@ records the statements, so the tests pin the SQL shape as well as the outcome.
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from typing import Any
 
@@ -61,10 +62,40 @@ class _ScriptedDb:
 
 
 def _install(monkeypatch, module, db: _ScriptedDb) -> None:
-    async def fake_get_db() -> Any:
-        return db
+    """Patch EVERY DB seam the module holds after H2/H4.
 
-    monkeypatch.setattr(module, "_get_db", fake_get_db)
+    ``publish`` is member-reached and converted: its seam is the
+    ``_tenant_session`` context manager (commit on clean exit, like the real
+    wrapper). ``service`` is the unattended run lifecycle and mostly still
+    acquires via ``_get_db`` (H4) — the health check commits its own writes
+    there.
+
+    ⚠️ **Both, never "whichever" — a module can hold both, and `service` does
+    since WS-27aa** (`_pm_lifecycle_sweeper` resolves on `_get_db` and then
+    binds `_tenant_session(org)`). The earlier `if hasattr(...): return` form
+    stopped patching `_get_db` the moment the second name appeared, and four
+    health tests went looking for a real Postgres on 127.0.0.1:5432 — failing
+    with `Connect call failed`, which reads as an environment problem rather
+    than as a test-helper bug.
+
+    ``organization_id`` is accepted and ignored: what these tests pin is the
+    health policy, not the GUC plumbing (``test_tenant_session.py`` owns that).
+    """
+    if hasattr(module, "_tenant_session"):
+
+        @asynccontextmanager
+        async def fake_tenant_session(organization_id: Any = None):
+            yield db
+            await db.commit()
+
+        monkeypatch.setattr(module, "_tenant_session", fake_tenant_session)
+
+    if hasattr(module, "_get_db"):
+
+        async def fake_get_db() -> Any:
+            return db
+
+        monkeypatch.setattr(module, "_get_db", fake_get_db)
 
 
 def _runs(*statuses: str) -> list[SimpleNamespace]:

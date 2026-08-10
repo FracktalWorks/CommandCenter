@@ -23,6 +23,7 @@ from gateway.routes.email.core import (
     _attachment_summaries,
     _fmt_addr_list,
     _get_db,
+    _tenant_session,
     _instantiate_provider,
     _llm_json,
     _log,
@@ -904,6 +905,8 @@ async def _mark_thread_replied(
     instead of defaulting to Awaiting and only correcting on the next sync."""
     if not thread_id:
         return
+    # H4: called only from _maybe_classify_threads (scheduler post-sync
+    # path); no ambient tenant to inherit.
     db = await _get_db()
     try:
         # Thread-status classification only decides whether a thread needs a
@@ -963,6 +966,8 @@ async def _reconcile_labels_bg(
     Best-effort."""
     if not thread_id:
         return
+    # H4: background consumer — _reconcile_labels_bg runs as a
+    # post-response BackgroundTask; no ambient tenant to inherit.
     db = await _get_db()
     try:
         acc = (await db.execute(text(
@@ -1004,6 +1009,9 @@ async def apply_thread_status_correction(
         _canon_status_key(status_key), ("", ""))
     if not rz_status or not thread_id:
         return {"ok": False}
+    # H4: mixed callers — apply_thread_status_correction also runs from the
+    # background sync's label learner (_apply_label_status_corrections);
+    # needs an explicit tenant from the account row.
     db = await _get_db()
     try:
         latest = (await db.execute(text(
@@ -1073,6 +1081,7 @@ async def _maybe_classify_threads(account_id: str) -> None:
     rule (FYI when none matches). Touches threads whose latest message changed OR
     whose stored status is provisional ("· auto" — a prior LLM fallback), so a
     guessed AWAITING self-heals. Caps work per cycle. Best-effort (never raises)."""
+    # H4: scheduler post-sync hook path; no ambient tenant to inherit.
     db = await _get_db()
     try:
         from gateway.routes.email.automation.engine import (  # noqa: PLC0415
@@ -1322,6 +1331,8 @@ async def _reclassify_reply_zero_job(
     inbound remainder can't be classified) stops the drain rather than spinning —
     those threads keep their gap, so re-triggering reclassify picks up where this
     left off. Progress is published per pass for the UI to poll. Best-effort."""
+    # H4: background consumer — _reclassify_reply_zero_job runs as a
+    # post-response BackgroundTask; no ambient tenant to inherit.
     db = await _get_db()
     try:
         await db.execute(text(
@@ -1344,6 +1355,7 @@ async def _reclassify_reply_zero_job(
     _RECLASSIFY_JOBS.update(account_id, token, total=total, remaining=total)
     prev_remaining: int | None = None
     for _ in range(_RECLASSIFY_MAX_PASSES):
+        # H4: background consumer (see above) — per-batch session of the same job.
         db = await _get_db()
         try:
             remaining = await _count_reply_zero_backlog(db, account_id)
@@ -1387,8 +1399,7 @@ async def resolve_thread(
     are collapsed to "Done" (clearing stale Reply / Awaiting / Follow-up).
     Reopen → re-derive NEEDS_REPLY/AWAITING from the latest message's folder and
     swap the label back to Reply / Awaiting Reply."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         await _assert_account_owner(db, req.account_id, user.email or "anonymous")
         keep_label = "Done"
         if req.dismiss:
@@ -1450,14 +1461,11 @@ async def resolve_thread(
                 "UPDATE email_thread_status SET status = :st, classified_at = now() "
                 "WHERE account_id = :aid AND thread_id = :tid"
             ), {"st": new_status, "aid": req.account_id, "tid": req.thread_id})
-        await db.commit()
         # Collapse the provider/local labels to match the new status (clears the
         # stale Reply / Awaiting / Follow-up that the status update alone left).
         background.add_task(
             _reconcile_labels_bg, req.account_id, req.thread_id, keep_label)
         return {"ok": True, "thread_id": req.thread_id, "done": req.done}
-    finally:
-        await db.close()
 
 
 class ReplyZeroReclassifyRequest(BaseModel):
@@ -1477,11 +1485,8 @@ async def reclassify_reply_zero(
     (not a fixed handful of passes). Runs in the background; poll
     GET /email/reply-zero/reclassify/status for progress, or GET /email/reply-zero
     to see the rebuilt buckets."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         await _assert_account_owner(db, req.account_id, user.email or "anonymous")
-    finally:
-        await db.close()
     # One rebuild at a time per account: a second click while one is draining
     # would double the LLM spend and race on the same status rows.
     if _RECLASSIFY_JOBS.is_running(req.account_id):
@@ -1503,11 +1508,8 @@ async def reclassify_reply_zero_status(
 ):
     """Progress of an in-flight (or the last) whole-mailbox reclassify: status,
     total threads to rebuild, how many remain, and how many are done."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         await _assert_account_owner(db, account_id, user.email or "anonymous")
-    finally:
-        await db.close()
     job = _RECLASSIFY_JOBS.get(account_id)
     if not job:
         return {"status": "idle"}
@@ -1532,8 +1534,7 @@ async def reply_zero(
     classified yet we kick off a one-off background backfill so the next poll is
     populated; an existing draft for the thread is surfaced (``draft_id``) so the
     UI offers "View draft" instead of drafting a second reply."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         await _assert_account_owner(db, account_id, user.email or "anonymous")
         want = {"awaiting": "AWAITING", "done": "DONE"}.get(type, "NEEDS_REPLY")
         # Trash is hidden from every bucket; archiving a thread also drops it from
@@ -1609,7 +1610,5 @@ async def reply_zero(
                 "draft_preview": (r.draft_text or "") if r.draft_id else None,
             })
         return {"threads": out, "type": type}
-    finally:
-        await db.close()
 
 

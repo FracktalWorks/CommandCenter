@@ -278,6 +278,13 @@ function MobileBottomNavInner({
   // the "workshop-*" cc-mobile-nav detail values.
   const isAppWorkshopEditPage =
     (pathname?.startsWith("/build/apps/") && pathname?.endsWith("/edit")) ?? false;
+  // Projects: three things the desktop layout owns have no home on a phone —
+  // the project tree (a 240px rail), the five view modes (a toolbar row) and
+  // ⌘K search (a keyboard). Each becomes a tab here; the page turns the first
+  // two into drawer sheets and the third into its own overlay. Notifications
+  // stay in the page's own title row: the bell is self-anchored and has no
+  // external open control, so a tab could not raise it.
+  const isProjectsPage = pathname?.startsWith("/projects") ?? false;
 
   // Tasks: the bottom bar reflects which GTD section you're in. The page emits
   // `cc-tasks-section` whenever the active view changes.
@@ -361,6 +368,25 @@ function MobileBottomNavInner({
               onClick={() => dispatchNav("tasks-assistant")}
               icon={themedIcon("Sparkles")}
               label="Assistant"
+            />
+          </>
+        )}
+        {isProjectsPage && (
+          <>
+            <TaskTab
+              onClick={() => dispatchNav("projects-tree")}
+              icon={themedIcon("FolderKanban")}
+              label="Projects"
+            />
+            <TaskTab
+              onClick={() => dispatchNav("projects-views")}
+              icon={themedIcon("LayoutGrid")}
+              label="Views"
+            />
+            <TaskTab
+              onClick={() => dispatchNav("projects-search")}
+              icon={themedIcon("Search")}
+              label="Search"
             />
           </>
         )}

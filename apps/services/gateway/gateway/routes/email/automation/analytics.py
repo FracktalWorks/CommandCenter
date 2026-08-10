@@ -26,7 +26,7 @@ from typing import Any
 from acb_auth import UserContext, get_current_user
 from fastapi import Depends, Query
 from gateway.routes.email.automation.senders import DISPOSED_FOLDERS
-from gateway.routes.email.core import _account_scope, _get_db, router
+from gateway.routes.email.core import _account_scope, _tenant_session, router
 from sqlalchemy import text
 
 # Mail that was never really "received into" the mailbox, or has already been
@@ -60,8 +60,7 @@ async def analytics_overview(
     headline figure carries its ``*_prev`` counterpart from the window of equal
     length immediately before it — a number with no trend is not actionable.
     """
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         params: dict[str, Any] = {"uid": user.email or "anonymous", "days": days}
         scope = _account_scope(account_id, params)
         # _account_scope names the table `em`; these queries alias it `m`.
@@ -149,8 +148,6 @@ async def analytics_overview(
             # is healthy; non-zero means conversations were re-damaged.
             "data_health": {"damaged_threads": damaged_threads},
         }
-    finally:
-        await db.close()
 
 
 async def _responsiveness(db: Any, scope: str, params: dict[str, Any]) -> dict:

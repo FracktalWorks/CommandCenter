@@ -23,7 +23,7 @@ import httpx
 from acb_auth import UserContext, get_current_user
 from acb_common import get_logger
 from fastapi import Depends, HTTPException
-from gateway.routes.whatsapp.core import _get_db, _instantiate_provider, router
+from gateway.routes.whatsapp.core import _instantiate_provider, _tenant_session, router
 from pydantic import BaseModel
 
 _log = get_logger("gateway.whatsapp.connect")
@@ -246,8 +246,7 @@ async def embedded_signup(
     display = (
         req.display_name.strip() or profile.get("verified_name") or "WhatsApp")
     phone = profile.get("display_phone_number") or ""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         row = await persist_account(
             db, user_id=user.email or "anonymous", phone_number=phone,
             phone_number_id=req.phone_number_id.strip(),
@@ -255,10 +254,7 @@ async def embedded_signup(
             display_name=display, credentials=creds,
             webhook_verify_token=os.environ.get("WHATSAPP_VERIFY_TOKEN") or None,
         )
-        await db.commit()
         acct = _account_model(row)
-    finally:
-        await db.close()
     return EmbeddedSignupResponse(
         account_id=acct.id, display_name=acct.display_name,
         phone_number=acct.phone_number, subscribed=subscribed)

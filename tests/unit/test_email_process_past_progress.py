@@ -15,6 +15,7 @@ import pytest
 from fastapi import BackgroundTasks
 
 from gateway.routes import email as m
+from tests.unit._email_fakes import bind_db
 
 runner = m.automation.runner
 
@@ -114,7 +115,7 @@ async def test_handler_seeds_tracker_and_schedules_when_mail_exists() -> None:
     req = m.RuleProcessPastRequest(
         account_id="acc-1", start_date="2026-01-01", end_date="2026-01-31",
         is_test=False, include_read=True)
-    with patch.object(runner, "_get_db", AsyncMock(return_value=db)), \
+    with patch.object(runner, "_tenant_session", bind_db(db)), \
             patch.object(runner, "_assert_account_owner", AsyncMock()):
         res = await m.process_past_emails(req, background=bg, user=user)
 
@@ -147,7 +148,7 @@ async def test_handler_schedules_download_even_when_nothing_local() -> None:
     # received, at one AI call each (see _assert_span_within_cap).
     req = m.RuleProcessPastRequest(
         account_id="acc-1", is_test=False, start_date="2026-05-01")
-    with patch.object(runner, "_get_db", AsyncMock(return_value=db)), \
+    with patch.object(runner, "_tenant_session", bind_db(db)), \
             patch.object(runner, "_assert_account_owner", AsyncMock()):
         res = await m.process_past_emails(req, background=bg, user=user)
 

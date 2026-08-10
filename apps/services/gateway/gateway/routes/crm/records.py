@@ -40,7 +40,7 @@ from gateway.routes.crm.core import (
     LeadIn,
     ListResponse,
     OrganizationIn,
-    _get_db,
+    _tenant_session,
     actor,
     clean_payload,
     compute_lead_name,
@@ -126,20 +126,14 @@ async def _list(entity: Entity, params: ListParams) -> ListResponse:
         status_id=params.status_id, owner=params.owner, source=params.source,
         extra_where=extra,
     )
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         return await run_list(db, entity, query)
-    finally:
-        await db.close()
 
 
 async def _get(entity: Entity, record_id: str) -> dict:
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         row = await require_row(db, entity.table, record_id, entity.label)
         return row_to_dict(row, entity.model)
-    finally:
-        await db.close()
 
 
 async def _resolve_status(
@@ -203,14 +197,10 @@ async def create_record(
     # have nothing to match.
     values.setdefault("owner_email", actor(user))
 
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         await _resolve_status(db, entity, values)
         row = await insert_row(db, entity.table, values)
-        await db.commit()
         return row_to_dict(row, entity.model)
-    finally:
-        await db.close()
 
 
 async def patch_record(
@@ -225,8 +215,7 @@ async def patch_record(
     """
     values = clean_payload(payload)
     validate_source(values)
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         record = await require_row(db, entity.table, record_id, entity.label)
         wanted = values.get("status_id")
         if wanted and str(getattr(record, "status_id", "") or "") != str(wanted):
@@ -239,10 +228,7 @@ async def patch_record(
         if not values:
             return row_to_dict(record, entity.model)
         row = await update_row(db, entity.table, record_id, values)
-        await db.commit()
         return row_to_dict(row, entity.model)
-    finally:
-        await db.close()
 
 
 #: The lead fields the display name is derived from. Touching any of them may
@@ -294,8 +280,7 @@ async def delete_record(
     deletion upstream no longer exists anywhere, and a delete that rolls back
     must not leave a tombstone that would delete a live Zoho record.
     """
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         record = await require_row(db, entity.table, record_id, entity.label)
         cascaded: dict[str, int] = {}
         for table, column in entity.cascades:
@@ -307,13 +292,10 @@ async def delete_record(
             text(f"DELETE FROM {entity.table} WHERE id = CAST(:id AS uuid)"),
             {"id": record_id},
         )
-        await db.commit()
         return DeleteResponse(
             deleted=record_id, entity=entity.slug, cascaded=cascaded,
             zoho_delete_queued=queued,
         )
-    finally:
-        await db.close()
 
 
 # ── Leads ───────────────────────────────────────────────────────────────────

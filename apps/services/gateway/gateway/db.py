@@ -20,17 +20,29 @@ appears.
 from __future__ import annotations
 
 from acb_common.db import (
+    TenantUnbound,
     async_database_url,
+    bind_tenant,
+    clear_tenant,
+    current_tenant,
     engine_connect_args,
     get_db,
     get_engine,
     get_session_factory,
+    release_tenant,
+    tenant_session,
 )
 
 __all__ = [
+    "TenantUnbound",
     "async_database_url",
+    "bind_tenant",
+    "clear_tenant",
+    "current_tenant",
     "engine_connect_args",
     "get_db",
     "get_engine",
     "get_session_factory",
+    "release_tenant",
+    "tenant_session",
 ]

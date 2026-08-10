@@ -36,9 +36,6 @@ import { quickAddPrefill } from "../lib/quickAdd";
 import { ColumnHeader, ColumnCell } from "./ListColumns";
 import { StatusPill } from "./StatusPill";
 
-/** The cursor never carries a selection here — see the note in onKeyDown. */
-const EMPTY_SELECTION: ReadonlySet<string> = new Set();
-
 // A status-segmented list (Jira backlog style): rows grouped under collapsible
 // stage headers with counts. In Manual sort the rows are drag-reorderable —
 // within a group (reposition) and across groups (re-file to that stage). A
@@ -79,11 +76,13 @@ export function TaskListGrouped({
   const reorderItem = useTaskStore((s) => s.reorderItem);
   const quickAddNext = useTaskStore((s) => s.quickAddNext);
   const openFocus = useTaskStore((s) => s.openFocus);
-  // Multi-select: when active, rows show a checkbox and drag is suppressed
-  // (selecting and dragging the same card would conflict).
-  const selectMode = useTaskStore((s) => s.selectMode);
+  // Multi-select. The checkbox is ALWAYS drawn, in its own gutter beside the
+  // grip rather than over it — so selecting and dragging are two targets and
+  // neither has to be switched off for the other (the mode this list used to
+  // require is gone; see ItemList's note).
   const selectedIds = useTaskStore((s) => s.selectedIds);
   const toggleSelected = useTaskStore((s) => s.toggleSelected);
+  const extendSelection = useTaskStore((s) => s.extendSelection);
 
   // Status grouping (the default): the drag-reorderable workflow-stage swimlanes.
   // A lens grouping (priority/mode/energy/context) is read-only swimlanes over
@@ -115,9 +114,11 @@ export function TaskListGrouped({
     () => (stages ? {} : statusStageMap),
     [stages, statusStageMap],
   );
-  // Drag-reorder is a manual-sort affordance on the STATUS axis only; off while
-  // multi-selecting and off for a lens grouping (can't drag to change priority).
-  const manual = sort.field === "manual" && !selectMode && statusGrouped;
+  // Drag-reorder is a manual-sort affordance on the STATUS axis only, and off
+  // for a lens grouping (you can't drag to change a computed attribute). It is
+  // no longer switched off while something is selected: the checkbox has its
+  // own gutter, so the two gestures no longer compete for one.
+  const manual = sort.field === "manual" && statusGrouped;
   const firstStage = stageKeys[0];
 
   const [dragId, setDragId] = useState<string | null>(null);
@@ -181,6 +182,7 @@ export function TaskListGrouped({
   // WS-27y backport: the keyboard cursor and the landing flash — the same
   // shared machinery the Projects list runs (`@/lib/cursor`, `useFlash`).
   const [cursor, setCursor] = useState(-1);
+  const [anchor, setAnchor] = useState<number | null>(null);
   const { flash, attach, scrollTo } = useFlash();
 
   // The cursor's world: the rows in render order, skipping collapsed groups.
@@ -208,19 +210,22 @@ export function TaskListGrouped({
       )
     )
       return;
-    // Plain cursor + Enter only. /tasks has no shift-range selection model
-    // (`selectedIds` is a bare toggle set with no anchor — see taskStore), so
-    // the shared cursor's shift-sweep stays dormant here rather than
-    // half-growing a second selection grammar on one surface.
+    // Shift+Arrow sweeps a range — the same gesture the /projects list has,
+    // and now on the same terms: ungated. It used to work only after pressing
+    // "Select", which meant the two apps disagreed about what Shift does while
+    // both claimed to share `@/lib/selection`.
+    const picked = selectedIds;
     const next = stepCursor(
       rows,
-      { cursor: cursorAt, anchor: null, selection: EMPTY_SELECTION },
+      { cursor: cursorAt, anchor, selection: picked },
       event.key,
-      false,
+      event.shiftKey,
     );
     if (!next) return;
     event.preventDefault();
     setCursor(next.cursor);
+    setAnchor(next.anchor);
+    if (next.selection !== picked) extendSelection([...next.selection]);
     if (next.open) openFocus(next.open);
     if (next.cursor >= 0) scrollTo(rows[next.cursor]);
   }
@@ -271,15 +276,17 @@ export function TaskListGrouped({
       className="flex-1 overflow-y-auto outline-none"
     >
       {/* Desktop column header row (Context list only). Hidden on mobile, where
-          rows stay stacked. The left spacer matches a row's grip+expand gutters
-          so "Name" and the cells sit above their columns. */}
+          rows stay stacked. The left spacer matches a row's three gutters —
+          checkbox (w-6) + grip (w-5) + expand (w-5) = 64px — so "Name" and the
+          cells sit above their columns. All three are now drawn on every row,
+          whatever the sort, which is what lets one fixed spacer be right. */}
       {columnar && cols.length > 0 && (
         <div className="sticky top-0 z-20 hidden border-b border-border bg-card/95 px-3.5 py-1.5 backdrop-blur sm:block">
           <div
             className="grid items-center gap-2"
             style={{ gridTemplateColumns: grid }}
           >
-            <span className="pl-10 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+            <span className="pl-16 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
               Name
             </span>
             {cols.map((c) => (
@@ -367,9 +374,8 @@ export function TaskListGrouped({
                     key={item.id}
                     item={item}
                     manual={manual}
-                    selectMode={selectMode}
                     selected={selectedIds.has(item.id)}
-                    onToggleSelected={() => toggleSelected(item.id)}
+                    onToggleSelected={(shift) => toggleSelected(item.id, shift, rows)}
                     columns={cols}
                     grid={grid}
                     // The status pill on the card is redundant when the list is
@@ -443,7 +449,6 @@ export function TaskListGrouped({
 function DraggableRow({
   item,
   manual,
-  selectMode,
   selected,
   onToggleSelected,
   columns,
@@ -459,9 +464,9 @@ function DraggableRow({
 }: {
   item: GtdItem;
   manual: boolean;
-  selectMode: boolean;
   selected: boolean;
-  onToggleSelected: () => void;
+  /** `shift` extends the selection from the anchor (`@/lib/selection`). */
+  onToggleSelected: (shift: boolean) => void;
   /** Visible desktop columns (empty → no columnar layout, stacked card only). */
   columns: ColumnDef[];
   /** grid-template-columns matching the header (only used when columns set). */
@@ -513,23 +518,41 @@ function DraggableRow({
         <span className="pointer-events-none absolute -top-[3px] left-0 h-1 w-1.5 rounded-full bg-primary" />
       )}
       <div className={["flex items-stretch", selected ? "bg-primary/5" : ""].join(" ")}>
-        {selectMode ? (
-          <label className="flex w-9 shrink-0 cursor-pointer items-center justify-center">
-            <input
-              type="checkbox"
-              checked={selected}
-              onChange={onToggleSelected}
-              className="h-4 w-4 accent-primary"
-              aria-label={selected ? "Deselect task" : "Select task"}
-            />
-          </label>
-        ) : (
-          manual && (
-            <span className="flex w-5 shrink-0 cursor-grab items-center justify-center text-muted-foreground/25 transition-colors group-hover/row:text-muted-foreground/60 active:cursor-grabbing">
-              <Icon name="GripVertical" className="h-3.5 w-3.5" />
-            </span>
-          )
-        )}
+        {/* The checkbox is a SIBLING of the row content, in its own gutter —
+            /projects' arrangement. It used to replace the grip gutter and only
+            in select mode, which is why selecting and manual sort could not
+            coexist. Two gutters, two gestures, and the row content beside them
+            still opens the task. */}
+        <label
+          // The row above is `draggable`; this says the box itself is not a
+          // drag handle. (Belt and braces — a press-and-release on a checkbox
+          // ticks it in any case; this is about a press-and-drag on one, which
+          // was never verified in a browser here.)
+          draggable={false}
+          className="flex w-6 shrink-0 cursor-pointer items-center justify-center"
+        >
+          <input
+            type="checkbox"
+            checked={selected}
+            onChange={(e) =>
+              onToggleSelected((e.nativeEvent as MouseEvent).shiftKey)
+            }
+            className="h-4 w-4 accent-primary"
+            aria-label={selected ? "Deselect task" : "Select task"}
+          />
+        </label>
+        {/* Kept even when the sort is not manual, so the columns above stay
+            over their cells instead of shifting 20px when the sort changes. */}
+        <span
+          className={[
+            "flex w-5 shrink-0 items-center justify-center text-muted-foreground/25 transition-colors",
+            manual
+              ? "cursor-grab group-hover/row:text-muted-foreground/60 active:cursor-grabbing"
+              : "",
+          ].join(" ")}
+        >
+          {manual && <Icon name="GripVertical" className="h-3.5 w-3.5" />}
+        </span>
         {/* expand toggle — only for parents; keeps a fixed-width gutter so all
             rows stay left-aligned whether or not they have subtasks. */}
         <span className="flex w-5 shrink-0 items-center justify-center">
@@ -550,24 +573,11 @@ function DraggableRow({
             </button>
           )}
         </span>
-        {selectMode ? (
-          // In select mode the whole row toggles selection; the content is inert
-          // so a click selects rather than opening the task.
-          <button
-            type="button"
-            onClick={onToggleSelected}
-            className="min-w-0 flex-1 text-left"
-            aria-pressed={selected}
-          >
-            <div className="pointer-events-none">
-              <RowContent item={item} columns={columns} grid={grid} showStage={showStage} />
-            </div>
-          </button>
-        ) : (
-          <div className="min-w-0 flex-1">
-            <RowContent item={item} columns={columns} grid={grid} showStage={showStage} />
-          </div>
-        )}
+        {/* The row content is the OPEN affordance, always — it no longer turns
+            into a selection toggle behind a mode. Selecting is the checkbox. */}
+        <div className="min-w-0 flex-1">
+          <RowContent item={item} columns={columns} grid={grid} showStage={showStage} />
+        </div>
       </div>
       {hasSubtasks && expanded && <SubtaskRows parent={item} />}
     </div>
@@ -702,7 +712,7 @@ function SubtaskRows({ parent }: { parent: GtdItem }) {
               type="button"
               onClick={() => openFocus(c.id)}
               className={[
-                "min-w-0 flex-1 truncate text-left text-[13px]",
+                "min-w-0 flex-1 truncate text-left text-sm",
                 done
                   ? "text-muted-foreground line-through"
                   : "text-foreground hover:text-primary",

@@ -40,6 +40,11 @@ from datetime import datetime, time
 from typing import Any
 from zoneinfo import ZoneInfo
 
+# WS-27aa / H4: the sweep refuses to run without an explicit tenant, and it
+# refuses with the seam's OWN exception rather than a bespoke one — `db.py`
+# already defines "no tenant, never defaulted", and a second exception type
+# would be a second vocabulary for the same refusal.
+from gateway.db import TenantUnbound
 from gateway.routes.projects.core import (
     CLOSING_CATEGORIES,
     TRIAGE_CATEGORY,
@@ -291,12 +296,25 @@ async def _sweep_candidates(
 
 
 async def run_lifecycle_sweep(
-    db: Any, *, actor: str, now: datetime | None = None,
+    db: Any, *, organization_id: str, actor: str, now: datetime | None = None,
 ) -> dict[str, Any]:
-    """Apply every root project's lifecycle policy once. Idempotent.
+    """Apply ONE tenant's root-project lifecycle policies once. Idempotent.
 
-    For each ROOT project with a policy enabled (both columns NULL — the
-    default — means the project is never touched):
+    ⚠️ **``organization_id`` is required and is never defaulted** (WS-27aa,
+    H4). This function is reached only from a scheduled ``/workflows`` node, so
+    it has no request to inherit a tenant from — and H4's rule for that
+    category is the whole point: *a job that forgets doesn't leak one row, it
+    leaks unbounded*. Before this argument existed the roots query was
+    ``SELECT * FROM pm_projects WHERE parent_project_id IS NULL`` with no
+    predicate at all, which is one schedule archiving and closing **every
+    customer's** work. A blank tenant raises :class:`TenantUnbound` rather than
+    sweeping wider; the caller
+    (``routes/workflows/service._pm_lifecycle_sweeper``) resolves it from the
+    workflow owner's ``app_user`` row — a stored fact, never request input
+    (R11) — and binds it on the session it hands in.
+
+    For each ROOT project **in that organization** with a policy enabled (both
+    columns NULL — the default — means the project is never touched):
 
     * **archive** — tasks whose status category is done/cancelled and whose
       ``updated_at`` is older than ``archive_after_months`` calendar months
@@ -320,9 +338,27 @@ async def run_lifecycle_sweep(
     ``system:workflow:<id>`` identity), so every change is an ordinary
     timeline row wearing the automation flag.
     """
+    org = str(organization_id or "").strip()
+    if not org:
+        raise TenantUnbound(
+            "run_lifecycle_sweep needs an explicit organization_id — a "
+            "scheduled sweep must never inherit an ambient tenant or default "
+            "to every tenant (saas_multitenancy_handover.md H4)"
+        )
     moment = now or _clock()
+    # The tenant predicate is on the ROOTS query and nowhere else, on purpose:
+    # everything below reaches its rows through `project.id`, so one fence at
+    # the top of the walk bounds the whole sweep. Under RLS phase 4 the bound
+    # session narrows it a second time — belt and braces, in the order H3's
+    # cliff needs (the predicate has to be right BEFORE the policy exists,
+    # because today there is no policy to catch a missing one).
     roots = (await db.execute(
-        text("SELECT * FROM pm_projects WHERE parent_project_id IS NULL"),
+        text(
+            "SELECT * FROM pm_projects "
+            "WHERE parent_project_id IS NULL "
+            "AND organization_id = CAST(:org AS uuid)"
+        ),
+        {"org": org},
     )).fetchall()
 
     swept = archived = closed = 0

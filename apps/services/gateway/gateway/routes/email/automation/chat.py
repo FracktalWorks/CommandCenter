@@ -16,7 +16,7 @@ from acb_auth import UserContext, get_current_user
 from fastapi import BackgroundTasks, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from gateway.routes.email.core import (
-    _get_db,
+    _tenant_session,
     _log,
     router,
 )
@@ -48,90 +48,88 @@ async def _build_chat_context(
     Best-effort — never raises."""
     parts: list[str] = []
     resolved = account_id
-    db = await _get_db()
     try:
-        accounts = (await db.execute(text(
-            "SELECT id, email_address FROM email_accounts WHERE user_id = :uid "
-            "ORDER BY created_at"
-        ), {"uid": user_id})).fetchall()
-        acc_map = {str(a.id): a.email_address for a in accounts}
-        if account_id and account_id in acc_map:
-            resolved = account_id
-        elif len(accounts) == 1:
-            resolved = str(accounts[0].id)
+        async with _tenant_session() as db:
+            accounts = (await db.execute(text(
+                "SELECT id, email_address FROM email_accounts WHERE user_id = :uid "
+                "ORDER BY created_at"
+            ), {"uid": user_id})).fetchall()
+            acc_map = {str(a.id): a.email_address for a in accounts}
+            if account_id and account_id in acc_map:
+                resolved = account_id
+            elif len(accounts) == 1:
+                resolved = str(accounts[0].id)
 
-        # The user's OWN addresses — so the model never reports the user as a
-        # sender / "someone who emails you"; mail from these was sent BY the user.
-        own_addrs = ", ".join(sorted(acc_map.values()))
-        if own_addrs:
-            parts.append(
-                "## You (the account owner)\n"
-                f"You are acting on behalf of the user, whose own email "
-                f"address(es) are: {own_addrs}. NEVER report any of these as a "
-                "sender, a top sender, or someone who emails the user — messages "
-                "from them were sent BY the user.")
-
-        if resolved and resolved in acc_map:
-            parts.append(
-                "## Email account\n"
-                f"Act on account id={resolved} ({acc_map[resolved]}). Pass this "
-                "account_id to tools unless the user names another account.")
-        elif len(accounts) > 1:
-            listing = "; ".join(
-                f"{a.email_address} (id={a.id})" for a in accounts)
-            parts.append(
-                "## Email accounts\nThe user has several accounts: " + listing
-                + ". Ask which one before account-scoped actions.")
-
-        if resolved and is_first_turn:
-            tot = (await db.execute(text(
-                "SELECT count(*) AS total, "
-                "count(*) FILTER (WHERE is_read = false) AS unread "
-                "FROM email_messages WHERE account_id = :aid "
-                "AND LOWER(folder) = 'inbox'"
-            ), {"aid": resolved})).fetchone()
-            nr = (await db.execute(text(
-                "SELECT count(*) AS c FROM email_thread_status "
-                "WHERE account_id = :aid AND status = 'NEEDS_REPLY'"
-            ), {"aid": resolved})).fetchone()
-            cats = (await db.execute(text(
-                "SELECT category, count(*) AS c FROM email_senders "
-                "WHERE account_id = :aid AND category IS NOT NULL "
-                "GROUP BY category ORDER BY c DESC LIMIT 6"
-            ), {"aid": resolved})).fetchall()
-            cat_str = ", ".join(
-                f"{r.category}: {r.c}" for r in cats) or "not categorized yet"
-            parts.append(
-                "## Inbox snapshot\n"
-                f"- Inbox: {tot.total if tot else 0} messages, "
-                f"{tot.unread if tot else 0} unread\n"
-                f"- Needs reply (Reply Zero): {nr.c if nr else 0}\n"
-                f"- Sender categories: {cat_str}\n"
-                "To answer questions about the WHOLE inbox use query_inbox "
-                "(filter by date/category/sender/read-state), "
-                "find_priority(kind=important|needs_reply|urgent), or "
-                "get_account_overview; read_email for one email's full content.")
-
-        if email_context_id:
-            row = (await db.execute(text(
-                "SELECT em.subject, em.body_text, em.from_address, em.received_at "
-                "FROM email_messages em "
-                "JOIN email_accounts ea ON em.account_id = ea.id "
-                "WHERE em.id = :id AND ea.user_id = :uid"
-            ), {"id": email_context_id, "uid": user_id})).fetchone()
-            if row:
-                frm = row.from_address if isinstance(row.from_address, dict) \
-                    else json.loads(row.from_address or "{}")
+            # The user's OWN addresses — so the model never reports the user as a
+            # sender / "someone who emails you"; mail from these was sent BY the user.
+            own_addrs = ", ".join(sorted(acc_map.values()))
+            if own_addrs:
                 parts.append(
-                    f"## Email open in the reader (id={email_context_id})\n"
-                    f"From: {frm.get('name') or ''} <{frm.get('email') or ''}>\n"
-                    f"Subject: {row.subject or ''}\n"
-                    f"Date: {row.received_at}\n\n"
-                    f"{(row.body_text or '')[:5000]}")
+                    "## You (the account owner)\n"
+                    f"You are acting on behalf of the user, whose own email "
+                    f"address(es) are: {own_addrs}. NEVER report any of these as a "
+                    "sender, a top sender, or someone who emails the user — messages "
+                    "from them were sent BY the user.")
+
+            if resolved and resolved in acc_map:
+                parts.append(
+                    "## Email account\n"
+                    f"Act on account id={resolved} ({acc_map[resolved]}). Pass this "
+                    "account_id to tools unless the user names another account.")
+            elif len(accounts) > 1:
+                listing = "; ".join(
+                    f"{a.email_address} (id={a.id})" for a in accounts)
+                parts.append(
+                    "## Email accounts\nThe user has several accounts: " + listing
+                    + ". Ask which one before account-scoped actions.")
+
+            if resolved and is_first_turn:
+                tot = (await db.execute(text(
+                    "SELECT count(*) AS total, "
+                    "count(*) FILTER (WHERE is_read = false) AS unread "
+                    "FROM email_messages WHERE account_id = :aid "
+                    "AND LOWER(folder) = 'inbox'"
+                ), {"aid": resolved})).fetchone()
+                nr = (await db.execute(text(
+                    "SELECT count(*) AS c FROM email_thread_status "
+                    "WHERE account_id = :aid AND status = 'NEEDS_REPLY'"
+                ), {"aid": resolved})).fetchone()
+                cats = (await db.execute(text(
+                    "SELECT category, count(*) AS c FROM email_senders "
+                    "WHERE account_id = :aid AND category IS NOT NULL "
+                    "GROUP BY category ORDER BY c DESC LIMIT 6"
+                ), {"aid": resolved})).fetchall()
+                cat_str = ", ".join(
+                    f"{r.category}: {r.c}" for r in cats) or "not categorized yet"
+                parts.append(
+                    "## Inbox snapshot\n"
+                    f"- Inbox: {tot.total if tot else 0} messages, "
+                    f"{tot.unread if tot else 0} unread\n"
+                    f"- Needs reply (Reply Zero): {nr.c if nr else 0}\n"
+                    f"- Sender categories: {cat_str}\n"
+                    "To answer questions about the WHOLE inbox use query_inbox "
+                    "(filter by date/category/sender/read-state), "
+                    "find_priority(kind=important|needs_reply|urgent), or "
+                    "get_account_overview; read_email for one email's full content.")
+
+            if email_context_id:
+                row = (await db.execute(text(
+                    "SELECT em.subject, em.body_text, em.from_address, em.received_at "
+                    "FROM email_messages em "
+                    "JOIN email_accounts ea ON em.account_id = ea.id "
+                    "WHERE em.id = :id AND ea.user_id = :uid"
+                ), {"id": email_context_id, "uid": user_id})).fetchone()
+                if row:
+                    frm = row.from_address if isinstance(row.from_address, dict) \
+                        else json.loads(row.from_address or "{}")
+                    parts.append(
+                        f"## Email open in the reader (id={email_context_id})\n"
+                        f"From: {frm.get('name') or ''} <{frm.get('email') or ''}>\n"
+                        f"Subject: {row.subject or ''}\n"
+                        f"Date: {row.received_at}\n\n"
+                        f"{(row.body_text or '')[:5000]}")
     except Exception as exc:  # noqa: BLE001
         _log.warning("email.chat_context_failed", error=str(exc)[:160])
-    finally:
-        await db.close()
     return resolved, parts
 
 
@@ -205,11 +203,8 @@ async def ai_chat(
     if req.account_id:
         try:
             from gateway.routes.email.automation.assistant import _account_models  # noqa: PLC0415
-            _mdb = await _get_db()
-            try:
+            async with _tenant_session() as _mdb:
                 chat_model = (await _account_models(_mdb, req.account_id))["chat"]
-            finally:
-                await _mdb.close()
         except Exception:  # noqa: BLE001
             pass
 

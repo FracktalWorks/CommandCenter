@@ -13,7 +13,7 @@ from __future__ import annotations
 from acb_auth import UserContext
 from fastapi import Depends
 from gateway.routes.apps._common import (
-    _get_db,
+    _tenant_session,
     _uid,
     get_app_or_404,
     require_app_user,
@@ -35,8 +35,7 @@ async def list_pinned_apps(
 ) -> list[PinnedApp]:
     """This viewer's pinned apps, most-recently-pinned first — the sidebar's
     query. Deliberately minimal payload (no manifest/status/etc.)."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         rows = (await db.execute(
             text(
                 """SELECT a.slug, a.name, a.icon
@@ -47,8 +46,6 @@ async def list_pinned_apps(
             ),
             {"email": _uid(user)},
         )).fetchall()
-    finally:
-        await db.close()
     return [PinnedApp(slug=r.slug, name=r.name, icon=r.icon or "") for r in rows]
 
 
@@ -58,8 +55,7 @@ async def pin_app(
     user: UserContext = Depends(require_app_user),
 ) -> dict[str, bool]:
     """Pin *slug* for the current viewer. Idempotent — pinning twice is a no-op."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         row, _grants = await get_app_or_404(db, slug, user)
         await db.execute(
             text(
@@ -69,9 +65,6 @@ async def pin_app(
             ),
             {"app_id": str(row.id), "email": _uid(user)},
         )
-        await db.commit()
-    finally:
-        await db.close()
     return {"pinned": True}
 
 
@@ -82,8 +75,7 @@ async def unpin_app(
 ) -> dict[str, bool]:
     """Unpin *slug* for the current viewer. Idempotent — unpinning an
     already-unpinned app is a no-op, not a 404."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         row, _grants = await get_app_or_404(db, slug, user)
         await db.execute(
             text(
@@ -91,7 +83,4 @@ async def unpin_app(
             ),
             {"app_id": str(row.id), "email": _uid(user)},
         )
-        await db.commit()
-    finally:
-        await db.close()
     return {"pinned": False}

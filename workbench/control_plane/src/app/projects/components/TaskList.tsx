@@ -17,16 +17,26 @@
  * value (`lib/quickAdd.ts` owns that mapping), and an arrow-key cursor walks
  * the rows — Shift extends the WS-27n selection, Enter opens the panel.
  */
+import { EmptyState } from "@/components/EmptyState";
 import Icon from "@/components/Icon";
+import { StatusChip } from "@/components/StatusChip";
 import { AvatarStack, TaskMeta } from "@/components/TaskMeta";
 import { useMemo, useState } from "react";
 
-import type { StatusRow, TaskRow } from "../lib/api";
+import { accentForGroup, accentForStatus } from "../lib/accent";
+import type { StatusRow, TagRow, TaskRow } from "../lib/api";
 import { projectsApi } from "../lib/api";
 import { sortForView } from "../lib/board";
-import { taskRef, visibleChips } from "../lib/card";
+import { tagColours, taskRef, visibleChips } from "../lib/card";
 import { clampCursor, stepCursor } from "../lib/cursor";
-import { type GroupBy, type TaskGroup, personLabel } from "../lib/grouping";
+import { emptyStateCopy } from "../lib/emptyState";
+import {
+  type Filters,
+  type GroupBy,
+  type TaskGroup,
+  isFiltered,
+  personLabel,
+} from "../lib/grouping";
 import { quickAddPrefill } from "../lib/quickAdd";
 import { QuickAdd } from "./QuickAdd";
 import { useFlash } from "./useFlash";
@@ -36,7 +46,18 @@ const NOBODY: ReadonlySet<string> = new Set();
 interface Props {
   groups: TaskGroup[];
   groupBy: GroupBy;
+  /**
+   * S4 — the view's filters, for the empty state alone.
+   *
+   * Required rather than optional: an unwired call site would silently draw
+   * "no tasks here yet" over a filtered-to-nothing list, which is the exact
+   * defect this props pair exists to end. `tsc` is the fence.
+   */
+  filters: Filters;
+  onClearFilters: () => void;
   statuses: StatusRow[];
+  /** S6 — the project's tag registry, for the colour of a tag chip alone. */
+  tags?: readonly TagRow[];
   /** WS-27y — where a quick-added task is created (the selected node). */
   projectId: string;
   /** WS-27x — the view's shown fields; chips a hidden field earned are not drawn. */
@@ -55,7 +76,10 @@ interface Props {
 export function TaskList({
   groups,
   groupBy,
+  filters,
+  onClearFilters,
   statuses,
+  tags,
   projectId,
   shownFields,
   onCreated,
@@ -82,6 +106,8 @@ export function TaskList({
 
   const statusById = new Map(statuses.map((s) => [s.id, s]));
   const total = groups.reduce((sum, group) => sum + group.tasks.length, 0);
+  // Once per registry, not once per row.
+  const tagHues = useMemo(() => tagColours(tags ?? []), [tags]);
 
   // The cursor's world: rendered order, each id once (a two-owner task is
   // drawn in two sections but is one row to the keyboard, as to WS-27n).
@@ -165,7 +191,23 @@ export function TaskList({
   }
 
   if (total === 0) {
-    return <p className="p-6 text-sm text-muted-foreground">No tasks here yet.</p>;
+    // S4 — two states, never one. "No tasks here yet" told somebody who had
+    // filtered the list that their project was empty; `isFiltered` is the same
+    // predicate the toolbar's Clear button reads, so the state and the control
+    // that caused it cannot disagree.
+    const copy = emptyStateCopy({ canvas: "list", filtered: isFiltered(filters) });
+    return (
+      <EmptyState
+        icon={copy.icon}
+        message={copy.message}
+        hint={copy.hint}
+        action={
+          copy.filtered
+            ? { label: "Clear filters", icon: "X", onClick: onClearFilters }
+            : undefined
+        }
+      />
+    );
   }
 
   const columnCount = onToggle ? 6 : 5;
@@ -196,8 +238,9 @@ export function TaskList({
             <th className="px-3 py-2 font-medium">Assignees</th>
             {/* Was "Due", showing a bare locale date. The shared chip row
                 (WS-27s) carries the due date *and* says when it is overdue,
-                what is blocking, and how far a checklist has got — the same
-                strip the board card draws, so the two views describe a task
+                what is blocking, how far a checklist has got, what priority
+                somebody gave it and which tags it wears (S6) — the same strip
+                the board card draws, so the two views describe a task
                 identically. Renamed because it is no longer only the date. */}
             <th className="px-3 py-2 font-medium">Details</th>
           </tr>
@@ -205,15 +248,26 @@ export function TaskList({
         {/* An empty status lane is kept on the board so a missing column reads
             as a missing state; a list has no columns, so an empty section is
             just a heading with nothing under it — `sections` dropped it. */}
-        {sections.map((group) => {
+        {sections.map((group, groupIndex) => {
           const isFolded = groupBy !== "none" && folded.has(group.key);
+          // WS-27ad — the same accent the board's column for this group wears,
+          // as the left bar /tasks' list-group headers already used. A grouped
+          // list and a board are two drawings of one grouping; they must not
+          // disagree about what colour "Done" is.
+          const accent = accentForGroup(
+            groupBy,
+            group.key,
+            groupIndex,
+            sections.length,
+            statuses
+          );
           return (
           <tbody key={group.key}>
             {groupBy === "none" ? null : (
-              <tr className="bg-muted">
+              <tr className={accent.soft}>
                 <th
                   colSpan={columnCount}
-                  className="px-3 py-1.5 text-left text-xs font-medium text-foreground"
+                  className={`border-l-2 px-3 py-1.5 text-left text-xs font-medium ${accent.bar} ${accent.text}`}
                 >
                   {/* The /tasks group-header grammar (TaskListGrouped):
                       chevron to collapse, label, then the count as a pill —
@@ -226,10 +280,11 @@ export function TaskList({
                   >
                     <Icon
                       name="ChevronRight"
-                      className={`h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform ${
+                      className={`h-3.5 w-3.5 shrink-0 transition-transform ${accent.text} ${
                         isFolded ? "" : "rotate-90"
                       }`}
                     />
+                    <span className={`h-2 w-2 shrink-0 rounded-full ${accent.dot}`} />
                     <span className="truncate">{group.label}</span>
                     <span className="shrink-0 rounded-full bg-background/60 px-1.5 py-0.5 text-[10px] font-semibold text-muted-foreground">
                       {group.tasks.length}
@@ -277,7 +332,18 @@ export function TaskList({
                     </span>
                   </td>
                   <td className="px-3 py-2 text-muted-foreground">
-                    {status?.name ?? "—"}
+                    {/* WS-27ad — the shared status pill, coloured by the
+                        owner's stored colour / the status category. It used
+                        to be a bare grey word while the same status on the
+                        /tasks side was a coloured pill. */}
+                    {status ? (
+                      <StatusChip
+                        accent={accentForStatus(status)}
+                        label={status.name}
+                      />
+                    ) : (
+                      "—"
+                    )}
                   </td>
                   <td className="px-3 py-2 text-muted-foreground">
                     {task.assignees?.length ? (
@@ -287,7 +353,9 @@ export function TaskList({
                     )}
                   </td>
                   <td className="px-3 py-2 text-muted-foreground">
-                    <TaskMeta chips={visibleChips(task, shownFields)} />
+                    <TaskMeta
+                      chips={visibleChips(task, shownFields, undefined, tagHues)}
+                    />
                   </td>
                 </tr>
               );

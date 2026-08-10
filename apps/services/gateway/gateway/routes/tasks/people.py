@@ -30,7 +30,7 @@ from fastapi import Depends, HTTPException, UploadFile
 from gateway.routes.tasks.attachments import _safe_name, _storage_dir
 from gateway.routes.tasks.core import (
     PEOPLE_STATUSES,
-    _get_db,
+    _tenant_session,
     _uid,
     can_read_hr_fields,
     require_people_write,
@@ -161,16 +161,13 @@ async def list_people(
             match += " OR EXISTS (SELECT 1 FROM unnest(skills) s WHERE s ILIKE :q)"
         clauses.append(match + ")")
         params["q"] = f"%{q.strip()}%"
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         rows = (await db.execute(
             text("SELECT * FROM gtd_people WHERE " + " AND ".join(clauses)
                  + " ORDER BY department, name"),
             params,
         )).fetchall()
         return [_row_to_person(r, include_hr=hr) for r in rows]
-    finally:
-        await db.close()
 
 
 async def fetch_people_for_clarify(db: Any) -> list[dict[str, Any]]:
@@ -340,8 +337,7 @@ async def create_person(
     skills_source = {s: "manual" for s in skills}
     available = _available(body.capacity_hours_per_week, body.current_load_hours_per_week)
     pid = str(uuid4())
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         # Duplicate NAMES are allowed, and refusing them was the bug.
         # Migration 148 dropped `UNIQUE(name)` on the argument that two real
         # people share a name and one of them was being locked out of the
@@ -377,12 +373,14 @@ async def create_person(
              "capacity": body.capacity_hours_per_week,
              "load": body.current_load_hours_per_week, "available": available,
              "clickup_user_id": body.clickup_user_id, "updated_by": _uid(user)})
-        await db.commit()
+        person = await _get_person_row(db, pid)
+    # The insert is committed above; the capability re-embed runs AFTER it in
+    # its own transaction (best-effort — an embedding hiccup never fails the
+    # write that already committed; H2 restructure).
+    async with _tenant_session() as db:
         await _reembed_capability(db, pid)
-        # include_hr: the route gate already proved this caller is an admin.
-        return _row_to_person(await _get_person_row(db, pid), include_hr=True)
-    finally:
-        await db.close()
+    # include_hr: the route gate already proved this caller is an admin.
+    return _row_to_person(person, include_hr=True)
 
 
 @router.patch("/people/{person_id}", response_model=OrgPersonModel,
@@ -401,8 +399,7 @@ async def update_person(
         _validate_status(fields["status"])
     if "email" in fields:
         fields["email"] = _clean_email(fields["email"])
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         row = await _get_person_row(db, person_id)
         # `exclude_id` is why this is not the create-path check: re-saving a
         # person without touching their address must not report them as their
@@ -449,12 +446,12 @@ async def update_person(
         await db.execute(
             text(f"UPDATE gtd_people SET {', '.join(set_parts)} WHERE id = :id"),
             params)
-        await db.commit()
+        person = await _get_person_row(db, person_id)
+    # The edit is committed above; the capability re-embed runs AFTER it in its
+    # own transaction (best-effort; H2 restructure).
+    async with _tenant_session() as db:
         await _reembed_capability(db, person_id)
-        return _row_to_person(
-            await _get_person_row(db, person_id), include_hr=True)
-    finally:
-        await db.close()
+    return _row_to_person(person, include_hr=True)
 
 
 class ResumeIngestResult(BaseModel):
@@ -487,8 +484,7 @@ async def ingest_resume(
     if len(content) > _RESUME_MAX_BYTES:
         raise HTTPException(status_code=413, detail="Résumé too large (max 15 MB).")
 
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         row = await _get_person_row(db, person_id)
         # Vocabulary = every skill the org already knows (broadens keyword hits).
         vocab_rows = (await db.execute(text(
@@ -540,15 +536,15 @@ async def ingest_resume(
              "summary": parsed.get("experience_summary"),
              "years": parsed.get("years_experience"),
              "domain": parsed.get("domain"), "by": _uid(user), "id": person_id})
-        await db.commit()
-        # New skills / résumé depth change the capability text → re-embed.
+        person = await _get_person_row(db, person_id)
+    # The résumé + merge are committed above. New skills / résumé depth change
+    # the capability text → re-embed, AFTER the commit, in its own transaction
+    # (best-effort; H2 restructure).
+    async with _tenant_session() as db:
         await _reembed_capability(db, person_id)
-        return ResumeIngestResult(
-            resume_id=rid, added_skills=added, extracted=extracted,
-            person=_row_to_person(
-                await _get_person_row(db, person_id), include_hr=True))
-    finally:
-        await db.close()
+    return ResumeIngestResult(
+        resume_id=rid, added_skills=added, extracted=extracted,
+        person=_row_to_person(person, include_hr=True))
 
 
 async def _reembed_capability(db: Any, person_id: str) -> None:

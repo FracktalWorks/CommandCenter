@@ -14,7 +14,7 @@ from fastapi import Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from gateway.routes.email.core import (
     ATTACHMENT_CACHE_TTL_SECS,
-    _get_db,
+    _tenant_session,
     _get_redis,
     _log,
     provider_session,
@@ -137,92 +137,89 @@ async def download_attachment(
     Checks Redis cache first (TTL 1 hour) to avoid redundant provider API
     calls for attachments downloaded multiple times.
     """
-    db = await _get_db()
-    try:
-        # Look up attachment and verify user owns the parent message
-        result = await db.execute(
-            text(
-                """SELECT ea.id, ea.filename, ea.mime_type, ea.size_bytes,
-                          ea.provider_attachment_id, ea.storage_path,
-                          em.provider_message_id, em.account_id
-                   FROM email_attachments ea
-                   JOIN email_messages em ON ea.message_id = em.id
-                   JOIN email_accounts p ON em.account_id = p.id
-                   WHERE ea.id = :aid AND p.user_id = :user_id"""
-            ),
-            {"aid": attachment_id, "user_id": user.email or "anonymous"},
-        )
-        row = result.fetchone()
-        if not row:
-            raise HTTPException(status_code=404, detail="Attachment not found")
-
-        # Sanitise the filename for the Content-Disposition header — strip quotes
-        # / CR / LF so an attacker-controlled attachment name can't break out of
-        # the quoted value (header-injection / filename-spoofing).
-        safe_name = (
-            (row.filename or "attachment")
-            .replace('"', "'").replace("\n", " ").replace("\r", " ")
-        )
-
-        # ── Ownership confirmed — NOW it's safe to serve from the Redis cache.
-        #    Reading the cache before this check was an IDOR: any caller who knew
-        #    an attachment_id could pull another user's cached bytes. ──
-        redis = await _get_redis()
-        if redis:
-            try:
-                cached = await redis.get(f"email:att:cache:{attachment_id}")
-                if cached:
-                    return StreamingResponse(
-                        io.BytesIO(cached),
-                        media_type=row.mime_type or "application/octet-stream",
-                        headers={
-                            "Content-Disposition": (
-                                f'attachment; filename="{safe_name}"'
-                            ),
-                            "Content-Length": str(len(cached)),
-                            "X-Cache": "HIT",
-                        },
-                    )
-            except Exception:
-                redis = None  # fall through to provider fetch
-
-        # Fetch through the ONE provider dance. This path used to instantiate
-        # the provider raw — never authenticating (an expired access token just
-        # 401'd) and never persisting a rotated refresh token (silently dropped,
-        # so the NEXT request re-authed from a stale token).
-        async with provider_session(
-            db, user.email or "anonymous", account_id=str(row.account_id),
-        ) as sess:
-            content = await sess.provider.get_attachment(
-                row.provider_message_id, row.provider_attachment_id
-            )
-        await db.commit()  # land the rotated-cred persist staged by the session
-
-        # ── Store in Redis cache ──
-        if redis and content:
-            try:
-                cache_key = f"email:att:cache:{attachment_id}"
-                await redis.setex(
-                    cache_key, ATTACHMENT_CACHE_TTL_SECS, content
-                )
-            except Exception:
-                pass
-
-        return StreamingResponse(
-            io.BytesIO(content),
-            media_type=row.mime_type,
-            headers={
-                "Content-Disposition": (
-                    f'attachment; filename="{safe_name}"'
+    async with _tenant_session() as db:
+        try:
+            # Look up attachment and verify user owns the parent message
+            result = await db.execute(
+                text(
+                    """SELECT ea.id, ea.filename, ea.mime_type, ea.size_bytes,
+                              ea.provider_attachment_id, ea.storage_path,
+                              em.provider_message_id, em.account_id
+                       FROM email_attachments ea
+                       JOIN email_messages em ON ea.message_id = em.id
+                       JOIN email_accounts p ON em.account_id = p.id
+                       WHERE ea.id = :aid AND p.user_id = :user_id"""
                 ),
-                "Content-Length": str(len(content)),
-                "X-Cache": "MISS",
-            },
-        )
-    except HTTPException:
-        raise
-    except Exception as exc:
-        _log.error("download_attachment.failed", aid=attachment_id, error=str(exc)[:200])
-        raise HTTPException(status_code=500, detail="Failed to download attachment")
-    finally:
-        await db.close()
+                {"aid": attachment_id, "user_id": user.email or "anonymous"},
+            )
+            row = result.fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="Attachment not found")
+
+            # Sanitise the filename for the Content-Disposition header — strip quotes
+            # / CR / LF so an attacker-controlled attachment name can't break out of
+            # the quoted value (header-injection / filename-spoofing).
+            safe_name = (
+                (row.filename or "attachment")
+                .replace('"', "'").replace("\n", " ").replace("\r", " ")
+            )
+
+            # ── Ownership confirmed — NOW it's safe to serve from the Redis cache.
+            #    Reading the cache before this check was an IDOR: any caller who knew
+            #    an attachment_id could pull another user's cached bytes. ──
+            redis = await _get_redis()
+            if redis:
+                try:
+                    cached = await redis.get(f"email:att:cache:{attachment_id}")
+                    if cached:
+                        return StreamingResponse(
+                            io.BytesIO(cached),
+                            media_type=row.mime_type or "application/octet-stream",
+                            headers={
+                                "Content-Disposition": (
+                                    f'attachment; filename="{safe_name}"'
+                                ),
+                                "Content-Length": str(len(cached)),
+                                "X-Cache": "HIT",
+                            },
+                        )
+                except Exception:
+                    redis = None  # fall through to provider fetch
+
+            # Fetch through the ONE provider dance. This path used to instantiate
+            # the provider raw — never authenticating (an expired access token just
+            # 401'd) and never persisting a rotated refresh token (silently dropped,
+            # so the NEXT request re-authed from a stale token).
+            async with provider_session(
+                db, user.email or "anonymous", account_id=str(row.account_id),
+            ) as sess:
+                content = await sess.provider.get_attachment(
+                    row.provider_message_id, row.provider_attachment_id
+                )
+
+            # ── Store in Redis cache ──
+            if redis and content:
+                try:
+                    cache_key = f"email:att:cache:{attachment_id}"
+                    await redis.setex(
+                        cache_key, ATTACHMENT_CACHE_TTL_SECS, content
+                    )
+                except Exception:
+                    pass
+
+            return StreamingResponse(
+                io.BytesIO(content),
+                media_type=row.mime_type,
+                headers={
+                    "Content-Disposition": (
+                        f'attachment; filename="{safe_name}"'
+                    ),
+                    "Content-Length": str(len(content)),
+                    "X-Cache": "MISS",
+                },
+            )
+        except HTTPException:
+            raise
+        except Exception as exc:
+            _log.error("download_attachment.failed", aid=attachment_id, error=str(exc)[:200])
+            raise HTTPException(status_code=500, detail="Failed to download attachment")

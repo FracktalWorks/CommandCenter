@@ -89,8 +89,19 @@ Rules that make it work:
   numbers). Specs go stale; the code is the fact.
 - **Respect the seams.** Extend the shared seam, never add a parallel one: one
   DB engine (`acb_common.db`), one entitlement intersect, one subject-grammar
-  validator, one task store, one Center registry (`lib/centers.ts`). A second
-  implementation of an existing seam is a defect, not a feature.
+  validator, one task store, one Center registry (`lib/centers.ts`), one status
+  colour vocabulary (`src/lib/statusAccent.ts`). A second implementation of an
+  existing seam is a defect, not a feature.
+- **The UI is one product, themed centrally.** Every app is a projection, never
+  a surface with its own look: no app-local palette, no second colour
+  vocabulary, no hand-rolled control. `workbench/control_plane/DESIGN_SYSTEM.md`
+  is the contract and `AGENTS.md` beside it carries the seven rules and their
+  fences — both are auto-loaded when you touch UI code. Owner directive
+  2026-08-10. Categorical hues (contexts, tags, labels) go through the
+  `--cat-1…8` ramp via `src/lib/categorical.ts`, never a raw Tailwind palette
+  class. The conformance suite checks seven regexes and **nothing tests layout
+  or cross-app continuity**, so the theme-switch check (Fluent → Material →
+  Graphite, on your surface *and* its neighbour) is the real gate.
 - **Keep branches short and integrate often.** Long branches are the root cause
   behind the migration-renumber collisions, the green-alone/red-together PRs and
   a duplicated tenancy design. Three or four in flight is the ceiling.

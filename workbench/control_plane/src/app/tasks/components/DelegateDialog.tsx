@@ -122,7 +122,7 @@ export function DelegateDialog({
                           setProjectId("");
                         }}
                         className={[
-                          "tech-transition inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[12px]",
+                          "tech-transition inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs",
                           accountId === a.id
                             ? "border-primary bg-primary/10 text-primary"
                             : "border-border text-muted-foreground hover:bg-secondary",
@@ -147,7 +147,7 @@ export function DelegateDialog({
                     value={q}
                     onChange={(e) => setQ(e.target.value)}
                     placeholder="Search projects…"
-                    className="w-full rounded-md border border-border bg-background/60 py-1.5 pl-8 pr-3 text-base text-foreground focus:border-primary/50 focus:outline-none sm:text-[13px]"
+                    className="w-full rounded-md border border-border bg-background/60 py-1.5 pl-8 pr-3 text-base text-foreground focus:border-primary/50 focus:outline-none sm:text-sm"
                   />
                 </div>
               )}
@@ -163,7 +163,7 @@ export function DelegateDialog({
                       type="button"
                       onClick={() => setProjectId(p.id)}
                       className={[
-                        "tech-transition flex w-full items-center gap-2 rounded-md border px-3 py-1.5 text-left text-[13px]",
+                        "tech-transition flex w-full items-center gap-2 rounded-md border px-3 py-1.5 text-left text-sm",
                         projectId === p.id
                           ? "border-primary bg-primary/10 text-primary"
                           : "border-border text-foreground hover:bg-secondary",
@@ -200,10 +200,10 @@ export function DelegateDialog({
         </div>
 
         <div className="flex shrink-0 items-center justify-end gap-2 border-t border-border px-4 py-3">
-          <Button variant="ghost" size="none" radius="keep" layout="" type="button" onClick={onClose} className="rounded-md px-3 py-1.5 text-[12px]">
+          <Button variant="ghost" size="none" radius="keep" layout="" type="button" onClick={onClose} className="rounded-md px-3 py-1.5 text-xs">
             Cancel
           </Button>
-          <Button size="none" radius="keep" layout="inline-flex items-center" type="button" disabled={!canSubmit} onClick={submit} className="gap-1.5 rounded-md px-3 py-1.5 text-[12px]">
+          <Button size="none" radius="keep" layout="inline-flex items-center" type="button" disabled={!canSubmit} onClick={submit} className="gap-1.5 rounded-md px-3 py-1.5 text-xs">
             {busy ? (
               <Icon name="Loader2" className="h-3.5 w-3.5 animate-spin" />
             ) : (

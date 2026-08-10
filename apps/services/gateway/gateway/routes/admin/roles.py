@@ -28,7 +28,7 @@ from sqlalchemy import text
 
 from gateway.routes.admin._common import (
     _log,
-    get_db,
+    _tenant_session,
     get_org_id,
     get_role,
     invalidate_for,
@@ -107,8 +107,7 @@ async def _permissions_for(db: Any, role_id: str) -> list[str]:
 async def list_roles(
     admin: UserContext = Depends(require_admin_user),
 ) -> list[RoleEntry]:
-    db = await get_db()
-    async with db:
+    async with _tenant_session() as db:
         org_id = await get_org_id(db, admin)
         rows = (
             await db.execute(
@@ -152,8 +151,7 @@ async def create_role(
     slug = _clean_slug(req.slug)
     permissions = _clean_permissions(req.permissions)
 
-    db = await get_db()
-    async with db:
+    async with _tenant_session() as db:
         org_id = await get_org_id(db, admin)
         existing = (
             await db.execute(
@@ -208,7 +206,6 @@ async def create_role(
                 ),
                 {"rid": role_id, "perm": perm},
             )
-        await db.commit()
 
     _log.info("role_created", slug=slug, by=admin.email, permissions=permissions)
     record_admin_change(admin.email, "org.role_created", f"role:{slug}",
@@ -229,8 +226,7 @@ async def update_role(
     patch: RolePatch,
     admin: UserContext = Depends(require_admin_user),
 ) -> RoleEntry:
-    db = await get_db()
-    async with db:
+    async with _tenant_session() as db:
         org_id = await get_org_id(db, admin)
         role = await get_role(db, org_id, slug)
         if role["is_system"]:
@@ -269,7 +265,6 @@ async def update_role(
                     ),
                     {"rid": role["id"], "perm": perm},
                 )
-        await db.commit()
         permissions = await _permissions_for(db, role["id"])
         role = await get_role(db, org_id, slug)
 
@@ -295,8 +290,7 @@ async def delete_role(
     slug: str,
     admin: UserContext = Depends(require_admin_user),
 ) -> dict[str, str]:
-    db = await get_db()
-    async with db:
+    async with _tenant_session() as db:
         org_id = await get_org_id(db, admin)
         role = await get_role(db, org_id, slug)
         if role["is_system"]:
@@ -320,7 +314,6 @@ async def delete_role(
             text("DELETE FROM org_role WHERE id = CAST(:rid AS uuid)"),
             {"rid": role["id"]},
         )
-        await db.commit()
 
     invalidate_for(None)
     _log.info("role_deleted", slug=slug, by=admin.email)
@@ -340,8 +333,7 @@ async def list_features(
     """
     features: list[dict[str, Any]] = []
     try:
-        db = await get_db()
-        async with db:
+        async with _tenant_session() as db:
             rows = (
                 await db.execute(
                     text(

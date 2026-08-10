@@ -194,6 +194,10 @@ def _seed_account(
 ) -> None:
     db.seed("email_accounts", id=ACCOUNT_ID, user_id=owner,
             email_address=address)
+    # H4 fix: _create_lead binds the owner's organization explicitly before
+    # calling the converted create_record — the lookup reads app_user.
+    db.seed("app_user", email=owner,
+            organization_id="99999999-9999-9999-9999-999999999999")
     if org_domains is not None:
         db.seed("email_assistant_settings", account_id=ACCOUNT_ID,
                 org_domains=org_domains)

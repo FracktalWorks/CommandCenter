@@ -27,7 +27,7 @@ from gateway.routes.crm.core import (
     CONTACTS,
     DEALS,
     ContactModel,
-    _get_db,
+    _tenant_session,
     link_deal_contact,
     require_row,
     router,
@@ -68,8 +68,7 @@ async def list_deal_contacts(
     panel prints a name, a title and a phone number, and a payload of ids would
     make it issue one request per person to render a card.
     """
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         await require_row(db, DEALS.table, deal_id, DEALS.label)
         rows = (await db.execute(
             text(
@@ -89,8 +88,6 @@ async def list_deal_contacts(
             )
             for row in rows
         ])
-    finally:
-        await db.close()
 
 
 @router.post("/deals/{deal_id}/contacts", status_code=201)
@@ -104,8 +101,7 @@ async def add_deal_contact(
     transaction (``core.link_deal_contact``) — the whole point of the endpoint
     beyond the row it writes.
     """
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         await require_row(db, DEALS.table, deal_id, DEALS.label)
         contact = await require_row(
             db, CONTACTS.table, payload.contact_id, CONTACTS.label,
@@ -114,14 +110,11 @@ async def add_deal_contact(
             db, deal_id, str(contact.id),
             role=payload.role, is_primary=payload.is_primary,
         )
-        await db.commit()
         return DealContact(
             contact=row_to_dict(contact, ContactModel),
             role=getattr(link, "role", None),
             is_primary=bool(getattr(link, "is_primary", False)),
         )
-    finally:
-        await db.close()
 
 
 @router.delete("/deals/{deal_id}/contacts/{contact_id}")
@@ -135,8 +128,7 @@ async def remove_deal_contact(
     from this deal" answered OK while Priya is still on it is the response that
     makes the UI re-render her and look broken.
     """
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         await require_row(db, DEALS.table, deal_id, DEALS.label)
         existing = (await db.execute(
             text(
@@ -158,7 +150,6 @@ async def remove_deal_contact(
             ),
             {"deal_id": deal_id, "contact_id": contact_id},
         )
-        await db.commit()
         # A deal whose primary contact was just removed has none. Saying so
         # lets the sheet prompt for a new one instead of silently showing a
         # deal that nobody is the contact for.
@@ -167,8 +158,6 @@ async def remove_deal_contact(
             "deal_id": deal_id,
             "was_primary": bool(getattr(existing, "is_primary", False)),
         }
-    finally:
-        await db.close()
 
 
 __all__ = ["DealContact", "DealContactIn", "DealContactsResponse"]

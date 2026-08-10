@@ -21,7 +21,7 @@
 
 import type { GroupBy } from "./ordering";
 import { NO_CONTEXT_GROUP } from "./priority";
-import type { Energy } from "./types";
+import type { Disposition, Energy, ViewKey } from "./types";
 
 /** What a quick-added task must carry to belong to its group. */
 export interface QuickAddPrefill {
@@ -29,6 +29,8 @@ export interface QuickAddPrefill {
   context?: string;
   energy?: Energy;
   deepWork?: boolean;
+  /** The GTD bucket the add lands in. Absent = the default NEXT. */
+  disposition?: Disposition;
 }
 
 /** The axes a /tasks quick-add can sit inside: the status axis (`""`, the
@@ -65,6 +67,49 @@ export function quickAddPrefill(
     case "priority":
     case "mode":
       // Computed from flags + due date — a create cannot promise the landing.
+      return null;
+  }
+}
+
+/**
+ * WS-27ad — the quick-add for a FLAT view, whose "group" is the view itself.
+ *
+ * The Done / Someday / Waiting / Archive lists had no capture box at all, so
+ * the only way to put something on your Someday list was to capture it into the
+ * Inbox and clarify it there — two steps for a thought that was already
+ * classified when you had it.
+ *
+ * Same null grammar as the axes above: a view that cannot honestly take the add
+ * offers no box, and each refusal has a reason rather than an omission.
+ */
+export function viewQuickAdd(
+  view: ViewKey,
+): { prefill: QuickAddPrefill; label: string } | null {
+  switch (view) {
+    case "someday":
+      // The clean case: "incubate this" is a complete decision, and Someday is
+      // exactly where an incubating thought belongs.
+      return { prefill: { disposition: "SOMEDAY" }, label: "Add to Someday" };
+    case "done":
+      // A log entry, not a to-do — the same thing the board already means when
+      // you quick-add into the last stage (see `quickAddNext`). Worth having:
+      // recording work that was never a task is otherwise impossible here.
+      return { prefill: { disposition: "DONE" }, label: "Log something done" };
+    case "waiting":
+      // NO box. Waiting-For is grouped by PERSON and a waiting-for's whole
+      // content is who owes it and since when; a create can set the bucket but
+      // not the delegation (that is the delegate path, which asks for the
+      // person and stamps `delegatedAt`). An add here would visibly file itself
+      // into "Unassigned" — a sibling group — which this module's header calls
+      // what it is: a lie about where the task went.
+      return null;
+    case "archive":
+      // Creating a task in order to immediately hide it is not a gesture.
+      return null;
+    default:
+      // Inbox has its own always-open capture row; next/priority/engage are
+      // grouped surfaces served by `quickAddPrefill`; calendar days get their
+      // own per-day box.
       return null;
   }
 }

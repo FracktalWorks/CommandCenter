@@ -44,6 +44,15 @@
 > existing `isFiltered` predicate, through a promoted `src/components/EmptyState.tsx`.
 > Frontend only — no migration, no API change. ⚠️ **The four-theme sweep is owed** for the
 > same reason: no browser runs in this environment. ·
+> 🟢 **S5 BUILT 2026-08-10, on branch `ws-s5-projects-task-panel`, NOT merged and NOT
+> deployed** (§11.22) — the second reversed-direction finding: `/projects`' `TaskPanel`
+> adopts `/tasks`' `ItemDetail` **composition** (header chip row → grouped details cells →
+> discrete labelled sections → pinned composer, one scroll region) and loses its two raw
+> controls. **`Select` is added to `src/components/ui/Input.tsx`** — the themed
+> single-choice field the tree never had, which 38 files had each hand-rolled — and the file
+> input is hidden behind a `<Button>` that lists what is uploading. **Conformance grows a
+> seventh rule** for both. Frontend only — no migration, no API change. ⚠️ Same owed check:
+> no browser runs here, so the phone viewport and the four-theme sweep are for review. ·
 > **Owner:** vjvarada · **Board row: WS-27**
 >
 > **Tenancy (audited 2026-08-10 — this spec previously cited no tenancy decision at all).**
@@ -1675,12 +1684,21 @@ Windows box against the live DB. **Name the files.**
 
 ```bash
 uv run pytest tests/unit/test_projects_routes.py tests/unit/test_projects_grants.py \
-              tests/unit/test_projects_migration.py tests/unit/test_projects_sync.py \
+              tests/unit/test_projects_migration.py \
               tests/unit/test_projects_import_mapping.py \
-              tests/unit/test_projects_personal_mirror.py \
+              tests/unit/test_projects_personal.py \
+              tests/unit/test_gtd_retirement_plan.py \
               tests/unit/test_org_access_control.py tests/unit/test_org_access_enforcement.py
 cd workbench/control_plane && npx tsc --noEmit && npm test
 ```
+
+*(Corrected 2026-08-10, found by S5 while running this block: it named
+`test_projects_sync.py` and `test_projects_personal_mirror.py`, **neither of
+which exists** — the second is `test_projects_personal.py`, and the first never
+landed under that name. A verification command that names a missing file makes
+pytest exit non-zero before running anything, so anyone who pasted this block
+saw a red run that had nothing to do with their change — and anyone who "fixed"
+it by deleting the offending path silently dropped real coverage.)*
 
 House style applies: hermetic route tests (fake session, monkeypatch the DB seam on the
 SUT submodule), the migration asserted idempotent **statically** over its text, cascade
@@ -2872,6 +2890,93 @@ then), `page.tsx`'s `renderState()` seam (WS-27ag left it marked for exactly thi
 component), and `projects/lib/mywork.isOverdue`, which this change left caller-less and is a
 second answer to a question `lib/taskCard.isOverdue` already answers better (it also checks
 `completed_at`).
+
+### 11.22 S5 — the task panel adopts the Tasks detail's composition (built 2026-08-10)
+
+**Owner-reported from screenshots of the deployed app**, comparing `/projects`' `TaskPanel`
+with `/tasks`' `ItemDetail` side by side: *"Task cards seem to be very different."* Like
+§11.21 this is a **reversed-direction** finding — the standing ruling is "Projects is
+canonical, Tasks conforms", and on this one surface Tasks was the designed one. Frontend
+only: no migration, no API change, no new dependency. Branch
+`ws-s5-projects-task-panel` — **not merged, not deployed.**
+
+**The controls, before → after.** Measured on `main` `54e4b880`:
+
+| Control | Before | After |
+|---|---|---|
+| Status | bare `<select>` with a copied class string | `<Select>` (new primitive) inside the Status cell |
+| Attachments | `<input type="file">`, i.e. *"Choose Files / No file chosen"* | hidden input raised by `<Button icon="Upload">`, with the in-flight filenames listed |
+| Close | raw `<button>` + `<Icon name="X">` | `<Button variant="ghost" size="icon-sm" icon="X">` |
+| Comment | raw `<textarea>` + raw `<button className="bg-primary …">` | `<Textarea>` + `<Button>` (this is the −1 on `SOLID_BUTTON_DEBT`) |
+| Assignee / subtask entry | two raw `<input>`s | `<Input>`, the subtask one with a leading `Plus` |
+| Assignee chips, "auto" marker | hand-rolled `<span>`s | `<Badge>` (`warning` tone for an address that is neither an email nor `agent:<name>`) |
+| Mention chips | raw rounded `<button>`s | `<Button variant="secondary" size="sm">` |
+
+Imports from `@/components/ui/` went from **one** to **four**, plus `StatusChip`.
+
+**`Select` is a seam, not a one-off.** `src/components/ui/Input.tsx` had `Input` and
+`Textarea` and no single-choice field at all, so **38 files** hand-rolled one — each with
+its own `const SELECT = "cc-control rounded-lg border border-border …"` — of which **37
+remain** after this change (nine in `app/projects/`, five in `app/tasks/`), all baselined.
+The primitive uses `appearance-none` plus
+`<Icon name="ChevronDown">` so the disclosure glyph follows the active **pack**; the native
+triangle is drawn by the OS and follows neither the theme nor the pack. One honest limit,
+shared with every `<select>` on the web: the popup list is the browser's, so the option rows
+do not take our tokens. `Textarea` also gains a declared `ref` (React 19 passes it as an
+ordinary prop; the comment box needs it to restore the caret after an @mention).
+
+**The composition**, re-derived by reading `ItemDetail.tsx` rather than described from
+memory: header (`bg-card`) carrying ref + copy-link + watch + close, the title, then the
+status **chip row** → one scroll region holding `DETAILS` (bordered `FieldCell`s: Status,
+Assignees) · `DESCRIPTION` · `PROPERTIES` (tags, repeats) · the custom-fields block ·
+`LINKS & SUBTASKS` · `FILES` · `ACTIVITY` → a pinned comment composer. The panel root moved
+to `bg-background` so the `bg-card` cells read as cards, which is why `ItemDetail` is built
+that way. It used to be **two** scroll regions — a fixed field block that could eat the
+whole panel on a short window, with the timeline scrolling under it.
+
+**What did NOT come across, deliberately:** `MetaEdit`'s click-to-edit flip (Projects'
+controls are live; hiding them behind a click is an interaction change, not a composition
+one) and every Tasks-only concept — context, energy, the founder priority matrix — which
+live on `pm_task_personal` and are not this surface's data. Everything Projects has and
+Tasks does not stays: task ref and deep link, tags, relations/links, watchers, recurrence,
+custom fields, attachments, the activity timeline and comments.
+
+**Width.** The details grid is `grid-cols-1` with **no** responsive variant. The cap is
+lifted by the PAGE (`[&>aside]:max-w-none` on the phone branch), so a `sm:` variant would
+key off the viewport and split the 448px docked column on a 4K monitor — the exact collision
+`/tasks`' detail hit when it was docked at 380px. The title wraps rather than truncating.
+
+**Fence (R7): `conformance.test.ts` rule 7**, two halves.
+*Selects* — `<select>` per file, ratcheted like rules 1/3/5/6, with 37 files baselined
+(TaskPanel deliberately absent as the worked example) and `components/ui/Input.tsx`
+allowlisted with a staleness check. *File pickers* — **absolute, no budget**: every other
+picker in the tree (chat upload, résumé parser, signature image, meeting audio, email
+composer) was already hidden behind a real control, so this one is a rule with no
+exceptions. `SOLID_BUTTON_DEBT` 30 → 29 in the same change, per the file's own protocol.
+
+Both halves were **mutation-checked** (raw `<select>` restored → red; `className="hidden"`
+deleted → red; file restored byte-identically each time), and the second mutation is why the
+fence is right: the first draft tested `/\bhidden\b/` over the whole tag, which
+**`aria-hidden` satisfied**, so deleting the hiding class left the gate green. Two scanner
+traps are written into the test: the shared `strip()` treats `accept="image/*"` as an opening
+`/*` and swallowed the rest of `SignatureEditor.tsx` (so this rule strips comments only at a
+token boundary), and reading raw source made the rule fail on the *comments explaining it*.
+
+**Owed, and not claimed:** ⚠️ **no browser check was possible** — Playwright cannot install
+here — so the phone viewport and the Fluent → Material → Graphite sweep on `/projects` *and*
+on `/tasks` beside it are owed at review. What was done instead: `tsc --noEmit` clean, 1634
+vitest cases green, `npx vitest run src/lib/theme/` green (361), a production `next build`
+that prerendered `/projects`, and every icon name checked against
+`lib/theme/icon-data/registry.json` for all packs. Also owed, and deliberately not done
+here: promoting `SectionLabel` (and `ItemDetail`'s copy) into `src/components/` with a
+`sharedTaskUi` SEAM row — that edit touches `app/tasks/**`, which another slice holds open —
+and the same for `TagPicker`/`RepeatEditor`/`CustomFieldValues`' own small labels, which
+still use the old lowercase style as sub-labels inside `PROPERTIES`.
+
+⚠️ **This section's own verification block (§10) is stale**: it names
+`tests/unit/test_projects_sync.py` and `tests/unit/test_projects_personal_mirror.py`, and
+neither exists — the second is `test_projects_personal.py`. Run with those two corrected,
+379 pass.
 
 ## Board record (2026-08-09) — moved from work_plan.md §2
 

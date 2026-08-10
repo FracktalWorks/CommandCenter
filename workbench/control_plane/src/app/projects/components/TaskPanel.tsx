@@ -6,11 +6,47 @@
  * Comments and system events come from ONE endpoint because they are one table
  * (§3.8) — the timeline shows a status change, an assignment, an agent run and
  * a comment in the same stream, which is the point of the shared spine.
+ *
+ * ## Composition (S5) — this panel follows `/tasks`' `ItemDetail`
+ *
+ * The standing ruling on the two task surfaces is "Projects is canonical, Tasks
+ * conforms". **This surface is the exception, and the direction is reversed**
+ * (owner-reported from screenshots of the deployed app, comparing the two
+ * detail panels: *"Task cards seem to be very different"*). `ItemDetail` is a
+ * designed surface — a header carrying the chip row and the title, a grouped
+ * details block of bordered field cells, then discrete labelled sections. This
+ * was a plain vertical form: a bare `<select>` for status, a raw file input
+ * rendering the browser's own *"Choose Files / No file chosen"*, and flat
+ * labels stacked with no grouping. Neither of those controls expresses
+ * Material's pill buttons or Graphite's uppercase labels, which is AGENTS.md
+ * rule 3 and is now fenced by conformance rule 7.
+ *
+ * So the grammar here is `ItemDetail`'s: `SectionLabel` for a section,
+ * `FieldCell` for a labelled cell (the chrome its `MetaEdit` draws closed).
+ * What is NOT copied is the interaction — Projects' controls are always
+ * visible rather than click-to-edit, because changing that is an interaction
+ * change wearing a composition change's clothes.
+ *
+ * **Everything Projects has and Tasks does not stays**: the task ref, tags,
+ * relations and links, watchers, recurrence, custom fields, attachments, the
+ * activity timeline and comments. Nothing Tasks-only is imported either —
+ * context, energy and the founder priority matrix live on `pm_task_personal`
+ * and are not this surface's data.
+ *
+ * ⚠️ **One column, always.** The panel is `max-w-md` docked on desktop and
+ * full-screen on a phone (`projects/page.tsx` lifts the cap). A `sm:grid-cols-2`
+ * would key off the VIEWPORT, so it would split the 448px docked column on a 4K
+ * monitor — which is exactly the collision `/tasks`' detail hit when it was
+ * docked at 380px. The surface, not the viewport, decides the column count.
  */
 import Icon from "@/components/Icon";
+import Badge from "@/components/ui/Badge";
 import Button from "@/components/ui/Button";
+import { Input, Select, Textarea } from "@/components/ui/Input";
+import { StatusChip } from "@/components/StatusChip";
 import { useEffect, useRef, useState } from "react";
 
+import { accentForStatus } from "../lib/accent";
 import {
   type ActivityRow,
   type AttachmentRow,
@@ -100,6 +136,68 @@ function describe(activity: ActivityRow, defs: FieldRow[] = []): string {
   }
 }
 
+/**
+ * A section heading — `ItemDetail`'s grammar, re-derived from that file
+ * (`text-[11px] font-semibold uppercase tracking-wide text-muted-foreground`,
+ * optional leading glyph).
+ *
+ * ⚠️ It is a deliberate second copy, and it should not stay one. The shared
+ * home for it is `src/components/`, promoted together with `ItemDetail`'s — and
+ * that edit touches `app/tasks/**`, which another slice holds open. Whoever
+ * takes it adds the row to `src/lib/sharedTaskUi.test.ts`'s SEAM so a third
+ * copy fails.
+ *
+ * Takes an icon NAME, not a component: `<Icon name="…">` is the house idiom and
+ * the active theme picks the pack.
+ */
+function SectionLabel({
+  icon,
+  children,
+}: {
+  icon?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <h3 className="mb-1.5 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+      {icon ? <Icon name={icon} className="h-3 w-3" /> : null}
+      {children}
+    </h3>
+  );
+}
+
+/**
+ * One labelled cell in the details block — the chrome `ItemDetail`'s `MetaEdit`
+ * draws in its closed state, without the click-to-edit flip: this panel's
+ * controls are live, and hiding them behind a click would be an interaction
+ * change, not a composition one.
+ *
+ * `trailing` is the right-hand slot of the label row (an accent dot, a count).
+ */
+function FieldCell({
+  label,
+  icon,
+  trailing,
+  children,
+}: {
+  label: string;
+  icon: string;
+  trailing?: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="min-w-0 rounded-md border border-border bg-card px-3 py-2">
+      <div className="flex items-center justify-between gap-2">
+        <span className="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+          <Icon name={icon} className="h-3 w-3" />
+          {label}
+        </span>
+        {trailing}
+      </div>
+      <div className="mt-1.5 text-sm text-foreground">{children}</div>
+    </div>
+  );
+}
+
 export function TaskPanel({
   task,
   statuses,
@@ -124,6 +222,12 @@ export function TaskPanel({
   // WS-27w item 6 — the copy-deep-link affordance's "it worked" flash.
   const [copied, setCopied] = useState(false);
   const [files, setFiles] = useState<AttachmentRow[]>([]);
+  // S5 — the names of the files currently going up. The picker is a <Button>
+  // now, so the browser's "3 files selected" text went with the raw control;
+  // this replaces it, and says something truer — what is IN FLIGHT, rather than
+  // what was last highlighted in a dialog.
+  const [uploading, setUploading] = useState<string[]>([]);
+  const filePicker = useRef<HTMLInputElement | null>(null);
   // WS-27v — null until the read lands, so the toggle never renders a state
   // it is only guessing at.
   const [watching, setWatching] = useState<boolean | null>(null);
@@ -131,6 +235,17 @@ export function TaskPanel({
   // Agents are excluded: an agent cannot receive a notification (migration
   // 152's CHECK), so offering to mention one would promise nothing.
   const mentionable = assignees.filter((who) => !who.startsWith("agent:"));
+  // The status this task is on, and its accent. `statusAccent`'s positional
+  // fallback wants the lane's index, so both come from one lookup; a status_id
+  // with no matching row (the panel opened before its project's statuses
+  // resolved) draws no chip rather than a wrong one.
+  const statusIndex = statuses.findIndex((s) => s.id === task.status_id);
+  const currentStatus = statusIndex >= 0 ? statuses[statusIndex] : undefined;
+  const statusTone = accentForStatus(
+    currentStatus,
+    Math.max(statusIndex, 0),
+    statuses.length,
+  );
 
   useEffect(() => {
     let live = true;
@@ -177,6 +292,7 @@ export function TaskPanel({
     if (!picked || picked.length === 0) return;
     setBusy(true);
     setError(null);
+    setUploading(Array.from(picked).map((f) => f.name));
     try {
       // Sequential, not Promise.all: each upload writes a timeline row, and a
       // burst of parallel writes would interleave them into an order that does
@@ -193,6 +309,7 @@ export function TaskPanel({
     } catch (err) {
       setError(String((err as Error).message));
     } finally {
+      setUploading([]);
       setBusy(false);
     }
   }
@@ -341,11 +458,18 @@ export function TaskPanel({
   }
 
   return (
-    <aside className="flex h-full w-full max-w-md flex-col border-l border-border bg-card">
-      <header className="flex items-start justify-between gap-2 border-b border-border p-3">
-        <div className="min-w-0">
-          <div className="flex items-center gap-0.5">
-            <p className="text-xs text-muted-foreground">{taskRef(task) ?? "Task"}</p>
+    // `bg-background` under a `bg-card` header, which is ItemDetail's
+    // arrangement and the reason the field cells below read as cards at all — a
+    // `bg-card` cell on a `bg-card` panel is an invisible box with a border.
+    // ⚠️ The root must stay an `<aside>`: `projects/page.tsx`'s phone branch
+    // lifts the width cap with `[&>aside]:max-w-none`.
+    <aside className="flex h-full w-full max-w-md flex-col border-l border-border bg-background">
+      <header className="shrink-0 border-b border-border bg-card px-3 py-3">
+        <div className="mb-1.5 flex items-start justify-between gap-2">
+          <div className="flex min-w-0 items-center gap-0.5">
+            <p className="truncate text-xs text-muted-foreground">
+              {taskRef(task) ?? "Task"}
+            </p>
             <Button
               variant="ghost"
               size="icon-xs"
@@ -355,285 +479,409 @@ export function TaskPanel({
               onClick={() => void copyDeepLink()}
             />
           </div>
-          <h2 className="truncate text-sm font-medium text-foreground">{task.title}</h2>
-        </div>
-        <div className="flex shrink-0 items-center gap-0.5">
-          {/* WS-27v — watch/unwatch. Watching means the bell hears about this
-              task; assignees hear regardless, so unwatching never silences
-              work you hold. Hidden (not disabled) until the state is known. */}
-          {watching !== null ? (
+          <div className="flex shrink-0 items-center gap-0.5">
+            {/* WS-27v — watch/unwatch. Watching means the bell hears about this
+                task; assignees hear regardless, so unwatching never silences
+                work you hold. Hidden (not disabled) until the state is known. */}
+            {watching !== null ? (
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                icon={watching ? "BellOff" : "Bell"}
+                aria-label={watching ? "Stop watching this task" : "Watch this task"}
+                title={
+                  watching
+                    ? "Watching — click to stop being notified about this task"
+                    : "Watch — get notified about this task"
+                }
+                onClick={() => void toggleWatch()}
+              />
+            ) : null}
             <Button
               variant="ghost"
               size="icon-sm"
-              icon={watching ? "BellOff" : "Bell"}
-              aria-label={watching ? "Stop watching this task" : "Watch this task"}
-              title={
-                watching
-                  ? "Watching — click to stop being notified about this task"
-                  : "Watch — get notified about this task"
-              }
-              onClick={() => void toggleWatch()}
+              icon="X"
+              aria-label="Close task"
+              title="Close this task"
+              onClick={onClose}
             />
+          </div>
+        </div>
+        {/* Wraps rather than truncates: the panel is 448px docked, and the title
+            is the one thing on it nobody can afford to have cut off. */}
+        <h2 className="text-base font-semibold leading-snug text-foreground">
+          {task.title}
+        </h2>
+        {/* The chip row — ItemDetail's status/source strip. The status is drawn
+            here through the shared `StatusChip`, in the accent
+            `accentForStatus` resolves from the owner's stored colour and then
+            from the machine-readable category (`lib/statusAccent.ts`): two
+            facts /tasks does not have, so this reads richer than the pill next
+            door rather than poorer. The Details block below carries the CONTROL
+            that changes it. */}
+        <div className="mt-2 flex flex-wrap items-center gap-1.5">
+          {currentStatus ? (
+            <StatusChip accent={statusTone} label={currentStatus.name} />
           ) : null}
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="Close task"
-            className="rounded p-1 text-muted-foreground hover:bg-muted"
-          >
-            <Icon name="X" className="h-4 w-4" />
-          </button>
+          {task.completed_at ? (
+            <Badge tone="success" icon="Check">
+              Completed
+            </Badge>
+          ) : null}
         </div>
       </header>
 
-      <div className="space-y-3 border-b border-border p-3 text-sm">
-        <label className="block">
-          <span className="text-xs text-muted-foreground">Status</span>
-          <select
-            value={task.status_id}
-            disabled={busy}
-            onChange={(e) => changeStatus(e.target.value)}
-            className="mt-1 w-full rounded-md border border-border bg-background px-2 py-1.5 text-sm text-foreground"
-          >
-            {statuses.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <div>
-          <span className="text-xs text-muted-foreground">Assignees</span>
-          <div className="mt-1 flex flex-wrap gap-1">
-            {assignees.map((who) => {
-              const kind = classify(who);
-              return (
-                <span
-                  key={who}
-                  title={kind === "unknown" ? "Not an email or agent:<name>" : who}
-                  className={`flex items-center gap-1 rounded-md px-2 py-1 text-xs ${
-                    kind === "unknown"
-                      ? "border border-border text-muted-foreground"
-                      : "bg-muted text-foreground"
-                  }`}
-                >
-                  {/* Agents and people are one vocabulary (D-PM-4), so the
-                      difference is an icon, never a separate field. */}
-                  {kind === "agent" ? <Icon name="Bot" className="h-3 w-3" /> : null}
-                  {assigneeLabel(who)}
-                  <button
-                    type="button"
-                    disabled={busy}
-                    aria-label={`Unassign ${who}`}
-                    onClick={() => void saveAssignees(withoutAssignee(assignees, who))}
-                    className="text-muted-foreground hover:text-foreground"
-                  >
-                    <Icon name="X" className="h-3 w-3" />
-                  </button>
-                </span>
-              );
-            })}
-            {assignees.length === 0 ? (
-              <span className="text-xs text-muted-foreground">Nobody yet</span>
-            ) : null}
-          </div>
-          <input
-            value={assignee}
-            disabled={busy}
-            onChange={(e) => setAssignee(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") {
-                e.preventDefault();
-                void addAssignees();
-              }
-            }}
-            onBlur={() => void addAssignees()}
-            placeholder="email or agent:name"
-            aria-label="Add an assignee"
-            className="mt-1 w-full rounded-md border border-border bg-background px-2 py-1.5 text-sm text-foreground"
-          />
-        </div>
-        {task.description ? (
-          <p className="whitespace-pre-wrap text-sm text-foreground">
-            {task.description}
-          </p>
-        ) : null}
-        {/* Renders nothing at all when the project has no custom fields, so a
-            project that never wanted them never grows an empty heading. */}
-        {/* Saved on every change rather than behind a button: a chip is a
-            single decision, and a Save beside it would be a second click for
-            something that is already unambiguous. */}
-        <TagPicker
-          value={task.tags ?? []}
-          registry={tags}
-          disabled={busy}
-          onChange={(next) => {
-            void (async () => {
-              try {
-                onChanged(await projectsApi.patchTask(task.id, { tags: next }));
-              } catch (err) {
-                setError(String((err as Error).message));
-              }
-            })();
-          }}
-        />
-        {/* Both halves existed in the schema since WS-27a with no surface:
-            links could be created and deleted but never listed, and subtasks
-            could be created but never shown. */}
-        {onOpenTask ? (
-          <RelationsBlock
-            taskId={task.id}
-            task={task}
-            refreshKey={relationsKey}
-            onOpenTask={onOpenTask}
-          />
-        ) : null}
-        <RepeatEditor taskId={task.id} />
-        <CustomFieldValues task={task} fields={fields} onChanged={onChanged} />
-        <div>
-          <span className="text-xs text-muted-foreground">Files</span>
-          <div className="mt-1 space-y-1">
-            {files.map((f) => (
-              <div key={f.attachment_id} className="flex items-center gap-2 text-xs">
-                {f.kind === "image" ? (
-                  <Icon name="Image" className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                ) : (
-                  <Icon name="Paperclip" className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                )}
-                <a
-                  href={f.url}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="min-w-0 flex-1 truncate text-foreground hover:underline"
-                >
-                  {f.name}
-                </a>
-                <span className="shrink-0 text-muted-foreground">
-                  {Math.max(1, Math.round(f.size / 1024))} KB
-                </span>
-                <button
-                  type="button"
-                  disabled={busy}
-                  aria-label={`Remove ${f.name}`}
-                  title="Removes it from this task; the file itself is kept"
-                  onClick={() => void detach(f.attachment_id)}
-                  className="shrink-0 text-muted-foreground hover:text-foreground"
-                >
-                  <Icon name="X" className="h-3 w-3" />
-                </button>
-              </div>
-            ))}
-            {files.length === 0 ? (
-              <p className="text-xs text-muted-foreground">Nothing attached.</p>
-            ) : null}
-          </div>
-          <input
-            type="file"
-            multiple
-            disabled={busy}
-            aria-label="Attach files"
-            onChange={(e) => {
-              void uploadFiles(e.target.files);
-              // Reset so picking the SAME file twice still fires a change.
-              e.target.value = "";
-            }}
-            className="mt-1 w-full text-xs text-muted-foreground file:mr-2 file:rounded-md file:border file:border-border file:bg-background file:px-2 file:py-1 file:text-xs file:text-foreground"
-          />
-        </div>
-        <div>
-          <span className="text-xs text-muted-foreground">Subtask</span>
-          <input
-            value={subtask}
-            disabled={busy}
-            onChange={(e) => setSubtask(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") {
-                e.preventDefault();
-                void addSubtask();
-              }
-            }}
-            placeholder="Break this down…"
-            aria-label="Add a subtask"
-            className="mt-1 w-full rounded-md border border-border bg-background px-2 py-1.5 text-sm text-foreground"
-          />
-        </div>
-      </div>
-
       {error ? (
-        <p className="border-b border-border bg-muted px-3 py-2 text-xs text-foreground">
+        <p className="shrink-0 border-b border-border bg-muted px-3 py-2 text-xs text-foreground">
           {error}
         </p>
       ) : null}
 
-      <ol className="flex-1 space-y-3 overflow-y-auto p-3">
-        {timeline.map((activity) => (
-          <li key={activity.id} className="text-sm">
-            <p className="flex items-center gap-1 text-xs text-muted-foreground">
-              {/* WS-27z — an automated entry says so. The flag is the row's
-                  meta.automation, written only by the workflow engine; a
-                  sweep archiving a task must not read as a person did it. */}
-              {isAutomated(activity) ? (
-                <span
-                  className="inline-flex items-center gap-0.5"
-                  title="Automated by a workflow"
+      {/* ONE scroll region. It used to be two: a fixed field block that could
+          eat the whole panel on a short window, with the timeline scrolling
+          under it. ItemDetail scrolls the whole detail, and so does this now —
+          only the header and the comment composer are pinned. */}
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        <div className="flex flex-col gap-4 px-3 py-3">
+          <section>
+            <SectionLabel icon="SlidersHorizontal">Details</SectionLabel>
+            {/* `grid-cols-1`, with no responsive variant on purpose — see the
+                width note in this file's header. */}
+            <div className="grid grid-cols-1 gap-2">
+              <FieldCell
+                label="Status"
+                icon="CircleDot"
+                trailing={
+                  <span
+                    className={`h-2 w-2 shrink-0 rounded-full ${statusTone.dot}`}
+                    aria-hidden
+                  />
+                }
+              >
+                <Select
+                  value={task.status_id}
+                  disabled={busy}
+                  aria-label="Status"
+                  onChange={(e) => void changeStatus(e.target.value)}
                 >
-                  <Icon name="Bot" className="h-3 w-3" />
-                  <span className="text-[10px]">auto</span>
-                </span>
-              ) : null}
-              <span className="min-w-0 truncate">
-                {activity.created_by ?? "system"}
-                {activity.created_at
-                  ? ` · ${new Date(activity.created_at).toLocaleString()}`
-                  : ""}
-              </span>
-            </p>
-            <p className="whitespace-pre-wrap text-foreground">{describe(activity, fields)}</p>
-          </li>
-        ))}
-        {timeline.length === 0 ? (
-          <li className="text-sm text-muted-foreground">Nothing on the timeline yet.</li>
-        ) : null}
-      </ol>
+                  {statuses.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name}
+                    </option>
+                  ))}
+                </Select>
+              </FieldCell>
 
-      <div className="border-t border-border p-3">
-        <textarea
+              <FieldCell
+                label="Assignees"
+                icon="Users"
+                trailing={
+                  assignees.length ? (
+                    <span className="text-[10px] text-muted-foreground">
+                      {assignees.length}
+                    </span>
+                  ) : null
+                }
+              >
+                <div className="flex flex-wrap gap-1">
+                  {assignees.map((who) => {
+                    const kind = classify(who);
+                    return (
+                      <Badge
+                        key={who}
+                        // An address that is neither an email nor `agent:<name>`
+                        // is a typo somebody has to see, so it takes the warning
+                        // tone rather than a quieter outline.
+                        tone={kind === "unknown" ? "warning" : "neutral"}
+                        // Agents and people are one vocabulary (D-PM-4), so the
+                        // difference is an icon, never a separate field.
+                        icon={kind === "agent" ? "Bot" : undefined}
+                        title={
+                          kind === "unknown" ? "Not an email or agent:<name>" : who
+                        }
+                      >
+                        {assigneeLabel(who)}
+                        <button
+                          type="button"
+                          disabled={busy}
+                          aria-label={`Unassign ${who}`}
+                          onClick={() =>
+                            void saveAssignees(withoutAssignee(assignees, who))
+                          }
+                          className="opacity-70 hover:opacity-100"
+                        >
+                          <Icon name="X" className="h-3 w-3" />
+                        </button>
+                      </Badge>
+                    );
+                  })}
+                  {assignees.length === 0 ? (
+                    <span className="text-xs text-muted-foreground">Nobody yet</span>
+                  ) : null}
+                </div>
+                <Input
+                  className="mt-1.5"
+                  value={assignee}
+                  disabled={busy}
+                  onChange={(e) => setAssignee(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      void addAssignees();
+                    }
+                  }}
+                  onBlur={() => void addAssignees()}
+                  placeholder="email or agent:name"
+                  aria-label="Add an assignee"
+                />
+              </FieldCell>
+            </div>
+          </section>
+
+          {task.description ? (
+            <section>
+              <SectionLabel icon="AlignLeft">Description</SectionLabel>
+              <p className="whitespace-pre-wrap text-sm text-foreground">
+                {task.description}
+              </p>
+            </section>
+          ) : null}
+
+          {/* Tags and recurrence draw their own small labels, so they are
+              sub-fields of one section rather than two sections whose headings
+              would compete with the ones those components already render.
+              Promoting those labels onto `SectionLabel` means editing
+              `TagPicker`/`RepeatEditor`, which S5 does not own. */}
+          <section>
+            <SectionLabel icon="Tag">Properties</SectionLabel>
+            <div className="space-y-3">
+              {/* Saved on every change rather than behind a button: a chip is a
+                  single decision, and a Save beside it would be a second click
+                  for something that is already unambiguous. */}
+              <TagPicker
+                value={task.tags ?? []}
+                registry={tags}
+                disabled={busy}
+                onChange={(next) => {
+                  void (async () => {
+                    try {
+                      onChanged(await projectsApi.patchTask(task.id, { tags: next }));
+                    } catch (err) {
+                      setError(String((err as Error).message));
+                    }
+                  })();
+                }}
+              />
+              <RepeatEditor taskId={task.id} />
+            </div>
+          </section>
+        </div>
+
+        {/* Custom fields bring their own section chrome — a top rule, their own
+            gutter and an `h4` — so they sit OUTSIDE the padded column rather
+            than nesting one gutter inside another. Renders nothing at all when
+            the project defined no fields, so a project that never wanted them
+            never grows an empty heading. */}
+        <CustomFieldValues task={task} fields={fields} onChanged={onChanged} />
+
+        <div className="flex flex-col gap-4 px-3 py-3">
+          {/* Both halves existed in the schema since WS-27a with no surface:
+              links could be created and deleted but never listed, and subtasks
+              could be created but never shown. */}
+          <section>
+            <SectionLabel icon="GitBranch">Links &amp; subtasks</SectionLabel>
+            <div className="space-y-2">
+              {onOpenTask ? (
+                <RelationsBlock
+                  taskId={task.id}
+                  task={task}
+                  refreshKey={relationsKey}
+                  onOpenTask={onOpenTask}
+                />
+              ) : null}
+              <Input
+                icon="Plus"
+                value={subtask}
+                disabled={busy}
+                onChange={(e) => setSubtask(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    void addSubtask();
+                  }
+                }}
+                placeholder="Break this down…"
+                aria-label="Add a subtask"
+              />
+            </div>
+          </section>
+
+          <section>
+            <SectionLabel icon="Paperclip">
+              Files{files.length ? ` · ${files.length}` : ""}
+            </SectionLabel>
+            <div className="space-y-1">
+              {files.map((f) => (
+                <div
+                  key={f.attachment_id}
+                  className="flex items-center gap-2 rounded-md border border-border bg-card px-2 py-1.5 text-xs"
+                >
+                  {f.kind === "image" ? (
+                    <Icon
+                      name="Image"
+                      className="h-3.5 w-3.5 shrink-0 text-muted-foreground"
+                    />
+                  ) : (
+                    <Icon
+                      name="Paperclip"
+                      className="h-3.5 w-3.5 shrink-0 text-muted-foreground"
+                    />
+                  )}
+                  <a
+                    href={f.url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="min-w-0 flex-1 truncate text-foreground hover:underline"
+                  >
+                    {f.name}
+                  </a>
+                  <span className="shrink-0 text-muted-foreground">
+                    {Math.max(1, Math.round(f.size / 1024))} KB
+                  </span>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    aria-label={`Remove ${f.name}`}
+                    title="Removes it from this task; the file itself is kept"
+                    onClick={() => void detach(f.attachment_id)}
+                    className="shrink-0 text-muted-foreground hover:text-foreground"
+                  >
+                    <Icon name="X" className="h-3 w-3" />
+                  </button>
+                </div>
+              ))}
+              {/* What is going up right now, by name. */}
+              {uploading.map((name) => (
+                <div
+                  key={`uploading:${name}`}
+                  className="flex items-center gap-2 rounded-md border border-dashed border-border px-2 py-1.5 text-xs text-muted-foreground"
+                >
+                  <Icon name="Loader2" className="h-3.5 w-3.5 shrink-0 animate-spin" />
+                  <span className="min-w-0 flex-1 truncate">{name}</span>
+                </div>
+              ))}
+              {files.length === 0 && uploading.length === 0 ? (
+                <p className="text-xs text-muted-foreground">Nothing attached.</p>
+              ) : null}
+            </div>
+            {/* S5 — the picker is a Button, not a bare file input. The
+                browser's own "Choose Files / No file chosen" is not a design:
+                it follows neither the theme's control personality nor the icon
+                pack, and it was the most visibly unstyled control on this
+                panel. The input stays in the tree, hidden, because it is the
+                only way to raise the OS file dialog. Fenced by conformance
+                rule 7. */}
+            <input
+              ref={filePicker}
+              type="file"
+              multiple
+              className="hidden"
+              tabIndex={-1}
+              aria-hidden
+              onChange={(e) => {
+                void uploadFiles(e.target.files);
+                // Reset so picking the SAME file twice still fires a change.
+                e.target.value = "";
+              }}
+            />
+            <Button
+              className="mt-2"
+              variant="secondary"
+              size="sm"
+              icon="Upload"
+              loading={uploading.length > 0}
+              disabled={busy}
+              onClick={() => filePicker.current?.click()}
+            >
+              {uploading.length > 0 ? "Uploading…" : "Attach files"}
+            </Button>
+          </section>
+
+          <section>
+            <SectionLabel icon="History">Activity</SectionLabel>
+            <ol className="space-y-3">
+              {timeline.map((activity) => (
+                <li key={activity.id} className="text-sm">
+                  <p className="flex items-center gap-1 text-xs text-muted-foreground">
+                    {/* WS-27z — an automated entry says so. The flag is the row's
+                        meta.automation, written only by the workflow engine; a
+                        sweep archiving a task must not read as a person did it. */}
+                    {isAutomated(activity) ? (
+                      <Badge size="xs" icon="Bot" title="Automated by a workflow">
+                        auto
+                      </Badge>
+                    ) : null}
+                    <span className="min-w-0 truncate">
+                      {activity.created_by ?? "system"}
+                      {activity.created_at
+                        ? ` · ${new Date(activity.created_at).toLocaleString()}`
+                        : ""}
+                    </span>
+                  </p>
+                  <p className="whitespace-pre-wrap text-foreground">
+                    {describe(activity, fields)}
+                  </p>
+                </li>
+              ))}
+              {timeline.length === 0 ? (
+                <li className="text-sm text-muted-foreground">
+                  Nothing on the timeline yet.
+                </li>
+              ) : null}
+            </ol>
+          </section>
+        </div>
+      </div>
+
+      <div className="shrink-0 border-t border-border bg-card p-3">
+        <Textarea
           ref={commentBox}
+          inputSize="lg"
           value={comment}
           onChange={(e) => setComment(e.target.value)}
           placeholder="Add a comment…"
+          aria-label="Add a comment"
           rows={2}
-          className="w-full rounded-md border border-border bg-background px-2 py-1.5 text-sm text-foreground"
         />
         {/* Mentionable people are this task's assignees. A full directory
             picker is WS-28e's job; these are who a comment names in practice,
             and typing the address by hand still works for anyone else. */}
         {mentionable.length ? (
-          <div className="mt-1 flex flex-wrap items-center gap-1">
+          <div className="mt-1.5 flex flex-wrap items-center gap-1">
             <span className="text-[10px] text-muted-foreground">Mention</span>
             {mentionable.map((who) => (
-              <button
+              <Button
                 key={who}
-                type="button"
+                variant="secondary"
+                size="sm"
                 onClick={() => mention(who)}
-                className="rounded-full border border-border px-1.5 py-0.5 text-[10px] text-muted-foreground hover:text-foreground"
               >
                 @{who.split("@")[0]}
-              </button>
+              </Button>
             ))}
           </div>
         ) : null}
         {notDelivered ? (
           <p className="mt-1 text-[11px] text-muted-foreground">{notDelivered}</p>
         ) : null}
-        <button
-          type="button"
+        <Button
+          className="mt-2 w-full"
+          icon="MessageSquare"
           onClick={addComment}
           disabled={busy || !comment.trim()}
-          className="mt-2 w-full rounded-md bg-primary px-3 py-1.5 text-sm text-primary-foreground disabled:opacity-50"
         >
           Comment
-        </button>
+        </Button>
       </div>
     </aside>
   );

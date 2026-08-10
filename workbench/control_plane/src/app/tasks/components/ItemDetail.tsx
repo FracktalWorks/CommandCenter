@@ -354,10 +354,17 @@ export function TaskDetail({
           />
         </section>
 
-        {/* Metadata grid — every cell is click-to-edit */}
+        {/* Metadata grid — every cell is click-to-edit.
+            ⚠️ Column count follows the SURFACE, not the viewport. This detail
+            was built for the `max-w-3xl` modal, where two columns are
+            comfortable; docking it into DESIGN_SYSTEM §6's 380px pane left each
+            cell ~170px and its label and value collided (owner-reported after
+            the S2 deploy, with a screenshot). A media query cannot fix it —
+            the pane is 380px on a 4K monitor too — so the switch is `focused`,
+            the prop that already distinguishes the two lives. */}
         <section>
           <SectionLabel icon={themedIcon("Tag")}>Details</SectionLabel>
-          <div className="grid grid-cols-2 gap-2">
+          <div className={`grid gap-2 ${focused ? "grid-cols-2" : "grid-cols-1"}`}>
             {/* Context */}
             <MetaEdit label="Context" icon={themedIcon("Tag")}
               display={item.context

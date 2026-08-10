@@ -213,6 +213,36 @@ PR and **stop before merge**. Two properties make it work:
 §1 contract already says this; it is here because it is the most common way an
 agent builds against a file that moved).
 
+## 5.1 The harness travels with the repo (D29)
+
+**The development philosophy is only real where it is installed.** Until
+2026-08-10 `.claude/` was entirely gitignored, so every checkout that was not the
+owner's laptop — **a cloud Claude instance, a fresh clone, a headless run, an
+agent's own worktree** — ran with *no* `plan-guard`, *no* supervisor-worker agent
+definitions and *no* `/next-ticket`. The owner-gate registry (§6 of the work
+plan) was being enforced by a file that travelled by accident.
+
+**Tracked, because it is doctrine in executable form:** `.claude/AGENTS.md` ·
+`.claude/agents/` (spec-auditor, ws-implementer, ws-verifier, diff-reviewer) ·
+`.claude/commands/` · `.claude/hooks/` (`plan-guard.mjs` + its test, `rtk-bash.sh`)
+· `.claude/settings.json` (wires the hooks; contains no secrets).
+
+**Still ignored, because it is local or derived:** `settings.local.json`
+(per-machine permissions), `worktrees/` (ephemeral full checkouts),
+`scheduled_tasks.lock`, `skill-observations/`, and `skills/` (third-party skill
+bundles — tooling a developer installs, not project doctrine).
+
+**Derived indexes are rebuilt, never committed.** The CodeGraph symbol index
+(`.codegraph/`) stays ignored: it is a per-checkout SQLite database that would be
+large, churn on every commit and conflict on every merge. Its *config*
+(`.mcp.json`, `codegraph.json`) is tracked, so a fresh environment gets the tool
+and builds its own index. **Anything derivable from the source is rebuilt on the
+new machine; only the sources of truth are tracked.**
+
+**The fence (R7):** `node .claude/hooks/plan-guard.test.mjs` runs blocking in
+`pr-check`. Break the guard and CI is red — rather than the guard quietly
+permitting everything on a machine nobody is watching.
+
 ## 6. Security once the users are not colleagues
 
 The threat model changes completely at customer #1, and

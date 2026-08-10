@@ -1930,9 +1930,23 @@ a counterexample, not a model.
 
 #### 9.4.1 Owner decisions owed — these gate the tickets under them
 
-**D-PM-15 (owed) — the headless-primitive substrate.** Base UI vs Radix vs Headless UI.
-Everything in WS-27ak depends on it and **picking two would create the parallel seam our
-own rules forbid**, so this is one choice made once. What it buys: a real focus trap,
+**D-PM-15 (owed, but now evidenced) — the headless-primitive substrate.** Base UI vs Radix
+vs Headless UI. Everything in WS-27ak depends on it and **picking two would create the
+parallel seam our own rules forbid**, so this is one choice made once.
+
+> ✅ **The Paca read (2026-08-10) turns this from taste into evidence.** Paca ships
+> **Base UI** as the substrate for **17 of its 24 primitives**; Plane's `propel` is *also* a
+> thin Base UI wrapper. **Two independent products, independently, chose Base UI for exactly
+> the primitive set WS-27ak enumerates.** That is the strongest external signal this decision
+> is going to get.
+> Two riders that change the ticket rather than the choice. **(a) Base UI has no Combobox** —
+> every "pick from a long list" surface in Paca is a hand-rolled search input inside a
+> Popover. So the substrate closes WS-27ak items 1, 2, 3 and 5, and **item 4 stays a build
+> whichever library wins**; its behaviour is specified in §9.5 and can be written now.
+> **(b) The rule must bind vendored registries too.** Paca's `package.json` carries Base UI
+> **and** `radix-ui` — the second reaching exactly one file, inherited from a vendored
+> component registry. That is the second-substrate failure walking in the back door, which is
+> the mechanism this decision exists to prevent, observed happening in someone else's tree. What it buys: a real focus trap,
 focus return, scroll-lock with scrollbar compensation, collision-aware positioning,
 roving tabindex, typeahead — the behaviours nobody hand-rolls correctly. Every primitive
 still gets a CommandCenter wrapper in `src/components/ui/` carrying `.cc-control`,
@@ -1950,9 +1964,20 @@ judgement-call migration nobody can automate. **Even if the answer is "no, vocab
 stay per-project", record it as a decision now**, because the answer is what stops the
 merge ever becoming necessary.
 
-**D-PM-17 (owed) — the i18n discipline (not i18n itself).** Their numbers are our
+**D-PM-17 (owed) — the i18n discipline (not i18n itself).** Plane's numbers are one
 forecast: 28 namespaces × 19 locales ≈ **5,181 keys per locale**, for a surface *smaller*
-than ours. The cost splits in two and only one half is avoidable: translation is
+than ours.
+
+> ⚠️ **Two corrections from the Paca read (2026-08-10), both of which make adoption look
+> cheaper than the Plane-only figure implied.** (1) **`i18next-icu` is not needed for
+> plurals.** Paca's Russian bundle carries `_one/_few/_many/_other`, i.e. CLDR plural
+> categories come from **i18next core via `Intl.PluralRules`**; ICU is only required for
+> select/ordinal/nested constructs. My earlier text named ICU as the plural mechanism and
+> that was wrong. (2) **The scale is not fixed by the library.** Paca does the same job in
+> **10 namespaces × 1,644 keys per locale** against Plane's 28 × 5,181 — so the honest
+> forecast is a range, and the shape of the surface drives it more than the tool does.
+> The recommendation below is unchanged, and the second correction strengthens it: the
+> cheap discipline is worth adopting precisely because the expensive half is not fixed. The cost splits in two and only one half is avoidable: translation is
 unavoidable and unchanged by anything we do today; **extraction** — walking every
 component, finding every literal, inventing a key — is the expensive, unreviewable,
 long-branch half, and it collides head-on with our "keep branches short" rule. The
@@ -2159,6 +2184,199 @@ expressible in a class string. · **UA-sniffing for touch** — use `(hover: hov
 derive it from a hash of the row index. · **Unmount-on-scroll virtualization for any
 subtree owning unsaved input** — browser find-in-page cannot see it and an in-progress edit
 is lost.
+
+---
+
+### 9.5 The Paca queue (minted 2026-08-10 from a full read of the second reference)
+
+Paca (**Apache-2.0**, pinned `09dab28e`) was our *first* reference and its research doc had
+**no UI section at all** — the same blind spot Plane's first pass had. Four agents re-read it
+in full: `apps/web`, `services/api`, the agent/MCP/realtime layer, and its e2e suite. That pass
+found **28 defects in our own Paca record** (recorded at `paca_pm_research_2026-08.md` §10–§11)
+and the queue below.
+
+> ### The cross-reference — the one thing neither single-repo pass could produce
+> **1. Paca ships Base UI too.** 17 of its 24 primitives. Plane's `propel` is also a Base UI
+> wrapper. **Two independent products, independently, chose the same substrate for exactly the
+> primitive set WS-27ak enumerates** — that is D-PM-15 answered with evidence instead of taste.
+> **2. Paca is ahead on exactly one axis, and it is ours.** Its ~4,500-line agent surface has
+> **no Plane counterpart at all** — Plane is not an AI product. Everything in §9.5.1 below is
+> therefore single-sourced, and it is the closest external analogue to our own thesis.
+> **3. On everything Plane's queue already covers, Paca is the WEAKER reference.** No
+> multi-select, no bulk edit, no keyboard cursor anywhere in 61k lines; native HTML5 drag only,
+> so its board cannot be reordered on a phone at all; a hand-rolled task modal with no focus
+> trap; one theme axis; raw Tailwind palette classes for every categorical hue. **Importing
+> from Paca on those axes would be a regression.** Where the two references disagree, we now
+> know which to follow.
+
+#### 9.5.1 The agent surface — where Paca is genuinely ahead of everything
+
+**WS-27au — the agent-run transcript.** 🟢 AGENT-SAFE.
+A run is not a log. Heterogeneous backend events (assistant message, tool call, observation,
+error, rejection) fold into one assistant *turn* per burst, and within a turn group into a
+collapsible **Reasoning** block, a collapsible **N tool calls** block, and the reply as prose.
+The details that make it correct: a synthetic terminal `finish` call is unwrapped so its
+message reads as the answer rather than an opaque card; a tool result arriving with no matching
+open call (a history gap after resume) still renders as a standalone complete card instead of
+vanishing; unknown event types fall through to plain text rather than disappearing; and a
+streaming tool part is created once and **mutated in place**, so a diff captured early is not
+cleared by a later update. This is the contract between an agent event bus (our AG-UI + Action
+Broker) and any chat renderer, and nothing in Plane specifies it.
+**REF:** [`apps/web/src/components/projects/agents/conversation-to-thread-messages.ts`](https://github.com/paca-ai/paca/blob/09dab28e3caee9e43891697998dcfa7fcf76991c/apps/web/src/components/projects/agents/conversation-to-thread-messages.ts)
+· their test file is the better spec: [`apps/web/src/components/projects/agents/conversation-to-thread-messages.test.ts`](https://github.com/paca-ai/paca/blob/09dab28e3caee9e43891697998dcfa7fcf76991c/apps/web/src/components/projects/agents/conversation-to-thread-messages.test.ts)
+
+**WS-27av — the inline tool-approval bar.** 🟢 AGENT-SAFE. **This is the Action Broker's
+human-in-the-loop surface, specified.**
+Allow/deny by default; a host-declared option list when present (allow-once / allow-always /
+reject-once / reject-always) with **allow options ordered first and only the first styled
+primary**; unknown custom kinds filtered out; and **a refusal path always preserved** — if the
+declared list contains no reject option, a Deny button is synthesised. An option may demand a
+second confirm step naming the **grants being conferred** as code chips. The card auto-expands
+exactly once on `requires-action` and never re-opens after the user collapses it.
+⚠️ **Read this together with the agent-layer finding that Paca's BACKEND has no approval
+primitive at all** (`paca_pm_research` §10): the protocol here comes from `@assistant-ui/react`
+(MIT), not from Paca. So the UI contract is adoptable and **the enforcement is ours to design**
+— which is exactly the split D-PM-19 below records.
+**REF:** [`apps/web/src/components/assistant-ui/tool-fallback.tsx`](https://github.com/paca-ai/paca/blob/09dab28e3caee9e43891697998dcfa7fcf76991c/apps/web/src/components/assistant-ui/tool-fallback.tsx) (approval bar, and the
+`isError`-separate-from-`status` rule: a tool that *returned* an error reports `complete`, so
+checking status alone renders a failure as a success)
+
+**WS-27aw — the agent activity ledger.** 🟢 AGENT-SAFE, needs a migration (two partial indexes).
+Per-agent, cross-entity: every task and doc the agent touched, typed, described in the **same
+sentence vocabulary as the task timeline**, deep-linked, with the entity title shown greyed and
+unlinked when the source was deleted — so the ledger survives its subjects. Filterable by
+source type, date range and text; keyset-paginated.
+**Not "here is a chat log" but "here is the ledger of changes this agent made to the
+business."** Neither we nor Plane have it. For us it is *cheaper than for them*: they must
+`UNION ALL` two activity tables, we have one `pm_activities` with the actor already recorded as
+`agent:<name>` — the read model is a filtered query over a table that exists.
+**REF:** [`services/api/internal/domain/agent/activity_feed.go`](https://github.com/paca-ai/paca/blob/09dab28e3caee9e43891697998dcfa7fcf76991c/services/api/internal/domain/agent/activity_feed.go) · [`apps/web/src/components/projects/agents/agent-activity-tab.tsx`](https://github.com/paca-ai/paca/blob/09dab28e3caee9e43891697998dcfa7fcf76991c/apps/web/src/components/projects/agents/agent-activity-tab.tsx)
+
+**WS-27ax — an agent assignee should LOOK like one.** 🟢 AGENT-SAFE. **Paca's own biggest
+miss, and the design space it leaves open for us.**
+Measured: `member_type === "agent"` is read in exactly two files in 61k lines, neither a card,
+a row, nor the properties panel. There is no bot glyph, no agent chip, no "an agent is working
+on this right now" state — the only visible trace is a timeline line. We already have the
+vocabulary (D-PM-4: agents and people are one assignee list, `agent:<name>`) and `TaskCardShell`
+already draws an avatar stack.
+Done when a card shows *an agent owns this*, *it is mid-run*, *here is how to watch it*, and
+*here is how to stop it*. The last two matter most: a running agent the user cannot see or stop
+is the failure mode this ticket exists to prevent.
+**REF:** no upstream — this is the gap, not the pattern. Nearest shape:
+[`apps/web/src/components/projects/agents/conversation-view.tsx`](https://github.com/paca-ai/paca/blob/09dab28e3caee9e43891697998dcfa7fcf76991c/apps/web/src/components/projects/agents/conversation-view.tsx) (status badge, always-reachable Stop, ~30s heartbeat so the sandbox reaper does not kill a run the user is watching)
+
+**WS-27ay — agent presets.** 🟢 AGENT-SAFE, trivial (data) + a slice (picker).
+Creating an agent starts from role-shaped templates — Software Engineer, Code Reviewer, QA,
+**Planner**, **Business Analyst**, Custom — each carrying provider, model and a system prompt
+that names the *tools* it should use and the output convention it should follow. Every field
+stays editable; the preset is a starting point, not a mould. For a Centers product this maps
+onto department-shaped agents almost one-for-one, and it is the cheap answer to an empty Agent
+Builder. ⚠️ Must live in our existing Agent Builder registry, never a second one.
+**REF:** [`apps/web/src/lib/agent-api.ts`](https://github.com/paca-ai/paca/blob/09dab28e3caee9e43891697998dcfa7fcf76991c/apps/web/src/lib/agent-api.ts) (the preset table with full prompts)
+
+#### 9.5.2 Tickets from the interaction surface
+
+**WS-27az — per-activity Revert and View diff, from the timeline.** 🟢 AGENT-SAFE.
+Hover a system entry → *View diff* (hunk-collapsed) and *Revert*, which reads the
+`{field, old, new}` record, resolves names back to ids, and applies an ordinary update — so
+**the revert is itself an auditable activity**. We adopted the schema from this reference and
+never built the affordance; `pm_activities` already carries the change record.
+⚠️ Two corrections to inherit deliberately rather than repeat: their `isRevertable` only checks
+that *some* change has an `old` key, so a field it cannot restore still offers an enabled menu
+item that silently does nothing — **ours computes revertability from the fields it can actually
+restore**; and their custom-field diffs record no old/new at all, so ours must.
+Disproportionately valuable in an agent product: undoing what an agent just did, one field at a
+time, is a trust mechanism. **Plane has nothing comparable.**
+**REF:** [`apps/web/src/components/projects/interactions/task-detail/activity-pane.tsx`](https://github.com/paca-ai/paca/blob/09dab28e3caee9e43891697998dcfa7fcf76991c/apps/web/src/components/projects/interactions/task-detail/activity-pane.tsx) (the field-by-field revert map, and the weak predicate to improve on)
+
+**WS-27ba — the saved-view filter that does not rot.** 🟢 AGENT-SAFE. **Cheap now, expensive
+later.**
+Their filter config is a **recursive, dimension-agnostic selector** — `all` plus per-item
+exceptions, nesting, named virtual groups, and per-custom-field range/contains blocks — not an
+ID array. "Every status except Archived" keeps working when someone adds a status; an ID
+snapshot silently starts hiding new work. With Center slices this matters more for us than for
+them: a Center's default view is created once and lives for years.
+⚠️ **Take the shape and resolve it SERVER-side.** Theirs is stored, handed back, and never read
+by the server — all filtering arrives as client-built query parameters, so their saved filters
+are advisory. Our `146_projects.sql` explicitly claims the opposite property; **we hold it and
+they do not, so Paca is not prior art for the split** — only for the shape.
+Composes with WS-27ap (the boolean filter tree from Plane): same JSONB config, one resolver.
+**REF:** [`services/api/internal/domain/sprint/entity.go`](https://github.com/paca-ai/paca/blob/09dab28e3caee9e43891697998dcfa7fcf76991c/services/api/internal/domain/sprint/entity.go) (the recursive `FilterConfig`)
+
+**WS-27bb — per-column board pagination.** 🟢 AGENT-SAFE. The largest scale gap between their
+board and ours: each column is its own paginated query with a **server-side total** in the
+header (or a summed numeric field — story points — instead of a count), so "Load more" never
+lies. The subtle part worth copying: when a realtime event forces a refetch, the column's
+**expanded depth is remembered and re-requested**, so a column the user expanded to 200 does not
+silently snap back to 20. Ours fetches one flat list.
+**REF:** [`apps/web/src/components/projects/interactions/interaction-layout.tsx`](https://github.com/paca-ai/paca/blob/09dab28e3caee9e43891697998dcfa7fcf76991c/apps/web/src/components/projects/interactions/interaction-layout.tsx)
+
+**WS-27bc — the long-list picker.** 🟢 AGENT-SAFE. **The behavioural half of WS-27ak(4), and it
+can be written before D-PM-15 resolves** — Base UI has no Combobox, so this is a build whichever
+substrate wins. Scroll-pagination at a 48px threshold; server-side search debounced at 300ms
+with a **minimum query length of 2**, below which it falls back to the unfiltered first page
+rather than firing a leading-wildcard scan with no index behind it. That minimum is a
+performance fence, not a nicety.
+**REF:** [`apps/web/src/lib/scroll-pagination.ts`](https://github.com/paca-ai/paca/blob/09dab28e3caee9e43891697998dcfa7fcf76991c/apps/web/src/lib/scroll-pagination.ts) · [`apps/web/src/components/projects/interactions/use-epic-search.ts`](https://github.com/paca-ai/paca/blob/09dab28e3caee9e43891697998dcfa7fcf76991c/apps/web/src/components/projects/interactions/use-epic-search.ts)
+
+**WS-27bd — the small rules, each removing a class of defect.** 🟢 AGENT-SAFE, all trivial.
+(1) **Shortcuts release unclaimed keys** — `Mod+F` opens page search only where a page
+registered one and otherwise falls through to the browser's find-in-page; the fence is a test
+asserting `preventDefault` is not called when no handler is registered. (2) **Per-row pending
+and per-row error** in lists, so three concurrent installs show three spinners and one failure
+is attributed to one row — against the usual single `isPending` that disables everything.
+(3) **Clipboard failure never claims success** — a denied or insecure-context write must not
+flip the button to "Copied", because the user may need to select the text by hand.
+(4) **Signature-keyed dismissal** for banners — dismiss *this* announcement, not the banner
+forever. (5) **Context menu on cards and rows**, reading the same action registry the palette
+already uses — one registry, two surfaces; measured, `/projects` has zero `onContextMenu`.
+**REF:** [`apps/web/src/lib/shortcuts/provider.tsx`](https://github.com/paca-ai/paca/blob/09dab28e3caee9e43891697998dcfa7fcf76991c/apps/web/src/lib/shortcuts/provider.tsx) · [`apps/web/src/components/plugins/PluginMarketplacePanel.tsx`](https://github.com/paca-ai/paca/blob/09dab28e3caee9e43891697998dcfa7fcf76991c/apps/web/src/components/plugins/PluginMarketplacePanel.tsx) · [`apps/web/src/components/home/UpdateBanner.tsx`](https://github.com/paca-ai/paca/blob/09dab28e3caee9e43891697998dcfa7fcf76991c/apps/web/src/components/home/UpdateBanner.tsx) · [`apps/web/src/components/projects/interactions/task-context-menu.tsx`](https://github.com/paca-ai/paca/blob/09dab28e3caee9e43891697998dcfa7fcf76991c/apps/web/src/components/projects/interactions/task-context-menu.tsx)
+
+#### 9.5.3 Decisions owed
+
+**D-PM-19 (owed) — the agent autonomy gate.** **The single most important gap in either
+reference.** Paca has **no approval or human-in-the-loop primitive anywhere in its agent
+layer** — a grep of the whole territory returns prose only. An agent's autonomy is exactly its
+project-role permission set, exercised unilaterally; the only human levers are pause and stop,
+after the fact. Its "you MUST invoke a skill before acting" rule is a paragraph in a prompt with
+nothing enforcing it. Plane has no agent surface at all.
+So: **neither reference is prior art, and we design it.** The natural seam is a **per-tool gate
+at the tool layer**, not a sentence in a system prompt — and the UI contract already exists as
+a library (WS-27av). Shapes the Action Broker and agent dispatch together, which is why it is a
+decision and not a ticket.
+
+**D-PM-20 (owed) — optimistic concurrency on `pm_tasks`.** Neither reference has any: no
+version column, no etag, read-modify-write throughout. **With agents writing concurrently with
+humans — which is the entire point of our product — last-write-wins is a data-loss design**,
+and a revert affordance (WS-27az) makes it worse by replaying stale values. An `updated_at`
+precondition on PATCH is nearly free *now* and breaks every client at once if added later.
+⚠️ It interacts with the delta feed: migration 168's `updated_at` serves both, so one semantic
+has to be chosen for both.
+
+#### 9.5.4 Added to the refusal list, with reasons
+
+**`is_public` as a boolean on the container.** One flag opens **26 anonymous read routes** —
+including the member list, comments, and presigned attachment download URLs. A visibility axis
+that is a column on the container has no granularity and no audit: you cannot make a board
+public without making its files public. Confirms **D-PM-14**, and is the second sighting of the
+same shape (Plane's anchor model was the first). · **`X-Agent-ID` as an identity over a shared
+install-wide key whose fallback principal is SUPER_ADMIN** — violates **R11** three ways, and
+its own narrowing step is skipped on any global-scope route. · **A migration runner with no
+ledger that re-executes every file on every boot**, plus an in-place `DROP COLUMN` in the same
+file that backfills — the direct negation of R1/R6 and of "verify delivery by evidence". ·
+**Producer-minted primary keys inserted without `ON CONFLICT` off an at-least-once stream** —
+one redelivery poisons the pending list permanently. · **Permission reads that ignore
+soft-delete**: their human path omits the predicate their agent path includes, so a removed
+member keeps every permission indefinitely. The fence for us is a test that revokes a grant and
+asserts 403 on the next read. · **A second activity spine per entity type**, and **a second
+project-role vocabulary** — both are our own CLAUDE.md §5 rule demonstrated in someone else's
+tree. · **Client-supplied fractional positions with no check that the task belongs to the
+view** — the third sighting of the join-table authorisation class we fixed in
+`views.set_positions`; it is a category, not an incident. · **Per-project agent rows**: the same
+assistant in ten projects is ten rows and ten secrets to rotate. · **`proOptions:
+hideAttribution`** on React Flow — MIT library, but removing the attribution mark requires a
+paid subscription; do not copy the flag. · **`class-variance-authority`**, again — it arrives
+*with* vendored component registries, which is exactly how the second substrate walks in.
 
 ---
 

@@ -411,3 +411,110 @@ the mining instruction has an honest negative answer; and a **hard timeout that 
 success** — an agent exhausting its hour is torn down and recorded as `FINISHED`, with no
 test covering the path. Whatever bound we set, exhausting it must be its own terminal state.
 
+
+---
+
+## 11. Second-pass corrections — the data model and API (2026-08-10)
+
+*Same pinned commit. A full re-read of `services/api` re-derived §2, §3 and §9 from the code.
+**Eighteen defects; six material.** With §10's ten, our Paca record carried ~28 errors — the
+cost of a first pass that read for features rather than for verification. Corrected here, not
+silently edited.*
+
+**C11 · MATERIAL · §2.6 "activities are written asynchronously" — only SYSTEM ones are.**
+Comments are written **synchronously straight to Postgres** and only realtime-published. Two
+paths, not one.
+
+**C12 · MATERIAL · §2.6 / §9 row 6 — "field-diff content powering diff & revert". There is no
+revert in the API at all.** No endpoint, no service method. The affordance exists in their web
+app as a **client-side reconstruction** that re-issues an ordinary PATCH. Three things break
+the story we told: `custom_fields` diffs are recorded with **no old and no new value**, so
+custom fields are structurally unrevertable; the diff is computed from the *request* against
+the pre-image rather than from the resulting row, so service-side defaulting is mis-recorded;
+and automation writes emit a **different content shape**, so automation changes are not
+revertable by the same reader. ⚠️ The affordance is still worth building (§9.5) — but as our
+design, on our schema, not as a lift.
+
+**C13 · MATERIAL · §2.4 — the fractional-indexing arithmetic is NOT in the API.** `MoveTask`
+accepts a **client-supplied** `position float64` and upserts it verbatim; the algorithm is a
+frontend contract. Worse, and directly relevant to us: **neither move method validates that
+`task_id` belongs to the view's project.** That is the same join-table authorisation class we
+just fixed in our own `views.set_positions` after reading Plane's advisory — now sighted a
+third time, in a second reference. It is a *category* of bug, not an incident.
+
+**C14 · MATERIAL · §2.2 "exactly two hard rules" — there are three, and enforcement is
+weaker.** `wouldCreateCycle` **fails open** past 50 ancestors or on any lookup error; `CreateTask`
+runs no cycle check at all; and **nothing checks the parent lives in the same project**, even
+though their task *links* have an explicit cross-project refusal. The asymmetry is in their
+code.
+
+**C15 · MATERIAL · §2.3 — `is_required` on custom fields is enforced nowhere**, and there is
+**no write-time type validation of custom-field values at all**; the repository works around it
+with regex-guarded casts so a stray value cannot abort a query. Our §2.3 presented `field_type`
+as a constraint. It is not.
+
+**C16 · MATERIAL · §2 preamble — "migrations re-run on every boot, every statement idempotent
+… independently converged with our `02+` rule". Overstated in our favour and against theirs.**
+Paca has **no migration ledger of any kind** and no numbering-collision check; every file
+re-executes on every boot forever. And one migration performs an in-place `DROP COLUMN` in the
+same file that backfills — the **opposite** of expand/contract. Our R1/R6/verify-by-ledger-line
+discipline is strictly stronger. **Not a convergence**, and the claim should never have been
+written as one.
+
+**C17 · §2.7 — BDD and time tracking were never in core.** Checklists and GitHub are real
+extractions; the other two appear only as *example* plugin identifiers in doc comments. Same
+error class as the Plane "kill switch" we credited and they do not have.
+
+**C18 · §2.1 — nothing in Paca is ever restorable.** `deleted_at` is set and never cleared;
+no trash, no undelete, no archived state distinct from deleted. Soft-delete there is a
+referential-integrity device, not an undo feature.
+
+**C19 · §2.5 — agents are PER-PROJECT rows** with their own key reference. There is no
+org-level agent registry: the same assistant used in ten projects is ten rows and ten secrets
+to rotate. ⚠️ Our registry is platform-level and should stay there.
+
+**C20 · MATERIAL · §3 — `config.filters` is not "id arrays", and this one we got wrong in the
+direction of UNDERSELLING it.** It is a **recursive, dimension-agnostic selector**:
+`{all: bool, items: {<uuid|virtual-group>: bool | nested}}` per dimension, plus per-custom-field
+range/contains blocks. "Every status except Archived" survives a status added next month; an
+ID snapshot silently starts hiding new work. **Materially better than what we recorded** — see
+§9.5, where it is minted.
+
+**C21 · MATERIAL · §3 — "one task-list endpoint serves every page; `view_id` enriches each
+task" is half true, and the missing half matters.** `view_id` loads positions and switches the
+sort. **It applies no filtering whatsoever.** The saved filter config is stored, handed back,
+and never read by the server; all ~20 dimensions arrive as query parameters the client builds.
+So the presentation-vs-query-constraints split is a **client-side convention, not a
+server-enforced property** — which is exactly the property our own `146_projects.sql` comment
+claims the split buys ("what stops a saved view from silently changing which rows a member may
+see"). **We must not cite Paca as prior art for it.** We hold that property; they do not.
+
+**C22 · MATERIAL · §9 row 5 "agents are ordinary members/actors" — true in the schema, false
+in the authentication, and the inversion matters.** The agent identity is the client-supplied
+header `X-Agent-ID`, trusted on presentation of a single shared static key that resolves to a
+seeded **SUPER_ADMIN** bot. Narrowing to the agent's project role happens *only* when the
+route's scope resolver yields a project — so on any global-scope route the request is evaluated
+as SUPER_ADMIN regardless of the header. ✅ Our §5 parenthetical — that our
+`EffectiveAccess.intersect()` narrows an agent by the acting member and Paca has nothing this
+strong — is **verified correct**.
+
+**C23 · §9 row 9 "idempotent everywhere" — true of the automation engine, false of the activity
+spine.** The activity's primary key is minted by the producer and carried on an at-least-once
+stream, and the consumer's insert has **no `ON CONFLICT`**; a redelivery raises a duplicate-key
+error, is deliberately not acked, and is re-read on every restart — a permanently poisoned
+pending list. Adopt the discipline from the engine, never from the spine.
+
+**C24 · §9 row 6 "single activity spine" — there are two**, `task_activities` and
+`doc_activities`, same shape, no common parent; the agent feed has to `UNION ALL` them. Our one
+`pm_activities` is the better shape, and it is *why* the agent activity feed (§9.5) is cheap
+for us and expensive for them.
+
+### Where the re-read says WE are ahead
+No delta/changed-since feed of any kind (we have tombstones + `/projects/delta/tasks`); no
+per-user view state, so collapsing a lane collapses it for everyone (our `pm_view_user_state`);
+no archive state distinct from delete; `ON DELETE SET NULL` on status so deleting a status
+silently orphans tasks to NULL, against our `RESTRICT` + a 409 naming the count; no foreign key
+on their position rows, so deleting a task leaves orphans forever; **66 `binding:"required"`
+validation tags with no validator in the module at all** — R7 stated as a failure, since a rule
+with no fence reads as protection to anyone skimming; and two parallel project-role
+vocabularies, which is our own "do not invent a second way" rule demonstrated.

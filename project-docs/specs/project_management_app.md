@@ -2906,9 +2906,10 @@ only: no migration, no API change, no new dependency. Branch
 Imports from `@/components/ui/` went from **one** to **four**, plus `StatusChip`.
 
 **`Select` is a seam, not a one-off.** `src/components/ui/Input.tsx` had `Input` and
-`Textarea` and no single-choice field at all, so **38 files** carry their own
-`const SELECT = "cc-control rounded-lg border border-border …"` — including four in
-`app/projects/` and five in `app/tasks/`. The primitive uses `appearance-none` plus
+`Textarea` and no single-choice field at all, so **38 files** hand-rolled one — each with
+its own `const SELECT = "cc-control rounded-lg border border-border …"` — of which **37
+remain** after this change (nine in `app/projects/`, five in `app/tasks/`), all baselined.
+The primitive uses `appearance-none` plus
 `<Icon name="ChevronDown">` so the disclosure glyph follows the active **pack**; the native
 triangle is drawn by the OS and follows neither the theme nor the pack. One honest limit,
 shared with every `<select>` on the web: the popup list is the browser's, so the option rows

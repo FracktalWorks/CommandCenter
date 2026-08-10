@@ -566,6 +566,75 @@ independent of the ClickUp work, because it is a move between two tables we own:
 ⚠️ **Not started, and it is the largest single piece of WS-27 remaining.** Until it lands
 there are two personal task stores, which is the state this decision exists to end.
 
+#### 7.5.1 The destination table — every column, named *(added 2026-08-10)*
+
+> **Why this exists.** Step 2 above says "a copy rather than a translation." That sentence is
+> true of the **seven** overlay columns `pm_task_personal` already mirrors, and false of the
+> rest. `gtd_items` carries **thirty-one** columns plus a `gtd_waiting` side table; fifteen of
+> them have no `pm_tasks` home at all. Executed as written, this migration would be a
+> **feature deletion wearing the word "copy"** — the founder priority matrix, all of
+> timeboxing, and the entire Waiting-For view would simply stop existing. Nobody would notice
+> until the data was already gone, because the migration would report success.
+>
+> So the destination of every column is named here **before** the migration is written. A
+> column that reaches the day of the move without a row in this table is a bug in this spec,
+> not a judgement call for whoever happens to be executing.
+
+**The governing question for each column is *whose fact is it?*** — because that decides the
+table, and getting it wrong is what a mirror-shaped design does to you later:
+
+* a **task** fact is true for everyone looking at the row → `pm_tasks`
+* a **member** fact can differ between two people on the same task → `pm_task_personal`
+
+The test that settles the hard cases: *if Ana and Ben are both on this task, can their answers
+legitimately differ?* If yes, it is per-member. This is the same argument `147_projects_personal.sql`
+already makes for `disposition` (one person is doing it, the other is waiting on it), applied
+consistently rather than only where it was first noticed.
+
+| `gtd_items` column | Destination | Why |
+|---|---|---|
+| `disposition`, `next_action`, `context`, `energy`, `time_estimate_mins`, `is_two_minute`, `defer_until`, `clarified_at` | **`pm_task_personal`** ✅ exists | The seven-plus-one already mirrored 1:1 by migration 147. This is the part that genuinely is a copy. |
+| `title`, `description`, `due_at`, `completed_at`, `created_at`, `updated_at` | **`pm_tasks`** ✅ exists | Same name, same meaning. |
+| `parent_item_id` | `pm_tasks.parent_task_id` ✅ | Same shape. |
+| `archived_at` | `pm_tasks.archived_at` ✅ | Same shape. |
+| `assignees` (JSONB, mig 91) | `pm_task_assignees` ✅ | Rows, not JSONB. `assignee` (the older singular, mig 48) folds into the same set. |
+| `attachments` (JSONB, mig 52) | `pm_task_attachments` ✅ | Rows, not JSONB. |
+| `sort_key` (mig 58) | `pm_view_task_positions` ✅ | D-PM-5: order is per view, not a column on the task. |
+| `project_id` → `gtd_projects` | `pm_tasks.project_id` | `LOCAL` rows land in the owner's personal project (§3.11). |
+| `workflow_stage` (mig 57) | `pm_tasks.status_id` | Free text → a real status row. The status→stage map already exists; the **colour** already agrees via `src/lib/statusAccent.ts`. |
+| **`important`, `leveraged`, `kept_mine`, `urgent_window_hours`** (mig 68) | **`pm_task_personal`** — 🔴 **NEW columns** | The founder priority matrix. Ana may rate a shared task important and Ben may not; it is a judgement, not a property of the work. Per-member by the test above. |
+| **`scheduled_start`, `scheduled_end`** (76), **`flexible`** (79), **`actual_start`, `actual_end`** (80) | **`pm_task_personal`** — 🔴 **NEW columns** | Timeboxing. *When I plan to do it* and *when I actually did* are mine; two people on one task book their own calendars. Note `pm_tasks.start_date` is a **different** fact (when the work starts, shared) and must not be conflated. |
+| **`deep_work`** (mig 96) | **`pm_task_personal`** — 🔴 **NEW column** | A sibling of `energy`, which is already per-member. My concentration classification, not the task's. |
+| `is_hard_date` | **`pm_tasks`** — 🔴 **NEW column** | The one calendar-shaped flag that is *not* personal: a deadline is either immovable or it is not, and that is true for everyone. |
+| **`origin`** (JSONB, mig 65) | **`pm_tasks`** — 🔴 **NEW**, or the P-9 `(external_source, external_id)` pair | Email-capture provenance: where this task came from. A task fact. Prefer the generic provenance pair (`plane_pm_research_2026-08.md` P-9) over a second JSONB blob — one provenance vocabulary, not two. |
+| `source`, `account_id`, `provider_task_id`, `provider_url`, `provider_status`, `sync_state` | **Retire with WS-27g**, not here | These are the ClickUp arm. They become meaningless when the provider retires, so they are a *legitimate* drop — **but only if WS-27g lands first or concurrently**. ⚠️ If WS-27h runs first, the `SourceBadge` loses its data while the integration is still live. Sequencing constraint, recorded. |
+| `is_mine` | **Derived, dropped** | `personal.derive_disposition` already computes it from `pm_task_assignees`. A stored copy of a derivable fact is the mirror problem in miniature. |
+| `deleted_at` (mig 67) | **Dropped → `archived_at`** | `pm_*` has no soft-delete and gains none: pervasive soft-delete was **refused** (P-31). Rows with `deleted_at` migrate as archived, and the reason travels with them. |
+| `user_id` | **Dissolved** | Becomes `pm_projects.personal_owner` (which project) plus `pm_task_personal.member_email` (whose overlay). One column becomes two because it was doing two jobs. |
+| `synced_at` | **Dropped** | Meaningless without the provider arm. |
+| `horizon_id` → `gtd_horizons` | 🔴 **BLOCKED — WS-21 owns Horizons and is DO-NOT-DISPATCH** (`work_plan.md` §4) | This migration **cannot** decide the fate of a feature another workstream owns. Either WS-21 rules first, or `gtd_horizons` and this FK outlive the retirement as an explicitly-parked island. Do not quietly drop it. |
+| **`gtd_waiting`** (table: `item_id`, `waiting_on`, `delegated_at`, `expected_by`, `last_nudged_at`, `resolved`, `created_at`) | 🔴 **NEW table `pm_task_waiting`**, keyed `(task_id, member_email)` | The whole Waiting-For view (WS-18, built 2026-08-02) rests on this. Per-member for the same reason as `disposition`: Ana waits on Ben while Ben waits on a vendor, about one task. A single delegation row per task cannot express that. `item_id` becomes `task_id`; the member half of the key is **new** — the legacy table had no such column because the legacy store was single-user by construction (`gtd_items.user_id`), which is precisely the assumption one store removes. |
+
+**What this changes about the ticket.** WS-27h is no longer "move rows between two tables we
+own." It is:
+
+1. a **schema** step — 🔴 twelve new columns on `pm_task_personal`, one on `pm_tasks`, one new
+   `pm_task_waiting` table, plus the provenance decision. Expand/contract per **R6**: nullable
+   with defaults, tighten later, never rename in place.
+2. the **union read** (step 1 above), which is independently valuable — it is what lets the
+   Tasks app show a Projects view of the same person's work without the two disagreeing about
+   what "my tasks" means. **This is the step to build first**; it unblocks UI parity work
+   without touching a single row.
+3. the **data move**, which is 🔴 owner-gated.
+4. the **predicate retirement** (step 3 above).
+
+**Sequencing constraints, both load-bearing:** WS-27g before or with the provider-column drop;
+WS-21's Horizons ruling before `horizon_id` can be resolved either way.
+
+**Done-when, added:** a test asserts every `gtd_items` column and every `gtd_waiting` column
+appears in this table with a destination, so a column added to the legacy store after this was
+written cannot reach the migration unnoticed — the failure mode this section exists to prevent.
+
 ### 7.4 Retirement inventory (WS-27g, second half)
 System A ClickUp arm: `ingestion/sources/clickup/` (client, normaliser, webhook),
 `scheduler.py`'s ClickUp job, `scripts/clickup_sync.py`, `/webhooks/clickup` from

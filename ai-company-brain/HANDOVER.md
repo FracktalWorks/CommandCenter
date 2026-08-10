@@ -12,6 +12,34 @@
 
 ## 1. Where the branch is
 
+> ### ⚠️ 2026-08-10 — #399 MERGED; branch restarted from `main`; WS-27u–z ALL BUILT
+>
+> PR **#399 merged to main**. Per the merged-PR rule the branch was restarted from
+> `origin/main` (same name, fresh history) — everything below this box describing "open PR
+> #399" is now historical record. On the restarted branch, six parallel agents built the
+> whole §9.1 beyond-parity queue **plus the owner-directed Tasks↔Projects continuity
+> backport**; all merged, verified (5789 backend / 1278 frontend / tsc / ruff / theme
+> conformance green) and pushed. **No PR opened yet** — not asked for.
+>
+> **New migrations awaiting the real box** (check `schema_migrations`, apply in order —
+> they follow 160–162 from §1.1): **164** `projects_intake` (pm_intake + `triage`
+> category), **165** `projects_watchers` (pm_task_watchers; seeds task authors as
+> watchers), **166** `projects_lifecycle` (per-root archive/close months + timezone,
+> default off).
+>
+> **New owner steps** (beyond §4): to activate WS-27z, author a workflow in `/workflows`
+> — schedule trigger + one config-free **`pm_lifecycle`** node — and publish it (the
+> canvas palette predates the Projects nodes; author via the workflows API/copilot, the
+> `pm_task` precedent). Then set months/timezone per root project via the Lifecycle
+> dialog. Everything defaults NULL = off.
+>
+> **Continuity gaps that remain** (from the backport agent's audit, for whoever continues):
+> Tasks' modal select-mode vs Projects' shift-range selection (biggest; needs an anchor in
+> `taskStore`); board chrome (Tasks: accent caps + drop-gap reorder; Projects: swimlanes +
+> append-on-drop); Tasks' flat lists (Done/Waiting/Someday/Archive), `WaitingForView` and
+> the Inbox's own j/k idiom have neither shared cursor nor quick-add; calendar asymmetry
+> (known, deliberately out of scope — Tasks has a 10-file module, Projects one view).
+
 **Tree clean, everything pushed.** Open PR **#399**.
 
 > ### ⚠️ 2026-08-09 — `main` moved, and this branch has been merged with it

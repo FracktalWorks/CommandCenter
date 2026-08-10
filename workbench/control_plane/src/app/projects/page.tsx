@@ -46,7 +46,13 @@ import { TaskList } from "./components/TaskList";
 import { TaskPanel } from "./components/TaskPanel";
 import { TriageRail } from "./components/TriageRail";
 import { SAVED_VIEW_POSITION, orderBearingView, type planDrop } from "./lib/board";
-import { calendarWindow, dayKey, monthGrid, shiftMonth } from "./lib/calendar";
+import {
+  type CalendarLayout,
+  calendarGrid,
+  calendarWindow,
+  dayKey,
+  shiftGrid,
+} from "./lib/calendar";
 import { isOpenShortcut } from "./lib/search";
 import type { Edge } from "./lib/timeline";
 import {
@@ -329,7 +335,10 @@ function ProjectsWorkspace() {
   // because the whole point is that it works from wherever you already are.
   const [searching, setSearching] = useState(false);
 
+  // WS-27ac — the calendar's own anchor and layout. The TIMELINE reads the same
+  // window and is always the month's, so the layout only reaches the calendar.
   const [monthAnchor, setMonthAnchor] = useState<Date>(() => new Date());
+  const [calLayout, setCalLayout] = useState<CalendarLayout>("month");
   const [month, setMonth] = useState(NO_MONTH);
 
   const [picked, setPicked] = useState<ReadonlySet<string>>(new Set());
@@ -540,9 +549,18 @@ function ProjectsWorkspace() {
   }, [selected, loadProject]);
 
   // WS-27q — the calendar's own fetch, because it reads a WINDOW rather than a
-  // page. `grid` is derived so the effect re-runs when the month steps, and
+  // page. `grid` is derived so the effect re-runs when the period steps, and
   // `calendarWindow` adds the day of slack the endpoint's UTC reading needs.
-  const grid = useMemo(() => monthGrid(monthAnchor), [monthAnchor]);
+  //
+  // WS-27ac — the grid, not the window, is what the week layout changes: the
+  // SAME `calendarWindow` reads whatever days the grid drew, so a week asks the
+  // same endpoint for ten days instead of forty-three. The timeline is always
+  // the month's — a Gantt of seven days is a list — so the layout reaches the
+  // grid only while the calendar is the view on screen.
+  const grid = useMemo(
+    () => calendarGrid(mode === "calendar" ? calLayout : "month", monthAnchor),
+    [mode, calLayout, monthAnchor]
+  );
 
   const loadMonth = useCallback(async () => {
     if (!selected) {
@@ -1147,8 +1165,10 @@ function ProjectsWorkspace() {
             onCreated={() => void loadMonth()}
             onSelect={(task) => void openWithStatuses(task)}
             onMove={(task, patch) => void moveTask(task, patch)}
-            onStep={(months) => setMonthAnchor(shiftMonth(grid, months))}
+            onStep={(steps) => setMonthAnchor(shiftGrid(grid, steps))}
             onToday={() => setMonthAnchor(new Date())}
+            onLayout={setCalLayout}
+            onRefuse={(reason) => setError(reason)}
           />
         ) : mode === "table" ? (
           <TableView

@@ -4,7 +4,7 @@
 > module, sliced into every other Center) · **Created:** 2026-08-05 · **Updated: 2026-08-10**
 > (status truth pass + tenancy alignment — R4; **WS-27ag shell/mobile slice built the same
 > day**; **S4 convergence slice built the same day — §11.21**; **S6 card-pills slice built the
-> same day — §11.23**) ·
+> same day — §11.23**; **WS-27ac calendar week/overflow slice built the same day — §11.24**) ·
 > **Status:** ✅ **WS-27 a–t MERGED AND DEPLOYED** (a b d e f i j k l m n via #390/#393/#394/#398;
 > o–t via **#399**; **u–z via #408**, 2026-08-10) — migrations **146, 147, 150, 152, 155, 156,
 > 160, 161, 164, 165, 166 are applied on prod** (164/165/166 log-verified on the 2026-08-10
@@ -66,6 +66,18 @@
 > visual sweep was actually run this time** (Playwright + the pre-installed Chromium, fixtures
 > at the network boundary), which closes the check af/ag/S1/S3/S4/S5 all left owed *for this
 > surface*; one honest finding recorded in §11.23 about Material dark's pale `--warning`. ·
+> 🟢 **WS-27ac BUILT 2026-08-10, on branch `ws-27ac-calendar-week`, NOT merged and NOT
+> deployed** (§11.24) — the calendar gains a **week** layout, an **exact** `+N more` that
+> expands, and a drop that says why it refused. The week is the month grid's own row, not a
+> second calculation: `mondayOffset` and `runOfDays` are shared, `MonthGrid` became
+> `CalendarGrid` with a `layout` discriminator, and `calendarWindow`/`taskDays`/`placeTasks`/
+> `rescheduleTo` never learned there was a second layout — so a week asks the SAME endpoint
+> for ten days and gets the same filters and the same `triage` default. Done-when 5 landed as
+> a window-shape parametrisation of the §11.16 coverage rule. Frontend plus one gateway test
+> file — **no migration, no API change, no new query parameter.** ✅ Four-theme × two-mode
+> sweep and every gesture (overflow, quick-add, drag-reschedule, refusal) driven in a real
+> browser, pinned to UTC+5:30. ⚠️ One honest limit recorded in §11.24: of the two drop
+> refusals only the foreign-payload one is reachable today. ·
 > **Owner:** vjvarada · **Board row: WS-27**
 >
 > **Tenancy (audited 2026-08-10 — this spec previously cited no tenancy decision at all).**
@@ -1440,8 +1452,9 @@ action carries a label and section, every go-sequence resolves to a route that e
 no two actions share a key sequence; (5) DESIGN_SYSTEM throughout — no raw colours, the
 `Icon`/`Button`/`Input` primitives, theme suite green.
 
-**WS-27ac — calendar: week layout, per-day quick-add, honest overflow.** 🟢 AGENT-SAFE
-*(P-19)*.
+**WS-27ac — calendar: week layout, per-day quick-add, honest overflow.** ✅ **BUILT
+2026-08-10** *(P-19; as built — **§11.24**; branch `ws-27ac-calendar-week`, not merged, not
+deployed)*.
 Done when: (1) `CalendarView` gains a **week** layout beside month, both driven by the
 existing `lib/calendar.ts` date math — one implementation, extended, never a second;
 (2) each day cell carries the shared group-context quick-add (`components/QuickAdd.tsx`)
@@ -1450,6 +1463,19 @@ shows `+N more` with the true count and expands rather than clipping silently; (
 between days reschedules through the existing `PATCH` path wearing WS-27y's drop-refusal
 reason and post-drop flash; (5) the §11.16 parameter-coverage test extends to the week
 range, so the `triage` exclusion (WS-27u) cannot be dropped by the new surface.
+
+**As built (§11.24).** `MonthGrid` → `CalendarGrid` with a `layout` discriminator;
+`monthGrid` and `weekGrid` share `mondayOffset` and `runOfDays`, fenced by a test that walks
+**every day of a month** asserting `weekGrid(d).days` equals the month row containing `d`,
+plus a structural read of `CalendarView.tsx` for `new Date(`/`.getDay()`/`.setDate(`.
+`monthLabel`/`isOutsideMonth`/`shiftMonth` became `gridLabel`/`isPadding`/`shiftGrid` — a
+week has no padding, and "next" means one of whatever is on screen. Overflow is
+`dayFill(count, limit, expanded)` with `hidden = count - shown`, `DAY_LIMITS` month 3 /
+week 8, no fold at one-over. `dayDropRefusal` names the two drops that previously did
+nothing silently — ⚠️ only the "not on this calendar" case is reachable today (§11.24).
+Quick-add and the drag `PATCH` were already correct and were re-verified in a browser.
+Done-when 5 landed as a **window-shape parametrisation** (`CLIENT_WINDOWS`) over the same
+endpoint. Browser-verified in four themes × two modes.
 
 **WS-27ad — Tasks ↔ Projects continuity, round 2.** ✅ **BUILT 2026-08-10** *(the backport
 agent's recorded gap list, HANDOVER §1; scope extended mid-ticket by the owner to put the
@@ -3070,6 +3096,117 @@ tag in every theme. **One honest note:** Material dark's `--warning` is a pale p
 (`hsl(35 90% 78%)`), so the `High` chip reads faint against `Normal` there — the chevron-up vs
 dash glyph is what carries the distinction, which is why the four levels have four glyphs.
 That is the theme's token doing what it says, not a hardcoded colour.
+
+### 11.24 WS-27ac — the calendar's week layout, per-day quick-add, honest overflow (built 2026-08-10)
+
+**Plane research item P-19** (§11.19), promoted by §9.2. Frontend plus one test file on the
+gateway side: **no migration, no API change, no new endpoint, no new query parameter.** Branch
+`ws-27ac-calendar-week` — **not merged, not deployed.**
+
+**The whole ticket is "extend the arithmetic", and the defect it exists to prevent is a second
+copy of it.** `lib/calendar.ts` already held every day decision as a pure function; a week
+layout is a natural place to write `const monday = d.getDate() - d.getDay() + 1` in the
+component and move on. That expression agrees with `monthGrid`'s padding on six days out of
+seven and moves **Sunday** a week forward, which is a bug that survives every demo that does
+not happen on a Sunday. So the two shapes now share both halves of the calculation:
+
+* `mondayOffset(date)` — the `(getDay() + 6) % 7` rotation that makes Monday the week start,
+  written once and read by the month grid's padding and the week grid's walk-back alike.
+* `runOfDays(startKey, count)` — the one place a grid's days are enumerated, in `YYYY-MM-DD`
+  keys, never through `new Date(iso)`.
+
+`MonthGrid` became **`CalendarGrid`** with a `layout` discriminator. Everything downstream —
+`calendarWindow`, `taskDays`, `placeTasks`, `rescheduleTo` — reads `grid.days` and **never
+learned there was a second layout**, which is why a week asks the same endpoint for ten days
+instead of forty-four and gets the same filters, the same triage default and the same
+placement. `monthLabel`/`isOutsideMonth`/`shiftMonth` became `gridLabel`/`isPadding`/
+`shiftGrid`: each was a month-only name for a question both layouts ask, and keeping the old
+name beside a new one is how the two answers drift.
+
+**A week grid has no padding, and that is a decision, not an omission.** `isPadding` returns
+false for every day of a week: all seven are the subject. Reusing the month's rule (day's
+month ≠ `grid.month`) would grey out part of five weeks a year for a reason no viewer could
+name. `grid.month` on a straddling week is its MONDAY's month, and `isPadding` is its only
+reader.
+
+**Overflow is exact, and one-over is not folded.** `dayFill(count, limit, expanded)` returns
+`{shown, hidden}` with `hidden = count - shown` and nothing else. The failure it replaces is
+the cell that renders its first three and stops: **a day with eleven tasks then looks exactly
+like a day with three**, which is the same dishonesty `truncated` and `undated` were added to
+prevent one level up. Two refinements are in the arithmetic rather than the component so they
+cannot drift from the limit they apply: folding fires at `limit + 2`, because a `+1 more` row
+occupies the row it would have saved; and an expanded cell reports `hidden: 0`, because a
+`+8 more` left under an expanded day is a count of tasks the viewer is already looking at.
+Limits are `DAY_LIMITS` — month 3, week 8 — beside the function, not in the JSX.
+
+**A refused drop says why.** `dayDropRefusal(task)` is the calendar's counterpart to
+`board.dropRefusal`: that one asks about the AXIS ("this column is computed"), this one about
+the TASK. Two questions, two functions, neither surface knowing the other's. Both cases it
+names already ended in `rescheduleTo` returning `null`, i.e. in *nothing happening*, which
+reads as a broken drag rather than as a refusal. A no-op drop (dropped back on its own day) is
+still silent — nothing was denied, so nothing is announced. ⚠️ **Honest limit:** of the two
+refusals, only "that task is not on this calendar" is reachable today (a stale or foreign
+drag payload), and it surfaces as the page's error banner. The undated one draws the hover
+overlay and cannot fire from the calendar's own cards, because an undated task is not drawn —
+it is the `undated` count. It is fenced by unit test and is the guard for the moment the
+unscheduled tally becomes a draggable tray; the alternative was to leave a gesture that
+sometimes silently does nothing.
+
+**The per-day quick-add and the drag were already right and are unchanged** —
+`components/QuickAdd.tsx` (the shared control) with `quickAddPrefill("day", key)`, and
+`PATCH /projects/tasks/{id}` with WS-27y's post-drop flash. Both were re-verified in a browser
+rather than assumed, because "already there" is exactly the claim a week layout can break
+without anyone noticing.
+
+**Fences added (R7).** `lib/calendar.test.ts` — 60 tests, of which the load-bearing ones are:
+*every day of August* asserts `weekGrid(d).days` equals the `monthGrid` row containing `d` (the
+one-implementation claim, behavioural), Sunday pinned by name (the one day the naive form
+differs), `shown + hidden === count` swept over both limits, `dayFill` agreeing with
+`rescheduleTo` about what cannot move, and a **structural** read of `CalendarView.tsx`
+asserting it contains no `new Date(`, `.getDay()`, `.setDate(` or `86400` — because the
+behavioural version of "there is no second week math" cannot see a duplicate that happens to
+be correct today. Mutation-measured: rewriting `weekGrid` in the naive form turns **2** tests
+red; `hidden: limit` instead of `count - limit` turns **3** red.
+`tests/unit/test_projects_calendar.py` — the §11.16 parameter-coverage rule extended to the
+**window shapes the browser actually sends** (`CLIENT_WINDOWS`: a month grid's forty-four days
+and a week grid's ten, each with its day of slack). Both are legal windows; both keep the
+board's filters and the same-filters `undated` count; and both hold the **`triage` exclusion**
+(WS-27u) with `include_triage` still the only way to ask. Plus a structural test that the week
+layout did not grow its own endpoint. Mutation-measured: deleting the triage predicate from
+`get_calendar` turns **both** parametrisations red.
+
+**Why a window parametrisation rather than another route assertion.** `include_triage` is
+declared once and `test_no_surface_can_silently_drop_include_triage` already pins the
+declaration. What that test cannot see is a new surface that keeps the parameter and stops
+sending it — or, worse, one that reaches for its own read and inherits a filter set nobody
+compared. Parametrising over the two windows is the assertion that survives either.
+
+**Visual check — done, not owed.** `next build` → `next start -p 3602` → Playwright against
+`/opt/pw-browsers/chromium`, fixtures at the **network boundary** only, the browser pinned to
+`Asia/Kolkata` (UTC+5:30 — the timezone the window's slack exists for) and to a fixed clock.
+Measured, not eyeballed: month draws **42 cells in 6 rows** at 96px; the 12th holds 8 tasks,
+shows **3** and says **`+5 more`**, expands to 8 with **Show less**, and folds back. Week draws
+**7 cells in 1 row** at 554px, labelled **`10 – 16 August 2026`**, and shows all 8 on the 12th
+(limit 8). The next/previous arrows read `Next week`/`Previous week` in week layout and
+`Next month`/`Previous month` in month, and stepping moves **`17 – 23 August 2026`**, i.e.
+seven days. A four-day bar (start 10th, due 13th) occupies four cells in **both** layouts; a
+`start_date`-only task sits on the day written. Quick-add on the 14th posted
+`due_at: 2026-08-14T06:30:00.000Z` — **noon local in IST**, the day clicked. Dragging
+"Calibrate the 0.8mm…" from the 10th to the 13th posted a single
+`PATCH {due_at: "2026-08-13T12:00:00.000Z"}` — the day moved, **17:30 IST preserved** — and the
+landing flash fired. A drop carrying a payload the window does not contain raised
+**"That task is not on this calendar."** DESIGN_SYSTEM §8 sweep run: RapidTool · Fluent ·
+Material · Graphite × dark and light, all four `--primary`/`--radius` pairs distinct in the
+DOM. The layout toggle and the `+N more` are `Button` primitives, so Graphite uppercases them
+(`MONTH` · `WEEK` · `+5 MORE`) and Material makes them pills without either being asked to.
+
+**Recorded, not done.** The calendar asymmetry stays out of scope and stays recorded (WS-27ad
+done-when 5): `/tasks` keeps its ten-file calendar module, `/projects` has one view. Under the
+owner's 2026-08-10 ruling that Projects is canonical and `/tasks` will derive from it (D-PM-6),
+`src/app/tasks/**` was not touched. Also left: the `undated` tally is still text, not a
+draggable tray — the affordance `dayDropRefusal`'s second case is waiting for; and the week
+layout has no time axis (an all-day grid, not `/tasks`' `TimeGrid`), which is a different
+ticket and a different data shape.
 
 ## Board record (2026-08-09) — moved from work_plan.md §2
 

@@ -24,6 +24,12 @@ import time
 from datetime import UTC, datetime
 from typing import Any
 
+# H4: the cron loop — `_scan_once` / `scan_due_waits` run in a supervised
+# background task with no request and no member session, so there is no bound
+# tenant and the ambient `tenant_session()` would raise `TenantUnbound` (and
+# inheriting one would be exactly what H4 forbids). Stays on the unbound
+# `get_db()` until H4 binds an explicit tenant per workflow row
+# (`tenant_session(org_id)`).
 from gateway.routes.workflows.core import _get_db, _log, parse_jsonb
 from gateway.routes.workflows.service import (
     RunRejected,

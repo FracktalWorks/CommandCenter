@@ -342,7 +342,10 @@ H2_WHATSAPP_EXEMPT_SITES: dict[str, int] = {
 #: leftovers are background consumers (broker_handlers, scheduler, calendar's
 #: rollover sweep), each with an H4 comment naming why ambient inheritance is
 #: forbidden for them.
-H2_BASELINE_ELSEWHERE = 224
+#: 224 → 198: routes/workflows' 26 member-facing sites (2026-08-10); its
+#: 17 leftovers are the engine/scheduler/dual-use run lifecycle (C) and
+#: the hook-token trigger route (B), each marked in place.
+H2_BASELINE_ELSEWHERE = 198
 
 
 def _get_db_sites() -> dict[str, int]:

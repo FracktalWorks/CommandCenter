@@ -15,8 +15,8 @@ from typing import Any
 from acb_auth import UserContext, get_current_user
 from fastapi import Depends, HTTPException
 from gateway.routes.workflows.core import (
-    _get_db,
     _log,
+    _tenant_session,
     _uid,
     iso,
     parse_jsonb,
@@ -119,15 +119,12 @@ def _module_row(row: Any, *, with_code: bool = True) -> dict[str, Any]:
 async def list_modules(
     user: UserContext = Depends(get_current_user),
 ) -> list[dict[str, Any]]:
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         rows = (
             await db.execute(
                 text("SELECT * FROM workflow_modules ORDER BY updated_at DESC"),
             )
         ).fetchall()
-    finally:
-        await db.close()
     return [_module_row(r, with_code=False) for r in rows]
 
 
@@ -138,8 +135,7 @@ async def create_module(
 ) -> dict[str, Any]:
     _assert_valid_status(body.status)
     _assert_valid_code(body.code)
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         existing = (
             await db.execute(
                 text("SELECT 1 FROM workflow_modules WHERE name = :name"),
@@ -174,9 +170,6 @@ async def create_module(
                 },
             )
         ).fetchone()
-        await db.commit()
-    finally:
-        await db.close()
     return _module_row(row)
 
 
@@ -185,16 +178,13 @@ async def get_module(
     module_id: str,
     user: UserContext = Depends(get_current_user),
 ) -> dict[str, Any]:
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         row = (
             await db.execute(
                 text("SELECT * FROM workflow_modules WHERE id = :id"),
                 {"id": module_id},
             )
         ).fetchone()
-    finally:
-        await db.close()
     if row is None:
         raise HTTPException(status_code=404, detail="Module not found")
     return _module_row(row)
@@ -221,17 +211,13 @@ async def update_module(
         if value is not None:
             sets.append(f"{column} = :{column} ::jsonb")
             params[column] = json.dumps(value, default=str)
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         row = (
             await db.execute(
                 text(f"UPDATE workflow_modules SET {', '.join(sets)} WHERE id = :id RETURNING *"),
                 params,
             )
         ).fetchone()
-        await db.commit()
-    finally:
-        await db.close()
     if row is None:
         raise HTTPException(status_code=404, detail="Module not found")
     return _module_row(row)
@@ -242,15 +228,11 @@ async def delete_module(
     module_id: str,
     user: UserContext = Depends(get_current_user),
 ) -> None:
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         await db.execute(
             text("DELETE FROM workflow_modules WHERE id = :id"),
             {"id": module_id},
         )
-        await db.commit()
-    finally:
-        await db.close()
 
 
 @router.post("/modules/test")
@@ -278,16 +260,13 @@ async def test_saved_module(
     body: ModuleTest,
     user: UserContext = Depends(get_current_user),
 ) -> dict[str, Any]:
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         row = (
             await db.execute(
                 text("SELECT code FROM workflow_modules WHERE id = :id"),
                 {"id": module_id},
             )
         ).fetchone()
-    finally:
-        await db.close()
     if row is None:
         raise HTTPException(status_code=404, detail="Module not found")
     try:

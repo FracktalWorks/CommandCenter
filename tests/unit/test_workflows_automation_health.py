@@ -16,6 +16,7 @@ records the statements, so the tests pin the SQL shape as well as the outcome.
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from typing import Any
 
@@ -61,6 +62,23 @@ class _ScriptedDb:
 
 
 def _install(monkeypatch, module, db: _ScriptedDb) -> None:
+    """Patch whichever DB seam the module holds after H2.
+
+    ``publish`` is member-reached and converted: its seam is the
+    ``_tenant_session`` context manager (commit on clean exit, like the real
+    wrapper). ``service`` is the unattended run lifecycle and deliberately
+    still acquires via ``_get_db`` (H4) — the health check commits its own
+    writes there."""
+    if hasattr(module, "_tenant_session"):
+
+        @asynccontextmanager
+        async def fake_tenant_session():
+            yield db
+            await db.commit()
+
+        monkeypatch.setattr(module, "_tenant_session", fake_tenant_session)
+        return
+
     async def fake_get_db() -> Any:
         return db
 

@@ -9,10 +9,28 @@
  * function over it. The awkward cases are the ones a selection UI always gets
  * wrong — shift-clicking a range, a selected card that a filter has since
  * removed from the page, and a bulk request that would say "change nothing".
+ *
+ * **WS-27ad — the selection GRAMMAR moved to `src/lib/selection.ts`** and is
+ * re-exported below, unchanged, so every existing Projects import still works.
+ * /tasks now speaks the same one: toggle, shift-range from an anchor, prune on
+ * filter change, never remove on shift. What stays here is what is genuinely
+ * this app's — the bulk REQUEST (`pm_tasks` fields, the gateway's no-op 422)
+ * and the board's own render order.
  */
+
+import {
+  allSelected,
+  clickSelect,
+  prune,
+  range,
+  toggle,
+} from "@/lib/selection";
 
 import type { TaskRow } from "./api";
 import { type Filters } from "./grouping";
+
+export { allSelected, clickSelect, prune, range, toggle };
+export type { SelectionState } from "@/lib/selection";
 
 export interface BulkRequest {
   task_ids: string[];
@@ -25,59 +43,6 @@ export interface BulkRequest {
 
 /** Mirrors the gateway's `MAX_BULK`. */
 export const MAX_BULK = 500;
-
-/** Toggle one id. */
-export function toggle(selected: ReadonlySet<string>, id: string): Set<string> {
-  const next = new Set(selected);
-  if (!next.delete(id)) next.add(id);
-  return next;
-}
-
-/**
- * The ids a shift-click selects: everything between the anchor and the target,
- * in the order the board is currently drawing them.
- *
- * Order comes from the caller's *visible* list rather than from the selection,
- * because "between these two" means between them **on screen** — after a
- * filter and a grouping have decided what is on screen at all.
- */
-export function range(
-  visible: readonly string[],
-  anchor: string,
-  target: string
-): string[] {
-  const from = visible.indexOf(anchor);
-  const to = visible.indexOf(target);
-  // Either end missing means the anchor scrolled out of the filtered set;
-  // selecting just the target is the honest fallback, and it is what leaves
-  // the next shift-click sensible.
-  if (from === -1 || to === -1) return [target];
-  const [lo, hi] = from <= to ? [from, to] : [to, from];
-  return visible.slice(lo, hi + 1);
-}
-
-/**
- * Drop ids that are no longer on the page.
- *
- * A selection that outlives its filter is how a bulk edit hits tasks nobody
- * can see any more: somebody selects forty, narrows the filter to three, then
- * presses "Done" believing they are acting on the three in front of them.
- */
-export function prune(
-  selected: ReadonlySet<string>,
-  visible: readonly string[]
-): Set<string> {
-  const onScreen = new Set(visible);
-  return new Set([...selected].filter((id) => onScreen.has(id)));
-}
-
-/** Whether every visible task is selected — drives the "select all" checkbox. */
-export function allSelected(
-  selected: ReadonlySet<string>,
-  visible: readonly string[]
-): boolean {
-  return visible.length > 0 && visible.every((id) => selected.has(id));
-}
 
 /** Every visible id, in the board's own order. */
 export function visibleIds(groups: { tasks: TaskRow[] }[]): string[] {

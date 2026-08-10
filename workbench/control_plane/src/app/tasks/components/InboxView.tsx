@@ -3,6 +3,7 @@
 import Button from "@/components/ui/Button";
 import AppIcon, { themedIcon, type ThemedIcon } from "@/components/Icon";
 import {
+  useCallback,
   useEffect,
   useMemo,
   useState,
@@ -10,6 +11,12 @@ import {
   KeyboardEvent,
 } from "react";
 import FilterPills from "@/components/FilterPills";
+import { clampCursor, stepCursor } from "@/lib/cursor";
+import {
+  NO_SELECTION,
+  type SelectionState,
+  clickSelect,
+} from "@/lib/selection";
 import { useTaskStore } from "../lib/taskStore";
 import { Disposition, GtdItem } from "../lib/types";
 import {
@@ -27,6 +34,10 @@ import type { TaskAttachment } from "../lib/types";
 import { ClarifyModal } from "./ClarifyModal";
 
 const AGING_MS = 3 * 24 * 3600 * 1000; // GTD: empty regularly — flag stale items
+
+/** The inbox's selection is its own (its bulk actions are GTD dispositions,
+ *  not archive/delete), but the GRAMMAR is the shared one — see `toggleSelect`. */
+const NOBODY: ReadonlySet<string> = new Set();
 
 // Density preference (cards vs Notion-style dense list), sticky per browser.
 // Read via useSyncExternalStore so SSR HTML (always "cards") hydrates cleanly
@@ -124,7 +135,11 @@ export function InboxView() {
   const [showTickler, setShowTickler] = useState(false);
   const [cursorId, setCursorId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  // Selection and its shift-anchor as ONE value: they are only meaningful
+  // together, and holding them apart meant the keyboard's `x` could write a
+  // selection from fresh state and an anchor from stale state.
+  const [selection, setSelection] = useState<SelectionState>(NO_SELECTION);
+  const selectedIds = selection.selected;
   const [showShortcuts, setShowShortcuts] = useState(false);
   // Inline editor for the dup-notice "rename existing" affordance: seeded with
   // the new capture's (usually clearer) title.
@@ -159,14 +174,20 @@ export function InboxView() {
     { id: "older", label: "Older", count: bucketCounts.older },
   ].filter((p) => p.id === "all" || p.count > 0);
 
-  const toggleSelect = (id: string) =>
-    setSelectedIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  const clearSelection = () => setSelectedIds(new Set());
+  // WS-27ad — the same transition /projects' board and the rest of /tasks use:
+  // a plain pick toggles and becomes the anchor, a shift-pick adds the range
+  // between them in the order the list is drawn.
+  // `useCallback` because the keyboard effect below calls it and it now closes
+  // over `visible` (the shift-range needs the on-screen order). Without it the
+  // effect would re-subscribe on every render.
+  const toggleSelect = useCallback(
+    (id: string, shift = false) =>
+      setSelection((prev) =>
+        clickSelect(prev, visible.map((i) => i.id), id, shift),
+      ),
+    [visible],
+  );
+  const clearSelection = () => setSelection(NO_SELECTION);
   const bulk = (d: Disposition) => {
     bulkDispose([...selectedIds], d);
     clearSelection();
@@ -177,6 +198,19 @@ export function InboxView() {
   };
 
   // ── keyboard navigation + triage over the visible list ──
+  //
+  // WS-27ad — the movement half is the SHARED cursor (`@/lib/cursor`), the same
+  // transition the board, the grouped list, the flat lists and both /projects
+  // surfaces run. The inbox's own `j`/`k` walk is retired: it was the last
+  // place in either app where the arrow keys meant something different, and a
+  // vim idiom on exactly one screen is a shortcut nobody can rely on.
+  //
+  // What stays local is TRIAGE — `e`/`x`/`t`/`s`/`r`/`2` are GTD dispositions,
+  // not navigation, and they belong to this screen alone.
+  //
+  // The cursor is held as an ID here rather than an index because triage
+  // ADVANCES it: dispose the current item and the row under it is gone, so
+  // "the next id" has to be read before the list changes.
   useEffect(() => {
     if (showTickler) return;
     const onKey = (e: globalThis.KeyboardEvent) => {
@@ -192,6 +226,7 @@ export function InboxView() {
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       if (!visible.length) return;
 
+      const rows = visible.map((i) => i.id);
       const idx = visible.findIndex((i) => i.id === cursorId);
       const cur = idx >= 0 ? visible[idx] : visible[0];
       const disposeAdvance = (d: Disposition) => {
@@ -207,23 +242,25 @@ export function InboxView() {
         setCursorId(nextId);
       };
 
+      // Arrows and Enter are the shared cursor's. `stepCursor` returns null for
+      // anything it does not own, so the triage switch below still sees every
+      // key it cares about and nothing is eaten twice.
+      const moved = stepCursor(
+        rows,
+        { cursor: clampCursor(rows.length, idx), anchor: null, selection: NOBODY },
+        e.key,
+        false,
+      );
+      if (moved) {
+        e.preventDefault();
+        // Enter clarifies rather than "opens" — the inbox's whole job is to
+        // process, and `open` is the row the shared cursor was standing on.
+        if (moved.open) openClarify(moved.open);
+        else setCursorId(rows[moved.cursor] ?? null);
+        return;
+      }
+
       switch (e.key) {
-        case "j":
-        case "ArrowDown":
-          e.preventDefault();
-          setCursorId(
-            idx < 0 ? visible[0].id : visible[Math.min(visible.length - 1, idx + 1)].id,
-          );
-          break;
-        case "k":
-        case "ArrowUp":
-          e.preventDefault();
-          setCursorId(idx < 0 ? visible[0].id : visible[Math.max(0, idx - 1)].id);
-          break;
-        case "Enter":
-          e.preventDefault();
-          openClarify(cur.id);
-          break;
         case "e":
           e.preventDefault();
           setEditingId(cur.id);
@@ -268,6 +305,7 @@ export function InboxView() {
     openClarify,
     quickDispose,
     requestDelete,
+    toggleSelect,
   ]);
 
   const submit = () => {
@@ -354,7 +392,10 @@ export function InboxView() {
         {showShortcuts && (
           <div className="flex flex-wrap gap-x-3 gap-y-1 border-t border-border px-4 py-2 text-[10px] text-muted-foreground">
             <Sc k="C">capture</Sc>
-            <Sc k="j / k">move</Sc>
+            {/* WS-27ad — was "j / k". The arrows are the one movement idiom
+                across both task apps now; a vim walk on this screen only was a
+                shortcut nobody could carry anywhere else. */}
+            <Sc k="↑ / ↓">move</Sc>
             <Sc k="↵">clarify</Sc>
             <Sc k="e">edit</Sc>
             <Sc k="x">select</Sc>
@@ -674,7 +715,7 @@ export function InboxView() {
                       selected={selectedIds.has(item.id)}
                       selectionMode={selectionActive}
                       editing={editingId === item.id}
-                      onSelectToggle={() => toggleSelect(item.id)}
+                      onSelectToggle={(shift) => toggleSelect(item.id, shift)}
                       onEditStart={() => setEditingId(item.id)}
                       onEditEnd={() => setEditingId(null)}
                     />

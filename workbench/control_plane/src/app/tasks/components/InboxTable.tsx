@@ -30,8 +30,10 @@ export function InboxTable({
 }: {
   items: GtdItem[];
   cursorId: string | null;
-  selectedIds: Set<string>;
-  onSelectToggle: (id: string) => void;
+  /** Read-only: the table never mutates the caller's selection. */
+  selectedIds: ReadonlySet<string>;
+  /** `shift` extends the selection from the anchor (`@/lib/selection`). */
+  onSelectToggle: (id: string, shift: boolean) => void;
 }) {
   const people = useTaskStore((s) => s.people);
   const projects = useTaskStore((s) => s.projects);
@@ -73,7 +75,7 @@ export function InboxTable({
                     aria-label={selected ? "Deselect" : "Select"}
                     onClick={(e) => {
                       e.stopPropagation();
-                      onSelectToggle(item.id);
+                      onSelectToggle(item.id, e.shiftKey);
                     }}
                     className={[
                       "tech-transition h-3.5 w-3.5 rounded-full border-2",

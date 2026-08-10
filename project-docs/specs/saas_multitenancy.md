@@ -285,6 +285,92 @@ first and the database question mostly stops being interesting.**
 
 ---
 
+### 0.9.9 Prior art — Odoo, Salesforce, SAP, and the one rule that separates them
+
+*(owner-raised 2026-08-11: "Odoo is also a large complex app with multiple sub-apps for
+one company — study its multi-tenancy and tell me whether shared-database is still ideal."
+Reviewed against Odoo, then Salesforce, then SAP. Recorded here so the comparison is not
+re-run and D15 is not re-litigated from the same starting point.)*
+
+**Outcome: D15 stands, unchanged.** The review changed nothing about the boundary and
+produced exactly one genuine finding — §6.6 below.
+
+#### The rule the comparison yields
+
+The question "does per-customer customization force a database per customer?" has a
+clean answer, and it is not the obvious one:
+
+> **What forces a silo is not customization. It is customization implemented as DDL.**
+
+Odoo adds a custom field by issuing real DDL — a physical `x_…` column on the shared
+table, registered in `ir.model.fields` — and stores installed modules, views and record
+rules as rows *in the same database*. Two Odoo tenants sharing a database would therefore
+have to share their customizations and their version. That is the forcing function.
+Notably it is **not** a verdict on row-level security: Odoo already ships row-level
+filtering (`ir.rule` record rules) and trusts it to separate legal entities' books inside
+one database. It cannot share the metadata layer, which is a different problem.
+
+CommandCenter is the inverse and already demonstrates it. `155_projects_custom_fields.sql`
+ships ClickUp-style custom fields with **definitions as rows** (`pm_custom_fields`) and
+**values as JSONB** on `pm_tasks` behind a `jsonb_path_ops` GIN index. Seven field types,
+per-project, and the schema never moves. Custom apps are the same shape — rows in
+`apps`/`app_versions` (migration 114), executed in the sandboxed execution plane (§0.9.3),
+never as tenant code in the database.
+
+| | Customization expressed as | Tenancy | Reads as evidence for |
+|---|---|---|---|
+| **Odoo** | DDL + metadata rows in the tenant DB | Database per tenant | Its own implementation choice, not RLS's limits |
+| **Salesforce / ServiceNow / NetSuite** | Metadata rows + generic value storage | **Pooled, shared schema** | Deep customization is compatible with pooling — at the cost of a large metadata engine |
+| **SAP (BTP/CAP)** | Key-user extensions + side-by-side apps on stable APIs | Shared app, **HDI container (schema) per tenant** | Constrain *how* extension is expressed, not where data sits |
+| **CommandCenter** | Rows + JSONB (`pm_custom_fields`), apps as rows | **Pooled + FORCE RLS** (D15) | — |
+
+#### What each one actually contributes
+
+- **Odoo** is the outlier, and for a historical reason: it grew up as on-prem ERP where
+  DDL-per-customer was free. Its capacity figures nonetheless argue *for* pooling at our
+  price point — 300–400 MB RAM per tenant for isolated instances, 8–10 tenants per 16 GB
+  box, against Center packages at ₹600/₹300 per seat (§2.4b).
+- **Salesforce** is the strongest counter-example to "customization needs silos": the
+  deepest per-tenant extensibility in the industry, pooled. **The caution it carries is
+  the cost** — that flexibility is paid for with an enormous metadata engine. Keep custom
+  fields typed, defined and narrow, as migration 155 does. A general EAV platform is a
+  priced feature with its own spec, never a pattern to spread table by table.
+- **SAP** is the most useful comparison because it is the closest to us *and* it partly
+  disagrees. Its CAP model — one shared application, one HDI container per tenant,
+  provisioned on subscribe via `cds-mtx` + Service Manager — is §1.8's schema-per-tenant,
+  working, in production, at scale. **Recorded honestly: this is real evidence against
+  §7 item 1c, and the reason it survives is ours, not a flaw in theirs.** CAP automates
+  schema deployment across containers and SAP ships on a quarterly cadence; we ship
+  continuously against a 160+ file hand-written ladder, applying migrations before
+  restart, with **no rollback** (R6). Schema-per-tenant would make every deploy a fleet
+  operation with partial-failure states. If our cadence or our ladder ever changes
+  character, this rejection is the one worth re-taking.
+- **SAP also re-invented pooling.** CAP provides an explicit *shared container* so the
+  provider can hold master data centrally and update it once for all tenants, built on
+  HANA cross-container access. That is our control plane (§0.9.2) arrived at from the
+  opposite direction: both architectures need a per-tenant space **and** a shared
+  cross-tenant space. Starting pooled and carving out the control plane is the cheaper
+  direction when most data is tenant-scoped.
+- **One nuance worth not overstating:** SAP's own guidance says HANA MDC suits a *trusted
+  environment* and does **not** recommend running different customers in one MDC system
+  without raised isolation. "SAP uses tenant databases" is therefore not the same claim as
+  "SAP treats a tenant database as a hard customer boundary."
+
+#### What the review does **not** dissolve
+
+Two properties that database-per-tenant gets free and we must engineer, both already
+recorded rather than newly discovered:
+
+1. **Blast radius is literal.** One pooled database is one failure domain — not
+   theoretical for us: on 2026-08-06 a leaked idle-in-transaction session parked DDL
+   behind it and email send died. Pooled, that incident is fleet-wide.
+2. **RLS fails open if a fence breaks; separate databases fail closed.** This is why
+   FORCE RLS at the seam, the tenancy-boundary test and the generated-set fence all
+   matter, and why **MT-1d must land before the MT-1b phase-4 promotion** (D27's second
+   finding: `run_lifecycle_sweep` sweeps every tenant with no predicate).
+
+---
+
 ## 1. DECISION — the tenant boundary is a ROW, and the deployment is a placement
 
 > ### `Tenant = organization_id, enforced by Postgres RLS at the connection seam.`
@@ -1475,6 +1561,36 @@ are cross-organization matches by construction. That document rated them "wrong 
 org too, nothing leaks today." **Under this decision they leak.** WS-14a's priority rises
 from cleanup to prerequisite.
 
+### 6.6 There is no per-tenant restore — only a whole-cluster one
+
+*(the single genuine finding of the §0.9.9 prior-art review, 2026-08-11.)*
+
+BO-23 backs up and restores **the cluster**. Under one tenant that is exactly right and
+nothing here applies. **The moment a second company's data is on the box it becomes a
+cross-tenant defect in this section's own terms:** the only way to answer "restore us to
+3pm yesterday, we bulk-deleted a pipeline" is to roll everyone back. Serving one
+customer's recovery by destroying another's day is not a recovery procedure.
+
+This is the one capability database-per-tenant gets free, and every comparison in §0.9.9
+has it — HANA MDC backs up and recovers each tenant database independently; CAP inherits
+the same per-container granularity. Pooled, it must be built: a **tenant-scoped logical
+export and re-import** (`organization_id`-filtered dump across the tenant-scoped table
+set, restored into the live cluster without touching other tenants' rows).
+
+**Fix, and the order it wants:** (a) a filtered logical export driven by the *same*
+generated table set the RLS policies use — `scripts/gen_tenant_migration.py`'s
+`discover_tables()`, so a table can never be in one list and missing from the other;
+(b) re-import into a staging schema, then a reviewed swap; (c) rehearse it in CI the way
+`rehearse_restore.sh` already rehearses the cluster path, because an untested restore
+should not first run during an incident (BO-23's own lesson).
+
+**When it is due:** *not* a pre-customer-#1 gate — with one tenant the cluster restore is
+the per-tenant restore. It is due **before customer #2**, which places it alongside the
+rest of this section rather than in MT-5's compliance basket.
+
+**Not yet dispatchable:** no ticket contract, and (a) depends on the tenant-scoped set
+being complete, i.e. after MT-1b's promotion. Recorded on the board's WS-29 row.
+
 ---
 
 ## 7. Explicitly rejected
@@ -1490,6 +1606,12 @@ Recorded so they are not re-proposed, and so the reasoning survives:
 1c. **Schema-per-tenant.** §1.8 — the strongest rejected alternative, and rejected on one
    property: **RLS fails closed (zero rows), `search_path` fails open (another tenant's
    rows, silently).** Re-take it if the market turns out to be a few dozen large accounts.
+   ⚠️ **Contrary evidence, recorded rather than argued away (§0.9.9):** SAP's CAP ships
+   precisely this — shared app, one HDI container per tenant — in production at scale. It
+   survives rejection here for a reason that is ours and not theirs: CAP automates schema
+   deploy across containers on a quarterly cadence, while we ship continuously against a
+   160+ file ladder applied before restart with no rollback. **If our release cadence or
+   our migration mechanism changes character, this is the first rejection to re-open.**
 2. **`X-Organization-Id` as the tenant source** (proposed in
    `multi_user_organization_research.md` §17.3). Client-settable tenancy is a one-line
    cross-tenant read. The tenant comes from the authenticated session or a tenant-scoped
@@ -2049,6 +2171,16 @@ events](https://stripe.com/customers/langfuse) ·
 [LiteLLM — budgets and rate limits](https://docs.litellm.ai/docs/proxy/users) ·
 [Revenera — SaaS licensing models](https://www.revenera.com/blog/software-monetization/saas-licensing-models-guide/) ·
 [Nalpeiron — SaaS licensing and entitlement management](https://docs.nalpeiron.com/education-and-training/licensing-education/learn-about-software-licensing-models/saas-licensing-and-entitlement-management)
+
+**External — the §0.9.9 prior-art review (2026-08-11).** ⚠️ The two Odoo sources are an
+agency guide and a single forum respondent; their RAM figures are directional capacity
+planning, not measurements, and are cited as such:
+[Odoo multi-tenant architecture guide](https://oec.sh/blog/odoo-multi-tenant-architecture) ·
+[Odoo forum — multi-tenant Community with white-label](https://www.odoo.com/forum/help-1/what-s-the-best-architecture-to-manage-multi-tenant-odoo-community-setup-with-white-label-support-289650) ·
+[SAP CAP — deploy multitenant SaaS applications](https://cap.cloud.sap/docs/guides/multitenancy/) ·
+[SAP samples — the CAP shared container (cross-tenant master data)](https://github.com/SAP-samples/btp-cap-multitenant-saas/blob/main/docu/2-basic/7-explore-the-components/components/SharedContainer.md) ·
+[SAP KBA 2101244 — HANA MDC FAQ (incl. the trusted-environment caveat)](https://userapps.support.sap.com/sap/support/knowledge/en/2101244) ·
+[SAP HANA MDC reference (PDF)](https://help.sap.com/doc/0987e3b51fb74e5a8631385fe4599c97/1.0.12/en-US/SAP_HANA_Multitenant_Database_Containers_en.pdf)
 
 ## Board record (2026-08-09) — moved from work_plan.md §2
 

@@ -15,7 +15,7 @@ know before reading anything else** — it deliberately duplicates nothing.
 | 2 | **`project-docs/work_plan.md` §1** | The agent-ready spec contract + standing rules **R1–R8**. Binding on every PR. |
 | 3 | **`project-docs/work_plan.md` §2** | The dispatch board: every workstream, its state, its gates. **This is the only current-state authority.** |
 | 4 | **`project-docs/work_plan.md` §6** | The owner-gate registry. Actions you must **refuse by name**. |
-| 5 | **`project-docs/work_plan.md` §3** | Decisions **D1–D30**. Recorded once, never re-litigated. Cite them; do not reopen them. |
+| 5 | **`project-docs/work_plan.md` §3** | Decisions **D1–D31**. Recorded once, never re-litigated. Cite them; do not reopen them. |
 | 6 | **`project-docs/specs/engineering_practice.md`** | *How* we build: environments, release rings, migrations, testing, agent work-partitioning, security, definition of done. |
 | 7 | The **owning spec** named by your board row | Scope and acceptance for the thing you are building. |
 
@@ -110,7 +110,7 @@ Rules that make it work:
 
 ## 5. What not to do
 
-- **Do not re-litigate decisions.** D1–D30 are taken. If one looks wrong, say so
+- **Do not re-litigate decisions.** D1–D31 are taken. If one looks wrong, say so
   and stop — do not build against your own alternative.
 - **Do not refactor the tree to conform** to R6/R7/R8. Those bind *new and
   changed* work. Existing violations are findings for the board.

@@ -37,6 +37,7 @@ from gateway.routes.projects.core import (
     resolve_visibility,
     router,
     row_to_dict,
+    task_visibility_clause,
     update_row,
 )
 from gateway.routes.projects.filters import (
@@ -355,7 +356,45 @@ async def set_positions(
         )
     async with _tenant_session() as db:
         await _load_visible_view(db, user, view_id)
+
+        # ⚠️ The VIEW being visible does not make the TASKS visible.
+        #
+        # This endpoint used to validate the view and then write every
+        # `task_id` the caller sent, unchecked — a join row authorised at one
+        # end only. That is the shape of Plane's own GHSA-4w5x-wc9w-f47x
+        # (found while reading them as a reference, 2026-08-10): they scoped a
+        # cycle-issue write by issue id alone and a caller could re-point
+        # another tenant's join rows.
+        #
+        # Ours was narrower than theirs — the PK is `(view_id, task_id)` and
+        # `view_id` is checked, so no existing row of anyone else's view could
+        # be re-pointed, and `organization_id` is stamped from the view by a
+        # trigger. But it still let a caller write rows referencing tasks they
+        # cannot read, including another organisation's, and every sibling
+        # endpoint in this package resolves visibility per task. An
+        # authorisation check that one endpoint skips is not a rule.
+        #
+        # Filtered as a SET rather than per id: `MAX_POSITIONS` is 1000, and
+        # 1000 round trips to re-derive what one predicate answers is how a
+        # correctness fix becomes a latency regression.
+        vis = await resolve_visibility(db, user)
+        wanted = [entry.task_id for entry in payload.positions]
+        visible = {
+            str(row.id)
+            for row in (await db.execute(
+                text(
+                    "SELECT t.id FROM pm_tasks t "
+                    f"WHERE t.id = ANY(CAST(:ids AS uuid[])) "
+                    f"AND {task_visibility_clause(vis)}"
+                ),
+                {"ids": wanted, **vis.params},
+            )).fetchall()
+        }
+
+        written = 0
         for entry in payload.positions:
+            if entry.task_id not in visible:
+                continue
             await db.execute(
                 text(
                     "INSERT INTO pm_view_task_positions "
@@ -371,4 +410,15 @@ async def set_positions(
                     "pos": entry.position, "grp": entry.group_key,
                 },
             )
-        return {"view_id": view_id, "written": len(payload.positions)}
+            written += 1
+
+        # `skipped` is reported rather than raised: a drag can carry a stale
+        # selection, and failing the whole reorder because one row went out of
+        # scope mid-gesture is worse for the user than ordering the rest. The
+        # count is returned so a client can tell "ordered 40" from "ordered 39",
+        # which is the difference between a no-op and a silent partial write.
+        return {
+            "view_id": view_id,
+            "written": written,
+            "skipped": len(payload.positions) - written,
+        }

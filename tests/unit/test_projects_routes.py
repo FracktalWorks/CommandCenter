@@ -32,6 +32,7 @@ from tests.unit._projects_fakes import (
     DEFAULT_ORGANIZATION,
     FakeProjectsDB,
     bind_db,
+    member_user,
     page,
     projects_user,
     silence_events,
@@ -1018,3 +1019,62 @@ def test_every_seeded_category_is_one_the_shared_vocabulary_colours() -> None:
         if category not in hues
     ]
     assert not uncoloured, f"seeded categories with no hue: {uncoloured}"
+
+
+async def test_positions_refuse_a_task_the_caller_cannot_see(
+    db: FakeProjectsDB,
+) -> None:
+    """A visible VIEW does not make an arbitrary task_id writable.
+
+    ⚠️ Found 2026-08-10 while reading `makeplane/plane` as a reference: their
+    GHSA-4w5x-wc9w-f47x scoped a cycle-issue join write by issue id alone, so a
+    caller could re-point another tenant's rows. Ours was narrower — the PK is
+    `(view_id, task_id)` and the view IS checked — but it still wrote join rows
+    for tasks the caller cannot read, and every sibling endpoint in this package
+    resolves visibility per task. An authorisation rule one endpoint skips is
+    not a rule.
+
+    The unreadable task is skipped, not raised: a drag can carry a stale
+    selection, and failing the whole reorder is worse than ordering the rest.
+    `skipped` is in the response so a client can tell a partial write from a
+    complete one.
+    """
+    # ⚠️ `member_user`, NOT the default `projects_user()`: the latter holds `*`,
+    # which includes `data:org:read` — "every project in the org, grants
+    # ignored". Written with it, this test passes whether or not the fix
+    # exists, which is the trap `_projects_fakes.member_user`'s own docstring
+    # names: a suite that proves only the owner can see everything is true of
+    # an unscoped route too. Measured: with `projects_user()` this asserts
+    # written==2.
+    caller = member_user("colleague@fracktal.in")
+    project = db.seed_project(name="Ops", subject=caller.email)
+    todo = db.seed_status(project.id, name="To do", category="todo", is_default=True)
+    view = db.seed(
+        "pm_views", project_id=project.id, name="Board", view_type="board",
+        created_by=caller.email,
+    )
+    mine = db.seed_task(project.id, todo.id, title="Mine")
+
+    # A project nobody granted the caller — the shape every 404 test uses.
+    theirs_project = db.seed_project(name="Not mine", subject=None)
+    theirs_status = db.seed_status(
+        theirs_project.id, name="To do", category="todo", is_default=True,
+    )
+    theirs = db.seed_task(theirs_project.id, theirs_status.id, title="Theirs")
+
+    result = await pm_views.set_positions(
+        str(view.id),
+        pm_views.PositionsIn(positions=[
+            pm_views.PositionIn(task_id=str(mine.id), position=100.0,
+                                group_key=str(todo.id)),
+            pm_views.PositionIn(task_id=str(theirs.id), position=200.0,
+                                group_key=str(todo.id)),
+        ]),
+        user=caller,
+    )
+
+    assert result["written"] == 1
+    assert result["skipped"] == 1
+    written = db.rows("pm_view_task_positions")
+    assert len(written) == 1
+    assert str(written[0]["task_id"]) == str(mine.id)

@@ -13,9 +13,16 @@ the naive version falls into.
 
 **1. It reports REMOVALS, because ``updated_at > :since`` cannot.**
 A row that is deleted stops appearing, and a client that merges what it receives
-keeps the ghost forever — silently, and for as long as the client lives. Plane's
-feed has exactly this hole. So ``removed[]`` is a first-class half of the answer
-and it has two sources:
+keeps the ghost forever — silently, and for as long as the client lives. So
+``removed[]`` is a first-class half of the answer and it has two sources:
+
+⚠️ *Corrected 2026-08-10.* This paragraph used to claim "Plane's feed has exactly
+this hole". It does not — Plane ships a separate deleted-ids endpoint filtered by
+``updated_at``. Ours is still the better shape (a keyset cursor, a tombstone
+TRIGGER so a CASCADE is recorded, and removals delivered in-band rather than from
+a second endpoint a client must remember to poll), but the comparison as written
+was false, and a reviewer who checked it would rightly have doubted every other
+claim in this file.
 
 * **hard deletes** — migration 168's ``pm_task_tombstones``, written by an
   ``AFTER DELETE`` trigger on ``pm_tasks`` so a project CASCADE is recorded as

@@ -58,7 +58,24 @@ const DISP_TONE: Record<Disposition, string> = {
 
 const ESTIMATES = [5, 15, 30, 60, 120, 240];
 
-export function ItemDetail() {
+/**
+ * The docked detail pane's entry point — it reads the store's `selectedItemId`
+ * and picks the surface that item needs. Mounted by `tasks/page.tsx` as the
+ * third column beside the item list (the house layout, DESIGN_SYSTEM §6), the
+ * same composition `projects/page.tsx` uses for `TaskPanel`.
+ *
+ * `onMaximize` raises the same detail into `TaskFocusModal` for the reading
+ * width the pane cannot give; `onClose` dismisses the pane. Both are optional —
+ * without them the maximise button falls back to the store's `openFocus` and no
+ * ✕ is drawn, so any other mount site keeps working.
+ */
+export function ItemDetail({
+  onMaximize,
+  onClose,
+}: {
+  onMaximize?: () => void;
+  onClose?: () => void;
+} = {}) {
   const items = useTaskStore((s) => s.items);
   const backend = useTaskStore((s) => s.backend);
   const pushItem = useTaskStore((s) => s.pushItem);
@@ -70,14 +87,48 @@ export function ItemDetail() {
 
   // Inbox items get the Clarify decision tree (F2). A clarified task gets the
   // editable detail view below. Keyed by id so state resets per item.
+  //
+  // Reachable in the docked pane the ordinary way: select an inbox item, then
+  // switch to a task view — `selectedItemId` survives the view change. The
+  // clarify tree carries no header of its own, so the pane's ✕ has to be added
+  // here or that selection would be undismissable.
   if (item && item.disposition === "INBOX") {
-    return <ClarifyPanel key={item.id} item={item} />;
+    if (!onClose) return <ClarifyPanel key={item.id} item={item} />;
+    return (
+      <div className="flex h-full min-h-0 flex-col">
+        <div className="flex shrink-0 items-center justify-end border-b border-border bg-card px-2 py-1">
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            icon="X"
+            title="Close detail"
+            aria-label="Close detail"
+            onClick={onClose}
+          />
+        </div>
+        <div className="min-h-0 flex-1">
+          <ClarifyPanel key={item.id} item={item} />
+        </div>
+      </div>
+    );
   }
 
   if (item) {
-    return <TaskDetail key={item.id} item={item} backend={backend} pushItem={pushItem} />;
+    return (
+      <TaskDetail
+        key={item.id}
+        item={item}
+        backend={backend}
+        pushItem={pushItem}
+        onMaximize={onMaximize}
+        onClose={onClose}
+      />
+    );
   }
 
+  // Reachable with a selection that no longer resolves — a hydrate/workspace
+  // switch replaces `items` while `selectedItemId` survives (taskStore keeps it
+  // across a reload; only the delete paths clear it).
   return <ItemDetailEmpty />;
 }
 
@@ -99,6 +150,8 @@ export function TaskDetail({
   backend,
   pushItem,
   focused,
+  onMaximize,
+  onClose,
 }: {
   item: GtdItem;
   backend: string;
@@ -106,6 +159,12 @@ export function TaskDetail({
   /** true when rendered inside the full-page focus overlay (hides the
    *  expand button; wider content handled by the modal wrapper). */
   focused?: boolean;
+  /** Docked pane only: raise this same detail into the focus overlay.
+   *  Omitted → the button falls back to the store's `openFocus`. */
+  onMaximize?: () => void;
+  /** Docked pane only: dismiss the pane and give the width back to the list.
+   *  Omitted → no ✕ is drawn (the overlay has its own). */
+  onClose?: () => void;
 }) {
   const projects = useTaskStore((s) => s.projects);
   const contexts = useTaskStore((s) => s.contexts);
@@ -211,12 +270,16 @@ export function TaskDetail({
               Focus
             </button>
           )}
+          {/* Maximise — the docked pane is 380px and this detail is dense
+              (nine sections plus the provider ones), so the reading width the
+              overlay gives is an affordance, not a leftover. Hidden inside the
+              overlay itself, which is already the wide mode. */}
           {!focused && (
             <button
               type="button"
               title="Open full page"
               aria-label="Open full page"
-              onClick={() => openFocus(item.id)}
+              onClick={() => (onMaximize ? onMaximize() : openFocus(item.id))}
               className="tech-transition ml-auto rounded-md p-1 text-muted-foreground/70 hover:bg-secondary hover:text-foreground"
             >
               <AppIcon name="Maximize2" className="h-4 w-4" />
@@ -247,6 +310,18 @@ export function TaskDetail({
           >
             <AppIcon name="Trash2" className="h-4 w-4" />
           </button>
+          {/* Close the docked pane (Projects' TaskPanel closes from its own ✕
+              too). The overlay draws its own ✕, so this stays off there. */}
+          {!focused && onClose && (
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              icon="X"
+              title="Close detail"
+              aria-label="Close detail"
+              onClick={onClose}
+            />
+          )}
         </div>
         <EditableTitle
           value={item.title}

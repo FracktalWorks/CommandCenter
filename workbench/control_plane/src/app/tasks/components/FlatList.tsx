@@ -26,8 +26,6 @@ import { useTaskStore } from "../lib/taskStore";
 import { GtdItem, ViewKey } from "../lib/types";
 import { TaskCard } from "./TaskCard";
 
-const NOBODY: ReadonlySet<string> = new Set();
-
 export function FlatList({
   items,
   view,
@@ -37,7 +35,6 @@ export function FlatList({
   view: ViewKey;
   showPriority?: boolean;
 }) {
-  const selectMode = useTaskStore((s) => s.selectMode);
   const selectedIds = useTaskStore((s) => s.selectedIds);
   const toggleSelected = useTaskStore((s) => s.toggleSelected);
   const extendSelection = useTaskStore((s) => s.extendSelection);
@@ -64,12 +61,14 @@ export function FlatList({
       )
     )
       return;
-    const picked = selectMode ? selectedIds : NOBODY;
+    // Ungated, as on /projects: Shift+Arrow sweeps whether or not anything is
+    // already selected. It used to require entering select mode first.
+    const picked = selectedIds;
     const next = stepCursor(
       rows,
       { cursor: cursorAt, anchor, selection: picked },
       event.key,
-      selectMode && event.shiftKey,
+      event.shiftKey,
     );
     if (!next) return;
     event.preventDefault();
@@ -95,17 +94,29 @@ export function FlatList({
     >
       {items.map((item, index) => {
         const atCursor = cursorAt >= 0 && cursorAt === index;
+        const selected = selectedIds.has(item.id);
         return (
           <div
             key={item.id}
             ref={attach(item.id)}
             className={atCursor ? "bg-muted/60 ring-2 ring-inset ring-ring" : ""}
           >
-            {selectMode ? (
-              <label className="flex cursor-pointer items-center gap-2 border-b border-border/60 pl-3 hover:bg-secondary/40">
+            {/* Checkbox BESIDE the card, never over it (/projects' shape): the
+                card keeps its own click — opening the task — and the box is a
+                second target. The card used to be wrapped in the label and made
+                inert, so the same click meant two different things depending on
+                a mode set three components away. The gutter carries the card's
+                own bottom border so the rule runs the full width. */}
+            <div
+              className={[
+                "flex items-stretch",
+                selected ? "bg-primary/5" : "",
+              ].join(" ")}
+            >
+              <label className="flex w-6 shrink-0 cursor-pointer items-center justify-center border-b border-border">
                 <input
                   type="checkbox"
-                  checked={selectedIds.has(item.id)}
+                  checked={selected}
                   onChange={(e) =>
                     toggleSelected(
                       item.id,
@@ -113,15 +124,14 @@ export function FlatList({
                       rows,
                     )
                   }
+                  aria-label={selected ? "Deselect task" : "Select task"}
                   className="h-4 w-4 shrink-0 accent-primary"
                 />
-                <div className="pointer-events-none min-w-0 flex-1">
-                  <TaskCard item={item} variant="row" />
-                </div>
               </label>
-            ) : (
-              <TaskCard item={item} variant="row" showPriority={showPriority} />
-            )}
+              <div className="min-w-0 flex-1">
+                <TaskCard item={item} variant="row" showPriority={showPriority} />
+              </div>
+            </div>
           </div>
         );
       })}

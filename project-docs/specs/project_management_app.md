@@ -19,6 +19,14 @@
 > six-purpose header splits into a title row and an action row. Frontend only — no migration,
 > no API change. ⚠️ **The phone-viewport and four-theme visual pass is still owed**: no
 > browser was runnable in the build environment (§11.20's closing note). ·
+> 🟢 **S3 (selection/bulk parity) BUILT 2026-08-10 for the /tasks LIST surfaces, on branch
+> `ws-s3-selection-bulk-parity`, NOT merged and NOT deployed** (§9 ticket "S3") — WS-27ad's
+> kept modal select-mode is **reversed by owner ruling** ("Projects is canonical, Tasks
+> conforms"): `selectMode` is now a derived mirror of "something is selected" and gates only
+> the bulk bar, the checkbox is permanent and sits outside the row content, shift-sweep is
+> ungated, the bar moved to the top onto Projects' chrome and primitives, and select-all
+> exists. ⚠️ The board card (`TaskCard`/`TaskBoard`, sibling slice S1) and `WaitingForView`
+> are still modal, and no browser was run here either. ·
 > **Owner:** vjvarada · **Board row: WS-27**
 >
 > **Tenancy (audited 2026-08-10 — this spec previously cited no tenancy decision at all).**
@@ -1370,11 +1378,14 @@ shims staying shims, no second name→class palette).
   card-shaped hole in the column). `shown_fields` gating unchanged.
 - **Selection.** `lib/selection.ts` holds `clickSelect` / `range` / `toggle` / `prune` /
   `allSelected`; `stepCursor`'s duplicated sweep now reads it. Projects' page and the Tasks
-  store both drive it, so shift-click and Shift+Arrow behave identically. **Tasks' modal
-  select-mode is KEPT**, with the reason in `tasks/components/ItemList.tsx`: `selectMode`
-  changes what a *click means*, and a permanent checkbox on a `TaskCard` would take the
-  drag-grip gutter or make one gesture mean two things. The mode is the entry; the grammar
-  inside it converged.
+  store both drive it, so shift-click and Shift+Arrow behave identically. ~~**Tasks' modal
+  select-mode is KEPT**, with the reason in `tasks/components/ItemList.tsx`.~~
+  **REVERSED by owner ruling 2026-08-10 — "Projects is canonical, Tasks conforms" — and
+  built for the list surfaces the same day (S3, below).** The kept reason (a permanent
+  checkbox would take the drag-grip gutter or make one gesture mean two things) was never
+  structural: Projects had already solved it by putting the box OUTSIDE the card as a
+  sibling in the row, while Tasks put it INSIDE, absolutely positioned over the grip — so
+  the collision was one Tasks had built for itself.
 - **Board chrome.** Drop-gap reorder beats append-on-drop and is now
   `components/DropGap.tsx` + `lib/boardDrop.ts` (`gapKey`, `dropIndexFor` — the downward
   intra-group off-by-one, previously buried in `taskStore.reorderItem`), consumed by both
@@ -1435,6 +1446,49 @@ accumulated tree-wide. ⚠️ Measured, and the ticket was wrong: `/tasks` held 
 > and the limit is written into `themes.ts`, `categorical.ts` and `DESIGN_SYSTEM.md` rather
 > than left implicit. None of that substitutes for looking at the running app on a phone in
 > four themes. That gate is still open.
+
+**S3 — selection and bulk-action grammar parity (`/tasks` conforms to `/projects`).**
+🟢 AGENT-SAFE, frontend only, no migration. ✅ **BUILT 2026-08-10 for the LIST surfaces**
+*(owner observation: "Tasks shows the selection checkbox only when the appropriate setting
+is there in the select options on top; in the Projects app the checkbox for selecting a
+task is present." Owner ruling: Projects is canonical.)* Branch `ws-s3-selection-bulk-parity`
+— **not merged, not deployed.**
+
+- **`selectMode` is no longer a mode.** It is a derived mirror of `selectedIds.size > 0`
+  maintained in one helper (`taskStore.applySelection`), and it decides only whether the
+  bulk bar is up. The "Select" button and `setSelectMode` are gone; `ItemList`,
+  `TaskListGrouped` and `FlatList` do not read `selectMode` at all.
+- **The checkbox is unconditional and OUTSIDE the row content** — its own gutter beside the
+  drag grip, so a click on the row still opens the task and the two gestures stop competing
+  for one gutter. Drag-reorder is therefore no longer switched off while something is
+  selected.
+- **Shift-sweep is ungated** on both list surfaces (it required select mode; Projects never
+  did), through the same `@/lib/selection` + `@/lib/cursor` both apps already shared.
+- **The bulk bar converged on Projects'**: top-mounted on the same `border-b border-border
+  bg-muted px-3 py-2` chrome, built from `Button`/`Badge` instead of the hand-rolled
+  outline `<button>`s (AGENTS.md rule 3 — the conformance regexes only see solid fills, so
+  CI had been silent on them).
+- **Select-all added** (`selectAllVisible`), and it means the FILTERED set, not the store.
+  With it, `pruneSelection` — a selection that outlived its filter is how a bulk archive
+  hits rows nobody can see, the same defect Projects' page already prunes for.
+- **Bulk power parity is not faked.** `/items/bulk` takes a disposition and
+  `/items/bulk-archive` an archive flag; that is the entire /tasks bulk surface, and
+  `gtd_items` has no tags column at all. Archive/restore/delete is the honest set and the
+  bar says so. ⚠️ The ticket's premise that status/assignee/importance "do not exist on
+  `gtd_items`" is wrong — the *fields* exist (`workflowStage`, `assignee(s)`,
+  `important`/`leveraged`); what is missing is any bulk endpoint for them. Widening the bar
+  is a gateway ticket.
+- **Fence:** `app/tasks/lib/selectionParity.test.ts` (13 cases) — the store invariant after
+  every transition, the absence of `setSelectMode`, the three surfaces not reading
+  `selectMode` or drawing a conditional checkbox, and both apps' bar carrying the same
+  chrome string. Verified by mutation: forcing `selectMode: true` fails 3 cases, re-gating
+  FlatList's checkbox fails 2.
+- ⚠️ **Not this slice, and still modal:** `TaskCard`/`TaskBoard` (the board's card checkbox
+  — owned by S1) and `WaitingForView` (owned by nobody in this wave) still draw their box
+  only while `selectMode` is true. Since `selectMode` is now derived, the FIRST pick on
+  those two surfaces has to come from Select-all or from a list surface until the card-side
+  move lands. **No browser was run**, so the phone-viewport and four-theme pass is owed
+  here as it is for af/ag.
 
 **Open, and needing an owner ruling** *(surfaced by af, 2026-08-10)*: WS-27ad standardised
 the **shared** card title on `text-[13px]` — deliberately choosing `/tasks`' size as the

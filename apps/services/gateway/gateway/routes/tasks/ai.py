@@ -23,8 +23,8 @@ from fastapi import Depends
 from gateway.routes.tasks.core import (
     DEFAULT_CONTEXTS,
     PROJECT_SELECT,
-    _get_db,
     _parse_jsonb,
+    _tenant_session,
     _uid,
     router,
 )
@@ -1196,8 +1196,7 @@ async def clarify_item(
     An optional `note` (request body) is freeform user guidance that steers the
     title/project/steps for this pass."""
     uid = _uid(user)
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         item = await _fetch_item(db, item_id, uid)
         projects = (await db.execute(
             text(PROJECT_SELECT + " WHERE p.user_id = :uid"), {"uid": uid},
@@ -1291,8 +1290,6 @@ async def clarify_item(
                     db, uid, item, str(proposal["project_id"]),
                     models["clarify"])
         return proposal
-    finally:
-        await db.close()
 
 
 # ── Enrich: fill a task's MISSING GTD fields (never overwrite) ────────────────
@@ -1508,13 +1505,10 @@ async def enrich_item(
     assignee). Proposes only — the client applies via PATCH. Empty `fields`
     when nothing was missing or nothing could be confidently filled."""
     uid = _uid(user)
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         item = await _fetch_item(db, item_id, uid)
         return {"item_id": item_id, "fields": await _enrich_fields(
             db, uid, item, only=None)}
-    finally:
-        await db.close()
 
 
 async def _llm_suggest_title(title: str, notes: str | None, model: str) -> dict[str, Any]:
@@ -1572,8 +1566,7 @@ async def suggest_title(
     editing it live. LLM-backed; degrades to {is_vague:false, suggested_title:
     null} when the assistant is off/unreachable."""
     uid = _uid(user)
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         item = await _fetch_item(db, item_id, uid)
         from gateway.routes.tasks.settings import gtd_models, gtd_toggles
         if not (await gtd_toggles(db, uid))["clarify_use_llm"]:
@@ -1582,8 +1575,6 @@ async def suggest_title(
         use_title = (title or item.title or "").strip()
         return await _llm_suggest_title(
             use_title, getattr(item, "description", None), models["clarify"])
-    finally:
-        await db.close()
 
 
 @router.post("/ai/backfill-context")
@@ -1594,8 +1585,7 @@ async def backfill_context(user: UserContext = Depends(get_current_user)):
     pushed upstream); returns how many were set. LLM-backed with a heuristic
     fallback, capped so one call can't run unbounded."""
     uid = _uid(user)
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         rows = (await db.execute(text(
             """SELECT * FROM gtd_items
                WHERE user_id = :uid
@@ -1633,10 +1623,7 @@ async def backfill_context(user: UserContext = Depends(get_current_user)):
                         WHERE id = :id AND user_id = :uid"""),
                 {"ctx": ctx, "id": str(item.id), "uid": uid})
             updated += 1
-        await db.commit()
         return {"scanned": len(rows), "updated": updated}
-    finally:
-        await db.close()
 
 
 @router.get("/insights")
@@ -1644,8 +1631,7 @@ async def inbox_insights(user: UserContext = Depends(get_current_user)):
     """Whole-inbox signals for the processing surface: counts, aging,
     project clusters, stale waiting-fors. (Agent narration comes later.)"""
     uid = _uid(user)
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         counts = (await db.execute(text(
             """SELECT disposition, count(*) AS n FROM gtd_items
                WHERE user_id = :uid GROUP BY disposition"""), {"uid": uid},
@@ -1675,8 +1661,6 @@ async def inbox_insights(user: UserContext = Depends(get_current_user)):
             "stale_waiting": stale.n if stale else 0,
             "projects_without_next_action": no_next.n if no_next else 0,
         }
-    finally:
-        await db.close()
 
 
 # ── Atomize + dedup: mind-dump → atomic captures (§2.1 seam) ─────────────────
@@ -1856,15 +1840,11 @@ async def atomize_dump(
     uid = _uid(user)
     # Per-user model choice (gtd_settings) — cheap read, defaults on failure.
     from gateway.routes.tasks.settings import gtd_models
-    _mdb = await _get_db()
-    try:
+    async with _tenant_session() as _mdb:
         models = await gtd_models(_mdb, uid)
-    finally:
-        await _mdb.close()
     existing: list[dict[str, Any]] = []
     if req.dedup:
-        db = await _get_db()
-        try:
+        async with _tenant_session() as db:
             rows = (await db.execute(text(
                 """SELECT id, title, disposition, source FROM gtd_items
                    WHERE user_id = :uid
@@ -1875,8 +1855,6 @@ async def atomize_dump(
             existing = [{"id": str(r.id), "title": r.title,
                          "disposition": r.disposition, "source": r.source}
                         for r in rows if str(r.id) not in skip]
-        finally:
-            await db.close()
 
     llm_items = await _llm_atomize(text_, existing, model=models["atomize"])
     used_llm = llm_items is not None

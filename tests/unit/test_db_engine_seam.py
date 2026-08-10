@@ -311,7 +311,11 @@ H2_EXEMPT_FILES: dict[str, str] = {
 
 #: The unconverted remainder OUTSIDE routes/projects at the time the Projects
 #: slice landed (2026-08-10). Lower it as packages convert; never raise it.
-H2_BASELINE_ELSEWHERE = 494
+#: 494 → 421 (2026-08-10): routes/tasks converted — 73 request-handler sites
+#: now on `_tenant_session`; the 6 that remain there are background consumers
+#: (broker_handlers, scheduler, calendar's rollover sweep), each carrying an
+#: H4 comment naming why ambient tenant inheritance is forbidden for them.
+H2_BASELINE_ELSEWHERE = 421
 
 
 def _get_db_sites() -> dict[str, int]:

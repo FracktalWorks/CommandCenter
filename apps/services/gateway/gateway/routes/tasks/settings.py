@@ -25,7 +25,13 @@ from typing import Any
 
 from acb_auth import UserContext, get_current_user
 from fastapi import Depends
-from gateway.routes.tasks.core import _get_db, _log, _parse_jsonb, _uid, router
+from gateway.routes.tasks.core import (
+    _log,
+    _parse_jsonb,
+    _tenant_session,
+    _uid,
+    router,
+)
 from pydantic import BaseModel
 from sqlalchemy import text
 
@@ -419,11 +425,8 @@ def _stages(val: Any) -> list[str]:
 
 @router.get("/settings", response_model=GtdSettingsModel)
 async def get_gtd_settings(user: UserContext = Depends(get_current_user)):
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         return await _load(db, _uid(user))
-    finally:
-        await db.close()
 
 
 class StatusCatalogEntry(BaseModel):
@@ -445,8 +448,7 @@ async def status_catalog(user: UserContext = Depends(get_current_user)):
     its auto-guessed stage (``mapped=False``) so the settings table is never
     blank — the user just confirms/adjusts. Powers the status-mapping UI."""
     uid = _uid(user)
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         settings = await _load(db, uid)
         rows = (await db.execute(text(
             "SELECT schema_cache FROM task_accounts WHERE user_id = :uid"),
@@ -489,8 +491,6 @@ async def status_catalog(user: UserContext = Depends(get_current_user)):
                 unmapped += 1
         return StatusCatalogResponse(
             stages=stages, entries=entries, unmapped=unmapped)
-    finally:
-        await db.close()
 
 
 @router.put("/settings", response_model=GtdSettingsModel)
@@ -501,42 +501,41 @@ async def put_gtd_settings(
     """Partial update — only the provided fields change (upsert)."""
     uid = _uid(user)
     fields = {k: v for k, v in patch.model_dump().items() if v is not None}
-    db = await _get_db()
-    try:
-        import json
-        if "workflow_stages" in fields:
-            # Sanitize (trim, drop empties, cap) and JSON-encode for the JSONB
-            # column. Guarantee a non-empty list with a "done" stage.
-            stages = [str(s).strip() for s in fields["workflow_stages"]
-                      if str(s).strip()][:24]
-            if not stages:
-                stages = list(DEFAULT_WORKFLOW_STAGES)
-            fields["workflow_stages"] = json.dumps(stages)
-        _jsonb_cols = {"workflow_stages", "status_stage_map", "energy_windows",
-                       "day_templates"}
-        if "day_templates" in fields:
-            fields["day_templates"] = json.dumps(
-                _day_templates(fields["day_templates"]))
-        if "status_stage_map" in fields:
-            # Normalize keys (lower/trim) + drop empties; JSON-encode for JSONB.
-            raw = fields["status_stage_map"] or {}
-            clean = {str(k).strip().lower(): str(v).strip()
-                     for k, v in raw.items()
-                     if str(k).strip() and str(v).strip()}
-            fields["status_stage_map"] = json.dumps(clean)
-        if "energy_windows" in fields:
-            # Validate + JSON-encode for the JSONB column.
-            fields["energy_windows"] = json.dumps(
-                _energy_windows(fields["energy_windows"]))
-        if fields:
-            # JSONB columns need an explicit ::jsonb cast on the bind param.
-            # The space before the cast matters — SQLAlchemy's bind-param
-            # scanner mis-parses a bind name immediately followed by a
-            # Postgres "::" cast (drops the last character of the name,
-            # leaves literal cast text the driver can't parse); see
-            # tests/unit/test_sql_bindparam_jsonb_cast.py.
-            def _ph(k: str) -> str:
-                return f":{k} ::jsonb" if k in _jsonb_cols else f":{k}"
+    import json
+    if "workflow_stages" in fields:
+        # Sanitize (trim, drop empties, cap) and JSON-encode for the JSONB
+        # column. Guarantee a non-empty list with a "done" stage.
+        stages = [str(s).strip() for s in fields["workflow_stages"]
+                  if str(s).strip()][:24]
+        if not stages:
+            stages = list(DEFAULT_WORKFLOW_STAGES)
+        fields["workflow_stages"] = json.dumps(stages)
+    _jsonb_cols = {"workflow_stages", "status_stage_map", "energy_windows",
+                   "day_templates"}
+    if "day_templates" in fields:
+        fields["day_templates"] = json.dumps(
+            _day_templates(fields["day_templates"]))
+    if "status_stage_map" in fields:
+        # Normalize keys (lower/trim) + drop empties; JSON-encode for JSONB.
+        raw = fields["status_stage_map"] or {}
+        clean = {str(k).strip().lower(): str(v).strip()
+                 for k, v in raw.items()
+                 if str(k).strip() and str(v).strip()}
+        fields["status_stage_map"] = json.dumps(clean)
+    if "energy_windows" in fields:
+        # Validate + JSON-encode for the JSONB column.
+        fields["energy_windows"] = json.dumps(
+            _energy_windows(fields["energy_windows"]))
+    if fields:
+        # JSONB columns need an explicit ::jsonb cast on the bind param.
+        # The space before the cast matters — SQLAlchemy's bind-param
+        # scanner mis-parses a bind name immediately followed by a
+        # Postgres "::" cast (drops the last character of the name,
+        # leaves literal cast text the driver can't parse); see
+        # tests/unit/test_sql_bindparam_jsonb_cast.py.
+        def _ph(k: str) -> str:
+            return f":{k} ::jsonb" if k in _jsonb_cols else f":{k}"
+        async with _tenant_session() as db:
             cols = ", ".join(fields)
             vals = ", ".join(_ph(k) for k in fields)
             sets = ", ".join(f"{k} = EXCLUDED.{k}" for k in fields)
@@ -546,17 +545,18 @@ async def put_gtd_settings(
                     ON CONFLICT (user_id)
                     DO UPDATE SET {sets}, updated_at = now()"""),
                 {"uid": uid, **fields})
-            await db.commit()
 
-            # A background_sync toggle must (re)start or stop this user's
-            # workspace loops at runtime — otherwise the change only takes
-            # effect on the next gateway restart.
-            if "background_sync" in fields:
+        # A background_sync toggle must (re)start or stop this user's
+        # workspace loops at runtime — otherwise the change only takes
+        # effect on the next gateway restart. Runs AFTER the block above
+        # committed: the scheduler re-reads gtd_settings on its own session
+        # and must see the new value (H2 restructure).
+        if "background_sync" in fields:
+            async with _tenant_session() as db:
                 await _apply_background_sync_toggle(
                     db, uid, bool(fields["background_sync"]))
+    async with _tenant_session() as db:
         return await _load(db, uid)
-    finally:
-        await db.close()
 
 
 async def _apply_background_sync_toggle(

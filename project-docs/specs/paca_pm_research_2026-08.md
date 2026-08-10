@@ -309,3 +309,105 @@ adoption target (ADR-028: no second runtime).
 
 Everything above is annealed into `specs/project_management_app.md` (WS-27), which owns all
 work, decisions, and status. This file is evidence, not a plan.
+
+---
+
+## 10. Second-pass corrections — the agent layer (2026-08-10)
+
+*Pinned commit `09dab28e3caee9e43891697998dcfa7fcf76991c`. A full re-read of
+`services/ai-agent`, `apps/mcp`, `services/realtime`, `apps/acp-bridge` and `apps/e2e`
+**re-derived §4–§8 from the code rather than from this document.** Ten claims above are
+wrong, stale or overstated. The original text is left in place and corrected here rather
+than silently edited, because which way a claim was wrong is itself the useful information —
+several of these made Paca look like prior art for something it does not have.*
+
+**C1 — §5's "the AI service never writes to Postgres directly (a stated Boundary Rule)" is
+false, and the phrase is not in their tree.** The agent service owns its own asyncpg pool
+and writes on every run (conversation status, one row per event), reads five tables
+directly, and decrypts the LLM key itself. The real boundary is narrower and worth stating
+precisely: **domain writes go through MCP→API under the agent's identity; the runtime's own
+bookkeeping is direct DB.** ⚠️ For us that direct pool is exactly the shape R5 forbids — a
+DB connection site outside the `get_db()` seam.
+
+**C2 — §6's "internal UUIDs are never agent-facing; no read round-trip to write" is
+inverted.** Every write tool takes raw UUIDs and the tool descriptions *mandate* the
+discovery call ("Use `list_projects` to get the project ID"). The pattern we described is
+real **only for documents**, which are addressed by filesystem path with the MCP layer
+resolving path→UUID. That narrow case is the good idea; the generalisation was ours, not
+theirs.
+
+**C3 — §6's "permission-filtered ListTools" is true but the implication is not.** Filtering
+happens in `ListTools` only — `CallTool` consults no permission map, so a hidden tool still
+executes if named. Tools absent from the permission table are **allowed by default**, and
+seven currently-routable tools have no entry. The table is maintained parallel to the
+routing switch with **no completeness test**.
+
+**C4 — §6's "lenient removes" is not implemented.** Per-item outcomes are real and good; a
+removal of something missing is reported as a failure, not absorbed as a no-op. The
+"16 tools collapsed to 4" history could not be verified at this commit.
+
+**C5 — §4's action-consolidation claim is right about the engine and did not land
+end-to-end.** Three built-in actions exist; the agent-facing MCP schema still advertises
+**seven**, documenting the config shape of types the API now rejects. Nothing tests the two
+lists against each other. Cite Paca for the consolidation *design*, never as evidence that
+consolidating is cheap to finish.
+
+**C6 — §7's "durable Streams for at-least-once work" is not true on the agent path.** The
+Python consumer creates its group at `$` (anything published earlier is lost), reads only
+new entries, never reclaims — there is **no `XAUTOCLAIM`/`XPENDING`/`XCLAIM` anywhere in
+the repository** — and acks only on success, so a failed trigger is never retried and leaks
+a pending entry forever. Their Go consumer does it correctly, so this is a regression
+against their own house standard, not a design position.
+
+**C7 — §5's "spins an OpenHands sandbox" understates the deployment cost.** The sandbox is a
+sibling container spawned through the **host Docker socket**, bind-mounted into the agent
+service — root-equivalent host access. That belongs in the record as a prerequisite, not an
+implementation detail.
+
+**C8 — §5's "permission-checked as its own project member" is true at the API and the
+credential model is weaker than it sounds.** There is **one shared deployment-wide agent API
+key**, and which agent is acting is asserted by an `X-Agent-ID` **header the caller
+supplies**. Anything holding the key can act as any agent in any project. ⚠️ Direct
+collision with **R11** (never take an identity from request input) — a refusal, not a model.
+Their ACP bridge tokens are per-agent, hashed and rotatable, which is the shape to copy.
+
+**C9 — §8's "backend plugins are WASM (wazero)" is false for the agent-facing half.** Plugin
+MCP tools are arbitrary ES modules dynamically imported **into the MCP server process** and
+handed the API key — same process, same credential, no sandbox. They are not
+permission-filtered and are dispatched **before** core tools, so a plugin declaring
+`update_task` shadows the real one.
+
+**C10 — §5: `automation_message` is a fifth trigger type surviving only on a fallback
+branch.** Latent misrouting for any future control type carrying a `trigger_type` field.
+
+### What the re-read CONFIRMED
+§5's dispatch-chain shape (event-driven, one payload shape for all sources, session marker
+written on the task); the ACP watchdog; the DB-seeded event index; §7's "permission checked
+once at join" and "realtime never persists raw tokens"; §4's `call_api` reader-visible-header
+gap. Also confirmed, and useful to us: **their realtime service is an accelerant, not a hard
+dependency** — the publish path's own docstring says clients "see new messages without
+waiting for the next poll cycle", i.e. there is a poll fallback. That is the opposite of the
+Plane finding about their collaboration server, and it means nothing in the agent surface
+implies a sibling service.
+
+### ⚠️ The biggest finding is an absence
+**There is no approval or human-in-the-loop primitive anywhere in Paca's agent layer.** A
+grep of the whole territory for approve/approval/confirm/consent returns prose only. An
+agent's autonomy is exactly its project-role permission set, exercised unilaterally; the only
+human levers are pause and stop, both after the fact. The "you MUST invoke a skill before
+acting" rule is a paragraph in a prompt with nothing enforcing it.
+
+For an **AI-driven company operating system**, that is the single most important gap, and the
+correct conclusion is that **Paca is not prior art for it.** If we want "an agent may do X
+unilaterally but needs a human for Y", we design it ourselves, and the natural seam is a
+per-tool gate at the tool layer — not a sentence in a system prompt. Recorded as a decision
+owed rather than a ticket, because it shapes the Action Broker and the agent-dispatch chain
+together.
+
+Two more absences worth the same treatment: **their e2e suite specifies nothing about the
+agent layer at all** (21 Playwright specs and 20 Gherkin features covering auth, projects,
+tasks, views, sprints and docs — not one line touching agents, automations or websockets), so
+the mining instruction has an honest negative answer; and a **hard timeout that reports
+success** — an agent exhausting its hour is torn down and recorded as `FINISHED`, with no
+test covering the path. Whatever bound we set, exhausting it must be its own terminal state.
+

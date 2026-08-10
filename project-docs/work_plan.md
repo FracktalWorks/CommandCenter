@@ -195,7 +195,7 @@ owning specs are the archive; this file owns ordering, gates and states only.
 
 | WS | Workstream | State | Owning spec · record | Gates · next (verified) |
 |---|---|---|---|---|
-| WS-29 | **Multi-tenancy — turning CommandCenter into a product sold to other companies** | ◐ H1 done · H2 next | **`specs/saas_multitenancy.md`** (architecture; §11 tickets) · ⭐ **`specs/saas_multitenancy_handover.md`** (H1→H8 runbook — hand THIS to the executing agent) · `specs/saas_multitenancy_implementation.md` (shapes) · board record 2026-08-09 in the parent spec | **Phase 0 ✅** (MT-0a · 0b · 0c-1 · 0d, pending review) · **H1 ✅ CLOSED**: scratch-verified 2026-08-09, **PR #404 merged and migrations 157/158/159 CONFIRMED on prod the same day** (ledger line "157 already recorded"; box self-applied via pull timer). · MT-1: 1a schema ✅ (identity cutover = H6, open) · 1b generated ✅ · 1c seam + ratchets ✅ — **561 call sites across 138 files unconverted = H2, the long pole** · 1e wrapper ✅ (~58 key sites unconverted = H5) · 1i ✅ (two-org DB fixture owed) · **MT-2/MT-3/MT-4 owner inputs ALL ANSWERED — final pricing shape D23/D24 2026-08-10 (§2.4b Center packages; ladder 600/1200/1800/2400/3000)** — MT-2's scope includes `center_package` + `plan_catalog` + seat `source` + the one-assignment act; spec detailing may start on all three; the customer console is WS-30 · 🔴 MT-0c-2 parked (D16; §6 first blockquote) · §5.1 cutover trigger **ADOPTED 2026-08-09** — owner checks monthly · ⚠️ **#399 (MERGED 2026-08-09) carried a second WS-29 thread** (`specs/multi_tenancy.md`, superseded for architecture — measured record only): migration **161** keys all 17 `pm_*` + a parent-consistency trigger, **162** makes `app_user` unique on `lower(email)`, S1-1 fixed a cross-tenant **write** into access control, S1-4 removed the process-global agent identity, plus a 14-finding leak audit. **It also found a defect in MT-1b:** the generator scoped `crm_contacts`/`crm_deals`/`crm_activities` by column name, but their `organization_id` references `crm_organizations` — phase 2 would have aborted mid-window. Gated at generation time now (`HOMONYM_BLOCKED`); those three tables carry **no isolation** pending a rename — 🔴 owner call. **Next: dispatch H2.** (2026-08-10) |
+| WS-29 | **Multi-tenancy — turning CommandCenter into a product sold to other companies** | ◐ H1 done · H2 next | **`specs/saas_multitenancy.md`** (architecture; §11 tickets) · ⭐ **`specs/saas_multitenancy_handover.md`** (H1→H8 runbook — hand THIS to the executing agent) · `specs/saas_multitenancy_implementation.md` (shapes) · board record 2026-08-09 in the parent spec | **Phase 0 ✅** (MT-0a · 0b · 0c-1 · 0d, pending review) · **H1 ✅ CLOSED**: scratch-verified 2026-08-09, **PR #404 merged and migrations 157/158/159 CONFIRMED on prod the same day** (ledger line "157 already recorded"; box self-applied via pull timer). · MT-1: 1a schema ✅ (identity cutover = H6, open) · 1b generated ✅ · 1c seam + ratchets ✅ — **561 call sites across 138 files unconverted = H2, the long pole** · 1e wrapper ✅ (~58 key sites unconverted = H5) · 1i ✅ (two-org DB fixture owed) · **MT-2/MT-3/MT-4 owner inputs ALL ANSWERED — final pricing shape D23/D24 2026-08-10 (§2.4b Center packages; ladder 600/1200/1800/2400/3000)** — MT-2's scope includes `center_package` + `plan_catalog` + seat `source` + the one-assignment act; spec detailing may start on all three; the customer console is WS-30 · 🔴 MT-0c-2 parked (D16; §6 first blockquote) · §5.1 cutover trigger **ADOPTED 2026-08-09** — owner checks monthly · ⚠️ **#399 (MERGED 2026-08-09) carried a second WS-29 thread** (`specs/multi_tenancy.md`, superseded for architecture — measured record only): migration **161** keys all 17 `pm_*` + a parent-consistency trigger, **162** makes `app_user` unique on `lower(email)`, S1-1 fixed a cross-tenant **write** into access control, S1-4 removed the process-global agent identity, plus a 14-finding leak audit. **It also found a defect in MT-1b:** the generator scoped `crm_contacts`/`crm_deals`/`crm_activities` by column name, but their `organization_id` references `crm_organizations` — phase 2 would have aborted mid-window. Gated at generation time now (`HOMONYM_BLOCKED`); those three tables carry **no isolation** pending a rename — 🔴 owner call. ⚠️ **New gap, D31 (2026-08-11): there is no per-tenant restore, only a whole-cluster one (§6.6).** BO-23 restores the box, so serving one customer's recovery rolls every other customer back — a §6 cross-tenant defect from customer #2, *not* a customer-#1 gate. Not dispatchable yet: needs a ticket contract, and its filtered export must be driven by the same `discover_tables()` set the RLS policies use, i.e. after MT-1b promotion. **Next: dispatch H2.** (2026-08-11) |
 
 | — | **Future modules roadmap** (KB · Marketing · Support · dashboards-colour · Builder/Workflows slicing rule) *(named 2026-08-09, D21)* | 🔴 not dispatchable | `specs/future_modules_roadmap.md` | No WS rows until each earns a §1-contract spec; Dashboards colour lands in WS-15's acceptance; the Builder/Workflows visibility-tier-at-creation rule binds reviews now (D12). |
 | WS-30 | **Subscription Console — customer-facing billing surface** *(minted 2026-08-09)* | 🔴 MT-2 first | **`specs/subscription_console.md`** | Manage-only at launch: **Centers & add-ons panel · users × Centers seat grid (D23)** · credit monitor · seat writes under D19.3's hard cap · role presets (D24.5) · change-request flow (fulfilment 🔴 OWNER-GATE during silo phase). Sequencing: MT-2 tables → SC-1 → SC-2/SC-3 → SC-4 with MT-4. Business inputs answered (D19 + D23 + **D24** — framing closed); blockers: MT-2's substrate and the MT-2/MT-3 ticket contracts. (2026-08-10) |
@@ -215,7 +215,7 @@ owning specs are the archive; this file owns ordering, gates and states only.
 | WS-28 | **People Center — directory, org chart, assignment seam** *(minted 2026-08-06)* | ✅ a+b+b-write | `specs/people_center_app.md` · board record 2026-08-09 | a (key shape, mig 148 + quarantine table) · b (directory + person page, mig 149, five-place registration) · b-write (create/edit UI restored; found three ways mig 148 had broken the write routes) — built 2026-08-06/07; **closes WS-13's directory item**. 🟢 c org chart · d capability search (**ranking EVAL-LOCKED**) · e Projects seams; 🔴 f seats/roles writes (§6 WS-24 (d) analogue). ⚠️ `schema.generated.sql` regeneration is **due**: stale since ~migration 113, and 148 reached prod ~2026-08-07 (after the #384 cast fix). (2026-08-07) |
 ---
 
-## 3. Decisions recorded (D1–D14: 2026-07-31→08-04 · D15/D16: 2026-08-08 · D17–D21: 2026-08-09 · D22–D30: 2026-08-10)
+## 3. Decisions recorded (D1–D14: 2026-07-31→08-04 · D15/D16: 2026-08-08 · D17–D21: 2026-08-09 · D22–D30: 2026-08-10 · D31: 2026-08-11)
 
 Resolutions for the cross-doc conflicts the audit surfaced. D1–D8, **D13**, **D14**,
 **D16** and **D17** are **proposed defaults, adopted unless the owner objects**
@@ -224,6 +224,29 @@ calls, taken and dated. ⚠️ Two entries below are superseded and kept as reco
 **D11** (re-taken by D15) and **D10 part 1's planning premise** (re-scoped by
 D15/D16) — read their banners before citing either.
 
+- **D31 — D15 re-tested against Odoo, Salesforce and SAP; it stands. One gap found.**
+  *(owner-raised 2026-08-11 — "Odoo is also a large complex app with multiple sub-apps
+  for one company; is shared-database still ideal?"; agent-answered,
+  `agent-proposed, owner may overrule`.)* Full record in **`saas_multitenancy.md`
+  §0.9.9**; do not re-run the comparison from the same starting point. **The rule it
+  yields: what forces a database per customer is not customization, it is
+  customization implemented as DDL.** Odoo adds a custom field by issuing real DDL and
+  keeps modules/views/rules as rows in the tenant database, so its tenants cannot share
+  one — a fact about Odoo's implementation, not about RLS (Odoo's own `ir.rule` is
+  row-level filtering, trusted to separate legal entities inside one database).
+  Salesforce/ServiceNow/NetSuite run the deepest per-tenant extensibility in the
+  industry **pooled**; SAP's answer to the same pressure was to constrain *how*
+  extension is expressed (key-user + side-by-side on stable APIs), not to silo. We are
+  already on the metadata side and shipped it: `155_projects_custom_fields.sql` —
+  definitions as rows, values as JSONB + GIN — and apps as rows (migration 114).
+  **Recorded against ourselves:** SAP CAP runs §7 item 1c's schema-per-tenant in
+  production, and it survives rejection here only because *we* ship continuously
+  against a 160+ file ladder applied before restart with no rollback — so §7 item 1c
+  now carries that as the first rejection to re-open if our cadence changes.
+  **The one genuine finding: there is no per-tenant restore — only a whole-cluster one
+  (§6.6).** Due before customer #2, not before customer #1 (with one tenant they are the
+  same operation). **Caution carried:** keep custom fields typed and narrow; a general
+  EAV/metadata platform is a priced feature with its own spec, not a pattern to spread.
 - **D30 — `CLAUDE.md` at the repo root is the always-loaded briefing.**
   *(owner-directed 2026-08-10 — "any cloud instance must understand the
   development philosophy, the work plan and the architecture at all times".)*

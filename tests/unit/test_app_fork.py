@@ -27,13 +27,13 @@ def test_fork_copies_files_and_corrects_identity(tmp_path: Path):
 
     _fork_workspace(new_workspace, files, manifest)
 
-    assert (new_workspace / "index.html").read_text() == "<html>original</html>"
-    assert (new_workspace / "src" / "App.tsx").read_text() == (
+    assert (new_workspace / "index.html").read_text(encoding="utf-8") == "<html>original</html>"
+    assert (new_workspace / "src" / "App.tsx").read_text(encoding="utf-8") == (
         "export default function App() {}"
     )
     # app.json is overwritten with the corrected identity, not the source's copy.
     import json
-    written = json.loads((new_workspace / "app.json").read_text())
+    written = json.loads((new_workspace / "app.json").read_text(encoding="utf-8"))
     assert written["slug"] == "quote-calc-fork"
     assert written["name"] == "Quote Calc (fork)"
 

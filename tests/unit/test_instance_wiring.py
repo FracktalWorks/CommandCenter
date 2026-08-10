@@ -173,7 +173,7 @@ def test_instanced_dir_is_created_and_stamped(tmp_path: Path, monkeypatch) -> No
 
     out = Path(_resolve_effective_agent_dir(clone, {}, instance="u:a@b.com"))
     assert out.is_dir()
-    assert (out / ".cc-instance").read_text() == "u:a@b.com"
+    assert (out / ".cc-instance").read_text(encoding="utf-8") == "u:a@b.com"
 
 
 # ---------------------------------------------------------------------------

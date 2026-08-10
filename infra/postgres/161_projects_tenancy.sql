@@ -43,6 +43,19 @@
 -- request. A column the Projects app requires cannot wait on a maintenance
 -- window, so the numbered path is what puts it there.
 --
+-- ⚠️ **That claim covers phases 1, 2 and 4 — NOT phase 3.** Audited 2026-08-10:
+-- `generated/03_constraints.sql` emits, for each of these 17 tables, an
+-- `ALTER TABLE … ADD CONSTRAINT {t}_org_fk FOREIGN KEY … REFERENCES organization`
+-- beside the inline `{t}_organization_id_fkey` this file already created, and a
+-- `CREATE INDEX {t}_org_idx` — the seventeen single-column indexes the "indexes"
+-- section at the foot of this file argues against creating. Postgres accepts the
+-- duplicate FK (two identical check triggers per row) and `ADD CONSTRAINT` has no
+-- `IF NOT EXISTS`, so a phase-3 RE-run errors on these 17 where it is idempotent
+-- everywhere else. **Whoever promotes the generated set must either skip-list
+-- these 17 in the constraints phase or accept both costs deliberately** — this is
+-- a maintenance-window decision, so it is written here rather than discovered at
+-- 2 a.m. Phases 1, 2 and 4 compose exactly as described below.
+--
 -- The two compose, because both sides are `ADD COLUMN IF NOT EXISTS` — whichever
 -- runs second finds the column and no-ops. **One difference is worth stating
 -- rather than discovering:** the generated column carries

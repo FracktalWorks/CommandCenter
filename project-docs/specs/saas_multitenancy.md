@@ -1865,6 +1865,19 @@ orchestrator runs, broker handlers, the Redis Streams consumer) carries an expli
 `organization_id` on its job record and binds it before any DB access; a test asserts a job
 constructed without one **refuses to run** rather than defaulting.
 
+> ⚠️ **Named site, found by the WS-27 alignment audit 2026-08-10 — H2 will NOT
+> reach it.** `automation.run_lifecycle_sweep`
+> (`routes/projects/automation.py`, entered from `workflows/service.py`'s
+> `_pm_lifecycle` node) opens the **un-bound** `get_db()` and starts with
+> `SELECT * FROM pm_projects WHERE parent_project_id IS NULL` — every tenant's
+> roots, no predicate. It is a *scheduled-workflow* path, so H2's request-side
+> conversion never touches it. After phase-4 policies it reads **zero rows** and
+> the WS-27z lifecycle policy silently stops working (presenting as "the feature
+> is broken", the exact failure `acb_common/db.py` warns about); bind a single
+> tenant instead and it sweeps that one and silently skips the rest. **It needs a
+> per-tenant loop, not a session swap** — as does `_pm_task_updater` beside it.
+> Do this ticket before the phase-4 promotion, not after.
+
 #### MT-1e · Redis: prefixes enforced by the client · ◐ **WRAPPER BUILT, CALL SITES NOT CONVERTED**
 
 > **Built:** `acb_common/tenant_redis.py` — a client that *cannot* express an unprefixed key,

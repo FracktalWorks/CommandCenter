@@ -195,6 +195,24 @@ attempt a mechanical repo-wide rewrite: `get_db()` returns a session the caller 
 while `tenant_session()` is an async context manager that owns the transaction — the call
 shape changes, not just the name.
 
+> ⚠️ **Two sites are NOT mechanical — audited 2026-08-10 (WS-27 alignment):**
+>
+> 1. **`routes/projects/core.py::resolve_organization_id`** reads the caller's
+>    tenant *from the database, inside the session* (`app_user.organization_id`,
+>    by authenticated email). `tenant_session()` needs the tenant **before** the
+>    session opens, so converting Projects is circular until this moves to the
+>    auth/pre-session layer. Note also that `bind_tenant` / `release_tenant` /
+>    `current_tenant` have **zero callers repo-wide** — no middleware binds yet,
+>    so that layer is the real first step of H2, not the 561 call sites.
+>    ⚠️ It also encodes **one person = one organization** (migration 161's
+>    D-MT-1), which **H6 retires**: `user_identity` + `org_membership` make
+>    multi-org real. There are **21 such `app_user`-derived org reads across 6
+>    modules** (projects, people, admin `members`/`_common`, rooms,
+>    `acb_auth/access`) — H6's "`app_user` reads are gone or reduced to a
+>    compatibility view" is a bigger surface than that sentence suggests.
+> 2. **Background jobs** — see MT-1d's named site in the parent spec
+>    (`run_lifecycle_sweep`): a scheduled path H2 does not reach at all.
+
 ```python
 # before
 db = await _get_db()

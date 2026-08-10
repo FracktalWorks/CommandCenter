@@ -54,7 +54,7 @@ def test_no_send_tool_by_design() -> None:
 
 def test_config_scope_matches_tools() -> None:
     # own_tool_scope in config.json must not drift from the registered tools.
-    config = json.loads((_AGENT_DIR / "config.json").read_text())
+    config = json.loads((_AGENT_DIR / "config.json").read_text(encoding="utf-8"))
     assert set(config["own_tool_scope"]) == {fn.__name__ for fn in _M._TOOLS}
     assert config["runtime"] == "maf"
 

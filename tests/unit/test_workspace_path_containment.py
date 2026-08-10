@@ -54,7 +54,7 @@ def test_write_artifact_writes_contained_file(tmp_path, monkeypatch):
     _set_ws(monkeypatch, tmp_path)
     res = asyncio.run(write_artifact("report.md", "hello"))
     assert res.get("path") == "outputs/report.md"
-    assert (tmp_path / "outputs" / "report.md").read_text() == "hello"
+    assert (tmp_path / "outputs" / "report.md").read_text(encoding="utf-8") == "hello"
 
 
 def test_save_note_refuses_traversal(tmp_path, monkeypatch):

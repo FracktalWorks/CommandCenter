@@ -261,7 +261,7 @@ def test_no_v1_client_reads_the_identity_token() -> None:
     ]
     root = pathlib.Path(__file__).resolve().parents[2]
     for rel in v1_client_modules:
-        source = (root / rel).read_text()
+        source = (root / rel).read_text(encoding="utf-8")
         offending = [
             line.strip()
             for line in source.split("\n")

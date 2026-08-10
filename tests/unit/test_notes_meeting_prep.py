@@ -68,7 +68,7 @@ def test_migration_keeps_copilot_enabled_nullable() -> None:
     """Three states are needed, not two: on, off, and 'not decided — follow the
     account default'. A NOT NULL DEFAULT FALSE would pin every existing meeting
     to off and make the global setting unreachable."""
-    sql = (_ROOT / "infra/postgres/127_meeting_prep.sql").read_text()
+    sql = (_ROOT / "infra/postgres/127_meeting_prep.sql").read_text(encoding="utf-8")
     assert "ADD COLUMN IF NOT EXISTS copilot_enabled BOOLEAN" in sql
     assert "copilot_enabled BOOLEAN NOT NULL" not in sql
     assert "copilot_enabled BOOLEAN DEFAULT" not in sql
@@ -76,7 +76,7 @@ def test_migration_keeps_copilot_enabled_nullable() -> None:
 
 def test_migration_is_additive_and_idempotent() -> None:
     """Migrations re-run on every deploy."""
-    sql = (_ROOT / "infra/postgres/127_meeting_prep.sql").read_text()
+    sql = (_ROOT / "infra/postgres/127_meeting_prep.sql").read_text(encoding="utf-8")
     assert sql.count("IF NOT EXISTS") >= 3          # 2 columns + the index
     assert "DROP" not in sql.upper()
 
@@ -85,7 +85,7 @@ def test_scheduled_at_is_separate_from_start_at() -> None:
     """start_at is when capture began — the pipeline and library sort on it.
     Overloading it would make an unstarted meeting look like one that ran the
     instant it was created."""
-    sql = (_ROOT / "infra/postgres/127_meeting_prep.sql").read_text()
+    sql = (_ROOT / "infra/postgres/127_meeting_prep.sql").read_text(encoding="utf-8")
     assert "scheduled_at TIMESTAMPTZ" in sql
     assert "start_at" not in sql.split("ALTER TABLE meeting")[1].split(";")[0]
 
@@ -109,7 +109,7 @@ def test_session_start_consults_the_prepared_decision() -> None:
     switch mid-conversation."""
     src = (
         _ROOT / "apps/services/gateway/gateway/routes/notes/live_session.py"
-    ).read_text()
+    ).read_text(encoding="utf-8")
     assert "_apply_prepared_copilot" in src
     assert "copilot_should_run" in src
     # Must not be able to take a recording down with it.

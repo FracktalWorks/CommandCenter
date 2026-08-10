@@ -24,7 +24,7 @@ from acb_auth import UserContext, get_current_user
 from fastapi import Depends, HTTPException
 from gateway.routes.projects.core import (
     ViewModel,
-    _get_db,
+    _tenant_session,
     actor,
     clean_payload,
     insert_row,
@@ -69,8 +69,7 @@ class PositionsIn(BaseModel):
 async def list_views(
     project_id: str, user: UserContext = Depends(get_current_user),
 ) -> dict:
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         vis = await resolve_visibility(db, user)
         await load_visible_project(db, vis, project_id)
         rows = (await db.execute(
@@ -83,8 +82,6 @@ async def list_views(
         return {
             "rows": [row_to_dict(r, ViewModel) for r in rows], "total": len(rows),
         }
-    finally:
-        await db.close()
 
 
 @router.post("/nodes/{project_id}/views", status_code=201)
@@ -102,8 +99,7 @@ async def create_view(
             status_code=422,
             detail=f"Unknown view type '{view_type}'. One of: {list(VIEW_TYPES)}.",
         )
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         vis = await resolve_visibility(db, user)
         await load_visible_project(db, vis, project_id)
         row = await insert_row(db, "pm_views", {
@@ -115,10 +111,7 @@ async def create_view(
             "position": values.get("position"),
             "created_by": actor(user),
         })
-        await db.commit()
         return row_to_dict(row, ViewModel)
-    finally:
-        await db.close()
 
 
 @router.patch("/views/{view_id}")
@@ -133,8 +126,7 @@ async def patch_view(
             detail=f"Unknown view type '{values['view_type']}'. "
                    f"One of: {list(VIEW_TYPES)}.",
         )
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         existing = await require_row(db, "pm_views", view_id, "View")
         vis = await resolve_visibility(db, user)
         await load_visible_project(db, vis, str(existing.project_id))
@@ -145,10 +137,7 @@ async def patch_view(
         if "config" in values:
             values["config"] = normalise_view_config(values["config"])
         row = await update_row(db, "pm_views", view_id, values)
-        await db.commit()
         return row_to_dict(row, ViewModel)
-    finally:
-        await db.close()
 
 
 @router.delete("/views/{view_id}")
@@ -162,8 +151,7 @@ async def delete_view(
     losing a hand-arranged board silently is exactly the surprise that makes
     people distrust a delete button.
     """
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         existing = await require_row(db, "pm_views", view_id, "View")
         vis = await resolve_visibility(db, user)
         await load_visible_project(db, vis, str(existing.project_id))
@@ -178,10 +166,7 @@ async def delete_view(
             text("DELETE FROM pm_views WHERE id = CAST(:vid AS uuid)"),
             {"vid": view_id},
         )
-        await db.commit()
         return {"deleted": view_id, "cascaded": {"positions": int(positions)}}
-    finally:
-        await db.close()
 
 
 # ── Manual order ────────────────────────────────────────────────────────────
@@ -197,8 +182,7 @@ async def _load_visible_view(db: Any, user: UserContext, view_id: str) -> Any:
 async def get_positions(
     view_id: str, user: UserContext = Depends(get_current_user),
 ) -> dict:
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         await _load_visible_view(db, user, view_id)
         rows = (await db.execute(
             text(
@@ -218,8 +202,6 @@ async def get_positions(
             ],
             "total": len(rows),
         }
-    finally:
-        await db.close()
 
 
 @router.put("/views/{view_id}/positions")
@@ -240,8 +222,7 @@ async def set_positions(
             detail=f"At most {MAX_POSITIONS} positions per request; "
                    f"got {len(payload.positions)}.",
         )
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         await _load_visible_view(db, user, view_id)
         for entry in payload.positions:
             await db.execute(
@@ -259,7 +240,4 @@ async def set_positions(
                     "pos": entry.position, "grp": entry.group_key,
                 },
             )
-        await db.commit()
         return {"view_id": view_id, "written": len(payload.positions)}
-    finally:
-        await db.close()

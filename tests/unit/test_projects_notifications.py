@@ -249,11 +249,16 @@ ACTOR = _user("me@fracktal.in", "feature:projects")
 
 
 def bind(monkeypatch, db: FakeDB, *modules) -> None:
-    async def _get_db():
-        return db
+    # H2: the seam is `_tenant_session`, commit-on-clean-exit.
+    from contextlib import asynccontextmanager
+
+    @asynccontextmanager
+    async def _tenant_session(organization_id=None):
+        yield db
+        await db.commit()
 
     for module in modules or (pm_notify,):
-        monkeypatch.setattr(module, "_get_db", _get_db, raising=False)
+        monkeypatch.setattr(module, "_tenant_session", _tenant_session)
 
 
 # ── Rule 3: nobody hears about a task they cannot open ──────────────────────

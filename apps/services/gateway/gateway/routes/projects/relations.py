@@ -38,7 +38,7 @@ from fastapi import Depends, HTTPException
 from gateway.routes.projects.core import (
     CLOSING_CATEGORIES,
     MAX_DEPTH,
-    _get_db,
+    _tenant_session,
     load_visible_task,
     resolve_visibility,
     router,
@@ -200,8 +200,7 @@ async def get_relations(
     and three round trips to fill one block is three chances to paint a
     half-drawn dependency section.
     """
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         vis = await resolve_visibility(db, user)
         await load_visible_task(db, vis, task_id)
         visible = task_visibility_clause(vis)
@@ -238,8 +237,6 @@ async def get_relations(
             "links": links,
             "blocked_by": blocked_by_open(blockers),
         }
-    finally:
-        await db.close()
 
 
 __all__ = [

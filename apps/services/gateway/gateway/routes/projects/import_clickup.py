@@ -37,7 +37,7 @@ from acb_auth import UserContext, get_current_user, require_permission
 from acb_common import get_logger
 from fastapi import Depends, HTTPException
 from gateway.routes.projects.core import (
-    _get_db,
+    _tenant_session,
     actor,
     insert_row,
     record_activity,
@@ -121,8 +121,7 @@ async def _resolve_provider(account_id: str) -> Any:
     from gateway.routes.tasks.core import _key_store
     from gateway.routes.tasks.providers import build_provider
 
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         row = (await db.execute(
             text(
                 "SELECT provider, workspace_id, credentials_encrypted "
@@ -130,8 +129,6 @@ async def _resolve_provider(account_id: str) -> Any:
             ),
             {"id": account_id},
         )).mappings().first()
-    finally:
-        await db.close()
     if row is None:
         raise HTTPException(status_code=404, detail="Task account not found")
     if row["provider"] != "clickup":
@@ -213,8 +210,7 @@ async def plan_import(
     workspace_id = getattr(provider, "_workspace_id", None)
     facts = await _gather(provider, str(workspace_id))
 
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         centers = await load_centers(db)
         group_members = await load_group_members(db)
         existing = await _existing_mappings(db)
@@ -249,8 +245,6 @@ async def plan_import(
                     else suggestion.as_dict()
                 ),
             })
-    finally:
-        await db.close()
 
     return {
         "account_id": payload.account_id,
@@ -291,8 +285,7 @@ async def import_clickup(
     facts = await _gather(provider, workspace_id)
     chosen = {m.space_id: m.center for m in payload.mappings}
 
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         centers = await load_centers(db)
         unknown = sorted(
             {c for c in chosen.values() if c and c not in centers}
@@ -318,10 +311,7 @@ async def import_clickup(
             # Nothing is committed, and the caller is told so in the response
             # rather than left to infer it from a counts-only payload.
             return {"dry_run": True, **summary.as_dict(facts)}
-        await db.commit()
         return {"dry_run": False, **summary.as_dict(facts)}
-    finally:
-        await db.close()
 
 
 @dataclass

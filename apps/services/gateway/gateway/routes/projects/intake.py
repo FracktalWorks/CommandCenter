@@ -54,7 +54,7 @@ from gateway.routes.projects.core import (
     TRIAGE_CATEGORY,
     Page,
     TaskModel,
-    _get_db,
+    _tenant_session,
     actor,
     apply_status_transition,
     emit,
@@ -259,8 +259,7 @@ async def capture_intake(
         raise HTTPException(status_code=422, detail="A capture needs a project_id.")
 
     source = (payload.source or "").strip() or None
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         vis = await resolve_visibility(db, user)
         # R5 — capturing INTO a project requires seeing it; an unreadable id
         # answers 404, never 403.
@@ -295,10 +294,7 @@ async def capture_intake(
             meta={"intake": "captured", "source": source,
                   "source_ref": getattr(wrapper, "source_ref", None)},
         )
-        await db.commit()
         result = _shape(task, wrapper)
-    finally:
-        await db.close()
 
     await emit("pm.intake.captured", {
         "task_id": result["task"]["id"],
@@ -324,8 +320,7 @@ async def list_intake(
     not open, and a `project_id` the caller cannot see is a 404 (R5) rather
     than an empty queue that confirms the project exists.
     """
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         vis = await resolve_visibility(db, user)
         params: dict[str, Any] = dict(vis.params)
         scope = ""
@@ -362,8 +357,6 @@ async def list_intake(
             }
             out.append(item)
         return {"rows": out, "total": int(total)}
-    finally:
-        await db.close()
 
 
 # ── The four rulings ────────────────────────────────────────────────────────
@@ -380,8 +373,7 @@ async def accept_intake(
     `status_change` activity a board drag would. The wrapper flips to
     `accepted` and stays forever.
     """
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         vis = await resolve_visibility(db, user)
         task = await load_visible_task(db, vis, task_id)
         wrapper = await _load_wrapper(db, task_id)
@@ -413,10 +405,7 @@ async def accept_intake(
             task_id=task_id, body="Accepted from intake",
             meta={"intake": "accepted", "status_id": str(destination.id)},
         )
-        await db.commit()
         result = _shape(moved["row"], wrapper)
-    finally:
-        await db.close()
 
     await emit("pm.intake.accepted", {"task_id": task_id})
     return result
@@ -431,8 +420,7 @@ async def decline_intake(
     Archived, not deleted — the standing soft-delete, so a decline is
     revertible the way any archive is, and the capture's timeline survives.
     """
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         vis = await resolve_visibility(db, user)
         await load_visible_task(db, vis, task_id)
         wrapper = await _load_wrapper(db, task_id)
@@ -447,10 +435,7 @@ async def decline_intake(
             task_id=task_id, body="Declined at intake",
             meta={"intake": "declined"},
         )
-        await db.commit()
         result = _shape(task, wrapper)
-    finally:
-        await db.close()
 
     await emit("pm.intake.declined", {"task_id": task_id})
     return result
@@ -472,8 +457,7 @@ async def duplicate_intake(
         raise HTTPException(
             status_code=422, detail="A task cannot be a duplicate of itself.",
         )
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         vis = await resolve_visibility(db, user)
         await load_visible_task(db, vis, task_id)
         await load_visible_task(db, vis, original)
@@ -490,10 +474,7 @@ async def duplicate_intake(
             task_id=task_id, body="Marked duplicate at intake",
             meta={"intake": "duplicate", "duplicate_of_task_id": original},
         )
-        await db.commit()
         result = _shape(task, wrapper)
-    finally:
-        await db.close()
 
     await emit("pm.intake.duplicate", {
         "task_id": task_id, "duplicate_of_task_id": original,
@@ -518,8 +499,7 @@ async def snooze_intake(
         raise HTTPException(
             status_code=422, detail="'until' must be in the future.",
         )
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         vis = await resolve_visibility(db, user)
         task = await load_visible_task(db, vis, task_id)
         wrapper = await _load_wrapper(db, task_id)
@@ -533,10 +513,7 @@ async def snooze_intake(
             task_id=task_id, body="Snoozed at intake",
             meta={"intake": "snoozed", "until": until.isoformat()},
         )
-        await db.commit()
         result = _shape(task, wrapper)
-    finally:
-        await db.close()
 
     await emit("pm.intake.snoozed", {
         "task_id": task_id, "until": until.isoformat(),

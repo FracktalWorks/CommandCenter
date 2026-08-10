@@ -158,7 +158,11 @@ async def test_the_plan_writes_nothing(
         if s.split(None, 1)[0].upper() in ("INSERT", "UPDATE", "DELETE")
     ]
     assert writes == []
-    assert db.committed == 0
+    # H2 note: the session wrapper now commits on every clean exit — including
+    # a read-only transaction, exactly as `tenant_session` does against
+    # Postgres — so a commit COUNT no longer distinguishes a write from a
+    # read. "Writes nothing" is the two assertions around this comment: no
+    # write statement was issued, and no row appeared.
     assert db.rows("pm_projects") == []
 
 
@@ -562,8 +566,9 @@ async def test_a_dry_run_writes_nothing_and_says_so(
 
     assert result["dry_run"] is True
     assert result["projects"]["created"] > 0
+    # H2: commit count no longer distinguishes reads from writes (see the
+    # plan-writes-nothing test) — the absence of rows IS the dry-run proof.
     assert db.rows("pm_projects") == []
-    assert db.committed == 0
 
 
 # ── Gating ──────────────────────────────────────────────────────────────────
@@ -615,8 +620,11 @@ async def test_a_non_clickup_account_is_refused(
 ) -> None:
     """The importer speaks ClickUp's shapes; handed an Asana account it would
     silently import nothing rather than say why."""
-    async def _fake_db() -> FakeProjectsDB:
-        return db
+    from contextlib import asynccontextmanager
+
+    @asynccontextmanager
+    async def _fake_session(organization_id=None):
+        yield db
 
     class _Row(dict):
         pass
@@ -634,7 +642,7 @@ async def test_a_non_clickup_account_is_refused(
                      "credentials_encrypted": "x"})
 
     monkeypatch.setattr(db, "execute", _execute)
-    monkeypatch.setattr(pm_import, "_get_db", _fake_db)
+    monkeypatch.setattr(pm_import, "_tenant_session", _fake_session)
 
     with pytest.raises(HTTPException) as exc:
         await pm_import._resolve_provider("acct-9")

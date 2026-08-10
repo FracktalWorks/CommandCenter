@@ -51,7 +51,7 @@ from acb_auth import UserContext, get_current_user
 from fastapi import Depends, HTTPException, Query
 from gateway.routes.projects.core import (
     TaskModel,
-    _get_db,
+    _tenant_session,
     load_visible_project,
     resolve_visibility,
     router,
@@ -218,8 +218,7 @@ async def get_calendar(
     """
     window_from, window_to = window_bounds(date_from, date_to)
 
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         vis = await resolve_visibility(db, user)
         clauses: list[str] = [task_visibility_clause(vis)]
         params: dict[str, Any] = dict(vis.params)
@@ -289,8 +288,6 @@ async def get_calendar(
             # has no dependencies" must not be confused with "nobody asked".
             "links": await window_links(db, window_rows) if include_links else [],
         }
-    finally:
-        await db.close()
 
 
 __all__ = [

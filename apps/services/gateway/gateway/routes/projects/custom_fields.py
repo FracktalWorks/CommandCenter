@@ -29,7 +29,7 @@ from typing import Any
 from acb_auth import UserContext, get_current_user
 from fastapi import Depends, HTTPException
 from gateway.routes.projects.core import (
-    _get_db,
+    _tenant_session,
     actor,
     clean_payload,
     load_visible_project,
@@ -366,14 +366,11 @@ async def _count_with_key(db: Any, root: str, key: str) -> int:
 async def list_fields(
     project_id: str, user: UserContext = Depends(get_current_user),
 ) -> dict:
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         vis = await resolve_visibility(db, user)
         root = await _root_for(db, vis, project_id)
         rows = await load_definitions(db, root)
         return {"rows": rows, "total": len(rows)}
-    finally:
-        await db.close()
 
 
 @router.post("/nodes/{project_id}/fields", status_code=201)
@@ -394,8 +391,7 @@ async def create_field(
     key = validate_key(str(values.get("field_key") or slugify_key(name)))
     options = clean_options(field_type, values.get("options"))
 
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         vis = await resolve_visibility(db, user)
         root = await _root_for(db, vis, project_id)
         existing = await load_definitions(db, root)
@@ -428,10 +424,7 @@ async def create_field(
                 "by": actor(user),
             },
         )).fetchone()
-        await db.commit()
         return _definition_row(row)
-    finally:
-        await db.close()
 
 
 @router.patch("/fields/{field_id}")
@@ -465,8 +458,7 @@ async def patch_field(
                    f"One of: {list(FIELD_TYPES)}.",
         )
 
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         existing = await require_row(db, "pm_custom_fields", field_id, "Custom field")
         vis = await resolve_visibility(db, user)
         await load_visible_project(db, vis, str(existing.project_id))
@@ -501,10 +493,7 @@ async def patch_field(
             values["options"] = _json(options)
 
         row = await update_row(db, "pm_custom_fields", field_id, values)
-        await db.commit()
         return _definition_row(row)
-    finally:
-        await db.close()
 
 
 @router.delete("/fields/{field_id}")
@@ -523,8 +512,7 @@ async def delete_field(
     The count is reported (R7/R8), for the same reason ``delete_view`` reports
     its cascade: losing data silently is what makes people distrust a delete.
     """
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         existing = await require_row(db, "pm_custom_fields", field_id, "Custom field")
         vis = await resolve_visibility(db, user)
         await load_visible_project(db, vis, str(existing.project_id))
@@ -541,14 +529,11 @@ async def delete_field(
             text("DELETE FROM pm_custom_fields WHERE id = CAST(:fid AS uuid)"),
             {"fid": field_id},
         )
-        await db.commit()
         return {
             "deleted": field_id,
             "field_key": existing.field_key,
             "cascaded": {"values_cleared": int(cleared)},
         }
-    finally:
-        await db.close()
 
 
 async def _options_in_use(

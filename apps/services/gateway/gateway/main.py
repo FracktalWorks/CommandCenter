@@ -8,6 +8,7 @@ from contextlib import asynccontextmanager
 from acb_auth import (UserContext, UserRole, get_current_user,
                       require_authenticated, require_role)
 from acb_common import configure_logging, get_logger, get_settings
+from acb_common.db import clear_tenant, release_tenant
 from fastapi import BackgroundTasks, Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
@@ -552,6 +553,31 @@ app = FastAPI(
     redoc_url="/redoc" if _docs_enabled else None,
     openapi_url="/openapi.json" if _docs_enabled else None,
 )
+
+# ── Tenant scope (MT-1c / H2) ── every HTTP request runs inside its own tenant
+# scope: opened empty here, filled in by `_with_resolved_access` when the auth
+# dependency resolves the caller's organization, released after the response.
+# Pure ASGI (no BaseHTTPMiddleware) so the downstream app runs in THIS task and
+# the contextvar token round-trips — which is what makes "one request can never
+# inherit another's binding" true on any server task model, not just uvicorn's
+# task-per-request. Jobs and consumers get no scope from this; they bind
+# explicitly or fail closed with TenantUnbound (H4).
+class TenantScopeMiddleware:
+    def __init__(self, asgi_app):  # noqa: ANN001 — ASGI protocol shape
+        self.asgi_app = asgi_app
+
+    async def __call__(self, scope, receive, send):  # noqa: ANN001
+        if scope["type"] != "http":
+            await self.asgi_app(scope, receive, send)
+            return
+        token = clear_tenant()
+        try:
+            await self.asgi_app(scope, receive, send)
+        finally:
+            release_tenant(token)
+
+
+app.add_middleware(TenantScopeMiddleware)
 
 # ── CORS ── allow workbench dev server (port 3001) and production origin
 app.add_middleware(

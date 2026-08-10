@@ -33,7 +33,7 @@ from gateway.routes.projects.core import (
     GrantModel,
     ProjectIn,
     ProjectModel,
-    _get_db,
+    _tenant_session,
     actor,
     assert_no_project_cycle,
     clean_payload,
@@ -152,11 +152,8 @@ async def get_tree(user: UserContext = Depends(get_current_user)) -> dict:
     as a root here — that is not a bug to fix by hiding it, it is the shape of a
     subtree granted to a Center without its parent department.
     """
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         rows = await _visible_projects(db, user)
-    finally:
-        await db.close()
 
     nodes = {str(r.id): {**row_to_dict(r, ProjectModel), "children": []} for r in rows}
     roots: list[dict] = []
@@ -168,11 +165,8 @@ async def get_tree(user: UserContext = Depends(get_current_user)) -> dict:
 
 @router.get("/nodes")
 async def list_nodes(user: UserContext = Depends(get_current_user)) -> dict:
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         rows = await _visible_projects(db, user)
-    finally:
-        await db.close()
     return {"rows": [row_to_dict(r, ProjectModel) for r in rows], "total": len(rows)}
 
 
@@ -180,13 +174,10 @@ async def list_nodes(user: UserContext = Depends(get_current_user)) -> dict:
 async def get_node(
     project_id: str, user: UserContext = Depends(get_current_user),
 ) -> dict:
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         vis = await resolve_visibility(db, user)
         row = await load_visible_project(db, vis, project_id)
         return row_to_dict(row, ProjectModel)
-    finally:
-        await db.close()
 
 
 # ── Writes ──────────────────────────────────────────────────────────────────
@@ -239,8 +230,7 @@ async def create_node(
     values["name"] = name
     values["created_by"] = actor(user)
 
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         vis = await resolve_visibility(db, user)
         parent_id = values.get("parent_project_id")
         if parent_id:
@@ -279,10 +269,7 @@ async def create_node(
             db, activity_type="system", created_by=actor(user),
             project_id=project_id, body=f"Project '{name}' created",
         )
-        await db.commit()
         result = row_to_dict(row, ProjectModel)
-    finally:
-        await db.close()
 
     await emit("pm.project.created", {"project_id": project_id, "name": name})
     return result
@@ -305,8 +292,7 @@ async def patch_node(
             detail="Use POST /projects/nodes/{id}/move to re-parent a project.",
         )
 
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         vis = await resolve_visibility(db, user)
         before = await load_visible_project(db, vis, project_id)
         _refuse_lifecycle_on_child(
@@ -325,10 +311,7 @@ async def patch_node(
                 db, created_by=actor(user), project_id=project_id,
                 changes=changes,
             )
-        await db.commit()
         result = row_to_dict(after, ProjectModel)
-    finally:
-        await db.close()
 
     await emit("pm.project.updated", {"project_id": project_id})
     return result
@@ -346,8 +329,7 @@ async def move_node(
     move that left it stale would leave tasks pointing at another project's
     status rows — visible immediately as lanes that do not exist on the board.
     """
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         vis = await resolve_visibility(db, user)
         await load_visible_project(db, vis, project_id)
         new_parent = payload.parent_project_id
@@ -378,10 +360,7 @@ async def move_node(
             db, activity_type="system", created_by=actor(user),
             project_id=project_id, body="Project moved",
         )
-        await db.commit()
         result = row_to_dict(row, ProjectModel)
-    finally:
-        await db.close()
 
     await emit("pm.project.moved", {"project_id": project_id})
     return result
@@ -397,8 +376,7 @@ async def delete_node(
     and the honest number is unobtainable, which is how a destructive route ends
     up reporting zero.
     """
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         vis = await resolve_visibility(db, user)
         await load_visible_project(db, vis, project_id)
 
@@ -431,9 +409,6 @@ async def delete_node(
             text("DELETE FROM pm_projects WHERE id = CAST(:pid AS uuid)"),
             {"pid": project_id},
         )
-        await db.commit()
-    finally:
-        await db.close()
 
     await emit("pm.project.deleted", {"project_id": project_id})
     return DeleteResponse(
@@ -455,8 +430,7 @@ async def delete_node(
 async def list_grants(
     project_id: str, user: UserContext = Depends(get_current_user),
 ) -> dict:
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         vis = await resolve_visibility(db, user)
         await load_visible_project(db, vis, project_id)
         rows = (await db.execute(
@@ -469,8 +443,6 @@ async def list_grants(
         return {
             "rows": [row_to_dict(r, GrantModel) for r in rows], "total": len(rows),
         }
-    finally:
-        await db.close()
 
 
 @router.post("/nodes/{project_id}/grants", status_code=201)
@@ -486,8 +458,7 @@ async def create_grant(
     fixture INSERT proving nothing about the API.
     """
     subject = validate_grant_subject(payload.subject)
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         vis = await resolve_visibility(db, user)
         await load_visible_project(db, vis, project_id)
         row = (await db.execute(
@@ -503,10 +474,7 @@ async def create_grant(
             db, activity_type="system", created_by=actor(user),
             project_id=project_id, body=f"Granted to {subject}",
         )
-        await db.commit()
         return row_to_dict(row, GrantModel)
-    finally:
-        await db.close()
 
 
 @router.delete("/nodes/{project_id}/grants/{grant_id}")
@@ -514,8 +482,7 @@ async def delete_grant(
     project_id: str, grant_id: str,
     user: UserContext = Depends(get_current_user),
 ) -> dict:
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         vis = await resolve_visibility(db, user)
         await load_visible_project(db, vis, project_id)
         row = (await db.execute(
@@ -532,7 +499,4 @@ async def delete_grant(
             db, activity_type="system", created_by=actor(user),
             project_id=project_id, body=f"Revoked {row.subject}",
         )
-        await db.commit()
         return {"deleted": grant_id, "subject": row.subject}
-    finally:
-        await db.close()

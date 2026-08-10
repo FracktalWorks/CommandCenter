@@ -39,6 +39,7 @@ connection opened inside a third-party library.
 from __future__ import annotations
 
 import ast
+import re
 from functools import cache
 from pathlib import Path
 
@@ -265,6 +266,11 @@ def test_route_packages_resolve_to_the_shared_factory(module_path: str) -> None:
         "_get_session_factory": shared.get_session_factory,
         "get_db": shared.get_db,
         "_get_db": shared.get_db,
+        # H2 (MT-1c): a converted package drops `_get_db` for the tenant-bound
+        # context manager — which must still BE the shared seam, not a wrapper
+        # with its own pool or its own GUC discipline.
+        "tenant_session": shared.tenant_session,
+        "_tenant_session": shared.tenant_session,
     }
     found = [n for n in expected if hasattr(mod, n)]
     assert found, f"{module_path} exposes no DB seam name at all"
@@ -284,3 +290,71 @@ def test_acb_auth_shares_the_pool() -> None:
     from acb_common import db as shared
 
     assert access._get_session_factory is shared.get_session_factory
+
+
+# ── H2 ratchet — get_db() call sites only go DOWN ───────────────────────────
+#
+# `saas_multitenancy_handover.md` H2: every `await get_db()` is a session that
+# will read ZERO rows once the RLS phase-4 policies apply, so the workstream's
+# done-when is "the grep returns 0". Converting 500+ sites takes many PRs;
+# this pair of tests is what stops the number creeping back up in between.
+
+_GET_DB_CALL = re.compile(r"await _?get_db\(\)")
+
+#: Sites that are ALLOWED to stay on the unbound seam, each with the reason.
+#: An entry here is a decision, not a grandfathering — H4 owns retiring them.
+H2_EXEMPT_FILES: dict[str, str] = {
+    "apps/services/gateway/gateway/routes/projects/agent_dispatch.py":
+        "event consumer, not a request handler — H4 threads an explicit "
+        "tenant through the event payload; ambient inheritance is forbidden",
+}
+
+#: The unconverted remainder OUTSIDE routes/projects at the time the Projects
+#: slice landed (2026-08-10). Lower it as packages convert; never raise it.
+H2_BASELINE_ELSEWHERE = 494
+
+
+def _get_db_sites() -> dict[str, int]:
+    out: dict[str, int] = {}
+    for base in ("apps", "packages"):
+        for path in (_REPO / base).rglob("*.py"):
+            n = len(_GET_DB_CALL.findall(path.read_text(encoding="utf-8")))
+            if n:
+                out[str(path.relative_to(_REPO)).replace("\\", "/")] = n
+    return out
+
+
+def test_routes_projects_is_converted_and_stays_converted() -> None:
+    """The Projects package acquires sessions ONLY through `tenant_session`.
+
+    A new `get_db()` here is a handler whose queries will silently return
+    nothing under RLS — the fail-closed symptom H2's runbook warns about.
+    """
+    sites = _get_db_sites()
+    offenders = {
+        f: n for f, n in sites.items()
+        if f.startswith("apps/services/gateway/gateway/routes/projects/")
+        and f not in H2_EXEMPT_FILES
+    }
+    assert offenders == {}, (
+        f"unbound get_db() in converted package: {offenders} — use "
+        f"`async with _tenant_session() as db:` (core.py) instead"
+    )
+
+
+def test_get_db_sites_elsewhere_only_ratchet_down() -> None:
+    total = sum(
+        n for f, n in _get_db_sites().items()
+        if not f.startswith("apps/services/gateway/gateway/routes/projects/")
+    )
+    assert total <= H2_BASELINE_ELSEWHERE, (
+        f"{total} unbound get_db() sites outside routes/projects — above the "
+        f"frozen H2 baseline of {H2_BASELINE_ELSEWHERE}. New code must use "
+        f"tenant_session(); see saas_multitenancy_handover.md H2."
+    )
+    if total < H2_BASELINE_ELSEWHERE:
+        # Progress must be BANKED, or the headroom becomes new-debt budget.
+        assert total > H2_BASELINE_ELSEWHERE - 25, (
+            f"H2 progress: {total} sites remain — lower H2_BASELINE_ELSEWHERE "
+            f"to {total} in this PR to bank it"
+        )

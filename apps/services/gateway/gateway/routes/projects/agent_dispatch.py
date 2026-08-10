@@ -29,7 +29,20 @@ import asyncio
 from typing import Any
 
 from acb_common import get_logger
-from gateway.routes.projects.core import _get_db, record_activity
+
+# ⚠️ H4, DELIBERATELY NOT H2 (`saas_multitenancy_handover.md`): this module is
+# an EVENT CONSUMER, not a request handler — `on_event` fires from
+# `emit_event`'s sink fan-out and `_run_and_record` outlives the request that
+# scheduled it. The runbook's rule for that category is "do not let a job
+# inherit an ambient tenant", so converting these sites to the ambient
+# `tenant_session()` would be exactly the inheritance it forbids. They stay on
+# the unbound `get_db()` until H4 threads an EXPLICIT tenant through the event
+# payload (`tenant_session(org_id)`), and the H2 ratchet in
+# `test_db_engine_seam.py` carries this module as its one named exemption.
+# Sequencing is safe: RLS phase 4 (which would starve these reads) is gated on
+# H2+H4 both being complete.
+from gateway.db import get_db as _get_db
+from gateway.routes.projects.core import record_activity
 from sqlalchemy import text
 
 _log = get_logger("projects.agent_dispatch")

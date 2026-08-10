@@ -27,7 +27,7 @@ from typing import Any
 from acb_auth import UserContext, get_current_user
 from fastapi import Depends
 from gateway.routes.projects.core import (
-    _get_db,
+    _tenant_session,
     actor,
     load_visible_task,
     resolve_visibility,
@@ -106,17 +106,13 @@ async def watch_task(
     accepted a ``watcher`` parameter would let anyone subscribe anyone else to
     a stream of that task's titles.
     """
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         vis = await resolve_visibility(db, user)
         # R5: an invisible task is 404, never 403 — "not yours" and "no such
         # task" must be one answer, or this endpoint becomes an oracle for
         # which ids exist.
         await load_visible_task(db, vis, task_id)
         await ensure_watchers(db, task_id, [actor(user)], by=actor(user))
-        await db.commit()
-    finally:
-        await db.close()
     return {"task_id": task_id, "watching": True}
 
 
@@ -130,8 +126,7 @@ async def unwatch_task(
     assignees, so somebody who holds the work keeps hearing about it. That is
     the contract's own shape, not an oversight.
     """
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         vis = await resolve_visibility(db, user)
         await load_visible_task(db, vis, task_id)
         await db.execute(
@@ -141,9 +136,6 @@ async def unwatch_task(
             ),
             {"tid": task_id, "who": actor(user).lower()},
         )
-        await db.commit()
-    finally:
-        await db.close()
     return {"task_id": task_id, "watching": False}
 
 
@@ -153,13 +145,10 @@ async def list_watchers(
 ) -> dict:
     """Who watches this task, and whether the caller does — one read, so the
     panel's toggle can render without a second round trip."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         vis = await resolve_visibility(db, user)
         await load_visible_task(db, vis, task_id)
         watchers = await watchers_of(db, task_id)
-    finally:
-        await db.close()
     return {
         "watchers": watchers,
         "watching": actor(user).lower() in set(watchers),

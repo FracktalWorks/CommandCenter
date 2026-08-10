@@ -14,6 +14,7 @@
  */
 
 import Icon from "@/components/Icon";
+import { accentForHue } from "@/lib/statusAccent";
 import { type MetaChip, type MetaTone, avatarStack, initials } from "@/lib/taskCard";
 
 const TONE: Record<MetaTone, string> = {
@@ -23,9 +24,21 @@ const TONE: Record<MetaTone, string> = {
   // and a low-contrast monitor.
   danger: "font-medium text-destructive",
   accent: "text-primary",
+  // The step below `danger`. No extra weight — "High" and "Urgent" must not
+  // both shout, or neither does.
+  warning: "text-warning",
 };
 
-/** The wrapping row of chips. Renders nothing at all when there are none. */
+/**
+ * The wrapping row of chips. Renders nothing at all when there are none.
+ *
+ * **Two shapes, one row.** A chip with a `hue` is an identity — a tag — and
+ * draws as a filled pill in the hue the registry stored, byte-identical to the
+ * chip the tag picker and the tag manager draw (`accentForHue(hue).chip` IS
+ * `tags.chipClass(color)`). A chip without one is a measurement and stays
+ * tinted text. Mixing the two is the /tasks card's existing grammar (a context
+ * pill beside plain meta), not a new one.
+ */
 export function TaskMeta({
   chips,
   className = "",
@@ -40,9 +53,20 @@ export function TaskMeta({
         <span
           key={chip.key}
           title={chip.title}
-          className={`inline-flex items-center gap-1 text-[10px] ${TONE[chip.tone]}`}
+          className={
+            chip.hue
+              ? // `max-w-[12ch]` is a SIZE, not a colour — rule 3 forbids
+                // arbitrary colour classes, and a tag named after a customer
+                // would otherwise push the whole row off a 288px card.
+                `inline-flex max-w-[12ch] items-center gap-1 truncate rounded-md px-1.5 py-0.5 text-[10px] ${
+                  accentForHue(chip.hue).chip
+                }`
+              : `inline-flex items-center gap-1 text-[10px] ${TONE[chip.tone]}`
+          }
         >
-          <Icon name={chip.icon} className="h-3 w-3" aria-hidden />
+          {chip.icon ? (
+            <Icon name={chip.icon} className="h-3 w-3 shrink-0" aria-hidden />
+          ) : null}
           {chip.label}
         </span>
       ))}

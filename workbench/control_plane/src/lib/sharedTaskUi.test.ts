@@ -99,6 +99,18 @@ const SEAM: {
     declaration: /export\s+function\s+TaskMeta\b/,
   },
   {
+    /**
+     * S6. `MetaTone` grew a `warning` slot for the Projects priority chip, and
+     * the tempting shortcut was to write `text-warning` at the call site — one
+     * class, no shared edit, and the descriptor stops being a name. This is the
+     * fence: the tone→class table lives in the renderer and nowhere else, so a
+     * second app cannot decide that its warning is amber-600.
+     */
+    what: "the chip tone→class table",
+    home: "components/TaskMeta.tsx",
+    declaration: /(?:^|\n)\s*const\s+TONE\s*:\s*Record<MetaTone/,
+  },
+  {
     what: "the status colour vocabulary",
     home: "lib/statusAccent.ts",
     declaration: /export\s+function\s+(statusAccent|resolveHue)\b/,
@@ -215,6 +227,14 @@ describe("both apps reach the shared modules", () => {
     // and retiring them onto the shared box is a `/tasks` edit that another
     // slice holds open. Add the row in the change that does it.
     ["projects", "components/EmptyState"],
+    // S6 — the chip vocabulary itself, not only its renderer. Each app reaches
+    // it through its own adapter (`projects/lib/card.ts`,
+    // `tasks/lib/cardMeta.ts`); an app that stopped importing it has grown a
+    // second rulebook for which chips a task earns.
+    ["projects", "lib/taskCard"],
+    ["projects", "components/TaskMeta"],
+    ["tasks", "lib/taskCard"],
+    ["tasks", "components/TaskMeta"],
     ["tasks", "lib/cursor"],
     ["tasks", "lib/selection"],
     ["tasks", "components/QuickAdd"],

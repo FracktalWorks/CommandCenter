@@ -24,10 +24,10 @@ import { AvatarStack, TaskMeta } from "@/components/TaskMeta";
 import { useMemo, useState } from "react";
 
 import { accentForGroup, accentForStatus } from "../lib/accent";
-import type { StatusRow, TaskRow } from "../lib/api";
+import type { StatusRow, TagRow, TaskRow } from "../lib/api";
 import { projectsApi } from "../lib/api";
 import { sortForView } from "../lib/board";
-import { taskRef, visibleChips } from "../lib/card";
+import { tagColours, taskRef, visibleChips } from "../lib/card";
 import { clampCursor, stepCursor } from "../lib/cursor";
 import { emptyStateCopy } from "../lib/emptyState";
 import {
@@ -56,6 +56,8 @@ interface Props {
   filters: Filters;
   onClearFilters: () => void;
   statuses: StatusRow[];
+  /** S6 — the project's tag registry, for the colour of a tag chip alone. */
+  tags?: readonly TagRow[];
   /** WS-27y — where a quick-added task is created (the selected node). */
   projectId: string;
   /** WS-27x — the view's shown fields; chips a hidden field earned are not drawn. */
@@ -77,6 +79,7 @@ export function TaskList({
   filters,
   onClearFilters,
   statuses,
+  tags,
   projectId,
   shownFields,
   onCreated,
@@ -103,6 +106,8 @@ export function TaskList({
 
   const statusById = new Map(statuses.map((s) => [s.id, s]));
   const total = groups.reduce((sum, group) => sum + group.tasks.length, 0);
+  // Once per registry, not once per row.
+  const tagHues = useMemo(() => tagColours(tags ?? []), [tags]);
 
   // The cursor's world: rendered order, each id once (a two-owner task is
   // drawn in two sections but is one row to the keyboard, as to WS-27n).
@@ -233,8 +238,9 @@ export function TaskList({
             <th className="px-3 py-2 font-medium">Assignees</th>
             {/* Was "Due", showing a bare locale date. The shared chip row
                 (WS-27s) carries the due date *and* says when it is overdue,
-                what is blocking, and how far a checklist has got — the same
-                strip the board card draws, so the two views describe a task
+                what is blocking, how far a checklist has got, what priority
+                somebody gave it and which tags it wears (S6) — the same strip
+                the board card draws, so the two views describe a task
                 identically. Renamed because it is no longer only the date. */}
             <th className="px-3 py-2 font-medium">Details</th>
           </tr>
@@ -347,7 +353,9 @@ export function TaskList({
                     )}
                   </td>
                   <td className="px-3 py-2 text-muted-foreground">
-                    <TaskMeta chips={visibleChips(task, shownFields)} />
+                    <TaskMeta
+                      chips={visibleChips(task, shownFields, undefined, tagHues)}
+                    />
                   </td>
                 </tr>
               );

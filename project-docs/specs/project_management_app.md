@@ -3,7 +3,8 @@
 > **Product:** CommandCenter · **Feature:** Projects (the People Center's primary work-management
 > module, sliced into every other Center) · **Created:** 2026-08-05 · **Updated: 2026-08-10**
 > (status truth pass + tenancy alignment — R4; **WS-27ag shell/mobile slice built the same
-> day**; **S4 convergence slice built the same day — §11.21**) ·
+> day**; **S4 convergence slice built the same day — §11.21**; **S6 card-pills slice built the
+> same day — §11.23**) ·
 > **Status:** ✅ **WS-27 a–t MERGED AND DEPLOYED** (a b d e f i j k l m n via #390/#393/#394/#398;
 > o–t via **#399**; **u–z via #408**, 2026-08-10) — migrations **146, 147, 150, 152, 155, 156,
 > 160, 161, 164, 165, 166 are applied on prod** (164/165/166 log-verified on the 2026-08-10
@@ -53,6 +54,18 @@
 > input is hidden behind a `<Button>` that lists what is uploading. **Conformance grows a
 > seventh rule** for both. Frontend only — no migration, no API change. ⚠️ Same owed check:
 > no browser runs here, so the phone viewport and the four-theme sweep are for review. ·
+> 🟢 **S6 BUILT 2026-08-10, on branch `ws-s6-projects-card-pills`, NOT merged and NOT
+> deployed** (§11.23) — the board/list card finally draws the facts its own row already
+> carries: a **priority chip** off `importance` and **named, registry-coloured tag pills**
+> instead of a bare count — both of which `DEFAULT_SHOWN` has promised since WS-27x while only
+> the spreadsheet honoured them, so **no shown-fields default moved** — plus `estimate_mins`,
+> which `taskFacts` had silently dropped behind a comment claiming the column did not exist.
+> The shared vocabulary is **extended, not forked**: `MetaTone` gains `warning`, `MetaChip`
+> gains an optional `hue` (a NAME, resolved by `TaskMeta` alone) and `TaskFacts.tagCount`
+> becomes `tags`. Frontend only — no migration, no API change. ✅ **The four-theme × two-mode
+> visual sweep was actually run this time** (Playwright + the pre-installed Chromium, fixtures
+> at the network boundary), which closes the check af/ag/S1/S3/S4/S5 all left owed *for this
+> surface*; one honest finding recorded in §11.23 about Material dark's pale `--warning`. ·
 > **Owner:** vjvarada · **Board row: WS-27**
 >
 > **Tenancy (audited 2026-08-10 — this spec previously cited no tenancy decision at all).**
@@ -2977,6 +2990,86 @@ still use the old lowercase style as sub-labels inside `PROPERTIES`.
 `tests/unit/test_projects_sync.py` and `tests/unit/test_projects_personal_mirror.py`, and
 neither exists — the second is `test_projects_personal.py`. Run with those two corrected,
 379 pass.
+
+### 11.23 S6 — the board/list card draws the facts its own row already carries (built 2026-08-10)
+
+**Owner-reported**, with a screenshot of a `/tasks` card beside a `/projects` one: *"we should
+have the relevant pills to show up in the cards of the projects app."* Frontend only: no
+migration, no API change, no new dependency, and **no change to the shown-fields vocabulary on
+either side of the wire**. Branch `ws-s6-projects-card-pills` — **not merged, not deployed.**
+
+**The job was not to copy the Tasks pills.** Half of what that card carries is GTD-only —
+`@context`, energy, deep-work, the founder priority matrix, the ClickUp source badge — and
+none of it exists on a `pm_tasks` row. What was measured instead is the gap between what the
+Projects card DRAWS and what its own `TaskRow` already HOLDS.
+
+**Before → after**, measured on `main` `0afa05db`:
+
+| Fact | On `TaskRow`? | Before | After |
+|---|---|---|---|
+| `importance` | yes | **drawn nowhere on a card** (Table column only) | a priority chip, gated on `importance` |
+| `tags` | yes | one chip reading `🏷 3` | up to **3 named pills** in the registry's colour, then `🏷 +N` |
+| `estimate_mins` | yes | **dropped** — `taskFacts` never mapped it, and the file's own comment claimed the column did not exist | mapped; chip gated on `estimate` (off by default, unchanged) |
+| `due_at` / overdue | yes | already a chip | unchanged |
+| `subtasks`, `blocked_by_count` | yes | already chips | unchanged |
+| `assignees` | yes | already the shared `AvatarStack` | unchanged |
+| status | yes | already `StatusChip`, off-axis only | unchanged (the rule was already right) |
+
+**`shown_fields` gates all of it, and no default moved.** `importance` and `tags` have been in
+`DEFAULT_SHOWN` since WS-27x — the field picker has been promising Priority and Tags on every
+view while only the spreadsheet honoured them. So the two headline chips required **zero**
+change to `DEFAULT_SHOWN`, `FIELD_KEYS` or the gateway's `filters.SHOWN_FIELDS` mirror: this
+slice makes the card obey a contract that already existed. `estimate` and `start_date` stay
+**off** by default, as WS-27x left them.
+
+**One vocabulary, extended rather than forked** (`AGENTS.md` rules 4 and 7):
+
+* `MetaTone` gains `warning`. A four-level priority scale needs a step between "fine" and "on
+  fire"; only `Urgent` takes `danger`. The tone stays a NAME — `TaskMeta` remains the only
+  file that turns one into a class.
+* `MetaChip` gains an optional `hue?: AccentHue`, meaning *draw me as a filled pill in this
+  hue*. A chip with a hue is an **identity** (which tag); a chip with only a tone is a
+  **measurement** (how late, how blocked). `accentForHue(hue).chip` is byte-identical to
+  `app/projects/lib/tags.chipClass(color)`, so a tag is one colour on the card, in the picker,
+  in the manager and in the filter bar. No second palette, no bespoke pill component.
+* `TaskFacts.tagCount: number` **became** `tags: TagFact[]`. The count was the shape of a fact
+  with the fact removed. `/tasks` never passed `tagCount`, so nothing there changed.
+* Chip keys may now be namespaced `<kind>:<discriminator>` (`tags:ops`). `chipKind()` is the
+  one reader, and the shown-fields gate goes through it — a whole-key lookup would have
+  silenced every tag chip while looking like it worked.
+
+**What was deliberately left off, because a card that shows everything shows nothing.**
+`start_date` (a floating `DATE`; a useful "not started yet" chip needs a day comparison that
+belongs to the app adapter, not to a shared module whose `relativeTime` would move it a day
+west of Greenwich — and it is off by default anyway, so almost nobody would see it). Blocking
+(this task blocks others) — `attach_relation_counts` returns `blocked_by_count` only, so it is
+a gateway ticket, not a card one. Watchers and recurrence — not on `TaskRow` at all. Triage —
+already carried by the status chip. Custom fields — unbounded density on a 288px card; the
+table is where a view's selected fields belong. `source` / `clickup_id` — on `TaskModel` but
+not on the browser's `TaskRow`, and a provenance badge is a different ticket from a work-fact.
+
+**Fences added (R7).** `taskCard.test.ts`: `chipKind` splits on the FIRST colon, tags are named
+not counted, the cap is `MAX_TAG_CHIPS` and the overflow names what it swallowed, the hue comes
+from the stored colour and falls back to gray, and every chip carries an icon **or** a hue.
+`card.test.ts`: unset priority draws nothing while `0` (Low) does, the labels are
+`table.importanceLabel`'s word for word, only the top of the scale escalates, the four glyphs
+are distinct and collide with neither `AlertTriangle` nor `Ban`, the registry colour survives
+case-folding, and **every chip kind `cardChips` can emit — including the spliced priority
+chip, which `taskMeta` never emits — maps onto a key `FIELD_KEYS` actually offers.**
+`sharedTaskUi.test.ts`: a new SEAM row pins the tone→class table to `TaskMeta.tsx`, and four
+new "both apps reach it" rows cover `lib/taskCard` and `components/TaskMeta`.
+
+**Visual check — done, not owed.** This is the first slice in the wave with a browser actually
+driven. `next build` → `next start -p 3457` → Playwright against `/opt/pw-browsers/chromium`,
+with the fixture at the **network boundary** (`page.route` over `/api/projects/*` and
+`/api/auth/me`) so the real `TaskBoard`/`TaskList`/`TaskMeta` render real `TaskRow`s and no
+product code was touched to make it happen. Board and list captured, then the DESIGN_SYSTEM §8
+sweep: RapidTool · Fluent · Material · Graphite × light and dark, plus `/tasks` beside it.
+Every pill repaints with the theme; the tag pills match the filter bar's chips for the same
+tag in every theme. **One honest note:** Material dark's `--warning` is a pale peach
+(`hsl(35 90% 78%)`), so the `High` chip reads faint against `Normal` there — the chevron-up vs
+dash glyph is what carries the distinction, which is why the four levels have four glyphs.
+That is the theme's token doing what it says, not a hardcoded colour.
 
 ## Board record (2026-08-09) — moved from work_plan.md §2
 

@@ -67,6 +67,17 @@ Four rules on top of the three above. Each one exists because it was broken:
    Projects board column rendered the same grey while the Tasks board next door
    was colour-coded. **Do not add a second palette.** If you need a hue a shared
    module does not express, extend the shared module.
+   The **card chip** vocabulary is the same rule one level up: `src/lib/taskCard.ts`
+   decides which chips a task earns and names their tone (`muted` · `danger` ·
+   `accent` · `warning`), and `src/components/TaskMeta.tsx` is the ONLY file that
+   turns a tone into a class. A chip may also carry `hue?: AccentHue` — still a
+   name, resolved through `statusAccent` — which makes it a filled pill instead of
+   tinted text: a hue is an **identity** (which tag), a tone is a **measurement**
+   (how late, how blocked). Chip keys may be namespaced `<kind>:<discriminator>`
+   (`tags:ops`); anything classifying a chip reads `chipKind(key)`, never the whole
+   key. Fences: `sharedTaskUi.test.ts`'s "the chip tone→class table" SEAM row, and
+   `app/projects/lib/card.test.ts`'s assertion that every chip kind `cardChips` can
+   emit maps onto a real `shownFields` key (S6).
 5. **A category and a name must resolve to the same colour.** Some apps know
    what a lane *means* (Projects has `STATUS_CATEGORIES`); some can only read
    what it is *called* (Tasks' stages are user-typed). Those two routes must

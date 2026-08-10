@@ -26,18 +26,67 @@
  *    quietly move that decision into a file with no theme.
  */
 
-/** Which of the app's semantic tones a chip is painted in. */
-export type MetaTone = "muted" | "danger" | "accent";
+import { type AccentHue, resolveHue } from "@/lib/statusAccent";
+
+/**
+ * Which of the app's semantic tones a chip is painted in.
+ *
+ * `warning` arrived with S6's priority chip: a four-level scale needs a step
+ * between "this is fine" and "this is on fire", and `--warning` is the token
+ * every other surface already uses for it (`statusAccent`'s amber, the energy
+ * dot on a /tasks card). Adding it here rather than writing `text-warning` at
+ * the one call site is the whole point of the descriptor — the tone stays a
+ * NAME and `TaskMeta` stays the only file that knows what it looks like.
+ */
+export type MetaTone = "muted" | "danger" | "accent" | "warning";
 
 export interface MetaChip {
-  /** Stable React key, and what a test asserts on. */
+  /**
+   * Stable React key, and what a test asserts on.
+   *
+   * **A key may be namespaced `<kind>:<discriminator>`** when one fact earns
+   * several chips — `tags:ops`, `tags:more`. Everything that classifies a chip
+   * (notably the per-view visibility gate) reads `chipKind(key)`, never the
+   * whole key, or the second tag chip a task grew would fall out of every
+   * lookup silently.
+   */
   key: string;
-  /** A Lucide name for `<Icon name=… />`; the active theme picks the pack. */
-  icon: string;
+  /**
+   * A Lucide name for `<Icon name=… />`; the active theme picks the pack.
+   *
+   * Optional since S6: a `hue` chip is a filled pill whose colour and name ARE
+   * the signal (a tag), and three tag chips each wearing a tag icon is the
+   * noise the density budget exists to prevent.
+   */
+  icon?: string;
   label: string;
   tone: MetaTone;
+  /**
+   * Draw me as a filled pill in this hue, rather than as tinted text.
+   *
+   * A NAME from the shared status vocabulary, never a class — the same rule
+   * `tone` follows, widened from three semantic tones to the six hues a stored
+   * `pm_tags.color` / `pm_task_statuses.color` can carry. A chip with a hue is
+   * an IDENTITY (which tag is this), a chip with only a tone is a MEASUREMENT
+   * (how late, how blocked); that is why they draw as two shapes.
+   */
+  hue?: AccentHue;
   /** Long form, for `title=` — a chip reading "2/5" needs to say what of. */
   title: string;
+}
+
+/** One tag a card wears, with whatever the registry says it looks like. */
+export interface TagFact {
+  name: string;
+  /**
+   * The registry's stored colour name, when the surface has the registry.
+   *
+   * Absent is legitimate rather than exceptional: a cross-project surface
+   * (Projects' My Work) has no single tag registry to read, and `resolveHue`
+   * answers gray for an absent colour — exactly what `tags.chipClass(undefined)`
+   * already draws everywhere else in the app.
+   */
+  color?: string | null;
 }
 
 /** Everything a card can draw, in terms neither app's row type owns. */
@@ -47,10 +96,39 @@ export interface TaskFacts {
   /** WS-27s — filled for every row of the list endpoint. */
   subtasks?: { done: number; total: number } | null;
   blockedByCount?: number | null;
-  tagCount?: number | null;
+  /**
+   * S6 — the tags themselves, not how many there are.
+   *
+   * It was `tagCount: number` and it drew "🏷 3", which is the shape of a fact
+   * without the fact: three tags tells a reader nothing they can act on, while
+   * `bug` `needs-review` is the whole reason the tag exists. The count survives
+   * as the overflow chip once the cap is reached.
+   */
+  tags?: readonly TagFact[] | null;
   attachmentCount?: number | null;
   estimateMins?: number | null;
 }
+
+/**
+ * The kind of a chip key — the part before the first `:`.
+ *
+ * One reader for the namespacing rule above, so the emitter and every
+ * classifier agree by construction. A plain key is its own kind.
+ */
+export function chipKind(key: string): string {
+  const at = key.indexOf(":");
+  return at === -1 ? key : key.slice(0, at);
+}
+
+/**
+ * How many tags a card names before it starts counting.
+ *
+ * Three, matching `avatarStack`'s default: a Projects board card is one of
+ * five columns × N swimlanes, and the fourth tag is not what anybody is
+ * scanning for. Exported so a surface with more room can raise it and a test
+ * can assert the cap rather than a magic number.
+ */
+export const MAX_TAG_CHIPS = 3;
 
 /** Relative "time ago" / "in X" label for a due or created date. */
 export function relativeTime(iso: string | undefined | null, nowMs = Date.now()): string {
@@ -134,6 +212,13 @@ const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
  * **A zero earns no chip.** "0 subtasks", "0 tags" and "0 attachments" are the
  * normal state of most tasks; drawing them turns the meta row into noise and
  * pushes the chips that mean something off the edge.
+ *
+ * **The tags sit where the tag COUNT used to** (after progress, before the
+ * quieter counts) rather than leading the row: they say what a task is about,
+ * which is a slower read than "do not start this" and "this is late". An app
+ * may splice its own chip into this order — `/tasks` does it for its
+ * count-only subtasks, `/projects` for priority — but the shared facts keep
+ * these slots in both apps.
  */
 export function taskMeta(facts: TaskFacts, nowMs = Date.now()): MetaChip[] {
   const chips: MetaChip[] = [];
@@ -175,14 +260,30 @@ export function taskMeta(facts: TaskFacts, nowMs = Date.now()): MetaChip[] {
     });
   }
 
-  const tags = facts.tagCount ?? 0;
-  if (tags > 0) {
+  // Named, in the order the row carries them, coloured by the registry.
+  // Deliberately NOT sorted: a tag list is a small hand-curated set and
+  // re-ordering it would move a chip under the reader's eye between two loads.
+  const tags = facts.tags ?? [];
+  for (const tag of tags.slice(0, MAX_TAG_CHIPS)) {
     chips.push({
-      key: "tags",
-      icon: "Tag",
-      label: String(tags),
+      key: `tags:${tag.name}`,
+      label: tag.name,
       tone: "muted",
-      title: plural(tags, "tag"),
+      hue: resolveHue({ color: tag.color }),
+      title: `Tagged ${tag.name}`,
+    });
+  }
+  const spare = tags.length - MAX_TAG_CHIPS;
+  if (spare > 0) {
+    chips.push({
+      key: "tags:more",
+      icon: "Tag",
+      label: `+${spare}`,
+      tone: "muted",
+      title: `${plural(spare, "more tag")}: ${tags
+        .slice(MAX_TAG_CHIPS)
+        .map((t) => t.name)
+        .join(", ")}`,
     });
   }
 

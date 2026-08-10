@@ -19,6 +19,14 @@
 > six-purpose header splits into a title row and an action row. Frontend only — no migration,
 > no API change. ⚠️ **The phone-viewport and four-theme visual pass is still owed**: no
 > browser was runnable in the build environment (§11.20's closing note). ·
+> 🟢 **S1 BUILT 2026-08-10, on branch, NOT merged and NOT deployed** (§9.2, under WS-27ad) —
+> the /tasks board card and column adopt /projects' chrome under the owner's ruling that
+> *"the Tasks app is only a slice of the Projects app"*: one column shape and surface, one
+> gutter, the shell's `completed` and `atCursor` props finally passed by their /tasks caller,
+> the shared `AvatarStack` instead of a private copy, the selection checkbox moved OUT of the
+> card as a sibling target, and the title clamped to two lines in the shared file — which
+> **amends ad's recorded "modal select-mode is KEPT" decision on the card side**. Frontend
+> only — no migration, no API change. ⚠️ Visual pass still owed for the same reason as af/ag. ·
 > **Owner:** vjvarada · **Board row: WS-27**
 >
 > **Tenancy (audited 2026-08-10 — this spec previously cited no tenancy decision at all).**
@@ -1370,11 +1378,13 @@ shims staying shims, no second name→class palette).
   card-shaped hole in the column). `shown_fields` gating unchanged.
 - **Selection.** `lib/selection.ts` holds `clickSelect` / `range` / `toggle` / `prune` /
   `allSelected`; `stepCursor`'s duplicated sweep now reads it. Projects' page and the Tasks
-  store both drive it, so shift-click and Shift+Arrow behave identically. **Tasks' modal
+  store both drive it, so shift-click and Shift+Arrow behave identically. ~~**Tasks' modal
   select-mode is KEPT**, with the reason in `tasks/components/ItemList.tsx`: `selectMode`
   changes what a *click means*, and a permanent checkbox on a `TaskCard` would take the
-  drag-grip gutter or make one gesture mean two things. The mode is the entry; the grammar
-  inside it converged.
+  drag-grip gutter or make one gesture mean two things.~~ **Struck on the card side by S1
+  below** — the checkbox went *outside* the card instead of into it, so it takes no gutter
+  from the grip and no gesture means two things; the premise that those were the only two
+  options was the error.
 - **Board chrome.** Drop-gap reorder beats append-on-drop and is now
   `components/DropGap.tsx` + `lib/boardDrop.ts` (`gapKey`, `dropIndexFor` — the downward
   intra-group off-by-one, previously buried in `taskStore.reorderItem`), consumed by both
@@ -1396,6 +1406,82 @@ shims staying shims, no second name→class palette).
 the seam test with its reason; `tasks/lib/contextColors.ts` uses raw Tailwind palette
 classes (`sky-500`…) rather than semantic tokens — legal under the conformance suite, off
 the token system, and a Tasks-only axis with no Projects counterpart.
+
+**S1 — board card and column convergence (round 3).** ✅ **BUILT 2026-08-10**, on branch,
+NOT merged. *(Owner ruling, not re-litigated: "the Tasks app is only a slice of the Projects
+app" — **Projects is canonical**; where the two disagree and neither is clearly better,
+Tasks conforms. A GTD-specific need Projects has no equivalent for is a legitimate reason to
+diverge, provided the reason is written next to the code.)* Frontend only, three files:
+`app/tasks/components/{TaskCard,TaskBoard}.tsx` and the shared
+`components/TaskCardShell.tsx`. Nothing in `app/projects/` was edited — the Projects-side
+effect (item 6) travels through the shell.
+
+1. **Column chrome.** `rounded-xl` + `bg-secondary/30` → `rounded-lg border border-border
+   bg-card`, refusal overlay `rounded-lg`, cards spaced by the column's `space-y-1` instead
+   of a per-card `mb-2`. Cards and drop gaps are now siblings, because `space-y-*` only
+   reaches direct children. The drag-over highlight and the accent cap stay.
+2. **Completed treatment.** `TaskCardShell` had accepted `completed` since ad and **nothing
+   under `app/tasks/` had ever passed it**, so a done task was dimmed and struck through on
+   one board and drawn as live work on the other, from one component, with every test green.
+   `completed={Boolean(item.completedAt)}` now reaches both the shell and `TaskCardTitle`.
+3. **Cursor ring.** The board's wrapper `<div className="ring-2 ring-ring">` is gone; the
+   card takes `atCursor` and the shell draws the ring on the card's own radius. `useFlash`'s
+   `attach` moved onto the card element too, so the thing that flashes is the card.
+4. **Avatars.** `TaskCard`'s private `Avatar`/`AvatarStack` are deleted for
+   `components/TaskMeta`'s shared pair, `max={1}` on this app's narrow rows.
+5. **The checkbox.** Out of the card and into a left gutter as a sibling in a `flex
+   items-start gap-1.5` row with `stopPropagation` — /projects' pattern — and **always
+   present**, not mode-gated. `selectMode` no longer changes what a click on a card means;
+   `TaskCard` has no `selectMode` prop at all. The **drag grip is dropped, not relocated**:
+   the whole card is `draggable`, so it was never a handle, only a hint pointing at a spot
+   that is not special; /projects draws none; and the shell's hover lift is the affordance
+   both boards already use. The `pr-5` the grip reserved is gone with it.
+6. **Title truncation** — *the one judgement call, taken in the shared file.* /projects
+   clamped to one line, /tasks wrapped without limit. `TaskCardTitle` now clamps to
+   `line-clamp-2` **for both apps** and strips a caller-supplied `truncate`/`line-clamp-*`
+   rather than merging it, because `white-space: nowrap` and `display: -webkit-box` on one
+   element resolve by CSS source order — invisible in review. Cost: a /tasks next action
+   longer than two lines ends in an ellipsis where it used to wrap in full (the full text is
+   in the focus modal); a /projects card is up to one line taller. `truncate` is still
+   passed at `projects/components/TaskBoard.tsx` and is now a no-op — deleting it is a
+   one-line follow-up for whoever next owns that file.
+
+**Kept, deliberately** (structural, backed by fields `pm_tasks` does not have): the priority
+badge and suggestion badge, the project chip, the `SourceBadge`, the inline `ScheduleButton`,
+`item.nextAction` under the title, and `StatusPill`'s interactivity — though its
+`!selectMode` gate is gone, since that gate only existed because the card *was* the checkbox.
+
+**Fences** (R7). All three are source scans in `src/lib/sharedTaskUi.test.ts`, and the file
+now says why they cannot be render tests: `vitest.config.ts` is `environment: "node"` with
+`include: ["src/**/*.test.ts"]`, so there is no DOM and `.tsx` test files are not collected —
+adding jsdom to fence one prop is a larger change than the thing fenced. (1) *every caller of
+`TaskCardShell` passes `completed` and `atCursor`* — the tag scanner is brace-aware, because
+a lazy regex stops at the `>` of the first arrow function and would pass for the wrong
+reason; (2) *no board re-implements the card cursor ring* (`ring-ring` absent from both
+`TaskBoard.tsx` files, present in the shell); (3) *both boards' columns use the same radius*.
+`AvatarStack` and `TaskCardTitle` joined the `SEAM` table, and `SEAM` rows gained an
+`except` map with a per-file argument plus a staleness check — `components/room/Identity.tsx`
+exports a different `AvatarStack` (room participants, photographs, presence rings, and the
+per-person identity hues conformance deliberately excepts from theming). All scans strip
+comments first: the first run failed on the code comment explaining which class had just
+been *removed*, and a gate a comment can trip teaches people not to comment.
+
+⚠️ **The audit's premise about `rounded-xl` is wrong in this tree, and the fence was written
+to the true rule instead.** `AGENTS.md` rule 6 and `DESIGN_SYSTEM.md` §4 say `rounded-xl` is
+"a fixed 12px that ignores Graphite's 0.125rem" — but `src/app/globals.css` (the `@theme`
+block, ~ll. 217-227) derives the **whole** `--radius-*` scale from `--radius`, and
+`--radius-xl` is literally `var(--radius)`, i.e. the same value `rounded-lg` resolves to.
+`rounded-xl` is therefore fully themed here, and a tree-wide ratchet on it would have
+baselined **274 correctly-themed occurrences across ~70 files**. What was actually wrong is
+narrower and is what shipped: two boards drew one object at two radii on two surfaces. The
+doc claim should be corrected by whoever owns `AGENTS.md`; it is left alone here rather than
+edited from a ticket that owns three component files.
+
+⚠️ **Not verified: how any of this looks.** No browser is runnable here (Playwright cannot
+install), so the Fluent → Material → Graphite sweep and the phone-viewport pass are owed at
+review, exactly as for af and ag. What was checked is `npx tsc --noEmit`, the full
+`npx vitest run`, `npx vitest run src/lib/theme/`, `eslint` on the changed files, and each
+new fence mutation-measured red before being reverted byte-identical.
 
 **WS-27ae — export, delta-sync, small columns.** 🟢 AGENT-SAFE, **not this wave** *(P-26,
 P-27, P-28 rest)*. Filtered-list CSV export on the export-job pattern; a delta-sync list

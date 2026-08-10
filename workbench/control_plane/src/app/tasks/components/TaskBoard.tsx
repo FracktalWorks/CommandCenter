@@ -5,7 +5,7 @@ import { QuickAdd } from "@/components/QuickAdd";
 import { useFlash } from "@/components/useFlash";
 import { gapKey } from "@/lib/boardDrop";
 import { clampCursor, stepCursor } from "@/lib/cursor";
-import { useCallback, useMemo, useState } from "react";
+import { Fragment, useCallback, useMemo, useState } from "react";
 import { GtdItem, ViewKey } from "../lib/types";
 import { useTaskStore } from "../lib/taskStore";
 import { TaskCard } from "./TaskCard";
@@ -73,9 +73,16 @@ export function TaskBoard({
   const updateItem = useTaskStore((s) => s.updateItem);
   const quickAddNext = useTaskStore((s) => s.quickAddNext);
   const openFocus = useTaskStore((s) => s.openFocus);
-  // Multi-select for bulk archive/delete — works right on the board now. While
-  // selecting, cards become selection toggles and drag is suppressed (a checkbox
-  // and a drag handle on the same card would fight each other).
+  // Multi-select for bulk archive/delete — works right on the board.
+  //
+  // S1: a card is no longer a selection toggle. Its checkbox is a permanent
+  // sibling of the card (see `TaskCard`), so clicking a card always opens it and
+  // `selectMode` no longer changes what a click MEANS. What it still does here
+  // is suppress the drag: `lib/dropRules.dropRefusal` treats select mode as a
+  // refusal with its own user-facing copy, so making cards draggable while that
+  // stands would offer a gesture every column then refuses. Un-gating the drag
+  // is a change to `dropRules` and the bulk bar together, not to this file
+  // alone — recorded here rather than half-done.
   const selectMode = useTaskStore((s) => s.selectMode);
   const selectedIds = useTaskStore((s) => s.selectedIds);
   const toggleSelected = useTaskStore((s) => s.toggleSelected);
@@ -285,14 +292,23 @@ export function TaskBoard({
             onDragLeave={() => setOverCol((c) => (c === col.key ? null : c))}
             onDrop={() => dropColumn(col.key)}
             className={[
-              "relative flex h-full w-72 shrink-0 flex-col overflow-hidden rounded-xl border bg-secondary/30",
+              // S1: the column's chrome is /projects' — `rounded-lg border
+              // border-border bg-card`, where this board drew `rounded-xl` on a
+              // `bg-secondary/30` well. Both radii are themed here (globals.css
+              // derives the whole `--radius-*` scale from `--radius`, and
+              // `--radius-xl` IS `--radius`), so this is a convergence, not a
+              // theming fix: two boards side by side drew the same object at two
+              // corner radii on two surfaces. The drop highlight stays —
+              // /projects has no equivalent, and a column that does not react
+              // while a card hovers over it reads as a refusal.
+              "relative flex h-full w-72 shrink-0 flex-col overflow-hidden rounded-lg border bg-card",
               isOver ? "border-primary bg-primary/5" : "border-border",
             ].join(" ")}
           >
             {/* WS-27y backport: the refusal, said on the target while the
                 card hovers — same overlay grammar as the Projects board. */}
             {refusal ? (
-              <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-xl bg-background/85 p-3 text-center text-xs font-medium text-destructive">
+              <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-lg bg-background/85 p-3 text-center text-xs font-medium text-destructive">
                 {refusal}
               </div>
             ) : null}
@@ -317,9 +333,16 @@ export function TaskBoard({
                 {colItems.length}
               </span>
             </div>
-            <div className="flex flex-1 flex-col overflow-y-auto p-2">
+            {/* S1: `space-y-1` on the column, /projects' gutter, rather than a
+                `mb-2` on each card — the gap belongs to the list, and putting
+                it on the child left the drop gaps spaced differently from the
+                cards they sit between. Cards and gaps are siblings here for the
+                same reason they are on /projects: `space-y-*` only reaches
+                direct children, so a card wrapped in a div of its own opts out
+                of the spacing the column just set. */}
+            <div className="flex flex-1 flex-col space-y-1 overflow-y-auto p-2">
               {colItems.map((i, idx) => (
-                <div key={i.id}>
+                <Fragment key={i.id}>
                   {/* drop gap ABOVE this card (manual reorder) */}
                   {manual && (
                     <DropGap
@@ -329,31 +352,26 @@ export function TaskBoard({
                       onDrop={() => dropAtIndex(col.key, idx)}
                     />
                   )}
-                  <div
-                    ref={attach(i.id)}
-                    className={[
-                      "mb-2 rounded-lg",
-                      // The keyboard cursor's ring — same classes the
-                      // Projects board draws on its active card.
-                      cursorAt >= 0 && rows[cursorAt] === i.id
-                        ? "ring-2 ring-ring"
-                        : "",
-                    ].join(" ")}
-                  >
-                    <TaskCard
-                      item={i}
-                      draggable={!selectMode}
-                      selectMode={selectMode}
-                      selected={selectedIds.has(i.id)}
-                      // The column IS the stage here — a per-card status pill
-                      // would just repeat it, so it's off on the board.
-                      showStage={false}
-                      onToggleSelected={(shift) => toggleSelected(i.id, shift, rows)}
-                      onDragStart={() => setDragId(i.id)}
-                      onDragEnd={() => { setDragId(null); setOverCol(null); setDropAt(null); }}
-                    />
-                  </div>
-                </div>
+                  <TaskCard
+                    item={i}
+                    // S1: the cursor ring and the flash target are the CARD's,
+                    // handed to the shared shell through the card. This board
+                    // used to wrap every card in a div and re-draw `ring-2
+                    // ring-ring` on it — a second implementation of a prop the
+                    // shell already had, and the wrapper is what made the ring
+                    // sit a pixel off the card's own radius.
+                    innerRef={attach(i.id)}
+                    atCursor={cursorAt >= 0 && rows[cursorAt] === i.id}
+                    draggable={!selectMode}
+                    selected={selectedIds.has(i.id)}
+                    // The column IS the stage here — a per-card status pill
+                    // would just repeat it, so it's off on the board.
+                    showStage={false}
+                    onToggleSelected={(shift) => toggleSelected(i.id, shift, rows)}
+                    onDragStart={() => setDragId(i.id)}
+                    onDragEnd={() => { setDragId(null); setOverCol(null); setDropAt(null); }}
+                  />
+                </Fragment>
               ))}
               {/* trailing gap → drop at the end */}
               {manual && colItems.length > 0 && (

@@ -1,5 +1,5 @@
 /**
- * Projects · the keyboard cursor (WS-27y).
+ * The keyboard cursor shared by /projects and /tasks (WS-27y, backported).
  *
  * The transitions that decide whether arrow keys feel solid: entry from
  * nowhere, both boundaries, a shift-sweep in each direction, a sweep started

@@ -518,6 +518,15 @@ interface TaskState {
   capture: (title: string, attachments?: import("./types").TaskAttachment[], dates?: import("./api").CaptureDates) => void;
   /** Capture many items at once (mind sweep) — one per non-empty line. */
   captureMany: (text: string) => void;
+  /** Group-context quick-add (WS-27y pattern): create a clarified NEXT action
+   *  directly in a board column / list group, carrying the group's prefill
+   *  (stage / @context / energy / deep-work) so it LANDS there — unlike
+   *  `capture`, which always files into the Inbox. Returns the optimistic id
+   *  (for the landing flash), or null for a blank title. */
+  quickAddNext: (
+    title: string,
+    prefill: import("./quickAdd").QuickAddPrefill,
+  ) => string | null;
   /** Undo the most recent capture batch (only items still in the inbox). */
   undoLastCapture: () => void;
   /** Clarify an inbox item — apply the GTD decision and advance to the next. */
@@ -958,6 +967,57 @@ export const useTaskStore = create<TaskState>((set, get) => ({
         ),
       );
     }
+  },
+
+  quickAddNext: (title, prefill) => {
+    const t = title.trim();
+    if (!t) return null;
+    const now = new Date().toISOString();
+    // The board's own rule (see updateItem): filing into the LAST configured
+    // stage means the task is DONE — a quick-add into the Done column is a
+    // log entry, not a to-do.
+    const stages = get().settings.workflowStages;
+    const done =
+      prefill.workflowStage !== undefined &&
+      stages.length > 0 &&
+      prefill.workflowStage === stages[stages.length - 1];
+    const item: GtdItem = {
+      ...makeCaptureItem(t),
+      // Born clarified: the group the add sits in already answered "what is
+      // this?" — it is a next action ON that stage/context/energy, and the
+      // title IS the next physical step.
+      disposition: done ? "DONE" : "NEXT",
+      nextAction: t,
+      clarifiedAt: now,
+      ...(done ? { completedAt: now } : {}),
+      ...prefill,
+    };
+    set((s) => ({ items: [item, ...s.items] }));
+    if (get().backend === "live") {
+      sync(
+        // Create + clarify as capture-then-patch: /items has no "born NEXT"
+        // shape, and this is the same two-step Clarify itself rides.
+        apiCapture(t).then(async (server) => {
+          const body: Parameters<typeof apiPatchItem>[1] = {
+            disposition: item.disposition,
+            next_action: t,
+          };
+          if (prefill.workflowStage !== undefined)
+            body.workflow_stage = prefill.workflowStage;
+          if (prefill.context !== undefined) body.context = prefill.context;
+          if (prefill.energy !== undefined) body.energy = prefill.energy;
+          if (prefill.deepWork !== undefined) body.deep_work = prefill.deepWork;
+          // If the clarify PATCH fails the capture still exists — keep the
+          // server row (it will show in the Inbox, which is honest) rather
+          // than inviting a duplicate-creating retry.
+          const final = await apiPatchItem(server.id, body).catch(() => server);
+          set((s) => ({
+            items: s.items.map((i) => (i.id === item.id ? final : i)),
+          }));
+        }),
+      );
+    }
+    return item.id;
   },
 
   undoLastCapture: () => {

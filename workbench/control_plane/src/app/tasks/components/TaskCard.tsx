@@ -1,11 +1,13 @@
 "use client";
 
 import Icon, { themedIcon } from "@/components/Icon";
+import { TaskMeta } from "@/components/TaskMeta";
 import { useState } from "react";
 import { GtdItem } from "../lib/types";
+import { gtdMetaChips } from "../lib/cardMeta";
 import { useTaskStore } from "../lib/taskStore";
 import { useCardActions } from "../lib/useCardActions";
-import { durationLabel, initials, isOverdue, relativeTime } from "../lib/utils";
+import { initials } from "../lib/utils";
 import { contextAccent } from "../lib/contextColors";
 import { SourceBadge } from "./SourceBadge";
 import { PriorityBadge, SuggestionBadge } from "./PriorityControls";
@@ -64,8 +66,6 @@ export function TaskCard({
   const project = item.projectId
     ? projects.find((p) => p.id === item.projectId)
     : undefined;
-  const overdue = isOverdue(item);
-  const atts = item.attachments?.length ?? 0;
   // Owners beyond the primary (shown as a "+N" on the avatar).
   const extraAssignees = Math.max(0, (item.assignees?.length ?? 0) - 1);
 
@@ -148,38 +148,13 @@ export function TaskCard({
           {item.energy}
         </span>
       )}
-      {item.timeEstimateMins ? (
-        <span className="inline-flex items-center gap-1 text-[10px] text-muted-foreground">
-          <Icon name="Zap" className="h-3 w-3" />
-          {durationLabel(item.timeEstimateMins)}
-        </span>
-      ) : null}
-      {item.dueAt && (
-        <span
-          className={[
-            "inline-flex items-center gap-1 text-[10px]",
-            overdue ? "font-medium text-destructive" : "text-muted-foreground",
-          ].join(" ")}
-        >
-          {overdue ? <Icon name="AlertTriangle" className="h-3 w-3" /> : <Icon name="Clock" className="h-3 w-3" />}
-          {relativeTime(item.dueAt)}
-        </span>
-      )}
-      {atts > 0 && (
-        <span className="inline-flex items-center gap-0.5 text-[10px] text-muted-foreground">
-          <Icon name="Paperclip" className="h-3 w-3" />
-          {atts}
-        </span>
-      )}
-      {item.subtaskCount ? (
-        <span
-          className="inline-flex items-center gap-0.5 text-[10px] text-muted-foreground"
-          title={`${item.subtaskCount} subtask${item.subtaskCount === 1 ? "" : "s"}`}
-        >
-          <Icon name="ListTree" className="h-3 w-3" />
-          {item.subtaskCount}
-        </span>
-      ) : null}
+      {/* The shared facts — due/overdue, subtasks, attachments, estimate — in
+          the shared chip vocabulary (WS-27s): `gtdMetaChips` adapts GtdItem to
+          `taskMeta`'s descriptors and the one `TaskMeta` renderer draws them,
+          so a task reads identically here and on /projects. The GTD-only
+          badges around it (context, deep, energy, source, priority) stay —
+          one grammar for the shared facts, not an erased identity. */}
+      <TaskMeta chips={gtdMetaChips(item)} className="min-w-0 max-w-full" />
       {item.origin?.kind === "email" && (
         <span
           className="inline-flex items-center gap-1 text-[10px] text-muted-foreground"

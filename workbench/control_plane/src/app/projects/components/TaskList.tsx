@@ -17,6 +17,7 @@
  * value (`lib/quickAdd.ts` owns that mapping), and an arrow-key cursor walks
  * the rows — Shift extends the WS-27n selection, Enter opens the panel.
  */
+import Icon from "@/components/Icon";
 import { AvatarStack, TaskMeta } from "@/components/TaskMeta";
 import { useMemo, useState } from "react";
 
@@ -68,6 +69,16 @@ export function TaskList({
   const [cursor, setCursor] = useState(-1);
   const [anchor, setAnchor] = useState<number | null>(null);
   const { flash, attach, scrollTo } = useFlash();
+  // Group sections collapse, /tasks-style (TaskListGrouped's grammar): a
+  // chevron on the header, local state, the header row itself stays put.
+  const [folded, setFolded] = useState<Set<string>>(new Set());
+  const toggleFold = (key: string) =>
+    setFolded((current) => {
+      const next = new Set(current);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
 
   const statusById = new Map(statuses.map((s) => [s.id, s]));
   const total = groups.reduce((sum, group) => sum + group.tasks.length, 0);
@@ -84,14 +95,18 @@ export function TaskList({
   const rows = useMemo(() => {
     const seen = new Set<string>();
     const out: string[] = [];
-    for (const group of sections)
+    for (const group of sections) {
+      // A folded section's rows are off-screen, so the cursor skips them —
+      // same rule the board applies to a collapsed lane.
+      if (folded.has(group.key)) continue;
       for (const task of group.tasks)
         if (!seen.has(task.id)) {
           seen.add(task.id);
           out.push(task.id);
         }
+    }
     return out;
-  }, [sections]);
+  }, [sections, folded]);
   const taskById = useMemo(() => {
     const map = new Map<string, TaskRow>();
     for (const group of sections) for (const task of group.tasks) map.set(task.id, task);
@@ -190,7 +205,9 @@ export function TaskList({
         {/* An empty status lane is kept on the board so a missing column reads
             as a missing state; a list has no columns, so an empty section is
             just a heading with nothing under it — `sections` dropped it. */}
-        {sections.map((group) => (
+        {sections.map((group) => {
+          const isFolded = groupBy !== "none" && folded.has(group.key);
+          return (
           <tbody key={group.key}>
             {groupBy === "none" ? null : (
               <tr className="bg-muted">
@@ -198,14 +215,30 @@ export function TaskList({
                   colSpan={columnCount}
                   className="px-3 py-1.5 text-left text-xs font-medium text-foreground"
                 >
-                  {group.label}
-                  <span className="ml-2 font-normal text-muted-foreground">
-                    {group.tasks.length}
-                  </span>
+                  {/* The /tasks group-header grammar (TaskListGrouped):
+                      chevron to collapse, label, then the count as a pill —
+                      so the two apps' grouped lists read identically. */}
+                  <button
+                    type="button"
+                    onClick={() => toggleFold(group.key)}
+                    aria-expanded={!isFolded}
+                    className="flex min-w-0 items-center gap-2 text-left"
+                  >
+                    <Icon
+                      name="ChevronRight"
+                      className={`h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform ${
+                        isFolded ? "" : "rotate-90"
+                      }`}
+                    />
+                    <span className="truncate">{group.label}</span>
+                    <span className="shrink-0 rounded-full bg-background/60 px-1.5 py-0.5 text-[10px] font-semibold text-muted-foreground">
+                      {group.tasks.length}
+                    </span>
+                  </button>
                 </th>
               </tr>
             )}
-            {group.tasks.map((task) => {
+            {isFolded ? null : group.tasks.map((task) => {
               const status = statusById.get(task.status_id);
               const atCursor = cursorAt >= 0 && rows[cursorAt] === task.id;
               return (
@@ -260,20 +293,24 @@ export function TaskList({
               );
             })}
             {/* WS-27y — the group's own capture box: a task added here lands
-                in THIS group, pre-filled by `quickAddPrefill`. */}
-            <tr>
-              <td colSpan={columnCount} className="px-3 py-1">
-                <QuickAdd
-                  label={
-                    groupBy === "none" ? "Add a task" : `Add to ${group.label}`
-                  }
-                  onAdd={(title) => quickAdd(title, group.key)}
-                  className="max-w-md"
-                />
-              </td>
-            </tr>
+                in THIS group, pre-filled by `quickAddPrefill`. Folded away
+                with the rows, exactly as /tasks folds its sections. */}
+            {isFolded ? null : (
+              <tr>
+                <td colSpan={columnCount} className="px-3 py-1">
+                  <QuickAdd
+                    label={
+                      groupBy === "none" ? "Add a task" : `Add to ${group.label}`
+                    }
+                    onAdd={(title) => quickAdd(title, group.key)}
+                    className="max-w-md"
+                  />
+                </td>
+              </tr>
+            )}
           </tbody>
-        ))}
+          );
+        })}
       </table>
     </div>
   );

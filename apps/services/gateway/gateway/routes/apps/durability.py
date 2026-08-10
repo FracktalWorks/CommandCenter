@@ -27,8 +27,8 @@ from gateway.routes.apps._common import (
     MAX_WORKSPACE_FILES,
     WORKSPACE_SKIP_DIRS,
     _field,
-    _get_db,
     _log,
+    _tenant_session,
     _uid,
     app_workspace,
     get_app_or_404,
@@ -151,7 +151,9 @@ _UPSERT_SQL = text(
 async def sync_workspace_to_store(db: Any, row: Any) -> int:
     """Mirror the workspace into ``app_files``: upsert changed files (the sha
     skips untouched ones), delete rows whose path is gone from disk. Returns
-    the number of files now in the store. Commits on *db*."""
+    the number of files now in the store. Does NOT commit — every caller
+    hands in a ``_tenant_session`` block, whose wrapper commits on clean exit
+    (H2: a mid-block commit would end the transaction and drop the GUC)."""
     app_id = str(_field(row, "id"))
     disk = await asyncio.get_event_loop().run_in_executor(
         None, _read_workspace_files, app_workspace(row),
@@ -173,20 +175,18 @@ async def sync_workspace_to_store(db: Any, row: Any) -> int:
             text("DELETE FROM app_files WHERE app_id = :app_id AND path = :path"),
             {"app_id": app_id, "path": rel},
         )
-    await db.commit()
     return len(disk)
 
 
 async def sync_workspace_best_effort(row: Any) -> int | None:
     """``sync_workspace_to_store`` on its own session — never raises. The
     scaffold/publish write-throughs ride this so a mirror hiccup can't fail
-    the user-visible operation."""
+    the user-visible operation. Awaited only on request paths, so the
+    ambient tenant is bound; a call outside one fails closed (and lands in
+    this except-all as a logged warning, keeping the best-effort contract)."""
     try:
-        db = await _get_db()
-        try:
+        async with _tenant_session() as db:
             return await sync_workspace_to_store(db, row)
-        finally:
-            await db.close()
     except Exception as exc:
         _log.warning(
             "apps.store_sync_failed",
@@ -199,15 +199,11 @@ async def mirror_app_file(app_id: str, path: str, content: str) -> None:
     """Best-effort single-file upsert (own session, never raises) — the PUT
     write path's cheap write-through; full reconciliation stays with sync."""
     try:
-        db = await _get_db()
-        try:
+        async with _tenant_session() as db:
             await db.execute(_UPSERT_SQL, {
                 "app_id": app_id, "path": path,
                 "content": content, "sha256": _sha256(content),
             })
-            await db.commit()
-        finally:
-            await db.close()
     except Exception as exc:
         _log.warning(
             "apps.file_mirror_failed",
@@ -394,12 +390,9 @@ async def sync_app(
     user: UserContext = Depends(require_app_user),
 ) -> dict[str, Any]:
     """Mirror the draft into ``app_files`` + drop a git checkpoint."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         row, _grants = await get_app_or_404(db, slug, user, edit=True)
         files = await sync_workspace_to_store(db, row)
-    finally:
-        await db.close()
     checkpoint = await asyncio.get_event_loop().run_in_executor(
         None, git_checkpoint, app_workspace(row), "checkpoint",
     )
@@ -416,12 +409,9 @@ async def list_app_checkpoints(
     user: UserContext = Depends(require_app_user),
 ) -> dict[str, list[dict[str, Any]]]:
     """The draft's checkpoint history (empty when git is unusable)."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         row, _grants = await get_app_or_404(db, slug, user, edit=True)
         workspace = await ensure_workspace(db, row)
-    finally:
-        await db.close()
     checkpoints = await asyncio.get_event_loop().run_in_executor(
         None, list_checkpoints, workspace,
     )
@@ -440,8 +430,7 @@ async def restore_app_checkpoint(
         raise HTTPException(
             status_code=422, detail="sha must be 7-40 hex characters",
         )
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         row, _grants = await get_app_or_404(db, slug, user, edit=True)
         workspace = await ensure_workspace(db, row)
         new_sha = await asyncio.get_event_loop().run_in_executor(
@@ -452,8 +441,6 @@ async def restore_app_checkpoint(
                 status_code=409, detail="Checkpoint restore failed",
             )
         await sync_workspace_to_store(db, row)
-    finally:
-        await db.close()
     await record_app_audit(
         app_id=str(row.id), user_email=_uid(user), kind="storage",
         detail={"op": "restore", "from": sha, "checkpoint": new_sha},

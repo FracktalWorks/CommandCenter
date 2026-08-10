@@ -330,6 +330,7 @@ H2_WHATSAPP_EXEMPT_SITES: dict[str, int] = {
 
 #: The unconverted remainder OUTSIDE routes/projects at the time the Projects
 #: slice landed (2026-08-10). Lower it as packages convert; never raise it.
+<<<<<<< HEAD
 #: 494 → 433: routes/notes converted (61 handler sites → `_tenant_session`;
 #: 33 remain there — background pipeline/poller/copilot-task sites and the
 #: meeting-bot worker's service-identity paths, each marked `# H4` in place).
@@ -345,7 +346,31 @@ H2_WHATSAPP_EXEMPT_SITES: dict[str, int] = {
 #: 224 → 198: routes/workflows' 26 member-facing sites (2026-08-10); its
 #: 17 leftovers are the engine/scheduler/dual-use run lifecycle (C) and
 #: the hook-token trigger route (B), each marked in place.
-H2_BASELINE_ELSEWHERE = 198
+#: 198 → 166: routes/apps' 32 member-facing sites (2026-08-10); its 6
+#: leftovers are pinned by H2_APPS_EXEMPT_SITES below.
+H2_BASELINE_ELSEWHERE = 166
+
+#: routes/apps (H2 slice, 2026-08-10): the sites that STAY on the unbound
+#: seam, as file → exact remaining count. Counts rather than whole files
+#: because ``tools.py`` is mixed — its request handlers are converted while
+#: its broker-invoked ``_apply_publish_review`` stays. Each entry is a
+#: decision, not a grandfathering — H4 owns retiring them, and each site's
+#: own ``H4`` comment names the reason and the tenant source (the app row's
+#: organization):
+#:
+#:   * ``actions.py`` (4) — ``execute_app_action`` + its ``_run_storage_*``
+#:     helpers are dual-audience: the HTTP route AND the orchestrator's
+#:     in-process agent tools (``orchestrator/app_tools.py``), which run with
+#:     no request and no bound tenant.
+#:   * ``_common.py`` (1) — ``record_app_audit``, reached from that same
+#:     agent path; converting it would silently drop agent-action audit rows.
+#:   * ``tools.py`` (1) — ``_apply_publish_review``, an Action Broker
+#:     handler that runs when an admin approves a queued proposal.
+H2_APPS_EXEMPT_SITES: dict[str, int] = {
+    "apps/services/gateway/gateway/routes/apps/_common.py": 1,
+    "apps/services/gateway/gateway/routes/apps/actions.py": 4,
+    "apps/services/gateway/gateway/routes/apps/tools.py": 1,
+}
 
 
 def _get_db_sites() -> dict[str, int]:
@@ -394,6 +419,26 @@ def test_routes_whatsapp_holds_at_its_named_remainder() -> None:
         f"{H2_WHATSAPP_EXEMPT_SITES}\nA NEW site must use `async with "
         "_tenant_session() as db:` (core.py); a RETIRED site must leave "
         "H2_WHATSAPP_EXEMPT_SITES in this test."
+    )
+
+
+def test_routes_apps_is_converted_and_stays_converted() -> None:
+    """The Custom Apps package acquires sessions through `tenant_session`,
+    except the named H4 sites — pinned by EXACT count, both directions.
+
+    A count above an entry (or a new file) is a handler whose queries will
+    silently return nothing under RLS; a count below it is banked progress
+    that must lower the entry, or the headroom becomes new-debt budget.
+    """
+    sites = {
+        f: n for f, n in _get_db_sites().items()
+        if f.startswith("apps/services/gateway/gateway/routes/apps/")
+    }
+    assert sites == H2_APPS_EXEMPT_SITES, (
+        f"routes/apps unbound get_db() sites {sites} != the named exemptions "
+        f"{H2_APPS_EXEMPT_SITES} — new sites must use "
+        f"`async with _tenant_session() as db:` (_common.py); a retired "
+        f"exemption must shrink H2_APPS_EXEMPT_SITES in this test"
     )
 
 

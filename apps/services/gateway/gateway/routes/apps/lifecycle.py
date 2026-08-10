@@ -18,8 +18,8 @@ from typing import Any
 from acb_auth import UserContext
 from fastapi import Depends, HTTPException
 from gateway.routes.apps._common import (
-    _get_db,
     _log,
+    _tenant_session,
     _uid,
     app_workspace,
     apps_root,
@@ -291,8 +291,7 @@ async def list_apps(
     user: UserContext = Depends(require_app_user),
 ) -> list[AppSummary]:
     """Every app the caller can see, newest-updated first."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         rows = (await db.execute(
             text("SELECT * FROM apps ORDER BY updated_at DESC"),
         )).fetchall()
@@ -316,8 +315,6 @@ async def list_apps(
                    GROUP BY app_id"""
             ),
         )).fetchall()
-    finally:
-        await db.close()
     by_app: dict[str, list[tuple[str, str]]] = {}
     for g in grant_rows:
         by_app.setdefault(str(g.app_id), []).append((g.subject, g.role))
@@ -347,8 +344,7 @@ async def create_app(
     if not name:
         raise HTTPException(status_code=422, detail="Name is required")
     owner = _uid(user)
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         taken = {
             r.slug for r in (await db.execute(
                 text("SELECT slug FROM apps"),
@@ -381,9 +377,6 @@ async def create_app(
                 "workspace_path": str(workspace),
             },
         )).fetchone()
-        await db.commit()
-    finally:
-        await db.close()
     # Durability: mirror the fresh scaffold into app_files right away so a
     # brand-new draft survives a disk loss (best-effort, never fails create).
     await sync_workspace_best_effort(row)
@@ -409,8 +402,7 @@ async def fork_app(
     no publish history of its own).
     """
     owner = _uid(user)
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         source_row, _source_grants = await get_app_or_404(db, slug, user)
         source_workspace = await ensure_workspace(db, source_row)
         files = await asyncio.get_event_loop().run_in_executor(
@@ -456,9 +448,6 @@ async def fork_app(
                 "workspace_path": str(new_workspace),
             },
         )).fetchone()
-        await db.commit()
-    finally:
-        await db.close()
     await sync_workspace_best_effort(row)
     _log.info("apps.forked", source_slug=slug, slug=new_slug, owner=owner)
     publish_app_activity(new_slug, user=owner, action="created")
@@ -474,8 +463,7 @@ async def get_app(
     (RFC §4.8), which is why this is the only caller of ``_to_detail`` that
     passes them: create/patch/list never need the extra queries.
     """
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         row, grants = await get_app_or_404(db, slug, user)
         needs_consent: bool | None = None
         live_scopes: list[str] | None = None
@@ -503,8 +491,6 @@ async def get_app(
                         consent_row.consented_scope_hash if consent_row else None
                     ) or ""
                     needs_consent = consented_hash != live_scope_set_hash
-    finally:
-        await db.close()
     return _to_detail(
         row, user, grants,
         needs_consent=needs_consent,
@@ -524,8 +510,7 @@ async def patch_app(
         raise HTTPException(status_code=422, detail="Invalid visibility")
     if "name" in fields and not str(fields["name"]).strip():
         raise HTTPException(status_code=422, detail="Name cannot be empty")
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         row, grants = await get_app_or_404(db, slug, user, edit=True)
         if fields:
             sets = ", ".join(f"{k} = :{k}" for k in fields)
@@ -536,12 +521,11 @@ async def patch_app(
                 ),
                 {**fields, "id": str(row.id)},
             )
-            await db.commit()
+        # Re-read inside the SAME transaction (H2: the wrapper owns the one
+        # commit, on clean exit) — the UPDATE above is visible to it.
         row = (await db.execute(
             text("SELECT * FROM apps WHERE id = :id"), {"id": str(row.id)},
         )).fetchone()
-    finally:
-        await db.close()
     manifest_fields = {
         k: v for k, v in fields.items()
         if k in ("name", "icon", "description")
@@ -560,8 +544,7 @@ async def delete_app(
 ) -> dict[str, Any]:
     """Soft-archive (edit-gated); a second delete by the OWNER of an already
     archived app removes the row (cascades) and its workspace folder."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         row, _grants = await get_app_or_404(db, slug, user, edit=True)
         if row.status != "archived":
             await db.execute(
@@ -571,7 +554,7 @@ async def delete_app(
                 ),
                 {"id": str(row.id)},
             )
-            await db.commit()
+            # Early return is a clean exit — the wrapper commits the UPDATE.
             return {"slug": slug, "status": "archived"}
         if row.owner_email != user.email:
             raise HTTPException(
@@ -580,9 +563,6 @@ async def delete_app(
         await db.execute(
             text("DELETE FROM apps WHERE id = :id"), {"id": str(row.id)},
         )
-        await db.commit()
-    finally:
-        await db.close()
     # Remove the workspace folder — but only when it's really under apps_root
     # (a corrupt workspace_path must never delete arbitrary directories).
     workspace = app_workspace(row).resolve()

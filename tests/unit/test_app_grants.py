@@ -8,9 +8,17 @@ Route-level tests call the async route functions directly with fake,
 in-memory DB sessions (mirrors ``tests/unit/test_app_tools.py``'s
 convention: no TestClient, no live Postgres — DB-touching seams are
 monkeypatched so every test stays hermetic and fast).
+
+H2 note: the handlers' seam is the package's ``_tenant_session`` alias
+(``acb_common.db.tenant_session``), swapped in via an ``asynccontextmanager``
+that commits on clean exit — so one-transaction contracts stay observable —
+while ``_common._get_db`` (``record_app_audit``'s H4-deferred seam) keeps its
+plain-coroutine patch.
 """
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from typing import Any
 
@@ -168,8 +176,12 @@ def _patch_grants(
     row = row or _row()
     db = fake_db if fake_db is not None else _FakeGrantsDB()
 
-    async def _get_db() -> _FakeGrantsDB:
-        return db
+    @asynccontextmanager
+    async def _tenant_session() -> AsyncIterator[_FakeGrantsDB]:
+        # Commit-on-clean-exit, like the real wrapper — a handler that raises
+        # mid-block commits nothing here just as against Postgres.
+        yield db
+        await db.commit()
 
     async def _get_app_or_404(
         _db: Any, _slug: str, _user: UserContext, edit: bool = False,
@@ -179,7 +191,7 @@ def _patch_grants(
     async def _common_get_db() -> _FakeGrantsDB:
         return _FakeGrantsDB()  # keeps record_app_audit best-effort + DB-free
 
-    monkeypatch.setattr(grants, "_get_db", _get_db)
+    monkeypatch.setattr(grants, "_tenant_session", _tenant_session)
     monkeypatch.setattr(grants, "get_app_or_404", _get_app_or_404)
     monkeypatch.setattr(_common, "_get_db", _common_get_db)
     return row, db
@@ -353,6 +365,9 @@ class _LifecycleFakeDB:
             return _Result(one=self.consent_row)
         return _Result()
 
+    async def commit(self) -> None:
+        pass
+
     async def close(self) -> None:
         pass
 
@@ -373,13 +388,15 @@ def _patch_lifecycle_get_app(
     monkeypatch: pytest.MonkeyPatch, *, row: Any, caller_grants: list,
     db: _LifecycleFakeDB,
 ) -> None:
-    async def _get_db() -> _LifecycleFakeDB:
-        return db
+    @asynccontextmanager
+    async def _tenant_session() -> AsyncIterator[_LifecycleFakeDB]:
+        yield db
+        await db.commit()
 
     async def _get_app_or_404(_db: Any, _slug: str, _user: UserContext) -> Any:
         return row, caller_grants
 
-    monkeypatch.setattr(lifecycle, "_get_db", _get_db)
+    monkeypatch.setattr(lifecycle, "_tenant_session", _tenant_session)
     monkeypatch.setattr(lifecycle, "get_app_or_404", _get_app_or_404)
 
 

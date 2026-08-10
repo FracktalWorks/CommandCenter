@@ -56,6 +56,7 @@ from fastapi.responses import JSONResponse
 from gateway.routes.apps._common import (
     _get_db,
     _log,
+    _tenant_session,
     _uid,
     get_app_or_404,
     manifest_scopes,
@@ -221,6 +222,17 @@ async def _apply_publish_review(proposal: ActionProposal) -> dict[str, Any]:
     commit — mirrors ``record_app_audit``'s use-and-close shape, on the same
     async engine as the rest of this package (``_common._get_db``).
 
+    ⚠️ H4, DELIBERATELY NOT H2 (`saas_multitenancy_handover.md`): this is a
+    BROKER-invoked action handler, not a request handler — it runs whenever
+    the ``app.publish_review`` proposal is approved, which can be minutes
+    after (and structurally outside) the publishing request, from the generic
+    approvals surface. The runbook's rule for that category is "do not let a
+    job inherit an ambient tenant", so it stays on the unbound ``get_db()``
+    until H4 threads an EXPLICIT tenant through the proposal payload — the
+    app row's organization, resolvable from ``payload["app_id"]`` — as
+    ``tenant_session(org_id)``. The H2 ratchet in ``test_db_engine_seam.py``
+    carries this site as a named, counted exemption.
+
     Known accepted gap (do not build a reconciliation job for this): a
     REJECTED review leaves this version's ``review_status`` stuck at
     ``'pending'`` forever — the generic ``/actions/pending/{id}/reject``
@@ -314,6 +326,8 @@ async def _has_remembered_grant(
 async def _remember_tool_grant(
     db: Any, app_id: str, email: str, tool: str,
 ) -> None:
+    """Upsert one remembered-consent row. Does NOT commit — the caller's
+    ``_tenant_session`` block commits on clean exit (H2)."""
     await db.execute(
         text(
             """INSERT INTO app_tool_grants (app_id, user_email, tool)
@@ -322,7 +336,6 @@ async def _remember_tool_grant(
         ),
         {"app_id": app_id, "email": email, "tool": tool},
     )
-    await db.commit()
 
 
 def _audit_args(args: dict[str, Any]) -> Any:
@@ -373,8 +386,7 @@ async def _run_destructive_tool(
 ) -> Any:
     """Per-use confirm (or a remembered grant), then the Action Broker."""
     email = _uid(user)
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         pre_confirmed = await _has_remembered_grant(db, str(row.id), email, tool)
         if not pre_confirmed and not body.confirm:
             return JSONResponse(status_code=409, content={
@@ -382,8 +394,6 @@ async def _run_destructive_tool(
             })
         if body.confirm and body.remember:
             await _remember_tool_grant(db, str(row.id), email, tool)
-    finally:
-        await db.close()
 
     authority = (
         AuthorityTier.SUGGEST_APPLY if _tool_broker_enforced(tool)
@@ -445,12 +455,9 @@ async def call_app_tool(
     "always allow" grant, ``app_tool_grants``) and then flow through the
     Action Broker exactly like every other outward write in the platform.
     """
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         row, _grants = await get_app_or_404(db, slug, user)
         manifest = await _load_live_manifest(db, row)
-    finally:
-        await db.close()
 
     constraints = find_declared_tool_scope(manifest, tool)
     if constraints is None:

@@ -18,9 +18,11 @@
  * the rows — Shift extends the WS-27n selection, Enter opens the panel.
  */
 import Icon from "@/components/Icon";
+import { StatusChip } from "@/components/StatusChip";
 import { AvatarStack, TaskMeta } from "@/components/TaskMeta";
 import { useMemo, useState } from "react";
 
+import { accentForGroup, accentForStatus } from "../lib/accent";
 import type { StatusRow, TaskRow } from "../lib/api";
 import { projectsApi } from "../lib/api";
 import { sortForView } from "../lib/board";
@@ -205,15 +207,26 @@ export function TaskList({
         {/* An empty status lane is kept on the board so a missing column reads
             as a missing state; a list has no columns, so an empty section is
             just a heading with nothing under it — `sections` dropped it. */}
-        {sections.map((group) => {
+        {sections.map((group, groupIndex) => {
           const isFolded = groupBy !== "none" && folded.has(group.key);
+          // WS-27ad — the same accent the board's column for this group wears,
+          // as the left bar /tasks' list-group headers already used. A grouped
+          // list and a board are two drawings of one grouping; they must not
+          // disagree about what colour "Done" is.
+          const accent = accentForGroup(
+            groupBy,
+            group.key,
+            groupIndex,
+            sections.length,
+            statuses
+          );
           return (
           <tbody key={group.key}>
             {groupBy === "none" ? null : (
-              <tr className="bg-muted">
+              <tr className={accent.soft}>
                 <th
                   colSpan={columnCount}
-                  className="px-3 py-1.5 text-left text-xs font-medium text-foreground"
+                  className={`border-l-2 px-3 py-1.5 text-left text-xs font-medium ${accent.bar} ${accent.text}`}
                 >
                   {/* The /tasks group-header grammar (TaskListGrouped):
                       chevron to collapse, label, then the count as a pill —
@@ -226,10 +239,11 @@ export function TaskList({
                   >
                     <Icon
                       name="ChevronRight"
-                      className={`h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform ${
+                      className={`h-3.5 w-3.5 shrink-0 transition-transform ${accent.text} ${
                         isFolded ? "" : "rotate-90"
                       }`}
                     />
+                    <span className={`h-2 w-2 shrink-0 rounded-full ${accent.dot}`} />
                     <span className="truncate">{group.label}</span>
                     <span className="shrink-0 rounded-full bg-background/60 px-1.5 py-0.5 text-[10px] font-semibold text-muted-foreground">
                       {group.tasks.length}
@@ -277,7 +291,18 @@ export function TaskList({
                     </span>
                   </td>
                   <td className="px-3 py-2 text-muted-foreground">
-                    {status?.name ?? "—"}
+                    {/* WS-27ad — the shared status pill, coloured by the
+                        owner's stored colour / the status category. It used
+                        to be a bare grey word while the same status on the
+                        /tasks side was a coloured pill. */}
+                    {status ? (
+                      <StatusChip
+                        accent={accentForStatus(status)}
+                        label={status.name}
+                      />
+                    ) : (
+                      "—"
+                    )}
                   </td>
                   <td className="px-3 py-2 text-muted-foreground">
                     {task.assignees?.length ? (

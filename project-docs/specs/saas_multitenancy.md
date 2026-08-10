@@ -1874,18 +1874,28 @@ orchestrator runs, broker handlers, the Redis Streams consumer) carries an expli
 `organization_id` on its job record and binds it before any DB access; a test asserts a job
 constructed without one **refuses to run** rather than defaulting.
 
-> ⚠️ **Named site, found by the WS-27 alignment audit 2026-08-10 — H2 will NOT
-> reach it.** `automation.run_lifecycle_sweep`
-> (`routes/projects/automation.py`, entered from `workflows/service.py`'s
-> `_pm_lifecycle` node) opens the **un-bound** `get_db()` and starts with
-> `SELECT * FROM pm_projects WHERE parent_project_id IS NULL` — every tenant's
-> roots, no predicate. It is a *scheduled-workflow* path, so H2's request-side
-> conversion never touches it. After phase-4 policies it reads **zero rows** and
-> the WS-27z lifecycle policy silently stops working (presenting as "the feature
-> is broken", the exact failure `acb_common/db.py` warns about); bind a single
-> tenant instead and it sweeps that one and silently skips the rest. **It needs a
-> per-tenant loop, not a session swap** — as does `_pm_task_updater` beside it.
-> Do this ticket before the phase-4 promotion, not after.
+> ✅ ~~**Named site, found by the WS-27 alignment audit 2026-08-10 — H2 will NOT
+> reach it.** `automation.run_lifecycle_sweep` … opens the **un-bound**
+> `get_db()` and starts with `SELECT * FROM pm_projects WHERE parent_project_id
+> IS NULL` — every tenant's roots, no predicate.~~ **CLOSED 2026-08-10 by
+> WS-27aa** (`project_management_app.md` §9.2). The sweep now takes a required
+> `organization_id`, refuses with `TenantUnbound` without one before issuing a
+> statement, and filters roots on `AND organization_id = CAST(:org AS uuid)`;
+> `workflows/service._pm_lifecycle_sweeper` resolves that tenant from the
+> workflow **owner** through `app_user` (the `workflows` table has no
+> `organization_id` column until H3 phase 1 lands) and binds it with
+> `tenant_session(org)`.
+>
+> ⚠️ **This entry's own prescription was wrong and is struck: it does NOT need a
+> per-tenant loop.** A loop inside the sweep would be one tenant's scheduled
+> workflow acting for every other tenant — the unbounded-job shape this section
+> exists to forbid. The loop is over *workflows*: each tenant schedules its own
+> and each sweeps exactly its own. Proven two-org against a real Postgres by
+> `tests/live/live_ws27aa.py`.
+>
+> **`_pm_task_updater` beside it is still open** — it patches ONE task by id on
+> the unbound seam, so it wants the task's own organization threaded from the
+> node config, not a loop. It belongs to WS-29's H4 slice, not to Projects.
 
 #### MT-1e · Redis: prefixes enforced by the client · ◐ **WRAPPER BUILT, CALL SITES NOT CONVERTED**
 

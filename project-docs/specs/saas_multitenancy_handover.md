@@ -226,10 +226,16 @@ stated values, **and** the baseline test set still passes.
 >
 > **`routes/projects` is converted** (84 sites, the largest single package): every
 > handler is `async with _tenant_session() as db:` where `_tenant_session` IS the
-> shared seam (identity asserted in `test_db_engine_seam.py`). One named exemption:
-> `agent_dispatch.py` (2 sites) is an **event consumer**, so per this document's own
-> rule it stays on `get_db()` until H4 threads an explicit tenant through the event
-> payload — inheriting the ambient one is exactly what H4 forbids.
+> shared seam (identity asserted in `test_db_engine_seam.py`). ~~One named exemption:
+> `agent_dispatch.py` (2 sites)~~ ✅ **that exemption is GONE (WS-27aa, 2026-08-10)** —
+> not by converting it to the ambient `tenant_session()`, which would have been the
+> inheritance H4 forbids, but by giving it an EXPLICIT tenant: `pm.task.assigned` now
+> carries the task's own `organization_id`, stamped by `set_assignees` inside the
+> request's bound session, and every session in the sink is `tenant_session(that_org)`.
+> An event without one is refused (a WARNING log line, no write — recording the refusal
+> on the task timeline is impossible without the unbound session being refused).
+> **`routes/projects` is therefore at ZERO unbound sites and holds no H2 exemption at
+> all**, so Projects is not what gates the phase-4 promotion.
 >
 > **Ratchets** (test_db_engine_seam.py): `routes/projects` must stay at ZERO
 > unconverted sites; the remainder elsewhere is frozen at **`H2_BASELINE_ELSEWHERE =
@@ -278,8 +284,17 @@ shape changes, not just the name.
 >    modules** (projects, people, admin `members`/`_common`, rooms,
 >    `acb_auth/access`) — H6's "`app_user` reads are gone or reduced to a
 >    compatibility view" is a bigger surface than that sentence suggests.
-> 2. **Background jobs** — see MT-1d's named site in the parent spec
->    (`run_lifecycle_sweep`): a scheduled path H2 does not reach at all.
+> 2. **Background jobs** — ~~see MT-1d's named site in the parent spec
+>    (`run_lifecycle_sweep`): a scheduled path H2 does not reach at all.~~
+>    ✅ **That site is CLOSED (WS-27aa, 2026-08-10)** and it is the worked
+>    example for the rest of H4: **resolve on an unbound session, then bind
+>    explicitly.** Two sessions, in that order — the first decides the tenant
+>    (so it cannot already be inside one) and writes nothing; the second is
+>    `tenant_session(org)` and does the work. The stored fact was the workflow
+>    **owner** (`workflows.owner_email` → `app_user.organization_id`), because
+>    `workflows` carries no `organization_id` until H3 phase 1. The remaining
+>    background sites in `workflows/service.py` (`_pm_task_updater`, the run
+>    lifecycle) still need it.
 
 ```python
 # before
@@ -383,6 +398,18 @@ Jobs have no request, so no session to inherit from. Cover: the ingestion schedu
 **Done when:** every queued/scheduled unit carries `organization_id` on its record and
 binds it before any DB access; a job constructed **without** one **refuses to run** rather
 than defaulting; a test proves the refusal.
+
+> ✅ **Two of these are done, and they are the pattern to copy** (2026-08-10):
+> `routes/crm/auto_lead` (the mailbox owner's org) and, by **WS-27aa**,
+> `routes/projects` — `run_lifecycle_sweep` (the workflow owner's org) and
+> `agent_dispatch` (the task's own org, carried **on the event payload**).
+> Three shapes, one rule: **resolve on an unbound session, bind explicitly,
+> refuse if the resolution finds nothing.** The dispatch case adds the one worth
+> generalising — when the unit is an *event consumer*, the tenant belongs on the
+> **event**, stamped by the emitter inside its bound session, because the
+> consumer has nowhere legitimate to look it up. And note what refusing costs:
+> a consumer with no tenant cannot record its own refusal in tenant data
+> either — it logs and returns.
 
 Also here: **`scripts/import_hr_people.py:177`** (§0.1 path 9) — it opens its own engine and
 **upserts people rows**, which are tenant data. It must take a tenant from argv. Under

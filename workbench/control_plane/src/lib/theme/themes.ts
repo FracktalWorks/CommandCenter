@@ -25,6 +25,45 @@ const SYSTEM_FALLBACK = "system-ui, -apple-system, BlinkMacSystemFont, sans-seri
 const MONO_FALLBACK = "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
 
 /**
+ * The categorical ramp — `--cat-1` … `--cat-8`.
+ *
+ * Every theme below carries all eight slots in both modes. They share one hue
+ * sequence so a slot means the same *family* everywhere (cat-3 is always the
+ * green one), and differ in saturation so the ramp belongs to its theme:
+ * RapidTool vivid, Fluent clean, Material softened toward M3's tonal
+ * palettes, Graphite muted to stay inside its near-monochrome register.
+ *
+ *   slot  1     2      3      4       5     6     7       8
+ *   hue   215   27     142    264     358   182   324     66
+ *         blue  orange green  violet  red   teal  magenta olive
+ *
+ * The hues are not evenly spaced round the wheel, because even spacing in HSL
+ * degrees is not even spacing to an eye: they were picked by maximising the
+ * WORST pairwise CIE-Lab separation across all eight theme/mode combinations
+ * (min ΔE ≈ 27 on Graphite dark, the least saturated and therefore hardest
+ * case — evenly spaced sets scored ≈ 20 there).
+ *
+ * Lightness is NOT shared: it is picked per theme, per mode, per hue so every
+ * slot clears WCAG AA (≥ 4.5:1) against that theme's own `card` AND
+ * `background`, with headroom. Equal-contrast rather than equal-lightness is
+ * why the greens and olives sit lower on the HSL scale than the blues — they
+ * are intrinsically more luminous, and matching HSL lightness would have made
+ * them the two slots nobody can read. `contrast.test.ts` measures all 64.
+ *
+ * One honest limit, measured: under simulated deuteranopia the eight collapse
+ * to about four — 1/4 (blue/violet), 2/8 (orange/olive) and 6/7 (teal/magenta)
+ * each merge. No eight-hue qualitative palette survives dichromacy; the
+ * colourblind-safe ceiling is around five. So a `--cat-*` slot must never be
+ * the ONLY thing carrying a distinction (DESIGN_SYSTEM §7). Every shipped use
+ * pairs it with the label it colours — the @context chip prints the context
+ * name, the facet dot sits beside its own text — and any new one has to.
+ *
+ * Changing a value is fine. Changing the ORDER is not: `contextColors.ts`
+ * hashes a @context name to a slot, so a reorder silently repaints every
+ * context in the product.
+ */
+
+/**
  * RapidTool — the Control Plane's original look, preserved token-for-token.
  *
  * These values are the contract with `globals.css`: the `:root` / `.light`
@@ -90,6 +129,15 @@ const rapidtool: Theme = {
       successForeground: "hsl(220 13% 8%)",
       warning: "hsl(47 96% 53%)",
       warningForeground: "hsl(220 13% 8%)",
+      // Categorical ramp — vivid, matching RapidTool's saturated register.
+      "cat-1": "hsl(215 85% 61%)",
+      "cat-2": "hsl(27 85% 47%)",
+      "cat-3": "hsl(142 85% 35%)",
+      "cat-4": "hsl(264 85% 70%)",
+      "cat-5": "hsl(358 85% 64%)",
+      "cat-6": "hsl(182 85% 34%)",
+      "cat-7": "hsl(324 85% 61%)",
+      "cat-8": "hsl(66 85% 32%)",
       sidebarBackground: "hsl(220 13% 9%)",
       sidebarForeground: "hsl(210 40% 98%)",
       sidebarPrimary: "hsl(198 89% 50%)",
@@ -123,6 +171,14 @@ const rapidtool: Theme = {
       successForeground: "hsl(210 40% 98%)",
       warning: "hsl(47 96% 53%)",
       warningForeground: "hsl(210 40% 98%)",
+      "cat-1": "hsl(215 85% 47%)",
+      "cat-2": "hsl(27 85% 36%)",
+      "cat-3": "hsl(142 85% 26%)",
+      "cat-4": "hsl(264 85% 59%)",
+      "cat-5": "hsl(358 85% 45%)",
+      "cat-6": "hsl(182 85% 26%)",
+      "cat-7": "hsl(324 85% 43%)",
+      "cat-8": "hsl(66 85% 24%)",
       sidebarBackground: "hsl(0 0% 98%)",
       sidebarForeground: "hsl(222.2 84% 4.9%)",
       sidebarPrimary: "hsl(198 89% 45%)",
@@ -206,6 +262,16 @@ const fluent: Theme = {
       successForeground: "hsl(0 0% 10%)",
       warning: "hsl(53 100% 49%)",
       warningForeground: "hsl(0 0% 10%)",
+      // Fluent's surfaces are the lightest darks we ship (card is 17%), so the
+      // ramp has to sit higher here than anywhere else to clear AA.
+      "cat-1": "hsl(215 80% 67%)",
+      "cat-2": "hsl(27 80% 56%)",
+      "cat-3": "hsl(142 80% 40%)",
+      "cat-4": "hsl(264 80% 75%)",
+      "cat-5": "hsl(358 80% 71%)",
+      "cat-6": "hsl(182 80% 40%)",
+      "cat-7": "hsl(324 80% 69%)",
+      "cat-8": "hsl(66 80% 37%)",
       sidebarBackground: "hsl(0 0% 15%)",
       sidebarAccent: "hsl(0 0% 21%)",
       sidebarBorder: "hsl(0 0% 22%)",
@@ -236,6 +302,16 @@ const fluent: Theme = {
       successForeground: "hsl(0 0% 100%)",
       warning: "hsl(36 100% 31%)",
       warningForeground: "hsl(0 0% 100%)",
+      // Fluent light puts the page at 95% grey, a darker backdrop than the
+      // white card — so the ramp is measured against the page, not the card.
+      "cat-1": "hsl(215 80% 44%)",
+      "cat-2": "hsl(27 80% 34%)",
+      "cat-3": "hsl(142 80% 25%)",
+      "cat-4": "hsl(264 80% 56%)",
+      "cat-5": "hsl(358 80% 43%)",
+      "cat-6": "hsl(182 80% 25%)",
+      "cat-7": "hsl(324 80% 41%)",
+      "cat-8": "hsl(66 80% 23%)",
       sidebarBackground: "hsl(0 0% 98%)",
       sidebarAccent: "hsl(0 0% 92%)",
       sidebarBorder: "hsl(0 0% 88%)",
@@ -311,6 +387,16 @@ const material: Theme = {
       successForeground: "hsl(142 60% 14%)",
       warning: "hsl(35 90% 78%)",
       warningForeground: "hsl(30 70% 16%)",
+      // Softer than RapidTool's: M3 expresses categories as tonal roles, not
+      // as fully saturated hues.
+      "cat-1": "hsl(215 58% 62%)",
+      "cat-2": "hsl(27 58% 54%)",
+      "cat-3": "hsl(142 58% 42%)",
+      "cat-4": "hsl(264 58% 69%)",
+      "cat-5": "hsl(358 58% 66%)",
+      "cat-6": "hsl(182 58% 42%)",
+      "cat-7": "hsl(324 58% 65%)",
+      "cat-8": "hsl(66 58% 39%)",
       sidebarBackground: "hsl(270 8% 12%)",
       sidebarAccent: "hsl(263 8% 22%)",
       sidebarBorder: "hsl(266 8% 24%)",
@@ -339,6 +425,14 @@ const material: Theme = {
       successForeground: "hsl(0 0% 100%)",
       warning: "hsl(43 100% 24%)",
       warningForeground: "hsl(0 0% 100%)",
+      "cat-1": "hsl(215 58% 45%)",
+      "cat-2": "hsl(27 58% 37%)",
+      "cat-3": "hsl(142 58% 29%)",
+      "cat-4": "hsl(264 58% 55%)",
+      "cat-5": "hsl(358 58% 47%)",
+      "cat-6": "hsl(182 58% 29%)",
+      "cat-7": "hsl(324 58% 45%)",
+      "cat-8": "hsl(66 58% 27%)",
       sidebarBackground: "hsl(280 43% 96%)",
       sidebarAccent: "hsl(270 27% 92%)",
       sidebarBorder: "hsl(266 16% 84%)",
@@ -413,6 +507,18 @@ const graphite: Theme = {
       successForeground: "hsl(0 0% 8%)",
       warning: "hsl(45 90% 58%)",
       warningForeground: "hsl(0 0% 8%)",
+      // The quietest ramp we ship: Graphite is near-monochrome, so categories
+      // are told apart by hue at LOW saturation rather than by vividness.
+      // Below ~40% they stop being separable at chip size, which is the floor
+      // this sits just above.
+      "cat-1": "hsl(215 45% 59%)",
+      "cat-2": "hsl(27 45% 52%)",
+      "cat-3": "hsl(142 45% 43%)",
+      "cat-4": "hsl(264 45% 65%)",
+      "cat-5": "hsl(358 45% 63%)",
+      "cat-6": "hsl(182 45% 43%)",
+      "cat-7": "hsl(324 45% 61%)",
+      "cat-8": "hsl(66 45% 40%)",
       sidebarBackground: "hsl(0 0% 9%)",
       sidebarAccent: "hsl(0 0% 14%)",
       sidebarBorder: "hsl(0 0% 17%)",
@@ -441,6 +547,14 @@ const graphite: Theme = {
       successForeground: "hsl(0 0% 100%)",
       warning: "hsl(35 95% 32%)",
       warningForeground: "hsl(0 0% 100%)",
+      "cat-1": "hsl(215 45% 45%)",
+      "cat-2": "hsl(27 45% 39%)",
+      "cat-3": "hsl(142 45% 32%)",
+      "cat-4": "hsl(264 45% 54%)",
+      "cat-5": "hsl(358 45% 49%)",
+      "cat-6": "hsl(182 45% 32%)",
+      "cat-7": "hsl(324 45% 47%)",
+      "cat-8": "hsl(66 45% 30%)",
       sidebarBackground: "hsl(0 0% 97%)",
       sidebarAccent: "hsl(0 0% 94%)",
       sidebarBorder: "hsl(0 0% 89%)",

@@ -175,6 +175,22 @@ breaking it — **plus R11, which will bite here hardest when WS-29 lands:**
 > directory runs against a tenant-bound session, and the binding happens **once**
 > in `acb_common.db` — so a route that reaches data any other way is the bug.
 > Build shapes: `saas_multitenancy_implementation.md` §2.
+>
+> ⚠️ **A background unit in this directory is NOT a route and must not behave
+> like one.** It has no request to inherit from, so `tenant_session()` with no
+> argument is the bug there — it would act for whoever happened to be in
+> context. The rule (H4) is **resolve on an unbound session, then bind
+> explicitly, and refuse if the resolution finds nothing**: two sessions in that
+> order, the first deciding the tenant and writing nothing. Three built
+> examples, three stored facts: `routes/crm/auto_lead` (the mailbox owner's
+> org), `routes/workflows/service._pm_lifecycle_sweeper` (the workflow owner's
+> org — `workflows` has no `organization_id` column until H3 phase 1) and
+> `routes/projects/agent_dispatch` (the task's own org, carried **on the event
+> payload**, because an event consumer has nowhere legitimate to look one up —
+> the emitter stamps it inside its bound session). A consumer that refuses
+> cannot record its refusal in tenant data either: it logs and returns.
+> `tests/unit/test_db_engine_seam.py` is the fence — `H2_EXEMPT_FILES`,
+> `H2_BASELINE_ELSEWHERE` and the exempt→converted call-edge table.
 
 1. **The app is default-deny; do not opt out to make something reachable.**
    `require_authenticated` is attached at the app level in `main.py`, so a new

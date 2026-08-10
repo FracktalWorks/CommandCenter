@@ -36,8 +36,7 @@ import { quickAddPrefill } from "../lib/quickAdd";
 import { ColumnHeader, ColumnCell } from "./ListColumns";
 import { StatusPill } from "./StatusPill";
 
-/** The cursor never carries a selection here — see the note in onKeyDown. */
-const EMPTY_SELECTION: ReadonlySet<string> = new Set();
+const NOBODY: ReadonlySet<string> = new Set();
 
 // A status-segmented list (Jira backlog style): rows grouped under collapsible
 // stage headers with counts. In Manual sort the rows are drag-reorderable —
@@ -84,6 +83,7 @@ export function TaskListGrouped({
   const selectMode = useTaskStore((s) => s.selectMode);
   const selectedIds = useTaskStore((s) => s.selectedIds);
   const toggleSelected = useTaskStore((s) => s.toggleSelected);
+  const extendSelection = useTaskStore((s) => s.extendSelection);
 
   // Status grouping (the default): the drag-reorderable workflow-stage swimlanes.
   // A lens grouping (priority/mode/energy/context) is read-only swimlanes over
@@ -181,6 +181,7 @@ export function TaskListGrouped({
   // WS-27y backport: the keyboard cursor and the landing flash — the same
   // shared machinery the Projects list runs (`@/lib/cursor`, `useFlash`).
   const [cursor, setCursor] = useState(-1);
+  const [anchor, setAnchor] = useState<number | null>(null);
   const { flash, attach, scrollTo } = useFlash();
 
   // The cursor's world: the rows in render order, skipping collapsed groups.
@@ -208,19 +209,20 @@ export function TaskListGrouped({
       )
     )
       return;
-    // Plain cursor + Enter only. /tasks has no shift-range selection model
-    // (`selectedIds` is a bare toggle set with no anchor — see taskStore), so
-    // the shared cursor's shift-sweep stays dormant here rather than
-    // half-growing a second selection grammar on one surface.
+    // WS-27ad — Shift+Arrow sweeps a range, the same gesture the /projects
+    // list has, and only inside select mode (see the board's note).
+    const picked = selectMode ? selectedIds : NOBODY;
     const next = stepCursor(
       rows,
-      { cursor: cursorAt, anchor: null, selection: EMPTY_SELECTION },
+      { cursor: cursorAt, anchor, selection: picked },
       event.key,
-      false,
+      selectMode && event.shiftKey,
     );
     if (!next) return;
     event.preventDefault();
     setCursor(next.cursor);
+    setAnchor(next.anchor);
+    if (next.selection !== picked) extendSelection([...next.selection]);
     if (next.open) openFocus(next.open);
     if (next.cursor >= 0) scrollTo(rows[next.cursor]);
   }
@@ -369,7 +371,7 @@ export function TaskListGrouped({
                     manual={manual}
                     selectMode={selectMode}
                     selected={selectedIds.has(item.id)}
-                    onToggleSelected={() => toggleSelected(item.id)}
+                    onToggleSelected={(shift) => toggleSelected(item.id, shift, rows)}
                     columns={cols}
                     grid={grid}
                     // The status pill on the card is redundant when the list is
@@ -461,7 +463,8 @@ function DraggableRow({
   manual: boolean;
   selectMode: boolean;
   selected: boolean;
-  onToggleSelected: () => void;
+  /** `shift` extends the selection from the anchor (`@/lib/selection`). */
+  onToggleSelected: (shift: boolean) => void;
   /** Visible desktop columns (empty → no columnar layout, stacked card only). */
   columns: ColumnDef[];
   /** grid-template-columns matching the header (only used when columns set). */
@@ -518,7 +521,9 @@ function DraggableRow({
             <input
               type="checkbox"
               checked={selected}
-              onChange={onToggleSelected}
+              onChange={(e) =>
+                onToggleSelected((e.nativeEvent as MouseEvent).shiftKey)
+              }
               className="h-4 w-4 accent-primary"
               aria-label={selected ? "Deselect task" : "Select task"}
             />
@@ -555,7 +560,7 @@ function DraggableRow({
           // so a click selects rather than opening the task.
           <button
             type="button"
-            onClick={onToggleSelected}
+            onClick={(e) => onToggleSelected(e.shiftKey)}
             className="min-w-0 flex-1 text-left"
             aria-pressed={selected}
           >
@@ -702,7 +707,7 @@ function SubtaskRows({ parent }: { parent: GtdItem }) {
               type="button"
               onClick={() => openFocus(c.id)}
               className={[
-                "min-w-0 flex-1 truncate text-left text-[13px]",
+                "min-w-0 flex-1 truncate text-left text-sm",
                 done
                   ? "text-muted-foreground line-through"
                   : "text-foreground hover:text-primary",

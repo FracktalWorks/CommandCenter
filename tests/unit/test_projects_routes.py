@@ -29,6 +29,7 @@ from gateway.routes.projects import tree as pm_tree
 from gateway.routes.projects import views as pm_views
 
 from tests.unit._projects_fakes import (
+    DEFAULT_ORGANIZATION,
     FakeProjectsDB,
     bind_db,
     page,
@@ -522,7 +523,13 @@ async def test_assigning_emits_only_the_added_assignees(
 ) -> None:
     """WS-27f dispatches an agent run off ``pm.task.assigned``, so a re-assert
     of an existing assignee must not re-dispatch: the event carries the added
-    set, never the whole set."""
+    set, never the whole set.
+
+    It also carries the task's ``organization_id`` (WS-27aa) — the sink's only
+    tenant source, read here inside the request's bound session. Asserted as
+    the WHOLE payload rather than key-by-key, so a field silently leaving it
+    fails this test.
+    """
     project, todo, _ = _project_with_statuses(db)
     task = db.seed_task(project.id, todo.id)
     db.seed(
@@ -537,7 +544,10 @@ async def test_assigning_emits_only_the_added_assignees(
     )
 
     assigned = [payload for name, payload in events if name == "pm.task.assigned"]
-    assert assigned == [{"task_id": str(task.id), "assignees": ["agent:triage"]}]
+    assert assigned == [{
+        "task_id": str(task.id), "assignees": ["agent:triage"],
+        "organization_id": DEFAULT_ORGANIZATION,
+    }]
 
 
 async def test_re_asserting_the_same_assignees_emits_nothing(
@@ -941,3 +951,70 @@ async def test_the_actor_comes_from_the_session_not_the_body(
     assert db.activities("comment")[0]["created_by"] == "owner@fracktal.in"
     assert "created_by" not in pm_activities.CommentIn.model_fields
     assert "created_by" not in pm_tasks.TaskIn.model_fields
+
+
+# ── The seed colours and the shared UI vocabulary ────────────────────────────
+#
+# `_SEED_STATUSES` writes a `color` on every new root project, and in the UI a
+# stored colour OUTRANKS the category (that is what lets an owner choose one).
+# So a seed that disagrees with the shared category→hue map silently overrides
+# the shared vocabulary on every project nobody has customised — and /projects
+# goes back to looking different from /tasks, which is the whole thing WS-27ad
+# set out to fix.
+#
+# It is not hypothetical: the seed shipped `To do` blue and `In progress` amber
+# against a category map of gray and blue, and two of the four default lanes
+# rendered differently in the two apps.
+#
+# This reads the TypeScript rather than mirroring it, because a mirror is
+# exactly the thing that goes stale and then lies.
+
+
+def test_seed_status_colours_match_the_shared_vocabulary() -> None:
+    from pathlib import Path
+
+    source = (
+        Path(__file__).resolve().parents[2]
+        / "workbench" / "control_plane" / "src" / "lib" / "statusAccent.ts"
+    ).read_text(encoding="utf-8")  # Windows defaults to cp1252 and crashes.
+
+    block = re.search(
+        r"const CATEGORY_HUES: Record<string, AccentHue> = \{(.*?)\}", source, re.S,
+    )
+    assert block, "CATEGORY_HUES not found — did statusAccent.ts move or rename it?"
+    hues = dict(re.findall(r"(\w+):\s*\"(\w+)\"", block.group(1)))
+    assert hues, "CATEGORY_HUES parsed empty"
+
+    mismatched = {
+        name: (colour, hues[category])
+        for name, colour, _position, category, _default in pm_tree._SEED_STATUSES
+        if category in hues and colour != hues[category]
+    }
+    assert not mismatched, (
+        "seeded colours disagree with CATEGORY_HUES in statusAccent.ts "
+        f"(lane: seeded vs derived): {mismatched}. A stored colour outranks the "
+        "category, so these seeds would override the shared vocabulary."
+    )
+
+
+def test_every_seeded_category_is_one_the_shared_vocabulary_colours() -> None:
+    """The companion direction: a seeded category the UI cannot colour renders
+    grey, which is the pre-WS-27ad failure wearing a different hat."""
+    from pathlib import Path
+
+    source = (
+        Path(__file__).resolve().parents[2]
+        / "workbench" / "control_plane" / "src" / "lib" / "statusAccent.ts"
+    ).read_text(encoding="utf-8")
+    block = re.search(
+        r"const CATEGORY_HUES: Record<string, AccentHue> = \{(.*?)\}", source, re.S,
+    )
+    assert block
+    hues = dict(re.findall(r"(\w+):\s*\"(\w+)\"", block.group(1)))
+
+    uncoloured = [
+        category
+        for _name, _colour, _position, category, _default in pm_tree._SEED_STATUSES
+        if category not in hues
+    ]
+    assert not uncoloured, f"seeded categories with no hue: {uncoloured}"

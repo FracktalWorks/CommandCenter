@@ -56,7 +56,7 @@ export function EliminatePopup() {
           >
             <Icon name="MoonStar" className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
             <span className="min-w-0">
-              <span className="block text-[13px] font-medium text-foreground">
+              <span className="block text-sm font-medium text-foreground">
                 Move to Someday / Maybe
               </span>
               <span className="block text-[11px] text-muted-foreground">
@@ -76,7 +76,7 @@ export function EliminatePopup() {
           >
             <Icon name="Trash2" className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
             <span className="min-w-0">
-              <span className="block text-[13px] font-medium text-foreground">
+              <span className="block text-sm font-medium text-foreground">
                 Delete
               </span>
               <span className="block text-[11px] text-muted-foreground">

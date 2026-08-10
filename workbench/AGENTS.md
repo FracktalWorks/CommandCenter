@@ -76,6 +76,17 @@ Control Plane (Next.js browser UI) and local development tools.
   The overflow menu contains Desktop toggle and Sign out — no toolbar-style "Desktop" button cluttering the header.
 - **Unified drawer**: useMobileDrawer() context lets child pages inject arbitrary content (conversations list,
   file browser, filters, etc.) into the hamburger drawer. The drawer includes default nav links and user section.
+  ⚠️ **The drawer holds a SNAPSHOT.** AppShell keeps injected content in its own state, so a sheet handed over
+  once keeps rendering the props it was built with — a page whose sheet reads local state (rather than a store,
+  as `ListsSidebar` does) must re-inject whenever that state changes, and must keep every callback inside it a
+  `useState` setter or the re-injection loops through the drawer's own context. The other half: **dismissing the
+  drawer from the outside has to clear whatever state says which sheet is open**, or the next data change reopens
+  the sheet the user just closed. Both rules are written out in `src/app/projects/page.tsx` (WS-27ag).
+- **Adding an app to the bottom bar** is two additive edits in `AppShell.tsx`: an `is<App>Page` const beside the
+  existing ones, and a `<TaskTab>` block beside the existing tab sets — never an edit inside another app's branch.
+  The page listens on the shared `cc-mobile-nav` CustomEvent; the detail strings agree at both ends **by
+  convention only — nothing tests them**, so a typo is a dead tab. `/projects` uses `projects-tree`,
+  `projects-views`, `projects-search`.
 - **Chat page**: conversations and files are accessed via the drawer — no separate sidebar panels or "Chats/Files"
   sub-toolbar on mobile. Pills at the top of the chat area ("Chats" / "Files") open the drawer with the
   appropriate content. Desktop retains its collapsible side-panels.

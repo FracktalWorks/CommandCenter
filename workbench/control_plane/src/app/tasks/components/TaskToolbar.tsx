@@ -278,7 +278,7 @@ interface FacetOption {
   label: string;
   /** lucide icon (priority) — takes precedence over a dot/emoji marker. */
   icon?: ThemedIcon;
-  /** a solid colour dot marker (context), e.g. "bg-sky-500". */
+  /** a solid colour dot marker (context) from the themed ramp, e.g. "bg-cat-1". */
   dot?: string;
   emoji?: string;
   count: number;

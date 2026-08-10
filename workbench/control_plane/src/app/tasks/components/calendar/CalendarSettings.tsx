@@ -92,7 +92,7 @@ export function CalendarSettings({
           padded so nothing hides behind the home indicator / menu bar);
           anchored popover on ≥sm. */}
       <div
-        className="fixed inset-x-0 bottom-0 z-[80] flex max-h-[88vh] flex-col rounded-t-2xl border border-border bg-card text-[12px] shadow-2xl sm:absolute sm:inset-x-auto sm:bottom-auto sm:right-0 sm:top-full sm:z-30 sm:mt-2 sm:max-h-[80vh] sm:w-80 sm:rounded-lg sm:shadow-xl"
+        className="fixed inset-x-0 bottom-0 z-[80] flex max-h-[88vh] flex-col rounded-t-2xl border border-border bg-card text-xs shadow-2xl sm:absolute sm:inset-x-auto sm:bottom-auto sm:right-0 sm:top-full sm:z-30 sm:mt-2 sm:max-h-[80vh] sm:w-80 sm:rounded-lg sm:shadow-xl"
       >
         {/* grab handle (mobile affordance) */}
         <div className="flex shrink-0 justify-center pt-2 sm:hidden">

@@ -100,7 +100,7 @@ export function ContextMenu({
                 onClose();
               }}
               className={[
-                "tech-transition flex w-full items-center gap-2 px-3 py-1.5 text-left text-[13px] hover:bg-secondary",
+                "tech-transition flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm hover:bg-secondary",
                 it.danger ? "text-destructive" : "text-foreground",
               ].join(" ")}
             >

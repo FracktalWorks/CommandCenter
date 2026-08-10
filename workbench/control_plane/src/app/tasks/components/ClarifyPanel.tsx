@@ -727,7 +727,7 @@ export function ClarifyPanel({
                   className="w-full resize-y rounded-md border border-border bg-background/60 px-3 py-2 text-base text-foreground focus:border-primary/50 focus:outline-none sm:text-sm"
                 />
                 <div className="flex items-center gap-2">
-                  <Button size="none" radius="keep" layout="inline-flex items-center" type="button" onClick={() => void reclarifyWithNote()} disabled={noteBusy || !note.trim()} className="gap-1.5 rounded-md px-2.5 py-1.5 text-[12px]">
+                  <Button size="none" radius="keep" layout="inline-flex items-center" type="button" onClick={() => void reclarifyWithNote()} disabled={noteBusy || !note.trim()} className="gap-1.5 rounded-md px-2.5 py-1.5 text-xs">
                     {noteBusy ? (
                       <AppIcon name="Loader2" className="h-3.5 w-3.5 animate-spin" />
                     ) : (
@@ -735,7 +735,7 @@ export function ClarifyPanel({
                     )}
                     Re-clarify with this
                   </Button>
-                  <Button variant="text" size="none" radius="keep" layout="" type="button" onClick={() => { setNoteOpen(false); setNote(""); }} className="rounded-md px-2 py-1.5 text-[12px]">
+                  <Button variant="text" size="none" radius="keep" layout="" type="button" onClick={() => { setNoteOpen(false); setNote(""); }} className="rounded-md px-2 py-1.5 text-xs">
                     Cancel
                   </Button>
                 </div>
@@ -771,7 +771,7 @@ export function ClarifyPanel({
         {/* Vague-title banner (soft gate) */}
         {vagueOpen && (
           <div className="flex flex-col gap-2 rounded-lg border border-warning/45 bg-warning/10 p-3">
-            <div className="flex items-start gap-2 text-[13px] font-semibold text-foreground">
+            <div className="flex items-start gap-2 text-sm font-semibold text-foreground">
               <AppIcon name="AlertTriangle" className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
               <span>
                 {proposal.isVague
@@ -797,11 +797,11 @@ export function ClarifyPanel({
               </div>
             )}
             <div className="flex items-center gap-2">
-              <Button size="none" radius="keep" layout="inline-flex items-center" type="button" onClick={acceptTitle} disabled={!suggestedTitle} className="gap-1.5 rounded-md px-2.5 py-1.5 text-[12px]">
+              <Button size="none" radius="keep" layout="inline-flex items-center" type="button" onClick={acceptTitle} disabled={!suggestedTitle} className="gap-1.5 rounded-md px-2.5 py-1.5 text-xs">
                 <AppIcon name="Check" className="h-3.5 w-3.5" />
                 Use this title
               </Button>
-              <Button variant="ghost" size="none" radius="keep" layout="" type="button" onClick={keepTitle} className="rounded-md px-2.5 py-1.5 text-[12px]">
+              <Button variant="ghost" size="none" radius="keep" layout="" type="button" onClick={keepTitle} className="rounded-md px-2.5 py-1.5 text-xs">
                 Keep original
               </Button>
             </div>
@@ -891,7 +891,7 @@ export function ClarifyPanel({
             )}
           </div>
           {proposal.disposition === "PROJECT" && proposal.outcome && (
-            <p className="mt-1.5 text-[13px] text-muted-foreground">
+            <p className="mt-1.5 text-sm text-muted-foreground">
               Outcome: <span className="text-foreground">{proposal.outcome}</span>
             </p>
           )}
@@ -950,7 +950,7 @@ export function ClarifyPanel({
               silently no-opping — when the decision can't build yet; the form
               below force-opens in that case to show what's missing. */}
           <div className="mt-2.5 flex flex-wrap items-center gap-2">
-            <Button size="none" radius="keep" layout="inline-flex items-center" type="button" onClick={() => void apply()} disabled={creatingTarget || !canApply} className="gap-1.5 rounded-md px-2.5 py-1.5 text-[12px]">
+            <Button size="none" radius="keep" layout="inline-flex items-center" type="button" onClick={() => void apply()} disabled={creatingTarget || !canApply} className="gap-1.5 rounded-md px-2.5 py-1.5 text-xs">
               {creatingTarget ? <AppIcon name="Loader2" className="h-3.5 w-3.5 animate-spin" /> : <AppIcon name="Check" className="h-3.5 w-3.5" />}
               {bigSuggestion
                 ? `Accept & create all ${subtasks.length || 1} step${subtasks.length === 1 ? "" : "s"}`
@@ -961,7 +961,7 @@ export function ClarifyPanel({
                 type="button"
                 onClick={() => setAdjustOpen(true)}
                 title="Change the sort, owner, timing, or destination yourself"
-                className="tech-transition inline-flex items-center gap-1 rounded-md border border-border px-2.5 py-1.5 text-[12px] font-medium text-muted-foreground hover:border-primary/40 hover:text-foreground"
+                className="tech-transition inline-flex items-center gap-1 rounded-md border border-border px-2.5 py-1.5 text-xs font-medium text-muted-foreground hover:border-primary/40 hover:text-foreground"
               >
                 <AppIcon name="Pencil" className="h-3 w-3" />
                 Adjust
@@ -971,7 +971,7 @@ export function ClarifyPanel({
               type="button"
               onClick={trashNow}
               title="Trash this — it's not actionable"
-              className="tech-transition ml-auto inline-flex items-center gap-1.5 rounded-md border border-transparent px-2.5 py-1.5 text-[12px] font-medium text-muted-foreground hover:border-destructive/30 hover:bg-destructive/10 hover:text-destructive"
+              className="tech-transition ml-auto inline-flex items-center gap-1.5 rounded-md border border-transparent px-2.5 py-1.5 text-xs font-medium text-muted-foreground hover:border-destructive/30 hover:bg-destructive/10 hover:text-destructive"
             >
               <AppIcon name="Trash2" className="h-3.5 w-3.5" />
               Trash
@@ -995,7 +995,7 @@ export function ClarifyPanel({
                   type="button"
                   onClick={() => setSort(s)}
                   className={[
-                    "tech-transition inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[12px]",
+                    "tech-transition inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs",
                     active
                       ? M.danger
                         ? "border-destructive bg-destructive/10 text-destructive"
@@ -1027,7 +1027,7 @@ export function ClarifyPanel({
                           type="button"
                           onClick={() => chooseSize(s)}
                           className={[
-                            "tech-transition inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[12px]",
+                            "tech-transition inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs",
                             active ? "border-primary bg-primary/10 text-primary" : "border-border text-muted-foreground hover:bg-secondary",
                           ].join(" ")}
                         >
@@ -1071,7 +1071,7 @@ export function ClarifyPanel({
                       type="button"
                       onClick={() => setOwner("me")}
                       className={[
-                        "tech-transition inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[12px]",
+                        "tech-transition inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs",
                         owner === "me" ? "border-primary bg-primary/10 text-primary" : "border-border text-muted-foreground hover:bg-secondary",
                       ].join(" ")}
                     >
@@ -1081,7 +1081,7 @@ export function ClarifyPanel({
                       type="button"
                       onClick={() => setOwner("delegate")}
                       className={[
-                        "tech-transition inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[12px]",
+                        "tech-transition inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs",
                         owner === "delegate" ? "border-primary bg-primary/10 text-primary" : "border-border text-muted-foreground hover:bg-secondary",
                       ].join(" ")}
                     >
@@ -1118,7 +1118,7 @@ export function ClarifyPanel({
                       type="button"
                       onClick={() => setWhen("anytime")}
                       className={[
-                        "tech-transition inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[12px]",
+                        "tech-transition inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs",
                         when === "anytime" ? "border-primary bg-primary/10 text-primary" : "border-border text-muted-foreground hover:bg-secondary",
                       ].join(" ")}
                     >
@@ -1128,7 +1128,7 @@ export function ClarifyPanel({
                       type="button"
                       onClick={() => setWhen("date")}
                       className={[
-                        "tech-transition inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[12px]",
+                        "tech-transition inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs",
                         when === "date" ? "border-primary bg-primary/10 text-primary" : "border-border text-muted-foreground hover:bg-secondary",
                       ].join(" ")}
                     >
@@ -1213,7 +1213,7 @@ export function ClarifyPanel({
                                 })
                               }
                               className={[
-                                "tech-transition inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[12px]",
+                                "tech-transition inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs",
                                 active ? "border-primary bg-primary/10 text-primary" : "border-border text-muted-foreground hover:bg-secondary",
                               ].join(" ")}
                             >
@@ -1349,7 +1349,7 @@ function ProjectSuggestBanner({
   const synced = project.source !== "LOCAL";
   return (
     <div className="flex flex-col gap-2.5 rounded-lg border border-primary/35 bg-primary/5 p-3">
-      <div className="flex items-start gap-2 text-[13px] font-semibold text-foreground">
+      <div className="flex items-start gap-2 text-sm font-semibold text-foreground">
         <AppIcon name="FolderKanban" className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
         <span>Looks like it belongs in an existing project</span>
       </div>
@@ -1373,11 +1373,11 @@ function ProjectSuggestBanner({
           : `Assigned to you — it'll show up in My Next Actions${synced ? ", and on ClickUp" : ""}.`}
       </p>
       <div className="flex flex-wrap items-center gap-2">
-        <Button size="none" radius="keep" layout="inline-flex items-center" type="button" disabled={busy} onClick={() => { setBusy(true); onFile(); }} className="gap-1.5 rounded-md px-2.5 py-1.5 text-[12px]">
+        <Button size="none" radius="keep" layout="inline-flex items-center" type="button" disabled={busy} onClick={() => { setBusy(true); onFile(); }} className="gap-1.5 rounded-md px-2.5 py-1.5 text-xs">
           {busy ? <AppIcon name="Loader2" className="h-3.5 w-3.5 animate-spin" /> : <AppIcon name="Check" className="h-3.5 w-3.5" />}
           File it here
         </Button>
-        <Button variant="ghost" size="none" radius="keep" layout="" type="button" onClick={onDismiss} className="ml-auto rounded-md px-2.5 py-1.5 text-[12px]">
+        <Button variant="ghost" size="none" radius="keep" layout="" type="button" onClick={onDismiss} className="ml-auto rounded-md px-2.5 py-1.5 text-xs">
           Choose another place
         </Button>
       </div>
@@ -1400,7 +1400,7 @@ function ParentSuggestBanner({
   const [busy, setBusy] = useState(false);
   return (
     <div className="flex flex-col gap-2.5 rounded-lg border border-primary/35 bg-primary/5 p-3">
-      <div className="flex items-start gap-2 text-[13px] font-semibold text-foreground">
+      <div className="flex items-start gap-2 text-sm font-semibold text-foreground">
         <AppIcon name="ListTree" className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
         <span>Looks like a step of an existing task</span>
       </div>
@@ -1415,11 +1415,11 @@ function ParentSuggestBanner({
         File it as a subtask under this task instead of a standalone one.
       </p>
       <div className="flex flex-wrap items-center gap-2">
-        <Button size="none" radius="keep" layout="inline-flex items-center" type="button" disabled={busy} onClick={async () => { setBusy(true); try { await onFileUnder(); } finally { setBusy(false); } }} className="gap-1.5 rounded-md px-2.5 py-1.5 text-[12px]">
+        <Button size="none" radius="keep" layout="inline-flex items-center" type="button" disabled={busy} onClick={async () => { setBusy(true); try { await onFileUnder(); } finally { setBusy(false); } }} className="gap-1.5 rounded-md px-2.5 py-1.5 text-xs">
           {busy ? <AppIcon name="Loader2" className="h-3.5 w-3.5 animate-spin" /> : <AppIcon name="ListTree" className="h-3.5 w-3.5" />}
           File as subtask
         </Button>
-        <Button variant="ghost" size="none" radius="keep" layout="" type="button" onClick={onDismiss} className="ml-auto rounded-md px-2.5 py-1.5 text-[12px]">
+        <Button variant="ghost" size="none" radius="keep" layout="" type="button" onClick={onDismiss} className="ml-auto rounded-md px-2.5 py-1.5 text-xs">
           It&apos;s its own task
         </Button>
       </div>
@@ -1464,7 +1464,7 @@ function DuplicateBanner({
     && renameTitle.trim() !== dup.title.trim();
   return (
     <div className="flex flex-col gap-2.5 rounded-lg border border-warning/45 bg-warning/10 p-3">
-      <div className="flex items-start gap-2 text-[13px] font-semibold text-foreground">
+      <div className="flex items-start gap-2 text-sm font-semibold text-foreground">
         <AppIcon name="AlertTriangle" className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
         <span>
           {dup.verdict === "duplicate"
@@ -1511,18 +1511,18 @@ function DuplicateBanner({
             Updates the task everywhere it lives (including ClickUp) and drops this inbox item.
           </p>
           <div className="flex items-center gap-2">
-            <Button size="none" radius="keep" layout="inline-flex items-center" type="button" disabled={busy !== null || !canRename} onClick={() => void run("rename", () => onRename(renameTitle))} className="gap-1.5 rounded-md px-2.5 py-1.5 text-[12px]">
+            <Button size="none" radius="keep" layout="inline-flex items-center" type="button" disabled={busy !== null || !canRename} onClick={() => void run("rename", () => onRename(renameTitle))} className="gap-1.5 rounded-md px-2.5 py-1.5 text-xs">
               {busy === "rename" ? <AppIcon name="Loader2" className="h-3.5 w-3.5 animate-spin" /> : <AppIcon name="Check" className="h-3.5 w-3.5" />}
               Save name
             </Button>
-            <Button variant="ghost" size="none" radius="keep" layout="" type="button" disabled={busy !== null} onClick={() => { setRenaming(false); setRenameTitle(captureTitle); }} className="rounded-md px-2.5 py-1.5 text-[12px]">
+            <Button variant="ghost" size="none" radius="keep" layout="" type="button" disabled={busy !== null} onClick={() => { setRenaming(false); setRenameTitle(captureTitle); }} className="rounded-md px-2.5 py-1.5 text-xs">
               Cancel
             </Button>
           </div>
         </div>
       ) : (
         <div className="flex flex-wrap items-center gap-2">
-          <Button size="none" radius="keep" layout="inline-flex items-center" type="button" disabled={busy !== null} onClick={() => void run("merge", onMerge)} className="gap-1.5 rounded-md px-2.5 py-1.5 text-[12px]">
+          <Button size="none" radius="keep" layout="inline-flex items-center" type="button" disabled={busy !== null} onClick={() => void run("merge", onMerge)} className="gap-1.5 rounded-md px-2.5 py-1.5 text-xs">
             {busy === "merge" ? <AppIcon name="Loader2" className="h-3.5 w-3.5 animate-spin" /> : <AppIcon name="Plus" className="h-3.5 w-3.5" />}
             Add to existing task
           </Button>
@@ -1530,7 +1530,7 @@ function DuplicateBanner({
             type="button"
             disabled={busy !== null}
             onClick={() => setRenaming(true)}
-            className="tech-transition inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1.5 text-[12px] font-medium text-foreground hover:border-primary/40 hover:bg-primary/10 disabled:opacity-50"
+            className="tech-transition inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1.5 text-xs font-medium text-foreground hover:border-primary/40 hover:bg-primary/10 disabled:opacity-50"
           >
             <AppIcon name="Pencil" className="h-3.5 w-3.5" />
             Update its name
@@ -1539,12 +1539,12 @@ function DuplicateBanner({
             type="button"
             disabled={busy !== null}
             onClick={() => void run("drop", onDrop)}
-            className="tech-transition inline-flex items-center gap-1.5 rounded-md border border-transparent px-2.5 py-1.5 text-[12px] font-medium text-muted-foreground hover:border-destructive/30 hover:bg-destructive/10 hover:text-destructive disabled:opacity-50"
+            className="tech-transition inline-flex items-center gap-1.5 rounded-md border border-transparent px-2.5 py-1.5 text-xs font-medium text-muted-foreground hover:border-destructive/30 hover:bg-destructive/10 hover:text-destructive disabled:opacity-50"
           >
             {busy === "drop" ? <AppIcon name="Loader2" className="h-3.5 w-3.5 animate-spin" /> : <AppIcon name="Trash2" className="h-3.5 w-3.5" />}
             Delete this inbox item
           </button>
-          <Button variant="ghost" size="none" radius="keep" layout="" type="button" disabled={busy !== null} onClick={onDismiss} className="ml-auto rounded-md px-2.5 py-1.5 text-[12px]">
+          <Button variant="ghost" size="none" radius="keep" layout="" type="button" disabled={busy !== null} onClick={onDismiss} className="ml-auto rounded-md px-2.5 py-1.5 text-xs">
             Not a duplicate
           </Button>
         </div>
@@ -1567,7 +1567,7 @@ function LockedWhere({
     <div>
       <div className="flex items-center gap-2 rounded-md border border-border bg-background/40 px-3 py-2">
         <AppIcon name="Lock" className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-        <span className="flex min-w-0 flex-wrap items-center gap-x-1.5 text-[12px] text-foreground">
+        <span className="flex min-w-0 flex-wrap items-center gap-x-1.5 text-xs text-foreground">
           <AppIcon name="Cloud" className="h-3.5 w-3.5 text-primary/70" />
           {destEntry(dest, providers)?.label ?? "ClickUp"}
           {selectedProject && (
@@ -1637,7 +1637,7 @@ function SubtaskEditor({
             value={s}
             onChange={(e) => edit(idx, e.target.value)}
             onBlur={() => { if (!s.trim()) remove(idx); }}
-            className="min-w-0 flex-1 rounded-md border border-border bg-background/60 px-2 py-1.5 text-[13px] text-foreground focus:border-primary/50 focus:outline-none"
+            className="min-w-0 flex-1 rounded-md border border-border bg-background/60 px-2 py-1.5 text-sm text-foreground focus:border-primary/50 focus:outline-none"
           />
           <button
             type="button"
@@ -1658,7 +1658,7 @@ function SubtaskEditor({
             if (e.key === "Enter") { e.preventDefault(); add(); }
           }}
           placeholder={value.length ? "Add another step…" : "Add a step…"}
-          className="min-w-0 flex-1 bg-transparent px-0.5 py-0.5 text-[13px] text-foreground placeholder:text-muted-foreground focus:outline-none"
+          className="min-w-0 flex-1 bg-transparent px-0.5 py-0.5 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none"
         />
         {draft.trim() && (
           <Button size="none" radius="keep" layout="" type="button" onClick={add} className="shrink-0 rounded-md px-2 py-0.5 text-[11px]">
@@ -1687,7 +1687,7 @@ function PeoplePicker({
           type="button"
           onClick={() => onChange(p)}
           className={[
-            "tech-transition inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[12px]",
+            "tech-transition inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs",
             value?.name === p.name ? "border-primary bg-primary/10 text-primary" : "border-border text-muted-foreground hover:bg-secondary",
           ].join(" ")}
         >
@@ -1900,7 +1900,7 @@ function InlineCreateFolder({
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className="tech-transition ml-4 flex items-center gap-1.5 text-left text-[12px] text-primary hover:underline"
+        className="tech-transition ml-4 flex items-center gap-1.5 text-left text-xs text-primary hover:underline"
       >
         <AppIcon name="Plus" className="h-3 w-3" /> New folder here
       </button>
@@ -1913,7 +1913,7 @@ function InlineCreateFolder({
         value={name}
         onChange={(e) => setName(e.target.value)}
         placeholder="Folder name…"
-        className="flex-1 rounded-md border border-border bg-background/60 px-2.5 py-1.5 text-base text-foreground focus:border-primary/50 focus:outline-none sm:text-[13px]"
+        className="flex-1 rounded-md border border-border bg-background/60 px-2.5 py-1.5 text-base text-foreground focus:border-primary/50 focus:outline-none sm:text-sm"
       />
       <button
         type="button"
@@ -1928,7 +1928,7 @@ function InlineCreateFolder({
             setBusy(false);
           }
         }}
-        className="tech-transition inline-flex items-center gap-1 rounded-md bg-primary px-2.5 py-1.5 text-[12px] font-medium text-primary-foreground disabled:opacity-50"
+        className="tech-transition inline-flex items-center gap-1 rounded-md bg-primary px-2.5 py-1.5 text-xs font-medium text-primary-foreground disabled:opacity-50"
       >
         {busy ? <AppIcon name="Loader2" className="h-3 w-3 animate-spin" /> : <AppIcon name="Plus" className="h-3 w-3" />}
         Create
@@ -2066,7 +2066,7 @@ function TreePicker({
           disabled={!canSelect && !expandable}
           title={unmirrored ? "Still syncing from ClickUp — available in a moment" : undefined}
           className={[
-            "tech-transition flex w-full items-center gap-2 rounded-md border px-3 py-1.5 text-left text-[13px]",
+            "tech-transition flex w-full items-center gap-2 rounded-md border px-3 py-1.5 text-left text-sm",
             depth === 3 ? "ml-8 w-[calc(100%-2rem)]" : depth === 2 ? "ml-4 w-[calc(100%-1rem)]" : "",
             active
               ? "border-primary bg-primary/10 text-primary"
@@ -2112,13 +2112,13 @@ function TreePicker({
                       if (e.key === "Escape") setCreatingAt(null);
                     }}
                     placeholder="New list name…"
-                    className="flex-1 rounded-md border border-border bg-background/60 px-2.5 py-1.5 text-base text-foreground focus:border-primary/50 focus:outline-none sm:text-[13px]"
+                    className="flex-1 rounded-md border border-border bg-background/60 px-2.5 py-1.5 text-base text-foreground focus:border-primary/50 focus:outline-none sm:text-sm"
                   />
                   <button
                     type="button"
                     disabled={!newName.trim() || creating}
                     onClick={() => void submitCreate(n.type === "space" ? n.id : ancestorSpaceId, n.type === "folder" ? n.id : undefined)}
-                    className="tech-transition inline-flex items-center gap-1 rounded-md bg-primary px-2.5 py-1.5 text-[12px] font-medium text-primary-foreground disabled:opacity-50"
+                    className="tech-transition inline-flex items-center gap-1 rounded-md bg-primary px-2.5 py-1.5 text-xs font-medium text-primary-foreground disabled:opacity-50"
                   >
                     {creating ? <AppIcon name="Loader2" className="h-3 w-3 animate-spin" /> : <AppIcon name="Plus" className="h-3 w-3" />}
                     Create
@@ -2130,7 +2130,7 @@ function TreePicker({
               <button
                 type="button"
                 onClick={() => { setCreatingAt(n.id); setNewName(""); setCreateError(null); }}
-                className={`tech-transition flex items-center gap-1.5 text-left text-[12px] text-primary hover:underline ${depth === 2 ? "ml-8" : "ml-4"}`}
+                className={`tech-transition flex items-center gap-1.5 text-left text-xs text-primary hover:underline ${depth === 2 ? "ml-8" : "ml-4"}`}
               >
                 {/* Say WHICH level the new list lands on — a space with folders
                     offers both "directly in this space" (folderless, the level
@@ -2158,13 +2158,13 @@ function TreePicker({
                         if (e.key === "Escape") setCreatingAt(null);
                       }}
                       placeholder="New folder name…"
-                      className="flex-1 rounded-md border border-border bg-background/60 px-2.5 py-1.5 text-base text-foreground focus:border-primary/50 focus:outline-none sm:text-[13px]"
+                      className="flex-1 rounded-md border border-border bg-background/60 px-2.5 py-1.5 text-base text-foreground focus:border-primary/50 focus:outline-none sm:text-sm"
                     />
                     <button
                       type="button"
                       disabled={!newName.trim() || creating}
                       onClick={() => void submitCreateFolder(n.id)}
-                      className="tech-transition inline-flex items-center gap-1 rounded-md bg-primary px-2.5 py-1.5 text-[12px] font-medium text-primary-foreground disabled:opacity-50"
+                      className="tech-transition inline-flex items-center gap-1 rounded-md bg-primary px-2.5 py-1.5 text-xs font-medium text-primary-foreground disabled:opacity-50"
                     >
                       {creating ? <AppIcon name="Loader2" className="h-3 w-3 animate-spin" /> : <AppIcon name="Plus" className="h-3 w-3" />}
                       Create
@@ -2176,7 +2176,7 @@ function TreePicker({
                 <button
                   type="button"
                   onClick={() => { setCreatingAt(`folder:${n.id}`); setNewName(""); setCreateError(null); }}
-                  className="tech-transition ml-4 flex items-center gap-1.5 text-left text-[12px] text-primary hover:underline"
+                  className="tech-transition ml-4 flex items-center gap-1.5 text-left text-xs text-primary hover:underline"
                 >
                   <AppIcon name="Plus" className="h-3 w-3" /> New folder here…
                 </button>
@@ -2222,7 +2222,7 @@ function TreePicker({
           type="button"
           onClick={() => onSelectLeaf(undefined)}
           className={[
-            "tech-transition flex w-full items-center gap-2 rounded-md border px-3 py-1.5 text-left text-[13px]",
+            "tech-transition flex w-full items-center gap-2 rounded-md border px-3 py-1.5 text-left text-sm",
             value === undefined
               ? "border-primary bg-primary/10 text-primary"
               : "border-transparent text-foreground hover:bg-secondary",
@@ -2247,13 +2247,13 @@ function TreePicker({
                   if (e.key === "Escape") setCreatingAt(null);
                 }}
                 placeholder="New space name…"
-                className="flex-1 rounded-md border border-border bg-background/60 px-2.5 py-1.5 text-base text-foreground focus:border-primary/50 focus:outline-none sm:text-[13px]"
+                className="flex-1 rounded-md border border-border bg-background/60 px-2.5 py-1.5 text-base text-foreground focus:border-primary/50 focus:outline-none sm:text-sm"
               />
               <button
                 type="button"
                 disabled={!newName.trim() || creating}
                 onClick={() => void submitCreate(undefined, undefined)}
-                className="tech-transition inline-flex items-center gap-1 rounded-md bg-primary px-2.5 py-1.5 text-[12px] font-medium text-primary-foreground disabled:opacity-50"
+                className="tech-transition inline-flex items-center gap-1 rounded-md bg-primary px-2.5 py-1.5 text-xs font-medium text-primary-foreground disabled:opacity-50"
               >
                 {creating ? <AppIcon name="Loader2" className="h-3 w-3 animate-spin" /> : <AppIcon name="Plus" className="h-3 w-3" />}
                 Create
@@ -2263,7 +2263,7 @@ function TreePicker({
             <button
               type="button"
               onClick={() => { setCreatingAt("top"); setNewName(""); setCreateError(null); }}
-              className="tech-transition flex items-center gap-1.5 text-left text-[12px] text-primary hover:underline"
+              className="tech-transition flex items-center gap-1.5 text-left text-xs text-primary hover:underline"
             >
               <AppIcon name="Plus" className="h-3 w-3" /> {newLabel}
             </button>
@@ -2285,7 +2285,7 @@ function SearchBox({ q, setQ }: { q: string; setQ: (v: string) => void }) {
         value={q}
         onChange={(e) => setQ(e.target.value)}
         placeholder="Search…"
-        className="w-full rounded-md border border-border bg-background/60 py-1.5 pl-8 pr-3 text-base text-foreground focus:border-primary/50 focus:outline-none sm:text-[13px]"
+        className="w-full rounded-md border border-border bg-background/60 py-1.5 pl-8 pr-3 text-base text-foreground focus:border-primary/50 focus:outline-none sm:text-sm"
       />
     </div>
   );
@@ -2350,7 +2350,7 @@ function Pill({
       type="button"
       onClick={onClick}
       className={[
-        "tech-transition rounded-full border px-2.5 py-1 text-[12px]",
+        "tech-transition rounded-full border px-2.5 py-1 text-xs",
         mono ? "font-mono" : plain ? "" : "capitalize",
         active ? "border-primary bg-primary/10 text-primary" : "border-border text-muted-foreground hover:bg-secondary",
       ].join(" ")}

@@ -135,7 +135,7 @@ export function NowNextBar({
               onClick={() => onOpen(current.item.id)}
               className="flex min-w-0 flex-1 flex-col items-start text-left"
             >
-              <span className="w-full truncate text-[13px] font-medium text-foreground">
+              <span className="w-full truncate text-sm font-medium text-foreground">
                 {current.item.title}
               </span>
               <span className="mt-1 flex w-full items-center gap-1.5">
@@ -155,7 +155,7 @@ export function NowNextBar({
             </button>
           </>
         ) : (
-          <Button variant="text" size="none" layout="" type="button" onClick={onFillGap} title="See what fits in this gap — 2-minute pile first" className="min-w-0 flex-1 truncate text-left text-[12px]">
+          <Button variant="text" size="none" layout="" type="button" onClick={onFillGap} title="See what fits in this gap — 2-minute pile first" className="min-w-0 flex-1 truncate text-left text-xs">
             Open right now —{" "}
             <span className="font-medium text-primary">
               fill the gap with quick wins?

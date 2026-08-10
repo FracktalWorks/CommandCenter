@@ -12,6 +12,8 @@
  * as the app rewriting what was typed.
  */
 
+import { ACCENT_HUES, type AccentHue, statusAccent } from "@/lib/statusAccent";
+
 export interface TagRow {
   id: string;
   project_id: string;
@@ -31,30 +33,26 @@ export const MAX_TAGS_PER_TASK = 25;
  * Names, not values: `DESIGN_SYSTEM.md` forbids a colour literal at a call
  * site, and a tag stores what it means rather than what it looks like, so a
  * theme change repaints every tag instead of stranding them at last year's hex.
+ *
+ * WS-27ad: the names and their classes now live in `src/lib/statusAccent.ts`,
+ * shared with statuses and with /tasks' stage accents. A tag and a status lane
+ * that both say "green" have to BE the same green, and two tables of class
+ * strings is how that stops being true.
  */
-export const TAG_COLORS = [
-  "gray",
-  "red",
-  "amber",
-  "green",
-  "blue",
-  "violet",
-] as const;
+export const TAG_COLORS = ACCENT_HUES;
 
-export type TagColor = (typeof TAG_COLORS)[number];
+export type TagColor = AccentHue;
 
-/** Tailwind classes per colour, from tokens only. */
-const CHIP: Record<string, string> = {
-  gray: "bg-secondary text-muted-foreground",
-  red: "bg-destructive/10 text-destructive",
-  amber: "bg-warning/10 text-warning",
-  green: "bg-success/10 text-success",
-  blue: "bg-primary/10 text-primary",
-  violet: "bg-accent text-accent-foreground",
-};
-
+/**
+ * A tag's chip classes.
+ *
+ * Delegates to the shared vocabulary. An unrecognised stored colour still lands
+ * on gray, as it always did — `resolveHue` falls through to the positional
+ * fallback, whose first slot is gray, rather than throwing at a tag somebody
+ * coloured from an older palette.
+ */
 export const chipClass = (color: string | undefined): string =>
-  CHIP[color ?? "gray"] ?? CHIP.gray;
+  statusAccent({ color }).chip;
 
 /** `lower(name)` → the registry's display form. */
 export function registryOf(tags: TagRow[]): Map<string, string> {

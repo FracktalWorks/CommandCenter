@@ -57,6 +57,7 @@ names *are* the theme.
 | `--accent` | `text-accent` | one highlight, used sparingly |
 | `--success` `--warning` `--destructive` (+ `-foreground`) | `text-success` … | states |
 | `--border` / `--input` / `--ring` | `border-border` `ring-ring` | hairlines, focus |
+| `--cat-1` … `--cat-8` | `bg-cat-3/10` `text-cat-3` `border-cat-3/30` | the **categorical ramp** — see below |
 
 **Never:** `#0ea5e9`, `rgb(…)`, `hsl(…)`, `bg-[#1a1b1e]`, or `style={{ color:
 "…" }}` with a literal.
@@ -68,6 +69,59 @@ which is not hypothetical, it was a real bug in the sandbox stylesheet.
 **Tints and translucency are fine and stay themed:** `bg-primary/10`,
 `border-primary/30`, `color-mix(in srgb, var(--success) 12%, var(--card))`. A
 token at an opacity is still a token.
+
+**`bg-sky-500` is a hardcoded colour with a friendly name.** Tailwind's own
+palette — `slate`, `sky`, `violet`, `emerald`, every family and every step — is
+as unreachable by the theming engine as `#0ea5e9`. It is a *named* class rather
+than a bracket class, which is why it slipped past the first two rules for a
+year and ~950 of them accumulated; rule 5 of `conformance.test.ts` now counts
+them per file, and the count only goes down.
+
+### The categorical ramp — `--cat-1` … `--cat-8`
+
+Semantic tokens answer *what does this mean* (success, warning, primary).
+Sometimes the question is different: *which one of these is it*, for a set whose
+members have no ranking and no meaning — @contexts, tags, custom-field options,
+chart series, workflow node categories. There are only about five semantic
+tones, so mapping eight categories onto them makes half of them share a colour
+and stop being distinguishable, which was the entire job.
+
+So there is a second, deliberately non-semantic vocabulary: eight slots, every
+theme supplying all eight in both modes, tuned so each clears **AA against that
+theme's own card *and* background** (`contrast.test.ts` measures all 64) and so
+the worst pairwise perceptual gap stays wide even on Graphite, the least
+saturated theme.
+
+The class strings live in **`src/lib/categorical.ts`**, next to
+`statusAccent.ts` and deliberately separate from it: a *status* resolves to a
+semantic tone because its hue is information; a *category* resolves to a ramp
+slot because its hue is only an identity. Two concepts, two mechanisms, no third
+(AGENTS.md rules 4 and 7).
+
+```tsx
+import { categoricalAccent } from "@/lib/categorical";
+
+<span className={`rounded border px-1.5 py-0.5 ${categoricalAccent(tag).chip}`}>
+  {tag}
+</span>
+```
+
+An app that needs to pin some of its own names to fixed slots keeps that map
+locally and delegates the rest — `app/tasks/lib/contextColors.ts` is the worked
+example, and it is the same shape `stageColors.ts` has over `statusAccent.ts`.
+
+Three rules:
+
+* **Pick the slot from a stable hash of the thing's name**, never an array
+  index. An index shifts when somebody adds an item and repaints everything
+  below it.
+* **Never reorder the slots.** A reorder silently recolours every existing
+  @context for every user at once, and nothing fails.
+* **Never let a slot be the only carrier.** Under simulated deuteranopia the
+  eight collapse to about four (1/4, 2/8 and 6/7 merge) — no eight-hue
+  qualitative palette survives dichromacy. Every use pairs the hue with the
+  label it colours; §7's rule is not waived here, it is the reason the ramp is
+  allowed to have eight slots at all.
 
 ### The three exceptions, and why they are exceptions
 
@@ -253,7 +307,9 @@ Grids: `grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5`.
 Themes are checked against WCAG 2.1 AA by `src/lib/theme/contrast.test.ts`. It
 carries a `KNOWN_SHORTFALLS` ratchet for pre-existing pairs: they may improve,
 never regress, and **fixing one requires deleting its entry**, so the list can
-never quietly become fiction.
+never quietly become fiction. The list is confined to `rapidtool/` by a test of
+its own — a theme added after the gate went in has no latitude, and neither does
+a token.
 
 If you add or edit a theme, run that test. Never signal state with colour alone —
 pair it with an icon or a label.

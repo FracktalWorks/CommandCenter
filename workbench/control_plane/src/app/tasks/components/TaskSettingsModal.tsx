@@ -129,7 +129,7 @@ function SettingsPanel() {
 
         <div className="flex flex-col gap-5 overflow-y-auto p-4">
           {backend !== "live" && (
-            <p className="rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-[12px] text-warning">
+            <p className="rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning">
               The tasks backend isn&apos;t reachable — changes apply to this
               session only and won&apos;t persist.
             </p>
@@ -147,7 +147,7 @@ function SettingsPanel() {
                   className="rounded-lg border border-border px-3 py-2.5"
                 >
                   <div className="flex flex-wrap items-center justify-between gap-2">
-                    <p className="text-[13px] font-medium text-foreground">
+                    <p className="text-sm font-medium text-foreground">
                       {cfg.title}
                     </p>
                     <select
@@ -383,7 +383,7 @@ function StageEditor({
                 // Never allow an empty stage name — restore a placeholder.
                 if (!e.target.value.trim()) rename(idx, `Stage ${idx + 1}`);
               }}
-              className="min-w-0 flex-1 rounded-md bg-transparent px-1.5 py-1 text-[13px] text-foreground focus:bg-background focus:outline-none focus:ring-1 focus:ring-primary/40"
+              className="min-w-0 flex-1 rounded-md bg-transparent px-1.5 py-1 text-sm text-foreground focus:bg-background focus:outline-none focus:ring-1 focus:ring-primary/40"
             />
             {isLast && (
               <span className="shrink-0 rounded-full bg-success/15 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-success">
@@ -411,7 +411,7 @@ function StageEditor({
             if (e.key === "Enter") { e.preventDefault(); add(); }
           }}
           placeholder="Add a stage…"
-          className="min-w-0 flex-1 bg-transparent px-0.5 py-1 text-[13px] text-foreground placeholder:text-muted-foreground focus:outline-none"
+          className="min-w-0 flex-1 bg-transparent px-0.5 py-1 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none"
         />
         {adding.trim() && (
           <Button size="none" radius="keep" layout="" type="button" onClick={add} className="shrink-0 rounded-md px-2 py-1 text-[11px]">
@@ -555,7 +555,7 @@ function ColumnsEditor() {
             key={c.key}
             className="flex items-center justify-between gap-3 rounded-lg border border-border px-3 py-2"
           >
-            <span className="text-[13px] font-medium text-foreground">
+            <span className="text-sm font-medium text-foreground">
               {c.label}
             </span>
             <button
@@ -597,7 +597,7 @@ function Toggle({
   return (
     <div className="flex items-start justify-between gap-3 rounded-lg border border-border px-3 py-2.5">
       <div className="min-w-0">
-        <p className="text-[13px] font-medium text-foreground">{title}</p>
+        <p className="text-sm font-medium text-foreground">{title}</p>
         <p className="mt-0.5 text-[11px] leading-snug text-muted-foreground">
           {description}
         </p>

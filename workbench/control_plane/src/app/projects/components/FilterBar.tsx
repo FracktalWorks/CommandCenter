@@ -22,7 +22,7 @@ import Button from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { useEffect, useState } from "react";
 
-import type { TagRow, ViewRow } from "../lib/api";
+import type { FieldRow, TagRow, ViewRow } from "../lib/api";
 import {
   EMPTY_FILTERS,
   type Filters,
@@ -30,6 +30,14 @@ import {
   type GroupBy,
   isFiltered,
 } from "../lib/grouping";
+import {
+  DEFAULT_SHOWN,
+  FIELD_KEYS,
+  FIELD_LABELS,
+  customFieldKey,
+  sameFieldSet,
+  toggleField,
+} from "../lib/shownFields";
 import { byUsage, chipClass } from "../lib/tags";
 
 /** The status categories, labelled. Mirrors the gateway's `STATUS_CATEGORIES`. */
@@ -60,10 +68,18 @@ interface Props {
   onFilters: (next: Filters) => void;
   groupBy: GroupBy;
   onGroupBy: (next: GroupBy) => void;
+  /** WS-27y — the board's second axis, drawn as swimlanes. `"none"` = flat. */
+  subGroupBy: GroupBy;
+  onSubGroupBy: (next: GroupBy) => void;
   /** The signed-in member's address, for the "Mine" toggle. Empty while loading. */
   me: string;
   /** WS-27m — the project's registered tags, for the tag row. */
   tags: TagRow[];
+  /** WS-27x — the view's shown fields: the table's columns AND the chip gate. */
+  shownFields: readonly string[];
+  onShownFields: (next: string[]) => void;
+  /** WS-27l — the project's custom field definitions, offered in the picker. */
+  fields: FieldRow[];
   views: ViewRow[];
   activeViewId: string | null;
   onApplyView: (view: ViewRow) => void;
@@ -78,8 +94,13 @@ export function FilterBar({
   onFilters,
   groupBy,
   onGroupBy,
+  subGroupBy,
+  onSubGroupBy,
   me,
   tags,
+  shownFields,
+  onShownFields,
+  fields,
   views,
   activeViewId,
   onApplyView,
@@ -93,6 +114,8 @@ export function FilterBar({
   const [draft, setDraft] = useState(filters.q);
   const [naming, setNaming] = useState(false);
   const [viewName, setViewName] = useState("");
+  // WS-27x — the shown-fields picker's popover.
+  const [pickingFields, setPickingFields] = useState(false);
 
   useEffect(() => setDraft(filters.q), [filters.q]);
 
@@ -180,6 +203,86 @@ export function FilterBar({
             ))}
           </select>
         </label>
+
+        {/* WS-27y — the board's second axis. The main axis is withheld from
+            the options: a board laned by its own columns means nothing, and
+            `fromConfig` would normalise it away anyway. */}
+        <label className="flex items-center gap-1 text-xs text-muted-foreground">
+          Lanes
+          <select
+            aria-label="Sub-group by (swimlanes)"
+            className={SELECT}
+            value={subGroupBy === groupBy ? "none" : subGroupBy}
+            onChange={(e) => onSubGroupBy(e.target.value as GroupBy)}
+          >
+            {GROUP_OPTIONS.filter(
+              (option) => option === "none" || option !== groupBy
+            ).map((option) => (
+              <option key={option} value={option}>
+                {option === "none" ? "No lanes" : GROUP_LABELS[option]}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        {/* WS-27x — which fields this view shows. ONE set feeding two
+            consumers: the table's columns and every card's chip row, so
+            hiding a field here silences it everywhere at once. */}
+        <div className="relative">
+          <Button
+            variant={sameFieldSet(shownFields, DEFAULT_SHOWN) ? "secondary" : "primary"}
+            size="sm"
+            icon="Columns3"
+            aria-expanded={pickingFields}
+            onClick={() => setPickingFields((open) => !open)}
+          >
+            Fields
+          </Button>
+          {pickingFields ? (
+            <div
+              className="absolute right-0 z-20 mt-1 w-52 rounded-lg border border-border bg-popover p-2 shadow-md"
+              onKeyDown={(e) => {
+                if (e.key === "Escape") setPickingFields(false);
+              }}
+            >
+              <div className="mb-1 flex items-center justify-between">
+                <span className="text-[11px] font-medium text-foreground">
+                  Shown fields
+                </span>
+                <Button
+                  variant="text"
+                  size="sm"
+                  disabled={sameFieldSet(shownFields, DEFAULT_SHOWN)}
+                  onClick={() => onShownFields([...DEFAULT_SHOWN])}
+                >
+                  Reset
+                </Button>
+              </div>
+              <div className="max-h-64 space-y-0.5 overflow-y-auto">
+                {[
+                  ...FIELD_KEYS.map((key) => ({ key, label: FIELD_LABELS[key] })),
+                  ...fields.map((def) => ({
+                    key: customFieldKey(def),
+                    label: def.name,
+                  })),
+                ].map(({ key, label }) => (
+                  <label
+                    key={key}
+                    className="flex items-center gap-2 rounded px-1 py-0.5 text-xs text-foreground hover:bg-muted"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={shownFields.includes(key)}
+                      onChange={() => onShownFields(toggleField(shownFields, key))}
+                      aria-label={`Show ${label}`}
+                    />
+                    {label}
+                  </label>
+                ))}
+              </div>
+            </div>
+          ) : null}
+        </div>
 
         {isFiltered(filters) ? (
           <Button
@@ -289,10 +392,18 @@ export function FilterBar({
             variant="text"
             size="sm"
             icon="Bookmark"
-            disabled={!isFiltered(filters) && groupBy === "status"}
+            disabled={
+              !isFiltered(filters) &&
+              groupBy === "status" &&
+              subGroupBy === "none" &&
+              sameFieldSet(shownFields, DEFAULT_SHOWN)
+            }
             title={
-              !isFiltered(filters) && groupBy === "status"
-                ? "Filter or regroup the board first — an unfiltered view is the board"
+              !isFiltered(filters) &&
+              groupBy === "status" &&
+              subGroupBy === "none" &&
+              sameFieldSet(shownFields, DEFAULT_SHOWN)
+                ? "Filter, regroup or change the fields first — an untouched view is the board"
                 : "Save these filters as a view"
             }
             onClick={() => setNaming(true)}

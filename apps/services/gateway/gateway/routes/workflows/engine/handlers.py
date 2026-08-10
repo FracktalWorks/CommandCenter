@@ -38,6 +38,9 @@ NODE_TIMEOUTS: dict[str, float] = {
     "trigger": 5.0,
     # An internal DB write — nothing here crosses the network.
     "pm_task": 30.0,
+    # The lifecycle sweep walks every root project with a policy (WS-27z).
+    # Internal DB work like pm_task, but N projects × M stale tasks of it.
+    "pm_lifecycle": 300.0,
 }
 DEFAULT_NODE_TIMEOUT = 60.0
 
@@ -71,6 +74,12 @@ class NodeServices:
     update_task: Callable[
         [str, dict[str, Any]], Awaitable[dict[str, Any]]
     ] | None = None
+    #: ``run_lifecycle_sweep()`` → sweep counts (WS-27z). Takes NOTHING: the
+    #: whole policy — which projects, which windows, which timezone — lives in
+    #: the Projects app's own columns, so a workflow cannot be published that
+    #: sweeps differently from what each project's settings say. The wiring
+    #: binds the workflow's identity, same as ``update_task``.
+    run_lifecycle_sweep: Callable[[], Awaitable[dict[str, Any]]] | None = None
     actor: str = "workflow"
     #: Extra context merged into agent messages' metadata (reserved).
     context: dict[str, Any] = field(default_factory=dict)
@@ -205,6 +214,14 @@ async def execute_node(
 
     if ntype == "pm_task":
         return await _execute_pm_task(config, state, services)
+
+    if ntype == "pm_lifecycle":
+        # Config-free by design (WS-27z): the node is an instruction to apply
+        # whatever each root project's stored policy says, so there is nothing
+        # to resolve and nothing a graph could override.
+        if services.run_lifecycle_sweep is None:
+            raise NodeExecutionError("the Projects app is not available")
+        return await services.run_lifecycle_sweep()
 
     if ntype == "output":
         value = resolve_value(config.get("value"), state)

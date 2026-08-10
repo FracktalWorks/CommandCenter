@@ -27,6 +27,7 @@ from typing import Any
 from acb_auth import UserContext, get_current_user
 from fastapi import Depends, HTTPException
 from gateway.routes.projects.core import (
+    LIFECYCLE_FIELDS,
     PROJECT_SOURCES,
     PROJECT_STATUSES,
     GrantModel,
@@ -42,6 +43,7 @@ from gateway.routes.projects.core import (
     insert_row,
     load_visible_project,
     record_activity,
+    record_field_change,
     require_organization,
     resolve_visibility,
     root_project_id,
@@ -50,6 +52,7 @@ from gateway.routes.projects.core import (
     update_row,
     validate_choice,
     validate_grant_subject,
+    validate_lifecycle_settings,
 )
 from pydantic import BaseModel
 from sqlalchemy import text
@@ -59,7 +62,31 @@ from sqlalchemy import text
 #: diff nobody reads.
 _TRACKED_PROJECT_FIELDS: tuple[str, ...] = (
     "name", "description", "status", "lead", "parent_project_id",
+    # WS-27z — a lifecycle-policy change is exactly the edit somebody asks
+    # "who turned this on, and when" about, six months later.
+    "archive_after_months", "close_after_months", "timezone",
 )
+
+
+def _refuse_lifecycle_on_child(values: dict, parent_project_id: object) -> None:
+    """WS-27z — the policy is a ROOT-project setting; the subtree inherits.
+
+    Statuses, types, custom fields and tags already work this way (root-keyed,
+    subtree-wide), and the sweep acts on ``pm_tasks.root_project_id`` — so a
+    value on a child row would be inert. Refusing the write keeps the inert
+    case unreachable rather than merely documented.
+    """
+    if parent_project_id is None:
+        return
+    offered = [f for f in LIFECYCLE_FIELDS if f in values]
+    if offered:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"{offered} are root-project settings — the root's lifecycle "
+                f"policy governs its whole subtree. Set them on the root."
+            ),
+        )
 
 #: Seeded on every ROOT project. The owner reshapes these in the app; they exist
 #: so a new project has a working board on its first render rather than an empty
@@ -207,6 +234,8 @@ async def create_node(
         raise HTTPException(status_code=422, detail="A project needs a name.")
     validate_choice(values.get("status"), PROJECT_STATUSES, "project status")
     validate_choice(values.get("source"), PROJECT_SOURCES, "source")
+    validate_lifecycle_settings(values)
+    _refuse_lifecycle_on_child(values, values.get("parent_project_id"))
     values["name"] = name
     values["created_by"] = actor(user)
 
@@ -267,6 +296,7 @@ async def patch_node(
     values = clean_payload(payload)
     validate_choice(values.get("status"), PROJECT_STATUSES, "project status")
     validate_choice(values.get("source"), PROJECT_SOURCES, "source")
+    validate_lifecycle_settings(values)
     # Re-parenting is a MOVE, with its own cycle check and root re-stamping.
     # Accepting it here as an ordinary field would skip both.
     if "parent_project_id" in values:
@@ -279,14 +309,21 @@ async def patch_node(
     try:
         vis = await resolve_visibility(db, user)
         before = await load_visible_project(db, vis, project_id)
+        _refuse_lifecycle_on_child(
+            values, getattr(before, "parent_project_id", None),
+        )
         if not values:
             return row_to_dict(before, ProjectModel)
         after = await update_row(db, "pm_projects", project_id, values)
         changes = diff_changes(before, after, _TRACKED_PROJECT_FIELDS)
         if changes:
-            await record_activity(
-                db, activity_type="field_change", created_by=actor(user),
-                project_id=project_id, meta={"changes": changes},
+            # The ONE field_change door (WS-27w) — none of the tracked project
+            # fields is FK-valued today, but the door is what keeps that claim
+            # checked rather than remembered, and a project-description edit
+            # session coalesces like a task's.
+            await record_field_change(
+                db, created_by=actor(user), project_id=project_id,
+                changes=changes,
             )
         await db.commit()
         result = row_to_dict(after, ProjectModel)

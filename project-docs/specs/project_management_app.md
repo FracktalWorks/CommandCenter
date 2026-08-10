@@ -1085,6 +1085,32 @@ the standing protocol: hermetic tests against the fake, mutation-tested guards, 
 Postgres run, and R1 (migration numbers resolved at build time — every number below is a
 description, not an assignment).
 
+> **✅ ALL SIX BUILT 2026-08-10** on the restarted branch (after #399 merged), six parallel
+> agents + two integration merges; full suites green (5789 backend / 1278 frontend).
+> Build-time facts that differ from or sharpen the ticket text:
+> - Migration numbers resolved as **164** (intake), **165** (watchers), **166** (lifecycle);
+>   `main` had taken 163 in the interim. WS-27w needed **no** migration.
+> - **WS-27w item 1**: no archive endpoint existed at all — `archived_at` had no writer. The
+>   ticket's guard therefore shipped as new `POST …/archive` + `/unarchive` endpoints with
+>   the 422 guard built in (guard phrased as `category not in CLOSING_CATEGORIES`, so
+>   `triage` is refused without depending on WS-27u).
+> - **WS-27v**: migration 165 seeds each task's author as a watcher (the pre-watchers
+>   audience included authors; the switch must not silently unsubscribe them), and only
+>   *delivered* mentions auto-subscribe.
+> - **WS-27z**: `/workflows` workflows are DB rows, not files — so the deliverable is the
+>   sweep (`automation.run_lifecycle_sweep`), a config-free **`pm_lifecycle`** engine node
+>   mirroring `pm_task`'s wiring, and `automation: true` on `record_activity`. Authoring +
+>   publishing the schedule-triggered workflow is an **owner step on the live box**
+>   (HANDOVER §1.1). "Default closing status" does not exist in the schema; the sweep's
+>   recorded model is first `cancelled` lane by position, else first `done`. Root's policy
+>   governs the subtree; the API 422s a policy write on a child.
+> - **Continuity backport (owner directive, same day)**: the WS-27y machinery was promoted
+>   to shared code (`src/lib/cursor.ts`, `src/components/QuickAdd.tsx` + `useFlash`) with
+>   re-export shims, the Tasks app's cards now draw the WS-27s chip vocabulary, and its
+>   board/list gained the cursor, group-context quick-add, and drop-refusal/flash grammar.
+>   Remaining divergences are recorded in HANDOVER (Tasks' modal selection vs Projects'
+>   shift-range is the biggest).
+
 **WS-27u — intake/triage: the front door.** 🟢 AGENT-SAFE *(P-1)*.
 A captured task is real from birth, parked out of sight until a human rules on it.
 Done when: (1) a migration adds a `pm_intake` join table (`task_id` unique, `status ∈

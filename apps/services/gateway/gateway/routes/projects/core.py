@@ -61,10 +61,16 @@ PROJECT_STATUSES: tuple[str, ...] = ("active", "on_hold", "done", "archived")
 
 #: `pm_task_statuses.category` — the machine-readable half of a status. Name and
 #: colour are the owner's; this is what completion, the personal mirror (§6.1)
-#: and automation gates (§6.3) key off.
+#: and automation gates (§6.3) key off. `triage` (WS-27u, migration 164) is the
+#: parked-at-the-front-door value that :func:`triage_exclusion_clause` keys off.
 STATUS_CATEGORIES: tuple[str, ...] = (
-    "backlog", "todo", "in_progress", "done", "cancelled",
+    "backlog", "todo", "in_progress", "done", "cancelled", "triage",
 )
+
+#: The one category the default list reads exclude (WS-27u). A constant rather
+#: than a literal in the clause below so the vocabulary word and the predicate
+#: cannot drift apart silently.
+TRIAGE_CATEGORY = "triage"
 
 #: Categories that close a task: crossing INTO one stamps ``completed_at``,
 #: crossing out clears it. ``cancelled`` counts as closed — a cancelled task is
@@ -135,6 +141,11 @@ class ProjectModel(BaseModel):
     source: str = "manual"
     clickup_id: str | None = None
     clickup_kind: str | None = None
+    # WS-27z — the lifecycle policy (migration 166). ROOT rows only carry a
+    # meaningful value; the sweep reads the root's and the subtree inherits.
+    archive_after_months: int | None = None
+    close_after_months: int | None = None
+    timezone: str = "UTC"
     created_by: str | None = None
     created_at: str | None = None
     updated_at: str | None = None
@@ -150,6 +161,10 @@ class ProjectIn(BaseModel):
     lead: str | None = None
     position: float | None = None
     source: str | None = None
+    # WS-27z — settable on ROOT projects only (the write path refuses a child).
+    archive_after_months: int | None = None
+    close_after_months: int | None = None
+    timezone: str | None = None
 
 
 class TaskModel(BaseModel):
@@ -286,16 +301,43 @@ class Page:
         return (self.page - 1) * self.page_size
 
 
-#: Wire sort key → the column it may order by. This dict IS the allowlist:
-#: anything not a key here is a 422, never a silent fall back to the default.
+#: The deterministic tail EVERY sort ends with (WS-27w item 4, P-6). Without
+#: it two tasks that tie on the sort key have no total order, and a tie
+#: straddling a page boundary appears on both pages — or neither — depending
+#: on the plan. ``{dir}`` is the direction slot the endpoint formats in.
+SORT_TIEBREAK = "t.created_at {dir}, t.id {dir}"
+
+#: :data:`STATUS_CATEGORIES` in lifecycle order, as a SQL array literal for the
+#: semantic status sort. Built from the tuple rather than written twice, so the
+#: rank can never drift from the vocabulary the CHECK mirrors.
+_CATEGORY_RANK_ARRAY = "ARRAY[" + ", ".join(f"'{c}'" for c in STATUS_CATEGORIES) + "]"
+
+#: Wire sort key → the ORDER BY fragment it may use, with ``{dir}`` as the
+#: direction slot. This dict IS the allowlist: anything not a key here is a
+#: 422, never a silent fall back to the default.
+#:
+#: Two rules, both pinned structurally (``test_projects_hardening``):
+#:
+#: * ``status`` is SEMANTIC — category rank in lifecycle order, then the lane's
+#:   own board position, never the status NAME (P-6). Alphabetical status sort
+#:   puts "Backlog" before "Done" only by accident of language, and every lane
+#:   rename reshuffles the list.
+#: * every entry ends with :data:`SORT_TIEBREAK`, so the order is total and
+#:   pagination never straddles a tie.
 TASK_SORTS: dict[str, str] = {
-    "created_at": "t.created_at",
-    "updated_at": "t.updated_at",
-    "due_at": "t.due_at",
-    "importance": "t.importance",
-    "title": "t.title",
-    "task_number": "t.task_number",
-    "completed_at": "t.completed_at",
+    "created_at": SORT_TIEBREAK,
+    "updated_at": f"t.updated_at {{dir}} NULLS LAST, {SORT_TIEBREAK}",
+    "due_at": f"t.due_at {{dir}} NULLS LAST, {SORT_TIEBREAK}",
+    "importance": f"t.importance {{dir}} NULLS LAST, {SORT_TIEBREAK}",
+    "title": f"t.title {{dir}}, {SORT_TIEBREAK}",
+    "task_number": f"t.task_number {{dir}} NULLS LAST, {SORT_TIEBREAK}",
+    "completed_at": f"t.completed_at {{dir}} NULLS LAST, {SORT_TIEBREAK}",
+    "status": (
+        f"(SELECT array_position({_CATEGORY_RANK_ARRAY}, s.category)"
+        f" FROM pm_task_statuses s WHERE s.id = t.status_id) {{dir}} NULLS LAST, "
+        f"(SELECT s.position FROM pm_task_statuses s WHERE s.id = t.status_id)"
+        f" {{dir}} NULLS LAST, {SORT_TIEBREAK}"
+    ),
 }
 
 DIRECTIONS: dict[str, str] = {"asc": "ASC", "desc": "DESC"}
@@ -327,6 +369,8 @@ TIMESTAMP_COLUMNS: frozenset[str] = frozenset({
     # `text()` declares no column type, so an ISO string would arrive at a
     # timestamptz as text.
     "defer_until", "clarified_at",
+    # The intake wrapper's reappearance instant (164, WS-27u).
+    "snoozed_until",
 })
 DATE_COLUMNS: frozenset[str] = frozenset({"start_date"})
 
@@ -754,6 +798,35 @@ def task_visibility_clause(vis: Visibility, alias: str = "t") -> str:
     )
 
 
+def triage_exclusion_clause(alias: str = "t") -> str:
+    """The default-list exclusion (WS-27u): triage-parked tasks are invisible.
+
+    A captured task is real from birth — an ordinary ``pm_tasks`` row — but it
+    is PARKED: its status carries the ``triage`` category, and until a human
+    rules on it it must appear on **no** board, list, calendar, timeline or
+    search read unless the caller passed ``include_triage=true``.
+
+    **This is the one copy of the predicate.** Every list surface appends this
+    helper's answer when ``include_triage`` is false, rather than writing the
+    clause itself — the §11.16 lesson restated for a WHERE fragment: two
+    hand-written copies are how one surface quietly starts leaking the queue.
+    The parameter-coverage test in ``test_projects_intake.py`` holds the other
+    half (no surface may silently drop the flag).
+
+    Joined through the status row rather than denormalised onto tasks, for
+    ``build_task_filters``' reason: the category is the status's property, and
+    a copy on the task would need re-stamping whenever a lane is recategorised.
+    ``NOT EXISTS`` rather than ``NOT IN`` so a task whose status row somehow
+    vanished stays visible — fail open into sight, never into a task nobody
+    can find.
+    """
+    return (
+        f"NOT EXISTS (SELECT 1 FROM pm_task_statuses s_triage"
+        f" WHERE s_triage.id = {alias}.status_id"
+        f" AND s_triage.category = '{TRIAGE_CATEGORY}')"
+    )
+
+
 # ── SQL helpers ─────────────────────────────────────────────────────────────
 #
 # Every identifier reaching an f-string below is one of ours: a literal table
@@ -1045,6 +1118,7 @@ async def require_status_in_project(db: Any, root_id: str, status_id: str) -> An
 
 async def apply_status_transition(
     db: Any, task: Any, new_status_id: str, *, created_by: str,
+    automation: bool = False,
 ) -> dict[str, Any]:
     """Move a task to a new status. **Three effects, one helper.**
 
@@ -1087,6 +1161,7 @@ async def apply_status_transition(
             "from_category": old_status.category,
             "to_category": new_status.category,
         },
+        automation=automation,
     )
 
     # WS-27o — a task crossing INTO a closing category is what advances a
@@ -1120,12 +1195,20 @@ async def record_activity(
     project_id: str | None = None,
     body: str | None = None,
     meta: dict[str, Any] | None = None,
+    automation: bool = False,
 ) -> Any:
     """Write one timeline row.
 
     The migration's CHECK requires a target, and this refuses first so the
     failure names the caller's mistake instead of surfacing as an
     IntegrityError 500 from the driver.
+
+    ``automation=True`` (WS-27z) stamps ``meta.automation``, the one flag the
+    timeline renders automated entries distinctly by. A FLAG, not a new
+    activity type or a fourth actor shape: the actor stays
+    ``system:workflow:<id>`` inside the one vocabulary (D-PM-4), and the row
+    stays whatever type the change earns — a status move by a sweep is still a
+    ``status_change``. Human writes never pass it, so their meta is unchanged.
     """
     if task_id is None and project_id is None:
         raise HTTPException(
@@ -1137,6 +1220,8 @@ async def record_activity(
             status_code=422,
             detail=f"Unknown activity type '{activity_type}'.",
         )
+    if automation:
+        meta = {**(meta or {}), "automation": True}
     return await insert_row(db, "pm_activities", {
         "type": activity_type,
         "task_id": task_id,
@@ -1161,6 +1246,183 @@ def diff_changes(before: Any, after: Any, fields: tuple[str, ...]) -> list[dict]
         if old != new:
             changes.append({"field": name, "old": old, "new": new})
     return changes
+
+
+#: FK-valued fields a ``field_change`` may record, and where each one's human
+#: label lives: field → (table, label column). WS-27w item 2 (P-5): a change
+#: entry that stores only the UUID renders as a UUID the moment the row it
+#: points at is renamed or deleted, so labels are resolved AT WRITE TIME and
+#: stored beside the ids — history survives a lane rename without a join.
+#:
+#: ``status_id`` is here even though a status move is a TRANSITION with its own
+#: activity type: a future call site that diffs it anyway must still resolve
+#: labels rather than store bare ids.
+FK_LABEL_FIELDS: dict[str, tuple[str, str]] = {
+    "status_id": ("pm_task_statuses", "name"),
+    "type_id": ("pm_task_types", "name"),
+    "parent_task_id": ("pm_tasks", "title"),
+    "project_id": ("pm_projects", "name"),
+    "parent_project_id": ("pm_projects", "name"),
+}
+
+#: Fields whose consecutive same-actor edits COALESCE into the prior activity
+#: row instead of appending (WS-27w item 3, P-5): an autosaving editor
+#: otherwise writes dozens of rows for one editing session, and a timeline
+#: that is 40 lines of "edited description" buries the one change that
+#: mattered.
+COALESCED_FIELDS: frozenset[str] = frozenset({"description"})
+
+
+async def _label_of(db: Any, table: str, column: str, row_id: Any) -> Any:
+    """One FK target's display label — ``None`` for a cleared or deleted end."""
+    if row_id is None:
+        return None
+    row = await load_row(db, table, str(row_id))
+    return None if row is None else wire(getattr(row, column, None))
+
+
+async def resolve_fk_labels(db: Any, changes: list[dict]) -> list[dict]:
+    """Rewrite FK-valued diff entries to the five-key shape the timeline owes.
+
+    ``{field, old, new}`` stays for plain values; an entry whose field is in
+    :data:`FK_LABEL_FIELDS` becomes ``{field, old_id, new_id, old_label,
+    new_label}`` with the labels read NOW, while the referenced rows still
+    exist. Every ``field_change`` write goes through
+    :func:`record_field_change` and therefore through here — the structural
+    test in ``test_projects_hardening`` is what keeps that sentence true.
+    """
+    out: list[dict] = []
+    for change in changes:
+        source = FK_LABEL_FIELDS.get(str(change.get("field") or ""))
+        if source is None:
+            out.append(change)
+            continue
+        table, column = source
+        old_id, new_id = change.get("old"), change.get("new")
+        out.append({
+            "field": change.get("field"),
+            "old_id": old_id,
+            "new_id": new_id,
+            "old_label": await _label_of(db, table, column, old_id),
+            "new_label": await _label_of(db, table, column, new_id),
+        })
+    return out
+
+
+async def _coalescible_prior(
+    db: Any, *, created_by: str, changes: list[dict],
+    task_id: str | None, project_id: str | None,
+    automation: bool = False,
+) -> Any | None:
+    """The activity row this edit folds into, or ``None`` to append normally.
+
+    Consecutive means exactly what WS-27w says: the IMMEDIATELY previous
+    activity row for this task (or project) is the same actor editing the same
+    lone field. Anything in between — a comment, an assignment, another
+    field's change, somebody else's edit — breaks the run, because the
+    timeline must still show that those happened in that order.
+
+    A prior row whose meta carries anything beside ``changes`` (a revert's
+    ``reverted_activity_id``) is a statement of its own and is never coalesced
+    into or over. The one exception is WS-27z's ``automation`` flag, which
+    rides beside ``changes`` on every automated write: an automation that
+    rewrites a description every run must keep coalescing (the WS-27f rule),
+    so an automation-flagged prior folds an automation-flagged edit — and only
+    that. A human edit never folds into an automated row or vice versa, even
+    under the same actor string, because the flag is part of what the row
+    asserts.
+    """
+    if len(changes) != 1 or str(changes[0].get("field") or "") not in COALESCED_FIELDS:
+        return None
+    if task_id is not None:
+        clause, target = "task_id = CAST(:target AS uuid)", task_id
+    elif project_id is not None:
+        clause, target = "project_id = CAST(:target AS uuid)", project_id
+    else:
+        return None
+    row = (await db.execute(
+        text(
+            f"SELECT * FROM pm_activities WHERE {clause} "
+            "AND deleted_at IS NULL "
+            "ORDER BY created_at DESC, id DESC LIMIT 1"
+        ),
+        {"target": str(target)},
+    )).fetchone()
+    if row is None or getattr(row, "type", None) != "field_change":
+        return None
+    prior_actor = str(getattr(row, "created_by", "") or "").strip().lower()
+    if prior_actor != (created_by or "").strip().lower():
+        return None
+    meta = from_jsonb(getattr(row, "meta", None))
+    if not isinstance(meta, dict) or set(meta) - {"automation"} != {"changes"}:
+        return None
+    if bool(meta.get("automation")) != automation:
+        return None
+    prior = [c for c in (meta.get("changes") or []) if isinstance(c, dict)]
+    if len(prior) != 1 or str(prior[0].get("field") or "") != str(changes[0]["field"]):
+        return None
+    return row
+
+
+async def record_field_change(
+    db: Any,
+    *,
+    created_by: str,
+    changes: list[dict],
+    task_id: str | None = None,
+    project_id: str | None = None,
+    extra_meta: dict[str, Any] | None = None,
+    automation: bool = False,
+) -> Any:
+    """Write one ``field_change`` activity — THE one door (WS-27w items 2+3).
+
+    Every caller that records a field change comes through here, and the
+    structural test walks the package's ``record_activity`` call sites to
+    refuse any that do not. That single-door shape is what the two rules hang
+    off:
+
+    1. **labels at write time** — :func:`resolve_fk_labels` runs on every
+       write, so an FK-valued change can never reach the table as a bare pair
+       of UUIDs;
+    2. **description coalescing** — a same-actor consecutive edit of a
+       :data:`COALESCED_FIELDS` field UPDATES the prior row (its span of
+       ``old`` → latest ``new``, and its timestamp) instead of appending.
+
+    ``extra_meta`` rides beside ``changes`` in the meta object; a write that
+    carries any (a revert naming ``reverted_activity_id``) is always appended,
+    never coalesced — it is an assertion about history, not an edit in a run.
+    """
+    resolved = await resolve_fk_labels(db, changes)
+    if extra_meta is None:
+        prior = await _coalescible_prior(
+            db, created_by=created_by, changes=resolved,
+            task_id=task_id, project_id=project_id, automation=automation,
+        )
+        if prior is not None:
+            prior_meta = from_jsonb(getattr(prior, "meta", None)) or {}
+            first = (prior_meta.get("changes") or [{}])[0]
+            merged = {**resolved[0], "old": first.get("old")}
+            coalesced: dict[str, Any] = {"changes": [merged]}
+            if automation:
+                # The flag survives the fold — a coalesced automated edit must
+                # not quietly turn back into a human-looking row.
+                coalesced["automation"] = True
+            # `created_at` is bumped too, not only `updated_at`: the coalesced
+            # row now records the LATEST edit, the timeline orders on
+            # `created_at`, and the row is already the task's newest — so the
+            # bump keeps it truthful without reordering anything.
+            return await update_row(db, "pm_activities", str(prior.id), {
+                "meta": coalesced,
+                "created_at": now(),
+            })
+    meta: dict[str, Any] = {"changes": resolved}
+    if extra_meta:
+        meta.update(extra_meta)
+    return await record_activity(
+        db, activity_type="field_change", created_by=created_by,
+        task_id=task_id, project_id=project_id, meta=meta,
+        automation=automation,
+    )
 
 
 # ── Events (§6.3) ───────────────────────────────────────────────────────────
@@ -1232,3 +1494,54 @@ def validate_choice(value: str | None, allowed: tuple[str, ...], what: str) -> N
             status_code=422,
             detail=f"Unknown {what} '{value}'. One of: {list(allowed)}.",
         )
+
+
+#: WS-27z — the three lifecycle-policy columns (migration 166). Named once so
+#: the write path's root-only guard and the tests read the same list.
+LIFECYCLE_FIELDS: tuple[str, ...] = (
+    "archive_after_months", "close_after_months", "timezone",
+)
+
+
+def validate_lifecycle_settings(values: dict[str, Any]) -> None:
+    """422 on a malformed lifecycle policy, before anything is written.
+
+    Months are whole numbers greater than zero, or ``null`` to switch the
+    policy off — the migration's CHECK says the same, and refusing here names
+    the field instead of surfacing an IntegrityError 500. The timezone is
+    validated against the IANA database exactly the way the workflows app
+    validates a schedule trigger's (``crud._timezone_is_valid``): a bad zone
+    discovered by the sweep is a policy that silently measures against the
+    wrong midnight; discovered at save time it is a 422 the owner can act on.
+    """
+    for column in ("archive_after_months", "close_after_months"):
+        if column not in values or values[column] is None:
+            continue
+        months = values[column]
+        if isinstance(months, bool) or not isinstance(months, int) or months <= 0:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"'{column}' must be a whole number of months greater "
+                    f"than zero, or null to switch the policy off."
+                ),
+            )
+    if "timezone" in values:
+        name = values["timezone"]
+        if name is None:
+            raise HTTPException(
+                status_code=422,
+                detail="'timezone' cannot be null — it defaults to 'UTC'.",
+            )
+        from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+        try:
+            ZoneInfo(str(name))
+        except (ZoneInfoNotFoundError, ValueError, KeyError):
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"Unknown timezone '{name}' — use an IANA name like "
+                    f"Asia/Kolkata"
+                ),
+            ) from None

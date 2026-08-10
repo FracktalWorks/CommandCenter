@@ -78,6 +78,17 @@ export type SortField =
 
 export type SortDir = "asc" | "desc";
 
+/** How each sort field reads to a human — the toolbar menu AND the board's
+ *  drop-refusal overlay name sorts from this one map, so they cannot drift. */
+export const SORT_LABEL: Record<SortField, string> = {
+  manual: "Manual",
+  priority: "Priority",
+  due: "Due date",
+  created: "Created",
+  title: "Title",
+  energy: "Energy",
+};
+
 // Facet filters: each is a SET of accepted values — a task matches a facet if it
 // falls in ANY of that facet's selected values (OR within a facet), and it must
 // pass EVERY active facet (AND across facets). Empty set = facet inactive. This

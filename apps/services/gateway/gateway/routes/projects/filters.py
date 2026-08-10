@@ -25,10 +25,11 @@ from typing import Any
 from fastapi import HTTPException
 from sqlalchemy import text
 
-#: `pm_task_statuses.category`. Mirrored from migration 146's CHECK and pinned
-#: by `test_projects_filters`.
+#: `pm_task_statuses.category`. Mirrored from the CHECK the migrations leave in
+#: force (146, widened by 164's `triage` — WS-27u) and pinned by
+#: `test_projects_filters`, which reads the LAST migration to constrain it.
 STATUS_CATEGORIES: tuple[str, ...] = (
-    "backlog", "todo", "in_progress", "done", "cancelled",
+    "backlog", "todo", "in_progress", "done", "cancelled", "triage",
 )
 
 #: Categories that mean "this task is finished". Shared with
@@ -240,6 +241,21 @@ GROUP_BY: tuple[str, ...] = (
     "status", "assignee", "project", "importance", "tag", "none",
 )
 
+#: WS-27x — the field keys a view's `shown_fields` may name. Mirrors the
+#: client vocabulary (`lib/shownFields.ts`), which is the single source the
+#: table's columns and the chip gate read; this tuple is the server's copy so
+#: a stored view cannot accumulate junk keys.
+SHOWN_FIELDS: tuple[str, ...] = (
+    "status", "assignees", "start_date", "due_at", "importance",
+    "subtasks", "blocked", "tags", "attachments", "estimate", "created_at",
+)
+
+#: A project's custom fields ride the same list as ``custom.<field_key>`` —
+#: the spelling ``patch_task`` already files a custom edit under. Checked by
+#: SHAPE rather than against the registry: this function is pure, and a view
+#: must survive its field being deleted after the save.
+_CUSTOM_FIELD_PREFIX = "custom."
+
 
 def normalise_view_config(config: Any) -> dict[str, Any]:
     """A stored view's config, reduced to what the board can actually apply.
@@ -262,10 +278,46 @@ def normalise_view_config(config: Any) -> dict[str, Any]:
         if key in VIEW_FILTER_KEYS
     } if isinstance(raw, dict) else {}
     group_by = config.get("group_by")
-    return {
+    out: dict[str, Any] = {
         "filters": filters,
         "group_by": group_by if group_by in GROUP_BY else "status",
     }
+    # WS-27y — lane state rides the same config. The client's rules mirrored
+    # exactly (grouping.ts `fromConfig`): a sub-axis equal to the main axis is
+    # nonsense and is dropped, lane keys must be strings, and the flags are
+    # stored only when they say something — so a lane-less view stays
+    # byte-identical to one saved before lanes existed.
+    sub = config.get("sub_group_by")
+    if sub in GROUP_BY and sub != "none" and sub != out["group_by"]:
+        out["sub_group_by"] = sub
+        lanes = config.get("collapsed_lanes")
+        if isinstance(lanes, list):
+            kept = [key for key in lanes if isinstance(key, str)]
+            if kept:
+                out["collapsed_lanes"] = kept
+        if config.get("show_empty_lanes") is True:
+            out["show_empty_lanes"] = True
+    # WS-27x — the shown-fields set. The client's rules mirrored exactly
+    # (`shownFields.sanitizeShownFields`): a list of known field keys, with
+    # unknown and non-string entries dropped and duplicates collapsed to the
+    # first appearance. ABSENT (or not a list) stays absent — the default set
+    # is the client's to apply, and writing it here would freeze today's
+    # default into every stored view. An explicitly stored empty list is KEPT:
+    # "every column hidden" is a choice, not the default.
+    shown = config.get("shown_fields")
+    if isinstance(shown, list):
+        kept_fields: list[str] = []
+        for key in shown:
+            if not isinstance(key, str) or key in kept_fields:
+                continue
+            known = key in SHOWN_FIELDS or (
+                key.startswith(_CUSTOM_FIELD_PREFIX)
+                and len(key) > len(_CUSTOM_FIELD_PREFIX)
+            )
+            if known:
+                kept_fields.append(key)
+        out["shown_fields"] = kept_fields
+    return out
 
 
 #: Assignees for a page of tasks, in ONE query.

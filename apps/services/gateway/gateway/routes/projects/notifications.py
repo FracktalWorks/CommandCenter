@@ -109,6 +109,19 @@ def mention_targets(body: str | None) -> list[str]:
     return list(seen)
 
 
+def new_mentions(old_body: str | None, new_body: str | None) -> list[str]:
+    """Only the addresses an edit ADDED, in first-seen order (WS-27v).
+
+    Editing a comment or description must notify the *newly named* people and
+    nobody twice: without this diff, fixing a typo in a comment that mentions
+    three colleagues re-pings all three, and a bell that repeats itself is a
+    bell people mute. Set-differenced on the folded address, the same identity
+    every other mention read uses (R10).
+    """
+    before = set(mention_targets(old_body))
+    return [who for who in mention_targets(new_body) if who not in before]
+
+
 def excerpt_of(body: str | None) -> str | None:
     """A single-line snippet, ellipsised.
 
@@ -219,20 +232,27 @@ async def notify(
 
 
 async def task_audience(db: Any, task_id: str) -> list[str]:
-    """Who a comment on this task concerns: its assignees and its author.
+    """Who an event on this task concerns: watchers ∪ assignees (WS-27v).
 
-    Derived rather than subscribed. A `pm_task_watchers` table would be the
-    fuller answer and is not this ticket — and the derived audience is the one
-    a watcher list would be seeded with anyway, so nothing here has to be undone
-    when one arrives.
+    The watcher table arrived exactly as WS-27j predicted, seeded from the
+    audience it replaces (migration 165 subscribes every task's author), so the
+    author keeps hearing without being a special case here. Assignees stay in
+    the audience in their OWN right rather than through a watcher row: holding
+    the work is the claim, and unwatching must not silence an assignment.
+
+    This is the audience, not the delivery list — ``notify`` still drops the
+    actor and agents (rules 1 and 2) and filters every recipient through
+    ``resolve_visibility_for`` (rule 3). A watcher who has lost the project's
+    grant keeps their row and hears nothing, which is the deliberate divergence
+    from Plane's membership-only check.
     """
     rows = (await db.execute(
         text(
-            "SELECT assignee AS who FROM pm_task_assignees "
+            "SELECT watcher AS who FROM pm_task_watchers "
             "WHERE task_id = CAST(:tid AS uuid) "
             "UNION "
-            "SELECT created_by AS who FROM pm_tasks "
-            "WHERE id = CAST(:tid AS uuid)"
+            "SELECT assignee AS who FROM pm_task_assignees "
+            "WHERE task_id = CAST(:tid AS uuid)"
         ),
         {"tid": task_id},
     )).fetchall()
@@ -285,10 +305,15 @@ async def list_notifications(
             {"me": me, "limit": page.limit, "offset": page.offset, **vis.params},
         )).fetchall()
         # Counted with the same visibility clause, so the badge can never
-        # promise more than the list can show.
+        # promise more than the list can show. WS-27v splits the count in the
+        # SAME query rather than a second one: `mentions` is a subset of
+        # `total` by construction here, so the two numbers can never disagree
+        # about which rows they describe.
         unread = (await db.execute(
             text(
-                "SELECT count(*) AS n FROM pm_notifications n "
+                "SELECT count(*) AS total, "
+                "count(*) FILTER (WHERE n.kind = 'mention') AS mentions "
+                "FROM pm_notifications n "
                 "JOIN pm_tasks t ON t.id = n.task_id "
                 f"WHERE n.recipient = :me AND n.read_at IS NULL AND {clause}"
             ),
@@ -299,7 +324,13 @@ async def list_notifications(
     return {
         "rows": [_row(r) for r in rows],
         "total": len(rows),
-        "unread": int(getattr(unread, "n", 0) or 0),
+        # `{total, mentions}`, not a bare number: "you were named" is a
+        # stronger claim on attention than "something you follow moved", and
+        # the bell renders the two distinctly (P-20).
+        "unread": {
+            "total": int(getattr(unread, "total", 0) or 0),
+            "mentions": int(getattr(unread, "mentions", 0) or 0),
+        },
     }
 
 

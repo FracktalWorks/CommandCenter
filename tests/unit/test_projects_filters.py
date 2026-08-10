@@ -56,15 +56,42 @@ def bound(**kwargs) -> dict:
 
 # ── The vocabulary matches the schema ───────────────────────────────────────
 
+def migrated_status_categories() -> set[str]:
+    """The category vocabulary as the DATABASE will enforce it.
+
+    Assembled from every migration that constrains `pm_task_statuses.category`,
+    taking the LAST one in file order — 146 creates the CHECK inline and 164
+    (WS-27u) replaces it wholesale to admit `triage`, so the newest definition
+    is the one that survives a full replay. The same aggregation
+    `test_projects_migration._activity_check_values` does for the activity
+    vocabulary, and for the same reason: a mirror pinned to the file that
+    CREATED the check goes quietly stale the day a later file widens it.
+
+    Scoped to files that name `pm_task_statuses`, because `feature_catalog`
+    (130/140) constrains a `category` column of its own.
+    """
+    latest: str | None = None
+    for path in sorted((REPO / "infra/postgres").glob("*.sql")):
+        if path.name == "schema.generated.sql":
+            continue
+        text = "\n".join(
+            re.sub(r"--.*$", "", line)
+            for line in path.read_text(encoding="utf-8").splitlines()
+        )
+        if "pm_task_statuses" not in text:
+            continue
+        for match in re.finditer(
+            r"CHECK\s*\(\s*category\s+IN\s*\((.*?)\)\s*\)", text, re.S | re.I,
+        ):
+            latest = match.group(1)
+    assert latest is not None, "no migration constrains pm_task_statuses.category"
+    return set(re.findall(r"'([a-z_]+)'", latest))
+
+
 def test_the_categories_are_the_ones_the_database_has():
-    """Read from the migration, not restated. A filter vocabulary that drifts
+    """Read from the migrations, not restated. A filter vocabulary that drifts
     from the CHECK is a filter that silently matches nothing."""
-    text = (REPO / "infra/postgres/146_projects.sql").read_text(encoding="utf-8")
-    text = "\n".join(re.sub(r"--.*$", "", line) for line in text.splitlines())
-    match = re.search(r"category\s+TEXT\s+NOT\s+NULL[^,]*?CHECK\s*\(\s*category\s+IN\s*\((.*?)\)\)",
-                      text, re.S | re.I)
-    assert match, "146 no longer constrains pm_task_statuses.category"
-    assert set(re.findall(r"'([a-z_]+)'", match.group(1))) == set(STATUS_CATEGORIES)
+    assert migrated_status_categories() == set(STATUS_CATEGORIES)
 
 
 def test_closed_means_done_or_cancelled():
@@ -285,6 +312,91 @@ def test_filters_that_are_not_an_object_are_ignored():
 @pytest.mark.parametrize("group_by", GROUP_BY)
 def test_every_advertised_grouping_survives_normalisation(group_by):
     assert normalise_view_config({"group_by": group_by})["group_by"] == group_by
+
+
+def test_lane_state_survives_normalisation():
+    """WS-27y — the sub-axis and its lane state ride the view config. The
+    server must not strip them, or every save round-trip silently flattens
+    the board back to a lane-less one."""
+    got = normalise_view_config({
+        "group_by": "status",
+        "sub_group_by": "assignee",
+        "collapsed_lanes": ["a@x.io", 7, "b@x.io"],
+        "show_empty_lanes": True,
+    })
+    assert got["sub_group_by"] == "assignee"
+    assert got["collapsed_lanes"] == ["a@x.io", "b@x.io"]
+    assert got["show_empty_lanes"] is True
+
+
+def test_a_sub_axis_equal_to_the_main_axis_is_dropped_with_its_lane_state():
+    """Mirrors grouping.ts fromConfig: laning a board by its own columns is
+    nonsense a hand-edited config could still say."""
+    got = normalise_view_config({
+        "group_by": "status",
+        "sub_group_by": "status",
+        "collapsed_lanes": ["todo"],
+        "show_empty_lanes": True,
+    })
+    assert "sub_group_by" not in got
+    assert "collapsed_lanes" not in got
+    assert "show_empty_lanes" not in got
+
+
+def test_a_lane_less_view_stores_no_lane_keys_at_all():
+    """A view saved before lanes existed and one saved after with no lanes
+    must stay byte-identical, so nothing bumps updated_at on a no-op save."""
+    assert normalise_view_config({"group_by": "status"}) == {
+        "filters": {}, "group_by": "status",
+    }
+
+
+def test_shown_fields_survive_normalisation_with_junk_dropped():
+    """WS-27x — the shown-fields set rides the view config. Unknown keys and
+    non-strings are hand-edits (or a newer client's vocabulary) and are
+    dropped; the rest must come back intact or every save round-trip would
+    strip somebody's column choices."""
+    got = normalise_view_config({
+        "group_by": "status",
+        "shown_fields": ["status", "phase", 7, None, "due_at", "assignees"],
+    })
+    assert got["shown_fields"] == ["status", "due_at", "assignees"]
+
+
+def test_every_advertised_shown_field_survives_normalisation():
+    from gateway.routes.projects.filters import SHOWN_FIELDS
+
+    got = normalise_view_config({"shown_fields": list(SHOWN_FIELDS)})
+    assert got["shown_fields"] == list(SHOWN_FIELDS)
+
+
+def test_custom_field_keys_pass_by_shape_and_a_bare_prefix_does_not():
+    """`custom.<key>` names a project field the pure normaliser cannot look
+    up, so it is checked by shape — and `custom.` alone names nothing."""
+    got = normalise_view_config({
+        "shown_fields": ["custom.budget", "custom.", "customer"],
+    })
+    assert got["shown_fields"] == ["custom.budget"]
+
+
+def test_a_duplicate_shown_field_is_kept_once():
+    got = normalise_view_config({"shown_fields": ["status", "status", "tags"]})
+    assert got["shown_fields"] == ["status", "tags"]
+
+
+def test_an_absent_or_junk_shown_fields_stays_absent():
+    """Absent means "the client's default set". Writing a default HERE would
+    freeze today's default into every stored view, so the key is simply not
+    emitted — mirroring how a lane-less view stores no lane keys."""
+    assert "shown_fields" not in normalise_view_config({"group_by": "status"})
+    for junk in ("status,tags", {"status": True}, 7, None, True):
+        assert "shown_fields" not in normalise_view_config({"shown_fields": junk})
+
+
+def test_an_explicitly_empty_shown_fields_list_is_kept():
+    """Hiding every column is a choice, not the default — collapsing `[]`
+    into "absent" would un-hide a deliberate choice on the next apply."""
+    assert normalise_view_config({"shown_fields": []})["shown_fields"] == []
 
 
 def test_a_saved_view_and_the_same_filters_typed_by_hand_are_one_query():

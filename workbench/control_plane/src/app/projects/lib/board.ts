@@ -9,6 +9,8 @@
  * there is no rank column on the task, and one drop writes exactly one row.
  */
 
+import { UNSET } from "./grouping";
+
 export interface PositionedTask {
   id: string;
   /** The task's position in THIS view, or null when it has never been dragged. */
@@ -150,7 +152,7 @@ export function orderBearingView<T extends { view_type: string }>(
 export function buildColumnDropUpdate(
   columnBy: string | null | undefined,
   groupKey: string | null
-): Record<string, string | null> | null {
+): Record<string, string | number | null> | null {
   switch (columnBy) {
     case "status":
       return { status_id: groupKey };
@@ -158,9 +160,117 @@ export function buildColumnDropUpdate(
       return { type_id: groupKey };
     case "project":
       return { project_id: groupKey };
+    case "importance":
+      // The UNSET lane means "no priority", and priority travels as an
+      // integer — `Number(UNSET)` would be NaN, which JSON turns into null
+      // only by luck of the serialiser.
+      return {
+        importance: groupKey === null || groupKey === UNSET ? null : Number(groupKey),
+      };
     default:
       // An unknown grouping is not an error — the drop still reorders within
       // the column; it simply patches no field.
       return null;
   }
+}
+
+/**
+ * WS-27y — why a drop into this target is refused, or `null` when it is not.
+ *
+ * The axes a drop can WRITE are the single-valued plain-PATCH fields: status
+ * and priority (and type, which `buildColumnDropUpdate` already speaks). The
+ * refusals are the reasons the old board silently disabled dragging for —
+ * said out loud, on the target, while the card hovers over it:
+ *
+ * - assignee/tag are many-valued. A task with two owners is drawn in both
+ *   their columns; dropping it into a third cannot know which of the two it
+ *   should replace, so the drop cannot honestly mean anything.
+ * - project crosses a grant boundary (R5) — the move is real but deliberate,
+ *   and belongs in the task panel, not at the end of a flick.
+ * - "none" refuses nothing: one column, so a drop is a pure reorder.
+ *
+ * A dual-axis target (a lane cell) is refused if EITHER axis is — writing
+ * half of what the cell means would file the card somewhere it is not.
+ */
+export function dropRefusal(
+  columnBy: string | null | undefined,
+  laneBy?: string | null,
+  task?: Pick<PositionedTask, "id"> & { archived_at?: string | null }
+): string | null {
+  // A task the server has archived is read-only history; the board should
+  // never be dragging one, but a stale row is not impossible.
+  if (task?.archived_at) return "This task is archived — unarchive it first.";
+
+  const REASONS: Record<string, string> = {
+    assignee:
+      "Assignees are many-valued — a drop can't know which one to replace. Edit them on the task.",
+    tag: "Tags are many-valued — edit them on the task instead.",
+    project:
+      "Moving between projects crosses a grant boundary — use the task panel.",
+  };
+  const WRITABLE = new Set(["status", "importance", "type", "none"]);
+
+  for (const axis of [columnBy, laneBy]) {
+    if (!axis || axis === "none" || WRITABLE.has(axis)) continue;
+    return REASONS[axis] ?? `Grouping by ${axis} isn't a field a drop can set.`;
+  }
+  return null;
+}
+
+/** The bucket key a task currently occupies on an axis — `UNSET` sentinel and
+ *  all, so it compares directly against a column or lane key. `null` means the
+ *  axis has no single current value (many-valued, or unknown). */
+export function currentAxisKey(
+  task: {
+    status_id?: string | null;
+    type_id?: string | null;
+    project_id?: string | null;
+    importance?: number | null;
+  },
+  axis: string | null | undefined
+): string | null {
+  switch (axis) {
+    case "status":
+      return task.status_id ?? null;
+    case "type":
+      return task.type_id ?? null;
+    case "project":
+      return task.project_id ?? null;
+    case "importance":
+      return task.importance === null || task.importance === undefined
+        ? UNSET
+        : String(task.importance);
+    default:
+      return null;
+  }
+}
+
+/**
+ * The one PATCH a drop into a (column, lane) cell implies — BOTH axes at once.
+ *
+ * Axes the task already satisfies are left out, so dropping a card elsewhere
+ * in its own lane changes only the axis that actually moved, and a drop into
+ * the very cell it came from patches nothing (`null`) — no activity row
+ * saying a task moved to where it already was.
+ *
+ * Callers must have consulted `dropRefusal` first; an unwritable axis here
+ * simply contributes nothing, which is the safe wrong answer.
+ */
+export function buildCellDropPatch(
+  task: Parameters<typeof currentAxisKey>[0],
+  columnBy: string | null | undefined,
+  columnKey: string | null,
+  laneBy?: string | null,
+  laneKey?: string | null
+): Record<string, string | number | null> | null {
+  const patch: Record<string, string | number | null> = {};
+  for (const [axis, key] of [
+    [columnBy, columnKey],
+    [laneBy, laneKey],
+  ] as const) {
+    if (!axis || key === undefined || key === null) continue;
+    if (currentAxisKey(task, axis) === key) continue;
+    Object.assign(patch, buildColumnDropUpdate(axis, key) ?? {});
+  }
+  return Object.keys(patch).length ? patch : null;
 }

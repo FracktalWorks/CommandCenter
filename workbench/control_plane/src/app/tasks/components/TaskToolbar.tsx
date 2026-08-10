@@ -11,6 +11,7 @@ import {
   activeFilterCount,
   NO_CONTEXT_FACET,
   NO_ENERGY_FACET,
+  SORT_LABEL,
   type GroupBy,
   type SortField,
   type TaskFilters,
@@ -35,14 +36,8 @@ import { contextAccent } from "../lib/contextColors";
 // Per-view exceptions: Assignee is hidden on My Next Actions (all mine), and
 // Sort is hidden on Waiting For (that view derives its own order).
 
-const SORT_LABEL: Record<SortField, string> = {
-  manual: "Manual",
-  priority: "Priority",
-  due: "Due date",
-  created: "Created",
-  title: "Title",
-  energy: "Energy",
-};
+// SORT_LABEL moved to lib/ordering.ts — the board's drop-refusal overlay names
+// the active sort from the same map this menu draws it from.
 
 const SORT_FIELDS: SortField[] = [
   "manual", "priority", "due", "created", "title", "energy",

@@ -16,6 +16,13 @@ export interface ProjectRow {
   lead?: string | null;
   clickup_id?: string | null;
   clickup_kind?: string | null;
+  /**
+   * WS-27z — the lifecycle policy. ROOT-project settings (the subtree
+   * inherits); `null` months = that policy is off, which is the default.
+   */
+  archive_after_months?: number | null;
+  close_after_months?: number | null;
+  timezone?: string | null;
   children?: ProjectRow[];
 }
 
@@ -243,6 +250,13 @@ export const projectsApi = {
 
   createProject: (payload: Record<string, unknown>) =>
     call<ProjectRow>("nodes", { method: "POST", body: JSON.stringify(payload) }),
+
+  /** WS-27z — root-project settings (lifecycle policy) ride the plain PATCH. */
+  patchProject: (projectId: string, payload: Record<string, unknown>) =>
+    call<ProjectRow>(`nodes/${projectId}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
 
   createTask: (payload: Record<string, unknown>) =>
     call<TaskRow>("tasks", { method: "POST", body: JSON.stringify(payload) }),
@@ -531,10 +545,14 @@ export interface NotificationRow {
  * request shape that reads somebody else's bell.
  */
 export const notificationsApi = {
+  // `unread` split since WS-27v: mentions are the subset whose reason is a
+  // mention, drawn distinctly on the bell.
   list: (unreadOnly = false) =>
-    call<{ rows: NotificationRow[]; total: number; unread: number }>(
-      `notifications${unreadOnly ? "?unread_only=true" : ""}`
-    ),
+    call<{
+      rows: NotificationRow[];
+      total: number;
+      unread: { total: number; mentions: number };
+    }>(`notifications${unreadOnly ? "?unread_only=true" : ""}`),
 
   markRead: (ids: string[]) =>
     call<{ marked: number }>("notifications/read", {
@@ -546,6 +564,30 @@ export const notificationsApi = {
     call<{ marked: number }>("notifications/read", {
       method: "POST",
       body: JSON.stringify({ all: true }),
+    }),
+};
+
+/**
+ * Watchers (WS-27v).
+ *
+ * The watcher is always the session's identity — no parameter, same contract
+ * as the bell above: there is no request shape that subscribes somebody else.
+ * Both writes are idempotent, so the toggle can be optimistic.
+ */
+export const watchersApi = {
+  get: (taskId: string) =>
+    call<{ watchers: string[]; watching: boolean }>(
+      `tasks/${taskId}/watchers`
+    ),
+
+  watch: (taskId: string) =>
+    call<{ task_id: string; watching: boolean }>(`tasks/${taskId}/watch`, {
+      method: "PUT",
+    }),
+
+  unwatch: (taskId: string) =>
+    call<{ task_id: string; watching: boolean }>(`tasks/${taskId}/watch`, {
+      method: "DELETE",
     }),
 };
 
@@ -568,6 +610,68 @@ export interface TaskAccountRow {
  * connection already lives; a second place to connect ClickUp would be a
  * second thing to retire at WS-27g.
  */
+/**
+ * Intake — the front door (WS-27u).
+ *
+ * The queue is scoped server-side by the same grants as the tasks it wraps,
+ * and a snoozed item reappears by being read (`snoozed_until <= now()`), so
+ * nothing here polls or wakes anything. Every ruling answers `{task, intake}`
+ * — the task flipped/archived IN PLACE plus the wrapper, which is permanent
+ * provenance and is never deleted.
+ */
+export const intakeApi = {
+  queue: (params: Record<string, string | number | boolean | undefined> = {}) => {
+    const qs = new URLSearchParams();
+    for (const [key, value] of Object.entries(params)) {
+      if (value !== undefined && value !== "") qs.set(key, String(value));
+    }
+    const query = qs.toString();
+    return call<{ rows: import("./intake").IntakeItem[]; total: number }>(
+      `intake${query ? `?${query}` : ""}`
+    );
+  },
+
+  capture: (payload: Record<string, unknown>) =>
+    call<{ task: TaskRow; intake: import("./intake").IntakeInfo }>("intake", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+
+  /** Accept: the task's status flips in place; omit `statusId` for the default. */
+  accept: (taskId: string, statusId?: string | null) =>
+    call<{ task: TaskRow; intake: import("./intake").IntakeInfo }>(
+      `intake/${taskId}/accept`,
+      {
+        method: "POST",
+        body: JSON.stringify(statusId ? { status_id: statusId } : {}),
+      }
+    ),
+
+  /** Decline: archives the task; the wrapper stays as the reason it exists. */
+  decline: (taskId: string) =>
+    call<{ task: TaskRow; intake: import("./intake").IntakeInfo }>(
+      `intake/${taskId}/decline`,
+      { method: "POST", body: "{}" }
+    ),
+
+  /** Duplicate: records WHICH task this repeats, then archives the capture. */
+  duplicate: (taskId: string, duplicateOfTaskId: string) =>
+    call<{ task: TaskRow; intake: import("./intake").IntakeInfo }>(
+      `intake/${taskId}/duplicate`,
+      {
+        method: "POST",
+        body: JSON.stringify({ duplicate_of_task_id: duplicateOfTaskId }),
+      }
+    ),
+
+  /** Snooze: hidden from the queue until `until`, then reappears on its own. */
+  snooze: (taskId: string, until: string) =>
+    call<{ task: TaskRow; intake: import("./intake").IntakeInfo }>(
+      `intake/${taskId}/snooze`,
+      { method: "POST", body: JSON.stringify({ until }) }
+    ),
+};
+
 export const importApi = {
   accounts: async (): Promise<TaskAccountRow[]> => {
     const res = await fetch("/api/tasks/accounts");

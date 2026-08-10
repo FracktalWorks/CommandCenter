@@ -35,15 +35,24 @@ consistent answer.
 
 from __future__ import annotations
 
+from calendar import monthrange
+from datetime import datetime, time
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from gateway.routes.projects.core import (
+    CLOSING_CATEGORIES,
+    TRIAGE_CATEGORY,
     apply_status_transition,
     coerce_write_values,
     diff_changes,
     record_activity,
+    record_field_change,
     require_row,
     update_row,
+)
+from gateway.routes.projects.core import (
+    now as _clock,  # aliased: the sweep's own parameter is called `now`
 )
 from sqlalchemy import text
 
@@ -154,9 +163,14 @@ async def apply_task_patch(
             diffs = diff_changes(task, after, _TRACKED)
             changed = [str(d["field"]) for d in diffs]
             if diffs:
-                await record_activity(
-                    db, activity_type="field_change", created_by=actor,
-                    task_id=task_id, meta={"changes": diffs},
+                # The ONE field_change door (WS-27w): an automation's edit gets
+                # the same label resolution and description coalescing a human
+                # PATCH gets — a workflow that rewrites a description every run
+                # must not write a timeline row every run. Flagged automation
+                # (WS-27z) so the timeline renders it distinctly.
+                await record_field_change(
+                    db, created_by=actor, task_id=task_id, changes=diffs,
+                    automation=True,
                 )
 
     status_name: str | None = None
@@ -164,7 +178,7 @@ async def apply_task_patch(
         target = await resolve_status(db, str(after.root_project_id), str(wanted_status))
         if str(target.id) != str(after.status_id):
             moved = await apply_status_transition(
-                db, after, str(target.id), created_by=actor,
+                db, after, str(target.id), created_by=actor, automation=True,
             )
             after = moved["row"]
             changed.append("status")
@@ -191,3 +205,188 @@ def _differs(current: Any, wanted: Any) -> bool:
     if current is None or wanted is None:
         return current is not wanted
     return str(current) != str(wanted)
+
+
+# ── The lifecycle sweep (WS-27z) ────────────────────────────────────────────
+#
+# Policy lives in migration 166's three ROOT-project columns; the schedule
+# lives in a published `/workflows` workflow (D6 — never a PM-app cron). This
+# function is the whole meeting point: the workflow's sweep node calls it with
+# nothing but the engine's identity, and everything it does is read from the
+# database at run time.
+
+
+def _months_before(midnight: datetime, months: int) -> datetime:
+    """``midnight`` moved back a whole number of calendar months.
+
+    Calendar months, not ``months * 30`` days, because the column is named in
+    months and an owner who says "one month" means "the 9th of last month",
+    not "30 days". The day clamps to the target month's length (May 31 minus
+    three months is Feb 28/29), which is the same choice every calendar
+    arithmetic library makes.
+    """
+    total = midnight.year * 12 + (midnight.month - 1) - months
+    year, month_index = divmod(total, 12)
+    month = month_index + 1
+    day = min(midnight.day, monthrange(year, month)[1])
+    return midnight.replace(year=year, month=month, day=day)
+
+
+def _project_midnight(moment: datetime, tz_name: str) -> datetime:
+    """The start of ``moment``'s day in the project's timezone.
+
+    This is what makes "a month untouched" defensible (P-28): the cutoff walks
+    back from the project's OWN midnight, so the boundary lands where the
+    people gardening the board live rather than at Greenwich. A bad zone name
+    (validated at write time, so this is belt-and-braces) falls back to UTC —
+    a sweep that skipped the project instead would silently switch the policy
+    off.
+    """
+    try:
+        zone = ZoneInfo(str(tz_name or "UTC"))
+    except Exception:
+        zone = ZoneInfo("UTC")
+    return datetime.combine(moment.astimezone(zone).date(), time.min, tzinfo=zone)
+
+
+def _closing_status(statuses: list[Any]) -> Any | None:
+    """The lane auto-close moves stale work to.
+
+    The project's first ``cancelled``-category lane (by position), else its
+    first ``done`` one. Cancelled preferred deliberately: a task nobody has
+    touched for months was abandoned, not finished, and calling it done would
+    inflate every completion report. There is no dedicated "default closing
+    status" flag in the schema (``is_default`` marks where NEW tasks land),
+    so the category ranking IS the model — stated here, tested, and easy to
+    replace with a flag if one ever earns its place.
+    """
+    for wanted in ("cancelled", "done"):
+        for row in statuses:  # already ordered by position
+            if str(row.category) == wanted:
+                return row
+    return None
+
+
+async def _sweep_candidates(
+    db: Any, root_id: str, status_ids: list[str], cutoff: datetime,
+) -> list[Any]:
+    """Unarchived tasks in these lanes, untouched since before ``cutoff``.
+
+    Membership is a POSITIVE ``ANY`` list on purpose — the caller hands in
+    exactly the lanes a pass may touch, so triage exemption and the archive
+    guard hold by construction rather than by a NOT somebody could drop.
+    """
+    if not status_ids:
+        return []
+    return (await db.execute(
+        text(
+            "SELECT * FROM pm_tasks "
+            "WHERE root_project_id = CAST(:root AS uuid) "
+            "AND archived_at IS NULL "
+            "AND status_id = ANY(CAST(:sids AS uuid[])) "
+            "AND updated_at < :cutoff"
+        ),
+        {"root": root_id, "sids": status_ids, "cutoff": cutoff},
+    )).fetchall()
+
+
+async def run_lifecycle_sweep(
+    db: Any, *, actor: str, now: datetime | None = None,
+) -> dict[str, Any]:
+    """Apply every root project's lifecycle policy once. Idempotent.
+
+    For each ROOT project with a policy enabled (both columns NULL — the
+    default — means the project is never touched):
+
+    * **archive** — tasks whose status category is done/cancelled and whose
+      ``updated_at`` is older than ``archive_after_months`` calendar months
+      before the project's own midnight leave the default surfaces
+      (``archived_at`` stamped, a ``system`` activity flagged automation).
+      Only closed-category lanes are eligible BY CONSTRUCTION, which is
+      WS-27w's manual archive guard restated as a query shape.
+    * **close** — open tasks (not closed, not triage — WS-27u's queue is a
+      place work WAITS) untouched beyond ``close_after_months`` move to the
+      project's closing status through :func:`core.apply_status_transition`,
+      so ``completed_at``, the ``status_change`` activity and recurrence all
+      behave exactly as if a person had moved the card.
+
+    A second run does nothing: archiving removes a task from the archive
+    pass's candidate set (``archived_at IS NULL``) and closing removes it
+    from the close pass's (its lane is now closed-category) — and the close
+    pass's transition bumps ``updated_at``, so even a task closed into a
+    project with a shorter archive window waits its full archive term.
+
+    Writes go through the ordinary service, as ``actor`` (the workflow's
+    ``system:workflow:<id>`` identity), so every change is an ordinary
+    timeline row wearing the automation flag.
+    """
+    moment = now or _clock()
+    roots = (await db.execute(
+        text("SELECT * FROM pm_projects WHERE parent_project_id IS NULL"),
+    )).fetchall()
+
+    swept = archived = closed = 0
+    for project in roots:
+        archive_months = getattr(project, "archive_after_months", None)
+        close_months = getattr(project, "close_after_months", None)
+        if archive_months is None and close_months is None:
+            continue
+        swept += 1
+        midnight = _project_midnight(
+            moment, getattr(project, "timezone", "UTC"),
+        )
+        statuses = (await db.execute(
+            text(
+                "SELECT * FROM pm_task_statuses "
+                "WHERE project_id = CAST(:pid AS uuid) ORDER BY position, name"
+            ),
+            {"pid": str(project.id)},
+        )).fetchall()
+
+        if archive_months is not None:
+            closed_ids = [
+                str(s.id) for s in statuses
+                if str(s.category) in CLOSING_CATEGORIES
+            ]
+            cutoff = _months_before(midnight, int(archive_months))
+            for task in await _sweep_candidates(
+                db, str(project.id), closed_ids, cutoff,
+            ):
+                await update_row(
+                    db, "pm_tasks", str(task.id), {"archived_at": moment},
+                )
+                await record_activity(
+                    db, activity_type="system", created_by=actor,
+                    task_id=str(task.id),
+                    body=(
+                        f"Task archived — untouched for "
+                        f"{int(archive_months)} month(s) after closing"
+                    ),
+                    automation=True,
+                )
+                archived += 1
+
+        if close_months is not None:
+            target = _closing_status(list(statuses))
+            open_ids = [
+                str(s.id) for s in statuses
+                if str(s.category) not in CLOSING_CATEGORIES
+                and str(s.category) != TRIAGE_CATEGORY
+            ]
+            if target is not None:
+                cutoff = _months_before(midnight, int(close_months))
+                for task in await _sweep_candidates(
+                    db, str(project.id), open_ids, cutoff,
+                ):
+                    await apply_status_transition(
+                        db, task, str(target.id), created_by=actor,
+                        automation=True,
+                    )
+                    closed += 1
+
+    return {
+        "projects": swept,
+        "archived": archived,
+        "closed": closed,
+        "skipped": not (archived or closed),
+    }

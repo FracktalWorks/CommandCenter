@@ -1,6 +1,9 @@
 "use client";
 
 import Icon from "@/components/Icon";
+import { QuickAdd } from "@/components/QuickAdd";
+import { useFlash } from "@/components/useFlash";
+import { clampCursor, stepCursor } from "@/lib/cursor";
 import {
   useCallback,
   useEffect,
@@ -29,8 +32,12 @@ import {
   DEFAULT_VISIBLE,
   type ColumnDef,
 } from "../lib/columns";
+import { quickAddPrefill } from "../lib/quickAdd";
 import { ColumnHeader, ColumnCell } from "./ListColumns";
 import { StatusPill } from "./StatusPill";
+
+/** The cursor never carries a selection here — see the note in onKeyDown. */
+const EMPTY_SELECTION: ReadonlySet<string> = new Set();
 
 // A status-segmented list (Jira backlog style): rows grouped under collapsible
 // stage headers with counts. In Manual sort the rows are drag-reorderable —
@@ -70,6 +77,8 @@ export function TaskListGrouped({
   const urgentWindowHours = useTaskStore((s) => s.settings.urgentWindowHours);
   const sort = useTaskStore((s) => s.sort);
   const reorderItem = useTaskStore((s) => s.reorderItem);
+  const quickAddNext = useTaskStore((s) => s.quickAddNext);
+  const openFocus = useTaskStore((s) => s.openFocus);
   // Multi-select: when active, rows show a checkbox and drag is suppressed
   // (selecting and dragging the same card would conflict).
   const selectMode = useTaskStore((s) => s.selectMode);
@@ -169,6 +178,64 @@ export function TaskListGrouped({
       return next;
     });
 
+  // WS-27y backport: the keyboard cursor and the landing flash — the same
+  // shared machinery the Projects list runs (`@/lib/cursor`, `useFlash`).
+  const [cursor, setCursor] = useState(-1);
+  const { flash, attach, scrollTo } = useFlash();
+
+  // The cursor's world: the rows in render order, skipping collapsed groups.
+  const rows = useMemo(() => {
+    const out: string[] = [];
+    for (const g of groups) {
+      if (collapsed.has(g.key)) continue;
+      for (const i of byGroup.get(g.key) ?? []) out.push(i.id);
+    }
+    return out;
+  }, [groups, byGroup, collapsed]);
+
+  // Clamped at READ time rather than synced by an effect: the rows shrink
+  // under the cursor on every reload, and a state write per reload is exactly
+  // the cascading-render pattern the lint forbids.
+  const cursorAt = clampCursor(rows.length, cursor);
+
+  function onKeyDown(event: React.KeyboardEvent) {
+    // A keystroke a control already consumed (a quick-add's Enter, a row's
+    // own Enter-to-open) is not the cursor's; nor is typing in an input.
+    if (event.defaultPrevented) return;
+    if (
+      (event.target as HTMLElement).closest(
+        "input, textarea, select, [contenteditable=true]",
+      )
+    )
+      return;
+    // Plain cursor + Enter only. /tasks has no shift-range selection model
+    // (`selectedIds` is a bare toggle set with no anchor — see taskStore), so
+    // the shared cursor's shift-sweep stays dormant here rather than
+    // half-growing a second selection grammar on one surface.
+    const next = stepCursor(
+      rows,
+      { cursor: cursorAt, anchor: null, selection: EMPTY_SELECTION },
+      event.key,
+      false,
+    );
+    if (!next) return;
+    event.preventDefault();
+    setCursor(next.cursor);
+    if (next.open) openFocus(next.open);
+    if (next.cursor >= 0) scrollTo(rows[next.cursor]);
+  }
+
+  // Group-context quick-add (shared QuickAdd + this app's prefill): a task
+  // added under a group header is born a NEXT action IN that group, then
+  // announces its landing with the same flash a drop gets. The computed
+  // lenses (priority / mode) return null and never offer the box.
+  const quickAdd = async (title: string, groupKey: string) => {
+    const prefill = quickAddPrefill(statusGrouped ? "" : (groupBy as GroupBy), groupKey);
+    if (!prefill) return;
+    const id = quickAddNext(title, prefill);
+    if (id) flash(id);
+  };
+
   const onDrop = (groupKey: string, index: number) => {
     setDropAt(null);
     const id = dragId;
@@ -188,13 +255,21 @@ export function TaskListGrouped({
           ? { workflowStage: groupKey }
           : { providerStatus: groupKey }
         : { workflowStage: groupKey };
+    // The landed row scrolls into view and flashes (shared useFlash), so the
+    // gesture visibly ends where the row now lives.
+    flash(id);
     reorderItem(id, dest, index, refile);
   };
 
   const total = groups.length;
 
   return (
-    <div className="flex-1 overflow-y-auto">
+    <div
+      tabIndex={0}
+      onKeyDown={onKeyDown}
+      aria-label="Task list — arrow keys move, Enter opens"
+      className="flex-1 overflow-y-auto outline-none"
+    >
       {/* Desktop column header row (Context list only). Hidden on mobile, where
           rows stay stacked. The left spacer matches a row's grip+expand gutters
           so "Name" and the cells sit above their columns. */}
@@ -214,7 +289,10 @@ export function TaskListGrouped({
         </div>
       )}
       {groups.map((g, gi) => {
-        const rows = byGroup.get(g.key) ?? [];
+        // `groupRows`, not `rows` — the outer `rows` is the keyboard cursor's
+        // whole-list world, and shadowing it here is how the cursor ring ends
+        // up comparing against the wrong array.
+        const groupRows = byGroup.get(g.key) ?? [];
         const isCollapsed = collapsed.has(g.key);
         const showHeader = grouped;
         // Status swimlanes get the per-stage accent; a lens grouping uses a plain
@@ -272,7 +350,7 @@ export function TaskListGrouped({
                       "bg-background/60 text-muted-foreground",
                     ].join(" ")}
                   >
-                    {rows.length}
+                    {groupRows.length}
                   </span>
                   {isDone && (
                     <span className="shrink-0 rounded-full bg-success/15 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-success">
@@ -284,7 +362,7 @@ export function TaskListGrouped({
             )}
             {!isCollapsed && (
               <div>
-                {rows.map((item, idx) => (
+                {groupRows.map((item, idx) => (
                   <DraggableRow
                     key={item.id}
                     item={item}
@@ -298,6 +376,8 @@ export function TaskListGrouped({
                     // grouped by status (the section header IS the stage); it's
                     // useful only on a lens grouping, where status isn't shown.
                     showStage={isLens}
+                    attachRef={attach(item.id)}
+                    atCursor={cursorAt >= 0 && rows[cursorAt] === item.id}
                     isDropTarget={dropAt === `${g.key}:${idx}`}
                     onDragStart={() => setDragId(item.id)}
                     onDragEnd={() => {
@@ -315,19 +395,19 @@ export function TaskListGrouped({
                     onDragOver={(e) => {
                       if (!dragId) return;
                       e.preventDefault();
-                      setDropAt(`${g.key}:${rows.length}`);
+                      setDropAt(`${g.key}:${groupRows.length}`);
                     }}
-                    onDrop={() => onDrop(g.key, rows.length)}
+                    onDrop={() => onDrop(g.key, groupRows.length)}
                     className={[
                       "transition-all",
                       dragId ? "h-6" : "h-2",
-                      dropAt === `${g.key}:${rows.length}`
+                      dropAt === `${g.key}:${groupRows.length}`
                         ? "border-t-2 border-primary bg-primary/10"
                         : "border-t-2 border-transparent",
                     ].join(" ")}
                   />
                 )}
-                {rows.length === 0 && showHeader && (
+                {groupRows.length === 0 && showHeader && (
                   <p className="px-9 py-2.5 text-[11px] italic text-muted-foreground/50">
                     {dragId
                       ? "Drop here to move to this stage"
@@ -336,6 +416,21 @@ export function TaskListGrouped({
                         : "No tasks in this group"}
                   </p>
                 )}
+                {/* WS-27y backport: the group's own capture box — a task
+                    added here is born a NEXT action IN this group (shared
+                    QuickAdd + lib/quickAdd prefill), and flashes where it
+                    lands. The computed lenses (priority / mode) offer no box:
+                    no create payload can promise the landing. */}
+                {showHeader &&
+                quickAddPrefill(statusGrouped ? "" : (groupBy as GroupBy), g.key) !== null ? (
+                  <div className="px-9 py-1">
+                    <QuickAdd
+                      label={`Add to ${g.label || "this group"}`}
+                      onAdd={(title) => quickAdd(title, g.key)}
+                      className="max-w-md"
+                    />
+                  </div>
+                ) : null}
               </div>
             )}
           </section>
@@ -354,6 +449,8 @@ function DraggableRow({
   columns,
   grid,
   showStage,
+  attachRef,
+  atCursor,
   isDropTarget,
   onDragStart,
   onDragEnd,
@@ -371,6 +468,10 @@ function DraggableRow({
   grid: string;
   /** Show the card's status pill (off when the list is grouped by status). */
   showStage: boolean;
+  /** useFlash registration — the landing flash / cursor scroll finds the row. */
+  attachRef: (el: HTMLElement | null) => void;
+  /** The keyboard cursor stands on this row (WS-27y backport). */
+  atCursor: boolean;
   isDropTarget: boolean;
   onDragStart: () => void;
   onDragEnd: () => void;
@@ -385,6 +486,7 @@ function DraggableRow({
 
   return (
     <div
+      ref={attachRef}
       draggable={manual}
       onDragStart={onDragStart}
       onDragEnd={onDragEnd}
@@ -401,6 +503,9 @@ function DraggableRow({
       className={[
         "group/row relative border-t-2 transition-colors",
         isDropTarget ? "border-primary" : "border-transparent",
+        // The keyboard cursor's ring — same classes the Projects list draws
+        // on its active row.
+        atCursor ? "bg-muted/60 ring-2 ring-inset ring-ring" : "",
       ].join(" ")}
     >
       {/* a precise drop line that reads even over a dense row */}

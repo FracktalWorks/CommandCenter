@@ -219,6 +219,10 @@ class FakeDB:
             who = args.get("vis_email")
             seen = who is None or who in self.visible_to
             return _Result([SimpleNamespace(x=1)] if seen else [])
+        # WS-27v's split badge count — one query, two aggregates, so the two
+        # numbers can never describe different row sets.
+        if "FILTER (WHERE n.kind = 'mention')" in statement:
+            return _Result([SimpleNamespace(total=3, mentions=1)])
         if "assignee AS who" in statement:
             return _Result([SimpleNamespace(who=w) for w in self.audience])
         if "UPDATE pm_notifications" in statement:
@@ -411,6 +415,23 @@ def test_the_badge_count_cannot_promise_more_than_the_list_shows(monkeypatch):
     bind(monkeypatch, db, pm_notify, pm_core)
     run(pm_notify.list_notifications(user=ACTOR, page=page()))
     counted = next(s for s in db.statements if "count(*)" in s)
+    assert "pm_project_grants" in counted
+    assert "read_at IS NULL" in counted
+
+
+def test_the_unread_count_is_split_into_total_and_mentions(monkeypatch):
+    """WS-27v. `{total, mentions}` rather than a bare number: "you were named"
+    is a stronger claim on attention than "something you follow moved", and the
+    bell draws the two distinctly. Counted in ONE query with a FILTER, through
+    the same visibility clause and unread predicate as before, so mentions is a
+    subset of total by construction."""
+    db = FakeDB()
+    bind(monkeypatch, db, pm_notify, pm_core)
+    result = run(pm_notify.list_notifications(user=ACTOR, page=page()))
+    assert result["unread"] == {"total": 3, "mentions": 1}
+    counted = next(
+        s for s in db.statements if "FILTER (WHERE n.kind = 'mention')" in s
+    )
     assert "pm_project_grants" in counted
     assert "read_at IS NULL" in counted
 

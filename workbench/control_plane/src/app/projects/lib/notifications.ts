@@ -24,6 +24,49 @@ export function badge(unread: number): string | null {
   return unread > BADGE_MAX ? `${BADGE_MAX}+` : String(unread);
 }
 
+/**
+ * The unread badge, split (WS-27v): `mentions` is the subset of `total` whose
+ * reason is a mention — "you were named", the stronger claim on attention.
+ */
+export interface UnreadSplit {
+  total: number;
+  mentions: number;
+}
+
+const sane = (n: unknown): number =>
+  typeof n === "number" && Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
+
+/**
+ * Normalise the server's unread payload into a split the bell can draw.
+ *
+ * Tolerates the pre-WS-27v bare number (a stale gateway behind a fresh UI is
+ * a deploy-window reality, and a bell that crashes during it notifies nobody
+ * about anything) and clamps `mentions` to `total`, because a subset larger
+ * than its set is a payload bug the badge must not amplify.
+ */
+export function unreadSplit(
+  raw: number | Partial<UnreadSplit> | null | undefined,
+): UnreadSplit {
+  if (typeof raw === "number") return { total: sane(raw), mentions: 0 };
+  const total = sane(raw?.total);
+  return { total, mentions: Math.min(sane(raw?.mentions), total) };
+}
+
+/**
+ * The split after one row of `kind` is read — the optimistic update the bell
+ * applies before the server confirms. Mentions only shrink when the row read
+ * was a mention; both floors are zero so a double-click cannot go negative.
+ */
+export function afterRead(split: UnreadSplit, kind: string): UnreadSplit {
+  return {
+    total: Math.max(0, split.total - 1),
+    mentions:
+      kind === "mention"
+        ? Math.max(0, split.mentions - 1)
+        : Math.min(split.mentions, Math.max(0, split.total - 1)),
+  };
+}
+
 /** The verb for each kind. */
 const VERB: Record<string, string> = {
   assigned: "assigned you",

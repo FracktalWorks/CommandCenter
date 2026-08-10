@@ -19,11 +19,14 @@ import Button from "@/components/ui/Button";
 
 import { type NotificationRow, notificationsApi } from "../lib/api";
 import {
+  type UnreadSplit,
+  afterRead,
   badge,
   describe,
   linkTo,
   order,
   unreadIds,
+  unreadSplit,
 } from "../lib/notifications";
 
 /** How often the badge re-checks while the tab is open. */
@@ -34,7 +37,7 @@ export function NotificationBell({ onOpenTask }: {
   onOpenTask?: (taskId: string) => void;
 }) {
   const [rows, setRows] = useState<NotificationRow[]>([]);
-  const [unread, setUnread] = useState(0);
+  const [unread, setUnread] = useState<UnreadSplit>({ total: 0, mentions: 0 });
   const [open, setOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const box = useRef<HTMLDivElement | null>(null);
@@ -43,7 +46,7 @@ export function NotificationBell({ onOpenTask }: {
     try {
       const res = await notificationsApi.list();
       setRows(order(res.rows));
-      setUnread(res.unread);
+      setUnread(unreadSplit(res.unread));
       setError(null);
     } catch (err) {
       setError((err as Error).message);
@@ -87,7 +90,7 @@ export function NotificationBell({ onOpenTask }: {
           r.id === row.id ? { ...r, read_at: new Date().toISOString() } : r,
         ),
       );
-      setUnread((n) => Math.max(0, n - 1));
+      setUnread((u) => afterRead(u, row.kind));
       try {
         await notificationsApi.markRead([row.id]);
       } catch {
@@ -101,7 +104,7 @@ export function NotificationBell({ onOpenTask }: {
   const dismissAll = async () => {
     const ids = unreadIds(rows);
     if (!ids.length) return;
-    setUnread(0);
+    setUnread({ total: 0, mentions: 0 });
     setRows((prev) =>
       prev.map((r) => (r.read_at ? r : { ...r, read_at: new Date().toISOString() })),
     );
@@ -112,7 +115,8 @@ export function NotificationBell({ onOpenTask }: {
     }
   };
 
-  const count = badge(unread);
+  const count = badge(unread.total);
+  const mentionCount = badge(unread.mentions);
 
   return (
     <div ref={box} className="relative">
@@ -120,7 +124,13 @@ export function NotificationBell({ onOpenTask }: {
         variant="ghost"
         size="icon-sm"
         icon="Bell"
-        aria-label={count ? `Notifications (${count} unread)` : "Notifications"}
+        aria-label={
+          count
+            ? `Notifications (${count} unread${
+                mentionCount ? `, ${mentionCount} mentions` : ""
+              })`
+            : "Notifications"
+        }
         onClick={() => setOpen((v) => !v)}
       />
       {count ? (
@@ -129,6 +139,17 @@ export function NotificationBell({ onOpenTask }: {
           className="pointer-events-none absolute -right-0.5 -top-0.5 rounded-full bg-primary px-1 text-[9px] font-medium leading-4 text-primary-foreground"
         >
           {count}
+        </span>
+      ) : null}
+      {/* WS-27v: mentions get their own marker, below the total so the two
+          never overlap. `@` rather than a second number at this size — the
+          count itself is in the aria-label and the panel header. */}
+      {mentionCount ? (
+        <span
+          aria-hidden
+          className="pointer-events-none absolute -bottom-0.5 -right-0.5 rounded-full bg-destructive px-1 text-[9px] font-semibold leading-4 text-destructive-foreground"
+        >
+          @
         </span>
       ) : null}
 
@@ -141,8 +162,13 @@ export function NotificationBell({ onOpenTask }: {
           <header className="flex items-center justify-between border-b border-border px-3 py-2">
             <span className="text-xs font-medium text-foreground">
               Notifications
+              {unread.mentions > 0 ? (
+                <span className="ml-1.5 rounded-full bg-destructive px-1.5 text-[10px] font-medium text-destructive-foreground">
+                  {badge(unread.mentions)} @
+                </span>
+              ) : null}
             </span>
-            {unread > 0 ? (
+            {unread.total > 0 ? (
               <Button variant="text" size="sm" onClick={dismissAll}>
                 Mark all read
               </Button>

@@ -1,10 +1,15 @@
 "use client";
 
+import { QuickAdd } from "@/components/QuickAdd";
+import { useFlash } from "@/components/useFlash";
+import { clampCursor, stepCursor } from "@/lib/cursor";
 import { useCallback, useMemo, useState } from "react";
 import { GtdItem, ViewKey } from "../lib/types";
 import { useTaskStore } from "../lib/taskStore";
 import { TaskCard } from "./TaskCard";
+import { dropRefusal } from "../lib/dropRules";
 import { applySort, byManualOrder, statusColumnForItem } from "../lib/ordering";
+import { quickAddPrefill } from "../lib/quickAdd";
 import { stageAccent } from "../lib/stageColors";
 import { formatStatus } from "../lib/utils";
 
@@ -27,6 +32,9 @@ import { formatStatus } from "../lib/utils";
 // The board is only offered for Next Actions (see ItemList `boardable`); other
 // views render list-only until their own status model is designed.
 
+/** The cursor never carries a selection here — see the note in onKeyDown. */
+const EMPTY_SELECTION: ReadonlySet<string> = new Set();
+
 export function TaskBoard({
   items,
   stages,
@@ -44,6 +52,8 @@ export function TaskBoard({
   const sort = useTaskStore((s) => s.sort);
   const reorderItem = useTaskStore((s) => s.reorderItem);
   const updateItem = useTaskStore((s) => s.updateItem);
+  const quickAddNext = useTaskStore((s) => s.quickAddNext);
+  const openFocus = useTaskStore((s) => s.openFocus);
   // Multi-select for bulk archive/delete — works right on the board now. While
   // selecting, cards become selection toggles and drag is suppressed (a checkbox
   // and a drag handle on the same card would fight each other).
@@ -71,6 +81,10 @@ export function TaskBoard({
   const [overCol, setOverCol] = useState<string | null>(null);
   // Exact gap "<colKey>:<index>" the card would drop into (manual mode only).
   const [dropAt, setDropAt] = useState<string | null>(null);
+  // WS-27y backport: the keyboard cursor and the landing flash — the same
+  // shared machinery the Projects board runs (`@/lib/cursor`, `useFlash`).
+  const [cursor, setCursor] = useState(-1);
+  const { flash, attach, scrollTo } = useFlash();
 
   // An unstaged task sits in the FIRST column of the axis.
   const firstStage = stageKeys[0];
@@ -97,6 +111,59 @@ export function TaskBoard({
     return m;
   }, [items, columns, stageOf, sort]);
 
+  // The keyboard cursor's world: every card in render order (column by
+  // column), same as the Projects board walks its lanes.
+  const rows = useMemo(() => {
+    const out: string[] = [];
+    for (const c of columns) for (const i of byColumn.get(c.key) ?? []) out.push(i.id);
+    return out;
+  }, [columns, byColumn]);
+
+  // Clamped at READ time rather than synced by an effect: the rows shrink
+  // under the cursor on every reload, and a state write per reload is exactly
+  // the cascading-render pattern the lint forbids.
+  const cursorAt = clampCursor(rows.length, cursor);
+
+  function onKeyDown(event: React.KeyboardEvent) {
+    // A keystroke a control already consumed (a quick-add's Enter, a card's
+    // own Enter-to-open) is not the cursor's; nor is typing in an input.
+    if (event.defaultPrevented) return;
+    if (
+      (event.target as HTMLElement).closest(
+        "input, textarea, select, [contenteditable=true]",
+      )
+    )
+      return;
+    // Plain cursor + Enter only. /tasks has no shift-range selection model
+    // (`selectedIds` is a bare toggle set with no anchor — see taskStore), so
+    // the shared cursor's shift-sweep stays dormant here rather than
+    // half-growing a second selection grammar on one surface.
+    const next = stepCursor(
+      rows,
+      { cursor: cursorAt, anchor: null, selection: EMPTY_SELECTION },
+      event.key,
+      false,
+    );
+    if (!next) return;
+    event.preventDefault();
+    setCursor(next.cursor);
+    if (next.open) openFocus(next.open);
+    if (next.cursor >= 0) scrollTo(rows[next.cursor]);
+  }
+
+  // WS-27y backport: dragging is always offered; a refused target explains
+  // itself while the card hovers (`lib/dropRules`), instead of the old
+  // silent snap-back.
+  const dragged = dragId ? items.find((i) => i.id === dragId) : undefined;
+  const refusalFor = (colKey: string): string | null =>
+    dragged
+      ? dropRefusal({
+          selectMode,
+          sortField: sort.field,
+          sameColumn: stageOf(dragged) === colKey,
+        })
+      : null;
+
   // Refile depends on the axis:
   //  • Global board (columns = local STAGES): set `workflowStage` for both
   //    LOCAL and SYNCED. For a synced task the backend translates the stage into
@@ -118,6 +185,8 @@ export function TaskBoard({
   };
 
   // Drop onto a specific gap (index) within a column — reorder + re-file.
+  // The landed card scrolls into view and flashes (shared useFlash), so the
+  // gesture visibly ends where the card now lives.
   const dropAtIndex = (colKey: string, index: number) => {
     setDropAt(null);
     setOverCol(null);
@@ -125,11 +194,14 @@ export function TaskBoard({
     setDragId(null);
     if (!id) return;
     const dest = byManualOrder(byColumn.get(colKey) ?? []);
+    flash(id);
     reorderItem(id, dest, index, refileFor(colKey, id));
   };
 
   // Drop anywhere in a column (not on a card gap): keep the old semantics —
-  // in a field sort we can't rank, so just re-file the stage/status.
+  // in a field sort we can't rank, so just re-file the stage/status. The
+  // refused case (same column, field sort) already explained itself via the
+  // hover overlay; here it simply does nothing.
   const dropColumn = (colKey: string) => {
     setOverCol(null);
     setDropAt(null);
@@ -141,31 +213,64 @@ export function TaskBoard({
     if (manual) {
       // append to the end of the column
       const dest = byManualOrder(byColumn.get(colKey) ?? []);
+      flash(id);
       reorderItem(id, dest, dest.length, refileFor(colKey, id));
       return;
     }
-    if (stageOf(item) === colKey) return; // no move
+    if (stageOf(item) === colKey) return; // refused — the overlay said why
     const refile = refileFor(colKey, id);
-    if (refile) updateItem(id, refile);
+    if (refile) {
+      flash(id);
+      updateItem(id, refile);
+    }
+  };
+
+  // Group-context quick-add (shared QuickAdd + this app's prefill): a task
+  // added at a column's foot is born a NEXT action IN that stage, then
+  // announces its landing with the same flash a drop gets.
+  const quickAdd = async (title: string, colKey: string) => {
+    const id = quickAddNext(title, quickAddPrefill("", colKey) ?? {});
+    if (id) flash(id);
   };
 
   return (
-    <div className="flex h-full gap-3 overflow-x-auto p-4">
+    <div
+      tabIndex={0}
+      onKeyDown={onKeyDown}
+      aria-label="Task board — arrow keys move, Enter opens"
+      className="flex h-full gap-3 overflow-x-auto p-4 outline-none"
+    >
       {columns.map((col, ci) => {
         const colItems = byColumn.get(col.key) ?? [];
         const isOver = overCol === col.key;
+        const refusal = isOver && dragged ? refusalFor(col.key) : null;
         const accent = stageAccent(col.label || col.key, ci, columns.length);
         return (
           <div
             key={col.key}
-            onDragOver={(e) => { e.preventDefault(); setOverCol(col.key); }}
+            onDragOver={(e) => {
+              // preventDefault even when refusing — the browser must keep
+              // sending events or the overlay could never show; the refusal
+              // is enforced in the drop handlers, and the cursor says "no"
+              // via dropEffect.
+              e.preventDefault();
+              e.dataTransfer.dropEffect = refusalFor(col.key) ? "none" : "move";
+              setOverCol(col.key);
+            }}
             onDragLeave={() => setOverCol((c) => (c === col.key ? null : c))}
             onDrop={() => dropColumn(col.key)}
             className={[
-              "flex h-full w-72 shrink-0 flex-col overflow-hidden rounded-xl border bg-secondary/30",
+              "relative flex h-full w-72 shrink-0 flex-col overflow-hidden rounded-xl border bg-secondary/30",
               isOver ? "border-primary bg-primary/5" : "border-border",
             ].join(" ")}
           >
+            {/* WS-27y backport: the refusal, said on the target while the
+                card hovers — same overlay grammar as the Projects board. */}
+            {refusal ? (
+              <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-xl bg-background/85 p-3 text-center text-xs font-medium text-destructive">
+                {refusal}
+              </div>
+            ) : null}
             {/* accent cap so each stage column is identifiable at a glance */}
             <div className={`h-1 w-full ${accent.dot}`} />
             <div
@@ -198,7 +303,17 @@ export function TaskBoard({
                       onDrop={() => dropAtIndex(col.key, idx)}
                     />
                   )}
-                  <div className="pb-2">
+                  <div
+                    ref={attach(i.id)}
+                    className={[
+                      "mb-2 rounded-lg",
+                      // The keyboard cursor's ring — same classes the
+                      // Projects board draws on its active card.
+                      cursorAt >= 0 && rows[cursorAt] === i.id
+                        ? "ring-2 ring-ring"
+                        : "",
+                    ].join(" ")}
+                  >
                     <TaskCard
                       item={i}
                       draggable={!selectMode}
@@ -227,6 +342,15 @@ export function TaskBoard({
                   {isOver ? "Drop here" : "Empty"}
                 </div>
               )}
+            </div>
+            {/* WS-27y backport: the column's own capture box — a task added
+                here is born a NEXT action in THIS stage (shared QuickAdd +
+                lib/quickAdd prefill), and flashes where it lands. */}
+            <div className="p-2 pt-0">
+              <QuickAdd
+                label={`Add to ${stages ? formatStatus(col.label) : col.label}`}
+                onAdd={(title) => quickAdd(title, col.key)}
+              />
             </div>
           </div>
         );

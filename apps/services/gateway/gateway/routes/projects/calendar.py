@@ -57,6 +57,7 @@ from gateway.routes.projects.core import (
     router,
     row_to_dict,
     task_visibility_clause,
+    triage_exclusion_clause,
 )
 from gateway.routes.projects.filters import (
     attach_assignees,
@@ -197,6 +198,9 @@ async def get_calendar(
     # same question, and the app's standing rule (§11.8) is that a second
     # endpoint per surface is how the filters start disagreeing.
     include_links: bool = False,
+    # WS-27u. The intake queue must not leak onto the month either — the ONE
+    # predicate is `core.triage_exclusion_clause`, applied below.
+    include_triage: bool = False,
 ) -> dict:
     """Every visible task whose schedule overlaps ``[from, to)``.
 
@@ -239,6 +243,8 @@ async def get_calendar(
         )
         clauses.extend(extra_clauses)
         params.update(extra_params)
+        if not include_triage:
+            clauses.append(triage_exclusion_clause())
 
         scoped = " AND ".join(clauses)
         params["window_from"] = window_from

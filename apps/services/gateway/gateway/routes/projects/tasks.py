@@ -24,6 +24,7 @@ from typing import Any
 from acb_auth import UserContext, get_current_user
 from fastapi import Depends, HTTPException
 from gateway.routes.projects.core import (
+    CLOSING_CATEGORIES,
     DIRECTIONS,
     TASK_SORTS,
     TASK_SOURCES,
@@ -46,13 +47,17 @@ from gateway.routes.projects.core import (
     load_visible_project,
     load_visible_task,
     next_task_number,
+    now,
     record_activity,
+    record_field_change,
+    require_row,
     require_status_in_project,
     resolve_visibility,
     root_project_id,
     router,
     row_to_dict,
     task_visibility_clause,
+    triage_exclusion_clause,
     update_row,
     validate_choice,
 )
@@ -62,7 +67,12 @@ from gateway.routes.projects.filters import (
     attach_relation_counts,
     build_task_filters,
 )
-from gateway.routes.projects.notifications import notify
+from gateway.routes.projects.notifications import (
+    excerpt_of,
+    new_mentions,
+    notify,
+)
+from gateway.routes.projects.watchers import ensure_watchers
 from gateway.routes.projects.relations import (
     DIRECTED_TYPES,
     assert_no_block_cycle,
@@ -127,6 +137,9 @@ async def list_tasks(
     # WS-27m. `tags` is ANY, `tags_all` is ALL — see `build_task_filters`.
     tags: str | None = None,
     tags_all: str | None = None,
+    # WS-27u. Triage-parked tasks are invisible to every list surface unless
+    # asked for — the ONE predicate lives in `core.triage_exclusion_clause`.
+    include_triage: bool = False,
 ) -> ListResponse:
     """The one task-list endpoint every surface reads through.
 
@@ -188,15 +201,21 @@ async def list_tasks(
         )
         clauses.extend(extra_clauses)
         params.update(extra_params)
+        if not include_triage:
+            clauses.append(triage_exclusion_clause())
 
         where = " WHERE " + " AND ".join(clauses)
         total = (await db.execute(
             text(f"SELECT count(*) FROM pm_tasks t{where}"), params,
         )).scalar() or 0
+        # `column` is an allowlisted template with `{dir}` slots; the direction
+        # is one of OUR two words, never caller text. Every entry ends with the
+        # `(created_at, id)` tiebreaker (core.SORT_TIEBREAK), so the order is
+        # total and a tie cannot straddle a page boundary.
         rows = (await db.execute(
             text(
                 f"SELECT t.* FROM pm_tasks t{where} "
-                f"ORDER BY {column} {order} NULLS LAST, t.id {order} "
+                f"ORDER BY {column.format(dir=order)} "
                 f"LIMIT :limit OFFSET :offset"
             ),
             {**params, "limit": page.limit, "offset": page.offset},
@@ -286,6 +305,10 @@ async def create_task(
             db, activity_type="system", created_by=actor(user),
             task_id=task_id, body="Task created",
         )
+        # WS-27v — the creator watches their own task, which is what keeps the
+        # WS-27j author-hears-about-comments behaviour once the audience is
+        # watchers ∪ assignees (migration 165 seeds the same for older tasks).
+        await ensure_watchers(db, task_id, [actor(user)], by=actor(user))
         await db.commit()
         result = row_to_dict(row, TaskModel)
     finally:
@@ -365,9 +388,11 @@ async def patch_task(
                 for key, moved in sorted(custom_changes.items())
             )
             if changes:
-                await record_activity(
-                    db, activity_type="field_change", created_by=actor(user),
-                    task_id=task_id, meta={"changes": changes},
+                # Through the ONE field_change door (WS-27w): FK ids gain their
+                # labels at write time, and a same-actor consecutive
+                # description edit coalesces into the prior row.
+                await record_field_change(
+                    db, created_by=actor(user), task_id=task_id, changes=changes,
                 )
         moved = None
         if new_status is not None and str(new_status) != str(before.status_id):
@@ -375,6 +400,28 @@ async def patch_task(
                 db, after, str(new_status), created_by=actor(user),
             )
             after = moved["row"]
+
+        if values or moved is not None:
+            # WS-27v — editing a task subscribes the editor (idempotent). Only
+            # when something actually changed: a no-op PATCH is not a touch.
+            await ensure_watchers(db, task_id, [actor(user)], by=actor(user))
+        if "description" in values:
+            # WS-27v — mention DIFFING on the description, same rule as a
+            # comment edit: only the addresses this edit ADDED are notified, so
+            # rewording a description that already names two colleagues pings
+            # neither, and the newly delivered mentions become watchers.
+            # Watchers at large deliberately hear nothing about a description
+            # edit — the diffed mentions are the whole fan-out.
+            added = new_mentions(
+                getattr(before, "description", None), values["description"],
+            )
+            mentioned = await notify(
+                db, recipients=added, kind="mention", task_id=task_id,
+                actor_id=actor(user), excerpt=excerpt_of(values["description"]),
+            )
+            await ensure_watchers(
+                db, task_id, mentioned["notified"], by=actor(user),
+            )
 
         await db.commit()
         result = row_to_dict(after, TaskModel)
@@ -505,6 +552,91 @@ async def delete_task(
     )
 
 
+# ── Archive (WS-27w item 1) ─────────────────────────────────────────────────
+
+@router.post("/tasks/{task_id}/archive")
+async def archive_task(
+    task_id: str, user: UserContext = Depends(get_current_user),
+) -> dict:
+    """Archive one task — allowed only once it is CLOSED.
+
+    An archived task exits every default list, board, calendar and search
+    surface at once, so archiving an open task is a trap, not a feature (P-3):
+    the work disappears while still owed, and nobody gardening a board can see
+    where it went. The guard is written on the status CATEGORY, and as "not in
+    (done, cancelled)" rather than as a list of open categories — a category
+    added later (WS-27u's `triage`) is refused by default instead of becoming
+    silently archivable. The refusal names the actual category, because "cannot
+    archive" without the why sends people hunting through lanes.
+
+    WS-27z's sweeper depends on this guard shipping first.
+    """
+    db = await _get_db()
+    try:
+        vis = await resolve_visibility(db, user)
+        task = await load_visible_task(db, vis, task_id)
+        status = await require_row(
+            db, "pm_task_statuses", str(task.status_id), "Status",
+        )
+        category = str(getattr(status, "category", "") or "")
+        if category not in CLOSING_CATEGORIES:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"Cannot archive an open task: its status category is "
+                    f"'{category}'. Move it to a done or cancelled status "
+                    f"first."
+                ),
+            )
+        if getattr(task, "archived_at", None) is not None:
+            # Already archived — idempotent, the double-click answer.
+            return row_to_dict(task, TaskModel)
+        row = await update_row(db, "pm_tasks", task_id, {"archived_at": now()})
+        await record_activity(
+            db, activity_type="system", created_by=actor(user),
+            task_id=task_id, body="Task archived",
+        )
+        await db.commit()
+        result = row_to_dict(row, TaskModel)
+    finally:
+        await db.close()
+
+    await emit("pm.task.archived", {"task_id": task_id})
+    return result
+
+
+@router.post("/tasks/{task_id}/unarchive")
+async def unarchive_task(
+    task_id: str, user: UserContext = Depends(get_current_user),
+) -> dict:
+    """Bring an archived task back onto its board.
+
+    No category guard in this direction — restoring puts work back where
+    people can see it, which is never the trap the archive guard exists to
+    prevent. Without this endpoint an archive would be one-way: nothing else
+    writes ``archived_at``, and the PATCH surface deliberately does not accept
+    it.
+    """
+    db = await _get_db()
+    try:
+        vis = await resolve_visibility(db, user)
+        task = await load_visible_task(db, vis, task_id)
+        if getattr(task, "archived_at", None) is None:
+            return row_to_dict(task, TaskModel)
+        row = await update_row(db, "pm_tasks", task_id, {"archived_at": None})
+        await record_activity(
+            db, activity_type="system", created_by=actor(user),
+            task_id=task_id, body="Task restored from the archive",
+        )
+        await db.commit()
+        result = row_to_dict(row, TaskModel)
+    finally:
+        await db.close()
+
+    await emit("pm.task.unarchived", {"task_id": task_id})
+    return result
+
+
 # ── Assignees ───────────────────────────────────────────────────────────────
 
 @router.put("/tasks/{task_id}/assignees")
@@ -579,6 +711,12 @@ async def set_assignees(
             db, recipients=sorted(added), kind="assigned",
             task_id=task_id, actor_id=actor(user),
         )
+        # WS-27v — a newly added assignee becomes a watcher. Idempotent, and
+        # only `added` for the same reason the event carries added: a re-assert
+        # is not a touch. Agents are dropped inside the helper (they are
+        # dispatched, never subscribed), and the rows survive a later
+        # unassignment — having held the work is a reason to keep hearing.
+        await ensure_watchers(db, task_id, sorted(added), by=actor(user))
         await db.commit()
     finally:
         await db.close()

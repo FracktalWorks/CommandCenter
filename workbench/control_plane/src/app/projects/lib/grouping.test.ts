@@ -10,8 +10,10 @@ import { describe, expect, it } from "vitest";
 
 import type { StatusRow, TaskRow } from "./api";
 import {
+  type BoardLanes,
   EMPTY_FILTERS,
   GROUP_OPTIONS,
+  NO_LANES,
   UNSET,
   fromConfig,
   groupTasks,
@@ -20,6 +22,7 @@ import {
   toConfig,
   toQuery,
 } from "./grouping";
+import { DEFAULT_SHOWN } from "./shownFields";
 
 const status = (id: string, name: string, position: number): StatusRow => ({
   id,
@@ -169,6 +172,8 @@ describe("saved view config", () => {
     expect(fromConfig(toConfig(filters, "assignee"))).toEqual({
       filters,
       groupBy: "assignee",
+      lanes: NO_LANES,
+      shownFields: [...DEFAULT_SHOWN],
     });
   });
 
@@ -221,6 +226,136 @@ describe("saved view config", () => {
   });
 });
 
+describe("swimlane state in a saved view (WS-27y)", () => {
+  const lanes: BoardLanes = {
+    subGroupBy: "assignee",
+    collapsedLanes: ["zoe@x.co", UNSET],
+    showEmptyLanes: true,
+  };
+
+  it("round-trips the sub-axis, the folded lanes and the empty-lane toggle", () => {
+    expect(fromConfig(toConfig(EMPTY_FILTERS, "status", lanes))).toEqual({
+      filters: EMPTY_FILTERS,
+      groupBy: "status",
+      lanes,
+      shownFields: [...DEFAULT_SHOWN],
+    });
+  });
+
+  it("stores nothing for a flat board, so lane-less views stay byte-identical", () => {
+    expect(toConfig(EMPTY_FILTERS, "status", NO_LANES)).toEqual(
+      toConfig(EMPTY_FILTERS, "status")
+    );
+    expect(toConfig(EMPTY_FILTERS, "status")).toEqual({
+      filters: {},
+      group_by: "status",
+    });
+  });
+
+  it("keeps collapsed lanes a JSON array, not a CSV", () => {
+    // Lane keys are addresses and sentinels; an address containing a comma is
+    // unlikely, but the config is JSON and a list should stay a list.
+    const config = toConfig(EMPTY_FILTERS, "status", lanes);
+    expect(config.collapsed_lanes).toEqual(["zoe@x.co", UNSET]);
+  });
+
+  it("normalises a sub-axis equal to the main axis to none", () => {
+    // A board laned by its own columns is nonsense a hand-edited config could
+    // still say; every consumer sees the normalised truth.
+    const got = fromConfig({ group_by: "status", sub_group_by: "status" });
+    expect(got.lanes.subGroupBy).toBe("none");
+    // ...and toConfig refuses to write it in the first place.
+    expect(
+      toConfig(EMPTY_FILTERS, "status", { ...lanes, subGroupBy: "status" })
+    ).not.toHaveProperty("sub_group_by");
+  });
+
+  it("drops junk lane state from a hand-edited config", () => {
+    const got = fromConfig({
+      sub_group_by: "phase",
+      collapsed_lanes: [7, null, "real"],
+      show_empty_lanes: "true",
+    });
+    expect(got.lanes.subGroupBy).toBe("none");
+    expect(got.lanes.collapsedLanes).toEqual(["real"]);
+    // A string is not a decision somebody made in the UI (same rule as
+    // overdue).
+    expect(got.lanes.showEmptyLanes).toBe(false);
+  });
+
+  it("reads an old config with no lane keys as a flat board", () => {
+    expect(fromConfig({ filters: {}, group_by: "status" }).lanes).toEqual(NO_LANES);
+  });
+
+  it("does not persist collapse state without its axis", () => {
+    const config = toConfig(EMPTY_FILTERS, "status", {
+      ...NO_LANES,
+      collapsedLanes: ["ghost"],
+    });
+    // A collapsed-lane list without the axis it belonged to is keys from a
+    // board that no longer exists.
+    expect(config).not.toHaveProperty("collapsed_lanes");
+  });
+});
+
+describe("shown fields in a saved view (WS-27x)", () => {
+  it("round-trips a non-default set", () => {
+    const shown = ["status", "tags", "custom.budget"];
+    expect(fromConfig(toConfig(EMPTY_FILTERS, "status", NO_LANES, shown))).toEqual({
+      filters: EMPTY_FILTERS,
+      groupBy: "status",
+      lanes: NO_LANES,
+      shownFields: shown,
+    });
+  });
+
+  it("stores nothing for the default set, so untouched views stay byte-identical", () => {
+    // Same rule as lane state: a view saved before shown-fields existed and
+    // one saved after with untouched columns must be the same bytes.
+    expect(toConfig(EMPTY_FILTERS, "status", NO_LANES, [...DEFAULT_SHOWN])).toEqual(
+      toConfig(EMPTY_FILTERS, "status")
+    );
+  });
+
+  it("compares against the default as a SET, not a sequence", () => {
+    // Toggling a field off and back on reorders the list; that is not a
+    // change somebody made to the view.
+    const reordered = [...DEFAULT_SHOWN].reverse();
+    expect(toConfig(EMPTY_FILTERS, "status", NO_LANES, reordered)).not.toHaveProperty(
+      "shown_fields"
+    );
+  });
+
+  it("stores an explicitly emptied set — hiding everything is a choice", () => {
+    const config = toConfig(EMPTY_FILTERS, "status", NO_LANES, []);
+    expect(config.shown_fields).toEqual([]);
+    expect(fromConfig(config).shownFields).toEqual([]);
+  });
+
+  it("reads an old config with no shown_fields as the default set", () => {
+    expect(fromConfig({ filters: {}, group_by: "status" }).shownFields).toEqual([
+      ...DEFAULT_SHOWN,
+    ]);
+  });
+
+  it("drops junk keys from a hand-edited config", () => {
+    // Same discipline the server applies (`normalise_view_config`): unknown
+    // and non-string keys dropped, duplicates collapsed, `custom.` alone
+    // names nothing.
+    expect(
+      fromConfig({
+        shown_fields: ["status", "phase", 7, "custom.", "custom.budget", "status"],
+      }).shownFields
+    ).toEqual(["status", "custom.budget"]);
+  });
+
+  it("reads a non-list shown_fields as absent, never as hidden-everything", () => {
+    expect(fromConfig({ shown_fields: "status,tags" }).shownFields).toEqual([
+      ...DEFAULT_SHOWN,
+    ]);
+  });
+});
+
 describe("groupTasks by tag (WS-27m)", () => {
   it("puts a task with three tags in all three columns", () => {
     // Same reason as two assignees: it genuinely belongs to each, and picking
@@ -270,7 +405,12 @@ describe("tag filters in the query", () => {
 
   it("round-trips through a saved view", () => {
     const filters = { ...EMPTY_FILTERS, tags: ["bug", "ops"] };
-    expect(fromConfig(toConfig(filters, "tag"))).toEqual({ filters, groupBy: "tag" });
+    expect(fromConfig(toConfig(filters, "tag"))).toEqual({
+      filters,
+      groupBy: "tag",
+      lanes: NO_LANES,
+      shownFields: [...DEFAULT_SHOWN],
+    });
   });
 
   it("survives a config that stored tags as an array instead of CSV", () => {

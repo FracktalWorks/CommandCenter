@@ -81,6 +81,8 @@ def test_every_feature_module_is_actually_mounted() -> None:
         "/projects/nodes/{project_id}/grants",
         "/projects/tasks",
         "/projects/tasks/{task_id}",
+        "/projects/tasks/{task_id}/archive",
+        "/projects/tasks/{task_id}/unarchive",
         "/projects/tasks/{task_id}/assignees",
         "/projects/tasks/{task_id}/timeline",
         "/projects/tasks/{task_id}/comments",
@@ -389,13 +391,15 @@ async def test_every_allowlisted_sort_key_reaches_the_order_by(
     db: FakeProjectsDB, key: str,
 ) -> None:
     """The allowlist's values are the only identifiers interpolated into the
-    ORDER BY, so this also pins that none of them is caller text."""
+    ORDER BY, so this also pins that none of them is caller text. The values
+    are `{dir}` templates since WS-27w; the default direction is `desc`."""
     _project_with_statuses(db)
 
     await pm_tasks.list_tasks(user=USER, sort=key, page=page())
 
     ordered = [s for s in db.statements if "ORDER BY" in s]
-    assert any(pm_core.TASK_SORTS[key] in s for s in ordered)
+    expected = " ".join(pm_core.TASK_SORTS[key].format(dir="DESC").split())
+    assert any(expected in s for s in ordered)
 
 
 async def test_archived_tasks_are_hidden_by_default(db: FakeProjectsDB) -> None:

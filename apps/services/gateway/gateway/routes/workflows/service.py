@@ -181,6 +181,38 @@ def _pm_task_updater(workflow_id: str) -> Any:
     return _update
 
 
+def _pm_lifecycle_sweeper(workflow_id: str) -> Any:
+    """The Projects lifecycle sweep (WS-27z), identity bound in.
+
+    Mirrors ``_pm_task_updater`` exactly — closure import so the workflows
+    package gains no import-time dependency on an app package, the workflow's
+    ``system:workflow:<id>`` actor bound in, one commit around the whole
+    sweep. The seam takes no arguments because the policy lives in the
+    Projects app's own columns; the workflow supplies nothing but the
+    schedule and the node.
+    """
+
+    async def _sweep() -> dict[str, Any]:
+        try:
+            from gateway.routes.projects.automation import (
+                run_lifecycle_sweep,
+                workflow_actor,
+            )
+        except Exception as exc:  # pragma: no cover — Projects ships with the gateway
+            raise NodeExecutionError("the Projects app is not available") from exc
+        db = await _get_db()
+        try:
+            result = await run_lifecycle_sweep(
+                db, actor=workflow_actor(workflow_id),
+            )
+            await db.commit()
+            return result
+        finally:
+            await db.close()
+
+    return _sweep
+
+
 def build_node_services(actor: str, workflow_id: str = "") -> NodeServices:
     return NodeServices(
         run_agent=_run_agent_node,
@@ -188,6 +220,7 @@ def build_node_services(actor: str, workflow_id: str = "") -> NodeServices:
         get_module_code=_get_module_code,
         actor=actor,
         update_task=_pm_task_updater(workflow_id),
+        run_lifecycle_sweep=_pm_lifecycle_sweeper(workflow_id),
     )
 
 

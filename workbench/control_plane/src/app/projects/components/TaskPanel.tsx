@@ -8,6 +8,7 @@
  * a comment in the same stream, which is the point of the shared spine.
  */
 import Icon from "@/components/Icon";
+import Button from "@/components/ui/Button";
 import { useEffect, useRef, useState } from "react";
 
 import {
@@ -19,7 +20,10 @@ import {
   type TaskRow,
   attachmentsApi,
   projectsApi,
+  watchersApi,
 } from "../lib/api";
+import { taskDeepLink, taskRef } from "../lib/card";
+import { isAutomated } from "../lib/lifecycle";
 import { CustomFieldValues } from "./CustomFieldValues";
 import { TagPicker } from "./TagPicker";
 import { RepeatEditor } from "./RepeatEditor";
@@ -117,7 +121,12 @@ export function TaskPanel({
   const [relationsKey, setRelationsKey] = useState(0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // WS-27w item 6 — the copy-deep-link affordance's "it worked" flash.
+  const [copied, setCopied] = useState(false);
   const [files, setFiles] = useState<AttachmentRow[]>([]);
+  // WS-27v — null until the read lands, so the toggle never renders a state
+  // it is only guessing at.
+  const [watching, setWatching] = useState<boolean | null>(null);
   const assignees = task.assignees ?? [];
   // Agents are excluded: an agent cannot receive a notification (migration
   // 152's CHECK), so offering to mention one would promise nothing.
@@ -139,10 +148,30 @@ export function TaskPanel({
       // Attachments failing must not blank the panel: the timeline and the
       // status control are the reason somebody opened it.
       .catch(() => undefined);
+    setWatching(null);
+    watchersApi
+      .get(task.id)
+      .then((res) => {
+        if (live) setWatching(res.watching);
+      })
+      // Same posture as attachments: no toggle beats a blank panel.
+      .catch(() => undefined);
     return () => {
       live = false;
     };
   }, [task.id]);
+
+  async function toggleWatch() {
+    if (watching === null) return;
+    // Optimistic — both writes are idempotent, so a failure just reverts.
+    const next = !watching;
+    setWatching(next);
+    try {
+      await (next ? watchersApi.watch(task.id) : watchersApi.unwatch(task.id));
+    } catch {
+      setWatching(!next);
+    }
+  }
 
   async function uploadFiles(picked: FileList | null) {
     if (!picked || picked.length === 0) return;
@@ -277,6 +306,26 @@ export function TaskPanel({
     }
   }
 
+  /**
+   * Copy a URL that reopens this panel — `/projects?task=<id>`, the deep-link
+   * shape the page already reads (WS-28b). The icon flips to a check briefly,
+   * because a copy with no acknowledgement gets clicked three times.
+   */
+  async function copyDeepLink() {
+    try {
+      await navigator.clipboard.writeText(
+        taskDeepLink(task, window.location.origin),
+      );
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // Clipboard can be unavailable (permissions, insecure context). The
+      // link is not lost — opening the task by deep link shows it in the
+      // address bar — so this fails quietly rather than turning a copy
+      // button into an error banner.
+    }
+  }
+
   /** Insert `@address` at the caret, so nobody has to type the token by hand. */
   function mention(who: string) {
     const box = commentBox.current;
@@ -295,19 +344,46 @@ export function TaskPanel({
     <aside className="flex h-full w-full max-w-md flex-col border-l border-border bg-card">
       <header className="flex items-start justify-between gap-2 border-b border-border p-3">
         <div className="min-w-0">
-          <p className="text-xs text-muted-foreground">
-            {task.task_number ? `#${task.task_number}` : "Task"}
-          </p>
+          <div className="flex items-center gap-0.5">
+            <p className="text-xs text-muted-foreground">{taskRef(task) ?? "Task"}</p>
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              icon={copied ? "Check" : "Link"}
+              aria-label="Copy a link to this task"
+              title="Copy a link that opens this task"
+              onClick={() => void copyDeepLink()}
+            />
+          </div>
           <h2 className="truncate text-sm font-medium text-foreground">{task.title}</h2>
         </div>
-        <button
-          type="button"
-          onClick={onClose}
-          aria-label="Close task"
-          className="rounded p-1 text-muted-foreground hover:bg-muted"
-        >
-          <Icon name="X" className="h-4 w-4" />
-        </button>
+        <div className="flex shrink-0 items-center gap-0.5">
+          {/* WS-27v — watch/unwatch. Watching means the bell hears about this
+              task; assignees hear regardless, so unwatching never silences
+              work you hold. Hidden (not disabled) until the state is known. */}
+          {watching !== null ? (
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              icon={watching ? "BellOff" : "Bell"}
+              aria-label={watching ? "Stop watching this task" : "Watch this task"}
+              title={
+                watching
+                  ? "Watching — click to stop being notified about this task"
+                  : "Watch — get notified about this task"
+              }
+              onClick={() => void toggleWatch()}
+            />
+          ) : null}
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close task"
+            className="rounded p-1 text-muted-foreground hover:bg-muted"
+          >
+            <Icon name="X" className="h-4 w-4" />
+          </button>
+        </div>
       </header>
 
       <div className="space-y-3 border-b border-border p-3 text-sm">
@@ -492,11 +568,25 @@ export function TaskPanel({
       <ol className="flex-1 space-y-3 overflow-y-auto p-3">
         {timeline.map((activity) => (
           <li key={activity.id} className="text-sm">
-            <p className="text-xs text-muted-foreground">
-              {activity.created_by ?? "system"}
-              {activity.created_at
-                ? ` · ${new Date(activity.created_at).toLocaleString()}`
-                : ""}
+            <p className="flex items-center gap-1 text-xs text-muted-foreground">
+              {/* WS-27z — an automated entry says so. The flag is the row's
+                  meta.automation, written only by the workflow engine; a
+                  sweep archiving a task must not read as a person did it. */}
+              {isAutomated(activity) ? (
+                <span
+                  className="inline-flex items-center gap-0.5"
+                  title="Automated by a workflow"
+                >
+                  <Icon name="Bot" className="h-3 w-3" />
+                  <span className="text-[10px]">auto</span>
+                </span>
+              ) : null}
+              <span className="min-w-0 truncate">
+                {activity.created_by ?? "system"}
+                {activity.created_at
+                  ? ` · ${new Date(activity.created_at).toLocaleString()}`
+                  : ""}
+              </span>
             </p>
             <p className="whitespace-pre-wrap text-foreground">{describe(activity, fields)}</p>
           </li>

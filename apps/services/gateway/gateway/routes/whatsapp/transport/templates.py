@@ -14,7 +14,7 @@ from uuid import uuid4
 
 from acb_auth import UserContext, get_current_user
 from fastapi import Depends, HTTPException
-from gateway.routes.whatsapp.core import _get_db, assert_account_owned, router
+from gateway.routes.whatsapp.core import _tenant_session, assert_account_owned, router
 from pydantic import BaseModel
 from sqlalchemy import text
 
@@ -116,8 +116,7 @@ async def list_templates(
 ):
     """List an account's templates. ``approved_only`` filters to what can send
     right now (what the composer's `/` picker offers when the window is closed)."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         await assert_account_owned(db, account_id, user.email or "anonymous")
         where = "account_id = :aid"
         params: dict[str, Any] = {"aid": account_id}
@@ -131,8 +130,6 @@ async def list_templates(
             params,
         )).fetchall()
         return [_model(r) for r in rows]
-    finally:
-        await db.close()
 
 
 @router.post("/accounts/{account_id}/templates", response_model=WhatsAppTemplateModel,
@@ -145,8 +142,7 @@ async def create_template(
     """Register/mirror a single template (upsert on name+language)."""
     _validate(req)
     import json
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         await assert_account_owned(db, account_id, user.email or "anonymous")
         row = (await db.execute(
             text("""INSERT INTO wa_templates
@@ -169,10 +165,7 @@ async def create_template(
              "vars": json.dumps(req.variables), "status": req.meta_status,
              "cost": req.cost_hint},
         )).fetchone()
-        await db.commit()
         return _model(row)
-    finally:
-        await db.close()
 
 
 @router.post("/accounts/{account_id}/templates/bootstrap",
@@ -184,8 +177,7 @@ async def bootstrap_templates(
     """Seed the default template set for an account (idempotent — existing names
     are left untouched). Called once after connect so the rules have templates."""
     import json
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         await assert_account_owned(db, account_id, user.email or "anonymous")
         for t in default_templates():
             await db.execute(
@@ -200,7 +192,8 @@ async def bootstrap_templates(
                  "lang": t["language"], "cat": t["category"], "body": t["body"],
                  "vars": json.dumps(t["variables"]), "cost": t["cost_hint"]},
             )
-        await db.commit()
+        # Same transaction as the seeding INSERTs — it reads its own writes,
+        # and the wrapper commits everything together on clean exit.
         rows = (await db.execute(
             text("""SELECT id, name, language, category, body, variables,
                            meta_status, cost_hint
@@ -209,5 +202,3 @@ async def bootstrap_templates(
             {"aid": account_id},
         )).fetchall()
         return [_model(r) for r in rows]
-    finally:
-        await db.close()

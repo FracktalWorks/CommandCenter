@@ -152,11 +152,13 @@ async def test_embedded_signup_400_when_unconfigured(monkeypatch) -> None:
 
 
 class _FakeDB:
-    async def commit(self):
-        pass
+    """The H2 seam's shape: the wrapper (not the handler) commits on exit."""
 
-    async def close(self):
-        pass
+    def __init__(self):
+        self.committed = 0
+
+    async def commit(self):
+        self.committed += 1
 
 
 async def test_embedded_signup_happy_path(monkeypatch) -> None:
@@ -173,15 +175,23 @@ async def test_embedded_signup_happy_path(monkeypatch) -> None:
     async def _subscribe(waba_id, token, gv):
         subscribed_calls.append(waba_id)
 
-    async def _get_db():
-        return _FakeDB()
+    from contextlib import asynccontextmanager
+
+    db = _FakeDB()
+
+    @asynccontextmanager
+    async def _tenant_session(organization_id=None):
+        # Mirrors `_projects_fakes.bind_db`: commit on clean exit, so the
+        # one-transaction contract stays observable.
+        yield db
+        await db.commit()
 
     async def _persist(db, **kw):
         return "ROW"
 
     monkeypatch.setattr(connect, "exchange_code_for_token", _exchange)
     monkeypatch.setattr(connect, "subscribe_app_to_waba", _subscribe)
-    monkeypatch.setattr(connect, "_get_db", _get_db)
+    monkeypatch.setattr(connect, "_tenant_session", _tenant_session)
     monkeypatch.setattr(
         connect, "_instantiate_provider",
         lambda name, creds: _FakeProvider(profile={
@@ -202,3 +212,5 @@ async def test_embedded_signup_happy_path(monkeypatch) -> None:
     assert out.account_id == "acc-1"
     assert out.subscribed is True
     assert subscribed_calls == ["waba-1"]
+    # One transaction, committed by the tenant-session wrapper on clean exit.
+    assert db.committed == 1

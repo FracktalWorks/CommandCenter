@@ -15,7 +15,7 @@ from uuid import uuid4
 
 from acb_auth import UserContext, get_current_user
 from fastapi import Depends, HTTPException
-from gateway.routes.whatsapp.core import _get_db, assert_account_owned, router
+from gateway.routes.whatsapp.core import _tenant_session, assert_account_owned, router
 from pydantic import BaseModel
 from sqlalchemy import text
 
@@ -90,16 +90,13 @@ async def list_saved_replies(
     account_id: str, user: UserContext = Depends(get_current_user),
 ):
     """List an account's saved replies, in the founder's chosen order."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         await assert_account_owned(db, account_id, user.email or "anonymous")
         rows = (await db.execute(
             text(_SELECT + " WHERE account_id = :aid ORDER BY sort_order, title"),
             {"aid": account_id},
         )).fetchall()
         return [_model(r) for r in rows]
-    finally:
-        await db.close()
 
 
 @router.post("/saved-replies", response_model=SavedReplyModel, status_code=201)
@@ -112,8 +109,7 @@ async def create_saved_reply(
     if not title or not body:
         raise HTTPException(status_code=422, detail="title and body are required")
     shortcut = normalize_shortcut(req.shortcut)
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         await assert_account_owned(db, req.account_id, user.email or "anonymous")
         try:
             row = (await db.execute(
@@ -125,16 +121,14 @@ async def create_saved_reply(
                  "body": body, "shortcut": shortcut, "sort": req.sort_order},
             )).fetchone()
         except Exception as exc:  # unique-shortcut collision, etc.
-            await db.rollback()
+            # Both arms re-raise, so the explicit rollback the old shape
+            # needed is now the wrapper's job (rollback on exception exit).
             if "uq_wa_saved_replies_shortcut" in str(exc):
                 raise HTTPException(
                     status_code=409,
                     detail=f"shortcut {shortcut} is already in use") from exc
             raise
-        await db.commit()
         return _model(row)
-    finally:
-        await db.close()
 
 
 @router.patch("/saved-replies/{reply_id}", response_model=SavedReplyModel)
@@ -143,8 +137,7 @@ async def update_saved_reply(
     user: UserContext = Depends(get_current_user),
 ):
     """Edit a saved reply (title / body / shortcut / order)."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         await _owned_reply_account(db, reply_id, user.email or "anonymous")
         fields: dict[str, Any] = {}
         if req.title is not None:
@@ -172,19 +165,18 @@ async def update_saved_reply(
                     params,
                 )
             except Exception as exc:
-                await db.rollback()
+                # Re-raised either way — the wrapper rolls back on exit.
                 if "uq_wa_saved_replies_shortcut" in str(exc):
                     raise HTTPException(
                         status_code=409,
                         detail="that shortcut is already in use") from exc
                 raise
-            await db.commit()
+        # Same transaction as the UPDATE, which sees its own writes; the
+        # wrapper commits both together on clean exit.
         updated = (await db.execute(
             text(_SELECT + " WHERE id = :rid"), {"rid": reply_id},
         )).fetchone()
         return _model(updated)
-    finally:
-        await db.close()
 
 
 @router.delete("/saved-replies/{reply_id}", status_code=204)
@@ -192,12 +184,8 @@ async def delete_saved_reply(
     reply_id: str, user: UserContext = Depends(get_current_user),
 ):
     """Delete a saved reply."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         await _owned_reply_account(db, reply_id, user.email or "anonymous")
         await db.execute(
             text("DELETE FROM wa_saved_replies WHERE id = :rid"), {"rid": reply_id},
         )
-        await db.commit()
-    finally:
-        await db.close()

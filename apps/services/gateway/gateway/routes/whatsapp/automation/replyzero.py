@@ -136,6 +136,9 @@ async def classify_chats(account_id: str) -> None:
     still catches up rather than gating on new inbound.
     """
     from gateway.routes.whatsapp.core import _get_db
+    # H4: post-sync hook — fired by the Meta webhook / bridge ingest /
+    # bridge reclassify (service identity, no member session), so there is NO
+    # ambient tenant and none may be inherited; H4 threads an explicit one.
     db = await _get_db()
     try:
         acc = (await db.execute(

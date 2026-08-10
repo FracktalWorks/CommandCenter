@@ -6,7 +6,12 @@ from typing import Any
 
 from acb_auth import UserContext, get_current_user
 from fastapi import Depends, Query
-from gateway.routes.whatsapp.core import WhatsAppMessageModel, _get_db, assert_chat_owned, router
+from gateway.routes.whatsapp.core import (
+    WhatsAppMessageModel,
+    _tenant_session,
+    assert_chat_owned,
+    router,
+)
 from sqlalchemy import text
 
 
@@ -42,8 +47,7 @@ async def list_messages(
     user: UserContext = Depends(get_current_user),
 ):
     """Return a conversation's messages oldest-first (thread reading order)."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         await assert_chat_owned(db, chat_id, user.email or "anonymous")
         rows = (await db.execute(
             text("""SELECT id, chat_id, wa_message_id, direction, kind, sender,
@@ -56,8 +60,6 @@ async def list_messages(
             {"cid": chat_id, "limit": limit},
         )).fetchall()
         return [_message_model(r) for r in rows]
-    finally:
-        await db.close()
 
 
 # The tsvector expression — byte-for-byte identical to migration 102's
@@ -88,8 +90,7 @@ async def search_messages(
     closeness only re-ranks. Requires ``whatsapp_semantic_search_enabled``; if the
     query can't be embedded (flag off / embed error), it falls through to lexical.
     """
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         params: dict[str, Any] = {
             "uid": user.email or "anonymous", "q": q, "limit": limit,
         }
@@ -135,5 +136,3 @@ async def search_messages(
             params,
         )).fetchall()
         return [_message_model(r) for r in rows]
-    finally:
-        await db.close()

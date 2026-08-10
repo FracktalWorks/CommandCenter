@@ -28,6 +28,7 @@ from fastapi import Depends, HTTPException
 from gateway.routes.whatsapp.core import (
     _get_db,
     _provider_for_account,
+    _tenant_session,
     router,
 )
 from pydantic import BaseModel
@@ -147,6 +148,8 @@ async def transcribe_pending(account_id: str) -> int:
     then re-run the classifiers once. A schedule/digest trigger, NOT the hot
     webhook path. Returns how many produced a transcript. Owns its transaction.
     """
+    # H4: background enrichment pass (scheduler.run_enrichment_cycle) — no
+    # request, no ambient tenant; H4 threads an explicit one per account.
     db = await _get_db()
     try:
         rows = (await db.execute(
@@ -200,18 +203,17 @@ async def transcribe_voice_note(
     message_id: str, user: UserContext = Depends(get_current_user),
 ):
     """Transcribe one voice note on demand and fold it into triage."""
-    db = await _get_db()
-    try:
+    async with _tenant_session() as db:
         account_id = await _assert_message_owned(
             db, message_id, user.email or "anonymous")
         provider, _store, _acc = await _provider_for_account(db, account_id)
         transcript = await transcribe_message(db, account_id, message_id, provider)
         if transcript is None:
+            # The 422 rolls back the sentinel 'failed'/'skipped' stamp too;
+            # the scheduled pass re-attempts, exactly as the old
+            # commit-only-on-success shape behaved.
             raise HTTPException(
                 status_code=422,
                 detail="No transcript — not a voice note, or transcription failed")
         await _reclassify(db, account_id)
-        await db.commit()
         return TranscriptModel(message_id=message_id, transcript_text=transcript)
-    finally:
-        await db.close()

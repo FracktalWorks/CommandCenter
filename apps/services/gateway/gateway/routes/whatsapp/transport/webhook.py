@@ -58,6 +58,9 @@ async def verify_webhook(request: Request):
     ok_token = configured and token == configured
     if not ok_token:
         # Fall back to matching any stored per-account verify token.
+        # H4/H6: service-identity route — Meta calls this with no session and
+        # no ambient tenant; the lookup is deliberately cross-account, and a
+        # tenant would have to come from the matched wa_accounts row.
         db = await _get_db()
         try:
             row = (await db.execute(
@@ -112,6 +115,10 @@ async def receive_webhook(request: Request):
         # A status-only or empty batch with no metadata — ack so Meta stops.
         return Response(status_code=200, content="ok")
 
+    # H4/H6: service-identity route — Meta authenticates by webhook signature,
+    # no member session, so `system:internal`/anonymous binds NO tenant and
+    # `tenant_session()` here would 500 every inbound batch. Derive the tenant
+    # from the wa_accounts row resolved by phone_number_id.
     db = await _get_db()
     try:
         account_id = await _resolve_account_id(db, result.phone_number_id)

@@ -91,10 +91,23 @@ def _refuse_lifecycle_on_child(values: dict, parent_project_id: object) -> None:
 #: Seeded on every ROOT project. The owner reshapes these in the app; they exist
 #: so a new project has a working board on its first render rather than an empty
 #: status picker.
+#:
+#: ⚠️ **The colours here must equal what `CATEGORY_HUES` derives from the
+#: category** (`workbench/control_plane/src/lib/statusAccent.ts`), because a
+#: stored colour OUTRANKS the category — that is what lets an owner choose. So a
+#: seed that disagrees is a seed that silently overrides the shared vocabulary on
+#: every project nobody has customised, and /projects goes back to looking
+#: different from /tasks. It did: this tuple used to seed `To do` blue and
+#: `In progress` amber against a category map of gray and blue, and two of the
+#: four default lanes rendered differently in the two apps.
+#:
+#: These are defaults, not decisions. If the shared vocabulary changes, change
+#: them here too; `test_seed_status_colours_match_the_shared_vocabulary` fails
+#: until you do.
 _SEED_STATUSES: tuple[tuple[str, str, int, str, bool], ...] = (
     ("Backlog",     "gray",   10, "backlog",     True),
-    ("To do",       "blue",   20, "todo",        False),
-    ("In progress", "amber",  30, "in_progress", False),
+    ("To do",       "gray",   20, "todo",        False),
+    ("In progress", "blue",   30, "in_progress", False),
     ("Done",        "green",  40, "done",        False),
 )
 

@@ -304,10 +304,16 @@ _GET_DB_CALL = re.compile(r"await _?get_db\(\)")
 
 #: Sites that are ALLOWED to stay on the unbound seam, each with the reason.
 #: An entry here is a decision, not a grandfathering — H4 owns retiring them.
+#:
+#: ⚠️ `routes/projects/agent_dispatch.py` LEFT this list on 2026-08-10 (WS-27aa
+#: done-when 5). It was not converted to the ambient `tenant_session()` — that
+#: would have been the inheritance H4 forbids. `pm.task.assigned` now carries
+#: the task's own `organization_id`, stamped by `set_assignees` inside the
+#: request's bound session, and every session in the sink is
+#: `tenant_session(that_org)`. The file needs no exemption because it has no
+#: unbound site left, which is what `test_converted_packages_stay_converted`
+#: now enforces for it.
 H2_EXEMPT_FILES: dict[str, str] = {
-    "apps/services/gateway/gateway/routes/projects/agent_dispatch.py":
-        "event consumer, not a request handler — H4 threads an explicit "
-        "tenant through the event payload; ambient inheritance is forbidden",
     "apps/services/gateway/gateway/routes/crm/auto_lead.py":
         "background job fired from the email scheduler's new-mail hook — H4 "
         "threads the mailbox owner's tenant explicitly; ambient inheritance "

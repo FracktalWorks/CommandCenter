@@ -36,6 +36,14 @@ const ENERGY_DOT: Record<string, string> = {
 // they share `primary`. Each pill also carries its own icon and label
 // (DESIGN_SYSTEM §7 — never signal state with colour alone), and that is what
 // tells them apart, here as before.
+//
+// Deliberately NOT routed through `@/lib/statusAccent` (AGENTS.md rule 4). That
+// module resolves an unknown lane — a stored colour, a category, a user-typed
+// stage name, a position — to a hue. An ActionMode is none of those: it is four
+// compile-time constants, `resolveHue` has nothing to resolve, and `keywordHue`
+// would match "delegate" against no rule and fall through to the POSITIONAL
+// list. Rule 4 forbids a second PALETTE; these are the house tokens themselves,
+// the same strings `statusAccent`'s `amber` and `blue` accents emit.
 const MODE_TONE: Record<ActionMode, string> = {
   do: "border-primary/40 bg-primary/10 text-primary",
   delegate: "border-warning/40 bg-warning/10 text-warning",

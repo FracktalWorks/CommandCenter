@@ -1,4 +1,6 @@
 import { create } from "zustand";
+import { dropIndexFor } from "@/lib/boardDrop";
+import { clickSelect } from "@/lib/selection";
 import {
   Disposition,
   Energy,
@@ -572,10 +574,30 @@ interface TaskState {
    *  selection survives switching between list/board mode within a view. */
   selectMode: boolean;
   selectedIds: Set<string>;
+  /** The last row picked WITHOUT shift — what a shift-click measures from.
+   *
+   *  WS-27ad: /tasks had no anchor at all, so shift did nothing here while it
+   *  swept a range on /projects. The grammar is now one shared transition
+   *  (`@/lib/selection.clickSelect`), so a member who learns shift-click on one
+   *  surface has learnt it on both. */
+  selectAnchor: string | null;
   /** Enter/leave select mode (leaving clears the selection). */
   setSelectMode: (on: boolean) => void;
-  /** Toggle one id in the current selection. */
-  toggleSelected: (id: string) => void;
+  /**
+   * Pick one id.
+   *
+   * `visible` is the surface's OWN render order — the board walks columns, the
+   * grouped list walks sections, and "between these two" means between them on
+   * screen. The store cannot know it, so the surface passes it; a shift-click
+   * with no order to measure against falls back to a plain toggle.
+   */
+  toggleSelected: (
+    id: string,
+    shift?: boolean,
+    visible?: readonly string[],
+  ) => void;
+  /** Replace the selection outright — Shift+Arrow's swept superset. */
+  extendSelection: (ids: readonly string[]) => void;
   /** Clear the selection and leave select mode. */
   clearSelection: () => void;
   /** Delete an item. SOFT delete (tombstone) → lossless Undo within the window,
@@ -813,17 +835,27 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   pendingDeleteIds: null,
   selectMode: false,
   selectedIds: new Set<string>(),
+  selectAnchor: null,
 
   setSelectMode: (on) =>
-    set(on ? { selectMode: true } : { selectMode: false, selectedIds: new Set() }),
-  toggleSelected: (id) =>
+    set(
+      on
+        ? { selectMode: true }
+        : { selectMode: false, selectedIds: new Set(), selectAnchor: null },
+    ),
+  toggleSelected: (id, shift = false, visible = []) =>
     set((s) => {
-      const next = new Set(s.selectedIds);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return { selectedIds: next };
+      const next = clickSelect(
+        { selected: s.selectedIds, anchor: s.selectAnchor },
+        visible,
+        id,
+        shift,
+      );
+      return { selectedIds: new Set(next.selected), selectAnchor: next.anchor };
     }),
-  clearSelection: () => set({ selectedIds: new Set(), selectMode: false }),
+  extendSelection: (ids) => set({ selectedIds: new Set(ids) }),
+  clearSelection: () =>
+    set({ selectedIds: new Set(), selectMode: false, selectAnchor: null }),
 
   selectView: (view) =>
     set({
@@ -837,6 +869,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
       // don't archive/delete rows you can no longer see.
       selectMode: false,
       selectedIds: new Set(),
+      selectAnchor: null,
     }),
 
   selectContext: (context) =>
@@ -977,20 +1010,29 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     // stage means the task is DONE — a quick-add into the Done column is a
     // log entry, not a to-do.
     const stages = get().settings.workflowStages;
-    const done =
+    const lastStage =
       prefill.workflowStage !== undefined &&
       stages.length > 0 &&
       prefill.workflowStage === stages[stages.length - 1];
+    // WS-27ad — a flat view's box says which bucket outright (`viewQuickAdd`:
+    // Someday incubates, Done logs). The board's last-stage rule stands where
+    // nothing was said.
+    const disposition: Disposition =
+      prefill.disposition ?? (lastStage ? "DONE" : "NEXT");
     const item: GtdItem = {
       ...makeCaptureItem(t),
       // Born clarified: the group the add sits in already answered "what is
       // this?" — it is a next action ON that stage/context/energy, and the
       // title IS the next physical step.
-      disposition: done ? "DONE" : "NEXT",
       nextAction: t,
       clarifiedAt: now,
-      ...(done ? { completedAt: now } : {}),
       ...prefill,
+      disposition,
+      // Stamped from the resolved disposition, not from the stage rule alone —
+      // a Done logged from the Done list is as complete as one dropped in the
+      // last column, and a completed row with no `completedAt` sorts as if it
+      // finished in 1970.
+      ...(disposition === "DONE" ? { completedAt: now } : {}),
     };
     set((s) => ({ items: [item, ...s.items] }));
     if (get().backend === "live") {
@@ -1845,15 +1887,12 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     const moving = get().items.find((i) => i.id === id);
     if (!moving) return;
     // `toIndex` is the gap index within `groupItems` (which may still include
-    // the moved card, e.g. an intra-group drag). The neighbour set is that
-    // group WITHOUT the moved card; when the card originally sat BEFORE the
-    // gap, removing it shifts every later index down by one — adjust so the
-    // card lands in the visually-targeted slot rather than one past it.
-    const fromIndex = groupItems.findIndex((i) => i.id === id);
+    // the moved card, e.g. an intra-group drag). Translating that into an index
+    // in the neighbour set is `@/lib/boardDrop.dropIndexFor` — shared with
+    // /projects' board since WS-27ad, because the off-by-one it handles is
+    // invisible in review and only bites on a downward intra-group drag.
     const others = groupItems.filter((i) => i.id !== id);
-    const destIndex =
-      fromIndex !== -1 && fromIndex < toIndex ? toIndex - 1 : toIndex;
-    const newKey = rankForDrop(others, destIndex);
+    const newKey = rankForDrop(others, dropIndexFor(groupItems, id, toIndex));
     // One patch carries the rank and any stage re-file, so a cross-column drag
     // that also repositions is a single write (and one optimistic update).
     const patch: ItemMetaPatch = { sortKey: newKey };

@@ -33,7 +33,8 @@ export interface InboxCardProps {
   selected: boolean;
   selectionMode: boolean;
   editing: boolean;
-  onSelectToggle: () => void;
+  /** `shift` extends the selection from the anchor (`@/lib/selection`). */
+  onSelectToggle: (shift: boolean) => void;
   onEditStart: () => void;
   onEditEnd: () => void;
 }
@@ -190,7 +191,7 @@ export function InboxCard({
         type="button"
         onClick={(e) => {
           e.stopPropagation();
-          onSelectToggle();
+          onSelectToggle(e.shiftKey);
         }}
         aria-label={selected ? "Deselect" : "Select"}
         className={[

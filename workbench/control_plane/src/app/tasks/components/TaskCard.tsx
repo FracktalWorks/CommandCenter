@@ -1,6 +1,7 @@
 "use client";
 
 import Icon, { themedIcon } from "@/components/Icon";
+import { TaskCardShell, TaskCardTitle } from "@/components/TaskCardShell";
 import { TaskMeta } from "@/components/TaskMeta";
 import { useState } from "react";
 import { GtdItem } from "../lib/types";
@@ -56,7 +57,8 @@ export function TaskCard({
    *  instead of opening the focus modal. Drag is suppressed by the parent. */
   selectMode?: boolean;
   selected?: boolean;
-  onToggleSelected?: () => void;
+  /** `shift` extends the selection from the anchor (`@/lib/selection`). */
+  onToggleSelected?: (shift: boolean) => void;
   onDragStart?: (e: React.DragEvent) => void;
   onDragEnd?: (e: React.DragEvent) => void;
 }) {
@@ -233,38 +235,32 @@ export function TaskCard({
   // In select mode the card is a selection toggle, not a link: clicking checks
   // the box (drag is disabled by the parent) so a batch can be archived/deleted
   // right on the board. A selected card gets a primary ring.
-  const activate = () => {
-    if (selectMode) onToggleSelected?.();
+  const activate = (shift: boolean) => {
+    if (selectMode) onToggleSelected?.(shift);
     else openFocus(item.id);
   };
   return (
     <>
-      <div
-        role="button"
-        tabIndex={0}
+      {/* WS-27ad: the box is `@/components/TaskCardShell`, the same one the
+          /projects board draws — same radius, padding, `bg-card` surface,
+          border and shadow lift. What goes INSIDE stays this app's: the GTD
+          badges, the context menu and the priority pair are not concepts
+          /projects has. */}
+      <TaskCardShell
         draggable={draggable}
         onDragStart={onDragStart}
         onDragEnd={onDragEnd}
-        onClick={activate}
+        onActivate={activate}
         onContextMenu={openMenu}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" || e.key === " ") {
-            e.preventDefault();
-            activate();
-          }
-        }}
-        className={[
-          "group tech-transition relative flex cursor-pointer flex-col gap-2 rounded-lg border bg-card p-3 shadow-sm hover:shadow-md",
-          selected
-            ? "border-primary ring-1 ring-primary"
-            : "border-border hover:border-primary/40",
-        ].join(" ")}
+        selected={selected}
       >
         {selectMode ? (
           <input
             type="checkbox"
             checked={selected}
-            onChange={() => onToggleSelected?.()}
+            onChange={(e) =>
+              onToggleSelected?.((e.nativeEvent as MouseEvent).shiftKey)
+            }
             onClick={(e) => e.stopPropagation()}
             aria-label={selected ? "Deselect task" : "Select task"}
             className="absolute right-1.5 top-1.5 h-4 w-4 accent-primary"
@@ -289,9 +285,7 @@ export function TaskCard({
         </div>
         <div className="flex items-start gap-2">
           {!selectMode && showStage && <StatusPill item={item} />}
-          <p className="text-sm font-medium leading-snug text-foreground">
-            {item.title}
-          </p>
+          <TaskCardTitle>{item.title}</TaskCardTitle>
         </div>
         {item.nextAction && item.nextAction !== item.title && (
           <p className="line-clamp-2 text-[11px] text-muted-foreground">
@@ -321,7 +315,7 @@ export function TaskCard({
             )}
           </div>
         </div>
-      </div>
+      </TaskCardShell>
       {contextMenu}
     </>
   );

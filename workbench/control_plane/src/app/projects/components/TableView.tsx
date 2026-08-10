@@ -25,11 +25,13 @@
  */
 
 import Icon from "@/components/Icon";
+import { StatusChip } from "@/components/StatusChip";
 import { AvatarStack } from "@/components/TaskMeta";
 import { Input } from "@/components/ui/Input";
 import { durationLabel } from "@/lib/taskCard";
 import { useMemo, useRef, useState } from "react";
 
+import { accentForStatus } from "../lib/accent";
 import type { FieldRow, StatusRow, TaskRow } from "../lib/api";
 import { projectsApi } from "../lib/api";
 import { parseAssignees } from "../lib/assignees";
@@ -259,8 +261,16 @@ export function TableView({
 
   function readOnlyCell(task: TaskRow, column: TableColumn): React.ReactNode {
     switch (column.key) {
-      case "status":
-        return statusById.get(task.status_id)?.name ?? "—";
+      case "status": {
+        // WS-27ad — the shared pill, not a bare word. Same fact, same
+        // appearance, whichever of the two apps you are reading it in.
+        const status = statusById.get(task.status_id);
+        return status ? (
+          <StatusChip accent={accentForStatus(status)} label={status.name} />
+        ) : (
+          "—"
+        );
+      }
       case "assignees":
         return task.assignees?.length ? (
           <AvatarStack people={task.assignees} label={personLabel} />

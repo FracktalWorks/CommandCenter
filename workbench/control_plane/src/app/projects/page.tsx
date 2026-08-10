@@ -13,6 +13,8 @@
  */
 import Icon from "@/components/Icon";
 import Button from "@/components/ui/Button";
+import { useMobileDrawer } from "@/components/AppShell";
+import { useViewMode } from "@/components/ViewModeProvider";
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 
@@ -64,16 +66,30 @@ import { type TableSort, sortQuery } from "./lib/table";
 import {
   allSelected as everySelected,
   buildRequest,
+  clickSelect,
   describeOutcome,
   prune,
-  range as selectRange,
-  toggle as toggleId,
   visibleIds,
 } from "./lib/selection";
 import { fetchAccess } from "@/lib/access";
 import { filterByCenter, flatten } from "./lib/tree";
 
 type ViewMode = "board" | "list" | "table" | "calendar" | "timeline";
+
+/**
+ * Five modes, not Tasks' two, because the domain genuinely has five — the
+ * chrome around them is what gets unified, never the count. Icon names are
+ * `icon-registry.ts` entries: an unmapped name falls back to Lucide on every
+ * theme, which is the one glyph in a row of Material Symbols that reads as a
+ * bug.
+ */
+const VIEW_MODES: Array<{ id: ViewMode; icon: string }> = [
+  { id: "board", icon: "Kanban" },
+  { id: "list", icon: "List" },
+  { id: "table", icon: "Table" },
+  { id: "calendar", icon: "Calendar" },
+  { id: "timeline", icon: "Milestone" },
+];
 
 /** An empty calendar window — the shape before anything has been fetched, and
  *  the shape after a failure, so the view never renders a stale month. */
@@ -84,9 +100,159 @@ const NO_MONTH = {
   truncated: false,
 };
 
+/** Which sheet the phone's bottom bar has pushed into the shell drawer. */
+type Sheet = "tree" | "views" | null;
+
+const LOADING_COPY = "Loading projects…";
+
+/**
+ * ── SEAM (WS-27ag) ─────────────────────────────────────────────────────────
+ * The ONE place this page renders a non-canvas state. Loading, "nothing here
+ * yet" and a failed fetch were three inline paragraphs in three places, two of
+ * them carrying the same string and one of them dressed as calm: a failure on
+ * `bg-muted`, which is the token for *quiet*, not for *this did not work*.
+ *
+ * The slice that follows replaces this body with the shared `EmptyState`
+ * component and touches nothing else — the four call sites already funnel
+ * through here. **Advisory:** this tree has no structural or layout test, so
+ * nothing fails if a fifth state is written inline instead of added here.
+ */
+function renderState(kind: "loading" | "empty" | "error", message: string) {
+  if (kind === "error") {
+    return (
+      <p
+        role="alert"
+        className="border-b border-border bg-destructive/10 px-3 py-2 text-xs text-destructive"
+      >
+        {message}
+      </p>
+    );
+  }
+  return <p className="p-6 text-sm text-muted-foreground">{message}</p>;
+}
+
+/**
+ * The project nav — the collapsible rail on desktop, the drawer sheet on a
+ * phone. ONE component, so tree-vs-drawer cannot drift into two navigations
+ * with two active states; `onPicked` is only how the drawer closes itself.
+ */
+function ProjectNav({
+  roots,
+  selectedId,
+  mine,
+  onMine,
+  onSelect,
+  onAddChild,
+  onImport,
+  onPicked,
+}: {
+  roots: ProjectRow[];
+  selectedId: string | null;
+  mine: boolean;
+  onMine: () => void;
+  onSelect: (project: ProjectRow) => void;
+  onAddChild: (parent: ProjectRow) => void;
+  onImport: () => void;
+  /** Called after any navigation, so the phone's drawer can close. */
+  onPicked?: () => void;
+}) {
+  return (
+    <>
+      {/* My work sits ABOVE the tree, not in a separate app. The personal
+          lens is a view of the same store — putting it anywhere else would
+          re-teach the split that D-PM-6 was revised to remove. */}
+      <button
+        type="button"
+        aria-pressed={mine}
+        onClick={() => {
+          onMine();
+          onPicked?.();
+        }}
+        className={`mb-2 w-full rounded-md px-2 py-1.5 text-left text-sm tech-transition ${
+          mine ? "bg-primary/10 text-primary" : "text-foreground hover:bg-muted"
+        }`}
+      >
+        My work
+      </button>
+      <ProjectTree
+        roots={roots}
+        onImport={() => {
+          onImport();
+          onPicked?.();
+        }}
+        selectedId={mine ? null : selectedId}
+        onSelect={(project) => {
+          onSelect(project);
+          onPicked?.();
+        }}
+        onAddChild={(parent) => {
+          onAddChild(parent);
+          onPicked?.();
+        }}
+      />
+    </>
+  );
+}
+
+/**
+ * The five modes as a toolbar control (desktop) and as a drawer sheet (phone).
+ *
+ * Deliberately NOT the shared `<Tabs>`: that is a page-level bar carrying its
+ * own `px-4 sm:px-6 py-3` and bottom border, and this sits *inside* one such
+ * header. Same active token as every other nav in the house.
+ */
+function ModeSwitch({
+  mode,
+  onPick,
+  layout,
+}: {
+  mode: ViewMode;
+  onPick: (next: ViewMode) => void;
+  layout: "toolbar" | "sheet";
+}) {
+  const sheet = layout === "sheet";
+  return (
+    <div
+      className={sheet ? "flex flex-col gap-0.5" : "flex shrink-0 items-center gap-1"}
+      role="group"
+      aria-label="View mode"
+    >
+      {VIEW_MODES.map((entry) => (
+        <button
+          key={entry.id}
+          type="button"
+          aria-pressed={mode === entry.id}
+          onClick={() => onPick(entry.id)}
+          className={`tech-transition flex items-center gap-2 rounded-md capitalize ${
+            sheet ? "px-3 py-2.5 text-sm" : "px-2 py-1 text-xs"
+          } ${
+            mode === entry.id
+              ? "bg-primary/10 text-primary"
+              : "text-muted-foreground hover:bg-muted"
+          }`}
+        >
+          <Icon name={entry.icon} className={sheet ? "h-4 w-4" : "h-3.5 w-3.5"} />
+          {entry.id}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 function ProjectsWorkspace() {
   const searchParams = useSearchParams();
   const center = searchParams.get("center");
+
+  // WS-27ag — the shell. `/projects` had no mobile branch at all: a 240px nav
+  // beside a five-mode canvas, plus a third column when a task opened, inside
+  // the shell's `pb-nav` scroller. Every other app in the tree decides its
+  // layout here.
+  const { isMobile } = useViewMode();
+  const { open: openDrawer, close: closeDrawer, isOpen: drawerOpen } = useMobileDrawer();
+  /** Desktop only: the left rail collapses, at Tasks' width. */
+  const [railOpen, setRailOpen] = useState(true);
+  /** Phone only: which sheet the bottom bar has pushed into the shell drawer. */
+  const [sheet, setSheet] = useState<Sheet>(null);
 
   const [roots, setRoots] = useState<ProjectRow[]>([]);
   const [grants, setGrants] = useState<GrantRow[]>([]);
@@ -100,7 +266,12 @@ function ProjectsWorkspace() {
   // that do not exist.
   const [panelStatuses, setPanelStatuses] = useState<StatusRow[]>([]);
   const [mine, setMine] = useState(false);
-  const [mode, setMode] = useState<ViewMode>("board");
+  // `null` = nobody has chosen yet, which is a different state from "board":
+  // the right default depends on the viewport, and a board of fixed-width
+  // columns is the wrong first screen on a 390px one. An explicit pick wins on
+  // both, and survives a resize.
+  const [chosenMode, setChosenMode] = useState<ViewMode | null>(null);
+  const mode: ViewMode = chosenMode ?? (isMobile ? "list" : "board");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -179,6 +350,25 @@ function ProjectsWorkspace() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
+  // WS-27ag — the phone's bottom bar (AppShell's `isProjectsPage` branch) talks
+  // to this page over the same `cc-mobile-nav` channel Tasks, Notes and the App
+  // Workshop use. Tapping the tab that is already showing closes its sheet.
+  useEffect(() => {
+    const handler = (event: Event) => {
+      const tab = (event as CustomEvent<string>).detail;
+      if (tab === "projects-tree") setSheet((s) => (s === "tree" ? null : "tree"));
+      else if (tab === "projects-views") setSheet((s) => (s === "views" ? null : "views"));
+      else if (tab === "projects-search") {
+        // ⌘K has no phone equivalent, so the palette needs a control. It is a
+        // full-screen overlay of its own — the drawer would be a second one.
+        setSheet(null);
+        setSearching(true);
+      }
+    };
+    window.addEventListener("cc-mobile-nav", handler);
+    return () => window.removeEventListener("cc-mobile-nav", handler);
+  }, []);
+
   useEffect(() => {
     // Only for the "Mine" toggle. `fetchAccess` never throws, and an empty
     // address disables the button rather than filtering on nobody.
@@ -234,6 +424,86 @@ function ProjectsWorkspace() {
       JSON.stringify(visibleRoots).includes(`"${selected.id}"`);
     if (!stillVisible) setSelected(visibleRoots[0]);
   }, [visibleRoots, selected]);
+
+  // The drawer holds a SNAPSHOT — AppShell keeps injected content in its own
+  // state, so a sheet handed over once keeps rendering the props it was built
+  // with. This re-injects whenever what it draws changes; everything it reads
+  // is in the dependency list, and every callback inside it is a `useState`
+  // setter, so this cannot become a render loop through the drawer's context.
+  useEffect(() => {
+    if (!isMobile) return;
+    if (!sheet) {
+      closeDrawer();
+      return;
+    }
+    openDrawer(
+      <div className="p-2">
+        <div className="mb-2 flex items-center gap-1 px-2">
+          <p className="min-w-0 flex-1 truncate text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+            {sheet === "tree" ? "Departments" : "View"}
+          </p>
+          {sheet === "tree" ? (
+            // The rail's + button has to exist here too, or a new department
+            // is a thing you can only create on a desktop. The form itself
+            // opens under the title row — see `projectForm`.
+            <button
+              type="button"
+              aria-label="New department"
+              onClick={() => {
+                setCreatingUnder(null);
+                setNewName("");
+                setSheet(null);
+              }}
+              className="shrink-0 rounded p-1 text-muted-foreground hover:bg-muted"
+            >
+              <Icon name="Plus" className="h-4 w-4" />
+            </button>
+          ) : null}
+        </div>
+        {sheet === "tree" ? (
+          <ProjectNav
+            roots={visibleRoots}
+            selectedId={selected?.id ?? null}
+            mine={mine}
+            onMine={() => setMine(true)}
+            onSelect={(project) => {
+              setMine(false);
+              setSelected(project);
+            }}
+            onAddChild={(parent) => {
+              setCreatingUnder(parent);
+              setNewName("");
+            }}
+            onImport={() => setImporting(true)}
+            onPicked={() => setSheet(null)}
+          />
+        ) : (
+          <ModeSwitch
+            mode={mode}
+            layout="sheet"
+            onPick={(next) => {
+              setChosenMode(next);
+              setSheet(null);
+            }}
+          />
+        )}
+      </div>,
+    );
+  }, [isMobile, sheet, mode, mine, selected, visibleRoots, openDrawer, closeDrawer]);
+
+  // Dismissing the drawer from the outside (the backdrop, or the Menu tab
+  // replacing the content) has to clear `sheet`, or the effect above reopens
+  // what the user just closed the next time the tree or the mode changes.
+  //
+  // `set-state-in-effect` is suppressed rather than worked around: the drawer
+  // IS an external system — it is AppShell's state, reached through context —
+  // and this is the subscribe half. The alternatives all reintroduce the bug
+  // (a re-tap after a backdrop dismissal sets the same value, so React bails
+  // out and the drawer never reopens).
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    if (!drawerOpen) setSheet(null);
+  }, [drawerOpen]);
 
   const loadProject = useCallback(
     async (project: ProjectRow) => {
@@ -388,17 +658,15 @@ function ProjectsWorkspace() {
     });
   }, [onScreen]);
 
+  // WS-27ad — one transition, shared with /tasks (`@/lib/selection`): a plain
+  // click toggles and becomes the anchor, a shift-click adds the range and
+  // leaves the anchor put, and shift never removes. Inlining the three
+  // branches here is what let the two apps drift apart in the first place.
   function toggleSelection(id: string, shift: boolean) {
     setBulkNotice(null);
-    setPicked((current) => {
-      if (shift && anchor) {
-        const next = new Set(current);
-        for (const each of selectRange(onScreen, anchor, id)) next.add(each);
-        return next;
-      }
-      return toggleId(current, id);
-    });
-    if (!shift) setAnchor(id);
+    const next = clickSelect({ selected: picked, anchor }, onScreen, id, shift);
+    setPicked(next.selected);
+    setAnchor(next.anchor);
   }
 
   // WS-27y — the keyboard's Shift+Arrow grew the selection; `stepCursor` only
@@ -661,387 +929,323 @@ function ProjectsWorkspace() {
     }
   }
 
-  if (loading) {
-    return <p className="p-6 text-sm text-muted-foreground">Loading projects…</p>;
-  }
+  if (loading) return renderState("loading", LOADING_COPY);
 
-  return (
-    <div className="flex h-full min-h-0">
-      <nav className="w-64 shrink-0 overflow-y-auto border-r border-border p-2">
-        <div className="mb-2 flex items-start gap-1 px-2">
-          <div className="min-w-0 flex-1">
-            <h1 className="text-sm font-semibold text-foreground">Projects</h1>
-            <p className="text-xs text-muted-foreground">
-              {center ? `${center} Center's slice` : "Every department you can see"}
-            </p>
-          </div>
-          <button
-            type="button"
-            aria-label="New department"
-            title="New department"
-            onClick={() => {
-              setCreatingUnder(null);
-              setNewName("");
-            }}
-            className="shrink-0 rounded p-1 text-muted-foreground hover:bg-muted"
-          >
-            <Icon name="Plus" className="h-4 w-4" />
-          </button>
-        </div>
+  // ── The parts both layouts render ────────────────────────────────────────
+  // Built once here rather than twice in the two branches below: a phone and a
+  // desktop showing two different apps is how "responsive" turns into two
+  // codebases. What genuinely differs is chrome — a rail versus a drawer, a
+  // docked panel versus a full-screen one — and only that is written twice.
 
-        {creatingUnder !== undefined ? (
-          <form onSubmit={submitProject} className="mb-2 px-2">
-            <input
-              autoFocus
-              value={newName}
-              onChange={(e) => setNewName(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Escape") setCreatingUnder(undefined);
-              }}
-              placeholder={
-                creatingUnder ? `Subproject of ${creatingUnder.name}` : "New department"
-              }
-              aria-label="Project name"
-              className="w-full rounded-md border border-border bg-background px-2 py-1.5 text-sm text-foreground"
-            />
-          </form>
-        ) : null}
-        {/* My work sits ABOVE the tree, not in a separate app. The personal
-            lens is a view of the same store — putting it anywhere else would
-            re-teach the split that D-PM-6 was revised to remove. */}
-        <button
-          type="button"
-          onClick={() => setMine(true)}
-          className={`mb-2 w-full rounded-md px-2 py-1.5 text-left text-sm ${
-            mine ? "bg-accent text-accent-foreground" : "text-foreground hover:bg-muted"
-          }`}
-        >
-          My work
-        </button>
-        <ProjectTree
-          roots={visibleRoots}
-          onImport={() => setImporting(true)}
-          selectedId={mine ? null : selected?.id ?? null}
-          onSelect={(project) => {
-            setMine(false);
-            setSelected(project);
+  /** The create-project form. In the rail on desktop; a strip under the title
+   *  row on a phone, because a controlled input inside the shell's drawer
+   *  would be re-injected on every keystroke. */
+  const projectForm = (className: string) =>
+    creatingUnder === undefined ? null : (
+      <form onSubmit={submitProject} className={className}>
+        <input
+          autoFocus
+          value={newName}
+          onChange={(e) => setNewName(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Escape") setCreatingUnder(undefined);
           }}
-          onAddChild={(parent) => {
-            setCreatingUnder(parent);
-            setNewName("");
+          placeholder={
+            creatingUnder ? `Subproject of ${creatingUnder.name}` : "New department"
+          }
+          aria-label="Project name"
+          className="w-full rounded-md border border-border bg-background px-2 py-1.5 text-sm text-foreground"
+        />
+      </form>
+    );
+
+  /** What the *selected project* offers — the action half of the old header.
+   *  `compact` drops the labels for the phone's title row; the set is the same
+   *  on both, so nothing is quietly unreachable on a phone. */
+  const projectActions = (compact: boolean) => (
+    <>
+      {/* Offered here too, not only from the empty state: the import is
+          idempotent and re-running it is how a workspace stays current until
+          WS-27g retires ClickUp. */}
+      <Button
+        variant="ghost"
+        size={compact ? "icon-sm" : "sm"}
+        icon="Download"
+        aria-label="Import from ClickUp"
+        title="Import from ClickUp"
+        onClick={() => setImporting(true)}
+      >
+        {compact ? null : "ClickUp"}
+      </Button>
+      {selected && !mine ? (
+        <Button
+          variant="ghost"
+          size={compact ? "icon-sm" : "sm"}
+          icon="SlidersHorizontal"
+          aria-label="Custom fields"
+          title="Custom fields"
+          onClick={() => setManagingFields(true)}
+        >
+          {compact ? null : "Fields"}
+        </Button>
+      ) : null}
+      {selected && !mine ? (
+        <Button
+          variant="ghost"
+          size={compact ? "icon-sm" : "sm"}
+          icon="Tag"
+          aria-label="Tags"
+          title="Tags"
+          onClick={() => setManagingTags(true)}
+        >
+          {compact ? null : "Tags"}
+        </Button>
+      ) : null}
+      {selected && !mine && !selected.parent_project_id ? (
+        <Button
+          variant="ghost"
+          size={compact ? "icon-sm" : "sm"}
+          icon="Archive"
+          aria-label="Lifecycle policy"
+          title="Auto-archive and auto-close policy for this project's subtree"
+          onClick={() => setManagingLifecycle(true)}
+        >
+          {compact ? null : "Lifecycle"}
+        </Button>
+      ) : null}
+    </>
+  );
+
+  const title = mine ? "My work" : selected?.name ?? "No project selected";
+  const subtitle = mine
+    ? "Assigned to you, plus your own — one store, so finishing here finishes it on the board."
+    : selected?.description ?? null;
+
+  /** Everything between the chrome and the canvas, plus the canvas. */
+  const workArea = (
+    <>
+      {error ? renderState("error", error) : null}
+
+      {!mine && selected ? (
+        <FilterBar
+          filters={filters}
+          onFilters={changeFilters}
+          groupBy={groupBy}
+          onGroupBy={(next) => {
+            setGroupBy(next);
+            // The new main axis may be the current sub-axis; lanes of the
+            // board's own columns mean nothing, so they reset.
+            setLanes((current) =>
+              current.subGroupBy === next
+                ? { ...current, subGroupBy: "none", collapsedLanes: [] }
+                : current
+            );
+            setActiveViewId(null);
+          }}
+          subGroupBy={lanes.subGroupBy}
+          onSubGroupBy={(next) => {
+            // Collapsed-lane keys belong to the axis that made them.
+            setLanes((current) => ({
+              ...current,
+              subGroupBy: next,
+              collapsedLanes: [],
+            }));
+            setActiveViewId(null);
+          }}
+          me={me}
+          tags={tags}
+          shownFields={shownFields}
+          onShownFields={changeShownFields}
+          fields={fields}
+          // The project's order-bearing board is withheld from the chips
+          // entirely: it is not a saved filter, and offering its ✕ would
+          // offer to delete every hand-arranged position on the project.
+          views={views.filter((v) => v.id !== orderBearingView(views)?.id)}
+          activeViewId={activeViewId}
+          onApplyView={applyView}
+          onSaveView={(name) => void saveView(name)}
+          onDeleteView={(view) => void deleteView(view)}
+          canSave={Boolean(selected)}
+        />
+      ) : null}
+
+      {!mine && selected && picked.size > 0 ? (
+        <BulkBar
+          count={picked.size}
+          statuses={statuses}
+          busy={bulkBusy}
+          notice={bulkNotice}
+          onClear={() => {
+            setPicked(new Set());
+            setAnchor(null);
+            setBulkNotice(null);
+          }}
+          onApply={(request) => void applyBulk(request)}
+        />
+      ) : null}
+
+      {!mine && selected ? (
+        // Capture-first here too: a title and Enter. Everything else about a
+        // task — status, assignee, subtasks — is set from the panel once it
+        // exists, because a create form that asks six questions is a create
+        // form people work around.
+        <form onSubmit={submitTask} className="border-b border-border px-3 py-2">
+          <input
+            value={newTask}
+            onChange={(e) => setNewTask(e.target.value)}
+            placeholder={`New task in ${selected.name}…`}
+            aria-label="New task title"
+            className="w-full rounded-md border border-border bg-background px-2 py-1.5 text-sm text-foreground"
+          />
+        </form>
+      ) : null}
+
+      {/* WS-27u — the front door. Renders nothing when the queue is empty;
+          a ruling reloads the board because an accept just added a card. */}
+      {!mine && selected ? (
+        <TriageRail
+          projectId={selected.id}
+          statuses={statuses}
+          onOpenTask={(id) => void openTaskById(id)}
+          onResolved={() => {
+            if (selected) void loadProject(selected);
           }}
         />
-      </nav>
+      ) : null}
 
-      <main className="flex min-w-0 flex-1 flex-col">
-        <header className="flex items-center justify-between gap-3 border-b border-border px-3 py-2">
-          <div className="min-w-0">
-            <h2 className="truncate text-sm font-medium text-foreground">
-              {mine ? "My work" : selected?.name ?? "No project selected"}
-            </h2>
-            {mine ? (
-              <p className="truncate text-xs text-muted-foreground">
-                Assigned to you, plus your own — one store, so finishing here
-                finishes it on the board.
-              </p>
-            ) : selected?.description ? (
-              <p className="truncate text-xs text-muted-foreground">
-                {selected.description}
-              </p>
-            ) : null}
-          </div>
-          <div className="flex shrink-0 items-center gap-1">
-            {/* Offered in the header too, not only from the empty state: the
-                import is idempotent and re-running it is how a workspace stays
-                current until WS-27g retires ClickUp. */}
-            <Button
-              variant="ghost"
-              size="sm"
-              icon="Download"
-              onClick={() => setImporting(true)}
-            >
-              ClickUp
-            </Button>
-            {selected && !mine ? (
-              <Button
-                variant="ghost"
-                size="sm"
-                icon="SlidersHorizontal"
-                onClick={() => setManagingFields(true)}
-              >
-                Fields
-              </Button>
-            ) : null}
-            {selected && !mine ? (
-              <Button
-                variant="ghost"
-                size="sm"
-                icon="Tag"
-                onClick={() => setManagingTags(true)}
-              >
-                Tags
-              </Button>
-            ) : null}
-            {selected && !mine && !selected.parent_project_id ? (
-              <Button
-                variant="ghost"
-                size="sm"
-                icon="Archive"
-                title="Auto-archive and auto-close policy for this project's subtree"
-                onClick={() => setManagingLifecycle(true)}
-              >
-                Lifecycle
-              </Button>
-            ) : null}
-            <Button
-              variant="ghost"
-              size="sm"
-              icon="Search"
-              onClick={() => setSearching(true)}
-              title="Search every project (⌘K)"
-            >
-              Search
-            </Button>
-            <NotificationBell onOpenTask={openTaskById} />
-          </div>
-          <div className={`flex shrink-0 gap-1 ${mine ? "hidden" : ""}`}>
-            {(["board", "list", "table", "calendar", "timeline"] as ViewMode[]).map((m) => (
-              <button
-                key={m}
-                type="button"
-                onClick={() => setMode(m)}
-                className={`rounded-md px-2 py-1 text-xs capitalize ${
-                  mode === m
-                    ? "bg-accent text-accent-foreground"
-                    : "text-muted-foreground hover:bg-muted"
-                }`}
-              >
-                {m}
-              </button>
-            ))}
-          </div>
-        </header>
-
-        {error ? (
-          <p className="border-b border-border bg-muted px-3 py-2 text-xs text-foreground">
-            {error}
-          </p>
-        ) : null}
-
-        {!mine && selected ? (
-          <FilterBar
-            filters={filters}
-            onFilters={changeFilters}
+      <div className="min-h-0 flex-1 overflow-auto">
+        {mine ? (
+          <MyWork onSelect={(task) => void openWithStatuses(task)} />
+        ) : !selected ? (
+          renderState(
+            "empty",
+            "Nothing here yet. Projects appear once a department is granted to you."
+          )
+        ) : mode === "timeline" ? (
+          <TimelineView
+            tasks={month.rows}
+            links={month.links}
+            undated={month.undated}
+            truncated={month.truncated}
+            today={dayKey(new Date())}
+            shownFields={shownFields}
+            onSelect={(task) => void openWithStatuses(task)}
+            onLink={(blockerId, blockedId) => void linkTasks(blockerId, blockedId)}
+            onRefuse={(reason) => setError(reason)}
+          />
+        ) : mode === "calendar" ? (
+          <CalendarView
+            grid={grid}
+            tasks={month.rows}
+            undated={month.undated}
+            truncated={month.truncated}
+            today={dayKey(new Date())}
+            projectId={selected.id}
+            shownFields={shownFields}
+            onCreated={() => void loadMonth()}
+            onSelect={(task) => void openWithStatuses(task)}
+            onMove={(task, patch) => void moveTask(task, patch)}
+            onStep={(months) => setMonthAnchor(shiftMonth(grid, months))}
+            onToday={() => setMonthAnchor(new Date())}
+          />
+        ) : mode === "table" ? (
+          <TableView
+            groups={groups}
             groupBy={groupBy}
-            onGroupBy={(next) => {
-              setGroupBy(next);
-              // The new main axis may be the current sub-axis; lanes of the
-              // board's own columns mean nothing, so they reset.
-              setLanes((current) =>
-                current.subGroupBy === next
-                  ? { ...current, subGroupBy: "none", collapsedLanes: [] }
-                  : current
-              );
-              setActiveViewId(null);
-            }}
-            subGroupBy={lanes.subGroupBy}
-            onSubGroupBy={(next) => {
-              // Collapsed-lane keys belong to the axis that made them.
+            statuses={statuses}
+            fields={fields}
+            shownFields={shownFields}
+            sort={tableSort}
+            onSort={setTableSort}
+            projectId={selected.id}
+            onCreated={() => void loadProject(selected)}
+            onSaved={(fresh) =>
+              setTasks((current) =>
+                current.map((t) => (t.id === fresh.id ? { ...t, ...fresh } : t))
+              )
+            }
+            onSelect={(task) => void openWithStatuses(task)}
+          />
+        ) : mode === "board" ? (
+          <TaskBoard
+            groups={groups}
+            groupBy={groupBy}
+            lanes={lanes}
+            onToggleLane={(key) =>
               setLanes((current) => ({
                 ...current,
-                subGroupBy: next,
-                collapsedLanes: [],
-              }));
-              setActiveViewId(null);
-            }}
-            me={me}
-            tags={tags}
-            shownFields={shownFields}
-            onShownFields={changeShownFields}
-            fields={fields}
-            // The project's order-bearing board is withheld from the chips
-            // entirely: it is not a saved filter, and offering its ✕ would
-            // offer to delete every hand-arranged position on the project.
-            views={views.filter((v) => v.id !== orderBearingView(views)?.id)}
-            activeViewId={activeViewId}
-            onApplyView={applyView}
-            onSaveView={(name) => void saveView(name)}
-            onDeleteView={(view) => void deleteView(view)}
-            canSave={Boolean(selected)}
-          />
-        ) : null}
-
-        {!mine && selected && picked.size > 0 ? (
-          <BulkBar
-            count={picked.size}
+                collapsedLanes: toggleLane(current.collapsedLanes, key),
+              }))
+            }
+            onShowEmptyLanes={(show) =>
+              setLanes((current) => ({ ...current, showEmptyLanes: show }))
+            }
             statuses={statuses}
-            busy={bulkBusy}
-            notice={bulkNotice}
-            onClear={() => {
-              setPicked(new Set());
-              setAnchor(null);
-              setBulkNotice(null);
-            }}
-            onApply={(request) => void applyBulk(request)}
-          />
-        ) : null}
-
-        {!mine && selected ? (
-          // Capture-first here too: a title and Enter. Everything else about a
-          // task — status, assignee, subtasks — is set from the panel once it
-          // exists, because a create form that asks six questions is a create
-          // form people work around.
-          <form onSubmit={submitTask} className="border-b border-border px-3 py-2">
-            <input
-              value={newTask}
-              onChange={(e) => setNewTask(e.target.value)}
-              placeholder={`New task in ${selected.name}…`}
-              aria-label="New task title"
-              className="w-full rounded-md border border-border bg-background px-2 py-1.5 text-sm text-foreground"
-            />
-          </form>
-        ) : null}
-
-        {/* WS-27u — the front door. Renders nothing when the queue is empty;
-            a ruling reloads the board because an accept just added a card. */}
-        {!mine && selected ? (
-          <TriageRail
+            projectName={projectName}
             projectId={selected.id}
-            statuses={statuses}
-            onOpenTask={(id) => void openTaskById(id)}
-            onResolved={() => {
-              if (selected) void loadProject(selected);
-            }}
+            shownFields={shownFields}
+            onCreated={() => void loadProject(selected)}
+            selected={picked}
+            onToggle={toggleSelection}
+            onExtendSelection={extendSelection}
+            onSelect={(task) => void openWithStatuses(task)}
+            onDrop={handleDrop}
           />
-        ) : null}
+        ) : (
+          <TaskList
+            groups={groups}
+            groupBy={groupBy}
+            statuses={statuses}
+            projectId={selected.id}
+            shownFields={shownFields}
+            onCreated={() => void loadProject(selected)}
+            selected={picked}
+            onToggle={toggleSelection}
+            allChecked={everySelected(picked, onScreen)}
+            onToggleAll={() =>
+              setPicked(
+                everySelected(picked, onScreen) ? new Set() : new Set(onScreen)
+              )
+            }
+            onExtendSelection={extendSelection}
+            onSelect={(task) => void openWithStatuses(task)}
+          />
+        )}
+      </div>
+    </>
+  );
 
-        <div className="min-h-0 flex-1 overflow-auto">
-          {mine ? (
-            <MyWork onSelect={(task) => void openWithStatuses(task)} />
-          ) : !selected ? (
-            <p className="p-6 text-sm text-muted-foreground">
-              Nothing here yet. Projects appear once a department is granted to you.
-            </p>
-          ) : mode === "timeline" ? (
-            <TimelineView
-              tasks={month.rows}
-              links={month.links}
-              undated={month.undated}
-              truncated={month.truncated}
-              today={dayKey(new Date())}
-              shownFields={shownFields}
-              onSelect={(task) => void openWithStatuses(task)}
-              onLink={(blockerId, blockedId) => void linkTasks(blockerId, blockedId)}
-              onRefuse={(reason) => setError(reason)}
-            />
-          ) : mode === "calendar" ? (
-            <CalendarView
-              grid={grid}
-              tasks={month.rows}
-              undated={month.undated}
-              truncated={month.truncated}
-              today={dayKey(new Date())}
-              projectId={selected.id}
-              shownFields={shownFields}
-              onCreated={() => void loadMonth()}
-              onSelect={(task) => void openWithStatuses(task)}
-              onMove={(task, patch) => void moveTask(task, patch)}
-              onStep={(months) => setMonthAnchor(shiftMonth(grid, months))}
-              onToday={() => setMonthAnchor(new Date())}
-            />
-          ) : mode === "table" ? (
-            <TableView
-              groups={groups}
-              groupBy={groupBy}
-              statuses={statuses}
-              fields={fields}
-              shownFields={shownFields}
-              sort={tableSort}
-              onSort={setTableSort}
-              projectId={selected.id}
-              onCreated={() => void loadProject(selected)}
-              onSaved={(fresh) =>
-                setTasks((current) =>
-                  current.map((t) => (t.id === fresh.id ? { ...t, ...fresh } : t))
-                )
-              }
-              onSelect={(task) => void openWithStatuses(task)}
-            />
-          ) : mode === "board" ? (
-            <TaskBoard
-              groups={groups}
-              groupBy={groupBy}
-              lanes={lanes}
-              onToggleLane={(key) =>
-                setLanes((current) => ({
-                  ...current,
-                  collapsedLanes: toggleLane(current.collapsedLanes, key),
-                }))
-              }
-              onShowEmptyLanes={(show) =>
-                setLanes((current) => ({ ...current, showEmptyLanes: show }))
-              }
-              statuses={statuses}
-              projectName={projectName}
-              projectId={selected.id}
-              shownFields={shownFields}
-              onCreated={() => void loadProject(selected)}
-              selected={picked}
-              onToggle={toggleSelection}
-              onExtendSelection={extendSelection}
-              onSelect={(task) => void openWithStatuses(task)}
-              onDrop={handleDrop}
-            />
-          ) : (
-            <TaskList
-              groups={groups}
-              groupBy={groupBy}
-              statuses={statuses}
-              projectId={selected.id}
-              shownFields={shownFields}
-              onCreated={() => void loadProject(selected)}
-              selected={picked}
-              onToggle={toggleSelection}
-              allChecked={everySelected(picked, onScreen)}
-              onToggleAll={() =>
-                setPicked(
-                  everySelected(picked, onScreen) ? new Set() : new Set(onScreen)
-                )
-              }
-              onExtendSelection={extendSelection}
-              onSelect={(task) => void openWithStatuses(task)}
-            />
-          )}
-        </div>
-      </main>
+  const taskPanel = openTask ? (
+    <TaskPanel
+      task={openTask}
+      statuses={panelStatuses}
+      fields={fields}
+      tags={tags}
+      // WS-27p — opening a subtask or a linked task resolves ITS project's
+      // statuses, which the panel has no tree to do.
+      onOpenTask={(id) => void openTaskById(id)}
+      onClose={() => setOpenTask(null)}
+      onTaskAdded={() => {
+        if (selected) void loadProject(selected);
+      }}
+      onChanged={(fresh) => {
+        setOpenTask(fresh);
+        setTasks((current) =>
+          current.map((t) => (t.id === fresh.id ? { ...t, ...fresh } : t))
+        );
+      }}
+    />
+  ) : null;
 
+  /** Everything that floats above the layout, in ONE place — so the two
+   *  branches cannot end up offering different dialogs. */
+  const overlays = (
+    <>
       <SearchPalette
         open={searching}
         onClose={() => setSearching(false)}
         onOpenTask={(id) => void openTaskById(id)}
       />
-
-      {openTask ? (
-        <TaskPanel
-          task={openTask}
-          statuses={panelStatuses}
-          fields={fields}
-          tags={tags}
-          // WS-27p — opening a subtask or a linked task resolves ITS project's
-          // statuses, which the panel has no tree to do.
-          onOpenTask={(id) => void openTaskById(id)}
-          onClose={() => setOpenTask(null)}
-          onTaskAdded={() => {
-            if (selected) void loadProject(selected);
-          }}
-          onChanged={(fresh) => {
-            setOpenTask(fresh);
-            setTasks((current) =>
-              current.map((t) => (t.id === fresh.id ? { ...t, ...fresh } : t))
-            );
-          }}
-        />
-      ) : null}
 
       {managingTags && selected ? (
         <TagManager
@@ -1091,6 +1295,165 @@ function ProjectsWorkspace() {
           onImported={() => setTreeKey((k) => k + 1)}
         />
       ) : null}
+
+      {/* ── SEAM (WS-27ag) ────────────────────────────────────────────────
+          The shared <Toast> mounts HERE, above both layouts and below every
+          dialog — one mount point, so a notice raised from the phone and one
+          raised from the desktop land in the same place. Nothing renders it
+          yet: `bulkNotice` still goes to <BulkBar> and `error` to the strip in
+          `workArea`, and the slice that owns Toast moves them. **Advisory:**
+          no test fences this position — the tree has no layout test at all. */}
+    </>
+  );
+
+  // ── Phone ────────────────────────────────────────────────────────────────
+  // One pane. The tree and the mode picker are sheets in the shell drawer
+  // (AppShell's `isProjectsPage` tabs), and an opened task is a full-screen
+  // surface rather than the third column it is on desktop.
+  if (isMobile) {
+    return (
+      <div className="flex h-full w-full flex-col overflow-hidden bg-background">
+        <div className="flex h-10 shrink-0 items-center gap-1 border-b border-border bg-card px-2">
+          <h1 className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
+            {title}
+          </h1>
+          <div className="flex shrink-0 items-center gap-0.5">
+            {projectActions(true)}
+            <NotificationBell onOpenTask={openTaskById} />
+          </div>
+        </div>
+
+        {projectForm("border-b border-border px-3 py-2")}
+        {workArea}
+
+        {taskPanel ? (
+          // The panel's own `max-w-md` is a docked-column width; on a phone the
+          // surface IS the screen, so the cap is lifted here rather than in the
+          // panel, which knows nothing about the shell. `z-[60]` clears the
+          // bottom nav (z-50); the panel closes from its own ✕.
+          <div className="fixed inset-0 z-[60] flex bg-background pt-safe pb-safe [&>aside]:max-w-none">
+            {taskPanel}
+          </div>
+        ) : null}
+
+        {overlays}
+      </div>
+    );
+  }
+
+  // ── Desktop ──────────────────────────────────────────────────────────────
+  return (
+    <div className="flex h-full w-full flex-col overflow-hidden bg-background">
+      {/* The house shell: a slim h-10 bar carrying the rail toggle, a divider,
+          the app's name and the app-LEVEL actions. Same shape as Tasks and
+          Email; what used to live here — six unrelated controls in one row —
+          is now split between this bar (app scope) and the header below
+          (project scope). */}
+      <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border bg-card px-2">
+        <Button
+          variant={railOpen ? "secondary" : "ghost"}
+          size="icon-sm"
+          icon={railOpen ? "PanelLeftClose" : "PanelLeftOpen"}
+          aria-label={railOpen ? "Hide the project tree" : "Show the project tree"}
+          aria-pressed={railOpen}
+          onClick={() => setRailOpen((v) => !v)}
+        />
+        <div className="h-4 w-px bg-border" />
+        {/* The page's <h1>. The project name below is an <h2>, as it was. */}
+        <h1 className="shrink-0 text-xs font-medium text-muted-foreground">Projects</h1>
+        <span className="min-w-0 truncate text-xs text-muted-foreground">
+          {center ? `${center} Center's slice` : "Every department you can see"}
+        </span>
+        <div className="ml-auto flex shrink-0 items-center gap-1">
+          <Button
+            variant="ghost"
+            size="sm"
+            icon="Search"
+            onClick={() => setSearching(true)}
+            title="Search every project (⌘K)"
+          >
+            Search
+          </Button>
+          <NotificationBell onOpenTask={openTaskById} />
+        </div>
+      </div>
+
+      <div className="flex min-h-0 flex-1 overflow-hidden">
+        {railOpen ? (
+          <nav className="w-60 shrink-0 overflow-y-auto border-r border-border bg-card p-2">
+            <div className="mb-2 flex items-center gap-1 px-2">
+              <p className="min-w-0 flex-1 truncate text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                Departments
+              </p>
+              <button
+                type="button"
+                aria-label="New department"
+                title="New department"
+                onClick={() => {
+                  setCreatingUnder(null);
+                  setNewName("");
+                }}
+                className="shrink-0 rounded p-1 text-muted-foreground hover:bg-muted"
+              >
+                <Icon name="Plus" className="h-4 w-4" />
+              </button>
+            </div>
+
+            {projectForm("mb-2 px-2")}
+            <ProjectNav
+              roots={visibleRoots}
+              selectedId={selected?.id ?? null}
+              mine={mine}
+              onMine={() => setMine(true)}
+              onSelect={(project) => {
+                setMine(false);
+                setSelected(project);
+              }}
+              onAddChild={(parent) => {
+                setCreatingUnder(parent);
+                setNewName("");
+              }}
+              onImport={() => setImporting(true)}
+            />
+          </nav>
+        ) : null}
+
+        <main className="flex min-w-0 flex-1 flex-col">
+          <header className="shrink-0 border-b border-border">
+            {/* Title row — what you are looking at, and nothing else. */}
+            <div className="flex min-w-0 items-baseline gap-2 px-3 pt-2">
+              <h2 className="min-w-0 truncate text-sm font-medium text-foreground">
+                {title}
+              </h2>
+              {subtitle ? (
+                <p className="min-w-0 truncate text-xs text-muted-foreground">
+                  {subtitle}
+                </p>
+              ) : null}
+            </div>
+            {/* Action row — how you look at it (left) and what you can do to
+                it (right). */}
+            <div className="flex items-center gap-1 px-3 pb-2 pt-1.5">
+              {mine ? null : (
+                <ModeSwitch
+                  mode={mode}
+                  layout="toolbar"
+                  onPick={(next) => setChosenMode(next)}
+                />
+              )}
+              <div className="ml-auto flex shrink-0 items-center gap-1">
+                {projectActions(false)}
+              </div>
+            </div>
+          </header>
+
+          {workArea}
+        </main>
+
+        {taskPanel}
+      </div>
+
+      {overlays}
     </div>
   );
 }
@@ -1098,9 +1461,7 @@ function ProjectsWorkspace() {
 export default function ProjectsPage() {
   // `useSearchParams` needs a Suspense boundary in the App Router.
   return (
-    <Suspense
-      fallback={<p className="p-6 text-sm text-muted-foreground">Loading projects…</p>}
-    >
+    <Suspense fallback={renderState("loading", LOADING_COPY)}>
       <ProjectsWorkspace />
     </Suspense>
   );

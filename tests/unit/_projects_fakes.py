@@ -603,6 +603,12 @@ class FakeProjectsDB:
                 SimpleNamespace(task_id=task_id, people=sorted(people))
                 for task_id, people in grouped.items()
             ])
+        # WS-27ae's attachment roll-up: one aggregate over the exported ids,
+        # the same page-aggregate shape as the assignee one above and taught
+        # for the same reason. Fingerprinted on its own ALIAS rather than on
+        # `pm_task_attachments`, which several statements name.
+        if "count(*) AS files" in statement:
+            return _Result(self._attachment_counts(args))
         # The two card-badge roll-ups, taught for the same reason as the
         # assignee one above: `GROUP BY` is not a shape the generic WHERE
         # reader can parse. Both fingerprints name a statement-specific ALIAS
@@ -682,6 +688,24 @@ class FakeProjectsDB:
             str(s["id"]): str(s.get("category") or "")
             for s in self.rows("pm_task_statuses")
         }
+
+    def _attachment_counts(self, args: dict) -> list[Any]:
+        """WS-27ae — ``{task_id, files}`` per task, over the exported ids.
+
+        A task with no attachments is ABSENT rather than zero, exactly as the
+        `GROUP BY` produces: the export fills its own default, and a mirror
+        that returned zeroes would hide a route that stopped doing so.
+        """
+        wanted = {str(i) for i in (args.get("ids") or [])}
+        counts: dict[str, int] = {}
+        for row in self.rows("pm_task_attachments"):
+            task_id = str(row.get("task_id"))
+            if task_id in wanted:
+                counts[task_id] = counts.get(task_id, 0) + 1
+        return [
+            SimpleNamespace(task_id=task_id, files=total)
+            for task_id, total in counts.items()
+        ]
 
     def _subtask_counts(self, statement: str, args: dict) -> list[Any]:
         """``{parent, total, done}`` per parent, over the page's ids.
@@ -1365,11 +1389,32 @@ class FakeProjectsDB:
             }
             rows = [r for r in rows if str(r.get("status_id")) not in parked]
 
-        # NOT EXISTS over pm_task_statuses — /assigned-to-me hiding closed
-        # work. The triage predicate above also names both fingerprints, so it
-        # is excluded here by its own alias.
+        # ⚠️ WS-27k's POSITIVE category filter: `EXISTS (… s.category =
+        # ANY(:categories))`. It has to be told apart from the two NEGATIVE
+        # category clauses below, and it was not until WS-27ae — the branch
+        # underneath matched any block naming `pm_task_statuses` and
+        # `category`, so `?status_category=` was silently read as "hide closed
+        # work". Every behavioural test in the tree happened to filter on
+        # `todo`, where the two answers coincide; `status_category=done`
+        # returned the OPEN tasks. Keyed on the bound parameter, which only
+        # this clause carries.
+        if any(":categories" in b for b in blocks):
+            seen = True
+            wanted_categories = set(args.get("categories") or [])
+            by_category = {
+                str(s["id"]) for s in self.rows("pm_task_statuses")
+                if s.get("category") in wanted_categories
+            }
+            rows = [r for r in rows if str(r.get("status_id")) in by_category]
+
+        # NOT EXISTS over pm_task_statuses — /assigned-to-me hiding closed work
+        # (`IN ('done', 'cancelled')`) and the `overdue` filter's still-open
+        # half (`= ANY(:closed)`). The triage predicate above and the positive
+        # filter here name the same table, so both are excluded by their own
+        # fingerprints and this branch keys on the closed vocabulary itself.
         if any(
-            "pm_task_statuses" in b and "category" in b and "s_triage" not in b
+            "pm_task_statuses" in b and "s_triage" not in b
+            and ("'done', 'cancelled'" in b or ":closed" in b)
             for b in blocks
         ):
             seen = True

@@ -43,6 +43,15 @@ Control Plane (Next.js browser UI) and local development tools.
 - Identity chain: NextAuth session → X-User-Email / X-User-Role headers → gateway UserContext
 - Role resolution: DB-backed org roles + per-user overrides, resolved server-side per request by the gateway (spec: project-docs/specs/org_access_control.md). EXECUTIVE_EMAILS remains only as the bootstrap path for a deployment whose access tables have not been migrated yet. Permissions are deliberately NOT put in the NextAuth JWT — a JWT outlives an access change, and access revoked an hour ago must not still work
 - All API routes that proxy to gateway forward user identity headers alongside Bearer token
+- ⚠️ **A proxy that stamps a fixed `Content-Type` on the way back can only serve JSON routes.**
+  `api/projects/[...path]` did, and it relabelled WS-27ae's `GET /projects/export/tasks.csv`
+  (`text/csv` + `Content-Disposition`) as `application/json`, turning a download into a
+  document. It now forwards the gateway's own content type and its `Content-Disposition` —
+  so the **filename is the server's single choice**, read back in the browser rather than
+  composed a second time — while a refusal from the same endpoint still arrives as the JSON
+  it actually is. Any other `[...path]` proxy that grows a non-JSON route needs the same
+  change; the others are JSON-only today and correct as they stand.
+  Spec: `project-docs/specs/project_management_app.md` §11.26
 - Agent-generated files (artefacts) are proxied via /api/agent/workspace/{sessionId}/file?path=
 - Image URLs in markdown are rewritten through the workspace file proxy automatically
 - Agents SHOULD write generated files to .tmp/ or outputs/ for discoverability

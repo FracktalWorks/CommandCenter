@@ -1391,10 +1391,20 @@ _FENCE_CASES = [
         False,
     ),
     (
-        "a direct call added to core",
+        # ⚠️ The import is INSIDE the function on purpose, and this is the case
+        # that pins `_crm_imports`' whole-tree walk. The real `core.py` CANNOT
+        # import `pipeline` at top level — `pipeline` imports `CLOSING_TYPES`
+        # from `core`, so a module-level import raises `ImportError: cannot
+        # import name 'CLOSING_TYPES' from partially initialized module`. The
+        # "one seam" mis-siting this package is most likely to grow can
+        # therefore ONLY be written with a function-body import, and it is also
+        # the one the reachability fence cannot help with (`core.insert_row` is
+        # not reached from the pull entry points). A fixture with a top-level
+        # import would model a siting that cannot exist.
+        "a direct call added to core, imported inside the function",
         "core.py",
-        "from gateway.routes.crm.pipeline import _require_entry_fields\n"
         "async def insert_row_gated(db, table, values):\n"
+        "    from gateway.routes.crm.pipeline import _require_entry_fields\n"
         "    _require_entry_fields(None, None, values)\n",
         ["core.py", "pipeline.py", "records.py"],
         False,

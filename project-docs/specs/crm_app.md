@@ -219,9 +219,23 @@
 > failed on the same class and it did not get to survive on "pre-existing". **(4)** The
 > fence count in this paragraph said `+9` where the measurement was `+8`, and the first
 > round's mutant tally was reported as twelve when thirteen were run (two carried the same
-> number). Every count here is now collected rather than recalled: **18 mutants red across
-> both rounds, plus one deliberate GREEN control** — a comment naming the gate, which the
-> replaced fence would have failed.
+> number). Every count here is now collected rather than recalled: **19 mutants red across
+> the three rounds, plus one deliberate GREEN control** — a comment naming the gate, which
+> the replaced fence would have failed.
+> ⚠️ **Repair round 2 (re-verify PASSED; one hole closed).** The new fence's own self-test
+> did not exercise the capability its helper's docstring leans on: `_crm_imports` walks the
+> WHOLE tree so a **function-body import** counts, but all eight fixtures imported at top
+> level, so mutating it to `tree.body` left the synthetic suite 8 green and the whole file
+> 84 green. Load-bearing, not academic — **`core.py` cannot import `pipeline` at top level**
+> (measured: `ImportError: cannot import name 'CLOSING_TYPES' from partially initialized
+> module 'gateway.routes.crm.core'`), so the "one seam" mis-siting the fence names as the
+> one to watch can ONLY be written as a function-body import, and `core.insert_row` is not
+> reachable from the pull entry points either. The `core.py` fixture modelled a siting that
+> cannot exist; its import moved inside the function, which makes the fixture realistic AND
+> pins the walk — the `tree.body` mutant now goes red. **Also recorded, not built:** WS-26h's
+> own fence carries the same text-match defect, is covered transitively by the reachability
+> fence (`apply_status_transition` calls `_require_entry_fields` unconditionally), and is
+> banked as a board item in §9 with its two riders.
 > **Not deployed, not merged.**
 > WS-26i (data management): 🟡 SPEC-THIN, audit-narrow before dispatch — **except
 > WS-26i-export, below.**
@@ -2536,6 +2550,17 @@ the caller's choice, `load_default_status` is the server's.)*
    reaches the gate that way today. Eight shapes are pinned against synthetic packages
    (`test_the_siting_fences_see_the_shapes_they_claim_to_see`) so "the fence went blind" is
    a red test, and all six were re-measured against the real package.
+   ⚠️ **Repair round 2:** `_crm_imports` reads the WHOLE tree so a **function-body import**
+   counts, and nothing made that capability fail if it regressed — mutating it to
+   `tree.body` left the synthetic suite 8 green and the whole file 84 green. It is not a
+   nicety: **`core.py` cannot import `pipeline` at top level at all** — measured,
+   `ImportError: cannot import name 'CLOSING_TYPES' from partially initialized module
+   'gateway.routes.crm.core'` — so the "one seam" mis-siting this fence names as the one to
+   watch can ONLY ever be written as a function-body import, and `core.insert_row` is not
+   reachable from the pull entry points, so the reachability half does not cover it either.
+   The `core.py` fixture used a top-level import, i.e. it modelled a siting that cannot
+   exist. Moving that import inside the function closed both halves at once: the fixture is
+   now realistic and the `tree.body` mutant goes red.
 9. `test_crm_zoho_import.py` and `test_crm_zoho_sync.py` pass **unchanged** — no edit to
    either file is permitted in this PR. An edit there is the signal the gate was mis-sited.
 
@@ -2551,6 +2576,27 @@ cycle — unchanged here). **It becomes OWNER-GATE the moment the check is place
 loop. The gate label is a property of the implementation SITE, not of the ticket.
 
 **R8 does not bind this slice** — it introduces no SQL, no migration and no predicate.
+
+⚠️ **Banked as a board item, deliberately NOT built here (2026-08-11, repair round 2):
+WS-26h's own fence `test_the_zoho_pull_never_enters_the_stage_gate` has the same defect
+this ticket fixed in its own** — it greps the literal `apply_status_transition(` in file
+text, so it is blind to an aliased call and red on a comment, while its docstring claims a
+structural property. It is a **correctness wart, not an exposure**, and the reason is worth
+stating rather than re-deriving: its live-system property is **already covered
+transitively** by `test_no_zoho_pull_path_can_reach_the_entry_gate`, because
+`apply_status_transition` calls `_require_entry_fields` unconditionally — so any static
+path from the pull to the MOVE gate is also a path to the ENTRY gate and fails there.
+Measured: the direct and aliased forms go red on the new fence while WS-26h's stays green.
+The residual is an aliased call from a file the loop cannot reach (`broker_handlers.py`,
+`auto_lead.py` — and `CRM_AUTO_LEAD` is still OFF).
+**Two riders, because both change what the follow-up is worth:**
+- The transitive coverage **depends on `apply_status_transition` continuing to call
+  `_require_entry_fields`**, and evaporates *silently* the day that call is removed or
+  relocated. Nothing asserts the dependency today.
+- `_crm_imports` / `_crm_call_graph` / `_gate_reached_from` back **both** fences, so
+  whichever ticket converts WS-26h's fence fixes both at once — a ~10-line change once
+  these helpers are on `main`, which is an argument for merging this branch rather than
+  growing it.
 The `TEXT[]` round-trip it depends on was verified against a real Postgres 16 by WS-26h
 and is unchanged. Say so in the PR rather than leaving a reviewer to ask.
 

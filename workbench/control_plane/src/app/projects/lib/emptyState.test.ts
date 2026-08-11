@@ -75,6 +75,89 @@ describe("the genuinely-empty state", () => {
   });
 });
 
+/**
+ * WS-27am — the third arm. The fence is *present-but-disabled*, and the mutant
+ * it is measured against is dropping the action (i.e. hiding the CTA), which is
+ * the shipped behaviour everywhere else and reads as correct in review.
+ */
+describe("the no-permission state", () => {
+  const denied = (canvas: "board" | "list" = "list") =>
+    emptyStateCopy({ canvas, filtered: false, canCreate: false });
+
+  it("offers the action DISABLED — never absent, never enabled", () => {
+    for (const canvas of ["board", "list"] as const) {
+      const copy = denied(canvas);
+      expect(
+        copy.action,
+        "Hiding the CTA teaches the reader the action does not exist here.",
+      ).toBeDefined();
+      expect(copy.action?.label).toBeTruthy();
+      expect(copy.action?.disabled).toBe(true);
+    }
+  });
+
+  it("says why, in a sentence, not only by greying a control", () => {
+    const copy = denied();
+    expect(copy.action?.disabledReason).toBeTruthy();
+    // The three lines must be three different facts: what is here, why you
+    // cannot change it, what to do about it.
+    expect(copy.action?.disabledReason).not.toBe(copy.hint);
+    expect(copy.hint).not.toBe(copy.message);
+  });
+
+  it("carries no handler — a disabled action has nothing to run", () => {
+    expect(denied().action?.onClick).toBeUndefined();
+  });
+
+  it("never blames the filters", () => {
+    const copy = denied();
+    expect(copy.filtered).toBe(false);
+    expect(`${copy.message} ${copy.hint ?? ""}`).not.toMatch(/filter/i);
+  });
+
+  it("is outranked by filters and outranks the status axis", () => {
+    // Filters win: `Clear filters` is a way out a read-only reader really has.
+    const filtered = emptyStateCopy({
+      canvas: "list",
+      filtered: true,
+      canCreate: false,
+    });
+    expect(filtered.message).toMatch(/filter/i);
+    expect(filtered.action).toBeUndefined();
+
+    // The status axis loses: "add a status" is an instruction this reader
+    // cannot follow, and unfollowable advice reads as a broken app.
+    const board = emptyStateCopy({
+      canvas: "board",
+      filtered: false,
+      onStatusAxis: true,
+      canCreate: false,
+    });
+    expect(`${board.message} ${board.hint ?? ""}`).not.toMatch(/add (a )?status/i);
+    expect(board.action?.disabled).toBe(true);
+  });
+
+  it("changes nothing for a caller that does not pass it", () => {
+    // The additive-only rule, as an assertion: the two shipped arms are
+    // byte-identical with `canCreate` omitted and with it true.
+    for (const filtered of [true, false]) {
+      for (const canvas of ["board", "list"] as const) {
+        expect(emptyStateCopy({ canvas, filtered, onStatusAxis: true })).toEqual(
+          emptyStateCopy({ canvas, filtered, onStatusAxis: true, canCreate: true }),
+        );
+      }
+    }
+  });
+
+  it("names icons that are mapped in every pack", () => {
+    for (const name of [denied().icon, denied().action?.icon]) {
+      expect(name, "an unnamed icon renders nothing").toBeTruthy();
+      expect(ICON_REGISTRY[name!]?.fluent, `${name} has no Fluent mapping`).toBeTruthy();
+      expect(ICON_REGISTRY[name!]?.material, `${name} has no Material mapping`).toBeTruthy();
+    }
+  });
+});
+
 describe("the two states are distinguishable", () => {
   it("differ in message and icon, not only in tone", () => {
     const filtered = noMatch("list");

@@ -12,16 +12,26 @@
  * somebody should do next; the rest is context. A blocker that has finished
  * disappears from it — the gateway derives that — so the section going quiet is
  * how you learn you can start.
+ *
+ * WS-27bd item 2 — **unlinking is per row.** It used to be one shared `error`
+ * string and no pending state at all: three unlinks in a row showed nothing
+ * happening, and a refusal from one of them was printed at the top of the
+ * block, unattached to any of the three. The state is now `lib/rowState.ts`'s
+ * `pending: Set<id>` / `errors: Map<id, string>`, kept in a pure reducer so
+ * "three concurrent operations, one attributed failure" is a unit test
+ * (`rowState.test.ts`) rather than something only a human with three slow
+ * network calls could ever see.
  */
 
 import Icon from "@/components/Icon";
 import Badge from "@/components/ui/Badge";
 import Button from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useReducer, useState } from "react";
 
 import type { TaskRow } from "../lib/api";
 import { projectsApi } from "../lib/api";
+import { NO_ROWS, errorFor, isPending, rowsReducer } from "../lib/rowState";
 import { conflictLabel, conflicts } from "../lib/timeline";
 import {
   type LinkType,
@@ -63,11 +73,18 @@ export function RelationsBlock({
   onOpenTask,
 }: Props) {
   const [data, setData] = useState<Relations | null>(null);
+  /**
+   * The ADD form's own failure. Deliberately not folded into `rows`: the form
+   * is one control, not a row, and its refusal ("that link would make a loop")
+   * belongs beside the field somebody is still typing in.
+   */
   const [error, setError] = useState<string | null>(null);
   const [linking, setLinking] = useState(false);
   const [target, setTarget] = useState("");
   const [kind, setKind] = useState<LinkType>("blocks");
   const [busy, setBusy] = useState(false);
+  /** Per-link-row pending and error, keyed by `link_id` (WS-27bd item 2). */
+  const [rows, dispatch] = useReducer(rowsReducer, NO_ROWS);
 
   const load = useCallback(async () => {
     try {
@@ -82,6 +99,23 @@ export function RelationsBlock({
   useEffect(() => {
     void load();
   }, [load, refreshKey]);
+
+  /**
+   * Row state cannot outlive its row.
+   *
+   * Every reload prunes to the link ids actually on screen, so a spinner or a
+   * message keyed to a link that has since gone (unlinked from here, or from
+   * the other end of the relation) is dropped rather than left invisible and
+   * permanent. `rowsReducer` returns the SAME object when nothing changed,
+   * which is what keeps this effect from re-rendering itself.
+   */
+  useEffect(() => {
+    if (!data) return;
+    dispatch({
+      kind: "prune",
+      ids: [...data.links, ...data.blocked_by].map((link) => link.link_id),
+    });
+  }, [data]);
 
   if (!data) return null;
 
@@ -108,13 +142,28 @@ export function RelationsBlock({
     }
   }
 
+  /**
+   * Unlink ONE row, and say so on that row.
+   *
+   * Three of these can be in flight at once and each keeps its own spinner;
+   * a refusal is written under the row it was about, not at the top of the
+   * block where it could be read as being about any of them. The previous
+   * error is deliberately NOT cleared on entry — it clears on success — so a
+   * retry does not blank the explanation at the moment somebody is reading it
+   * (`lib/rowState.ts`, and the same rule `MyWork` already follows).
+   */
   async function removeLink(linkId: string) {
-    setError(null);
+    dispatch({ kind: "start", id: linkId });
     try {
       await projectsApi.deleteLink(taskId, linkId);
+      dispatch({ kind: "settled", id: linkId });
       await load();
     } catch (err) {
-      setError(String((err as Error).message));
+      dispatch({
+        kind: "failed",
+        id: linkId,
+        message: String((err as Error).message),
+      });
     }
   }
 
@@ -201,38 +250,70 @@ export function RelationsBlock({
         <div key={s.key}>
           <span className="text-xs text-muted-foreground">{s.label}</span>
           <ul className="mt-0.5 space-y-0.5">
-            {s.links.map((l) => (
-              <li key={l.link_id} className="flex items-center gap-1">
-                <button
-                  type="button"
-                  onClick={() => onOpenTask(l.id)}
-                  className="flex min-w-0 flex-1 items-center gap-2 rounded px-1 py-0.5 text-left text-xs hover:bg-muted"
-                >
-                  {l.task_number ? (
-                    <span className="shrink-0 text-muted-foreground">
-                      #{l.task_number}
-                    </span>
+            {s.links.map((l) => {
+              // WS-27bd item 2 — this row's own state. Two rows unlinking at
+              // once show two spinners, and a refusal names the row it hit.
+              const pending = isPending(rows, l.link_id);
+              const failure = errorFor(rows, l.link_id);
+              return (
+                <li key={l.link_id}>
+                  <div className="flex items-center gap-1">
+                    <button
+                      type="button"
+                      onClick={() => onOpenTask(l.id)}
+                      className="flex min-w-0 flex-1 items-center gap-2 rounded px-1 py-0.5 text-left text-xs hover:bg-muted"
+                    >
+                      {l.task_number ? (
+                        <span className="shrink-0 text-muted-foreground">
+                          #{l.task_number}
+                        </span>
+                      ) : null}
+                      <span
+                        className={`min-w-0 flex-1 truncate text-foreground ${
+                          isResolved(l.category) ? "line-through opacity-60" : ""
+                        }`}
+                      >
+                        {l.title}
+                      </span>
+                      <span className="shrink-0 text-muted-foreground">
+                        {l.status_name}
+                      </span>
+                    </button>
+                    {/* `loading` on THIS button only — a single shared flag
+                        would disable every row in the block, so two thirds of
+                        a working list would look broken. The primitive already
+                        disables what it is spinning on. */}
+                    <Button
+                      variant="ghost"
+                      size="icon-xs"
+                      icon="X"
+                      loading={pending}
+                      aria-label={`Unlink ${l.title}`}
+                      onClick={() => void removeLink(l.link_id)}
+                    />
+                  </div>
+                  {failure ? (
+                    <p
+                      role="alert"
+                      className="mt-0.5 flex items-start gap-1.5 rounded border border-destructive/40 bg-destructive/10 px-2 py-1 text-[11px] text-foreground"
+                    >
+                      <Icon
+                        name="AlertTriangle"
+                        className="mt-0.5 h-3 w-3 shrink-0 text-destructive"
+                      />
+                      <span className="min-w-0 flex-1">{failure}</span>
+                      <Button
+                        variant="ghost"
+                        size="icon-xs"
+                        icon="X"
+                        aria-label={`Dismiss the error on ${l.title}`}
+                        onClick={() => dispatch({ kind: "dismiss", id: l.link_id })}
+                      />
+                    </p>
                   ) : null}
-                  <span
-                    className={`min-w-0 flex-1 truncate text-foreground ${
-                      isResolved(l.category) ? "line-through opacity-60" : ""
-                    }`}
-                  >
-                    {l.title}
-                  </span>
-                  <span className="shrink-0 text-muted-foreground">
-                    {l.status_name}
-                  </span>
-                </button>
-                <Button
-                  variant="ghost"
-                  size="icon-xs"
-                  icon="X"
-                  aria-label={`Unlink ${l.title}`}
-                  onClick={() => void removeLink(l.link_id)}
-                />
-              </li>
-            ))}
+                </li>
+              );
+            })}
           </ul>
         </div>
       ))}

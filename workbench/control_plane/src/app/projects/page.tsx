@@ -13,6 +13,7 @@
  */
 import Icon from "@/components/Icon";
 import Button from "@/components/ui/Button";
+import { LayoutBoundary } from "@/components/LayoutBoundary";
 import { useMobileDrawer } from "@/components/AppShell";
 import { useViewMode } from "@/components/ViewModeProvider";
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -1251,6 +1252,24 @@ function ProjectsWorkspace() {
     ? "Assigned to you, plus your own — one store, so finishing here finishes it on the board."
     : selected?.description ?? null;
 
+  /**
+   * WS-27am — which canvas is on screen, in the user's words. It labels the
+   * error boundary's fallback, so a failure says *which* view stopped rendering
+   * rather than "Projects broke".
+   */
+  const canvasLabel = mine ? "My work" : !selected ? "Projects" : mode;
+
+  /**
+   * …and its identity, which is what actually makes the boundary recoverable.
+   *
+   * A boundary keyed on nothing stays broken until somebody presses Retry —
+   * including after the user has already navigated to data that is fine. Keying
+   * it by layout AND project means the two escapes the fallback's own copy
+   * offers ("switch view or pick another project") really do clear it, because
+   * either one mounts a boundary React has never seen.
+   */
+  const canvasKey = `${mine ? "my-work" : selected?.id ?? "none"}:${canvasLabel}`;
+
   /** Everything between the chrome and the canvas, plus the canvas. */
   const workArea = (
     <>
@@ -1344,114 +1363,116 @@ function ProjectsWorkspace() {
       ) : null}
 
       <div className="min-h-0 flex-1 overflow-auto">
-        {mine ? (
-          <MyWork onSelect={(task) => void openWithStatuses(task)} />
-        ) : !selected ? (
-          renderState(
-            "empty",
-            "Nothing here yet. Projects appear once a department is granted to you."
-          )
-        ) : mode === "timeline" ? (
-          <TimelineView
-            tasks={month.rows}
-            links={month.links}
-            undated={month.undated}
-            truncated={month.truncated}
-            today={dayKey(new Date())}
-            shownFields={shownFields}
-            tags={tags}
-            onSelect={(task) => void openWithStatuses(task)}
-            onLink={(blockerId, blockedId) => void linkTasks(blockerId, blockedId)}
-            onRefuse={(reason) => setError(reason)}
-          />
-        ) : mode === "calendar" ? (
-          <CalendarView
-            grid={grid}
-            tasks={month.rows}
-            undated={month.undated}
-            truncated={month.truncated}
-            today={dayKey(new Date())}
-            projectId={selected.id}
-            shownFields={shownFields}
-            tags={tags}
-            onCreated={() => void loadMonth()}
-            onSelect={(task) => void openWithStatuses(task)}
-            onMove={(task, patch) => void moveTask(task, patch)}
-            onStep={(steps) => setMonthAnchor(shiftGrid(grid, steps))}
-            onToday={() => setMonthAnchor(new Date())}
-            onLayout={setCalLayout}
-            onRefuse={(reason) => setError(reason)}
-          />
-        ) : mode === "table" ? (
-          <TableView
-            groups={groups}
-            groupBy={groupBy}
-            statuses={statuses}
-            fields={fields}
-            shownFields={shownFields}
-            sort={tableSort}
-            onSort={setTableSort}
-            projectId={selected.id}
-            onCreated={() => void loadProject(selected)}
-            onSaved={(fresh) =>
-              setTasks((current) =>
-                current.map((t) => (t.id === fresh.id ? { ...t, ...fresh } : t))
-              )
-            }
-            onSelect={(task) => void openWithStatuses(task)}
-          />
-        ) : mode === "board" ? (
-          <TaskBoard
-            groups={groups}
-            groupBy={groupBy}
-            // S4 — the empty state has to know whether the filters emptied it.
-            filters={filters}
-            onClearFilters={() => changeFilters(EMPTY_FILTERS)}
-            lanes={lanes}
-            onToggleLane={(key) =>
-              setLanes((current) => ({
-                ...current,
-                collapsedLanes: toggleLane(current.collapsedLanes, key),
-              }))
-            }
-            onShowEmptyLanes={(show) =>
-              setLanes((current) => ({ ...current, showEmptyLanes: show }))
-            }
-            statuses={statuses}
-            tags={tags}
-            projectName={projectName}
-            projectId={selected.id}
-            shownFields={shownFields}
-            onCreated={() => void loadProject(selected)}
-            selected={picked}
-            onToggle={toggleSelection}
-            onExtendSelection={extendSelection}
-            onSelect={(task) => void openWithStatuses(task)}
-            onDrop={handleDrop}
-          />
-        ) : (
-          <TaskList
-            groups={groups}
-            groupBy={groupBy}
-            filters={filters}
-            onClearFilters={() => changeFilters(EMPTY_FILTERS)}
-            statuses={statuses}
-            tags={tags}
-            projectId={selected.id}
-            shownFields={shownFields}
-            onCreated={() => void loadProject(selected)}
-            selected={picked}
-            onToggle={toggleSelection}
-            allChecked={everySelected(picked, onScreen)}
-            onToggleAll={() =>
-              setPicked(
-                everySelected(picked, onScreen) ? new Set() : new Set(onScreen)
-              )
-            }
-            onExtendSelection={extendSelection}
-            onSelect={(task) => void openWithStatuses(task)}
-          />
-        )}
+        <LayoutBoundary key={canvasKey} layout={canvasLabel}>
+          {mine ? (
+            <MyWork onSelect={(task) => void openWithStatuses(task)} />
+          ) : !selected ? (
+            renderState(
+              "empty",
+              "Nothing here yet. Projects appear once a department is granted to you."
+            )
+          ) : mode === "timeline" ? (
+            <TimelineView
+              tasks={month.rows}
+              links={month.links}
+              undated={month.undated}
+              truncated={month.truncated}
+              today={dayKey(new Date())}
+              shownFields={shownFields}
+              tags={tags}
+              onSelect={(task) => void openWithStatuses(task)}
+              onLink={(blockerId, blockedId) => void linkTasks(blockerId, blockedId)}
+              onRefuse={(reason) => setError(reason)}
+            />
+          ) : mode === "calendar" ? (
+            <CalendarView
+              grid={grid}
+              tasks={month.rows}
+              undated={month.undated}
+              truncated={month.truncated}
+              today={dayKey(new Date())}
+              projectId={selected.id}
+              shownFields={shownFields}
+              tags={tags}
+              onCreated={() => void loadMonth()}
+              onSelect={(task) => void openWithStatuses(task)}
+              onMove={(task, patch) => void moveTask(task, patch)}
+              onStep={(steps) => setMonthAnchor(shiftGrid(grid, steps))}
+              onToday={() => setMonthAnchor(new Date())}
+              onLayout={setCalLayout}
+              onRefuse={(reason) => setError(reason)}
+            />
+          ) : mode === "table" ? (
+            <TableView
+              groups={groups}
+              groupBy={groupBy}
+              statuses={statuses}
+              fields={fields}
+              shownFields={shownFields}
+              sort={tableSort}
+              onSort={setTableSort}
+              projectId={selected.id}
+              onCreated={() => void loadProject(selected)}
+              onSaved={(fresh) =>
+                setTasks((current) =>
+                  current.map((t) => (t.id === fresh.id ? { ...t, ...fresh } : t))
+                )
+              }
+              onSelect={(task) => void openWithStatuses(task)}
+            />
+          ) : mode === "board" ? (
+            <TaskBoard
+              groups={groups}
+              groupBy={groupBy}
+              // S4 — the empty state has to know whether the filters emptied it.
+              filters={filters}
+              onClearFilters={() => changeFilters(EMPTY_FILTERS)}
+              lanes={lanes}
+              onToggleLane={(key) =>
+                setLanes((current) => ({
+                  ...current,
+                  collapsedLanes: toggleLane(current.collapsedLanes, key),
+                }))
+              }
+              onShowEmptyLanes={(show) =>
+                setLanes((current) => ({ ...current, showEmptyLanes: show }))
+              }
+              statuses={statuses}
+              tags={tags}
+              projectName={projectName}
+              projectId={selected.id}
+              shownFields={shownFields}
+              onCreated={() => void loadProject(selected)}
+              selected={picked}
+              onToggle={toggleSelection}
+              onExtendSelection={extendSelection}
+              onSelect={(task) => void openWithStatuses(task)}
+              onDrop={handleDrop}
+            />
+          ) : (
+            <TaskList
+              groups={groups}
+              groupBy={groupBy}
+              filters={filters}
+              onClearFilters={() => changeFilters(EMPTY_FILTERS)}
+              statuses={statuses}
+              tags={tags}
+              projectId={selected.id}
+              shownFields={shownFields}
+              onCreated={() => void loadProject(selected)}
+              selected={picked}
+              onToggle={toggleSelection}
+              allChecked={everySelected(picked, onScreen)}
+              onToggleAll={() =>
+                setPicked(
+                  everySelected(picked, onScreen) ? new Set() : new Set(onScreen)
+                )
+              }
+              onExtendSelection={extendSelection}
+              onSelect={(task) => void openWithStatuses(task)}
+            />
+          )}
+        </LayoutBoundary>
       </div>
     </>
   );

@@ -25,6 +25,7 @@
  * and the quick-add row cannot disagree about the `colSpan`. No default moved:
  * both keys are in `DEFAULT_SHOWN`.
  */
+import { ControlLink } from "@/components/ControlLink";
 import { EmptyState } from "@/components/EmptyState";
 import Icon from "@/components/Icon";
 import { StatusChip } from "@/components/StatusChip";
@@ -35,7 +36,7 @@ import { accentForGroup, accentForStatus } from "../lib/accent";
 import type { StatusRow, TagRow, TaskRow } from "../lib/api";
 import { projectsApi } from "../lib/api";
 import { sortForView } from "../lib/board";
-import { tagColours, taskRef, visibleChips } from "../lib/card";
+import { tagColours, taskDeepLink, taskRef, visibleChips } from "../lib/card";
 import { clampCursor, stepCursor } from "../lib/cursor";
 import { emptyStateCopy } from "../lib/emptyState";
 import {
@@ -343,11 +344,21 @@ export function TaskList({
                     {taskRef(task) ?? "—"}
                   </td>
                   <td className="px-3 py-2 text-foreground">
-                    <span
+                    {/* WS-27al(1) — the title is a REAL link to the task's own
+                        deep link, so cmd/ctrl/shift/middle-click open it in a
+                        new tab the way they do everywhere else on the machine.
+                        A plain click is intercepted and opens the docked panel,
+                        exactly as the row's own `onClick` does. It lands in
+                        this cell rather than around the row because an `<a>`
+                        cannot wrap a `<tr>`; the row keeps its handler for
+                        clicks anywhere else along it. */}
+                    <ControlLink
+                      href={taskDeepLink(task)}
+                      onActivate={() => onSelect(task)}
                       className={task.completed_at ? "line-through opacity-60" : ""}
                     >
                       {task.title}
-                    </span>
+                    </ControlLink>
                   </td>
                   {showStatus ? (
                     <td className="px-3 py-2 text-muted-foreground">

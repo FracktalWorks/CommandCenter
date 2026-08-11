@@ -42,6 +42,24 @@ describe("isOverdue", () => {
     expect(isOverdue({ due_at: "2026-08-06T12:00:00Z" }, now)).toBe(false);
   });
 
+  it("is NOT overdue once the task has been completed", () => {
+    // WS-27al(3). This predicate had no completion check at all, so a task
+    // ticked off last week kept rendering overdue in My Work while the same
+    // row on the board and in the `overdue` filter read as done. A list that
+    // shouts about work you already did is a list people stop opening.
+    expect(
+      isOverdue(
+        { due_at: "2026-08-06T11:59:00Z", completed_at: "2026-08-06T11:00:00Z" },
+        now,
+      ),
+    ).toBe(false);
+    // The paired half: the SAME row, still open, is overdue — so a predicate
+    // hard-wired to `false` cannot pass this pair.
+    expect(isOverdue({ due_at: "2026-08-06T11:59:00Z", completed_at: null }, now)).toBe(
+      true,
+    );
+  });
+
   it("treats an unparseable date as not overdue", () => {
     // Better to under-alarm than to paint every task red because one row
     // carried a malformed date.

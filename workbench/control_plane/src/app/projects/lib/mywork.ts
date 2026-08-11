@@ -11,6 +11,8 @@
  * growing a second, drifting answer to "what is my next action".
  */
 
+import { isOverdue as sharedIsOverdue } from "@/lib/taskCard";
+
 import type { TaskRow } from "./api";
 
 /**
@@ -54,17 +56,31 @@ export const LANE_LABELS: Record<string, string> = {
 };
 
 /**
- * True when a task's due date has passed.
+ * True when a task's due date has passed **and it is not finished**.
+ *
+ * WS-27al(3) — this used to be a second, independent implementation, and it
+ * disagreed with the other two on the half that matters: it had **no
+ * completion check at all**, so a task somebody ticked off last Tuesday
+ * rendered overdue in My Work forever, while the same row on the board (via
+ * `@/lib/taskCard.isOverdue`) and in the `overdue` filter (via the gateway's
+ * `CLOSED_CATEGORIES`) read as done. A personal list that keeps shouting about
+ * work you already did is a personal list people stop opening.
+ *
+ * So the body is gone: this is now a thin adapter onto the shared predicate,
+ * the same shape `app/tasks/lib/utils.ts` uses. What stays local is only the
+ * *calling convention* — a row plus a `Date`, which is what the pane holds —
+ * because the alternative is a rename with no behaviour in it.
  *
  * `now` is a parameter rather than a `Date.now()` call so the boundary is
  * testable — a function that reads the clock itself can only be tested by
  * mocking time, and "is this overdue" is exactly the kind of off-by-a-day
  * question that deserves a plain assertion.
  */
-export function isOverdue(task: Pick<MyTaskRow, "due_at">, now: Date): boolean {
-  if (!task.due_at) return false;
-  const due = new Date(task.due_at);
-  return !Number.isNaN(due.getTime()) && due.getTime() < now.getTime();
+export function isOverdue(
+  task: Pick<MyTaskRow, "due_at" | "completed_at">,
+  now: Date,
+): boolean {
+  return sharedIsOverdue(task.due_at, task.completed_at, now.getTime());
 }
 
 /**

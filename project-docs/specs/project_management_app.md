@@ -1,12 +1,28 @@
 # Projects App — Master Plan (native project management; ClickUp retirement path)
 
 > **Product:** CommandCenter · **Feature:** Projects (the People Center's primary work-management
-> module, sliced into every other Center) · **Created:** 2026-08-05 · **Updated: 2026-08-10**
+> module, sliced into every other Center) · **Created:** 2026-08-05 · **Updated: 2026-08-11**
 > (status truth pass + tenancy alignment — R4; **WS-27ag shell/mobile slice built the same
 > day**; **S4 convergence slice built the same day — §11.21**; **S6 card-pills slice built the
 > same day — §11.23**; **WS-27ac calendar week/overflow slice built the same day — §11.24**;
 > **WS-27ab view-ergonomics slice — §11.25**; **WS-27ae's export third — §11.26**;
-> **WS-27ae's delta-sync + small-columns thirds — §11.27, migration 168**) ·
+> **WS-27ae's delta-sync + small-columns thirds — §11.27, migration 168**;
+> **WS-27al's narrowed thirds — §11.28**) ·
+> 🟢 **WS-27al (1)(2)(3) BUILT 2026-08-11, on branch `ws-27al-controllink-papercuts`, NOT
+> merged and NOT deployed** (§11.28) — `ControlLink` on the list and table task titles (the
+> app's first `<a href>` on a task at all, so cmd/ctrl/shift/middle-click finally open a new
+> tab), the shared `data-prevent-outside-click` walker consumed by `NotificationBell`, and
+> **My Work's overdue predicate folded onto the shared one — it had NO completion check, so
+> a finished task read as overdue there and as done everywhere else.** Frontend only — no
+> migration, no API change. ⚠️ **Three of the ticket's six items are struck, not deferred
+> silently**: (4) lazy tooltip mounting is unbuildable here (zero `Tooltip` components exist;
+> the native `title=` attribute has no machinery to mount lazily → WS-27ak(2), Wave 2);
+> (5) selected-first ordering names no target multi-select; (6) selection self-heal is
+> **already shipped** (`app/projects/page.tsx` prunes off `onScreen` via `src/lib/selection.ts`).
+> 🔴 **The ticket body's "seven predicates" and "today counts as due" are both wrong** and were
+> deliberately NOT acted on: there are three (plus one deliberately-different waiting
+> predicate under its own contract), and `<` vs `<=` is pinned by two tests with explanatory
+> comments — the day-boundary question is a doc blocker for the owner, not an agent's call. ·
 > **Status:** ✅ **WS-27 a–t MERGED AND DEPLOYED** (a b d e f i j k l m n via #390/#393/#394/#398;
 > o–t via **#399**; **u–z via #408**, 2026-08-10) — migrations **146, 147, 150, 152, 155, 156,
 > 160, 161, 164, 165, 166 are applied on prod** (164/165/166 log-verified on the 2026-08-10
@@ -4615,6 +4631,92 @@ consumes any of this yet**: the per-user overlay is served by `list_views` and t
 still reads `collapsed_lanes` from the shared config, so the behaviour changes only when a
 frontend slice adopts it. (3) The feed has **no client** in-tree — it is built for the
 agents/mobile consumers P-27 names.
+
+### 11.28 WS-27al — the papercuts that were actually buildable (built 2026-08-11)
+
+Wave 1. Frontend only — no migration, no API change, no new dependency. The ticket named
+six items; **three were struck against the tree before a line was written**, and the
+striking is the more useful half of this record.
+
+**(1) `ControlLink` — `/projects` gets its first `<a href>` on a task.**
+Measured at `ebf68f4e`: **zero** `<a href>` and zero `next/link` anywhere in the app's task
+surfaces, so cmd/ctrl-click, shift-click and middle-click did nothing at all — the one
+interaction every other application on the machine agrees on.
+
+- `src/lib/controlLink.ts` — `shouldIntercept(event)`, pure. False for `button !== 0`,
+  meta/ctrl/shift/alt, and an already-`defaultPrevented` click; true otherwise.
+- `src/components/ControlLink.tsx` — a real anchor that calls `preventDefault()` and runs
+  `onActivate` **only** when `shouldIntercept` says so.
+- Wired into `TaskList.tsx` and `TableView.tsx`, at the **title cell**. ⚠️ The rows are
+  `<tr onClick>`, and an `<a>` cannot wrap a `<tr>` — so the row keeps its handler and the
+  link lives in the cell. `TaskCardShell` is deliberately untouched: it is a
+  `role="button"` div by a decision recorded in its own comment (nested interactive
+  elements inside an anchor are invalid HTML), so **cards were out of scope**.
+- Two rules written into the component because both are silent when wrong: it is a **plain
+  `<a>`, never `next/link`** (the target is the route the reader is already on; a `<Link>`
+  would prefetch it once per row for a navigation that only happens in a *new* tab), and it
+  **stops propagation unconditionally** — otherwise a plain click opens the panel twice and
+  a cmd-click opens a tab *and* the panel, honouring the modifier by half.
+- The href is `lib/card.taskDeepLink`, the same `/projects?task=<id>` the bell emits and
+  `page.tsx` reads. No second spelling.
+
+**(2) `data-prevent-outside-click`.** `src/lib/outsideClick.ts` — `shouldDismiss(target,
+walk)` climbs from the clicked node and returns false on the surface itself, on any
+ancestor carrying the attribute, and on a null target; `domClickWalk(surface)` is the one
+DOM adapter. `NotificationBell` consumes it. ⚠️ **Stated honestly: the motivating case does
+not exist in `/projects` yet** — nothing here portals a picker out of a dropdown, so today
+the walker and the old `contains()` behave identically. It is built ahead of the need
+because Wave 2 (Modal · Tooltip · Combobox) creates that case immediately and the
+alternative is three hand-rolled answers arriving at once. **The walker takes an injected
+parent/attribute accessor rather than an `Element` on purpose**: the runner is
+`environment: "node"`, so a DOM-bound version would have no fence at all.
+
+**(3) The overdue predicate — narrowed, and the ticket's own claim corrected.**
+The ticket says "seven" predicates and that "today counts as due". **Both are wrong.**
+Measured: three (`src/lib/taskCard.ts` · `app/projects/lib/mywork.ts` ·
+`gateway/routes/projects/filters.py`), plus `app/tasks/lib/waiting.ts`'s
+`isWaitingOverdue`, which is deliberately different under a documented contract and was
+left alone. The real defect was narrower and worse than "seven copies": **`mywork.ts`'s had
+no completion check at all**, so a finished task with a past due date rendered overdue in
+My Work while the same row read as done on the board and in the SQL filter. Its body is now
+gone — it delegates to `@/lib/taskCard.isOverdue`, the `app/tasks/lib/utils.ts` adapter
+shape — keeping only its local calling convention.
+🔴 **`<` was NOT changed to `<=` and the SQL was not touched.** `taskCard.test.ts` and
+`mywork.test.ts` both pin `<` with explanatory comments ("a task is late once the moment
+has passed, not at the moment itself"). Whether today counts as due is a **doc blocker for
+the owner**, not an agent's call.
+
+**Struck, each for a measured reason.** (4) **Lazy tooltip mounting** — unbuildable:
+**zero `Tooltip` components exist**, the app uses the native `title=` attribute, and there
+is no positioning machinery to mount lazily. It is WS-27ak(2), Wave 2. (5) **Selected-first
+ordering** — the ticket names no target multi-select; `FilterBar`'s tag row is a
+permanently-visible chip strip with no "open" moment, so "sorted on open and frozen while
+open" has no referent there. (6) **Selection self-heal** — **already shipped**:
+`app/projects/page.tsx` prunes the selection against `onScreen` via `src/lib/selection.ts`'s
+`prune`. Verified verbatim; nothing to do.
+
+**Fences (R7), each mutation-measured.**
+
+| Fence | Mutation applied | Result |
+|---|---|---|
+| `src/lib/controlLink.test.ts` — modifier cases, **middle-click asserted by name** (the upstream reference exempts meta/ctrl only and misses it) | dropped the `button !== 0` arm | 2 red |
+| `src/lib/controlLink.test.ts` — "wired, not merely imported" source scan over `TaskList.tsx` + `TableView.tsx` (import · renders · has `href` **and** `onActivate`) | reverted `TaskList`'s title cell to a `<span>` | 2 red, import-half still green (the two halves are distinct) |
+| `src/lib/outsideClick.test.ts` — bails on the attribute, **and dismisses the same chain without it** | dropped the `isGuarded` arm | 2 red |
+| `src/app/projects/lib/mywork.test.ts` — a completed task with a past due date is not overdue, **and the same row still open is** | restored the pre-fix body | 1 red; the two `<`-pinning assertions stayed green |
+
+⚠️ **"cmd-click opens a second tab" is review-only in this tree, and that is not faked.**
+`vitest.config.ts` is `environment: "node"` with `include: ["src/**/*.test.ts"]` — no jsdom,
+no `@testing-library`, `.tsx` tests are not collected. Adding a DOM environment to fence one
+component is a substrate decision, not a papercut. What the fences prove is that the
+decision is right and the wiring exists; that a modified click really opens a tab, and that
+the four themes still draw the title identically now it is an anchor (Tailwind preflight
+gives `a { color: inherit; text-decoration: inherit }`, so no colour was written), is
+`DESIGN_SYSTEM.md` §8 and a human.
+
+**Owed / noticed, deliberately not done.** The anchor makes every task title a tab stop —
+correct for a real link and an accessibility gain over a `<div onClick>` row, but it changes
+tab order on a long table and deserves a look. `/tasks`' list surfaces have the same missing
+`<a href>` and are not in this slice.
 
 ## Board record (2026-08-09) — moved from work_plan.md §2
 

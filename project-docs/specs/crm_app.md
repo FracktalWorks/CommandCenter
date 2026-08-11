@@ -197,9 +197,13 @@
 > that passed while broken** — full write-up in §9. **(1)** Both BFF proxies did
 > `await res.text()`, a UTF-8 decode, which **strips the BOM the gateway emits**; measured
 > `EF BB BF 4E 61 6D` in, `4E 61 6D 65` out, so done-when 5 was not met end to end. Both now
-> read `res.arrayBuffer()`. **This also fixes a live Projects bug** — `api/projects/[...path]`
-> has shipped the same arm since WS-27ae, so `/projects/export/tasks.csv` has been reaching
-> Excel without its BOM in production; it is fixed here deliberately, not by accident.
+> read `res.arrayBuffer()`. **This also fixes the same bug in Projects** —
+> `api/projects/[...path]` has carried the identical arm since WS-27ae, so
+> `/projects/export/tasks.csv` reaches Excel without its BOM; it is fixed here deliberately,
+> not by accident. ⚠️ Evidenced precisely, after a verifier challenged an earlier "in
+> production" phrasing: WS-27ae is **on `main`** (`1de846a` is an ancestor of `origin/main`
+> via `ebf68f4`, PR #422) and `deploy` reported success on that SHA — **almost certainly
+> live, not proven live**, because a green job is not delivery evidence (non-negotiable 8).
 > **(2)** The done-when-1 parity fence compared the SHALLOW `dependant.query_params`, empty
 > on both sides because both use a class `Depends()` — it now recurses. **(3)** `LIMIT :cap`
 > at exactly the cap could return exactly the cap after a concurrent insert (READ COMMITTED)
@@ -2430,10 +2434,16 @@ recorded here rather than quietly fixed because three of the four were fences th
    `EF BB BF 4E 61 6D`, relayed `4E 61 6D 65`. Excel on Windows then reads the 3,993-row
    Zoho backfill as the system code page and "Café" arrives as "CafÃ©", which is the exact
    failure the BOM exists to prevent. Both proxies now read `res.arrayBuffer()` and pass
-   the bytes. **`api/projects/[...path]` carried the identical arm, so Projects'
-   production export has shipped without a BOM since WS-27ae** — fixed here rather than
-   left broken while the shared fence documents the broken shape as correct. That is a
-   deliberate one-line reach outside this ticket, not scope creep.
+   the bytes. **`api/projects/[...path]` carried the identical arm, so Projects' export
+   has served BOM-less CSV since WS-27ae** — fixed here rather than left broken while the
+   shared fence documents the broken shape as correct. That is a deliberate one-line reach
+   outside this ticket, not scope creep. ⚠️ **Deploy state, stated exactly** (an earlier
+   draft claimed "production" and a verifier rightly refused it): WS-27ae is on `main`
+   (`1de846a` ancestor of `origin/main` via `ebf68f4`, PR #422) and the `deploy` workflow
+   reported success on that SHA at 2026-08-10T23:53:53Z. Nobody has read back a ledger
+   line or a deployed SHA, so it is **almost certainly live, not proven live** — the
+   distinction CLAUDE.md non-negotiable 8 exists to keep. The defect is in merged code
+   either way.
 2. **The done-when-1 parity fence was vacuous.** It compared
    `route.dependant.query_params`, which is the SHALLOW set; both the list and the export
    take their filters through a class `Depends()`, so it was `set() - set()` on all four

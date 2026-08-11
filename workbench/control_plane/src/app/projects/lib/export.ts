@@ -9,12 +9,11 @@
  * table would disagree about what "my open bugs in Ops" means, which is the
  * whole bug class the one-builder rule exists for.
  *
- * ⚠️ **The export is fetched, not navigated to.** Pointing `window.location` at
- * the endpoint would download the file, but the server REFUSES a filter wider
- * than its row cap (422 rather than a truncated file), and a navigation turns
- * that refusal into a tab full of JSON. Fetching it means the refusal arrives
- * as a message the board can show — which is the entire point of refusing
- * rather than truncating.
+ * The two halves that are NOT projects-specific — reading the server's filename
+ * back off `Content-Disposition`, and handing the bytes to the browser without
+ * decoding them — live in `@/lib/export`, shared with the CRM's export
+ * (WS-26i-export). They carry their own warnings, including the one about
+ * fetching rather than navigating.
  */
 
 import { type Filters, toQuery } from "./grouping";
@@ -63,21 +62,12 @@ export function exportPath(request: ExportRequest): string {
 }
 
 /**
- * The filename the SERVER chose, off `Content-Disposition`.
+ * The name a Projects export falls back to when the proxy dropped the header.
  *
- * Read back rather than composed here so there is one of it. A client-side
- * name would be a second opinion about what the file is called, and the two
- * would drift the first time either side gained a project slug.
+ * The server owns the real one; this is only what `filenameFromDisposition`
+ * uses when there is nothing to read.
  */
-export function filenameFromDisposition(
-  header: string | null,
-  fallback = "projects-tasks.csv"
-): string {
-  const quoted = /filename="([^"]+)"/.exec(header ?? "");
-  if (quoted) return quoted[1];
-  const bare = /filename=([^;]+)/.exec(header ?? "");
-  return bare ? bare[1].trim() : fallback;
-}
+export const EXPORT_FILENAME = "projects-tasks.csv";
 
 /**
  * Whether the Export button does anything.
@@ -88,34 +78,4 @@ export function filenameFromDisposition(
  */
 export function canExport(request: ExportRequest): boolean {
   return Array.isArray(request.shownFields);
-}
-
-/**
- * Hand a fetched CSV to the browser as a download.
- *
- * ⚠️ **It takes a `Blob`, and that is not a detail.** The obvious version reads
- * `await res.text()` and wraps the string — and `Response.text()` decodes UTF-8
- * with `TextDecoder`, which **strips a leading byte order mark**. The gateway
- * emits that BOM for exactly one reason: without it Excel reads the file as the
- * system code page and every non-ASCII task title arrives mojibake. So the text
- * path silently undid the server's fix, and the file downloaded from a running
- * browser was measurably different from the bytes the endpoint produced.
- * Keeping the body as bytes end to end is what makes them the same file.
- *
- * ⚠️ Untested by construction: `vitest.config.ts` runs `environment: "node"`
- * with `include: ["src/**\/*.test.ts"]`, so there is no `document` here and
- * adding jsdom to cover six lines of DOM plumbing is a larger change than the
- * thing covered. Everything with a decision in it — the query, the filename,
- * the refusal path — is a pure function above and IS tested; the BOM is pinned
- * on the server side (`test_projects_export`) and was caught in a real browser.
- */
-export function saveCsv(body: Blob, filename: string): void {
-  const url = URL.createObjectURL(body);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = filename;
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  URL.revokeObjectURL(url);
 }

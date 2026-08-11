@@ -20,6 +20,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import FilterPills from "@/components/FilterPills";
 import Tabs from "@/components/Tabs";
+import Button from "@/components/ui/Button";
 import { useAccess } from "@/components/AccessProvider";
 import { hasCapability } from "@/lib/access";
 import ConvertModal from "./components/ConvertModal";
@@ -82,6 +83,9 @@ function CrmPageInner() {
   const store = useCrmStore();
   const { access } = useAccess();
   const [creating, setCreating] = useState<EntitySlug | null>(null);
+  /** Local, not in the store: an in-flight download is this button's state,
+   *  not the collection's, and reusing `saving` would grey out the sheet. */
+  const [exporting, setExporting] = useState(false);
   const [converting, setConverting] = useState<Lead | null>(null);
   /** A move the gateway would refuse as sent — held until the modal answers. */
   const [pendingMove, setPendingMove] = useState<{
@@ -211,6 +215,34 @@ function CrmPageInner() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          {listEntity && (
+            // WS-26i-export — the filter that is on screen, as a CSV.
+            //
+            // ⚠️ Fetched rather than navigated to (see lib/api.exportRecords).
+            // The endpoint REFUSES a filter wider than its row cap, naming the
+            // matched count, and `window.location = …` would turn that refusal
+            // into a tab full of JSON instead of a sentence in the banner
+            // below.
+            //
+            // It is on the LISTS only: the board is a page of each lane and
+            // reports are aggregates, so neither has a row set an export could
+            // honestly claim to be "what you were looking at".
+            <Button
+              variant="secondary"
+              // `lg` is the New button's geometry beside it — two controls in
+              // one header at two sizes read as two products.
+              size="lg"
+              icon="Download"
+              loading={exporting}
+              onClick={async () => {
+                setExporting(true);
+                await store.exportList(listEntity, view);
+                setExporting(false);
+              }}
+            >
+              Export
+            </Button>
+          )}
           <button
             onClick={reload}
             className="rounded-lg border border-border p-2 text-muted-foreground hover:bg-secondary tech-transition"

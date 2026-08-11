@@ -3,6 +3,7 @@ import {
   activeChip,
   applyChip,
   canSortBy,
+  exportQuery,
   chipsFor,
   hasPipeline,
   listQuery,
@@ -218,5 +219,51 @@ describe("SORTS", () => {
 describe("hasPipeline", () => {
   it("names exactly the two entities with a status_id column", () => {
     expect(ENTITIES.filter(hasPipeline)).toEqual(["deals", "leads"]);
+  });
+});
+
+describe("exportQuery", () => {
+  it("sends exactly the filters the list fetch sends, minus the page", () => {
+    // ⚠️ Compared against `listQuery` itself. Restating the parameter names
+    // here would pass just as happily against a second serialisation, which is
+    // the drift both this module and `core.list_contract` exist to avoid.
+    const view = {
+      ...DEFAULT_VIEW,
+      q: "acme",
+      statusId: "s1",
+      owner: "priya@fracktal.in",
+      sort: "amount",
+      dir: "asc" as const,
+    };
+    const list = listQuery("deals", view);
+    const exported = exportQuery("deals", view);
+
+    for (const [key, value] of Object.entries(list)) {
+      if (key === "page" || key === "page_size") continue;
+      expect(exported[key as keyof typeof exported]).toBe(value);
+    }
+    expect(exported.page).toBeUndefined();
+    // A page is a screen's unit. The endpoint refuses a filter wider than its
+    // row cap rather than paging, so `page_size` could only mean something the
+    // server does not do.
+    expect(exported.page_size).toBeUndefined();
+  });
+
+  it("keeps the leads-only converted toggle", () => {
+    const view = { ...DEFAULT_VIEW, includeConverted: true };
+    expect(exportQuery("leads", view).include_converted).toBe(true);
+    expect(exportQuery("contacts", view).include_converted).toBeUndefined();
+  });
+
+  it("still refuses to send ?status_id to an entity without a pipeline", () => {
+    const view = { ...DEFAULT_VIEW, statusId: "s1" };
+    expect(exportQuery("organizations", view).status_id).toBeUndefined();
+  });
+
+  it("reaches the export endpoint through the BFF, never the gateway", () => {
+    const view = { ...DEFAULT_VIEW, q: "a&b c" };
+    const path = `/api/crm/export/leads.csv${queryString(exportQuery("leads", view))}`;
+    expect(path.startsWith("/api/crm/export/leads.csv?")).toBe(true);
+    expect(path).toContain("q=a%26b+c");
   });
 });

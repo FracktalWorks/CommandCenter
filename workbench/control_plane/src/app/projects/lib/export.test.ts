@@ -9,12 +9,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import {
-  canExport,
-  exportPath,
-  exportQuery,
-  filenameFromDisposition,
-} from "./export";
+import { canExport, exportPath, exportQuery } from "./export";
 import { EMPTY_FILTERS, type Filters, toQuery } from "./grouping";
 import { type TableSort, sortQuery } from "./table";
 
@@ -135,24 +130,8 @@ describe("exportPath", () => {
   });
 });
 
-describe("filenameFromDisposition", () => {
-  it("reads the name the SERVER chose", () => {
-    expect(
-      filenameFromDisposition('attachment; filename="projects-tasks-p1.csv"')
-    ).toBe("projects-tasks-p1.csv");
-  });
-
-  it("reads an unquoted name too", () => {
-    expect(filenameFromDisposition("attachment; filename=export.csv")).toBe(
-      "export.csv"
-    );
-  });
-
-  it("falls back rather than downloading a file called null", () => {
-    expect(filenameFromDisposition(null)).toBe("projects-tasks.csv");
-    expect(filenameFromDisposition("attachment")).toBe("projects-tasks.csv");
-  });
-});
+// `filenameFromDisposition` moved to `@/lib/export` with the CRM's export
+// (WS-26i-export); its cases live in `src/lib/export.test.ts` beside it.
 
 describe("canExport", () => {
   it("does not require a project — exporting everything you can see is real", () => {

@@ -1122,3 +1122,123 @@ def test_the_zoho_pull_never_enters_the_stage_gate() -> None:
     # a status. Nothing else — in particular not import_zoho / sync_zoho /
     # broker_handlers / auto_lead, the four that run outside a member request.
     assert callers == ["pipeline.py", "records.py"], callers
+
+
+def test_the_zoho_pull_never_enters_the_entry_gate_either() -> None:
+    """WS-26h2 done-when 8 — the sibling fence, and the load-bearing one.
+
+    The fence above greps for ``apply_status_transition(`` and protects the
+    MOVE gate only; it would not have fired on WS-26h2's change at all. This
+    one holds the same live-system property one function lower down: the set of
+    files under ``routes/crm/`` that call ``_require_entry_fields`` is EXACTLY
+    ``pipeline.py`` (which defines it) and ``records.py`` (the one create path
+    where a caller may choose the stage).
+
+    ``import_zoho.py``, ``sync_zoho.py`` or ``core.py`` appearing here means
+    the gate now sits on ``sync_zoho.pull_phase`` — the **enabled** 600s
+    production loop (``work_plan.md`` §6 WS-26 (a)) — and the next cycle after
+    any settings-grid save starts refusing rows from the live upstream tenant.
+    That is an OWNER-GATE change to a running loop, not a bug to be fixed
+    forward. ⚠️ ``core.insert_row`` keyed on ``table == "crm_deals"`` is the
+    tempting "one seam" and misses the pull **today only because
+    ``upsert_by_zoho_id`` duplicates the statement rather than delegating** —
+    do not build on that accident.
+
+    Structural rather than by example, because the plausible refactor ("make
+    the importer use the shared create seam") is exactly the one no example
+    test would be watching.
+    """
+    from pathlib import Path
+
+    package = Path(crm_core.__file__).parent
+    callers = sorted(
+        path.name for path in package.glob("*.py")
+        if "_require_entry_fields(" in path.read_text(encoding="utf-8")
+    )
+    assert callers == ["pipeline.py", "records.py"], callers
+
+
+# ── WS-26h2 · the create gate's own shape ───────────────────────────────────
+#
+# The route-level behaviour is in `test_crm_routes.py` (and the convert half in
+# `test_crm_convert.py`). What is asserted here is the shape `records.py` hands
+# the gate: "there is no existing row" as a first-class argument rather than a
+# `None` that happens to make `getattr` answer the same way.
+
+
+def _stage(name: str = "Proposal", *fields: str):
+    """A status row as `require_row` would return it, carrying requirements."""
+    from types import SimpleNamespace
+
+    return SimpleNamespace(name=name, type="ongoing", required_fields=list(fields))
+
+
+def test_with_no_existing_row_only_the_payload_can_satisfy_a_requirement() -> None:
+    with pytest.raises(HTTPException) as exc:
+        crm_pipeline._require_entry_fields(
+            _stage("Proposal", "amount"),
+            crm_pipeline.NO_EXISTING_RECORD,
+            {"name": "Printer order"},
+        )
+
+    assert exc.value.status_code == 422
+    assert "amount" in str(exc.value.detail)
+
+    # …and the same call with the field present is silent.
+    crm_pipeline._require_entry_fields(
+        _stage("Proposal", "amount"),
+        crm_pipeline.NO_EXISTING_RECORD,
+        {"name": "Printer order", "amount": 400000},
+    )
+
+
+def test_the_no_row_shape_is_a_distinct_object_not_none() -> None:
+    """Passing `None` would work by coincidence — `getattr(None, "amount",
+    None)` is also `None` — and would read forever after as somebody having
+    forgotten the record. The create case is something the gate is TOLD."""
+    assert crm_pipeline.NO_EXISTING_RECORD is not None
+    assert repr(crm_pipeline.NO_EXISTING_RECORD) == "NO_EXISTING_RECORD"
+
+
+def test_none_is_refused_rather_than_read_as_no_row() -> None:
+    """The fence that makes "first-class shape" more than a comment.
+
+    `getattr(None, field, None)` answers None for every field, so a caller that
+    lost the record on the way here would silently refuse a move it should have
+    allowed — the sentinel and a bug would be indistinguishable. They are not.
+    """
+    with pytest.raises(TypeError):
+        crm_pipeline._require_entry_fields(_stage("Proposal", "amount"), None, {})
+
+
+def test_the_no_row_sentinel_can_never_be_given_a_field() -> None:
+    """It is a module-level singleton; one that could carry an attribute would
+    be a global that could be made to satisfy somebody's requirement."""
+    with pytest.raises(AttributeError):
+        crm_pipeline.NO_EXISTING_RECORD.amount = 400000  # type: ignore[attr-defined]
+
+
+def test_a_decimal_zero_is_a_value_on_the_create_path_too() -> None:
+    """WS-26h2 done-when 6, the half `DealIn` cannot express: `amount` is typed
+    `float | None`, so a `Decimal` never survives the model — but `_is_blank`
+    is shared with the move path, where a real `NUMERIC` column returns
+    `Decimal('0.00')`, and "same semantics" is asserted rather than assumed."""
+    from decimal import Decimal
+
+    crm_pipeline._require_entry_fields(
+        _stage("Proposal", "amount"),
+        crm_pipeline.NO_EXISTING_RECORD,
+        {"amount": Decimal("0.00")},
+    )
+
+
+@pytest.mark.parametrize("blank", ["", "   "])
+def test_blank_text_is_absent_on_the_create_path_too(blank: str) -> None:
+    with pytest.raises(HTTPException) as exc:
+        crm_pipeline._require_entry_fields(
+            _stage("Proposal", "owner_email"),
+            crm_pipeline.NO_EXISTING_RECORD,
+            {"owner_email": blank},
+        )
+
+    assert exc.value.status_code == 422

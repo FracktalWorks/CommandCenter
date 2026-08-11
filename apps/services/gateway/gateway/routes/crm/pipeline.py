@@ -165,7 +165,33 @@ async def apply_status_transition(
     return updates
 
 
-def _require_entry_fields(status: Any, record: Any, patch: dict[str, Any]) -> None:
+class _NoExistingRecord:
+    """The "there is no stored row" shape :func:`_require_entry_fields` accepts.
+
+    A distinct object rather than ``None``, because ``getattr(None, field,
+    None)`` also answers ``None``: handing the gate ``None`` would make the
+    CREATE path work by coincidence and read, forever after, as somebody having
+    forgotten to pass the record. A caller that has no row has to SAY so.
+
+    ``__slots__`` is empty on purpose — the sentinel is a module-level
+    singleton, and one that could be given an attribute would be a global
+    somebody could make answer a requirement.
+    """
+
+    __slots__ = ()
+
+    def __repr__(self) -> str:  # pragma: no cover — a debugging aid
+        return "NO_EXISTING_RECORD"
+
+
+#: Pass as ``record`` when the write CREATES the row rather than moving one —
+#: ``records._resolve_status`` is the only caller (WS-26h2 / D-CRM-13).
+NO_EXISTING_RECORD = _NoExistingRecord()
+
+
+def _require_entry_fields(
+    status: Any, record: Any | _NoExistingRecord, patch: dict[str, Any],
+) -> None:
     """WS-26h — 422 unless the deal carries everything the TARGET stage demands.
 
     The generalisation of the lost-reason rule directly above, and deliberately
@@ -187,7 +213,9 @@ def _require_entry_fields(status: Any, record: Any, patch: dict[str, Any]) -> No
     ``{"status_id": …, "amount": 400000}`` satisfies an ``amount`` requirement
     in one statement. Read through the same "payload, else row" idiom
     ``admin._effective`` uses, for the same reason: what matters is the state
-    the write LEAVES, not what was stored a moment ago.
+    the write LEAVES, not what was stored a moment ago. On a CREATE there is no
+    row to fall back to, which is a case the caller STATES by passing
+    :data:`NO_EXISTING_RECORD` rather than one this function infers.
 
     **Empty is not missing-but-fine.** ``""`` and ``0`` are treated
     differently on purpose: a blank string is an unfilled text box, while a
@@ -197,27 +225,64 @@ def _require_entry_fields(status: Any, record: Any, patch: dict[str, Any]) -> No
     Stages with no requirements — every stage until somebody sets one, and
     every LEAD status, whose table has no such column — return immediately.
 
-    ⚠️ **Known and deliberate gap: CREATE is not gated.** ``POST /crm/deals``
-    with an explicit ``status_id`` writes the row without coming through here,
-    and so does the convert path's ``_create_deal``. WS-26h scopes the rule to
-    the move path (spec §9), and widening it silently would make the quick-create
-    modal and every lead conversion refusable by a settings-grid edit made
-    elsewhere. Recorded rather than fixed by ambush; a later ticket may close it.
+    ⚠️ **CREATE reaches this gate from ONE of its THREE paths, and the other
+    two must stay open** (WS-26h2, and the rule is **D-CRM-13**: entry
+    requirements gate the stage a caller CHOSE, never the stage the server
+    DEFAULTED to — a deal in the default lane has claimed nothing yet, so
+    demanding proof of progress to enter it is a category error).
+
+    1. ``POST /crm/<entity>`` **with an explicit ``status_id``** →
+       ``records._resolve_status`` calls this with :data:`NO_EXISTING_RECORD`.
+       **Gated.** Creating straight into a late stage by API *is* a claim.
+    2. ``POST /crm/<entity>`` with **no** ``status_id`` (the server defaults the
+       lane), and the convert path's :func:`_create_deal`, which always calls
+       ``load_default_status`` and has no ``status_id`` field at all →
+       **ungated, deliberately.** ``QuickCreateModal`` sends no stage and
+       ``ConvertModal`` offers no organization picker, so gating the defaulted
+       lane would 422 quick-create and *every* lead conversion the moment an
+       owner put a requirement on it — which ``admin.py`` permits unrestricted.
+    3. ``import_zoho.apply_record`` → ``core.upsert_by_zoho_id``, reached by the
+       backfill route **and by ``sync_zoho.pull_phase`` — the ENABLED 600s
+       production loop** → **ungated, and it must stay that way.** It builds its
+       own ``INSERT … ON CONFLICT (zoho_id)`` and calls neither
+       ``core.insert_row`` nor ``records.create_record``. A pulled deal carries
+       whatever stage Zoho has it in and owes nothing to a requirement set here
+       afterwards; a gate on that path would start refusing rows from the live
+       upstream tenant on the next cycle after any settings-grid save, which is
+       an OWNER-GATE change to a running loop (``work_plan.md`` §6 WS-26 (a)).
+       ``test_crm_pipeline.py`` fences the call sites structurally.
+
+    ⚠️ This paragraph previously said CREATE was not gated **at all** and
+    counted the ungated create paths as **two**. Both were wrong — path 3 was
+    missing. Corrected under WS-26h2; the same undercount in ``crm_app.md`` was
+    struck in the commit that recorded D-CRM-13.
     """
-    required = getattr(status, "required_fields", None) or []
-    missing = [
-        field for field in required
-        if _is_blank(
-            patch[field] if field in patch else getattr(record, field, None)
+    if record is None:
+        # Not defensive noise: `getattr(None, field, None)` answers None for
+        # every field, so a miswired caller would silently refuse a move it
+        # should have allowed. "No row" has a name; None means somebody lost
+        # the record on the way here.
+        raise TypeError(
+            "_require_entry_fields takes a record or NO_EXISTING_RECORD, "
+            "never None."
         )
-    ]
+
+    def stated(field: str) -> Any:
+        """"Payload, else row" — with "there is no row" as a stated case."""
+        if field in patch:
+            return patch[field]
+        if record is NO_EXISTING_RECORD:
+            return None
+        return getattr(record, field, None)
+
+    required = getattr(status, "required_fields", None) or []
+    missing = [field for field in required if _is_blank(stated(field))]
     if missing:
         raise HTTPException(
             status_code=422,
             detail=(
                 f"'{status.name}' requires {missing} before a deal can enter "
-                "it. Send the missing field(s) in the same request as the "
-                "status change."
+                "it. Send the missing field(s) in the same request."
             ),
         )
 

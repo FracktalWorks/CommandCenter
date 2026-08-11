@@ -166,6 +166,34 @@
 > three times for idempotency, and the package's own `insert_row`/`update_row`/`status_wire`
 > were run against it — the `TEXT[]` round-trip is the one thing the hermetic fakes cannot
 > answer. **Not deployed, not merged.**
+> · **WS-26h2 (entry requirements on the CHOSEN create stage): 🟢 BUILT 2026-08-11**
+> (branch `claude/crm-command-center-tasks-i8l7n4`; **no migration, no UI change, no change
+> to `core.STAGE_REQUIREABLE_FIELDS` or `board.ts::REQUIREABLE_FIELDS`**). The gate is **one
+> call in `records._resolve_status`**, beside the create-side lost-reason refusal and in the
+> same order, under `if chosen:` — where `chosen = values.get("status_id")` is the caller's
+> own claim and `load_default_status` is the server's default (**D-CRM-13**). It sees
+> `values`, the caller's body *after* `create_record` has defaulted an absent `owner_email`
+> to the acting user, so an unstated owner is never "missing" while an explicit `null` is.
+> `_require_entry_fields` gained **`NO_EXISTING_RECORD`**, a first-class "there is no stored
+> row" shape, and now **refuses `None` with a `TypeError`** rather than reading it as one:
+> `getattr(None, field, None)` answers `None` for every field, so a miswired caller would
+> silently refuse a move it should have allowed and be indistinguishable from the create
+> case. ⚠️ **The gate label is a property of the SITE**: AGENT-SAFE in `records.py`,
+> OWNER-GATE anywhere `sync_zoho.pull_phase` traverses (§6 WS-26 (a)). One of the three
+> create paths is gated; the other two — the DEFAULTED create together with `_create_deal`,
+> and `import_zoho.apply_record` → `core.upsert_by_zoho_id` — stay open. **Fences (R7):**
+> `test_crm_pipeline.py` +9 (the **sibling structural fence** for done-when 8, since the
+> existing one greps `apply_status_transition(` and does not fire on this change at all;
+> plus the sentinel's shape and `_is_blank`'s semantics re-asserted **on** the create path),
+> `test_crm_routes.py` +10, `test_crm_convert.py` +1. **Twelve mutants measured red**, and
+> one is worth recording: moving the gate to `core.insert_row` keyed on `crm_deals` — the
+> tempting "one seam" — leaves `test_crm_zoho_import.py` + `test_crm_zoho_sync.py` **136
+> green** (the importer duplicates the statement rather than delegating, so the pull walks
+> straight past it) and turns **only** the structural fence and the two D-CRM-13 cases red.
+> Done-when 9 held: neither Zoho test file was touched. `pipeline.py`'s docstring — which
+> still said CREATE was ungated and still counted the ungated paths as two — is corrected in
+> the same change (R4). **R8 does not bind this slice: no SQL, no migration, no predicate.**
+> **Not deployed, not merged.**
 > WS-26i (data management): 🟡 SPEC-THIN, audit-narrow before dispatch — **except
 > WS-26i-export, below.**
 > · **WS-26i-export (the filtered-list CSV export): 🟢 BUILT + REPAIRED 2026-08-11** (branch
@@ -2378,7 +2406,11 @@ columns.
 **Tests:** extend `tests/unit/test_crm_pipeline.py`; vitest `board.test.ts` (rot,
 move-plan).
 
-### WS-26h2 — Entry requirements on the CHOSEN create stage · 🟢 AGENT-SAFE · no migration
+### WS-26h2 — Entry requirements on the CHOSEN create stage · ✅ BUILT 2026-08-11 · 🟢 AGENT-SAFE · no migration
+*(Built on branch `claude/crm-command-center-tasks-i8l7n4`, no migration, no owner gate
+touched — the gate landed in `records._resolve_status` and nowhere else, which is the
+condition the label below is stated against. The ticket is left as written; the status
+header's WS-26h2 paragraph records what shipped and what was measured.)*
 *(Minted 2026-08-11 from the WS-26h CREATE-gap audit. Contract authored by the
 spec-auditor, not by the implementer. Closes the create half of the gap **for the case a
 caller actually chose the stage**, and leaves the defaulted case deliberately open per

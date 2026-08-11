@@ -321,8 +321,16 @@ body {
   transition: all var(--motion-duration) var(--motion-easing);
 }
 
-/* Keyboard focus only — a mouse click should not draw a ring. */
-.cc-control:focus-visible {
+/* Keyboard focus only — a mouse click should not draw a ring.
+   `.cc-link` is the same contract for something that is focusable but is NOT a
+   control: a real <a> inside body text or a table cell (ControlLink). It shares
+   this declaration deliberately rather than getting its own, because a second
+   focus ring is a second design system. What it must NOT inherit is the rest of
+   `.cc-control` — the label weight, tracking, text-transform and state layer are
+   a control's personality, and applying them to a task title would restyle every
+   row in the table. One ring, two kinds of focusable thing. */
+.cc-control:focus-visible,
+.cc-link:focus-visible {
   outline: var(--control-focus-ring) solid var(--ring);
   outline-offset: 2px;
 }

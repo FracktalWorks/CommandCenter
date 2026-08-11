@@ -1,12 +1,35 @@
 # Projects App — Master Plan (native project management; ClickUp retirement path)
 
 > **Product:** CommandCenter · **Feature:** Projects (the People Center's primary work-management
-> module, sliced into every other Center) · **Created:** 2026-08-05 · **Updated: 2026-08-10**
+> module, sliced into every other Center) · **Created:** 2026-08-05 · **Updated: 2026-08-11**
+> (**WS-27am's narrowed slice built — §11.29**; **WS-27bd's — §11.30**; each narrowed, and
+> what each STRUCK is the more useful half of the record) ·
+> **Previously updated 2026-08-10**
 > (status truth pass + tenancy alignment — R4; **WS-27ag shell/mobile slice built the same
 > day**; **S4 convergence slice built the same day — §11.21**; **S6 card-pills slice built the
 > same day — §11.23**; **WS-27ac calendar week/overflow slice built the same day — §11.24**;
 > **WS-27ab view-ergonomics slice — §11.25**; **WS-27ae's export third — §11.26**;
-> **WS-27ae's delta-sync + small-columns thirds — §11.27, migration 168**) ·
+> **WS-27ae's delta-sync + small-columns thirds — §11.27, migration 168**;
+> **WS-27al's narrowed thirds — §11.28**; **WS-27bd's two of five — §11.30**) ·
+> 🟢 **WS-27al (1)(2)(5-narrowed) BUILT 2026-08-11, merged onto `claude/paca-research-task-management-a1f6zd`, NOT
+> merged and NOT deployed** (§11.28) — `ControlLink` on the list and table task titles (the
+> app's first `<a href>` on a task at all, so cmd/ctrl/shift/middle-click finally open a new
+> tab), the shared `data-prevent-outside-click` walker consumed by `NotificationBell`, and
+> **My Work's overdue predicate folded onto the shared one — it had NO completion check.**
+> ⚠️ It also had **no in-app caller**, so this was a latent divergence, not a visible bug;
+> an earlier draft of this bullet claimed a finished task read as overdue in My Work and
+> that was wrong (§11.28). Frontend only — no migration, no API change.
+> ⚠️ **Three of the ticket's six items are struck, not deferred silently** — numbered as
+> §9.4.2 numbers them, not as the build order: **(3)** lazy tooltip mounting is unbuildable
+> here (zero `Tooltip` components exist; the native `title=` attribute has no machinery to
+> mount lazily → WS-27ak(2), Wave 2); **(4)** selected-first ordering names no target
+> multi-select; **(6)** selection self-heal is **already shipped** (`app/projects/page.tsx`
+> prunes off `onScreen` via `src/lib/selection.ts`). Built: **(1)**, **(2)** and the
+> narrowed **(5)**.
+> 🔴 **The ticket body's "seven predicates" and "today counts as due" are both wrong** and were
+> deliberately NOT acted on: there are three (plus one deliberately-different waiting
+> predicate under its own contract), and `<` vs `<=` is pinned by two tests with explanatory
+> comments — the day-boundary question is a doc blocker for the owner, not an agent's call. ·
 > **Status:** ✅ **WS-27 a–t MERGED AND DEPLOYED** (a b d e f i j k l m n via #390/#393/#394/#398;
 > o–t via **#399**; **u–z via #408**, 2026-08-10) — migrations **146, 147, 150, 152, 155, 156,
 > 160, 161, 164, 165, 166 are applied on prod** (164/165/166 log-verified on the 2026-08-10
@@ -132,6 +155,42 @@
 > now reads `res.arrayBuffer()` and also forwards `X-Export-Rows`. Fence:
 > `src/lib/export.test.ts` runs both proxies end to end over a BOM'd body. **The fix rides
 > the WS-26i-export branch and is not deployed.** ·
+> 🟢 **WS-27am BUILT 2026-08-11 (NARROWED), merged onto `claude/paca-research-task-management-a1f6zd`, NOT merged to `main`
+> and NOT deployed** (§11.29) — §9.4.2's item 3 in full plus item 1 as a primitive.
+> **The tree had no error boundary anywhere** (zero `componentDidCatch`, no `error.tsx`), so
+> one malformed group shape blanked the whole app: `src/components/LayoutBoundary.tsx` now
+> wraps `/projects`' canvas region, keyed by layout and project, and its **Retry re-mounts by
+> bumping a key** — arithmetic kept pure in `src/lib/layoutBoundary.ts` because vitest here is
+> node-env and cannot render. `EmptyState` gains the triad's **third arm**: a CTA drawn
+> **disabled rather than hidden** (`disabled`/`disabledReason` + `emptyStateCopy`'s
+> `canCreate`), all optional, defaults unchanged, **wired at no call site** — the three list
+> surfaces were held open by sibling slices and an additive prop needs no edit there.
+> 🔴 **§9.4.2's item 2 (the loader/empty/error HOC) is STRUCK, not built**: "one HOC per
+> layout" names no layouts and reads tree-wide, so it cannot be closed as written — a doc
+> blocker, not a build. Frontend only — no migration, no API change. ⚠️ Two claims are
+> **review-only and not fenced** ("a malformed shape must not blank the app", "Retry
+> re-mounts rather than re-crashing"): both need a render with a throwing child, and adding a
+> DOM substrate to this runner is a decision above this ticket's pay grade. Four-theme sweep
+> owed. ·
+> 🟢 **WS-27bd (NARROWED to items 5 and 2) BUILT 2026-08-11, merged onto
+> `claude/paca-research-task-management-a1f6zd`, NOT merged to `main` and NOT deployed**
+> (§11.30) — the right-click
+> menu arrives on `/projects`' cards as a **promotion, not a build**: the working generic menu
+> at `app/tasks/components/ContextMenu.tsx` moves to `src/components/ContextMenu.tsx` behind a
+> re-export shim (/tasks' five call sites unedited), and its items come from a new declared
+> registry `lib/taskMenu.ts` read by **both** `TaskBoard` and `MyWork`. `TaskCardShell` is
+> **unchanged** — it has accepted `onContextMenu` since S1 and /projects simply never passed
+> it. Item 2 lands as `lib/rowState.ts`, a pure `pending: Set` / `errors: Map` reducer wired
+> into `RelationsBlock`'s unlink rows. Frontend only — no migration, no API change, no new
+> prop from `page.tsx`. **Three of the five items were STRUCK before any code**: (1) the
+> shortcut registry is a third keyboard seam, not a papercut, and nothing binds `Mod+F`
+> anyway; (3) clipboard-failure-never-claims-success is **already true** at all eight
+> `writeText` sites; (4) no dismissible banner with a persist-forever key exists. ⚠️ **Cards
+> only** — the row half is deferred, and §9.5.2's "reading the same action registry the
+> palette already uses" is **corrected in §11.30**: `lib/commands.ts` is the page registry and
+> holds no task-scoped action to resolve to, so the two registries are held **disjoint** by
+> test instead. ⚠️ Fences mutation-measured (22/22); the pointer/Escape behaviour is
+> **review-only** (node test env, no DOM) and the four-theme sweep is owed. ·
 > **Owner:** vjvarada · **Board row: WS-27**
 >
 > **Tenancy (audited 2026-08-10 — this spec previously cited no tenancy decision at all).**
@@ -1023,6 +1082,80 @@ when revisited is `plane_pm_research_2026-08.md` §6 Q1 — the anchor-capabilit
 physically separate route module with read-only models, no member-roster endpoint, per-board
 kill switch, and the RLS-bypass point that must be resolved before `SET LOCAL app.tenant_id`.
 Until then the gateway's posture is unchanged: no anonymous tenant-data read routes exist.
+
+**D-PM-21 — UI behaviour is verified in a REAL BROWSER (Playwright), narrowly. No jsdom.**
+`DECISION (2026-08-11, owner-delegated: "make the decisions as per what you recommend").`
+Wave 2 (WS-27ak: Modal → Tooltip → Toast → Skeleton) is almost entirely behaviour that no
+current test in this tree can observe. `vitest.config.ts` is `environment: "node"` with
+`include: ["src/**/*.test.ts"]`, so `.tsx` tests are not collected and there is no jsdom,
+happy-dom or `@testing-library`: **React rendering is verified by nothing but a human
+looking at it.**
+
+**Rejected: jsdom + `@testing-library`.** It is the cheaper-looking option and it buys the
+wrong half. jsdom has **no layout engine**, so scroll-lock with scrollbar compensation,
+collision-aware positioning, viewport flip and real Tab order are all unverifiable under it
+— and those are precisely the behaviours most likely to be silently wrong. Adding it would
+mint a second test environment that still cannot answer the questions Wave 2 asks.
+
+**Chosen: Playwright**, because the infrastructure already exists and is idle —
+`playwright.config.ts`, six `e2e/*.spec.ts`, Chromium pre-installed at
+`/opt/pw-browsers`. This is switching something on, not building it. ⚠️ Version drift is
+real: the installed browser is `chromium-1194` while the packaged Playwright wanted 1223, so
+a spec may need an explicit `executablePath`
+(`/opt/pw-browsers/chromium-1194/chrome-linux/chrome`). **Never run `npx playwright
+install`** — the environment forbids it.
+
+**Scope, and it is deliberately narrow: one spec per primitive, asserting only what no other
+method can see.** Focus moves in on open · Tab wraps at both ends · the background is
+genuinely `inert` (find-in-page and a screen reader cannot walk into it) · Escape is caught
+at the dialog, not on `document` · focus returns to the opener, never `<body>` · scroll locks
+without the page shifting. **Not** a broad e2e suite — those rot, and a rotting suite is
+worse than none because it teaches people to ignore red.
+
+**The evidence this is worth it, from the day it was decided.** Wave 1's adversarial reviewer
+raised a P1: making the task title a real `<a>` means Enter escapes the canvas keydown
+handler (true — `stepCursor` returns null at `cursor < 0` and `TaskList.tsx:171` returns
+*before* `preventDefault`) and therefore performs a full-document GET that reboots the SPA and
+discards filters, selection and view mode. Plausible, well-argued, **and wrong**: the default
+action of Enter on an anchor is *to dispatch a click*, which `ControlLink` intercepts.
+Settled in minutes by driving Chromium against a repro faithful to React's root delegation —
+zero navigations, URL unchanged. Under the status quo that is a repair round spent on a
+non-bug, every time.
+**R7:** the fence is the spec files themselves; there is no test that can force their
+existence, so this decision is **advisory** until a WS-27ak slice lands one.
+
+**D-PM-22 — "Overdue" stays timestamp-granular: `due_at < now()`. Today does NOT count as
+due.** `DECISION (2026-08-11, owner-delegated).` WS-27al(5) inherited *"today counts as due"*
+from the upstream reference. **Refused, and recorded so it is not re-proposed.** Our store is
+timestamp-granular and the reference is date-granular; these are different models, not a bug
+and its fix. Adopting theirs would invert two assertions that deliberately pin `<` over `<=`
+and carry their reasoning in comments (`src/lib/taskCard.test.ts:174`,
+`src/app/projects/lib/mywork.test.ts:35-42` — *"a task is late once the moment has passed,
+not at the moment itself"*), **and** change `gateway/routes/projects/filters.py:182`,
+dragging R8 and R6 into a ticket labelled "logic-only, no dependency". What *is* required, and
+is now true, is that all four predicates agree on **completion**: a finished task is never
+overdue. **Fences already in place:** `taskCard.test.ts`, `mywork.test.ts` (both pinning `<`),
+and the SQL's `CLOSED_CATEGORIES` exclusion.
+
+**D-PM-23 — The task-menu registry is a SECOND registry at a different scope, and that is
+correct.** `DECISION (2026-08-11, owner-delegated).` WS-27bd's acceptance said its items
+derive from `app/projects/lib/commands.ts`. **That criterion was unsatisfiable and the
+implementer's deviation is ACCEPTED.** `COMMANDS` holds `go.*`, `view.*`, `panel.*`,
+`project.*` and `help.shortcuts` — **nothing task-scoped** — so a card menu whose every item
+resolved to it would read *"Widen the task panel · Custom fields · Import from ClickUp"*.
+`app/projects/lib/taskMenu.ts` is therefore the task-scoped registry and `commands.ts` stays
+the page-scoped one.
+⚠️ **This is not a licence to grow registries.** The condition, already fenced in
+`taskMenu.test.ts`, is that **the two stay disjoint in both directions** — no shared id, no
+shared label, no `task.*` in `COMMANDS`, no non-`task.*` in `TASK_MENU_ACTIONS`. Extending
+`commands.ts` to task scope remains possible but is **a ticket, not a side effect**: it also
+moves the `g`/`v` key sequences and the printed `?` shortcuts sheet, which are generated from
+that registry.
+📌 **The process point, which outlives this ticket.** An implementer rewrote its own
+acceptance criterion. The reasoning was right and it was disclosed in three places rather than
+buried — that is the behaviour we want. But the *decision* to change acceptance is a
+reviewer/owner call, and it is being recorded here rather than left inside an as-built,
+because acceptance that a builder can silently edit is not acceptance.
 
 ---
 
@@ -1947,7 +2080,36 @@ a counterexample, not a model.
 
 #### 9.4.1 Owner decisions owed — these gate the tickets under them
 
-**D-PM-15 (owed, but now evidenced) — the headless-primitive substrate.** Base UI vs Radix
+> ### ✅ **D-PM-15 — ANSWERED 2026-08-11: Base UI.**
+> `DECISION (owner-answered 2026-08-11).` Chosen over Radix and over building on
+> `floating-ui`, on the evidence below: **Plane's `propel` and Paca (17 of its 24 primitives)
+> each chose Base UI independently, for exactly the primitive set WS-27ak enumerates.**
+>
+> **What this unblocks:** WS-27ak, in the debt order §9.7.2 fixed — **Modal → Tooltip → Toast
+> → Skeleton**. Measured at `ebf68f4e`: **zero focus traps** across **69** hand-rolled
+> `fixed inset-0` overlays · **no toast system at all** (no `useToast`, no `<Toaster>`, no
+> `ToastProvider`) · native `title=` tooltips in **157** files · `animate-pulse` improvised in
+> **26**.
+>
+> **Three conditions this decision carries, each of which has already failed somewhere we can
+> point at:**
+> 1. **Every primitive gets a CommandCenter wrapper in `src/components/ui/`** carrying
+>    `.cc-control`, resolving icons through `<Icon name>`, using only semantic tokens. Call
+>    sites import ours, never the library's, or the library's defaults become a second design
+>    system. **R7: the conformance suite gains a rule naming that import restriction, or the
+>    rule is advisory.**
+> 2. **One substrate, and the rule binds vendored registries too.** Paca's `package.json`
+>    carries Base UI **and** `radix-ui`, the second reaching exactly one file, inherited from a
+>    vendored component registry. That is the second-substrate failure walking in the back
+>    door — observed, not hypothesised. A `cva`/shadcn-style registry drop is the usual vector.
+> 3. **Base UI has no Combobox.** It closes WS-27ak items 1, 2, 3 and 5; **item 4 stays a
+>    build whichever substrate won**, which is why WS-27bc is sequenced ahead of this decision
+>    rather than behind it (§9.7.2).
+>
+> ⚠️ **Verify each licence at install time.** `node_modules` was absent from the read clones,
+> so every licence claim in §9.4 comes from a manifest, not from a package.
+
+**~~D-PM-15 (owed, but now evidenced)~~ — the headless-primitive substrate.** Base UI vs Radix
 vs Headless UI. Everything in WS-27ak depends on it and **picking two would create the
 parallel seam our own rules forbid**, so this is one choice made once.
 
@@ -2048,6 +2210,57 @@ cancelled item, and **today counts as due**; ours must be one function, not seve
 (6) **Selection self-heals**: when the filtered list changes, drop selected ids that are no
 longer present, so a bulk action cannot fire at something off-screen.
 
+> ### ⚠️ Audit outcome 2026-08-11 — **GO-NARROWED to (1), (2) and a subset of (5)**
+> Re-derived from the tree, not from this ticket's own prose. **Two of six items describe
+> work that already exists**, which is what an unaudited "measured" header buys you.
+>
+> **Done when:** (1) `TaskList.tsx` and `TableView.tsx` render a `ControlLink` in the task
+> **title cell** — ⚠️ *not* around the row: both are `<tr onClick=…>` (`TaskList.tsx:318-321`,
+> `TableView.tsx:533-541`) and an `<a>` cannot wrap a `<tr>`; a pure `src/lib/controlLink.ts`
+> passes a test asserting plain left-click intercepts while `metaKey`/`ctrlKey`/`shiftKey`/
+> `altKey`/`button===1` do not (**assert middle-click explicitly — the upstream reference
+> missed exactly that case**); and a structural assertion in the `sharedTaskUi.test.ts:332`
+> idiom proves both files *render* it, not merely import it. (2) an outside-click walker bails
+> on `data-prevent-outside-click`, consumed at `NotificationBell.tsx:75-80`, with the
+> parent/attribute accessor **injected** so it is testable in this tree's node environment.
+> (5) `app/projects/lib/mywork.ts:64` stops disagreeing with the other predicates about
+> completion.
+> ⚠️ `TaskCardShell.tsx` is **out of scope**: it is a `role="button"` div by the documented
+> decision in its own comment at lines 70-73 (nested interactive elements inside an anchor are
+> invalid HTML).
+>
+> **(5) re-scoped — the ticket's own two claims are both wrong.** There are not "seven"
+> predicates; there are **three in TypeScript and one in SQL**: the shared
+> `src/lib/taskCard.ts:190` (correct — excludes completed) · `src/app/projects/lib/mywork.ts:64`
+> (**no completion check at all** — a finished task with a past due date renders overdue in
+> MyWork, and *that* is the real defect) · `src/app/tasks/lib/waiting.ts:68` (deliberately
+> different under a documented contract — **out of scope, do not merge it**) ·
+> `gateway/routes/projects/filters.py:182` (the best of the four: excludes done *and*
+> cancelled). Not overdue predicates and not to be merged: `tasks/lib/priority.ts:36,50`,
+> `CalendarView.tsx:195`, `StartupRitual.tsx:106` are "due soon" horizon scans.
+> 🔴 **"today counts as due" is REFUSED as under-specified and is now an owner question.**
+> Adopting it inverts two deliberately-pinned assertions that carry their reasoning in
+> comments — `src/lib/taskCard.test.ts:174` and `src/app/projects/lib/mywork.test.ts:35-42`
+> ("Pins `<` rather than `<=`: a task is late once the moment has passed, not at the moment
+> itself") — **and** changes `filters.py:182`, dragging R8 (verify SQL against a real database)
+> and R6 into a ticket labelled "logic-only, no dependency". Our store is timestamp-granular;
+> the reference is date-granular. That is a semantic choice, not a bug fix.
+>
+> **~~(3) lazy tooltip mounting~~ — MOVED to WS-27ak(2), Wave 2.** There is no `Tooltip`
+> component in `src/` at all, so there is no positioning machinery to mount lazily; the native
+> `title=` attribute has none. The item had no target here and its dependency was invisible.
+>
+> **~~(4) selected-first ordering~~ — STRUCK pending a named target.** The ticket names no
+> multi-select. The nearest candidate, the FilterBar tag row (`FilterBar.tsx:369-385`, already
+> ordered `byUsage`), is a permanently-visible chip strip with **no "open" moment**, so
+> "sorted on open and frozen while open" is meaningless there. Re-mint when a real
+> open/close multi-select exists.
+>
+> **~~(6) selection self-heals~~ — ALREADY SHIPPED. Struck.** `app/projects/page.tsx:722-733`
+> prunes the selection off `onScreen` through `src/lib/selection.ts:105 prune`, and
+> `app/tasks/lib/taskStore.ts:923` does the same. Verified verbatim — the shipped comment even
+> uses this ticket's own example ("select forty, narrow to three").
+
 **WS-27am — the three-state list surface.** 🟢 AGENT-SAFE.
 (1) The **empty-state triad**: filters-active-but-no-match (action: *Clear filters*),
 never-populated (action: *Create*), and no-permission — the last renders the CTA
@@ -2058,6 +2271,40 @@ three states — with their judgement call kept: **an empty calendar still rende
 empty chrome is meaningful there and not in a table. (3) A **per-layout error boundary**
 whose Retry re-mounts by bumping a key rather than clearing a flag (which re-crashes
 instantly). A malformed group shape must not blank the app.
+
+> ### ⚠️ Audit outcome 2026-08-11 — **GO-NARROWED to (3) in full and (1) as a capability**
+>
+> **Done when:** (3) `src/components/LayoutBoundary.tsx` wraps every canvas rendered by
+> `app/projects/page.tsx`, its Retry re-mounts by **bumping a key**, and a structural
+> assertion in the `sharedTaskUi.test.ts` idiom proves every canvas is inside it — measured,
+> **the tree contains zero error boundaries**: no `ErrorBoundary`, no `componentDidCatch`, no
+> Next `error.tsx`, so a malformed group shape blanks the whole app today. (1) the
+> **no-permission arm only**: `EmptyState.tsx` gains an *additive optional* disabled-with-reason
+> action and `emptyStateCopy` gains the third arm, unit-tested, **wired at no call site this
+> wave** (every candidate call site belongs to a parallel agent).
+>
+> **(1) is two-thirds already shipped.** `src/components/EmptyState.tsx` (promoted by S4) plus
+> `app/projects/lib/emptyState.ts:46 emptyStateCopy` already deliver filters-active-but-no-match
+> and never-populated, consumed at `TaskBoard.tsx:471` and `TaskList.tsx:207`. Only the
+> no-permission arm — CTA **disabled rather than hidden** — is new.
+>
+> **~~(2) the loader/empty/error HOC~~ — STRUCK for this wave; the doc must name its surfaces
+> first.** "One HOC **per layout**" never says which layouts: `/projects` has five canvases plus
+> MyWork, and the sentence reads tree-wide. An item that cannot be enumerated cannot be closed,
+> so it cannot be dispatched. Re-mint with the surface set written down.
+>
+> **The duplicate `EmptyState` is NOT this ticket's.** `app/tasks/components/ItemList.tsx:490`
+> declares a second one, but **WS-27ah owns retiring it** by name (§9.3, "Retire the duplicate
+> and add the SEAM row… or record why not"), and `EmptyState.tsx`'s own docstring already says
+> that edit is held by another slice. WS-27ah is Wave 4.
+>
+> ⚠️ **Two done-whens here are inherently review-only and must not be faked.** "A malformed
+> group shape must not blank the app" and "Retry re-mounts rather than re-crashing" require
+> rendering a throwing child. This tree **cannot** do that: `vitest.config.ts` is
+> `environment: "node"` with `include: ["src/**/*.test.ts"]`, so `.tsx` tests are not even
+> collected, and there is no jsdom, happy-dom or `@testing-library` installed. Adding one is a
+> substrate decision, not a papercut ticket. A pure test that Retry increments a key asserts
+> the arithmetic, not the remount — label it as such rather than letting it read as a fence.
 
 **WS-27an — the inline-autosave contract.** 🟢 AGENT-SAFE. Six behaviours, and the third is
 the one everybody omits: 1.5s debounce; save on blur with trim; **save on unmount if
@@ -2349,6 +2596,52 @@ forever. (5) **Context menu on cards and rows**, reading the same action registr
 already uses — one registry, two surfaces; measured, `/projects` has zero `onContextMenu`.
 **REF:** [`apps/web/src/lib/shortcuts/provider.tsx`](https://github.com/paca-ai/paca/blob/09dab28e3caee9e43891697998dcfa7fcf76991c/apps/web/src/lib/shortcuts/provider.tsx) · [`apps/web/src/components/plugins/PluginMarketplacePanel.tsx`](https://github.com/paca-ai/paca/blob/09dab28e3caee9e43891697998dcfa7fcf76991c/apps/web/src/components/plugins/PluginMarketplacePanel.tsx) · [`apps/web/src/components/home/UpdateBanner.tsx`](https://github.com/paca-ai/paca/blob/09dab28e3caee9e43891697998dcfa7fcf76991c/apps/web/src/components/home/UpdateBanner.tsx) · [`apps/web/src/components/projects/interactions/task-context-menu.tsx`](https://github.com/paca-ai/paca/blob/09dab28e3caee9e43891697998dcfa7fcf76991c/apps/web/src/components/projects/interactions/task-context-menu.tsx)
 
+> ### ⚠️ Audit outcome 2026-08-11 — **GO-NARROWED to (5) cards-only and (2)**
+> Three of five items describe work that is already done or has no target in this tree.
+>
+> **Done when:** (5) `src/components/ContextMenu.tsx` exists **as a promotion of
+> `app/tasks/components/ContextMenu.tsx`**, both `/tasks` and `/projects` consume that one
+> implementation, /projects cards (`TaskBoard.tsx`, `MyWork.tsx`) open it, its items are
+> derived from `app/projects/lib/commands.ts`, and a structural fence asserts **exactly one
+> shared ContextMenu** with the pre-existing `email/components/EmailList.tsx` copy recorded as
+> a **named exemption** — a fence that is silently red on arrival, or silently passes over a
+> known second copy, is worse than none. (2) `RelationsBlock.tsx` keeps `pending: Set<id>` and
+> `errors: Map<id,string>` in a pure reducer, so three concurrent operations show three
+> spinners and one failure is attributed to one row.
+>
+> 🔴 **(5) is a PROMOTION, and the ticket's own wording is the trap.** "Context menu on cards
+> and rows" reads like a build. A working generic one already exists at
+> `app/tasks/components/ContextMenu.tsx` — `CtxItem[]` union, viewport flip, Escape, click-away
+> — wired at **five** call sites (`tasks/components/TaskCard.tsx:216,298`, `InboxCard.tsx:173`,
+> `calendar/TimeGrid.tsx:521`, `calendar/UnscheduledRail.tsx:136`), and a **second** lives at
+> `email/components/EmailList.tsx:429,697`. A third would be a CLAUDE.md §5 defect authored by
+> the ticket that was meant to prevent it. ✅ `TaskCardShell.tsx` already **accepts and wires**
+> `onContextMenu` (lines 41/63/82) — /projects simply never passes it, so this is a
+> pass-through. ⚠️ The registry is `app/projects/lib/commands.ts`, **not** `src/lib/commands.ts`
+> — §11.25's shorthand misleads on the path.
+> ⚠️ **Cards only this wave.** The row half waits for WS-27al, which is making table rows
+> link-navigable in the same click path.
+>
+> **~~(1) shortcuts release unclaimed keys~~ — NO-GO.** Its own stated fence ("`preventDefault`
+> is not called when no handler is registered") is a good test **of a registry that does not
+> exist**. Keyboard handling lives in three unrelated places (`projects/page.tsx:1034`,
+> `projects/lib/search.ts:118-140`, `projects/lib/commands.ts:388-396`); consolidating them
+> mints a **third** keyboard seam, which is a seam decision, not a papercut. Separately,
+> **nothing binds `Mod+F` anywhere** — zero matches — so "falls through to find-in-page" is
+> already true by absence.
+>
+> **~~(3) clipboard failure never claims success~~ — ALREADY TRUE at all eight sites. Struck.**
+> Six of eight `clipboard.writeText` calls have an explicit `catch` that deliberately does not
+> flip "Copied", including /projects' own at `TaskPanel.tsx:493-506`, which carries a comment
+> explaining why. The two `.then()` sites (`MessageActionBar.tsx:33`, `MarkdownMessage.tsx:132`)
+> never run their success branch on rejection either — they leak an unhandled rejection, which
+> is a different and smaller defect. Re-scoping this as "one clipboard helper, eight call
+> sites" would be a legitimate ticket, but it is **a different one** and not this wave's.
+>
+> **~~(4) signature-keyed banner dismissal~~ — STRUCK, no target.** No dismissible banner with a
+> persist-forever key exists anywhere. The nearest seam, `src/lib/dismissedTools.ts`, is
+> already id-keyed — i.e. already signature-keyed in spirit.
+
 #### 9.5.3 Decisions owed
 
 **D-PM-19 (owed) — the agent autonomy gate.** **The single most important gap in either
@@ -2477,6 +2770,79 @@ implementation) · **RTL** (zero occurrences repo-wide, so D-PM-18 gains nothing
 unchallenged**) · **page-batched list badges** (their implementation is the anti-pattern; the
 rule is ours and their file is only the evidence for it) · **per-tenant OAuth callback routing**
 (instance-global upstream — the hard part is unsolved there).
+
+---
+
+### 9.7 The usability sequencing (owner directive 2026-08-11)
+
+§9.3–§9.5 minted 21 tickets ranked by *finding*, not by *impact*. The owner's instruction
+on 2026-08-11 re-ranks them by one question:
+
+> *"the features … which will make the most impact in the UI/UX and feature set to ensure
+> that the UI/UX is as clean, neat, and organized as possible and can bring us to a state
+> of usability as soon as possible."*
+
+This section records the resulting order. It changes **no ticket's scope** — every
+done-when above stands unedited. It owns sequencing only, and where it disagrees with a
+ticket's own ranking prose, `work_plan.md` §2's board row wins over both.
+
+#### 9.7.1 The measurement that set the order
+
+Re-measured against the tree at `ebf68f4e`, 2026-08-11 — not quoted from §9.4, which was
+written a day earlier against a description of the tree rather than a count of it.
+
+| Anchor | Count | Why it ranks where it does |
+|---|---|---|
+| Focus traps, whole tree | **0** | All 7 grep hits for `focus-trap\|FocusTrap\|inert` are the *word* "inert" in prose comments. Not one real trap, not one `inert` attribute. |
+| Files with a hand-rolled `fixed inset-0` overlay | **69** | The population the missing trap applies to. |
+| Toast system (`useToast` / `<Toaster>` / `ToastProvider`) | **0** | ⚠️ **Worse than §9.4 stated.** There is no confirmation channel at all — a mutation either reports inline or reports nothing. This moved Toast up WS-27ak's order. |
+| Files using the native `title=` tooltip | **157** | ⚠️ **Corrected 2026-08-11.** This row first read "**125**, §9.4 said ~157; the real figure is 125" — that was my error, not §9.4's. `title="` matches 125 files, `title={` matches 108, and `title=` matches **157**. §9.4's figure was right; my narrower grep was not, and a count quoted without its method is not a measurement. Unstyled, ~500ms delayed, invisible on touch. |
+| Files improvising `animate-pulse` | **26** | §9.4 said ~20. |
+| Headless-primitive library in `package.json` | **none** | No Radix, no Base UI, no Headless UI, no cmdk, no sonner, no floating-ui. Confirms §9.4's framing: WS-27ab's palette is hand-rolled too. |
+| `<Link>` / `<a href>` anywhere under `src/app/projects` | **0** | ⚠️ **Corrected 2026-08-11.** First written as "124 `onClick`, 0 `role=\"button\"`"; both halves were wrong. The real count is **122** `onClick` lines across 23 files, and `role="button"` is **not** absent — `TaskCardShell.tsx:74` emits it for every /projects card. **The gap is the missing `<a href>`, not the missing button role**: cmd/ctrl/shift/middle-click cannot open a task in a new tab anywhere in `/projects`. ⚠️ The list rows are `<tr>` (`TaskList.tsx:318`, `TableView.tsx:533`), so a link lands in the **title cell** — an `<a>` cannot wrap a `<tr>`. |
+| `onContextMenu` in `/projects` | **0** | ✅ **Cheaper than §9.5 implied**: `src/components/TaskCardShell.tsx` already *accepts* the prop and `/tasks` already ships `app/tasks/components/ContextMenu.tsx`. WS-27bd(5) is wiring, not building. |
+| `EmptyState` implementations | **2** | `src/components/EmptyState.tsx` + a local one at `app/tasks/components/ItemList.tsx:490`. |
+
+#### 9.7.2 The four waves
+
+**Wave 1 — the papercut wave. DISPATCHED 2026-08-11.** 🟢 all AGENT-SAFE, no migration, no
+library, no owner decision, nothing blocking. **WS-27al** (logic-only wins) · **WS-27am**
+(three-state list surface) · **WS-27bd** (the small rules). Highest usability-per-hour in
+the queue: it is the wave that makes the app stop feeling improvised.
+
+**Wave 2 — the primitive wave.** 🟡 **D-PM-15 is the only gate in the entire sequence.**
+**WS-27ak** in debt order — **Modal → Tooltip → Toast → Skeleton** (Toast promoted above
+Skeleton by the measurement above; §9.4.2's original order had it third by count, and count
+was the wrong axis). **WS-27bc** (long-list picker) runs *in parallel and before the
+decision resolves*, because Base UI has no Combobox and it is a build whichever substrate
+wins.
+
+**Wave 3 — the "does it lose my work" wave.** 🟢 no decision needed. **WS-27an** (inline
+autosave — save-on-unmount-if-dirty is the behaviour that currently loses an edit when the
+panel closes mid-keystroke) · **WS-27at** (the living gallery, which is what stops waves 1–2
+drifting apart and converts the manual theme-switch sweep into one page).
+
+**Wave 4 — the modern-feel wave.** **WS-27ao** (rich comment editor, Lite — extensions on
+the TipTap v3 we already ship, not an engine) · **WS-27ah** (segmented clickable progress,
+timeline zoom/edge-drag, pins, recently-viewed, draft restore).
+
+#### 9.7.3 Deliberately not on this path
+
+Recorded so they do not read as forgotten: **WS-27ap** (boolean filter tree) ·
+**WS-27aq** (notification preferences) · **WS-27ai** (notifications inbox) · **WS-27az**
+(revert from timeline) · **WS-27ba** (non-rotting saved view) · **WS-27bb** (per-column
+board pagination) · the whole agent queue **WS-27au–ay**. All real; none on the shortest
+line to a clean, usable Projects app.
+
+⚠️ **The one tension worth stating rather than burying.** Four deferred items are *cheap
+now and expensive later*, and deferring them is a real cost, not a free one:
+**D-PM-20**'s `updated_at` precondition on PATCH (adding it later breaks every client at
+once, and migration 168's `updated_at` already serves the delta feed, so one semantic must
+cover both) · **WS-27ar**'s single generic `(user, entity_type, entity_id)` pins table
+(otherwise four `is_pinned` columns across four tables and a unifying migration) ·
+**WS-27ap**/**WS-27ba**'s stored filter grammar (the saved-view corpus only grows). The
+recommendation carried to the owner was to take D-PM-20 and WS-27ar's table shape alongside
+Wave 1; ap/ba wait until after Wave 3.
 
 ---
 
@@ -4446,6 +4812,267 @@ consumes any of this yet**: the per-user overlay is served by `list_views` and t
 still reads `collapsed_lanes` from the shared config, so the behaviour changes only when a
 frontend slice adopts it. (3) The feed has **no client** in-tree — it is built for the
 agents/mobile consumers P-27 names.
+
+### 11.28 WS-27al — the papercuts that were actually buildable (built 2026-08-11)
+
+Wave 1. Frontend only — no migration, no API change, no new dependency. The ticket named
+six items; **three were struck against the tree before a line was written**, and the
+striking is the more useful half of this record.
+
+**(1) `ControlLink` — `/projects` gets its first `<a href>` on a task.**
+Measured at `ebf68f4e`: **zero** `<a href>` and zero `next/link` anywhere in the app's task
+surfaces, so cmd/ctrl-click, shift-click and middle-click did nothing at all — the one
+interaction every other application on the machine agrees on.
+
+- `src/lib/controlLink.ts` — `shouldIntercept(event)`, pure. False for `button !== 0`,
+  meta/ctrl/shift/alt, and an already-`defaultPrevented` click; true otherwise.
+- `src/components/ControlLink.tsx` — a real anchor that calls `preventDefault()` and runs
+  `onActivate` **only** when `shouldIntercept` says so.
+- Wired into `TaskList.tsx` and `TableView.tsx`, at the **title cell**. ⚠️ The rows are
+  `<tr onClick>`, and an `<a>` cannot wrap a `<tr>` — so the row keeps its handler and the
+  link lives in the cell. `TaskCardShell` is deliberately untouched: it is a
+  `role="button"` div by a decision recorded in its own comment (nested interactive
+  elements inside an anchor are invalid HTML), so **cards were out of scope**.
+- Two rules written into the component because both are silent when wrong: it is a **plain
+  `<a>`, never `next/link`** (the target is the route the reader is already on; a `<Link>`
+  would prefetch it once per row for a navigation that only happens in a *new* tab), and it
+  **stops propagation unconditionally** — otherwise a plain click opens the panel twice and
+  a cmd-click opens a tab *and* the panel, honouring the modifier by half.
+- The href is `lib/card.taskDeepLink`, the same `/projects?task=<id>` the bell emits and
+  `page.tsx` reads. No second spelling.
+
+**(2) `data-prevent-outside-click`.** `src/lib/outsideClick.ts` — `shouldDismiss(target,
+walk)` climbs from the clicked node and returns false on the surface itself, on any
+ancestor carrying the attribute, and on a null target; `domClickWalk(surface)` is the one
+DOM adapter. `NotificationBell` consumes it. ⚠️ **Stated honestly: the motivating case does
+not exist in `/projects` yet** — nothing here portals a picker out of a dropdown, so today
+the walker and the old `contains()` behave identically. It is built ahead of the need
+because Wave 2 (Modal · Tooltip · Combobox) creates that case immediately and the
+alternative is three hand-rolled answers arriving at once. **The walker takes an injected
+parent/attribute accessor rather than an `Element` on purpose**: the runner is
+`environment: "node"`, so a DOM-bound version would have no fence at all.
+
+**(3) The overdue predicate — narrowed, and the ticket's own claim corrected.**
+The ticket says "seven" predicates and that "today counts as due". **Both are wrong.**
+Measured: three (`src/lib/taskCard.ts` · `app/projects/lib/mywork.ts` ·
+`gateway/routes/projects/filters.py`), plus `app/tasks/lib/waiting.ts`'s
+`isWaitingOverdue`, which is deliberately different under a documented contract and was
+left alone. The real defect was narrower than "seven copies": **`mywork.ts`'s had
+no completion check at all**, disagreeing with both `taskCard.ts` and the SQL filter. Its
+body is now gone — it delegates to `@/lib/taskCard.isOverdue`, the `app/tasks/lib/utils.ts`
+adapter shape — keeping only its local calling convention.
+⚠️ **Corrected 2026-08-11, and the correction matters for how this reads.** An earlier
+draft of this paragraph — and of the header bullet, and of the report that went to the
+owner — said *"a finished task with a past due date rendered overdue in My Work."* **It did
+not.** `mywork.isOverdue` had **no in-app caller at all**: `MyWork.tsx:353` draws the
+overdue chip through `cardChips` → the shared `taskCard.ts` predicate, which was always
+correct. This was a divergent exported helper waiting for its first caller — a latent trap,
+not a visible bug. Worth closing, and closed; but a "measured" claim that nobody checked
+against the call graph is exactly the kind of thing this file exists to stop repeating.
+The export was kept rather than deleted because deleting it would delete the fence.
+🔴 **`<` was NOT changed to `<=` and the SQL was not touched.** `taskCard.test.ts` and
+`mywork.test.ts` both pin `<` with explanatory comments ("a task is late once the moment
+has passed, not at the moment itself"). Whether today counts as due is a **doc blocker for
+the owner**, not an agent's call.
+
+**Struck, each for a measured reason.** (4) **Lazy tooltip mounting** — unbuildable:
+**zero `Tooltip` components exist**, the app uses the native `title=` attribute, and there
+is no positioning machinery to mount lazily. It is WS-27ak(2), Wave 2. (5) **Selected-first
+ordering** — the ticket names no target multi-select; `FilterBar`'s tag row is a
+permanently-visible chip strip with no "open" moment, so "sorted on open and frozen while
+open" has no referent there. (6) **Selection self-heal** — **already shipped**:
+`app/projects/page.tsx` prunes the selection against `onScreen` via `src/lib/selection.ts`'s
+`prune`. Verified verbatim; nothing to do.
+
+**Fences (R7), each mutation-measured.**
+
+| Fence | Mutation applied | Result |
+|---|---|---|
+| `src/lib/controlLink.test.ts` — modifier cases, **middle-click asserted by name** (the upstream reference exempts meta/ctrl only and misses it) | dropped the `button !== 0` arm | 2 red |
+| `src/lib/controlLink.test.ts` — "wired, not merely imported" source scan over `TaskList.tsx` + `TableView.tsx` (import · renders · has `href` **and** `onActivate`) | reverted `TaskList`'s title cell to a `<span>` | 2 red, import-half still green (the two halves are distinct) |
+| `src/lib/outsideClick.test.ts` — bails on the attribute, **and dismisses the same chain without it** | dropped the `isGuarded` arm | 2 red |
+| `src/app/projects/lib/mywork.test.ts` — a completed task with a past due date is not overdue, **and the same row still open is** | restored the pre-fix body | 1 red; the two `<`-pinning assertions stayed green |
+
+⚠️ **"cmd-click opens a second tab" is review-only in this tree, and that is not faked.**
+`vitest.config.ts` is `environment: "node"` with `include: ["src/**/*.test.ts"]` — no jsdom,
+no `@testing-library`, `.tsx` tests are not collected. Adding a DOM environment to fence one
+component is a substrate decision, not a papercut. What the fences prove is that the
+decision is right and the wiring exists; that a modified click really opens a tab, and that
+the four themes still draw the title identically now it is an anchor (Tailwind preflight
+gives `a { color: inherit; text-decoration: inherit }`, so no colour was written), is
+`DESIGN_SYSTEM.md` §8 and a human.
+
+**Owed / noticed, deliberately not done.** The anchor makes every task title a tab stop —
+correct for a real link and an accessibility gain over a `<div onClick>` row, but it changes
+tab order on a long table and deserves a look. `/tasks`' list surfaces have the same missing
+`<a href>` and are not in this slice.
+### 11.29 WS-27am (narrowed) — the error boundary, and the third empty state (built 2026-08-11)
+
+The ticket in §9.4.2 carries three items. **Two were built, one is struck**, and the strike
+is the part worth reading.
+
+**Struck: item 2, the loader/empty/error HOC.** The sentence is *"one HOC **per layout**"*
+and it never says which layouts. `/projects` alone has five canvases plus `MyWork`, and the
+clause reads tree-wide — so "done" is unknowable and the surface set would have been the
+implementer's guess, not the spec's decision. Recorded as a doc blocker rather than closed
+by guessing. `page.tsx`'s `renderState()` seam (WS-27ag left it marked) is untouched and
+still owed.
+
+**Item 3 — the per-layout error boundary — is the substance of the slice.** Measured before
+building: **the tree had no error boundary at all** — zero `componentDidCatch`, zero
+`ErrorBoundary`, no Next.js `error.tsx`. One malformed group shape thrown out of one card
+took React's whole root down, and the user got a white document: no chrome, no nav, and
+nothing saying which of "empty" and "broken" had happened.
+
+- `src/components/LayoutBoundary.tsx` — the class boundary, mounted in
+  `app/projects/page.tsx` around the canvas scroll region. Scoped to the **canvases**, which
+  are the code that walks server-shaped data, so the tree, toolbar, filter bar and task panel
+  stay alive while one canvas is broken: switching view, clearing a filter and picking
+  another project are all still available, and all three are plausible ways out.
+- **Retry bumps a key; it never clears a flag.** `state.attempt` is the guarded subtree's
+  `key` and only ever increments. The arithmetic lives in `src/lib/layoutBoundary.ts` so it
+  can be tested at all — vitest here is `environment: "node"` and its `include` covers
+  `.test.ts` only, so a `.tsx` test is not even collected.
+- `caught()` deliberately returns **only** `error`. It is `getDerivedStateFromError`, whose
+  return value React *merges* — an `attempt` in it would reset the key on every crash and
+  turn the key bump silently back into a flag clear. That is a fenced assertion, not a
+  comment.
+- The boundary is **keyed by layout and project** in `page.tsx`, so a crashed canvas does not
+  follow the user to data that is fine.
+
+**Item 1 — the no-permission arm — landed as a primitive capability, wired at no call site.**
+Two-thirds of the triad shipped with S4 (§11.21): `src/components/EmptyState.tsx` plus
+`app/projects/lib/emptyState.ts` already answer *filtered-to-nothing* and *never populated*.
+The third arm renders its CTA **disabled rather than hidden**, so the reader learns the
+action exists *and* that it is not theirs — hidden, they learn neither and go looking.
+`EmptyStateAction` gains optional `disabled` / `disabledReason` (and `onClick` becomes
+optional, because a disabled action has nothing to run); `emptyStateCopy` gains optional
+`canCreate`, defaulting **true** so every existing caller renders exactly what it did. The
+reason is rendered, not only tooltipped: a disabled button is not focusable, so `title`
+alone is unreachable from a keyboard and never appears on a touch screen. Precedence is
+**filtered → no-permission → status-axis → empty**, and the argued step is the middle one —
+a viewer on a column-less board must not be told *"add a status"*, because unfollowable
+advice reads as a broken app rather than as limited access. `TaskBoard`/`TaskList`/
+`TableView` were **not** edited: an additive optional prop needs no call-site change, and
+those files were held open by sibling slices.
+
+**Fences added** (R7), all mutation-measured red and restored byte-identical:
+`src/lib/layoutBoundary.test.ts` — the arithmetic (retry advances and never re-uses a key;
+`caught` cannot reset it) **and** a source scan in `sharedTaskUi.test.ts`'s idiom asserting
+the boundary is declared once, consumes the tested helpers rather than re-deriving them,
+hands `attempt` to React as a `key`, and **is the scroll region's only child**, which is what
+makes a seventh canvas guarded without anybody remembering to add a row. `emptyState.test.ts`
+gains the no-permission arm — present-but-disabled, never absent, never enabled, and
+outranked by filters.
+Mutants: hiding the CTA (4 red) · enabling it (2) · rendering `MyWork` outside the boundary
+(2) · dropping the boundary's `key` (1) · Retry clearing the flag (1) · dropping the child
+`key` (1) · `caught` returning `attempt: 0` (2) · `retry` re-using its key (3).
+
+⚠️ **Honestly outside any fence, and labelled review-only:** *"a malformed group shape must
+not blank the app"* and *"Retry re-mounts rather than re-crashing"* need a render with a
+throwing child. This runner has no jsdom and no testing-library, and adding a DOM substrate
+to fence one component is a substrate decision, not a papercut ticket — so it was **not**
+done. Those two claims are checked by throwing from a canvas and looking. The four-theme
+sweep on the fallback is owed for the same reason every UI slice in this wave owes one: no
+browser runs here. Also owed: `renderState()`'s retirement onto `EmptyState`, a caller that
+actually passes `canCreate` (the per-project write grant is not on the client's row shapes
+yet), and a `/tasks`-side boundary — `LayoutBoundary` is shared by placement, with one
+consumer.
+
+⚠️ **Corrected 2026-08-11 by adversarial review — the remaining wiring is TWO edits, not
+one, and the second is the whole feature.** This entry said the arm needed "a caller that
+actually passes `canCreate`". Passing it is necessary and **not sufficient**: both
+consumers — `TaskBoard.tsx:558` and `TaskList.tsx:210` — render
+`action={copy.filtered ? { label: "Clear filters", … } : undefined}`, i.e. they build their
+own action and **discard `copy.action` unconditionally**. So a slice that only passes
+`canCreate: false` would produce exactly the outcome the arm exists to prevent: a read-only
+reader with **no CTA at all**, never seeing `disabledReason`, while
+`emptyState.test.ts`'s *"offers the action DISABLED — never absent, never enabled"* stays
+green. That is a fence that passes while the shipped screen does the forbidden thing — the
+gap being a call site the fence cannot see. The follow-up must change both call sites to
+prefer `copy.action`, and the fence for it has to be structural (the call site), not another
+assertion about the pure module.
+### 11.30 WS-27bd (narrowed) — the right-click menu, promoted; per-row pending (built 2026-08-11)
+
+**Two of the five items in the §9.5.2 basket. Three were struck before any code was
+written, each for a measured reason** — the strikes are the more valuable half of this
+entry, because each one is a slice somebody would otherwise build.
+
+**Struck (1) — "shortcuts release unclaimed keys".** Its stated fence (`preventDefault` is
+not called when no handler is registered) is a good test **of a registry that does not
+exist**. Keyboard handling today is three unrelated places — `projects/page.tsx`'s window
+listener, `lib/search.ts`, `lib/commands.ts`'s `stepSequence` — so building it means minting
+a **third** keyboard seam, which is a seam decision, not a papercut. And nothing binds
+`Mod+F` anywhere in the tree (zero matches), so "falls through to find-in-page" is already
+true by absence.
+
+**Struck (3) — "clipboard failure never claims success": ALREADY TRUE.** All eight
+`clipboard.writeText` sites were checked. Six carry an explicit `catch` that deliberately
+does not flip "Copied", `/projects`' own site (`TaskPanel.tsx`) among them, with a comment
+saying why. The two `.then()` sites in the chat components never run their success branch on
+rejection either; they leak an **unhandled rejection**, which is a different and much
+smaller defect and is recorded rather than swept in here.
+
+**Struck (4) — "signature-keyed banner dismissal": no target.** No dismissible banner with a
+persist-forever key exists. The nearest seam, `src/lib/dismissedTools.ts`, is already
+id-keyed.
+
+**Built (5) — the context menu, as a PROMOTION.** `/projects` had zero `onContextMenu` and a
+working generic menu already existed at `app/tasks/components/ContextMenu.tsx`, wired at five
+call sites. It was **moved** to `src/components/ContextMenu.tsx` with a re-export shim left
+at the old path — /tasks' five call sites are unedited — and wired onto the board's cards
+and My work's cards. `components/TaskCardShell.tsx` has accepted `onContextMenu` since S1 and
+/projects simply never passed it, so the wiring is a prop pass-through and the shell is
+**unchanged**. The ITEMS come from a new declared registry, `lib/taskMenu.ts` (Open · Copy
+link · Select/Deselect · Change status, each with the context it is offered in), read by both
+surfaces — one registry, two surfaces. Nothing new arrives from `page.tsx`: Open is
+`onSelect`, Select is `onToggle`, and a status change is `onDrop` carrying
+`buildColumnDropUpdate`'s axis patch with an **empty** position plan, so the card keeps the
+manual order it had.
+
+⚠️ **Scope: CARDS ONLY.** The row half of the basket's wording is deferred — table rows were
+being made link-navigable in a parallel slice and two agents in one click path is how a
+regression gets attributed to neither.
+
+⚠️ **`lib/taskMenu.ts` is a SECOND registry at a different scope, deliberately, and this
+corrects §9.5.2's wording.** The basket says the menu should read "the same action registry
+the palette already uses". It cannot: `lib/commands.ts` is the **page** registry (go, view,
+panel, project) and contains no task-scoped action for Open / Copy link / Select / Change
+status to resolve to; a card menu assembled from what it does contain would read
+"Widen the task panel · Custom fields · Import from ClickUp". Extending `commands.ts` with
+task actions is a legitimate option and it changes the palette, the `g`/`v` sequences and the
+printed shortcuts sheet at once — a ticket, not a side effect. What is enforced instead is
+that the two registries stay **disjoint in both directions**, which is the "no second
+vocabulary" property the sentence was reaching for.
+
+**Built (2) — per-row pending and per-row error**, in `RelationsBlock.tsx`'s unlink rows.
+State is a pure reducer, `lib/rowState.ts` (`pending: Set<id>`, `errors: Map<id, string>`),
+so three concurrent unlinks are three independent spinners and one refusal is written under
+the row it was about. Two rules that are easy to get backwards are written into it: a retry
+does **not** blank the previous error on entry (it clears on success — the rule `MyWork`
+already follows), and `prune` drops state keyed to a row that has left the list, so a message
+cannot outlive the row it was attributed to. The add-link FORM keeps its own error: it is one
+control, not a row.
+
+**Fences (R7), all mutation-measured — 22 mutants applied, 22 killed.**
+`src/lib/sharedTaskUi.test.ts` gains the structural row: **exactly one `ContextMenu` is
+declared under `src/`**, and both apps consume it. The pre-existing THIRD copy inside
+`app/email/components/EmailList.tsx` is a **recorded exemption naming it** — it is genuinely
+the same interaction, but it carries flyout submenus and bulk-vs-single fan-out the flat
+shared menu does not express, so retiring it is an email ticket (CLAUDE.md §5: existing
+violations are findings for the board). The exemption is itself checked: the suite fails if
+the file stops declaring one. `taskMenu.test.ts` pins which entries each surface is offered,
+that the task's own status is the ticked one, that no separator opens or closes the menu once
+a group is filtered away, that every emitted id traces back to a declared action through the
+`<kind>:<discriminator>` grammar, and the disjointness cross-check against `COMMANDS`.
+`rowState.test.ts` pins three-at-once with one attributed failure.
+
+**Honest about what is NOT fenced.** "Right-click opens the menu at the pointer and Escape
+closes it" is **review-only** in this tree: `vitest.config.ts` is `environment: "node"` with
+`include: ["src/**/*.test.ts"]`, so there is no DOM and `.tsx` tests are not collected. The
+viewport-flip, the click-away catcher and the Escape handler are the promoted file's own,
+unchanged and already in production on /tasks' five call sites — but nothing here re-proves
+them. **The four-theme visual pass is also owed**, as for every UI slice in this environment.
 
 ## Board record (2026-08-09) — moved from work_plan.md §2
 

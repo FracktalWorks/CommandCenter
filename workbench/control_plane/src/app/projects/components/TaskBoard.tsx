@@ -22,11 +22,19 @@
  * Ordering is per view (D-PM-5): a drop writes fractional positions through
  * `planDrop`, which is one row in the normal case and the whole group on the
  * first drag into an unordered column.
+ *
+ * WS-27bd adds the right-click menu. The MENU is `@/components/ContextMenu` —
+ * the one /tasks has used for five call sites, promoted rather than rewritten —
+ * and its ITEMS come from `lib/taskMenu.ts`, the declared task-action registry
+ * `MyWork` reads too. Nothing new arrives from `page.tsx`: Open is `onSelect`,
+ * Select is `onToggle`, and Change status is `onDrop` carrying an axis patch
+ * and no reordering, which is exactly what dragging the card there would send.
  */
+import { ContextMenu, type CtxItem } from "@/components/ContextMenu";
 import { AvatarStack, TaskMeta } from "@/components/TaskMeta";
 import { DropGap } from "@/components/DropGap";
 import { EmptyState } from "@/components/EmptyState";
-import Icon from "@/components/Icon";
+import Icon, { themedIcon } from "@/components/Icon";
 import { StatusChip } from "@/components/StatusChip";
 import { TaskCardShell, TaskCardTitle } from "@/components/TaskCardShell";
 import Button from "@/components/ui/Button";
@@ -38,11 +46,12 @@ import type { StatusRow, TagRow, TaskRow } from "../lib/api";
 import { projectsApi } from "../lib/api";
 import {
   buildCellDropPatch,
+  buildColumnDropUpdate,
   dropRefusal,
   planDrop,
   sortForView,
 } from "../lib/board";
-import { tagColours, taskRef, visibleChips } from "../lib/card";
+import { tagColours, taskDeepLink, taskRef, visibleChips } from "../lib/card";
 import { clampCursor, stepCursor } from "../lib/cursor";
 import { emptyStateCopy } from "../lib/emptyState";
 import {
@@ -60,6 +69,7 @@ import {
   hiddenLaneCount,
   visibleLanes,
 } from "../lib/swimlanes";
+import { type TaskMenuActions, taskMenuItems } from "../lib/taskMenu";
 import { QuickAdd } from "./QuickAdd";
 import { useFlash } from "./useFlash";
 
@@ -140,6 +150,10 @@ export function TaskBoard({
   const [dropAt, setDropAt] = useState<string | null>(null);
   const [cursor, setCursor] = useState(-1);
   const [anchor, setAnchor] = useState<number | null>(null);
+  /** WS-27bd — where the right-click landed, and on which card. */
+  const [menu, setMenu] = useState<{ x: number; y: number; task: TaskRow } | null>(
+    null
+  );
   const { flash, attach, scrollTo } = useFlash();
 
   // `fromConfig` normalises an equal sub-axis away, but the axis pickers can
@@ -395,6 +409,68 @@ export function TaskBoard({
       })()
     ) : null;
 
+  /**
+   * WS-27bd — what a right-click can do, over the props the board ALREADY has.
+   *
+   * Nothing new arrives from `page.tsx`. `onSelect` opens, `onToggle` selects,
+   * and a status change is `onDrop` carrying the axis patch with an EMPTY
+   * position plan: the card keeps whatever manual order it had, which is the
+   * honest reading of "change this task's status" as opposed to "drag it to the
+   * end of that column". `buildColumnDropUpdate` builds the patch rather than an
+   * inline `{ status_id }`, so the menu and the drag write the same shape.
+   */
+  const menuActions: TaskMenuActions = {
+    open: (task) => onSelect(task),
+    copyLink: (task) => {
+      void (async () => {
+        try {
+          await navigator.clipboard.writeText(
+            taskDeepLink(task, window.location.origin)
+          );
+        } catch {
+          // Clipboard can be unavailable (permissions, insecure context). The
+          // menu closes on select and there is no "Copied" state to flip, so a
+          // refusal claims nothing — the `catch` is here so a denied write is
+          // not an unhandled rejection. Same reasoning `TaskPanel`'s copy site
+          // writes out; this is not a second clipboard policy.
+        }
+      })();
+    },
+    // `false` — the range-extend gesture belongs to the control that starts a
+    // range, and a right-click has no anchor.
+    toggleSelect: (task) => onToggle?.(task.id, false),
+    setStatus: (task, statusId) => {
+      if (task.status_id === statusId) return;
+      onDrop(task, [], buildColumnDropUpdate("status", statusId));
+    },
+  };
+
+  const menuFor = (task: TaskRow) => ({
+    task,
+    statuses,
+    // The checkbox and the menu row agree by construction: both are the
+    // presence of `onToggle`, so a surface that cannot select cannot offer it.
+    canSelect: Boolean(onToggle),
+    selected: selected?.has(task.id) ?? false,
+  });
+
+  /** The registry's entries as the shared menu's items. Icons resolve here —
+   *  `taskMenu.ts` stays pure and names glyphs, it never imports a component. */
+  const menuItems = (task: TaskRow): CtxItem[] => {
+    const ctx = menuFor(task);
+    return taskMenuItems(ctx).map((entry): CtxItem =>
+      entry.kind === "item"
+        ? {
+            kind: "item",
+            label: entry.label,
+            icon: entry.icon ? themedIcon(entry.icon) : undefined,
+            checked: entry.checked,
+            onSelect: () => entry.run(menuActions, ctx),
+          }
+        : entry
+    );
+  };
+
   const card = (task: TaskRow) => (
     <li key={task.id} className="flex items-start gap-1.5 rounded-md">
       {onToggle ? (
@@ -424,6 +500,13 @@ export function TaskBoard({
         selected={selected?.has(task.id) ?? false}
         atCursor={cursorAt >= 0 && rows[cursorAt] === task.id}
         onActivate={() => onSelect(task)}
+        // WS-27bd — the shell has accepted this prop since S1 and /projects
+        // never passed it, which is why the app had zero `onContextMenu`.
+        onContextMenu={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          setMenu({ x: event.clientX, y: event.clientY, task });
+        }}
         onDragStart={(e) => {
           e.dataTransfer.effectAllowed = "move";
           e.dataTransfer.setData("text/plain", task.id);
@@ -647,6 +730,17 @@ export function TaskBoard({
           </div>
         </div>
       )}
+
+      {/* One menu for the whole board, positioned at the pointer — not one per
+          card. The flat/laned branches both raise it, so it lives out here. */}
+      {menu ? (
+        <ContextMenu
+          x={menu.x}
+          y={menu.y}
+          items={menuItems(menu.task)}
+          onClose={() => setMenu(null)}
+        />
+      ) : null}
     </div>
   );
 }

@@ -42,6 +42,26 @@ describe("isOverdue", () => {
     expect(isOverdue({ due_at: "2026-08-06T12:00:00Z" }, now)).toBe(false);
   });
 
+  it("is NOT overdue once the task has been completed", () => {
+    // WS-27al(3). This predicate had no completion check at all, while the
+    // board and the `overdue` filter both excluded finished work.
+    // ⚠️ It had no in-app caller either, so nothing rendered wrong — an earlier
+    // version of this comment claimed a ticked-off task "kept rendering overdue
+    // in My Work", and that was never true (spec §11.28). This test is the
+    // fence that keeps the divergence closed now that the body delegates.
+    expect(
+      isOverdue(
+        { due_at: "2026-08-06T11:59:00Z", completed_at: "2026-08-06T11:00:00Z" },
+        now,
+      ),
+    ).toBe(false);
+    // The paired half: the SAME row, still open, is overdue — so a predicate
+    // hard-wired to `false` cannot pass this pair.
+    expect(isOverdue({ due_at: "2026-08-06T11:59:00Z", completed_at: null }, now)).toBe(
+      true,
+    );
+  });
+
   it("treats an unparseable date as not overdue", () => {
     // Better to under-alarm than to paint every task red because one row
     // carried a malformed date.

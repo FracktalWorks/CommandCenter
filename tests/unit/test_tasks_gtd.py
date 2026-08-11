@@ -1925,6 +1925,26 @@ def test_agent_item_format_shows_email_origin():
     assert "from email" not in plain
 
 
+def test_agent_item_format_distinguishes_the_two_waiting_states():
+    """BO-1b repair: `awaiting_approval` was an unswept consumer of the widened
+    vocabulary — `_fmt_item` only tested for `'pending'`, so a queued item
+    rendered to the agent with NO marker at all and no provider link, and the
+    agent could not tell it from a normal task. The two states are not synonyms
+    and the rendered line must say which one it is."""
+    from skill_task_gtd.core import _fmt_item
+
+    staged = _fmt_item({"id": "a" * 12, "title": "t", "disposition": "NEXT",
+                        "source": "SYNCED", "sync_state": "pending"})
+    queued = _fmt_item({"id": "b" * 12, "title": "t", "disposition": "NEXT",
+                        "source": "SYNCED", "sync_state": "awaiting_approval"})
+    normal = _fmt_item({"id": "c" * 12, "title": "t", "disposition": "NEXT",
+                        "source": "SYNCED", "sync_state": "synced"})
+
+    assert "PENDING PUSH" in staged and "AWAITING APPROVAL" not in staged
+    assert "AWAITING APPROVAL" in queued and "PENDING PUSH" not in queued
+    assert "PENDING PUSH" not in normal and "AWAITING APPROVAL" not in normal
+
+
 # ---------------------------------------------------------------------------
 # Email → task capture: clarify-before-capture popup (preview/enhance/create)
 # ---------------------------------------------------------------------------

@@ -164,9 +164,17 @@ def test_every_gated_provider_action_has_a_writer():
     * It is **blind to a non-literal action name** — a variable, an f-string or
       a name built at runtime is silently skipped, so it cannot see a gate whose
       action is computed.
-    * It is **scoped to `providers.py` only**. `routes/crm/broker_handlers.py`
+    * It is **blind to an aliased or indirect call.** The walk matches an
+      `ast.Attribute` named `_broker_gate`, so `g = self._broker_gate; await
+      g("clickup.x", …)` is an `ast.Name` at the call site and is skipped in
+      silence. Same for a gate reached through a wrapper or a `getattr`.
+    * It is **scoped to `providers.py` only**, and that file's own header
+      invites the gap: "Asana/Jira/Linear and a generic MCP connector slot in
+      beside it later." **A second connector module is not covered** — its gated
+      writes would satisfy this fence vacuously. Widen `_PROVIDERS_PY` to the
+      set of connector modules when one arrives. `routes/crm/broker_handlers.py`
       has its own `broker_gate`, and `routes/apps/tools.py` derives action names
-      through `_broker_action_name`; neither surface is covered here.
+      through `_broker_action_name`; neither surface is covered here either.
     """
     gated = _gated_action_names()
     # Non-emptiness is the fence's own fence: an AST walk that stops matching
@@ -182,7 +190,13 @@ def test_the_gated_payload_carries_every_arg_its_writer_reads(monkeypatch):
     """The other half of BO-1a #1: a handler reads `args[k] for k in keys`, so
     the gate's `audit_payload` at that call site must already carry those keys.
     `clickup.archive_task`'s second arg (`archived`) is the one the four-entry
-    map never carried — assert the payload shape rather than assuming it."""
+    map never carried — assert the payload shape rather than assuming it.
+
+    ⚠️ **This sweeps all SIX gated actions, not just the two BO-1a added.** The
+    four pre-existing ones were only ever "checked" by the dispatch tests above,
+    which hand-write the `args` dict and would therefore agree with a wrong key
+    on both sides. Here the keys come from the REAL gate call site on one side
+    and from `_WRITERS` on the other, so a rename on either side fails."""
     from gateway.routes.tasks.providers import ClickUpProvider
 
     seen: dict[str, dict] = {}
@@ -194,8 +208,16 @@ def test_the_gated_payload_carries_every_arg_its_writer_reads(monkeypatch):
     monkeypatch.setattr(ClickUpProvider, "_broker_gate", _capture)
     prov = ClickUpProvider(token="tok", workspace_id="ws1", account_id="acc-1")
 
+    asyncio.run(prov.create_task("list-5", {"title": "x"}))
+    asyncio.run(prov.update_task("T1", {"title": "x"}))
     asyncio.run(prov.delete_task("T1"))
     asyncio.run(prov.archive_task("T1", True))
+    asyncio.run(prov.create_project("ws1", "P", "s1", None))
+    asyncio.run(prov.create_folder("ws1", "s1", "F"))
+
+    # Vacuity guard: a gated method that stopped reaching the gate (or a seventh
+    # that arrives unswept) must fail here rather than shrink the loop silently.
+    assert set(seen) == set(bh._WRITERS), sorted(set(bh._WRITERS) - set(seen))
 
     for action, payload in seen.items():
         keys = bh._WRITERS[action][1]

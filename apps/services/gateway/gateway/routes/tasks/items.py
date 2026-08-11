@@ -1364,10 +1364,19 @@ async def _push_pending_item(db: Any, item_id: str, uid: str) -> Any:
     })
     if created.get("pending"):
         # The broker QUEUED the write (see the docstring). Record that state and
-        # stop: `provider_task_id` stays untouched, because the marker carries an
-        # empty string and every downstream reader treats a set-but-empty id the
-        # same as a real one. No subtasks either — there is no parent to hang
-        # them off yet.
+        # stop. `provider_task_id` stays untouched — writing the marker's empty
+        # string would be a UNIQUE violation, not a harmless no-op: a staged item
+        # is `source='SYNCED'` (see `/items/{id}/organize`), so it falls inside
+        # `uq_gtd_items_provider ON gtd_items(account_id, provider_task_id)
+        # WHERE source <> 'LOCAL'` (48_task_manager_gtd.sql:122). NULL is exempt
+        # there (Postgres treats NULLs as distinct); `''` is a real value, so the
+        # SECOND queued push on the same account would fail the UPDATE outright.
+        # ⚠️ Do not restore the old reason ("every downstream reader treats a
+        # set-but-empty id the same as a real one") — it is false. The readers
+        # test TRUTHINESS (`_push_patch_upstream` at :769, the purge guard at
+        # :445), so `''` reads as ABSENT, not as an id. Absent is what we want
+        # here; the uniqueness index is why we must not write the empty string
+        # to get it. No subtasks either — there is no parent to hang them off.
         await db.execute(
             text("""UPDATE gtd_items
                     SET sync_state = 'awaiting_approval', updated_at = now()

@@ -64,6 +64,16 @@ export function hasUpstreamTask(syncState: string | undefined): boolean {
  * The chip that explains a waiting state, or `null` when there is nothing to
  * say — `local` has no upstream to be out of step with, and `synced` is the
  * quiet case (the surface already shows the provider link).
+ *
+ * ⚠️ **The `pending` branch has no live render site today and is deliberately
+ * DEFENSIVE, not dead-by-accident.** `ItemDetail.tsx`'s only call renders it at
+ * `sync && !pushable`, and a `pending` item is by definition `canPush` — the
+ * staged case is drawn instead by the Push affordance section right below,
+ * which carries its own label and button. The branch exists so the table is
+ * TOTAL over `SyncState`: any second caller that asks "which chip?" for a
+ * waiting row gets the right answer for both waiting states rather than a
+ * `null` it would have to special-case. Wiring it into the affordance section
+ * is a UI change, not a correctness one, and is not this ticket's.
  */
 export function syncBadge(syncState: string | undefined): MetaChip | null {
   if (syncState === "pending") {

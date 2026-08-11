@@ -830,6 +830,51 @@ async def test_positions_are_upserted_in_one_request(db: FakeProjectsDB) -> None
     assert len(db.rows("pm_view_task_positions")) == 2
 
 
+async def test_an_empty_position_list_is_a_no_op_and_never_wipes(
+    db: FakeProjectsDB,
+) -> None:
+    """`positions: []` must change nothing — it is a real caller, not a curiosity.
+
+    WS-27bd's context-menu "Change status" writes the status through
+    `patchTask` and then calls this endpoint with an EMPTY list, meaning
+    "change the status, keep the manual order". Today that is safe because the
+    handler's only write is an upsert *inside* the loop, so zero entries means
+    zero statements — there is no DELETE and no anti-join anywhere in it.
+
+    Nothing enforced that. A later "make positions authoritative" change —
+    `min_length=1`, or deleting rows absent from the payload — would turn this
+    caller into a 422 or into a silent wipe of every manual position on the
+    board, and the only symptom would be somebody's ordering quietly reverting.
+    This is the fence for that, so the refactor fails here instead of in the UI.
+    """
+    project, todo, _ = _project_with_statuses(db)
+    view = db.seed(
+        "pm_views", project_id=project.id, name="Board", view_type="board",
+        created_by="owner@fracktal.in",
+    )
+    kept = db.seed_task(project.id, todo.id, title="Already ordered")
+    await pm_views.set_positions(
+        str(view.id),
+        pm_views.PositionsIn(positions=[
+            pm_views.PositionIn(task_id=str(kept.id), position=100.0,
+                                group_key=str(todo.id)),
+        ]),
+        user=USER,
+    )
+    before = db.rows("pm_view_task_positions")
+    assert len(before) == 1
+
+    result = await pm_views.set_positions(
+        str(view.id), pm_views.PositionsIn(positions=[]), user=USER,
+    )
+
+    assert result["written"] == 0
+    assert result["skipped"] == 0
+    # The survival assertion is the point: `written == 0` alone would still pass
+    # if the handler had deleted everything first and then written nothing.
+    assert db.rows("pm_view_task_positions") == before
+
+
 async def test_a_repositioned_task_updates_rather_than_duplicates(
     db: FakeProjectsDB,
 ) -> None:

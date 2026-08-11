@@ -18,11 +18,22 @@
  * ## Retry bumps a key
  *
  * `state.attempt` is the guarded subtree's `key`, and `lib/layoutBoundary.retry`
- * only ever increments it. Clearing an error flag and re-rendering is the shape
- * this exists to avoid: it hands React the same element identity it was already
- * reconciling, so anything that survived below the boundary is still there and
- * the next render throws again instantly. A key React has never seen forces a
- * genuine unmount/mount of everything underneath.
+ * only ever increments it.
+ *
+ * ⚠️ **Corrected 2026-08-11 — the first version of this paragraph overstated the
+ * mechanism, and a wrong explanation in the file everyone reads is worse than
+ * none.** It claimed that clearing a flag "hands React the same element identity
+ * it was already reconciling, so anything that survived below the boundary is
+ * still there". That is not how error boundaries work: React unmounts the entire
+ * subtree below the boundary *before* it renders the fallback, so nothing
+ * survives either way. The key bump is belt-and-braces against a child that
+ * holds identity some other way (a portal, a ref-held instance, a memo keyed on
+ * something stale), not the thing that makes Retry work.
+ *
+ * The bump that genuinely earns its place is `page.tsx`'s `canvasKey`: it
+ * changes when the layout or project changes, so a fallback stuck on a broken
+ * board clears the moment the user navigates away from it — the "plausible way
+ * out" above, made real rather than merely offered.
  *
  * ⚠️ **What Retry cannot do, and does not claim.** The children come from the
  * parent's last render, so if the fault is in the *data* — a group shape the

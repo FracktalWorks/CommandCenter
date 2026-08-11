@@ -112,9 +112,45 @@
 > reads. 47 hermetic cases + 20 vitest + the 14-row shared fixture on both sides; 5
 > mutants measured red. One fake-fidelity bug found and fixed on the way: `_crm_fakes`'
 > `lower(col) = :param` reader matched a NULL column, which SQL never does.
-> · **WS-26h (stage discipline):
-> 🟢 SPECCED 2026-08-07, dispatchable — §5.1 is the blueprint, trigger was the owner's
-> first live board session (lanes out of order, imported stages at 0% probability).
+> · **WS-26h (stage discipline): 🟢 BUILT 2026-08-11** (branch
+> `claude/crm-command-center-tasks-i8l7n4`, migration **169** — number taken from the
+> directory at build time per R1 and re-checked at merge; every test finds the file by
+> CONTENT so a renumber in review is free). `crm_deal_statuses` gains
+> `required_fields TEXT[] NOT NULL DEFAULT '{}'` and a nullable `max_dwell_days SMALLINT`,
+> both **deal-only** — the same asymmetry `probability` already has, because the allowlist
+> is deal columns and rot is measured off `status_changed_at`, which 144 gave deals and
+> withheld from leads. The gate is `pipeline.py::_require_entry_fields`, called from
+> `apply_status_transition` immediately after the lost-reason refusal, so it inherits all
+> three of that rule's properties: **entry-only** (`records.patch_record` enters the
+> transition only when `status_id` actually MOVES), **refused before any of the three
+> effects**, and **satisfiable by the SAME PATCH** — which is what lets the modal send
+> fields + status in one request. `core.STAGE_REQUIREABLE_FIELDS` is the allowlist and is
+> validated when the column is WRITTEN, never when it is read: a typo'd name can never be
+> satisfied by any deal, so validating on the way out would leave a lane that refuses every
+> move with a message about a field that does not exist. ⚠️ **Two decisions worth
+> re-reading before extending this:** `0` and `False` are VALUES and only `None`/blank text
+> count as absent (`_is_blank`, mirrored in `board.ts`) — a falsiness test would refuse a
+> genuine ₹0 deal, and it was measured against a real `NUMERIC` column returning
+> `Decimal('0.00')`; and **CREATE is deliberately not gated** — `POST /crm/deals` with an
+> explicit `status_id`, and the convert path's `_create_deal`, both write without coming
+> through the transition, so a settings-grid edit cannot retroactively make quick-create or
+> lead conversion refusable. Recorded in the function's own docstring rather than fixed by
+> ambush. Rot is **presentation only** (`board.ts::rotLevel` → `ROT_TONES`, amber past the
+> threshold, destructive past 2×, strictly-past so a card is fine ON the allowance day):
+> nothing moves, closes or hides. `LostReasonModal` was **absorbed** into `MoveModal`
+> rather than sat beside — a lost stage can also be a gated one, and two dialogs each
+> raised by its own 422 is the shape where a user answers a question and is refused again.
+> **Fences (R7):** `test_crm_pipeline.py` +24 cases (the gate, the entry-only property, the
+> zero/blank pair, both settings validators); `test_crm_migration.py` grew a WS-26h section
+> and its `NOT_NULL_DEFAULTED` derivation now reads ALTER-added columns too — the sync
+> migration stays excluded with its existing reason (`zoho_dirty` is platform-written, this
+> column is PATCHed by name); **`test_crm_stage_discipline_parity.py` is new** and reads
+> `REQUIREABLE_FIELDS` out of `board.ts`, holding the two-language allowlist together the
+> way `CATEGORY_HUES` is held — measured red in both directions; `board.test.ts` +14,
+> `settings.test.ts` +13. **R8:** the migration was applied to a real PostgreSQL 16, replayed
+> three times for idempotency, and the package's own `insert_row`/`update_row`/`status_wire`
+> were run against it — the `TEXT[]` round-trip is the one thing the hermetic fakes cannot
+> answer. **Not deployed, not merged.**
 > WS-26i (data management): 🟡 SPEC-THIN, audit-narrow before dispatch.
 > **DEMO CRITICAL PATH (owner-directed 2026-08-07, §9.0): ~~dispatch D1 f~~ (∥ ~~D2 d-email~~) →
 > ~~D3 g~~ → ~~D4 d-write~~ → D5 d-autolead; h/i/e deferred past the demo. Full chain and all
@@ -2199,7 +2235,11 @@ silently dropping unmatched names (e), `trim()` off the owner predicate (f), the
 upper bound (g), the leaderboard's upper bound alone (h), and `moveDeal` reverted to its
 hard-coded board fetch (i, three vitest cases).
 
-### WS-26h — Stage discipline: entry requirements + rot · 🟢 AGENT-SAFE · after f2
+### WS-26h — Stage discipline: entry requirements + rot · ✅ BUILT 2026-08-11 · 🟢 AGENT-SAFE · after f2
+*(Built on branch `claude/crm-command-center-tasks-i8l7n4`, migration 169, no owner gate
+touched. The ticket below is left as written — it is what was built against; the status
+header's WS-26h paragraph records what shipped, what was measured, and the one gap left
+open on purpose.)*
 *(§5.1 system 3. The mechanism exists in miniature: lost-type moves already demand a
 reason — `needsLostReason` in `board.ts`, enforced server-side. Generalize exactly that,
 change nothing about it.)*

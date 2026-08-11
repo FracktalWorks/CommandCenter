@@ -292,4 +292,104 @@ describe("changedFields", () => {
   it("is empty when nothing moved", () => {
     expect(changedFields({ a: 1 }, { a: 1 })).toEqual({});
   });
+
+  it("compares arrays by content, not by identity (WS-26h)", () => {
+    // The requirements grid rebuilds `required_fields` on every toggle, so a
+    // field switched on and back off leaves a NEW array holding the OLD
+    // contents. Identity would report that as a change, and a Save button that
+    // never goes quiet is a Save button nobody trusts.
+    expect(
+      changedFields(
+        { required_fields: ["amount", "owner_email"] },
+        { required_fields: ["amount", "owner_email"] }
+      )
+    ).toEqual({});
+  });
+
+  it("treats a reordered array as a change", () => {
+    // `required_fields` is stored as written and the blocked-move 422 lists it
+    // in that order, so the order is data.
+    expect(
+      changedFields(
+        { required_fields: ["amount", "owner_email"] },
+        { required_fields: ["owner_email", "amount"] }
+      )
+    ).toEqual({ required_fields: ["owner_email", "amount"] });
+  });
+
+  it("sees a field added to or removed from the set", () => {
+    expect(
+      changedFields({ required_fields: [] }, { required_fields: ["amount"] })
+    ).toEqual({ required_fields: ["amount"] });
+    expect(
+      changedFields({ required_fields: ["amount"] }, { required_fields: [] })
+    ).toEqual({ required_fields: [] });
+  });
+});
+
+// ── WS-26h · what the grid may write ──────────────────────────────────────
+
+describe("validateStatusDraft · stage discipline", () => {
+  const base = { name: "Proposal", type: "ongoing" as StatusType, probability: 50 };
+
+  it("accepts the requirable columns", () => {
+    expect(
+      validateStatusDraft(
+        { ...base, required_fields: ["amount", "expected_close_date"] },
+        "deal"
+      )
+    ).toBeNull();
+  });
+
+  it("refuses a name the server's allowlist does not carry", () => {
+    // Same rule as the gateway's, not a looser one: a client check that
+    // permitted something the server refuses turns a rule into an
+    // intermittent bug.
+    expect(
+      validateStatusDraft({ ...base, required_fields: ["amont"] }, "deal")
+    ).toContain("amont");
+  });
+
+  it("accepts an empty requirement set — that is how a stage stops asking", () => {
+    expect(
+      validateStatusDraft({ ...base, required_fields: [] }, "deal")
+    ).toBeNull();
+  });
+
+  it("accepts a null rot threshold as 'never rots'", () => {
+    expect(
+      validateStatusDraft({ ...base, max_dwell_days: null }, "deal")
+    ).toBeNull();
+    expect(validateStatusDraft(base, "deal")).toBeNull();
+  });
+
+  it("accepts a threshold inside the column", () => {
+    expect(
+      validateStatusDraft({ ...base, max_dwell_days: 1 }, "deal")
+    ).toBeNull();
+    expect(
+      validateStatusDraft({ ...base, max_dwell_days: 32767 }, "deal")
+    ).toBeNull();
+  });
+
+  it.each([0, -1, 32768, 1.5])("refuses %s days", (days) => {
+    // 0 would paint every card in the stage amber the moment it arrived;
+    // the ceiling is SMALLINT's own.
+    expect(
+      validateStatusDraft({ ...base, max_dwell_days: days }, "deal")
+    ).toBeTruthy();
+  });
+
+  it("judges neither column on a lead status", () => {
+    // The gateway refuses both outright there (they are deal-only), and the
+    // grid never renders them for leads — so a lead draft that somehow
+    // carried one must not be refused HERE with a message about a rule that
+    // is not the one it broke.
+    expect(
+      validateStatusDraft(
+        { name: "New", type: "open", max_dwell_days: 0 },
+        "lead"
+      )
+    ).toBeNull();
+  });
 });

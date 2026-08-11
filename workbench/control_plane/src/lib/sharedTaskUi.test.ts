@@ -157,6 +157,43 @@ const SEAM: {
     home: "components/EmptyState.tsx",
     declaration: /export\s+function\s+EmptyState\b/,
   },
+  {
+    /**
+     * WS-27bd. `/projects` had zero `onContextMenu` and a working right-click
+     * menu already existed under `app/tasks/components/`, wired at five call
+     * sites. The likeliest way to "add a context menu to the board" is to write
+     * a third one — so the menu was **promoted** to `components/ContextMenu.tsx`
+     * (a re-export shim keeps /tasks' import path) and this row is the fence.
+     *
+     * The `export` is optional in the pattern, as it is for the avatar stack:
+     * the copy this has to see is NOT exported.
+     */
+    what: "the right-click menu",
+    home: "components/ContextMenu.tsx",
+    declaration: /(?:^|\n)\s*(?:export\s+)?function\s+ContextMenu\b/,
+    except: {
+      "app/email/components/EmailList.tsx":
+        "a THIRD copy, pre-existing and deliberately left alone. It is not a " +
+        "name collision like the room strip's AvatarStack — it is genuinely " +
+        "the same interaction — but it carries flyout submenus, bulk-vs-single " +
+        "fan-out and a label picker that the flat shared menu does not " +
+        "express, so folding it in is an email ticket with its own acceptance, " +
+        "not a side effect of a Projects↔Tasks slice (CLAUDE.md §5: existing " +
+        "violations are findings for the board). Recorded rather than silently " +
+        "passed, so the fence is neither red on arrival nor lying. Delete this " +
+        "exemption in the change that retires it.",
+    },
+  },
+  {
+    /**
+     * The ITEM vocabulary, not only the renderer. A surface that declared its
+     * own item union would be free to grow a kind the shared menu cannot draw
+     * — which is how the email copy acquired submenus in the first place.
+     */
+    what: "the right-click menu's item vocabulary",
+    home: "components/ContextMenu.tsx",
+    declaration: /export\s+type\s+CtxItem\b/,
+  },
 ];
 
 describe("one implementation, consumed twice", () => {
@@ -233,6 +270,11 @@ describe("both apps reach the shared modules", () => {
     // second rulebook for which chips a task earns.
     ["projects", "lib/taskCard"],
     ["projects", "components/TaskMeta"],
+    // WS-27bd — the right-click menu, consumed by BOTH apps. /projects reaches
+    // it directly (`TaskBoard`, `MyWork`); /tasks through the shim at its old
+    // path, which is what keeps its five call sites unedited.
+    ["projects", "components/ContextMenu"],
+    ["tasks", "components/ContextMenu"],
     ["tasks", "lib/taskCard"],
     ["tasks", "components/TaskMeta"],
     ["tasks", "lib/cursor"],
@@ -262,6 +304,7 @@ describe("both apps reach the shared modules", () => {
       ...shims("projects", "components/QuickAdd"),
       ...shims("projects", "components/useFlash"),
       ...shims("tasks", "lib/statusAccent"),
+      ...shims("tasks", "components/ContextMenu"),
     ];
     expect(suspects.length, "no shims found — the seam moved").toBeGreaterThan(0);
 

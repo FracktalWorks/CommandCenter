@@ -2,14 +2,15 @@
 
 > **Product:** CommandCenter · **Feature:** Projects (the People Center's primary work-management
 > module, sliced into every other Center) · **Created:** 2026-08-05 · **Updated: 2026-08-11**
-> (**WS-27am's narrowed slice built — §11.29**; its item 2 struck as unbuildable-as-written) ·
+> (**WS-27am's narrowed slice built — §11.29**; **WS-27bd's — §11.30**; each narrowed, and
+> what each STRUCK is the more useful half of the record) ·
 > **Previously updated 2026-08-10**
 > (status truth pass + tenancy alignment — R4; **WS-27ag shell/mobile slice built the same
 > day**; **S4 convergence slice built the same day — §11.21**; **S6 card-pills slice built the
 > same day — §11.23**; **WS-27ac calendar week/overflow slice built the same day — §11.24**;
 > **WS-27ab view-ergonomics slice — §11.25**; **WS-27ae's export third — §11.26**;
 > **WS-27ae's delta-sync + small-columns thirds — §11.27, migration 168**;
-> **WS-27al's narrowed thirds — §11.28**) ·
+> **WS-27al's narrowed thirds — §11.28**; **WS-27bd's two of five — §11.30**) ·
 > 🟢 **WS-27al (1)(2)(5-narrowed) BUILT 2026-08-11, merged onto `claude/paca-research-task-management-a1f6zd`, NOT
 > merged and NOT deployed** (§11.28) — `ControlLink` on the list and table task titles (the
 > app's first `<a href>` on a task at all, so cmd/ctrl/shift/middle-click finally open a new
@@ -154,6 +155,25 @@
 > re-mounts rather than re-crashing"): both need a render with a throwing child, and adding a
 > DOM substrate to this runner is a decision above this ticket's pay grade. Four-theme sweep
 > owed. ·
+> 🟢 **WS-27bd (NARROWED to items 5 and 2) BUILT 2026-08-11, merged onto
+> `claude/paca-research-task-management-a1f6zd`, NOT merged to `main` and NOT deployed**
+> (§11.30) — the right-click
+> menu arrives on `/projects`' cards as a **promotion, not a build**: the working generic menu
+> at `app/tasks/components/ContextMenu.tsx` moves to `src/components/ContextMenu.tsx` behind a
+> re-export shim (/tasks' five call sites unedited), and its items come from a new declared
+> registry `lib/taskMenu.ts` read by **both** `TaskBoard` and `MyWork`. `TaskCardShell` is
+> **unchanged** — it has accepted `onContextMenu` since S1 and /projects simply never passed
+> it. Item 2 lands as `lib/rowState.ts`, a pure `pending: Set` / `errors: Map` reducer wired
+> into `RelationsBlock`'s unlink rows. Frontend only — no migration, no API change, no new
+> prop from `page.tsx`. **Three of the five items were STRUCK before any code**: (1) the
+> shortcut registry is a third keyboard seam, not a papercut, and nothing binds `Mod+F`
+> anyway; (3) clipboard-failure-never-claims-success is **already true** at all eight
+> `writeText` sites; (4) no dismissible banner with a persist-forever key exists. ⚠️ **Cards
+> only** — the row half is deferred, and §9.5.2's "reading the same action registry the
+> palette already uses" is **corrected in §11.30**: `lib/commands.ts` is the page registry and
+> holds no task-scoped action to resolve to, so the two registries are held **disjoint** by
+> test instead. ⚠️ Fences mutation-measured (22/22); the pointer/Escape behaviour is
+> **review-only** (node test env, no DOM) and the four-theme sweep is owed. ·
 > **Owner:** vjvarada · **Board row: WS-27**
 >
 > **Tenancy (audited 2026-08-10 — this spec previously cited no tenancy decision at all).**
@@ -4820,6 +4840,87 @@ browser runs here. Also owed: `renderState()`'s retirement onto `EmptyState`, a 
 actually passes `canCreate` (the per-project write grant is not on the client's row shapes
 yet), and a `/tasks`-side boundary — `LayoutBoundary` is shared by placement, with one
 consumer.
+### 11.30 WS-27bd (narrowed) — the right-click menu, promoted; per-row pending (built 2026-08-11)
+
+**Two of the five items in the §9.5.2 basket. Three were struck before any code was
+written, each for a measured reason** — the strikes are the more valuable half of this
+entry, because each one is a slice somebody would otherwise build.
+
+**Struck (1) — "shortcuts release unclaimed keys".** Its stated fence (`preventDefault` is
+not called when no handler is registered) is a good test **of a registry that does not
+exist**. Keyboard handling today is three unrelated places — `projects/page.tsx`'s window
+listener, `lib/search.ts`, `lib/commands.ts`'s `stepSequence` — so building it means minting
+a **third** keyboard seam, which is a seam decision, not a papercut. And nothing binds
+`Mod+F` anywhere in the tree (zero matches), so "falls through to find-in-page" is already
+true by absence.
+
+**Struck (3) — "clipboard failure never claims success": ALREADY TRUE.** All eight
+`clipboard.writeText` sites were checked. Six carry an explicit `catch` that deliberately
+does not flip "Copied", `/projects`' own site (`TaskPanel.tsx`) among them, with a comment
+saying why. The two `.then()` sites in the chat components never run their success branch on
+rejection either; they leak an **unhandled rejection**, which is a different and much
+smaller defect and is recorded rather than swept in here.
+
+**Struck (4) — "signature-keyed banner dismissal": no target.** No dismissible banner with a
+persist-forever key exists. The nearest seam, `src/lib/dismissedTools.ts`, is already
+id-keyed.
+
+**Built (5) — the context menu, as a PROMOTION.** `/projects` had zero `onContextMenu` and a
+working generic menu already existed at `app/tasks/components/ContextMenu.tsx`, wired at five
+call sites. It was **moved** to `src/components/ContextMenu.tsx` with a re-export shim left
+at the old path — /tasks' five call sites are unedited — and wired onto the board's cards
+and My work's cards. `components/TaskCardShell.tsx` has accepted `onContextMenu` since S1 and
+/projects simply never passed it, so the wiring is a prop pass-through and the shell is
+**unchanged**. The ITEMS come from a new declared registry, `lib/taskMenu.ts` (Open · Copy
+link · Select/Deselect · Change status, each with the context it is offered in), read by both
+surfaces — one registry, two surfaces. Nothing new arrives from `page.tsx`: Open is
+`onSelect`, Select is `onToggle`, and a status change is `onDrop` carrying
+`buildColumnDropUpdate`'s axis patch with an **empty** position plan, so the card keeps the
+manual order it had.
+
+⚠️ **Scope: CARDS ONLY.** The row half of the basket's wording is deferred — table rows were
+being made link-navigable in a parallel slice and two agents in one click path is how a
+regression gets attributed to neither.
+
+⚠️ **`lib/taskMenu.ts` is a SECOND registry at a different scope, deliberately, and this
+corrects §9.5.2's wording.** The basket says the menu should read "the same action registry
+the palette already uses". It cannot: `lib/commands.ts` is the **page** registry (go, view,
+panel, project) and contains no task-scoped action for Open / Copy link / Select / Change
+status to resolve to; a card menu assembled from what it does contain would read
+"Widen the task panel · Custom fields · Import from ClickUp". Extending `commands.ts` with
+task actions is a legitimate option and it changes the palette, the `g`/`v` sequences and the
+printed shortcuts sheet at once — a ticket, not a side effect. What is enforced instead is
+that the two registries stay **disjoint in both directions**, which is the "no second
+vocabulary" property the sentence was reaching for.
+
+**Built (2) — per-row pending and per-row error**, in `RelationsBlock.tsx`'s unlink rows.
+State is a pure reducer, `lib/rowState.ts` (`pending: Set<id>`, `errors: Map<id, string>`),
+so three concurrent unlinks are three independent spinners and one refusal is written under
+the row it was about. Two rules that are easy to get backwards are written into it: a retry
+does **not** blank the previous error on entry (it clears on success — the rule `MyWork`
+already follows), and `prune` drops state keyed to a row that has left the list, so a message
+cannot outlive the row it was attributed to. The add-link FORM keeps its own error: it is one
+control, not a row.
+
+**Fences (R7), all mutation-measured — 22 mutants applied, 22 killed.**
+`src/lib/sharedTaskUi.test.ts` gains the structural row: **exactly one `ContextMenu` is
+declared under `src/`**, and both apps consume it. The pre-existing THIRD copy inside
+`app/email/components/EmailList.tsx` is a **recorded exemption naming it** — it is genuinely
+the same interaction, but it carries flyout submenus and bulk-vs-single fan-out the flat
+shared menu does not express, so retiring it is an email ticket (CLAUDE.md §5: existing
+violations are findings for the board). The exemption is itself checked: the suite fails if
+the file stops declaring one. `taskMenu.test.ts` pins which entries each surface is offered,
+that the task's own status is the ticked one, that no separator opens or closes the menu once
+a group is filtered away, that every emitted id traces back to a declared action through the
+`<kind>:<discriminator>` grammar, and the disjointness cross-check against `COMMANDS`.
+`rowState.test.ts` pins three-at-once with one attributed failure.
+
+**Honest about what is NOT fenced.** "Right-click opens the menu at the pointer and Escape
+closes it" is **review-only** in this tree: `vitest.config.ts` is `environment: "node"` with
+`include: ["src/**/*.test.ts"]`, so there is no DOM and `.tsx` tests are not collected. The
+viewport-flip, the click-away catcher and the Escape handler are the promoted file's own,
+unchanged and already in production on /tasks' five call sites — but nothing here re-proves
+them. **The four-theme visual pass is also owed**, as for every UI slice in this environment.
 
 ## Board record (2026-08-09) — moved from work_plan.md §2
 

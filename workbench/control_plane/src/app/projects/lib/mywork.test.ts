@@ -43,10 +43,12 @@ describe("isOverdue", () => {
   });
 
   it("is NOT overdue once the task has been completed", () => {
-    // WS-27al(3). This predicate had no completion check at all, so a task
-    // ticked off last week kept rendering overdue in My Work while the same
-    // row on the board and in the `overdue` filter read as done. A list that
-    // shouts about work you already did is a list people stop opening.
+    // WS-27al(3). This predicate had no completion check at all, while the
+    // board and the `overdue` filter both excluded finished work.
+    // ⚠️ It had no in-app caller either, so nothing rendered wrong — an earlier
+    // version of this comment claimed a ticked-off task "kept rendering overdue
+    // in My Work", and that was never true (spec §11.28). This test is the
+    // fence that keeps the divergence closed now that the body delegates.
     expect(
       isOverdue(
         { due_at: "2026-08-06T11:59:00Z", completed_at: "2026-08-06T11:00:00Z" },

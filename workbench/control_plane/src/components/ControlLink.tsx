@@ -46,12 +46,24 @@ export interface ControlLinkProps
 }
 
 export const ControlLink = forwardRef<HTMLAnchorElement, ControlLinkProps>(
-  function ControlLink({ href, onActivate, children, ...rest }, ref) {
+  function ControlLink({ href, onActivate, children, className, ...rest }, ref) {
     return (
       <a
         {...rest}
         ref={ref}
         href={href}
+        // `cc-link` is the themed keyboard focus ring (globals.css, sharing one
+        // declaration with `.cc-control`). Without it every one of these — ~200
+        // new focus stops on a long table — would draw Chrome's default outline
+        // instead of the theme's, which the conformance suite's seven regexes
+        // cannot see because nothing here tests focus appearance.
+        //
+        // `draggable={false}` because an <a href> is natively draggable, and
+        // that steals click-drag text selection: before this component the title
+        // was a <span> you could drag-select to copy, and a link would silently
+        // take that away.
+        className={className ? `cc-link ${className}` : "cc-link"}
+        draggable={false}
         onClick={(event) => {
           // See the header note: the link owns the click, whichever way it goes.
           event.stopPropagation();

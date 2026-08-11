@@ -4840,6 +4840,20 @@ browser runs here. Also owed: `renderState()`'s retirement onto `EmptyState`, a 
 actually passes `canCreate` (the per-project write grant is not on the client's row shapes
 yet), and a `/tasks`-side boundary — `LayoutBoundary` is shared by placement, with one
 consumer.
+
+⚠️ **Corrected 2026-08-11 by adversarial review — the remaining wiring is TWO edits, not
+one, and the second is the whole feature.** This entry said the arm needed "a caller that
+actually passes `canCreate`". Passing it is necessary and **not sufficient**: both
+consumers — `TaskBoard.tsx:558` and `TaskList.tsx:210` — render
+`action={copy.filtered ? { label: "Clear filters", … } : undefined}`, i.e. they build their
+own action and **discard `copy.action` unconditionally**. So a slice that only passes
+`canCreate: false` would produce exactly the outcome the arm exists to prevent: a read-only
+reader with **no CTA at all**, never seeing `disabledReason`, while
+`emptyState.test.ts`'s *"offers the action DISABLED — never absent, never enabled"* stays
+green. That is a fence that passes while the shipped screen does the forbidden thing — the
+gap being a call site the fence cannot see. The follow-up must change both call sites to
+prefer `copy.action`, and the fence for it has to be structural (the call site), not another
+assertion about the pure module.
 ### 11.30 WS-27bd (narrowed) — the right-click menu, promoted; per-row pending (built 2026-08-11)
 
 **Two of the five items in the §9.5.2 basket. Three were struck before any code was

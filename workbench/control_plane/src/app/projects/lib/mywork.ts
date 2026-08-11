@@ -60,11 +60,20 @@ export const LANE_LABELS: Record<string, string> = {
  *
  * WS-27al(3) — this used to be a second, independent implementation, and it
  * disagreed with the other two on the half that matters: it had **no
- * completion check at all**, so a task somebody ticked off last Tuesday
- * rendered overdue in My Work forever, while the same row on the board (via
- * `@/lib/taskCard.isOverdue`) and in the `overdue` filter (via the gateway's
- * `CLOSED_CATEGORIES`) read as done. A personal list that keeps shouting about
- * work you already did is a personal list people stop opening.
+ * completion check at all**, while the board (via `@/lib/taskCard.isOverdue`)
+ * and the `overdue` filter (via the gateway's `CLOSED_CATEGORIES`) both
+ * excluded finished work.
+ *
+ * ⚠️ **It was never user-visible, and an earlier version of this comment said
+ * it was.** The claim here — and in the ticket, and in the report that went to
+ * the owner — was that a task ticked off last Tuesday "rendered overdue in My
+ * Work forever". It did not: this export had **no in-app caller at all**.
+ * `MyWork.tsx` draws its overdue chip through `cardChips` → the shared
+ * predicate, which was always right. This was a divergent helper waiting for
+ * its first caller — a latent trap, not a bug anyone could see. Worth closing;
+ * not worth mis-describing. See spec §11.28, which records the correction and
+ * why it matters: a "measured" claim nobody checked against the call graph is
+ * the specific mistake this tree keeps making.
  *
  * So the body is gone: this is now a thin adapter onto the shared predicate,
  * the same shape `app/tasks/lib/utils.ts` uses. What stays local is only the

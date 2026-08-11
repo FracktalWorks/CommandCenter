@@ -2463,6 +2463,79 @@ rule is ours and their file is only the evidence for it) · **per-tenant OAuth c
 
 ---
 
+### 9.7 The usability sequencing (owner directive 2026-08-11)
+
+§9.3–§9.5 minted 21 tickets ranked by *finding*, not by *impact*. The owner's instruction
+on 2026-08-11 re-ranks them by one question:
+
+> *"the features … which will make the most impact in the UI/UX and feature set to ensure
+> that the UI/UX is as clean, neat, and organized as possible and can bring us to a state
+> of usability as soon as possible."*
+
+This section records the resulting order. It changes **no ticket's scope** — every
+done-when above stands unedited. It owns sequencing only, and where it disagrees with a
+ticket's own ranking prose, `work_plan.md` §2's board row wins over both.
+
+#### 9.7.1 The measurement that set the order
+
+Re-measured against the tree at `ebf68f4e`, 2026-08-11 — not quoted from §9.4, which was
+written a day earlier against a description of the tree rather than a count of it.
+
+| Anchor | Count | Why it ranks where it does |
+|---|---|---|
+| Focus traps, whole tree | **0** | All 7 grep hits for `focus-trap\|FocusTrap\|inert` are the *word* "inert" in prose comments. Not one real trap, not one `inert` attribute. |
+| Files with a hand-rolled `fixed inset-0` overlay | **69** | The population the missing trap applies to. |
+| Toast system (`useToast` / `<Toaster>` / `ToastProvider`) | **0** | ⚠️ **Worse than §9.4 stated.** There is no confirmation channel at all — a mutation either reports inline or reports nothing. This moved Toast up WS-27ak's order. |
+| Files using the native `title=` tooltip | **125** | §9.4 said ~157; the real figure is 125. Unstyled, ~500ms delayed, invisible on touch. |
+| Files improvising `animate-pulse` | **26** | §9.4 said ~20. |
+| Headless-primitive library in `package.json` | **none** | No Radix, no Base UI, no Headless UI, no cmdk, no sonner, no floating-ui. Confirms §9.4's framing: WS-27ab's palette is hand-rolled too. |
+| `<Link>` / `<a href>` on a Projects task card | **0** | 124 `onClick`, 0 `role="button"`. cmd/ctrl/middle-click cannot open a task in a new tab **anywhere** in `/projects`. |
+| `onContextMenu` in `/projects` | **0** | ✅ **Cheaper than §9.5 implied**: `src/components/TaskCardShell.tsx` already *accepts* the prop and `/tasks` already ships `app/tasks/components/ContextMenu.tsx`. WS-27bd(5) is wiring, not building. |
+| `EmptyState` implementations | **2** | `src/components/EmptyState.tsx` + a local one at `app/tasks/components/ItemList.tsx:490`. |
+
+#### 9.7.2 The four waves
+
+**Wave 1 — the papercut wave. DISPATCHED 2026-08-11.** 🟢 all AGENT-SAFE, no migration, no
+library, no owner decision, nothing blocking. **WS-27al** (logic-only wins) · **WS-27am**
+(three-state list surface) · **WS-27bd** (the small rules). Highest usability-per-hour in
+the queue: it is the wave that makes the app stop feeling improvised.
+
+**Wave 2 — the primitive wave.** 🟡 **D-PM-15 is the only gate in the entire sequence.**
+**WS-27ak** in debt order — **Modal → Tooltip → Toast → Skeleton** (Toast promoted above
+Skeleton by the measurement above; §9.4.2's original order had it third by count, and count
+was the wrong axis). **WS-27bc** (long-list picker) runs *in parallel and before the
+decision resolves*, because Base UI has no Combobox and it is a build whichever substrate
+wins.
+
+**Wave 3 — the "does it lose my work" wave.** 🟢 no decision needed. **WS-27an** (inline
+autosave — save-on-unmount-if-dirty is the behaviour that currently loses an edit when the
+panel closes mid-keystroke) · **WS-27at** (the living gallery, which is what stops waves 1–2
+drifting apart and converts the manual theme-switch sweep into one page).
+
+**Wave 4 — the modern-feel wave.** **WS-27ao** (rich comment editor, Lite — extensions on
+the TipTap v3 we already ship, not an engine) · **WS-27ah** (segmented clickable progress,
+timeline zoom/edge-drag, pins, recently-viewed, draft restore).
+
+#### 9.7.3 Deliberately not on this path
+
+Recorded so they do not read as forgotten: **WS-27ap** (boolean filter tree) ·
+**WS-27aq** (notification preferences) · **WS-27ai** (notifications inbox) · **WS-27az**
+(revert from timeline) · **WS-27ba** (non-rotting saved view) · **WS-27bb** (per-column
+board pagination) · the whole agent queue **WS-27au–ay**. All real; none on the shortest
+line to a clean, usable Projects app.
+
+⚠️ **The one tension worth stating rather than burying.** Four deferred items are *cheap
+now and expensive later*, and deferring them is a real cost, not a free one:
+**D-PM-20**'s `updated_at` precondition on PATCH (adding it later breaks every client at
+once, and migration 168's `updated_at` already serves the delta feed, so one semantic must
+cover both) · **WS-27ar**'s single generic `(user, entity_type, entity_id)` pins table
+(otherwise four `is_pinned` columns across four tables and a unifying migration) ·
+**WS-27ap**/**WS-27ba**'s stored filter grammar (the saved-view corpus only grows). The
+recommendation carried to the owner was to take D-PM-20 and WS-27ar's table shape alongside
+Wave 1; ap/ba wait until after Wave 3.
+
+---
+
 ## 10. Verification
 
 ⚠️ Never `uv run pytest tests/unit/` bare — whole-directory collection hangs on the

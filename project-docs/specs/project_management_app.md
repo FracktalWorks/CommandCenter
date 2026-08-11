@@ -1098,12 +1098,36 @@ collision-aware positioning, viewport flip and real Tab order are all unverifiab
 mint a second test environment that still cannot answer the questions Wave 2 asks.
 
 **Chosen: Playwright**, because the infrastructure already exists and is idle —
-`playwright.config.ts`, six `e2e/*.spec.ts`, Chromium pre-installed at
-`/opt/pw-browsers`. This is switching something on, not building it. ⚠️ Version drift is
-real: the installed browser is `chromium-1194` while the packaged Playwright wanted 1223, so
-a spec may need an explicit `executablePath`
-(`/opt/pw-browsers/chromium-1194/chrome-linux/chrome`). **Never run `npx playwright
-install`** — the environment forbids it.
+`playwright.config.ts`, six `e2e/*.spec.ts`, Chromium pre-installed at `/opt/pw-browsers`.
+This is switching something on, not building it.
+
+✅ **VERIFIED RUNNING 2026-08-11, twice, independently** — `npx playwright test
+e2e/theming.spec.ts` → **20 passed**, exit 0. This decision is not a plan; it is a capability
+that works today. The exact invocation, from `workbench/control_plane`:
+
+```
+PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers \
+PLAYWRIGHT_EXECUTABLE_PATH=/opt/pw-browsers/chromium-1194/chrome-linux/chrome \
+  npx playwright test e2e/<spec>.spec.ts --reporter=line
+```
+
+⚠️ **Corrected 2026-08-11 — the first draft of this paragraph said "a spec *may need* an
+explicit `executablePath`", which understated it in both directions.** The escape hatch is
+**already wired** at `playwright.config.ts:22-27`, which reads `PLAYWRIGHT_EXECUTABLE_PATH`
+into `launchOptions` — it landed with #424. So no config edit is needed. But the two env vars
+are **required, not optional**: without them the run fails hard looking for
+`chromium_headless_shell-1223` (`playwright-core/browsers.json` pins 1223; `/opt/pw-browsers`
+has 1194). ⚠️ **`npm run test:e2e` as written in `package.json` sets neither and therefore
+fails** — fixing that script belongs to the first slice that lands a spec.
+**Never run `npx playwright install`** — the environment forbids it, and it is not needed.
+
+🔴 **A claim this correction retires.** Every Wave 1 as-built, and several of my own reports,
+said the four-theme sweep was "owed at review — no browser runs in this environment."
+**A browser runs in this environment**, and `e2e/theming.spec.ts` already asserts
+Fluent/Material/Graphite control personality across 20 cases. What is genuinely unfenced is
+*cross-app layout continuity*, not "anything in a browser". The weaker claim was repeated
+often enough to become received truth, which is exactly how a tree acquires a false
+constraint.
 
 **Scope, and it is deliberately narrow: one spec per primitive, asserting only what no other
 method can see.** Focus moves in on open · Tab wraps at both ends · the background is
@@ -2102,12 +2126,34 @@ a counterexample, not a model.
 >    carries Base UI **and** `radix-ui`, the second reaching exactly one file, inherited from a
 >    vendored component registry. That is the second-substrate failure walking in the back
 >    door — observed, not hypothesised. A `cva`/shadcn-style registry drop is the usual vector.
-> 3. **Base UI has no Combobox.** It closes WS-27ak items 1, 2, 3 and 5; **item 4 stays a
->    build whichever substrate won**, which is why WS-27bc is sequenced ahead of this decision
->    rather than behind it (§9.7.2).
+> 3. ~~**Base UI has no Combobox.**~~ 🔴 **FALSE — corrected 2026-08-11, hours after this
+>    decision was recorded, and the correction is worth more than the rider.** Verified against
+>    the registry rather than against our notes: `@base-ui/react@1.7.0` **ships `combobox`**,
+>    and also `tooltip`, `toast`, `dialog`, `drawer`, `context-menu`, `alert-dialog`,
+>    `autocomplete`, `select`, `popover` and `menu`. Only **`skeleton` is genuinely absent**,
+>    so WS-27ak item 5 stays a build and items 1–4 are all served.
+>    **How the error got in:** the "no Combobox" claim was read off the `@base-ui-components`
+>    line inside the *pinned* Plane and Paca clones — stale by a package rename plus seven
+>    minor versions. It is the same failure mode this file keeps recording: a measurement
+>    taken from someone else's manifest and never re-derived from the thing itself.
+>    **Consequence:** WS-27bc's entire rationale for running *ahead* of this decision is gone.
+>    It is re-sequenced behind WS-27ak in §9.7.2, and separately NO-GO on its own contract.
 >
-> ⚠️ **Verify each licence at install time.** `node_modules` was absent from the read clones,
-> so every licence claim in §9.4 comes from a manifest, not from a package.
+> ⚠️ **Verify each licence at install time** — and it has now been done, which is the only
+> reason the error above was caught. **The package is `@base-ui/react@^1.7.0`.** Licence read
+> from the package itself (`npm pack` + extract): `package/LICENSE` is the 17-line MIT text
+> ("Copyright (c) 2019 Material-UI SAS"), `package.json` `"license": "MIT"`. Five runtime
+> dependencies, **all MIT** (`@babel/runtime`, `@base-ui/utils`, `@floating-ui/react-dom`,
+> `@floating-ui/utils`, `use-sync-external-store`); `sideEffects: false`, tree-shakes per
+> subpath. React peer `^17 || ^18 || ^19` — we are on **19.2.4** ✓. `date-fns` appears in
+> `peerDependencies` but is **optional** (date pickers only), so no second date library rides
+> in.
+> 🔴 **Do NOT install `@base-ui-components/react`** — the name our research implies. It is
+> **deprecated** ("Package was renamed to @base-ui/react") and its `latest` is stuck at
+> `1.0.0-rc.0`, so installing the name the evidence points at ships a release candidate of a
+> renamed package.
+> ⚠️ Next 16.2.6 / Turbopack interop is **unverified** — it could not be checked without
+> installing. Stated as unknown rather than assumed.
 
 **~~D-PM-15 (owed, but now evidenced)~~ — the headless-primitive substrate.** Base UI vs Radix
 vs Headless UI. Everything in WS-27ak depends on it and **picking two would create the
@@ -2177,7 +2223,7 @@ schedule later.
 
 #### 9.4.2 Tickets
 
-**WS-27ak — the primitive layer.** 🟡 Blocked on D-PM-15.
+**WS-27ak — the primitive layer.** ~~🟡 Blocked on D-PM-15.~~ 🟢 **AGENT-SAFE** for items 1, 3 and 5 (item 2 see the `HoverPopover` note; item 4 now served by the substrate). **D-PM-15 is answered — Base UI — 100 lines above this ticket in §9.4.1, and this header contradicted it for hours.**
 Sequenced by debt, not by ease: (1) **`Modal`** first — seven hand-rolled copies, **zero
 focus traps**, and it proves the theming wrapper on the hardest case. The behaviour a
 dialog owes: focus moves in on open; Tab wraps at both ends; the background is `inert`, not
@@ -2193,6 +2239,81 @@ toast in place, actions derived from the resolved value) — it is also the deli
 for the copy-link affordance. (4) **`Combobox`** — our `Select` is a styled native
 `<select>`, so every "pick from a long list" surface is unserved. (5) **`Skeleton`** —
 ~20 files improvise `animate-pulse`.
+
+> ### ⚠️ Audit outcome 2026-08-11 — **GO-NARROWED to item (1) Modal**, after doc repairs
+>
+> **Done when:** `src/components/ui/Modal.tsx` wraps **`@base-ui/react@^1.7.0`**'s `dialog`
+> (see D-PM-15 for the verified package, licence and the deprecated name NOT to install), is
+> the only import of that library outside `src/components/ui/`, and **all six of `/projects`'
+> hand-rolled dialogs render it**. The six are not a guess — a previous author already
+> enumerated them in code at `app/projects/page.tsx:968-974`'s `overlayOpen`:
+> `ShortcutsSheet.tsx:47` · `SearchPalette.tsx:162` · `ImportClickUp.tsx:166` ·
+> `FieldManager.tsx:122` · `TagManager.tsx:86` · `LifecyclePolicy.tsx:62`. Each owns its own
+> `fixed inset-0`, so **`page.tsx` is not touched** — which matters, because it is the hottest
+> file in the tree and was edited by both of today's merges.
+>
+> 🔴 **One done-when was factually impossible and is restated, not dropped.** The ticket said
+> *"Escape captured **at the dialog**, not on `document` where it races every other
+> listener"*. **Base UI does exactly what that forbids** —
+> `@base-ui/react/floating-ui-react/hooks/useDismiss.js:419` binds `keydown` on
+> `ownerDocument(...)`. So the sentence cannot be satisfied by the substrate D-PM-15 chose.
+> The observable it was reaching for, which IS testable: **with a dialog open, one Escape
+> closes exactly one surface and `page.tsx:1039`'s window handler does not also fire.**
+> That handler already returns early on `overlayOpen` (`:1003`), so the real risk in this
+> slice is that a wrapper taking ownership of open state silently breaks that suppression —
+> after which `g`-sequences navigate out from under a half-filled ClickUp import form.
+> **That is the highest-value adversarial test here**, and it is Playwright-observable.
+>
+> ⚠️ **A second obligation the ticket implies but does not state:** Base UI's default
+> `outsidePressEvent` is `'sloppy'` (fires on `pointerdown`); the ticket's "press must start
+> *and* end outside" is `'intentional'`. The wrapper sets it, and a source scan asserts no
+> call site overrides it.
+>
+> 🔴 **There is already a Modal in this tree, and building the ticket as written authors a
+> second one** — the WS-27bd(5) ContextMenu situation repeating.
+> `app/email/components/automation/ui.tsx:15` exports `Modal({title, description, onClose,
+> children, footer, maxWidth})` with **five** consumers, whose own docstring says it is
+> *"kept dependency-free… to match the rest of the email app, which hand-rolls its overlays."*
+> It has window-Escape and backdrop dismiss, and **no** focus trap, focus return, scroll lock,
+> `role` or `aria-modal`. This slice leaves its five call sites alone and records the
+> retirement, exactly as ContextMenu did. (The same file's `HoverPopover:132` is a partial
+> answer to item (2), which is another reason Tooltip is not first.)
+>
+> **Re-measured — five of the ticket's numbers are wrong.** "69 files `fixed inset-0`" is
+> **70 files / 95 occurrences**, of which only **60 across 48 files are dialogs**: 21 are
+> empty dismiss-scrims for dropdowns, 12 are drawers/bottom-sheets/full-screen modes, 2 are
+> prose in comments. "Seven hand-rolled copies" derives from nothing; `/projects` has **six**.
+> ✅ Zero focus traps and zero `inert=` attributes: **confirmed**. ✅ `src/components/ui/`
+> **already exists** (`Badge`, `Button`, `Input`) — this extends a home, it does not mint one.
+>
+> **The free harness is the argument for Modal first.** Driven in Chromium at `00c47c6b` with
+> **zero API mocking** (`/projects` renders without auth; `?` opens `ShortcutsSheet`):
+> `dialogs: 1` · `activeElement after open: BODY` (focus never moves in) · `focus inside after
+> 6 Tabs: false ×6` (no trap — focus walks the background) · `[inert] elements: 0` ·
+> `activeElement after close: A`, an arbitrary anchor rather than the opener. The hardest
+> primitive is the one with the cheapest fence.
+>
+> ⚠️ **Two costs to know before dispatch.** (1) Conformance **rule 8** (no `@base-ui/react`
+> import outside `src/components/ui/`) trips `conformance.test.ts`'s own rule-count fence,
+> which asserts that **`AGENTS.md` and the root `CLAUDE.md`** both quote the same number —
+> all three say "seven" today, so this slice necessarily edits the root `CLAUDE.md`. That is
+> mechanical and intended; it should not surprise a reviewer. (2) `DESIGN_SYSTEM.md` has **no
+> overlay/z-index section at all** — the tree uses ad-hoc `z-40…z-95` and backdrops split
+> across `bg-black/40|50|60|70`, `bg-background/70|80`, `bg-foreground/20`, and `bg-black/60`
+> passes all seven conformance rules today because `PALETTE_CLASS` lists only the numbered
+> ramps, not `black`/`white`. The wrapper must pick a token deliberately **and**
+> `DESIGN_SYSTEM.md` must gain a short overlay section, or this ships the eighth backdrop.
+>
+> ⚠️ **A seam tension to state rather than resolve silently:** Wave 1 shipped
+> `src/lib/outsideClick.ts` whose docstring names *"Wave 2's Modal / Tooltip / Combobox"* as
+> why it exists ahead of need. Base UI brings its own outside-press handling, so a Base-UI
+> Modal will **not** consume it. That is acceptable — but it must be written down, or the tree
+> has two answers and no record of why.
+>
+> **🔴 Items (2) Tooltip and (5) Skeleton are NO-GO as written**: their entire done-when is a
+> count of the problem ("~157 files use `title=`", "~20 files improvise `animate-pulse`"), not
+> a definition of done. Item (3) Toast has a real criterion and survives. Do not dispatch
+> (2) or (5) until each has acceptance.
 
 **WS-27al — the logic-only wins.** 🟢 AGENT-SAFE, no library, no design decision, no
 dependency on D-PM-15. The cheapest real quality in this whole section:
@@ -2583,6 +2704,62 @@ rather than firing a leading-wildcard scan with no index behind it. That minimum
 performance fence, not a nicety.
 **REF:** [`apps/web/src/lib/scroll-pagination.ts`](https://github.com/paca-ai/paca/blob/09dab28e3caee9e43891697998dcfa7fcf76991c/apps/web/src/lib/scroll-pagination.ts) · [`apps/web/src/components/projects/interactions/use-epic-search.ts`](https://github.com/paca-ai/paca/blob/09dab28e3caee9e43891697998dcfa7fcf76991c/apps/web/src/components/projects/interactions/use-epic-search.ts)
 
+> ### 🔴 Audit outcome 2026-08-11 — **NO-GO. The blocker is documentation, so the doc fix IS the ticket.**
+> Contract point 3 fails outright: **there is no "Done when".** Three constants are not
+> acceptance. Everything below is verified against the code, not against the ticket.
+>
+> **1. A third of it is already shipped — the confident third.** "Server-side search debounced
+> with a minimum query length of 2" exists in `gateway/routes/projects/search.py:72`
+> (`MIN_QUERY = 2`, enforced at `:228`, answering empty rather than 422) and
+> `app/projects/lib/search.ts:27` (*"Mirrors the gateway's `MIN_QUERY`"*), consumed by
+> `TriageRail.tsx:85`. `email/components/RecipientInput.tsx` is a **working hand-rolled
+> long-list picker** with `role="combobox"/"listbox"/"option"` already wired. A fourth
+> implementation is the CLAUDE.md §5 defect authored by the ticket meant to prevent it.
+>
+> 🔴 **2. Its central justification is FALSE and must be struck.** The ticket says the minimum
+> stops *"a leading-wildcard scan with no index behind it"*. The query is
+> `t.title ILIKE :term OR t.description ILIKE :term` with `term = '%…%'` — **`'%ab%'` is
+> exactly as unindexable as `'%a%'`.** `pg_trgm` appears **zero** times in `infra/`. The
+> minimum bounds the **result set**, not the scan, which is what the gateway's own docstring
+> (`search.py:68-71`) actually says: *"returning half the workspace."* Replace the wording
+> with the true claim.
+>
+> **3. The 300ms contradicts the tree.** `projects/lib/search.ts:30` is `DEBOUNCE_MS = 180`,
+> `FilterBar.tsx:162` is an inline `300`, `RecipientInput` is `200` — and there is **no shared
+> debounce helper**, just seven ad-hoc copies. Either reconcile to one number, or say
+> explicitly that this ticket mints `src/lib/`'s debounce and retires all seven. Minting an
+> eighth is the defect; minting a shared one and leaving seven is half a seam.
+>
+> 🔴 **4. A contradiction that blocks the build outright, and it is a decision not an edit.**
+> The ticket wants scroll-pagination **and** server search **and** a fallback to "the
+> unfiltered first page" in one surface. But `/projects/search` is **capped, not paged**, by a
+> recorded decision in its own module docstring (*"Nobody pages through search results; they
+> retype. A `LIMIT` with no `OFFSET` is the honest shape"*), and has **no unfiltered mode** —
+> `q=""` returns `{"rows": []}`. `/projects/tasks` **is** paged but its `q` has no minimum and
+> no ranking. Two endpoints, incompatible contracts, spec silent on which. An implementer must
+> either straddle both and let the list visibly reorder at the 2-character boundary, or reopen
+> `search.py`'s paging decision. **Neither is an agent's call.**
+>
+> **5. Only scroll-pagination is genuinely unbuilt.** Zero `IntersectionObserver`, `onScroll`,
+> `scrollHeight`, `loadMore` or `hasMore` anywhere under `app/projects/`.
+>
+> **6. Re-sequenced: the surface half now depends on WS-27ak, it does not race it.**
+> §9.7.2's *"runs in parallel and before D-PM-15 resolves"* was written while that decision was
+> open. It is answered, and **its "Base UI has no Combobox" rider was itself false** (D-PM-15,
+> corrected: `@base-ui/react@1.7.0` ships `combobox`). A picker owes a popover, `aria-expanded`
+> /`aria-controls`/`aria-activedescendant`, listbox roles and focus return — all of which
+> D-PM-15 condition 1 says arrive as a wrapper in `src/components/ui/`. Hand-rolling a popover
+> shell here is the second-substrate failure condition 2 exists to prevent, arriving through a
+> ticket instead of a vendored registry.
+>
+> ➡️ **The one slice dispatchable today** is substrate-independent and has no component in it:
+> a pure `app/projects/lib/pagedPicker.ts` + test — threshold predicate, page accumulation and
+> dedupe, min-length gate — reusing `search.ts:80`'s existing `isCurrent()` stale-response
+> guard rather than re-deriving it. ⚠️ And its real target is
+> `RelationsBlock.tsx`'s `<Input placeholder="task id">`, which is the only true long-list
+> surface in `/projects` — note `search.py`'s `exclude_relatives_of` was built for exactly
+> that and has **zero client consumers** today.
+
 **WS-27bd — the small rules, each removing a class of defect.** 🟢 AGENT-SAFE, all trivial.
 (1) **Shortcuts release unclaimed keys** — `Mod+F` opens page search only where a page
 registered one and otherwise falls through to the browser's find-in-page; the fence is a test
@@ -2641,6 +2818,36 @@ already uses — one registry, two surfaces; measured, `/projects` has zero `onC
 > **~~(4) signature-keyed banner dismissal~~ — STRUCK, no target.** No dismissible banner with a
 > persist-forever key exists anywhere. The nearest seam, `src/lib/dismissedTools.ts`, is
 > already id-keyed — i.e. already signature-keyed in spirit.
+
+**WS-27be — the task search index nobody can use, and the missing minimum.** 🟢 AGENT-SAFE,
+needs a migration. **Found 2026-08-11 while auditing WS-27bc; it is bigger than that ticket
+and unrelated to its scope, so it is minted here rather than smuggled in.**
+
+Two facts, both verified against the tree:
+1. **`idx_pm_tasks_fts` has been dead weight since migration 146.** `146_projects.sql:248`
+   creates `GIN (to_tsvector('english', coalesce(title,'') || ' ' || coalesce(description,'')))`
+   — a full-text index. The only query that searches those columns is
+   `search.py`'s `t.title ILIKE '%…%' OR t.description ILIKE '%…%'`, and **`ILIKE` cannot use a
+   `to_tsvector` GIN index.** So every `/projects/search` call is a sequential scan of
+   `pm_tasks` plus two joins plus a full sort before `LIMIT 51`, while an index that looks like
+   it covers the case sits unused. Nobody has noticed because the table is small — which is
+   exactly the condition under which this stays invisible until it is expensive.
+2. **The list endpoint has no minimum query length.** `filters.py:202` accepts any non-empty
+   `q`, and `FilterBar.tsx:162` sends it after 300ms with no length check, so
+   `GET /projects/tasks?q=a` fires today with no cap — the very query WS-27bc claims to be
+   preventing, at the one endpoint where nothing prevents it.
+
+Done when: the search path and the index agree — **either** `pg_trgm` + a `gin_trgm_ops` index
+so `ILIKE` is servable (zero `pg_trgm` in `infra/` today, so this is a new extension and an
+owner-visible choice), **or** the query moves to `to_tsvector`/`websearch_to_tsquery` and uses
+the index that already exists, **or** `idx_pm_tasks_fts` is dropped as honest dead weight.
+Whichever way it lands, the decision is recorded and the leftover is not left looking useful.
+Plus: `filters.py:202` gets the same minimum `search.py` already enforces, or a written reason
+why the list endpoint does not need one.
+⚠️ **R8** — this is a SQL/plan question and hermetic fakes agree with whatever SQL they are
+handed. It must be verified against a real Postgres, with `EXPLAIN` before and after; a green
+unit test proves nothing here.
+⚠️ **R6** — expand/contract. A new index is additive; dropping the old one is a later release.
 
 #### 9.5.3 Decisions owed
 
@@ -2813,9 +3020,14 @@ the queue: it is the wave that makes the app stop feeling improvised.
 **Wave 2 — the primitive wave.** 🟡 **D-PM-15 is the only gate in the entire sequence.**
 **WS-27ak** in debt order — **Modal → Tooltip → Toast → Skeleton** (Toast promoted above
 Skeleton by the measurement above; §9.4.2's original order had it third by count, and count
-was the wrong axis). **WS-27bc** (long-list picker) runs *in parallel and before the
-decision resolves*, because Base UI has no Combobox and it is a build whichever substrate
-wins.
+was the wrong axis). ~~**WS-27bc** (long-list picker) runs *in parallel and before the decision resolves*, because
+Base UI has no Combobox and it is a build whichever substrate wins.~~
+🔴 **Struck 2026-08-11 — both halves of that rationale were wrong.** D-PM-15 is answered, so
+there is no race to run ahead of; and **`@base-ui/react@1.7.0` does ship `combobox`** (the
+"no Combobox" claim was read off a renamed, deprecated package inside the pinned clones).
+WS-27bc is separately **NO-GO** on its own contract (§9.5.2) and its surface half is
+re-sequenced **behind** WS-27ak's wrapper layer. Its one dispatchable piece today is a pure
+`pagedPicker.ts` with no component in it.
 
 **Wave 3 — the "does it lose my work" wave.** 🟢 no decision needed. **WS-27an** (inline
 autosave — save-on-unmount-if-dirty is the behaviour that currently loses an edit when the

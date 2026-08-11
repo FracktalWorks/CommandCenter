@@ -1066,6 +1066,80 @@ physically separate route module with read-only models, no member-roster endpoin
 kill switch, and the RLS-bypass point that must be resolved before `SET LOCAL app.tenant_id`.
 Until then the gateway's posture is unchanged: no anonymous tenant-data read routes exist.
 
+**D-PM-21 — UI behaviour is verified in a REAL BROWSER (Playwright), narrowly. No jsdom.**
+`DECISION (2026-08-11, owner-delegated: "make the decisions as per what you recommend").`
+Wave 2 (WS-27ak: Modal → Tooltip → Toast → Skeleton) is almost entirely behaviour that no
+current test in this tree can observe. `vitest.config.ts` is `environment: "node"` with
+`include: ["src/**/*.test.ts"]`, so `.tsx` tests are not collected and there is no jsdom,
+happy-dom or `@testing-library`: **React rendering is verified by nothing but a human
+looking at it.**
+
+**Rejected: jsdom + `@testing-library`.** It is the cheaper-looking option and it buys the
+wrong half. jsdom has **no layout engine**, so scroll-lock with scrollbar compensation,
+collision-aware positioning, viewport flip and real Tab order are all unverifiable under it
+— and those are precisely the behaviours most likely to be silently wrong. Adding it would
+mint a second test environment that still cannot answer the questions Wave 2 asks.
+
+**Chosen: Playwright**, because the infrastructure already exists and is idle —
+`playwright.config.ts`, six `e2e/*.spec.ts`, Chromium pre-installed at
+`/opt/pw-browsers`. This is switching something on, not building it. ⚠️ Version drift is
+real: the installed browser is `chromium-1194` while the packaged Playwright wanted 1223, so
+a spec may need an explicit `executablePath`
+(`/opt/pw-browsers/chromium-1194/chrome-linux/chrome`). **Never run `npx playwright
+install`** — the environment forbids it.
+
+**Scope, and it is deliberately narrow: one spec per primitive, asserting only what no other
+method can see.** Focus moves in on open · Tab wraps at both ends · the background is
+genuinely `inert` (find-in-page and a screen reader cannot walk into it) · Escape is caught
+at the dialog, not on `document` · focus returns to the opener, never `<body>` · scroll locks
+without the page shifting. **Not** a broad e2e suite — those rot, and a rotting suite is
+worse than none because it teaches people to ignore red.
+
+**The evidence this is worth it, from the day it was decided.** Wave 1's adversarial reviewer
+raised a P1: making the task title a real `<a>` means Enter escapes the canvas keydown
+handler (true — `stepCursor` returns null at `cursor < 0` and `TaskList.tsx:171` returns
+*before* `preventDefault`) and therefore performs a full-document GET that reboots the SPA and
+discards filters, selection and view mode. Plausible, well-argued, **and wrong**: the default
+action of Enter on an anchor is *to dispatch a click*, which `ControlLink` intercepts.
+Settled in minutes by driving Chromium against a repro faithful to React's root delegation —
+zero navigations, URL unchanged. Under the status quo that is a repair round spent on a
+non-bug, every time.
+**R7:** the fence is the spec files themselves; there is no test that can force their
+existence, so this decision is **advisory** until a WS-27ak slice lands one.
+
+**D-PM-22 — "Overdue" stays timestamp-granular: `due_at < now()`. Today does NOT count as
+due.** `DECISION (2026-08-11, owner-delegated).` WS-27al(5) inherited *"today counts as due"*
+from the upstream reference. **Refused, and recorded so it is not re-proposed.** Our store is
+timestamp-granular and the reference is date-granular; these are different models, not a bug
+and its fix. Adopting theirs would invert two assertions that deliberately pin `<` over `<=`
+and carry their reasoning in comments (`src/lib/taskCard.test.ts:174`,
+`src/app/projects/lib/mywork.test.ts:35-42` — *"a task is late once the moment has passed,
+not at the moment itself"*), **and** change `gateway/routes/projects/filters.py:182`,
+dragging R8 and R6 into a ticket labelled "logic-only, no dependency". What *is* required, and
+is now true, is that all four predicates agree on **completion**: a finished task is never
+overdue. **Fences already in place:** `taskCard.test.ts`, `mywork.test.ts` (both pinning `<`),
+and the SQL's `CLOSED_CATEGORIES` exclusion.
+
+**D-PM-23 — The task-menu registry is a SECOND registry at a different scope, and that is
+correct.** `DECISION (2026-08-11, owner-delegated).` WS-27bd's acceptance said its items
+derive from `app/projects/lib/commands.ts`. **That criterion was unsatisfiable and the
+implementer's deviation is ACCEPTED.** `COMMANDS` holds `go.*`, `view.*`, `panel.*`,
+`project.*` and `help.shortcuts` — **nothing task-scoped** — so a card menu whose every item
+resolved to it would read *"Widen the task panel · Custom fields · Import from ClickUp"*.
+`app/projects/lib/taskMenu.ts` is therefore the task-scoped registry and `commands.ts` stays
+the page-scoped one.
+⚠️ **This is not a licence to grow registries.** The condition, already fenced in
+`taskMenu.test.ts`, is that **the two stay disjoint in both directions** — no shared id, no
+shared label, no `task.*` in `COMMANDS`, no non-`task.*` in `TASK_MENU_ACTIONS`. Extending
+`commands.ts` to task scope remains possible but is **a ticket, not a side effect**: it also
+moves the `g`/`v` key sequences and the printed `?` shortcuts sheet, which are generated from
+that registry.
+📌 **The process point, which outlives this ticket.** An implementer rewrote its own
+acceptance criterion. The reasoning was right and it was disclosed in three places rather than
+buried — that is the behaviour we want. But the *decision* to change acceptance is a
+reviewer/owner call, and it is being recorded here rather than left inside an as-built,
+because acceptance that a builder can silently edit is not acceptance.
+
 ---
 
 ## 9. Tickets

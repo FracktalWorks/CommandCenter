@@ -910,6 +910,55 @@ describe("the headless substrate is wrapped, not imported", () => {
       ).toBe(false);
     }
   });
+
+  /**
+   * The six dialogs WS-27ak converted stay converted.
+   *
+   * ⚠️ This exists because the import restriction above does **not** catch the
+   * regression it was being credited with. A hand-rolled
+   * `<div className="fixed inset-0 bg-black/60">` imports nothing, so rule 8's
+   * scan is blind to it — which is precisely the 70-file status quo the
+   * primitive was written for. `DESIGN_SYSTEM.md` §4a used to name rule 8 as
+   * the fence against "the seventh scrim colour"; it was not one, and R7 says a
+   * rule names the test that makes breaking it fail or is labelled advisory.
+   *
+   * Deliberately **narrow**: these six files, not the tree. A tree-wide ban
+   * would flag 70 correct-for-now files, ~21 of which are dismiss-scrims for
+   * dropdowns and not dialogs at all, and a gate that cries wolf is one
+   * somebody switches off (this file's own header, "Ratchet, not a wall").
+   * Retiring another overlay onto `Modal` is how this list grows.
+   */
+  const CONVERTED = [
+    "app/projects/components/ShortcutsSheet.tsx",
+    "app/projects/components/SearchPalette.tsx",
+    "app/projects/components/ImportClickUp.tsx",
+    "app/projects/components/FieldManager.tsx",
+    "app/projects/components/TagManager.tsx",
+    "app/projects/components/LifecyclePolicy.tsx",
+  ];
+
+  it("the converted /projects dialogs do not grow an overlay back by hand", () => {
+    const offenders = CONVERTED.filter((f) => /fixed\s+inset-0/.test(strip(read(f))));
+    expect(
+      offenders,
+      "A dialog that was moved onto `Modal` has a hand-rolled `fixed inset-0` " +
+        "overlay again. That is a second scrim colour, a second z-layer and — " +
+        "measured across the 70 files that had one before WS-27ak — no focus " +
+        "trap, no focus return and no scroll lock. Put it inside `Modal`.",
+    ).toEqual([]);
+  });
+
+  it("the six converted dialogs are all still there and all still use Modal", () => {
+    // Guards the assertion above the two ways it can go vacuous: a renamed
+    // file (read() throws, so this is the readable failure) and a dialog that
+    // quietly stopped rendering the primitive while keeping a clean file.
+    const notWired = CONVERTED.filter((f) => !/from "@\/components\/ui\/Modal"/.test(read(f)));
+    expect(
+      notWired,
+      "These no longer import `Modal`, so the scan above fences nothing for " +
+        "them. Either they regressed, or this list is stale.",
+    ).toEqual([]);
+  });
 });
 
 // ── The published contract stays published ──────────────────────────────────

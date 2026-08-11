@@ -158,10 +158,16 @@ Five rules on top of the three above. Each one exists because it was broken:
    (WS-27ak) is the worked example and the only file in the tree allowed to name
    the library. **A dialog is not a `fixed inset-0` div** — before that wrapper,
    70 files carried one and **zero** trapped focus or set `inert`; that is not
-   seventy bugs, it is a primitive nobody had written. Fence: conformance rule
-   8, which also fails a second substrate appearing in `package.json` (a
-   vendored shadcn/`cva` registry pulling in `radix-ui` is the observed vector,
-   not a hypothetical one).
+   seventy bugs, it is a primitive nobody had written. Fences: conformance rule
+   8 — nothing outside `components/ui/` imports the substrate; no second
+   substrate in `package.json` (a vendored shadcn/`cva` registry pulling in
+   `radix-ui` is the observed vector, not a hypothetical one); and none of the
+   six converted `/projects` dialogs may contain `fixed inset-0`. ⚠️ **The
+   import rule does NOT catch a hand-rolled dialog** — a `fixed inset-0` div
+   imports nothing, which is how the 70 got there — so "a new surface uses
+   `Modal`" is **advisory**, review-only. ⚠️ Base UI marks the background
+   `aria-hidden` + `data-base-ui-inert`, never real `inert`: Ctrl+F still finds
+   the page behind the scrim.
    ⚠️ `src/lib/outsideClick.ts` is **not** consumed by Modal, despite its
    docstring naming "Wave 2's Modal": Base UI brings its own outside-press
    handling with the start-and-end-outside rule the hand-rolled walker does not

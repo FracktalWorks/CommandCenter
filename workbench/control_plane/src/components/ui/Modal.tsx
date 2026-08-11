@@ -21,17 +21,27 @@
  *
  * ## What this gives every dialog, and where it comes from
  *
- * * **Focus moves in** on open and **returns to the opener** on close, with a
- *   sensible fallback when the opener unmounted — `Dialog.Popup`'s
- *   `initialFocus` / `finalFocus`, both exposed here as props.
+ * * **Focus moves in** on open and **returns to the opener** on close — and
+ *   when the opener has unmounted, to the page's `<main>` landmark rather than
+ *   to `<body>`. That fallback is **this wrapper's**, not the substrate's; the
+ *   substrate has none. See `finalFocus` below for the exact order and for the
+ *   one case where there is nothing left to focus.
  * * **Tab wraps at both ends** — `modal` (`true`, the default here) puts the
  *   popup in a real focus trap rather than a `keydown` handler that guesses.
- * * **The background is `inert`, not merely covered.** Base UI's `markOthers`
- *   sets a real `inert` attribute on the popup's siblings, so find-in-page and
- *   a screen reader cannot walk into the page underneath. `aria-modal` is set
- *   here as well: Base UI deliberately does not, because `inert` is the fact
- *   and `aria-modal` is only a hint — but the hint is cheap and the ticket
- *   names it.
+ * * **The background is hidden from assistive tech and sealed against Tab —
+ *   but NOT from find-in-page.** Base UI's `markOthers` sets
+ *   `aria-hidden="true"` plus a `data-base-ui-inert` **marker** attribute on
+ *   the popup's siblings; it never sets a real `inert` attribute
+ *   (`FloatingFocusManager.js:339` calls `markOthers(…, { ariaHidden: modal })`
+ *   and nothing in the package passes `inert: true` —
+ *   `markOthers.mjs:147-155` defaults it to `false`). Measured on `/projects`
+ *   with a dialog open: `[inert]` elements **0**. So a screen reader cannot
+ *   walk into the page underneath and Tab cannot leave the dialog (guard
+ *   nodes), and **Ctrl+F still finds the text behind the scrim**. That gap is
+ *   the substrate's; closing it means a second implementation of `markOthers`,
+ *   which is a board decision (`project_management_app.md` §11.31), not this
+ *   file's. `aria-modal` is set here as a hint for assistive tech that predates
+ *   `inert`; Base UI deliberately does not set it.
  * * **Scroll is locked with scrollbar-width compensation**, so the page does
  *   not shift sideways when the dialog opens. This is the one behaviour only a
  *   layout engine can verify, which is D-PM-21's whole argument for Playwright
@@ -94,6 +104,7 @@
  */
 
 import { Dialog } from "@base-ui/react/dialog";
+import { useState } from "react";
 
 import Icon from "@/components/Icon";
 import Button from "@/components/ui/Button";
@@ -127,6 +138,52 @@ const PLACEMENT: Record<ModalPlacement, string> = {
   top: "items-start justify-center p-4 pt-16",
 };
 
+/**
+ * Does the call site already say how tall the popup may be?
+ *
+ * The base class string used to carry `max-h-full` unconditionally, which made
+ * every call site's height a **dead knob**: measured,
+ * `getComputedStyle(popup).maxHeight === "100%"` with `max-h-[80vh]` passed in,
+ * because two `max-height` utilities of equal specificity are decided by the
+ * order Tailwind emits them, not by the order they appear in `class`. So the
+ * default is applied only when the caller has not expressed one.
+ *
+ * Matches any responsive/state prefix (`sm:max-h-[70vh]`) as well, because a
+ * caller who set a height at one breakpoint means to own the property.
+ */
+const CALLER_SETS_MAX_HEIGHT = /(?:^|\s)(?:[\w-]+:)*max-h-/;
+
+/**
+ * The landmark focus lands on when the opener is gone. First in document
+ * order, which on every CommandCenter page is `AppShell`'s own `<main>`.
+ */
+const LANDMARK = "main, [role='main']";
+
+/**
+ * Focus a landmark that is not focusable, and leave the DOM as it was found.
+ *
+ * `<main>` has no tabindex, so `.focus()` on it does nothing. The skip-link
+ * pattern is to add `tabindex="-1"` for the duration; the attribute is removed
+ * again the first time the element loses focus, so a Tab from here behaves
+ * exactly as it would have.
+ *
+ * Deliberately does the focusing itself, in a microtask, rather than handing
+ * the element back to the substrate: Base UI runs the return element through
+ * `getFirstTabbableElement()`, which for a `tabindex="-1"` container returns
+ * its **first tabbable child** — i.e. the first control on the page, which is
+ * a jump, not a return.
+ */
+function focusLandmark(el: HTMLElement): void {
+  const owned = !el.hasAttribute("tabindex");
+  if (owned) el.setAttribute("tabindex", "-1");
+  queueMicrotask(() => {
+    el.focus({ preventScroll: true });
+    if (owned) {
+      el.addEventListener("blur", () => el.removeAttribute("tabindex"), { once: true });
+    }
+  });
+}
+
 export type ModalProps = {
   /**
    * Whether the dialog is up. **Controlled, always** — this component holds no
@@ -157,17 +214,52 @@ export type ModalProps = {
    */
   showClose?: boolean;
   /**
+   * Accessible name of the close button. Defaults to `"Close"`, which is right
+   * for a dialog whose title is already on screen beside it. Pass a specific
+   * one where the button is reachable out of that context — a screen-reader
+   * user listing the page's buttons hears the label and nothing else.
+   */
+  closeLabel?: string;
+  /**
    * What to focus on open. Defaults to Base UI's behaviour — the first tabbable
    * element, or the popup itself when opened by touch. Pass a ref to aim it at
    * a search box; pass `false` only with a reason.
    */
   initialFocus?: React.ComponentProps<typeof Dialog.Popup>["initialFocus"];
   /**
-   * What to focus on close. Defaults to the opener, falling back to Base UI's
-   * own resolution when it has unmounted — never `<body>`.
+   * Where focus goes on close. **This wrapper resolves it**, in this order,
+   * stopping at the first that holds:
+   *
+   *   1. `finalFocus`, when you pass a ref whose element is still connected;
+   *   2. the element that had focus at the moment this dialog opened, captured
+   *      here, when it is still connected — the ordinary case;
+   *   3. the page's `<main>` landmark (`main, [role="main"]`), focused with a
+   *      `tabIndex={-1}` this wrapper adds and removes again on blur;
+   *   4. **nothing.** A document with no `<main>` and no `[role="main"]` leaves
+   *      focus wherever the browser put it, which is `<body>`. There is no
+   *      fifth thing to focus and this wrapper does not invent one.
+   *
+   * Pass `false` to leave focus alone entirely.
+   *
+   * ⚠️ **Step 3 exists because the substrate has no fallback at all**, contrary
+   * to what this file used to claim. `FloatingFocusManager.js:476` drops
+   * `elementFocusedBeforeOpen` when `!isConnected`,
+   * `getPreviouslyFocusedElement()` filters disconnected elements and returns
+   * `undefined`, `getReturnElement` returns `null`, and **no `.focus()` runs**
+   * — so focus stays on `<body>`. That is reachable in this app, not
+   * theoretical: `ImportClickUp`'s only trigger is the empty-state button
+   * (`ProjectTree.tsx:140`), a real import calls `onImported()`, `page.tsx`
+   * bumps `treeKey`, and the tree refetches and replaces the trigger **while
+   * the dialog is still open**. Fenced by `e2e/modal.spec.ts`, "focus does not
+   * fall to `<body>` when the opener unmounted".
    */
-  finalFocus?: React.ComponentProps<typeof Dialog.Popup>["finalFocus"];
-  /** Layout classes for the popup — height, flex, overflow. Never colour. */
+  finalFocus?: React.RefObject<HTMLElement | null> | false;
+  /**
+   * Layout classes for the popup — height, flex, overflow. Never colour.
+   *
+   * A `max-h-*` here **wins**: the wrapper drops its own `max-h-full` when the
+   * caller expresses a height. See `CALLER_SETS_MAX_HEIGHT`.
+   */
   className?: string;
   children?: React.ReactNode;
 };
@@ -182,11 +274,56 @@ export default function Modal({
   size = "lg",
   placement = "center",
   showClose = true,
+  closeLabel = "Close",
   initialFocus,
   finalFocus,
   className = "",
   children,
 }: ModalProps) {
+  /**
+   * The element that had focus when this dialog opened.
+   *
+   * Captured **during the render in which `open` flips true** — React's
+   * adjusting-state-on-a-prop-change pattern — and deliberately not in an
+   * effect. `Dialog.Popup` is a child and the substrate reads its own
+   * `elementFocusedBeforeOpen` in a **layout** effect
+   * (`FloatingFocusManager.js:418`); child layout effects run before the
+   * parent's, so no effect here can see the opener. During render the DOM has
+   * not been touched yet. State rather than a ref because a ref written during
+   * render is a `react-hooks/refs` error, and because React re-runs this render
+   * before touching any child — the popup has not mounted when the read
+   * happens.
+   *
+   * This lives on the component, not on the `open` transition alone, because
+   * `SearchPalette` keeps its `Modal` mounted across `open`.
+   */
+  // `false`, never `open`: `ShortcutsSheet` and the four managers MOUNT with
+  // `open` already true, so seeding this from the prop would make the first
+  // render look like "no change" and the opener would never be captured at all.
+  const [wasOpen, setWasOpen] = useState(false);
+  const [opener, setOpener] = useState<HTMLElement | null>(null);
+  if (open !== wasOpen) {
+    setWasOpen(open);
+    if (open && typeof document !== "undefined") {
+      const active = document.activeElement;
+      setOpener(active instanceof HTMLElement && active !== document.body ? active : null);
+    }
+  }
+
+  /** The order documented on `finalFocus`. Runs in Base UI's close cleanup. */
+  const returnFocus = () => {
+    if (finalFocus === false) return false;
+    const explicit = finalFocus?.current;
+    if (explicit?.isConnected) return explicit;
+    if (opener?.isConnected) return opener;
+    const landmark = document.querySelector<HTMLElement>(LANDMARK);
+    if (landmark) focusLandmark(landmark);
+    // `false` either way: step 3 focuses the landmark itself (see
+    // `focusLandmark`), and step 4 has nothing to focus. Returning an element
+    // here would hand it to `getFirstTabbableElement()` instead.
+    return false;
+  };
+
   return (
     <Dialog.Root
       open={open}
@@ -216,12 +353,17 @@ export default function Modal({
         <Dialog.Viewport className={`fixed inset-0 z-50 flex ${PLACEMENT[placement]}`}>
           <Dialog.Popup
             aria-label={title ? undefined : label}
-            // Base UI relies on real `inert` on everything else and does not
-            // set this; it is a hint for assistive tech that predates `inert`.
+            // Base UI does not set this. It is a hint for assistive tech that
+            // predates `inert` — and here it is doing real work, because the
+            // substrate marks the background with `aria-hidden` and a
+            // `data-base-ui-inert` marker rather than a real `inert` attribute
+            // (see this file's header).
             aria-modal="true"
             initialFocus={initialFocus}
-            finalFocus={finalFocus}
-            className={`flex max-h-full w-full ${SIZES[size]} flex-col overflow-hidden rounded-lg border border-border bg-card shadow-lg outline-none ${className}`}
+            finalFocus={returnFocus}
+            className={`flex ${
+              CALLER_SETS_MAX_HEIGHT.test(className) ? "" : "max-h-full"
+            } w-full ${SIZES[size]} flex-col overflow-hidden rounded-lg border border-border bg-card shadow-lg outline-none ${className}`}
           >
             {title ? (
               <header className="flex items-center gap-2 border-b border-border px-3 py-2">
@@ -233,7 +375,12 @@ export default function Modal({
                     {title}
                   </Dialog.Title>
                   {description ? (
-                    <Dialog.Description className="truncate text-xs text-muted-foreground">
+                    // NOT `truncate`. The title is one line by design; the
+                    // description is a sentence, and on a phone
+                    // `ImportClickUp`'s ("Every Preview writes nothing. Only
+                    // the buttons that say so write.") clipped mid-word — which
+                    // deletes the half that says which buttons.
+                    <Dialog.Description className="text-xs text-muted-foreground">
                       {description}
                     </Dialog.Description>
                   ) : null}
@@ -243,7 +390,7 @@ export default function Modal({
                     variant="ghost"
                     size="icon-sm"
                     icon="X"
-                    aria-label="Close"
+                    aria-label={closeLabel}
                     onClick={onClose}
                   />
                 ) : null}

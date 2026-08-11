@@ -39,8 +39,12 @@ export function ShortcutsSheet({ onClose }: { onClose: () => void }) {
     <Modal
       open
       onClose={onClose}
-      label="Keyboard shortcuts"
+      // No `label`: `Modal` uses it only when there is no `title`, and there is
+      // one. The close button keeps the specific name this sheet had before
+      // WS-27ak — a generic "Close" is fine beside a visible title and useless
+      // in a screen reader's list of the page's buttons.
       title="Keyboard shortcuts"
+      closeLabel="Close the shortcuts sheet"
       icon="Keyboard"
       size="2xl"
       placement="top"

@@ -29,7 +29,12 @@ import { expect, test, type Page } from "@playwright/test";
  *   behind) · `[inert]` elements: 0 · activeElement after close: **A**, an
  *   arbitrary anchor rather than the opener.
  *
- * Each test below asserts the *after* of one of those.
+ * Each test below asserts the *after* of one of those, plus two the WS-27ak
+ * review added: **focus does not fall to `<body>` when the opener unmounted**
+ * (the wrapper's own fallback — the substrate has none, and the review found
+ * the docstring promising one that did not exist), and **the call site's
+ * height wins** over the wrapper's default (`max-h-full` was baked into the
+ * base classes, so `className` was a dead knob).
  *
  * ## Two things this file deliberately does NOT assert, with the reason
  *
@@ -106,6 +111,76 @@ test.describe("Modal", () => {
     // starts the reader at the top of the page they were already inside.
     expect(closed.tag).not.toBe("BODY");
     expect(closed.isOpener, `focus landed on <${closed.tag}>, not the opener`).toBe(true);
+  });
+
+  test("focus does not fall to <body> when the opener unmounted", async ({ page }) => {
+    // ⚠️ The case the wrapper's own fallback exists for, and the one the
+    // substrate does NOT handle: `FloatingFocusManager.js:476` drops
+    // `elementFocusedBeforeOpen` once `!isConnected`,
+    // `getPreviouslyFocusedElement()` filters disconnected elements out of its
+    // module-level list, `getReturnElement` returns `null`, and no `.focus()`
+    // runs at all — so focus is left on `<body>`, which is exactly the
+    // pre-slice measurement this whole primitive exists to remove.
+    //
+    // Not hypothetical: `ImportClickUp`'s only trigger is the empty-state
+    // button (`ProjectTree.tsx:140`, rendered only while the tree has no
+    // roots). A real import calls `onImported()`, `page.tsx` bumps `treeKey`,
+    // the tree refetches and REPLACES that button while the dialog is still
+    // open. Removing the opener here is that sequence, minus the fixtures.
+    await openShortcuts(page);
+    await page.evaluate(() => {
+      const opener = document.querySelector('[data-e2e-opener="1"]');
+      if (!opener) throw new Error("the opener was never marked — harness broke");
+      opener.remove();
+    });
+
+    await page.keyboard.press("Escape");
+    await expect(page.locator(DIALOG)).toHaveCount(0);
+    await page.waitForTimeout(200);
+    const closed = await focusState(page);
+    expect(
+      closed.tag,
+      "focus fell to the document — the wrapper's landmark fallback did nothing",
+    ).not.toBe("BODY");
+    // Step 3 of `Modal`'s documented order: the page's `<main>` landmark,
+    // focused with a `tabIndex={-1}` the wrapper adds and cleans up on blur.
+    expect(closed.tag).toBe("MAIN");
+    expect(
+      await page.evaluate(() => document.activeElement?.getAttribute("tabindex")),
+    ).toBe("-1");
+
+    // And the borrowed attribute is given back, so a Tab from here behaves as
+    // it would have. (A landmark left permanently `tabindex="-1"` is a change
+    // to the page the reader never asked for.)
+    await page.keyboard.press("Tab");
+    await page.waitForTimeout(150);
+    expect(
+      await page.evaluate(() => document.querySelector("main")?.hasAttribute("tabindex")),
+      "the temporary tabindex outlived the focus it was for",
+    ).toBe(false);
+  });
+
+  test("the call site's height wins over the wrapper's default", async ({ page }) => {
+    // `max-h-full` used to be baked into the popup's base classes, which made
+    // `className` a dead knob: two `max-height` utilities of equal specificity
+    // are decided by the order Tailwind EMITS them, not the order they sit in
+    // `class`. Measured then: `maxHeight === "100%"` with `max-h-[80vh]`
+    // passed in, so the shortcuts sheet and the importer both rendered ~10%
+    // taller than designed. This is a computed-style question, i.e. one only a
+    // real engine can answer (D-PM-21).
+    await openShortcuts(page);
+    const measured = await page.evaluate(() => {
+      const popup = document.querySelector('[role="dialog"]') as HTMLElement;
+      return {
+        maxHeight: getComputedStyle(popup).maxHeight,
+        eightyVh: window.innerHeight * 0.8,
+      };
+    });
+    expect(
+      measured.maxHeight,
+      "the wrapper's own max-height is still winning — `className` is a dead knob",
+    ).not.toBe("100%");
+    expect(Math.abs(parseFloat(measured.maxHeight) - measured.eightyVh)).toBeLessThan(1);
   });
 
   test("Tab wraps at both ends instead of walking into the page behind", async ({ page }) => {
@@ -202,8 +277,29 @@ test.describe("Modal", () => {
     // backdrop and is released INSIDE the dialog. Under `'sloppy'` the
     // dismissal fires on `pointerdown`, so the dialog is gone before the mouse
     // is even lifted; under `'intentional'` it waits for the release and sees
-    // it land inside. Measured both ways on this runner: 1 dialog with the
-    // wrapper as written, 0 with `Dialog.Backdrop` removed.
+    // it land inside.
+    //
+    // ⚠️ **Mutation, re-measured 2026-08-11.** An earlier version of this
+    // comment claimed "1 dialog with the wrapper as written, 0 with
+    // `Dialog.Backdrop` removed". The second half does not reproduce: removing
+    // `<Dialog.Backdrop>` alone is **10 passed / exit 0**, because
+    // `DialogPortal.mjs:38` renders an `InternalBackdrop` whenever
+    // `modal === true` and a backdrop of *either* kind is enough to keep
+    // `outsidePressEvent` at `'intentional'` (`useDialogRoot.mjs:23-33`).
+    //
+    // The mutation that actually produces `'sloppy'` — and the one measured
+    // red — is **both** halves: `<Dialog.Backdrop>` removed AND
+    // `modal="trap-focus"`. That run is **8 passed / 2 failed**, this case
+    // among them ("a press released inside the dialog closed it", 1 dialog
+    // expected, 0 received: it was gone at `pointerdown`). The other failure
+    // is the scroll-lock case, which is `trap-focus` doing exactly what
+    // `Modal.tsx` says it does — leave the page scrollable.
+    //
+    // So this assertion IS a genuine discriminator of `intentional` vs
+    // `sloppy`; what it is not is a fence against the backdrop alone. That
+    // half is static: `conformance.test.ts`'s "the Modal wrapper does not hand
+    // outside-press dismissal to its callers" asserts `<Dialog.Backdrop>` and
+    // `<Dialog.Portal>` are still rendered at all.
     await page.mouse.move(6, 6);
     await page.mouse.down();
     await page.mouse.move(middle.x, middle.y, { steps: 8 });

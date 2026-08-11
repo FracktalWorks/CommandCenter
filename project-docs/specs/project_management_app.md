@@ -4,8 +4,10 @@
 > module, sliced into every other Center) · **Created:** 2026-08-05 · **Updated: 2026-08-11**
 > (**WS-27ak's narrowed slice built — §11.31**; **WS-27am's — §11.29**; **WS-27bd's — §11.30**;
 > each narrowed, and what each STRUCK is the more useful half of the record) ·
-> 🟢 **WS-27ak item (1) `Modal` BUILT 2026-08-11 on `ws-27ak-modal-primitive`, NOT merged and
-> NOT deployed** (§11.31) — `src/components/ui/Modal.tsx` over **`@base-ui/react@1.7.0`**
+> 🟢 **WS-27ak item (1) `Modal` BUILT 2026-08-11, REPAIRED the same day on
+> `ws-27ak-modal-repair` (repair round 1 of 2 — two behavioural fixes, three corrected
+> records, one new structural fence), NOT merged and NOT deployed** (§11.31) —
+> `src/components/ui/Modal.tsx` over **`@base-ui/react@1.7.0`**
 > (D-PM-15), the **only** file in the tree allowed to import the substrate (conformance rule
 > **8**, which is why this slice necessarily edited the root `CLAUDE.md`), and all **six** of
 > `/projects`' hand-rolled dialogs render it. `app/projects/page.tsx` was **not touched** and
@@ -2257,9 +2259,9 @@ for the copy-link affordance. (4) **`Combobox`** — our `Select` is a styled na
 
 > ### ⚠️ Audit outcome 2026-08-11 — **GO-NARROWED to item (1) Modal**, after doc repairs
 >
-> 🟢 **Item (1) BUILT 2026-08-11 — `ws-27ak-modal-primitive`, NOT merged, NOT deployed. Full
-> record and the two done-whens that could not be met as written: §11.31.** Items (2)–(5)
-> unchanged by that slice.
+> 🟢 **Item (1) BUILT 2026-08-11, REPAIRED the same day — `ws-27ak-modal-repair`, NOT merged,
+> NOT deployed. Full record, the two done-whens that could not be met as written, and repair
+> round 1: §11.31.** Items (2)–(5) unchanged by that slice.
 >
 > **Done when:** `src/components/ui/Modal.tsx` wraps **`@base-ui/react@^1.7.0`**'s `dialog`
 > (see D-PM-15 for the verified package, licence and the deprecated name NOT to install), is
@@ -2517,7 +2519,7 @@ positions fence had exactly that defect.
 
 **WS-27at — the living design-system gallery.** 🟢 AGENT-SAFE. The one item here that
 improves our *process* rather than the product, and it targets the gap CLAUDE.md names by
-name: the conformance suite checks seven regexes and **nothing tests layout or cross-app
+name: the conformance suite checks eight regexes (WS-27ak added rule 8) and **nothing tests layout or cross-app
 continuity, so the theme-switch sweep is the real gate** — a manual gate that every slice
 this session owed and several skipped. One internal route rendering every token, every
 control and every state across all four themes × both modes turns that sweep into one page.
@@ -5313,8 +5315,11 @@ them. **The four-theme visual pass is also owed**, as for every UI slice in this
 
 ### 11.31 WS-27ak item (1) — the `Modal` primitive, and six dialogs onto it (built 2026-08-11)
 
-**Branch `ws-27ak-modal-primitive`, cut from `be26999b`. NOT merged, NOT deployed.** Frontend
-only: no migration, no gateway change, one new dependency.
+**Status: BUILT + REPAIRED 2026-08-11. Branch `ws-27ak-modal-repair`, cut from `684e3f2f`
+(itself cut from `be26999b`). NOT merged, NOT deployed.** Frontend only: no migration, no
+gateway change, one new dependency. Verification at repair: `npx tsc --noEmit` exit 0 ·
+`npx vitest run` 85 files / 1916 tests, exit 0 · `npx next build` exit 0 ·
+`npx playwright test e2e/modal.spec.ts` **10 passed**, exit 0.
 
 **Built.** `workbench/control_plane/src/components/ui/Modal.tsx` — a CommandCenter wrapper over
 `@base-ui/react@1.7.0`'s `dialog` (D-PM-15's substrate; installed under the **new** name, not the
@@ -5339,8 +5344,83 @@ navigate to `/tasks`, and the same sequence works again the moment it closes.
 | `activeElement` after close | `A` (an arbitrary anchor) | the opener, by identity |
 | page scroll under an open dialog | scrolls | locked, no width change, freed on close |
 
-**Fence:** `workbench/control_plane/e2e/modal.spec.ts` — 8 cases, Playwright (D-PM-21), all
-mutation-measured. `npm run test:e2e` **could not run in this environment at all** (it set
+**Repair round 1 (2026-08-11) — what the verifier and reviewer found, and what changed.**
+The primitive's code was confirmed right; five of the seven findings were **documents lying
+about the code**, which is the failure mode this spec keeps recording.
+
+*Two behavioural defects, both fixed:*
+
+1. 🔴 **The documented `finalFocus` fallback did not exist — focus landed on `<body>`.**
+   `Modal.tsx` promised focus "falling back to Base UI's own resolution when it has unmounted
+   — never `<body>`". There is no such fallback in the substrate:
+   `FloatingFocusManager.js:476` drops `elementFocusedBeforeOpen` once `!isConnected`,
+   `getPreviouslyFocusedElement()` filters disconnected elements and returns `undefined`,
+   `getReturnElement` returns `null`, and **no `.focus()` runs at all**. Reachable in a
+   dialog this slice converted: `ImportClickUp`'s only trigger is the empty-state button
+   (`ProjectTree.tsx:140`), and a real import calls `onImported()` → `page.tsx` bumps
+   `treeKey` → the tree refetches and **replaces the trigger while the dialog is still
+   open**. Closing it then left `activeElement: BODY` — verbatim the pre-slice measurement
+   this work exists to remove. **The wrapper now resolves it itself**, in a documented order:
+   an explicit `finalFocus` ref if still connected → the opener captured *during the render
+   in which `open` flips true* (an effect is too late — child effects run first, so the
+   substrate has already moved focus in) → the page's `<main>` / `[role="main"]` landmark,
+   focused with a `tabIndex={-1}` the wrapper adds and removes again on blur → and if the
+   document has neither, **the docstring says focus is left on `<body>`** rather than
+   claiming a guarantee. The landmark is focused by the wrapper in a microtask rather than
+   handed back to the substrate, because Base UI's `getFirstTabbableElement()` would redirect
+   a `tabindex="-1"` container to its first tabbable *child*, i.e. the first control on the
+   page — a jump, not a return.
+2. 🔴 **`max-h-full` was baked into the popup's base classes, so every call site's height was
+   a dead knob.** Measured: `getComputedStyle(popup).maxHeight === "100%"` with
+   `max-h-[80vh]` passed in — two `max-height` utilities of equal specificity are decided by
+   the order Tailwind *emits* them, not the order in `class`, so `ShortcutsSheet`'s
+   `max-h-[80vh]` and `ImportClickUp`'s `max-h-[88vh]` both lost and the importer rendered
+   ~10% taller than designed. The default is now applied only when the caller has not
+   expressed a height (`CALLER_SETS_MAX_HEIGHT`, any responsive prefix included).
+
+*Three records corrected — the code was right, the documents were not:*
+
+3. `Modal.tsx`'s own header asserted Base UI's `markOthers` "sets a real `inert` attribute …
+   so find-in-page and a screen reader cannot walk into the page underneath". It does not
+   (measured `[inert] = 0`); it sets `aria-hidden="true"` plus a `data-base-ui-inert`
+   **marker**. The header now states the truth precisely — **screen readers cannot reach the
+   background, Tab cannot leave the dialog (guard nodes), find-in-page CAN still reach it** —
+   which is what §11.31's point 2 below already said and what the primitive's own file, the
+   one every future call site reads, was contradicting.
+4. `DESIGN_SYSTEM.md` §4a repeated the same false `inert` claim **and mis-named a fence**,
+   which is an R7 violation: it credited conformance rule 8 with stopping "a hand-rolled
+   dialog … becoming the seventh scrim colour", but rule 8 only forbids *importing*
+   `@base-ui/react` outside `src/components/ui/` — a `fixed inset-0 bg-black/60` div imports
+   nothing and is exactly the 70-file status quo. §4a now separates each fence from what it
+   does **not** do, and a **real, narrow structural fence** was added:
+   `conformance.test.ts`'s *"the converted `/projects` dialogs do not grow an overlay back by
+   hand"* — none of the six converted files may contain `fixed inset-0` (they grep clean
+   today, so it passes on arrival and catches the regression), plus a companion case that the
+   six still import `Modal` so the scan cannot go vacuous. The claim that a *new* surface
+   uses `Modal` is now labelled **advisory**, because nothing in this tree can tell a new
+   dialog from a new dropdown scrim. §4a also said "six different values" and listed seven.
+5. `e2e/modal.spec.ts` recorded a mutation measurement that does not reproduce — "0 dialogs
+   with `Dialog.Backdrop` removed". Removing the backdrop alone is **10 passed / exit 0**,
+   because `DialogPortal.mjs:38` renders an `InternalBackdrop` whenever `modal === true` and
+   that alone keeps `outsidePressEvent` at `'intentional'`. The assertion is still a genuine
+   discriminator; the mutation that reaches `'sloppy'` is **both** halves (backdrop removed
+   **and** `modal="trap-focus"`), measured **8 passed / 2 failed**. The comment now records
+   that run and names `conformance.test.ts` as the static guard on the backdrop's presence.
+
+*Two minor:* `ShortcutsSheet` passed both `label` and `title` and the `label` was dead (the
+wrapper uses it only when there is no `title`) — dropped; and every converted dialog's close
+button had become the generic `aria-label="Close"`, where this sheet previously said "Close
+the shortcuts sheet". A `closeLabel` prop (default `"Close"`) restores the specific name.
+`ImportClickUp`'s subtitle was being `truncate`d by `<Dialog.Description>` and clipped on a
+phone — *"Every Preview writes nothing. Only the buttons that say so write."* — so the
+description wraps now; the title still does not.
+
+**Fence:** `workbench/control_plane/e2e/modal.spec.ts` — **10** cases, Playwright (D-PM-21),
+all mutation-measured. The repair's own measurements: passing `finalFocus` straight through
+(the pre-repair wrapper) → **9 passed / 1 failed**, `activeElement: BODY`; re-baking
+`max-h-full` unconditionally → **9 passed / 1 failed**; adding `fixed inset-0` to
+`TagManager` → conformance **31 passed / 1 failed**; breaking one of the six `Modal` imports
+→ conformance **31 passed / 1 failed** on the companion guard. `npm run test:e2e` **could not run in this environment at all** (it set
 neither `PLAYWRIGHT_*` variable and Playwright looked for a browser revision that is not
 installed); it now goes through `scripts/run-e2e.mjs`, which fills them in when the pre-installed
 Chromium is really there and changes nothing otherwise. Static fence: **conformance rule 8** —

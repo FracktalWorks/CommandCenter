@@ -284,17 +284,7 @@
 > claim only the file, deliberately, because WS-26i-bulk done-when 1 moves the call to
 > `apply_record_patch` inside `records.py` and a function-level assertion would turn that
 > sanctioned change red. Ten helper mutants now measured red (six of them new).
-> ⚠️ **What is still blind, measured rather than reasoned, because a limit block that
-> under-lists its holes is the very defect this ticket exists to remove:** dispatch through a
-> VALUE (a variable, a registry dict, `partial`, a cross-package callback — the substring scan
-> missed these too); an attribute taken off an EXPRESSION rather than a name
-> (`importlib.import_module("…").apply_status_transition(…)`, `getattr(pipeline, "…")(…)`) —
-> **the substring scan CAUGHT the `importlib` form, so this one is a residual REGRESSION,
-> left open deliberately** because closing it means resolving unbound attributes against every
-> top-level name in the package, which lets an innocent `db.close()` fabricate a call chain
-> and a fence that cries wolf is one people edit; an indirect route beginning at module level
-> (module-level code is a call SITE but not an entry POINT); and anything outside
-> `routes/crm/*.py`. **Not deployed, not merged.**
+> ⚠️ **What stays blind, split by the ONE question that decides whether a hole is a REGRESSION against the substring scan this replaced — is the gate's own name written immediately before a `(`?** **(A) Name never written before a `(`, so the old scan was blind too — NOT regressions:** dispatch through a value (`_MOVE = apply_status_transition` then `_MOVE(…)`, `partial`, a cross-package callback); a registry or object holding the gate under ANOTHER name (`_REGISTRY["move"](…)`, `Registry.move(…)`); and `getattr(pipeline, "apply_status_transition")(…)` — **measured green on the old scan too**, because `")("` intervenes and the literal never appears. **(B) Name IS written before a `(`, so the old scan went RED — residual REGRESSIONS, exactly two, both left open deliberately:** a call qualified by something the graph cannot tie to a package module — `importlib.import_module("…pipeline").apply_status_transition(…)` and `_GATES.apply_status_transition(…)` where `_GATES` is a local object or class. ⚠️ **The reason recorded in repair round 1 for leaving them was FALSE and is corrected here:** it claimed closing them meant resolving unbound attributes against every top-level name, letting an innocent `db.close()` fabricate a chain — a reviewer disproved it by building the fix, and a narrow resolver reading only STRING CONSTANTS adds **no** edges to the real package, reddens both forms, and never looks at `db.close()`. **The real reason is reach, not risk:** `importlib.import_module` appears **once** in all of `apps/` + `packages/` (`orchestrator/declarative.py:100`, a plugin loader) and **zero** times in the gateway. Neither shape is the plausible refactor this fence targets; both are deliberate evasion, and a fence cannot be built against someone willing to edit the fence file. **(C)** An indirect route beginning at module level (module-level code is a call SITE but not an entry POINT). **(D)** Anything outside `routes/crm/*.py`. **Not deployed, not merged.**
 > WS-26i (data management): 🟡 SPEC-THIN, audit-narrow before dispatch — **except
 > WS-26i-export, below.**
 > · **WS-26i-export (the filtered-list CSV export): 🟢 BUILT + REPAIRED 2026-08-11** (branch
@@ -2624,20 +2614,16 @@ the caller's choice, `load_default_status` is the server's.)*
    any level (`from .pipeline import …`, `from . import pipeline`, `from ..crm.pipeline import
    …`), star imports, a symbol re-exported through the package `__init__`, a name bound to the
    package itself (`from .. import crm` → `crm.pipeline.f()`), and calls written at module
-   level outside any `def`. All six are now READ and each has a synthetic case. **What is still
-   blind, measured rather than reasoned:** dispatch through a value (a variable, a registry
-   dict, `functools.partial`, a cross-package callback — the substring scan missed these too);
-   an attribute taken off an EXPRESSION rather than a name
-   (`importlib.import_module("…").apply_status_transition(…)`, `getattr(pipeline, "…")(…)`) —
-   ⚠️ **the substring scan CAUGHT the `importlib` form, so this one is a residual regression,
-   left open deliberately** because closing it means resolving unbound attributes against every
-   top-level name in the package, which lets an innocent `db.close()` fabricate a call chain;
-   and an indirect route that begins at module level, since module-level code is a call SITE
-   but not an entry POINT. Eight shapes are pinned against synthetic packages
+   level outside any `def`. All six are now READ and each has a synthetic case.    ⚠️ **What stays blind, split by the ONE question that decides whether a hole is a REGRESSION against the substring scan this replaced — is the gate's own name written immediately before a `(`?** **(A) Name never written before a `(`, so the old scan was blind too — NOT regressions:** dispatch through a value (`_MOVE = apply_status_transition` then `_MOVE(…)`, `partial`, a cross-package callback); a registry or object holding the gate under ANOTHER name (`_REGISTRY["move"](…)`, `Registry.move(…)`); and `getattr(pipeline, "apply_status_transition")(…)` — **measured green on the old scan too**, because `")("` intervenes and the literal never appears. **(B) Name IS written before a `(`, so the old scan went RED — residual REGRESSIONS, exactly two, both left open deliberately:** a call qualified by something the graph cannot tie to a package module — `importlib.import_module("…pipeline").apply_status_transition(…)` and `_GATES.apply_status_transition(…)` where `_GATES` is a local object or class. ⚠️ **The reason recorded in repair round 1 for leaving them was FALSE and is corrected here:** it claimed closing them meant resolving unbound attributes against every top-level name, letting an innocent `db.close()` fabricate a chain — a reviewer disproved it by building the fix, and a narrow resolver reading only STRING CONSTANTS adds **no** edges to the real package, reddens both forms, and never looks at `db.close()`. **The real reason is reach, not risk:** `importlib.import_module` appears **once** in all of `apps/` + `packages/` (`orchestrator/declarative.py:100`, a plugin loader) and **zero** times in the gateway. Neither shape is the plausible refactor this fence targets; both are deliberate evasion, and a fence cannot be built against someone willing to edit the fence file. **(C)** An indirect route beginning at module level (module-level code is a call SITE but not an entry POINT). **(D)** Anything outside `routes/crm/*.py`. Eight shapes were pinned against synthetic packages
    (`test_the_siting_fences_see_the_shapes_they_claim_to_see`) so "the fence went blind" is
-   a red test, and all six were re-measured against the real package. *(**2026-08-11,
-   WS-26h-fence:** that suite is now **fifteen** cases and asserts **both** gates on every
-   one of them — the seven added cases are the move gate's, pinned the same way.)*
+   a red test, and all six were re-measured against the real package — eight being what h2
+   shipped. *(**2026-08-11, WS-26h-fence and its two repair rounds:** it is now a
+   **25-case synthetic self-test** and asserts **both** gates on every one of them — seven
+   cases added for the move gate, nine for the import spellings the first AST cut could not
+   read, one for `_merge_names`' union. ⚠️ **That number is itself pinned now**:
+   `test_the_spec_quotes_the_real_number_of_fence_cases` reads every
+   "N-case synthetic self-test" out of THIS file and asserts it equals `len(_FENCE_CASES)`,
+   because two consecutive repair rounds found a stale count here and nothing failed.)*
    ⚠️ **Repair round 2:** `_crm_imports` reads the WHOLE tree so a **function-body import**
    counts, and nothing made that capability fail if it regressed — mutating it to
    `tree.body` left the synthetic suite 8 green and the whole file 84 green. It is not a
@@ -3031,7 +3017,8 @@ PR (R4).
 
     # WS-26h + WS-26h2 + WS-26h-fence — the two stage gates and where each may be
     # called from. Four fences over ONE AST mechanism (call sites + reachability,
-    # per gate) plus the 15-case synthetic self-test that keeps them honest:
+    # per gate), the 25-case synthetic self-test that keeps them honest, and the
+    # fence on THIS number (it reads the count back out of this file):
     uv run pytest tests/unit/test_crm_pipeline.py -q \
                   -k "move_gate or entry_gate or zoho_pull_never or siting_fences"
 

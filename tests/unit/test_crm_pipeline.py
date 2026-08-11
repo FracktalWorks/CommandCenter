@@ -1140,29 +1140,49 @@ def test_the_transition_is_the_only_writer_of_status_change_rows() -> None:
 # (`from .. import crm` → `crm.pipeline.f()`); and **calls written at module
 # level**, outside any `def`.
 #
-# It is BLIND to four shapes, each measured against a copy of the real package
-# rather than reasoned about:
+# It is BLIND to the shapes below. Each was measured against a copy of the real
+# package rather than reasoned about, and they are split by ONE question —
+# **is the gate's own name written immediately before a `(`?** — because that,
+# and not "expression versus name", is what the deleted substring scan keyed on,
+# and therefore what decides whether a hole is a REGRESSION against it.
 #
-#   1. Dispatch through a VALUE — `_MOVE = apply_status_transition` then
-#      `_MOVE(…)`, a registry dict, `functools.partial`, or a callback handed
-#      across the package boundary. The name is never written as a call.
-#   2. An attribute taken off an EXPRESSION rather than a name —
-#      `importlib.import_module("…pipeline").apply_status_transition(…)`,
-#      `getattr(pipeline, "apply_status_transition")(…)`, `globals()[…](…)`.
-#      ⚠️ **The substring scan this replaced caught the `importlib` form**,
-#      because the literal `apply_status_transition(` is still written there.
-#      That one is a residual REGRESSION and is left open deliberately: closing
-#      it means resolving an unbound attribute against every top-level name in
-#      the package, which makes an innocent `db.close()` able to fabricate a
-#      call chain, and a fence that cries wolf is one people edit.
-#   3. Reachability enters at `_SYNC_ENTRY_POINTS` only. Module-level code is a
+#   A. The name is NEVER written before a `(`, so the substring scan was blind
+#      too. **Not regressions**; holes this fence never claimed to close:
+#        · dispatch through a value — `_MOVE = apply_status_transition` then
+#          `_MOVE(…)`, `functools.partial`, a callback handed across the
+#          package boundary;
+#        · a registry or object holding the gate under ANOTHER name —
+#          `_REGISTRY["move"](…)`, `Registry.move(…)`;
+#        · `getattr(pipeline, "apply_status_transition")(…)` — measured green
+#          on the old scan too, because `")("` intervenes and the literal
+#          `apply_status_transition(` never appears.
+#   B. The name IS written before a `(`, so the substring scan went RED.
+#      **Residual REGRESSIONS — two shapes, both left open deliberately.** Both
+#      are a call qualified by something the graph cannot tie to a package
+#      module:
+#        · `importlib.import_module("…pipeline").apply_status_transition(…)`
+#        · `_GATES.apply_status_transition(…)`, where `_GATES` is a local
+#          object or class rather than a module binding.
+#      ⚠️ **Why they stay open — the reason recorded in repair round 1 was
+#      FALSE and is corrected here.** It said closing them meant resolving
+#      unbound attributes against every top-level name, letting an innocent
+#      `db.close()` fabricate a chain. A reviewer disproved that by building
+#      it: a narrow resolver reading only STRING CONSTANTS adds no edges at all
+#      to the real package, reddens both forms, and never looks at `db.close()`.
+#      The real reason is reach, not risk. `importlib.import_module` appears
+#      ONCE in all of `apps/` + `packages/` (`orchestrator/declarative.py:100`,
+#      a plugin loader) and ZERO times in the gateway. Neither shape is the
+#      plausible refactor this fence exists to catch ("make the importer use
+#      the shared seam"); both are deliberate evasion, and a fence cannot be
+#      built against someone willing to edit the fence file.
+#   C. Reachability enters at `_SYNC_ENTRY_POINTS` only. Module-level code is a
 #      call SITE (so a module-level call TO a gate is caught) but is not an
 #      entry POINT, so an indirect route that begins at import time —
 #      `_PRIMED = patch_record(…)` at module level — is seen by neither
 #      reachability fence.
-#   4. Anything outside `routes/crm/*.py`.
+#   D. Anything outside `routes/crm/*.py`.
 #
-# Nothing in this package reaches either gate by any of the four today.
+# Nothing in this package reaches either gate by any of these today.
 
 #: WS-26h — the status transition itself, and its three effects.
 _MOVE_GATE = ("pipeline", "apply_status_transition")
@@ -1895,6 +1915,29 @@ _FENCE_CASES = [
         (_SITED, True),
         (_SITED, True),
     ),
+    (
+        # ── repair round 2 ────────────────────────────────────────────────
+        # The case that pins `_merge_names`' UNION. Two imports bind the same
+        # local name — the `TYPE_CHECKING` / `try: … except ImportError:`
+        # fallback, a real shape and not a contrivance — and only one branch
+        # names the gate. Union sees it; last-one-wins does not, and which
+        # branch "wins" is an accident of `ast.walk` order.
+        #
+        # ⚠️ This was the ONE helper mutant that survived repair round 1:
+        # `_merge_names` documented union semantics and nothing asserted them,
+        # so `into[key] = value` left the whole file green.
+        "the same local name bound by two imports (TYPE_CHECKING fallback)",
+        "import_zoho.py",
+        "from typing import TYPE_CHECKING\n"
+        "if TYPE_CHECKING:\n"
+        "    from .pipeline import apply_status_transition\n"
+        "else:\n"
+        "    from .core import apply_status_transition\n"
+        "async def _mv(db):\n"
+        "    return await apply_status_transition(db)\n",
+        (_SITED, False),
+        (["import_zoho.py", "pipeline.py", "records.py"], False),
+    ),
 ]
 
 
@@ -1931,6 +1974,38 @@ def test_the_siting_fences_see_the_shapes_they_claim_to_see(
         assert bool(chain) is reachable, (
             f"{label}: {' -> '.join(chain) or 'unreachable'}"
         )
+
+
+def test_the_spec_quotes_the_real_number_of_fence_cases() -> None:
+    """The fence's own fence, added in repair round 2 (R7).
+
+    Two consecutive rounds found a **stale case count in `crm_app.md`** and
+    nothing failed — including in the §10 block an agent runs at dispatch,
+    where the number annotates a command whose real output disagreed with it.
+    A count nobody checks is a comment, so this checks it.
+
+    The spec writes the count in one canonical form, ``N-case synthetic
+    self-test``, everywhere it states it; every occurrence must equal the
+    length of :data:`_FENCE_CASES`.
+    """
+    import re
+    from pathlib import Path
+
+    spec = (
+        Path(__file__).resolve().parents[2]
+        / "project-docs" / "specs" / "crm_app.md"
+    ).read_text(encoding="utf-8")
+    quoted = re.findall(r"(\d+)-case synthetic self-test", spec)
+
+    # Its own precondition, because a regex that matches nothing agrees with
+    # everything — the WS-26i-export vacuous-fence lesson, applied here.
+    assert quoted, (
+        "crm_app.md no longer states the count in the pinned form "
+        "'N-case synthetic self-test' — restore it or this fence is vacuous"
+    )
+    assert [int(n) for n in quoted] == [len(_FENCE_CASES)] * len(quoted), (
+        f"crm_app.md quotes {quoted}; the suite has {len(_FENCE_CASES)} cases"
+    )
 
 
 # ── WS-26h2 · the create gate's own shape ───────────────────────────────────

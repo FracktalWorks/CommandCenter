@@ -275,7 +275,7 @@
 > fences green. Not hypothetical: `orchestrator` and `meeting_bot` already carry 19 relative
 > imports, and `pyproject.toml` selects no `TID` rules, so nothing else refuses one. All six
 > now read, each with its own synthetic case, each measured red first — the suite is
-> **15 → 24 cases** and the file **92 → 101**. Two more findings fixed in the same round:
+> **15 → 25 cases** and the file **92 → 103**. Two more findings fixed in the same round:
 > **reachability entered at `pull_phase` only**, so a gate reached from the PUSH half
 > (`push_records` / `apply_push_result` / `_settle` / `_fail`) reported `[]` while running
 > every cycle — the entry set is now the cycle itself (`_sync_loop` / `run_cycle` /
@@ -283,7 +283,7 @@
 > function-level siting an assertion over `f"{module}.py"` does not have** — corrected to
 > claim only the file, deliberately, because WS-26i-bulk done-when 1 moves the call to
 > `apply_record_patch` inside `records.py` and a function-level assertion would turn that
-> sanctioned change red. Ten helper mutants now measured red (six of them new).
+> sanctioned change red. Eleven helper mutants now measured red (six of them new).
 > ⚠️ **What stays blind, split by the ONE question that decides whether a hole is a REGRESSION against the substring scan this replaced — is the gate's own name written immediately before a `(`?** **(A) Name never written before a `(`, so the old scan was blind too — NOT regressions:** dispatch through a value (`_MOVE = apply_status_transition` then `_MOVE(…)`, `partial`, a cross-package callback); a registry or object holding the gate under ANOTHER name (`_REGISTRY["move"](…)`, `Registry.move(…)`); and `getattr(pipeline, "apply_status_transition")(…)` — **measured green on the old scan too**, because `")("` intervenes and the literal never appears. **(B) Name IS written before a `(`, so the old scan went RED — residual REGRESSIONS, exactly two, both left open deliberately:** a call qualified by something the graph cannot tie to a package module — `importlib.import_module("…pipeline").apply_status_transition(…)` and `_GATES.apply_status_transition(…)` where `_GATES` is a local object or class. ⚠️ **The reason recorded in repair round 1 for leaving them was FALSE and is corrected here:** it claimed closing them meant resolving unbound attributes against every top-level name, letting an innocent `db.close()` fabricate a chain — a reviewer disproved it by building the fix, and a narrow resolver reading only STRING CONSTANTS adds **no** edges to the real package, reddens both forms, and never looks at `db.close()`. **The real reason is reach, not risk:** `importlib.import_module` appears **once** in all of `apps/` + `packages/` (`orchestrator/declarative.py:100`, a plugin loader) and **zero** times in the gateway. Neither shape is the plausible refactor this fence targets; both are deliberate evasion, and a fence cannot be built against someone willing to edit the fence file. **(C)** An indirect route beginning at module level (module-level code is a call SITE but not an entry POINT). **(D)** Anything outside `routes/crm/*.py`. **Not deployed, not merged.**
 > WS-26i (data management): 🟡 SPEC-THIN, audit-narrow before dispatch — **except
 > WS-26i-export, below.**
@@ -3020,7 +3020,8 @@ PR (R4).
     # per gate), the 25-case synthetic self-test that keeps them honest, and the
     # fence on THIS number (it reads the count back out of this file):
     uv run pytest tests/unit/test_crm_pipeline.py -q \
-                  -k "move_gate or entry_gate or zoho_pull_never or siting_fences"
+                  -k "move_gate or entry_gate or zoho_pull_never or siting_fences \
+                      or spec_quotes"
 
     # WS-26i-bulk — the db-taking patch seam and the bulk endpoint.
     # ⚠️ Every CRM route test shares tests/unit/_crm_fakes.py, so the new file is

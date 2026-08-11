@@ -294,8 +294,10 @@ export default function Modal({
    * before touching any child — the popup has not mounted when the read
    * happens.
    *
-   * This lives on the component, not on the `open` transition alone, because
-   * `SearchPalette` keeps its `Modal` mounted across `open`.
+   * The transition has to be detected rather than the value simply seeded at
+   * mount, because the six call sites are not all the same shape:
+   * `SearchPalette` keeps its `Modal` mounted and toggles `open`, while the
+   * other five mount already open.
    */
   // `false`, never `open`: `ShortcutsSheet` and the four managers MOUNT with
   // `open` already true, so seeding this from the prop would make the first

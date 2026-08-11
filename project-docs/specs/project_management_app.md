@@ -2,23 +2,29 @@
 
 > **Product:** CommandCenter · **Feature:** Projects (the People Center's primary work-management
 > module, sliced into every other Center) · **Created:** 2026-08-05 · **Updated: 2026-08-11**
+> (**WS-27am's narrowed slice built — §11.29**; its item 2 struck as unbuildable-as-written) ·
+> **Previously updated 2026-08-10**
 > (status truth pass + tenancy alignment — R4; **WS-27ag shell/mobile slice built the same
 > day**; **S4 convergence slice built the same day — §11.21**; **S6 card-pills slice built the
 > same day — §11.23**; **WS-27ac calendar week/overflow slice built the same day — §11.24**;
 > **WS-27ab view-ergonomics slice — §11.25**; **WS-27ae's export third — §11.26**;
 > **WS-27ae's delta-sync + small-columns thirds — §11.27, migration 168**;
 > **WS-27al's narrowed thirds — §11.28**) ·
-> 🟢 **WS-27al (1)(2)(3) BUILT 2026-08-11, on branch `ws-27al-controllink-papercuts`, NOT
+> 🟢 **WS-27al (1)(2)(5-narrowed) BUILT 2026-08-11, merged onto `claude/paca-research-task-management-a1f6zd`, NOT
 > merged and NOT deployed** (§11.28) — `ControlLink` on the list and table task titles (the
 > app's first `<a href>` on a task at all, so cmd/ctrl/shift/middle-click finally open a new
 > tab), the shared `data-prevent-outside-click` walker consumed by `NotificationBell`, and
-> **My Work's overdue predicate folded onto the shared one — it had NO completion check, so
-> a finished task read as overdue there and as done everywhere else.** Frontend only — no
-> migration, no API change. ⚠️ **Three of the ticket's six items are struck, not deferred
-> silently**: (4) lazy tooltip mounting is unbuildable here (zero `Tooltip` components exist;
-> the native `title=` attribute has no machinery to mount lazily → WS-27ak(2), Wave 2);
-> (5) selected-first ordering names no target multi-select; (6) selection self-heal is
-> **already shipped** (`app/projects/page.tsx` prunes off `onScreen` via `src/lib/selection.ts`).
+> **My Work's overdue predicate folded onto the shared one — it had NO completion check.**
+> ⚠️ It also had **no in-app caller**, so this was a latent divergence, not a visible bug;
+> an earlier draft of this bullet claimed a finished task read as overdue in My Work and
+> that was wrong (§11.28). Frontend only — no migration, no API change.
+> ⚠️ **Three of the ticket's six items are struck, not deferred silently** — numbered as
+> §9.4.2 numbers them, not as the build order: **(3)** lazy tooltip mounting is unbuildable
+> here (zero `Tooltip` components exist; the native `title=` attribute has no machinery to
+> mount lazily → WS-27ak(2), Wave 2); **(4)** selected-first ordering names no target
+> multi-select; **(6)** selection self-heal is **already shipped** (`app/projects/page.tsx`
+> prunes off `onScreen` via `src/lib/selection.ts`). Built: **(1)**, **(2)** and the
+> narrowed **(5)**.
 > 🔴 **The ticket body's "seven predicates" and "today counts as due" are both wrong** and were
 > deliberately NOT acted on: there are three (plus one deliberately-different waiting
 > predicate under its own contract), and `<` vs `<=` is pinned by two tests with explanatory
@@ -131,6 +137,23 @@
 > UTF-8 BOM, so the saved file differed from the bytes the endpoint produced). It also found
 > a **hermetic-fake defect**: `_projects_fakes` read `?status_category=` as "hide closed
 > work", so `status_category=done` returned the OPEN tasks — fixed here. ·
+> 🟢 **WS-27am BUILT 2026-08-11 (NARROWED), merged onto `claude/paca-research-task-management-a1f6zd`, NOT merged to `main`
+> and NOT deployed** (§11.29) — §9.4.2's item 3 in full plus item 1 as a primitive.
+> **The tree had no error boundary anywhere** (zero `componentDidCatch`, no `error.tsx`), so
+> one malformed group shape blanked the whole app: `src/components/LayoutBoundary.tsx` now
+> wraps `/projects`' canvas region, keyed by layout and project, and its **Retry re-mounts by
+> bumping a key** — arithmetic kept pure in `src/lib/layoutBoundary.ts` because vitest here is
+> node-env and cannot render. `EmptyState` gains the triad's **third arm**: a CTA drawn
+> **disabled rather than hidden** (`disabled`/`disabledReason` + `emptyStateCopy`'s
+> `canCreate`), all optional, defaults unchanged, **wired at no call site** — the three list
+> surfaces were held open by sibling slices and an additive prop needs no edit there.
+> 🔴 **§9.4.2's item 2 (the loader/empty/error HOC) is STRUCK, not built**: "one HOC per
+> layout" names no layouts and reads tree-wide, so it cannot be closed as written — a doc
+> blocker, not a build. Frontend only — no migration, no API change. ⚠️ Two claims are
+> **review-only and not fenced** ("a malformed shape must not blank the app", "Retry
+> re-mounts rather than re-crashing"): both need a render with a throwing child, and adding a
+> DOM substrate to this runner is a decision above this ticket's pay grade. Four-theme sweep
+> owed. ·
 > **Owner:** vjvarada · **Board row: WS-27**
 >
 > **Tenancy (audited 2026-08-10 — this spec previously cited no tenancy decision at all).**
@@ -4676,11 +4699,19 @@ The ticket says "seven" predicates and that "today counts as due". **Both are wr
 Measured: three (`src/lib/taskCard.ts` · `app/projects/lib/mywork.ts` ·
 `gateway/routes/projects/filters.py`), plus `app/tasks/lib/waiting.ts`'s
 `isWaitingOverdue`, which is deliberately different under a documented contract and was
-left alone. The real defect was narrower and worse than "seven copies": **`mywork.ts`'s had
-no completion check at all**, so a finished task with a past due date rendered overdue in
-My Work while the same row read as done on the board and in the SQL filter. Its body is now
-gone — it delegates to `@/lib/taskCard.isOverdue`, the `app/tasks/lib/utils.ts` adapter
-shape — keeping only its local calling convention.
+left alone. The real defect was narrower than "seven copies": **`mywork.ts`'s had
+no completion check at all**, disagreeing with both `taskCard.ts` and the SQL filter. Its
+body is now gone — it delegates to `@/lib/taskCard.isOverdue`, the `app/tasks/lib/utils.ts`
+adapter shape — keeping only its local calling convention.
+⚠️ **Corrected 2026-08-11, and the correction matters for how this reads.** An earlier
+draft of this paragraph — and of the header bullet, and of the report that went to the
+owner — said *"a finished task with a past due date rendered overdue in My Work."* **It did
+not.** `mywork.isOverdue` had **no in-app caller at all**: `MyWork.tsx:353` draws the
+overdue chip through `cardChips` → the shared `taskCard.ts` predicate, which was always
+correct. This was a divergent exported helper waiting for its first caller — a latent trap,
+not a visible bug. Worth closing, and closed; but a "measured" claim that nobody checked
+against the call graph is exactly the kind of thing this file exists to stop repeating.
+The export was kept rather than deleted because deleting it would delete the fence.
 🔴 **`<` was NOT changed to `<=` and the SQL was not touched.** `taskCard.test.ts` and
 `mywork.test.ts` both pin `<` with explanatory comments ("a task is late once the moment
 has passed, not at the moment itself"). Whether today counts as due is a **doc blocker for
@@ -4717,6 +4748,78 @@ gives `a { color: inherit; text-decoration: inherit }`, so no colour was written
 correct for a real link and an accessibility gain over a `<div onClick>` row, but it changes
 tab order on a long table and deserves a look. `/tasks`' list surfaces have the same missing
 `<a href>` and are not in this slice.
+### 11.29 WS-27am (narrowed) — the error boundary, and the third empty state (built 2026-08-11)
+
+The ticket in §9.4.2 carries three items. **Two were built, one is struck**, and the strike
+is the part worth reading.
+
+**Struck: item 2, the loader/empty/error HOC.** The sentence is *"one HOC **per layout**"*
+and it never says which layouts. `/projects` alone has five canvases plus `MyWork`, and the
+clause reads tree-wide — so "done" is unknowable and the surface set would have been the
+implementer's guess, not the spec's decision. Recorded as a doc blocker rather than closed
+by guessing. `page.tsx`'s `renderState()` seam (WS-27ag left it marked) is untouched and
+still owed.
+
+**Item 3 — the per-layout error boundary — is the substance of the slice.** Measured before
+building: **the tree had no error boundary at all** — zero `componentDidCatch`, zero
+`ErrorBoundary`, no Next.js `error.tsx`. One malformed group shape thrown out of one card
+took React's whole root down, and the user got a white document: no chrome, no nav, and
+nothing saying which of "empty" and "broken" had happened.
+
+- `src/components/LayoutBoundary.tsx` — the class boundary, mounted in
+  `app/projects/page.tsx` around the canvas scroll region. Scoped to the **canvases**, which
+  are the code that walks server-shaped data, so the tree, toolbar, filter bar and task panel
+  stay alive while one canvas is broken: switching view, clearing a filter and picking
+  another project are all still available, and all three are plausible ways out.
+- **Retry bumps a key; it never clears a flag.** `state.attempt` is the guarded subtree's
+  `key` and only ever increments. The arithmetic lives in `src/lib/layoutBoundary.ts` so it
+  can be tested at all — vitest here is `environment: "node"` and its `include` covers
+  `.test.ts` only, so a `.tsx` test is not even collected.
+- `caught()` deliberately returns **only** `error`. It is `getDerivedStateFromError`, whose
+  return value React *merges* — an `attempt` in it would reset the key on every crash and
+  turn the key bump silently back into a flag clear. That is a fenced assertion, not a
+  comment.
+- The boundary is **keyed by layout and project** in `page.tsx`, so a crashed canvas does not
+  follow the user to data that is fine.
+
+**Item 1 — the no-permission arm — landed as a primitive capability, wired at no call site.**
+Two-thirds of the triad shipped with S4 (§11.21): `src/components/EmptyState.tsx` plus
+`app/projects/lib/emptyState.ts` already answer *filtered-to-nothing* and *never populated*.
+The third arm renders its CTA **disabled rather than hidden**, so the reader learns the
+action exists *and* that it is not theirs — hidden, they learn neither and go looking.
+`EmptyStateAction` gains optional `disabled` / `disabledReason` (and `onClick` becomes
+optional, because a disabled action has nothing to run); `emptyStateCopy` gains optional
+`canCreate`, defaulting **true** so every existing caller renders exactly what it did. The
+reason is rendered, not only tooltipped: a disabled button is not focusable, so `title`
+alone is unreachable from a keyboard and never appears on a touch screen. Precedence is
+**filtered → no-permission → status-axis → empty**, and the argued step is the middle one —
+a viewer on a column-less board must not be told *"add a status"*, because unfollowable
+advice reads as a broken app rather than as limited access. `TaskBoard`/`TaskList`/
+`TableView` were **not** edited: an additive optional prop needs no call-site change, and
+those files were held open by sibling slices.
+
+**Fences added** (R7), all mutation-measured red and restored byte-identical:
+`src/lib/layoutBoundary.test.ts` — the arithmetic (retry advances and never re-uses a key;
+`caught` cannot reset it) **and** a source scan in `sharedTaskUi.test.ts`'s idiom asserting
+the boundary is declared once, consumes the tested helpers rather than re-deriving them,
+hands `attempt` to React as a `key`, and **is the scroll region's only child**, which is what
+makes a seventh canvas guarded without anybody remembering to add a row. `emptyState.test.ts`
+gains the no-permission arm — present-but-disabled, never absent, never enabled, and
+outranked by filters.
+Mutants: hiding the CTA (4 red) · enabling it (2) · rendering `MyWork` outside the boundary
+(2) · dropping the boundary's `key` (1) · Retry clearing the flag (1) · dropping the child
+`key` (1) · `caught` returning `attempt: 0` (2) · `retry` re-using its key (3).
+
+⚠️ **Honestly outside any fence, and labelled review-only:** *"a malformed group shape must
+not blank the app"* and *"Retry re-mounts rather than re-crashing"* need a render with a
+throwing child. This runner has no jsdom and no testing-library, and adding a DOM substrate
+to fence one component is a substrate decision, not a papercut ticket — so it was **not**
+done. Those two claims are checked by throwing from a canvas and looking. The four-theme
+sweep on the fallback is owed for the same reason every UI slice in this wave owes one: no
+browser runs here. Also owed: `renderState()`'s retirement onto `EmptyState`, a caller that
+actually passes `canCreate` (the per-project write grant is not on the client's row shapes
+yet), and a `/tasks`-side boundary — `LayoutBoundary` is shared by placement, with one
+consumer.
 
 ## Board record (2026-08-09) — moved from work_plan.md §2
 

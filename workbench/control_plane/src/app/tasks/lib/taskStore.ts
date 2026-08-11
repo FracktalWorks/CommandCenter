@@ -28,6 +28,7 @@ import {
   type ConnectedProvider,
 } from "./mockData";
 import { isCalendarItem, isTickled } from "./utils";
+import { canPush } from "./syncState";
 import {
   DEFAULT_FILTERS,
   DEFAULT_SORT,
@@ -1338,7 +1339,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
             // immediately when the tool has everything it needs (a real
             // provider project). Otherwise it stays staged with the manual
             // Push affordance — never lost, never silently failing.
-            if (server.syncState === "pending" && server.projectId) {
+            if (canPush(server.syncState) && server.projectId) {
               try {
                 const pushed = await apiPushItem(server.id);
                 set((s) => ({

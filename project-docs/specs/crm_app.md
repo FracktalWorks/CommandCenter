@@ -2367,6 +2367,50 @@ before any build.)*
   `localStorage` at all. The DB direction is doc-blocked on the `crm_*` `organization_id`
   naming call — see the audit record above.
 
+### WS-26i-export — The filtered-list CSV export · 🟢 AGENT-SAFE · no migration
+*(Minted 2026-08-11 by the WS-26i audit, which is recorded above. This is the one of the
+five WS-26i items clearable by a doc edit alone: it touches the live Zoho tenant **not at
+all**, needs no migration, collides with WS-26h not at all, and has a line-for-line sibling
+in `routes/projects/export.py` (WS-27ae). Real need: ~4,000 records whose only export route
+today is the Zoho UI we are retiring. **The other four items stay NO-GO** — do not widen
+this ticket into them.)*
+
+`GET /crm/export/{entity}.csv` for the four entities, mirroring `routes/projects/export.py`.
+
+**Done-when:**
+1. The filters are the caller's, built by the **same** `core.list_contract` the list
+   endpoint uses — `q`, `status_id`, `owner`, `source`, `include_converted`, `sort`, `dir`.
+   A second filter parser is a defect.
+2. `?status_id` on contacts/organizations → **422** (the existing refusal, not a silent
+   ignore); unknown `sort` key → 422 naming the entity's allowlist; unknown `dir` → 422.
+3. **Complete or refused.** A `count(*)` over the same WHERE runs before any row is
+   rendered; over `MAX_EXPORT_ROWS` → 422 naming the real count and the cap. Never
+   truncated.
+4. Columns are the entity's declared vocabulary in declaration order, promoted out of
+   `RecordList.tsx` into `src/app/crm/lib/columns.ts` so a Python fence can read the
+   TypeScript — the mechanism `test_crm_stage_discipline_parity.py` already uses for
+   `board.ts`.
+5. RFC 4180 via `csv.writer(lineterminator="\r\n", quoting=QUOTE_MINIMAL)` + a UTF-8 BOM;
+   server-owned `Content-Disposition` filename built from the entity slug only, never from
+   free text.
+6. The BFF proxy passes the upstream `Content-Type` and `Content-Disposition` through
+   instead of stamping `application/json`; a 422 from the same endpoint still arrives as
+   JSON.
+7. Read-only: no `INSERT`, no `UPDATE`, no `zoho_dirty`, no tombstone. **Asserted, not
+   assumed** — the sync loop is running and any dirtied row is pushed to the live tenant
+   within one 600s cycle.
+
+**Tests:** new `tests/unit/test_crm_export.py`; vitest for the client half.
+
+⚠️ **Two traps, both measured 2026-08-11, neither guessable from this spec.**
+**(1)** `core.list_contract` clamps `page_size` to `MAX_PAGE_SIZE = 100`. Reuse it for the
+WHERE clause ONLY and override the LIMIT — reusing it verbatim silently exports the first
+100 rows of a 1,516-row lead list, which is the exact silent truncation done-when 3 forbids,
+arriving through the door marked "reuse the shared builder".
+**(2)** The CRM BFF proxy (`src/app/api/crm/[...path]/route.ts`) does `res.json()` then
+`NextResponse.json(...)` unconditionally, so a `text/csv` body becomes `{}` with a 200.
+Projects hit this and fixed it — copy their arm, comment and all.
+
 ### WS-26e — Cutover + retirement · 🔴 OWNER-GATE end-to-end
 Final import + parity report; §6 consumers repointed; §7.4 inventory retired; Zoho refresh
 token revoked (executes part of WS-2); spec status header + board row updated in the same
@@ -2382,6 +2426,16 @@ PR (R4).
                   tests/unit/test_crm_convert.py tests/unit/test_crm_migration.py \
                   tests/unit/test_org_access_control.py \
                   tests/unit/test_org_access_enforcement.py -q
+
+    # WS-26i-export — the CSV export. ⚠️ Every CRM route test shares
+    # tests/unit/_crm_fakes.py, so the new file is NEVER run alone: a fake that
+    # drifts shows up as another suite failing, not as this one passing.
+    uv run pytest tests/unit/test_crm_export.py tests/unit/test_crm_routes.py \
+                  tests/unit/test_crm_pipeline.py tests/unit/test_crm_convert.py \
+                  tests/unit/test_crm_migration.py tests/unit/test_crm_reports.py \
+                  tests/unit/test_crm_email_timeline.py \
+                  tests/unit/test_crm_stage_metadata.py -q
+    cd workbench/control_plane && npx tsc --noEmit && npx vitest run
 
     # WS-26d read half — the agent, the parse-only WhatsApp constant, AND the
     # four registration fences the slice leans on. Run all seven together: a

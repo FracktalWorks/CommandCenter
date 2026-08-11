@@ -1100,6 +1100,35 @@ physically separate route module with read-only models, no member-roster endpoin
 kill switch, and the RLS-bypass point that must be resolved before `SET LOCAL app.tenant_id`.
 Until then the gateway's posture is unchanged: no anonymous tenant-data read routes exist.
 
+**D-PM-24 — The `inert` gap in `Modal` is ACCEPTED. We do not re-implement `markOthers`.**
+`DECISION (2026-08-11, owner-delegated).` WS-27ak slice 1's done-when said *"the background is
+`inert`, not merely covered (so find-in-page and a screen reader cannot walk into it)"*.
+**`@base-ui/react@1.7.0` cannot deliver the first half** — `FloatingFocusManager:339` passes
+`ariaHidden`, `markOthers` defaults `inert: false`, nothing in the package ever passes
+`inert: true`, and the only real `inert` sits on the portal's own `InternalBackdrop` while
+**closed**. Measured in Chromium: `[inert] = 0`; the background carries `aria-hidden="true"`
+plus a `data-base-ui-inert` marker.
+
+**What we actually have, stated precisely so nobody has to re-derive it:** screen readers
+**cannot** reach the background · Tab **cannot** leave the dialog (guard nodes) · **Ctrl+F
+still finds the page behind the scrim.**
+
+**Accepted, for three reasons.** (1) The two properties that carry real accessibility weight
+are both covered; find-in-page reaching background text is an annoyance, not a failure.
+(2) **Every dialog we ship is dismissible** — nothing in this product depends on hard
+isolation, which is what `inert` is really for. (3) Closing it means the wrapper walking
+`document.body`'s children itself, i.e. **a second implementation of `markOthers`** — the
+parallel seam CLAUDE.md §5 forbids, and a permanent maintenance liability against an upstream
+that will very likely add the flag.
+
+⚠️ **Revisit on either trigger**, and they are cheap to notice: Base UI exposes an `inert`
+option (watch `markOthers`' signature, which already accepts one), **or** we design a
+non-dismissible confirm gate — a destructive-action modal that must not be escaped is the
+first surface where "merely covered" stops being good enough.
+**R7: advisory.** No test can assert the *absence* of a substrate feature; what IS fenced is
+that the docs no longer claim otherwise (`Modal.tsx`'s header, `DESIGN_SYSTEM.md` §4a, and
+§11.31 were all corrected in repair round 1 after two of them shipped the false claim).
+
 **D-PM-21 — UI behaviour is verified in a REAL BROWSER (Playwright), narrowly. No jsdom.**
 `DECISION (2026-08-11, owner-delegated: "make the decisions as per what you recommend").`
 Wave 2 (WS-27ak: Modal → Tooltip → Toast → Skeleton) is almost entirely behaviour that no
@@ -2341,6 +2370,55 @@ for the copy-link affordance. (4) **`Combobox`** — our `Select` is a styled na
 > count of the problem ("~157 files use `title=`", "~20 files improvise `animate-pulse`"), not
 > a definition of done. Item (3) Toast has a real criterion and survives. Do not dispatch
 > (2) or (5) until each has acceptance.
+
+> ### ✅ Acceptance criteria for items (2) Tooltip and (5) Skeleton — written 2026-08-11
+> Both were **NO-GO** because their entire done-when was a count of the problem
+> (*"we use the native `title` attribute in ~157 files"*, *"~20 files improvise
+> `animate-pulse`"*) rather than a definition of done. A count is a reason to act, not a
+> description of what "acted" looks like. Written here by the workstream owner so they stop
+> being undispatchable; scope only — the sequencing in §9.7.2 is unchanged.
+>
+> **Item (2) — `Tooltip`. Done when:**
+> 1. `src/components/ui/Tooltip.tsx` wraps `@base-ui/react`'s `tooltip` and is covered by
+>    conformance **rule 8** (no new rule; the count is pinned by a fence across three files).
+> 2. **Hover-intent, not raw hover** — a delay before showing (~400ms) and a *shorter* delay
+>    on the way out, so crossing a toolbar does not strobe every icon. This is the whole
+>    reason the native `title` feels broken, and it is the criterion to hold.
+> 3. **Reachable without a pointer**: it shows on keyboard focus, not only on hover, and
+>    dismisses on Escape. The native attribute never appears on focus at all.
+> 4. **Touch has an answer, even if the answer is "nothing"** — `(hover: hover)` /
+>    `(pointer: fine)`, never UA-sniffing (§9.4.4 refuses that by name). A tooltip that is
+>    unreachable on a phone must not be the only carrier of information the user needs.
+> 5. **It is not the accessible name.** `aria-describedby`, and the trigger keeps its own
+>    label — a tooltip used *as* the label disappears for anyone who cannot hover.
+> 6. ⚠️ **`app/email/components/automation/ui.tsx:132` already exports `HoverPopover`**, a
+>    partial answer with its own consumers. Same treatment as `Modal`/`ContextMenu`: leave it,
+>    record it for retirement, do **not** author a third.
+> 7. **Convert a named starting set, not "157 files"** — a slice picks one surface
+>    (`/projects`' toolbar is the obvious first), converts it completely, and the rest follows
+>    per surface. A sweep of 157 files is a long branch, which is the root cause behind three
+>    migration collisions and a duplicated tenancy design.
+> **Fences:** hover-intent timing is pure logic in a `.ts` module (delay in, state out) and
+> unit-testable; show-on-focus and dismiss-on-Escape are Playwright (D-PM-21); "not the
+> accessible name" is a structural scan. Do not fence 7 with a count — a ratchet on
+> `title="` occurrences would make every unrelated file's edit a chore.
+>
+> **Item (5) — `Skeleton`. Done when:**
+> 1. `src/components/ui/Skeleton.tsx`, themed, replacing improvised `animate-pulse` at a
+>    **named** starting set of surfaces (same per-surface rule as above).
+> 2. **It respects `prefers-reduced-motion`** — we already hold this rule tree-wide and the
+>    upstream reference does not (§9.4's "where we are AHEAD"). A pulsing skeleton is exactly
+>    the animation that triggers people.
+> 3. **Irregularity is derived, never random.** §9.4.4 refuses `Math.random()` in a skeleton
+>    render by name: it re-randomises every render and makes the placeholder shimmer *shape*
+>    change under the reader. Hash the row index.
+> 4. **It matches the shape it replaces** — a skeleton whose height differs from the loaded
+>    row causes a layout jump on arrival, which is worse than a spinner. Same line count, same
+>    approximate widths.
+> 5. **A minimum on-screen time** (~300ms) once shown, so a fast response does not produce a
+>    flash of skeleton — the defect that makes teams rip skeletons out again.
+> **Fences:** 3, 4 and 5 are pure logic (hash→width, shape derivation, the min-display state
+> machine) and belong in a `.ts` module; 2 is a structural scan for the reduced-motion guard.
 
 **WS-27al — the logic-only wins.** 🟢 AGENT-SAFE, no library, no design decision, no
 dependency on D-PM-15. The cheapest real quality in this whole section:

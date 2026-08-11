@@ -192,6 +192,25 @@ NOT_ON_THE_EXPORT = {
 }
 
 
+def _query_params(dependant) -> set[str]:
+    """Every query parameter a route accepts, **including sub-dependencies**.
+
+    ⚠️ ``dependant.query_params`` is the SHALLOW list — parameters declared on
+    the handler itself. Both the CRM list and the export take their filters via
+    a class ``Depends()`` (``records.ListParams`` / ``export.ExportParams``), so
+    that shallow set is **empty on both sides for all four entities** and any
+    comparison of it is ``set() - set() == set()``: a fence that passes whatever
+    happens. That is how it shipped, and adding a ``city`` filter to
+    ``ListParams`` — the exact drift this is here to catch — left every test in
+    this file green. Recursing into ``dependant.dependencies`` is what makes the
+    comparison see the parameters that actually exist.
+    """
+    found = {p.name for p in dependant.query_params}
+    for sub in dependant.dependencies:
+        found |= _query_params(sub)
+    return found
+
+
 @pytest.mark.parametrize("slug", sorted(ENTITIES))
 def test_every_list_filter_reaches_the_export_or_is_named_as_excluded(
     slug: str,
@@ -203,32 +222,72 @@ def test_every_list_filter_reaches_the_export_or_is_named_as_excluded(
 
     def params(path: str) -> set[str]:
         route = next(r for r in router.routes if r.path == path)
-        return {p.name for p in route.dependant.query_params}
+        return _query_params(route.dependant)
 
-    missing = params(f"/crm/{slug}") - params(f"/crm/export/{slug}.csv")
+    listed = params(f"/crm/{slug}")
+    # The fence's own precondition: if the flattening ever stops finding the
+    # class dependency's parameters, this comparison silently becomes vacuous
+    # again — so assert it found them before trusting the difference.
+    assert {"q", "sort", "owner"} <= listed, (
+        f"the {slug} list route exposes {sorted(listed)} — the parameter "
+        f"flattening is not seeing ListParams, so the comparison below would "
+        f"pass no matter what drifted"
+    )
+
+    exported = params(f"/crm/export/{slug}.csv")
+    missing = listed - exported
     assert missing - NOT_ON_THE_EXPORT == set(), (
         f"the {slug} list accepts {sorted(missing - NOT_ON_THE_EXPORT)} and "
         f"the export does not — FastAPI will drop them silently"
+    )
+    # And the other direction: pagination is EXCLUDED, not merely absent by
+    # accident. An export that grew a `page` would be the partial file
+    # done-when 3 refuses, arriving as a feature.
+    assert exported & NOT_ON_THE_EXPORT == set(), (
+        f"the {slug} export accepts {sorted(exported & NOT_ON_THE_EXPORT)} — "
+        f"a page is a screen's unit and half a filter's records in a file is "
+        f"the silent truncation this endpoint refuses"
     )
 
 
 def test_the_filters_come_from_the_one_shared_builder() -> None:
     """⚠️ Done-when 1. A second filter parser drifts, and the export and the
-    screen then disagree about what the caller was looking at."""
+    screen then disagree about what the caller was looking at.
+
+    Two anchors, the shape ``test_projects_export.py`` uses: naming the builder
+    is not the same as handing it the caller's values, and a source grep for
+    ``list_contract(`` alone would pass on a call that reparsed ``params`` into
+    its own vocabulary first.
+    """
     source = SOURCE.read_text(encoding="utf-8")
     assert "list_contract(" in source
+    for field in ("q", "sort", "direction", "status_id", "owner", "source"):
+        assert f"{field}=params.{field}" in source, (
+            f"`{field}` is not handed to `list_contract` off the caller's "
+            f"params — the export and the screen would disagree about it"
+        )
+    assert "extra_where=extra" in source
 
 
 def test_there_is_no_partial_file_path_at_all() -> None:
     """⚠️ The structural half of the never-truncated rule: ``OFFSET`` would page
-    the export, and the row query's LIMIT is the cap the count already refused
-    past — no branch renders fewer rows than matched."""
+    the export, and the row query's LIMIT is ``cap + 1`` purely so the render
+    can refuse — no branch renders fewer rows than matched."""
     source = SOURCE.read_text(encoding="utf-8")
     body = source[source.index("async def _export"):]
     assert "OFFSET" not in body
     assert "query.limit" not in body, (
         "`ListQuery.limit` is clamped to MAX_PAGE_SIZE — binding it here is "
         "exactly the silent 100-row truncation this endpoint refuses"
+    )
+    assert "MAX_EXPORT_ROWS + 1" in body, (
+        "the row query must fetch one past the cap: under READ COMMITTED the "
+        "count and the render take different snapshots, so a `LIMIT :cap` of "
+        "exactly the cap can return exactly the cap and ship a partial file"
+    )
+    assert "len(rows) > MAX_EXPORT_ROWS" in body, (
+        "fetching cap + 1 without checking it renders the extra row instead of "
+        "refusing — the probe is only worth anything with the refusal attached"
     )
 
 
@@ -459,6 +518,49 @@ async def test_exactly_the_cap_is_exported_in_full(db, monkeypatch) -> None:
     text, _ = await _export("leads")
 
     assert len(_rows(text)) == 3  # header + two
+
+
+@pytest.mark.asyncio
+async def test_a_race_past_the_cap_refuses_rather_than_shipping_exactly_the_cap(
+    db, monkeypatch,
+) -> None:
+    """⚠️ Done-when 3 against a database that moves under the reader.
+
+    ``_tenant_session()`` opens ONE transaction, but Postgres defaults to READ
+    COMMITTED — the ``count(*)`` and the row query see different snapshots. So
+    the count can answer "under the cap", a concurrent insert can land (the
+    auto-lead path inserts leads on an ingest, unprompted), and a ``LIMIT`` of
+    exactly the cap then returns exactly the cap: a partial file, a 200, and
+    nobody told. The counted total is not the invariant; the rendered set is.
+
+    This asserts the version that cannot be fooled — the row query fetches one
+    past the cap and refuses on what came back. Measured red against the
+    ``LIMIT :cap = MAX_EXPORT_ROWS`` version, which exported the two rows as a
+    complete file.
+    """
+    monkeypatch.setattr(crm_export, "MAX_EXPORT_ROWS", 2)
+    for n in range(2):
+        db.seed("crm_leads", lead_name=f"Lead {n}")
+
+    real_execute = db.execute
+    raced: list[str] = []
+
+    async def racing_execute(sql, params=None):
+        result = await real_execute(sql, params)
+        if "count(*)" in str(sql) and not raced:
+            raced.append("committed by somebody else")
+            db.seed("crm_leads", lead_name="Raced in")
+        return result
+
+    monkeypatch.setattr(db, "execute", racing_execute)
+
+    with pytest.raises(HTTPException) as caught:
+        await _export("leads")
+
+    assert raced, "the race never fired — the count statement was not seen"
+    assert caught.value.status_code == 422
+    # "at least", because the endpoint deliberately did not count past the cap.
+    assert "at least 3 leads match" in caught.value.detail
 
 
 @pytest.mark.asyncio

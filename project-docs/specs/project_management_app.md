@@ -114,7 +114,16 @@
 > 390 px viewport were checked; and it caught a real defect (`Response.text()` strips the
 > UTF-8 BOM, so the saved file differed from the bytes the endpoint produced). It also found
 > a **hermetic-fake defect**: `_projects_fakes` read `?status_category=` as "hide closed
-> work", so `status_category=done` returned the OPEN tasks — fixed here. ·
+> work", so `status_category=done` returned the OPEN tasks — fixed here.
+> 🔧 **Correction 2026-08-11: the BOM fix above was only half applied, and this export has
+> shipped BOM-less ever since.** `saveCsv` kept the last hop as bytes, but the BFF proxy
+> (`src/app/api/projects/[...path]/route.ts`) did `await res.text()` and rebuilt the
+> response — the same UTF-8 decode one hop earlier, so the BOM was already gone. Measured on
+> node v22 through the real handler: `EF BB BF 4E 61 6D` in, `4E 61 6D 65` out. Found and
+> fixed while building the CRM's copy of the arm (WS-26i-export, `crm_app.md` §9); the proxy
+> now reads `res.arrayBuffer()` and also forwards `X-Export-Rows`. Fence:
+> `src/lib/export.test.ts` runs both proxies end to end over a BOM'd body. **The fix rides
+> the WS-26i-export branch and is not deployed.** ·
 > **Owner:** vjvarada · **Board row: WS-27**
 >
 > **Tenancy (audited 2026-08-10 — this spec previously cited no tenancy decision at all).**
@@ -4223,8 +4232,7 @@ file is written, and the button recovers.
 ⚠️ **`saveCsv` takes a `Blob`, and the first version did not — this was a real defect caught
 only by running it.** `Response.text()` decodes UTF-8 with `TextDecoder`, which **strips a
 leading byte order mark**, so the file the browser saved was measurably different from the
-bytes the endpoint produced and the server's Excel fix was silently undone. Keeping the body
-as bytes end to end is what makes them the same file.
+bytes the endpoint produced and the server's Excel fix was silently undone.
 
 The BFF proxy (`src/app/api/projects/[...path]/route.ts`) previously stamped
 `Content-Type: application/json` on **every** response. It now forwards the gateway's own
@@ -4232,6 +4240,25 @@ content type and its `Content-Disposition`; the filename is therefore the server
 choice, read back by `filenameFromDisposition` rather than composed a second time in the
 browser. A refusal from the same endpoint is still JSON and still arrives as JSON, because
 the proxy reads what upstream sent rather than what the route usually sends.
+
+🔧 **Correction, 2026-08-11 (WS-26i-export repair round 1) — this export has shipped
+WITHOUT its BOM since WS-27ae, and the paragraph above was wrong to say the bytes survived
+"end to end".** `saveCsv` taking a `Blob` fixed the last hop only. The BFF proxy did
+`const text = await res.text()` and rebuilt the response from the decoded string, which is
+the *same* decode, one hop earlier: the BOM was gone before `saveCsv` ever saw it. Measured
+on node v22 through the real handler — upstream `EF BB BF 4E 61 6D`, relayed
+`4E 61 6D 65`. A task titled "Café" therefore reaches Excel on Windows as "CafÃ©", which is
+exactly what the gateway's BOM exists to prevent.
+
+Found while building the CRM's copy of this proxy arm (`crm_app.md` §9, WS-26i-export) and
+fixed here in the same change, because leaving one of two identical proxies broken while the
+new shared fence documents the shape as correct is worse than either. The proxy now reads
+`res.arrayBuffer()` and passes the bytes; it also forwards `X-Export-Rows`, which the
+gateway has set since WS-27ae and no caller could reach. **Fence:**
+`src/lib/export.test.ts` RUNS both proxies over a BOM'd `text/csv` body and compares bytes
+(a decoded comparison cannot see a BOM at all) — replacing the previous version, which
+asserted `toContain("await res.text()")` and so pinned the defect in place. Measured red
+under the revert. **Not deployed** — the fix rides the WS-26i-export branch.
 
 #### A hermetic-fake defect this ticket found (worth more than the feature)
 

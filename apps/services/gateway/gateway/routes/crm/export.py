@@ -32,6 +32,19 @@ Five rules, each because the obvious implementation is wrong:
    count and the cap**. A short page announces itself; a short CSV does not —
    nobody scrolls to the bottom of a spreadsheet to check whether it ended
    early.
+   ⚠️ **The count alone is not sufficient, so the render re-checks.**
+   ``_tenant_session()`` opens one transaction, but Postgres defaults to READ
+   COMMITTED: the ``count(*)`` and the row query take different snapshots.
+   Count 9,998 → no refusal → a concurrent auto-lead insert adds five matching
+   rows → a ``LIMIT`` of exactly :data:`MAX_EXPORT_ROWS` returns exactly
+   :data:`MAX_EXPORT_ROWS` → a partial file with a 200 and nobody told. So the
+   row query binds ``cap + 1`` and refuses when it comes back with more than the
+   cap: the complete-or-refused invariant becomes a property of the bytes about
+   to be written rather than of a count taken a moment earlier, and the endpoint
+   no longer has to trust that the two agree. The extra row is evidence for a
+   refusal and is never rendered — this is not the calendar's
+   truncate-and-say-so probe.
+   Fence: ``test_crm_export.py::test_a_race_past_the_cap_refuses_rather_than_shipping_exactly_the_cap``.
 
 4. **The columns are the list's own vocabulary** (:data:`COLUMNS`), in the order
    the table draws them. Hand-kept here and READ from
@@ -200,6 +213,27 @@ def _cell(entity: Entity, key: str, row: dict[str, Any]) -> Any:
     return row.get(key)
 
 
+def _too_many(entity: Entity, total: int, *, at_least: bool = False) -> HTTPException:
+    """The refusal, and the reason it is a refusal — see rule 3.
+
+    It names the real number so the caller can judge how much narrowing is
+    needed rather than guessing. ``at_least`` is the render-side form: there the
+    endpoint knows the set overflowed but deliberately did not count past the
+    cap, and "at least 10001" is honest where a bare "10001" would be a figure
+    somebody could quote.
+    """
+    counted = f"at least {total}" if at_least else str(total)
+    return HTTPException(
+        status_code=422,
+        detail=(
+            f"{counted} {entity.slug} match these filters and the export cap "
+            f"is {MAX_EXPORT_ROWS}. Narrow the filter (a stage, an owner, a "
+            f"search) and export again — this endpoint will not hand back a "
+            f"partial file."
+        ),
+    )
+
+
 async def _export(entity: Entity, params: ExportParams) -> Response:
     """The caller's current filter, as a CSV file. One implementation, four
     entities — the shape ``records._list`` uses for the same reason."""
@@ -225,18 +259,10 @@ async def _export(entity: Entity, params: ExportParams) -> Response:
             query.params,
         )).scalar() or 0)
         if total > MAX_EXPORT_ROWS:
-            # The refusal, and the reason it is a refusal — see rule 3. It names
-            # the real number so the caller can judge how much narrowing is
-            # needed rather than guessing.
-            raise HTTPException(
-                status_code=422,
-                detail=(
-                    f"{total} {entity.slug} match these filters and the export "
-                    f"cap is {MAX_EXPORT_ROWS}. Narrow the filter (a stage, an "
-                    f"owner, a search) and export again — this endpoint will "
-                    f"not hand back a partial file."
-                ),
-            )
+            # Cheap and early: refused before a single row is rendered, and the
+            # count is exact so the message can name it. It is not the only
+            # gate — see the render below.
+            raise _too_many(entity, total)
 
         inner = (
             f"SELECT * FROM {entity.table}{query.where} "
@@ -248,8 +274,22 @@ async def _export(entity: Entity, params: ExportParams) -> Response:
             # board. Without it the Organization column would be empty on every
             # row, which reads as missing data rather than a missing join.
             text(project_joined(entity, inner, qualify(query.order_by, "base"))),
-            {**query.params, "cap": MAX_EXPORT_ROWS},
+            # ⚠️ **cap + 1, and the check below is what makes it a refusal.**
+            # `_tenant_session()` opens one transaction but Postgres defaults to
+            # READ COMMITTED, so the count and this render take DIFFERENT
+            # snapshots: count answers 9,998 (no 422), the auto-lead path
+            # inserts five matching rows, and a `LIMIT :cap` of exactly
+            # MAX_EXPORT_ROWS then returns exactly MAX_EXPORT_ROWS — a partial
+            # file with a 200 and no warning, which is the one outcome rule 3
+            # forbids. Fetching one row past the cap makes "did this overflow"
+            # a property of the rendered set rather than of a count taken
+            # earlier, so the invariant no longer depends on the two agreeing.
+            # This is NOT the calendar's truncate-and-say-so probe: the extra
+            # row is never rendered, it is the evidence for a refusal.
+            {**query.params, "cap": MAX_EXPORT_ROWS + 1},
         )).fetchall()
+        if len(rows) > MAX_EXPORT_ROWS:
+            raise _too_many(entity, len(rows), at_least=True)
         exported = [row_to_dict(r, entity.model) for r in rows]
 
     columns = COLUMNS[entity.slug]
@@ -272,6 +312,15 @@ async def _export(entity: Entity, params: ExportParams) -> Response:
             ),
             # An honest count beside the file, for anything reading this
             # programmatically. The file itself is complete by construction.
+            #
+            # ⚠️ A response header is only real if the caller can reach it: the
+            # BFF proxy forwards a fixed set, and for the first cut of this
+            # endpoint that set was `Content-Type` + `Content-Disposition`, so
+            # this header existed and nothing could ever read it.
+            # `api/crm/[...path]` and `api/projects/[...path]` now forward it
+            # too (fence: `src/lib/export.test.ts`, "forwards the server's
+            # filename and its row count"). Anything else that fronts this
+            # endpoint has to, or the header is a no-op again.
             "X-Export-Rows": str(len(exported)),
         },
     )

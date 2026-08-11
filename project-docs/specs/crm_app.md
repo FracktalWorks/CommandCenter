@@ -162,7 +162,7 @@
 > answer. **Not deployed, not merged.**
 > WS-26i (data management): 🟡 SPEC-THIN, audit-narrow before dispatch — **except
 > WS-26i-export, below.**
-> · **WS-26i-export (the filtered-list CSV export): 🟢 BUILT 2026-08-11** (branch
+> · **WS-26i-export (the filtered-list CSV export): 🟢 BUILT + REPAIRED 2026-08-11** (branch
 > `claude/crm-command-center-tasks-i8l7n4`, **no migration**, **read-only — the live
 > Zoho tenant is untouched**). `routes/crm/export.py` =
 > `GET /crm/export/{leads,deals,contacts,organizations}.csv`, four literal paths with the
@@ -186,12 +186,25 @@
 > `res.json()` then `NextResponse.json(…)` unconditionally**, so a `text/csv` body arrived
 > as `{}` with a 200; it now passes the upstream `Content-Type` and `Content-Disposition`
 > through, the arm Projects already carried. **Fences (R7):** `tests/unit/test_crm_export.py`
-> (46 cases) — the page-clamp trap end to end at 150 rows, the cap refusal and its boundary,
-> the parameter-parity sweep per entity, the column vocabulary READ out of `columns.ts` the
-> way `test_crm_stage_discipline_parity.py` reads `board.ts`, and done-when 7 asserted
-> **twice**: no writer is imported (AST) and every statement an export issues is a `SELECT`;
-> `src/lib/export.test.ts` sweeps both BFF proxies for the JSON-stamping shape;
+> (47 cases) — the page-clamp trap end to end at 150 rows, the cap refusal, its boundary and
+> the READ-COMMITTED race past it, the parameter-parity sweep per entity, the column
+> vocabulary READ out of `columns.ts` the way `test_crm_stage_discipline_parity.py` reads
+> `board.ts`, and done-when 7 asserted **twice**: no writer is imported (AST) and every
+> statement an export issues is a `SELECT`; `src/lib/export.test.ts` RUNS both BFF proxies
+> end to end over a BOM'd body and also sweeps them for the JSON-stamping shape;
 > `filters.test.ts` +4. Every fence was measured red before its code existed.
+> ⚠️ **Repair round 1 (2026-08-11), recorded because three of the four defects were fences
+> that passed while broken** — full write-up in §9. **(1)** Both BFF proxies did
+> `await res.text()`, a UTF-8 decode, which **strips the BOM the gateway emits**; measured
+> `EF BB BF 4E 61 6D` in, `4E 61 6D 65` out, so done-when 5 was not met end to end. Both now
+> read `res.arrayBuffer()`. **This also fixes a live Projects bug** — `api/projects/[...path]`
+> has shipped the same arm since WS-27ae, so `/projects/export/tasks.csv` has been reaching
+> Excel without its BOM in production; it is fixed here deliberately, not by accident.
+> **(2)** The done-when-1 parity fence compared the SHALLOW `dependant.query_params`, empty
+> on both sides because both use a class `Depends()` — it now recurses. **(3)** `LIMIT :cap`
+> at exactly the cap could return exactly the cap after a concurrent insert (READ COMMITTED)
+> and ship a partial file; it binds `cap + 1` and refuses on the rendered count.
+> **(4)** `X-Export-Rows` was unreachable through the proxy; both proxies forward it.
 > **Not deployed, not merged.** The other four WS-26i items stay 🔴 NO-GO.
 > **DEMO CRITICAL PATH (owner-directed 2026-08-07, §9.0): ~~dispatch D1 f~~ (∥ ~~D2 d-email~~) →
 > ~~D3 g~~ → ~~D4 d-write~~ → D5 d-autolead; h/i/e deferred past the demo. Full chain and all
@@ -2399,10 +2412,53 @@ before any build.)*
   `localStorage` at all. The DB direction is doc-blocked on the `crm_*` `organization_id`
   naming call — see the audit record above.
 
-### WS-26i-export — The filtered-list CSV export · 🟢 BUILT 2026-08-11 · no migration
+### WS-26i-export — The filtered-list CSV export · 🟢 BUILT + REPAIRED 2026-08-11 · no migration
 *(Built on branch `claude/crm-command-center-tasks-i8l7n4`; as-built record in this file's
-status header. All seven done-whens met, both traps hit and fenced. Not deployed, not
-merged.)*
+status header. Both traps hit and fenced. **The first cut did NOT meet done-when 5 end to
+end and claimed it did** — see the repair note below. All seven met after repair round 1.
+Not deployed, not merged.)*
+
+⚠️ **Repair round 1, 2026-08-11 — four defects, one of them decisive.** An independent
+verifier and an adversarial reviewer converged on the same byte-level finding, and it is
+recorded here rather than quietly fixed because three of the four were fences that
+*passed while the thing they fence was broken*:
+
+1. **The UTF-8 BOM was destroyed in transit.** The gateway emits it
+   (`gateway/csv_export.py`) and `test_crm_export.py` asserts it, but the BFF proxy did
+   `await res.text()` — a UTF-8 *decode*, which strips a leading byte order mark — and
+   rebuilt the response from the decoded string. Measured on node v22: upstream
+   `EF BB BF 4E 61 6D`, relayed `4E 61 6D 65`. Excel on Windows then reads the 3,993-row
+   Zoho backfill as the system code page and "Café" arrives as "CafÃ©", which is the exact
+   failure the BOM exists to prevent. Both proxies now read `res.arrayBuffer()` and pass
+   the bytes. **`api/projects/[...path]` carried the identical arm, so Projects'
+   production export has shipped without a BOM since WS-27ae** — fixed here rather than
+   left broken while the shared fence documents the broken shape as correct. That is a
+   deliberate one-line reach outside this ticket, not scope creep.
+2. **The done-when-1 parity fence was vacuous.** It compared
+   `route.dependant.query_params`, which is the SHALLOW set; both the list and the export
+   take their filters through a class `Depends()`, so it was `set() - set()` on all four
+   entities. Adding a `city` filter to `records.ListParams` — the exact drift it claims to
+   catch — left all 46 cases green. It now recurses `dependant.dependencies`, asserts its
+   own precondition (that the flattening actually found `ListParams`), and checks the
+   reverse direction too. Measured red under that mutation on all four entities.
+3. **The LIMIT could ship a partial file instead of refusing.** `_tenant_session()` opens
+   one transaction but Postgres defaults to READ COMMITTED, so the `count(*)` and the row
+   query take different snapshots: count 9,998 → no 422 → a concurrent auto-lead insert
+   lands → `LIMIT :cap` at exactly `MAX_EXPORT_ROWS` returns exactly `MAX_EXPORT_ROWS` →
+   a partial file with a 200. The row query now binds `cap + 1` and refuses on the
+   rendered count, so the invariant no longer depends on the count and the render
+   agreeing. The extra row is evidence for a refusal, never rendered.
+4. **`X-Export-Rows` was a shipped no-op** — the BFF proxy forwarded two headers and this
+   was not one of them, so the header's stated purpose ("for anything reading this
+   programmatically") had no caller that could serve it. Forwarded rather than deleted:
+   Projects' gateway sets it too and both its unit and live suites assert it, so deleting
+   would have been the asymmetric choice.
+
+`src/lib/export.test.ts` no longer greps source for the defect it was pinning
+(`expect(source).toContain("await res.text()")`, commented "`res.text()` keeps the
+bytes" — it does not). It now **runs** both proxies end to end over a BOM'd `text/csv`
+body and compares bytes, checks a 422 from the same endpoint still arrives as readable
+JSON, and checks the filename and row count survive.
 
 *(Minted 2026-08-11 by the WS-26i audit, which is recorded above. This is the one of the
 five WS-26i items clearable by a doc edit alone: it touches the live Zoho tenant **not at

@@ -59,11 +59,23 @@ async function forward(
         signal: AbortSignal.timeout(30_000),
       });
     }
-    const text = await res.text();
+    // ⚠️ **BYTES, not a string.** `Response.text()` is a UTF-8 *decode* (WHATWG
+    // Encoding §BOM handling), and a UTF-8 decode strips a leading byte order
+    // mark; re-encoding the decoded string into a new response then ships the
+    // file without it. The gateway emits that BOM deliberately
+    // (`gateway/csv_export.py`) because without it Excel on Windows reads the
+    // CSV as the system code page and every non-ASCII name in the 3,993-row
+    // Zoho backfill — "Café", "Sørensen", "₹", the Devanagari ones — arrives
+    // mojibake. Measured on node v22: upstream `EF BB BF 4E 61 6D` relayed as
+    // `4E 61 6D 65`. Reading the body as an `ArrayBuffer` and handing those
+    // same bytes to `NextResponse` is what makes the downloaded file identical
+    // to the one the endpoint produced. Fence: `src/lib/export.test.ts` runs
+    // this proxy end to end over a BOM'd body.
+    const buf = await res.arrayBuffer();
     // 204 and every other empty body: no content type to guess at, and
     // `NextResponse.json("")` would answer `""` where the caller expects
     // nothing.
-    if (!text) return new NextResponse(null, { status: res.status });
+    if (buf.byteLength === 0) return new NextResponse(null, { status: res.status });
     // ⚠️ The response type is the GATEWAY's, not a constant. This used to do
     // `res.json()` then `NextResponse.json(…)`, which is right for every route
     // but one: WS-26i-export's `GET /crm/export/{entity}.csv` answers
@@ -88,7 +100,14 @@ async function forward(
     // Forwarded because the FILENAME is the server's to choose — dropping it
     // would leave the client inventing a second one that drifts.
     if (disposition) headers["Content-Disposition"] = disposition;
-    return new NextResponse(text, { status: res.status, headers });
+    // The gateway's honest row count beside the file. Forwarded because a
+    // header no caller can reach is a header that does not exist: this proxy
+    // is the ONLY route to the export, so dropping it made the gateway's own
+    // stated purpose ("for anything reading this programmatically")
+    // unserveable.
+    const exportRows = res.headers.get("x-export-rows");
+    if (exportRows) headers["X-Export-Rows"] = exportRows;
+    return new NextResponse(buf, { status: res.status, headers });
   } catch (err) {
     return NextResponse.json({ error: String(err) }, { status: 502 });
   }

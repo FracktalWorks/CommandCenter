@@ -50,17 +50,25 @@ export function filenameFromDisposition(
  * with `TextDecoder`, which **strips a leading byte order mark**. The gateway
  * emits that BOM for exactly one reason: without it Excel reads the file as the
  * system code page and every non-ASCII name arrives mojibake. So the text path
- * silently undid the server's fix, and the file downloaded from a running
- * browser was measurably different from the bytes the endpoint produced.
- * Keeping the body as bytes end to end is what makes them the same file.
+ * silently undoes the server's fix, and the file saved from a running browser
+ * is measurably different from the bytes the endpoint produced.
  *
- * ⚠️ Untested by construction: `vitest.config.ts` runs `environment: "node"`
- * with `include: ["src/**\/*.test.ts"]`, so there is no `document` here and
- * adding jsdom to cover six lines of DOM plumbing is a larger change than the
- * thing covered. Everything with a decision in it — the query, the filename,
- * the refusal path — is a pure function and IS tested; the BOM is pinned on the
- * server side (`test_projects_export`, `test_crm_export`) and was caught in a
- * real browser.
+ * ⚠️ **The rule binds at EVERY hop, not just this one.** Keeping a `Blob` here
+ * bought nothing for the year both BFF proxies did `await res.text()` and
+ * rebuilt the response from the decoded string: the bytes reaching this
+ * function had already lost their BOM, so a correct client sat downstream of a
+ * lossy relay. Measured on node v22 — upstream `EF BB BF 4E 61 6D`, relayed
+ * `4E 61 6D 65`. Both proxies now read `res.arrayBuffer()`, and
+ * `src/lib/export.test.ts` RUNS each of them over a BOM'd body and compares
+ * bytes; anything new that fronts an export joins that list.
+ *
+ * ⚠️ This function itself is untested by construction: `vitest.config.ts` runs
+ * `environment: "node"` with `include: ["src/**\/*.test.ts"]`, so there is no
+ * `document` here and adding jsdom to cover six lines of DOM plumbing is a
+ * larger change than the thing covered. Everything with a decision in it — the
+ * query, the filename, the refusal path — is a pure function and IS tested; the
+ * BOM is pinned at the gateway (`test_projects_export`, `test_crm_export`) and
+ * through the proxies (`export.test.ts`), which are the two places it was lost.
  */
 export function saveCsv(body: Blob, filename: string): void {
   const url = URL.createObjectURL(body);

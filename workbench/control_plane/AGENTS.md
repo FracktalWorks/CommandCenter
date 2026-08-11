@@ -80,12 +80,26 @@ Four rules on top of the three above. Each one exists because it was broken:
    emit maps onto a real `shownFields` key (S6).
    The same rule outside colour: **`src/lib/export.ts` is the one CSV-download seam**
    (`filenameFromDisposition`, `saveCsv`), consumed by Projects and the CRM. Its two
-   traps are why it is shared rather than copied — `res.text()` strips the UTF-8 BOM the
-   gateway emits for Excel, so the body must stay a `Blob`; and the filename is the
-   SERVER's, read back off `Content-Disposition` rather than composed here. Each app
-   keeps only its own `exportQuery`/`exportPath`. Fence: `src/lib/export.test.ts`, which
-   also sweeps every BFF proxy fronting an export for the `NextResponse.json`
-   content-type stamp that turns a `text/csv` download into `{}` with a 200.
+   traps are why it is shared rather than copied — the UTF-8 BOM, and the filename,
+   which is the SERVER's, read back off `Content-Disposition` rather than composed here.
+   Each app keeps only its own `exportQuery`/`exportPath`.
+   ⚠️ **The BOM trap binds at every hop, and "keep it a `Blob` in the client" is only
+   half of it.** `Response.text()` is a UTF-8 *decode* and a UTF-8 decode strips a
+   leading byte order mark, so **a BFF proxy that does `await res.text()` and rebuilds
+   the response deletes the BOM before the client ever sees it** — which is what both
+   `api/projects/[...path]` and `api/crm/[...path]` did (measured on node v22: upstream
+   `EF BB BF 4E 61 6D`, relayed `4E 61 6D 65`), and Excel on Windows then reads "Café"
+   as "CafÃ©". A proxy fronting a binary-ish route reads `res.arrayBuffer()` and passes
+   the bytes; it also forwards `Content-Disposition` and `X-Export-Rows`, because this
+   proxy is the only route to them.
+   Fence: `src/lib/export.test.ts`, which **runs** every proxy in `EXPORT_PROXIES` over
+   a BOM'd `text/csv` body and compares bytes (a decoded compare cannot see a BOM at
+   all), checks a 422 refusal from the same endpoint still arrives as readable JSON, and
+   statically sweeps for the `NextResponse.json` content-type stamp that turns a
+   `text/csv` download into `{}` with a 200. Add a proxy to that list when it grows a
+   non-JSON route. *(The previous version of that fence asserted
+   `toContain("await res.text()")` and claimed `res.text()` "keeps the bytes" — it
+   pinned the defect in place. A fence that holds a bug still is worse than none.)*
 5. **A category and a name must resolve to the same colour.** Some apps know
    what a lane *means* (Projects has `STATUS_CATEGORIES`); some can only read
    what it is *called* (Tasks' stages are user-typed). Those two routes must

@@ -2,8 +2,23 @@
 
 > **Product:** CommandCenter · **Feature:** Projects (the People Center's primary work-management
 > module, sliced into every other Center) · **Created:** 2026-08-05 · **Updated: 2026-08-11**
-> (**WS-27ak's narrowed slice built — §11.31**; **WS-27am's — §11.29**; **WS-27bd's — §11.30**;
+> (**WS-27bc's one dispatchable slice built — §11.34**; **WS-27ak's narrowed slice built —
+> §11.31**; **WS-27am's — §11.29**; **WS-27bd's — §11.30**;
 > each narrowed, and what each STRUCK is the more useful half of the record) ·
+> 🟢 **WS-27bc's `pagedPicker` BUILT 2026-08-11 on `ws-27bc-paged-picker`, NOT merged and NOT
+> deployed** (§11.34) — `app/projects/lib/pagedPicker.ts`: a 48px scroll-threshold predicate
+> whose boundary is inclusive, page accumulation that dedupes by id (the list is ordered by
+> `updated_at`, so a row legitimately crosses a page boundary), a terminal state **derived** from
+> a short page rather than a `hasMore` flag that can disagree with the rows, and a min-length
+> gate that **imports** `MIN_QUERY` and `isCurrent` from `./search` — fenced by a source scan,
+> because no behavioural test can tell a shared constant from a second copy. Pure module, 31
+> cases, 9/9 mutants red; **no component, no endpoint change, no call site wired, no debounce.**
+> 🔴 **WS-27bc as a whole remains NO-GO** (§9.5.2): its central "leading-wildcard scan"
+> justification is **struck as false** (the predicate is `ILIKE '%…%'` either way and `pg_trgm`
+> appears zero times in `infra/`; the minimum bounds the RESULT SET), its 300ms contradicts
+> seven ad-hoc debounce copies with no shared helper, and `/projects/search` (capped-not-paged,
+> by decision) versus `/projects/tasks` (paged, unranked) is a decision nobody has taken. Its
+> surface half is re-sequenced **behind** WS-27ak, not beside it. ·
 > 🟢 **WS-27ak item (1) `Modal` BUILT 2026-08-11, REPAIRED the same day on
 > `ws-27ak-modal-repair` (repair round 1 of 2 — two behavioural fixes, three corrected
 > records, one new structural fence), NOT merged and NOT deployed** (§11.31) —
@@ -2813,6 +2828,22 @@ performance fence, not a nicety.
 > Contract point 3 fails outright: **there is no "Done when".** Three constants are not
 > acceptance. Everything below is verified against the code, not against the ticket.
 >
+> 🟢 **Amended 2026-08-11 — the one dispatchable slice below is now BUILT (§11.34), on branch
+> `ws-27bc-paged-picker`, NOT merged and NOT deployed.** `app/projects/lib/pagedPicker.ts` +
+> its test: the threshold predicate, page accumulation with dedupe by id, a terminal state
+> derived from a short page, and a min-length gate that **imports** `MIN_QUERY` and `isCurrent`
+> from `./search` rather than re-deriving either — held there by a source scan, not only by
+> behaviour. 9/9 mutants red. Point 2's false justification is struck **in the module's own
+> docstring**, so the correction travels with the code.
+> **The ticket as a whole stays NO-GO, and nothing else below moved:** point 3 (the debounce
+> number, and the seven ad-hoc copies with no shared helper) is untouched — a shared debounce is
+> its own ticket and this slice deliberately minted neither an eighth copy nor a half seam;
+> point 4 (two endpoints, incompatible contracts) is untouched and is why `isSearchable` reports
+> the minimum and stops instead of choosing a fallback; point 6 (the surface half, behind
+> WS-27ak) is untouched — there is no component, popover or listbox in this slice, and it is
+> wired to no call site. What is left of WS-27bc after §11.34 is exactly the two decisions and
+> the surface.
+>
 > **1. A third of it is already shipped — the confident third.** "Server-side search debounced
 > with a minimum query length of 2" exists in `gateway/routes/projects/search.py:72`
 > (`MIN_QUERY = 2`, enforced at `:228`, answering empty rather than 422) and
@@ -2857,7 +2888,8 @@ performance fence, not a nicety.
 > shell here is the second-substrate failure condition 2 exists to prevent, arriving through a
 > ticket instead of a vendored registry.
 >
-> ➡️ **The one slice dispatchable today** is substrate-independent and has no component in it:
+> ➡️ **The one slice dispatchable today — 🟢 BUILT 2026-08-11, §11.34** — is
+> substrate-independent and has no component in it:
 > a pure `app/projects/lib/pagedPicker.ts` + test — threshold predicate, page accumulation and
 > dedupe, min-length gate — reusing `search.ts:80`'s existing `isCurrent()` stale-response
 > guard rather than re-deriving it. ⚠️ And its real target is
@@ -5560,6 +5592,95 @@ UI **works** — `npx next build` exit 0 with the substrate imported.
 **Not built, and not attempted:** items (2) Tooltip and (5) Skeleton (NO-GO — their done-when is a
 count of the problem), (3) Toast, (4) Combobox. **Owed:** the four-theme visual pass, as for every
 UI slice here — no test in this tree looks at a layout.
+
+### 11.34 WS-27bc (the one dispatchable slice) — `pagedPicker`, a pure module with no picker in it (built 2026-08-11)
+
+**Status: BUILT 2026-08-11. Branch `ws-27bc-paged-picker`, cut from `583a0d38` on
+`claude/paca-research-task-management-a1f6zd`. NOT merged, NOT deployed.** Frontend only:
+**no migration, no gateway change, no new dependency, no component, and no call site wired.**
+Verification: `npx tsc --noEmit` exit 0 · `npx vitest run` **86 files / 1947 tests**, exit 0
+(base was 85 / 1916 — this slice is the one new file and its 31 cases).
+
+**The ticket is still NO-GO; this is the substrate-independent remainder** §9.5.2's audit
+identified as genuinely unbuilt. Everything the audit blocked stayed blocked and is listed below
+rather than quietly skipped.
+
+**Built.** `workbench/control_plane/src/app/projects/lib/pagedPicker.ts` +
+`pagedPicker.test.ts` — four pieces of arithmetic and nothing else:
+
+1. **`shouldLoadMore(scrollTop, clientHeight, scrollHeight, threshold = 48)`** — pure numbers,
+   no element and no `IntersectionObserver`, because `vitest.config.ts` here is
+   `environment: "node"` and a decision taken inside a component would have no fence at all.
+   Two boundary rules are deliberate and both are asserted: **at** the threshold counts as
+   reached (`<=`, not `<` — a scroller resting exactly on the line would otherwise wait for a
+   pixel of scroll a trackpad's momentum may never deliver), and a scroller whose content does
+   not fill its viewport is **already at its end**, which is the classic "first page did not
+   fill the box so no scroll event ever fires and paging stalls at page 1" bug answered in the
+   predicate rather than at each call site. A non-finite measurement asks for nothing.
+2. **`appendPage` — dedupe by id, first position wins, last payload wins.** The hazard is real
+   and not defensive: `/projects/tasks` is ordered by `updated_at`, so page N+1 is a second
+   query against a table that moved in between and a row can legitimately come back. Keeping the
+   **first position** stops the list re-sorting under the reader's cursor; keeping the **last
+   payload** stops it rendering a title we have just been told is stale.
+3. **A terminal state that is derived, never flagged.** `done` is a property of the page in
+   hand (`page.length < pageSize`), not a `hasMore` boolean kept beside the rows that can be
+   updated on one path and not the other. ⚠️ It is computed from the **raw** page length, never
+   from how many rows the dedupe actually added — a full page whose rows were all already on
+   screen adds nothing, and reading that as the end of the list truncates the picker at whatever
+   the reader happened to have seen. `pageSize <= 0` is treated as done, or the caller asks
+   forever for a page that cannot contain anything.
+4. **The min-length gate and the stale-response guard are both IMPORTED.** `MIN_QUERY` and
+   `isCurrent` come from `app/projects/lib/search.ts` (`:27` and `:80`), which already mirror
+   `gateway/routes/projects/search.py:72` and already solve the out-of-order-response bug. A
+   third copy of the number, or a second query comparison, is the CLAUDE.md §5 defect — and this
+   module is precisely where someone would add one.
+
+**The structural assertion is the reason this file was worth writing carefully.** A behavioural
+test cannot tell a shared constant from a second copy that happens to hold the same number today,
+so `pagedPicker.test.ts` closes with a source scan (the `controlLink.test.ts` /
+`sharedTaskUi.test.ts` idiom, rooted at `src/` via `import.meta.url` so a checkout with agent
+worktrees does not scan itself): the module must import both names from `./search`, must declare
+neither itself, and must actually **call** `isCurrent(` and reference `MIN_QUERY` outside the
+import line — an import a module never uses is what a half-finished revert leaves behind.
+
+**Fences mutation-measured 9/9 red, file restored byte-identical:** `<=` → `<` at the threshold
+(2 red) · dedupe removed, pages concatenated (5 red) · a repeated row keeping its stale payload
+(2 red) · `done` derived from accumulated growth instead of the raw page (1 red) · the
+stale-response guard removed (2 red) · `>=` → `>` on the minimum (3 red) · the `pageSize <= 0`
+guard removed (1 red) · the minimum no longer trimming (1 red) · **`MIN_QUERY` re-declared
+locally instead of imported (2 red — the §5 rule made executable).**
+
+🔴 **Struck, corrected in the module's own docstring: the ticket's central justification.**
+WS-27bc claims the minimum stops "a leading-wildcard scan with no index behind it." It does not.
+The gateway's predicate is `ILIKE '%…%'` either way and `'%ab%'` is exactly as unindexable as
+`'%a%'`; `pg_trgm` appears zero times in `infra/`. What the minimum bounds is the **result set**,
+in the gateway's own words (`search.py:68-71`): "returning half the workspace."
+
+**Not built, each for a recorded reason — these are findings, not omissions:**
+- **No debounce helper, shared or local.** There are **seven** ad-hoc copies in the tree
+  (`projects/lib/search.ts`'s `DEBOUNCE_MS = 180`, `FilterBar.tsx:162`'s inline `300`,
+  `RecipientInput`'s `200`, …) and no shared one. Minting an eighth is the defect; minting a
+  shared one and leaving seven is half a seam. That is its own ticket, and the ticket's "300ms"
+  is the number it has to reconcile.
+- **No component, no popover, no listbox.** A picker's surface owes `aria-expanded`,
+  `aria-controls`, `aria-activedescendant`, focus return and outside-press — all of which
+  D-PM-15 condition 1 says arrive as a wrapper under `src/components/ui/`. Hand-rolling that
+  shell here is the second-substrate failure condition 2 exists to prevent. The surface half is
+  re-sequenced **behind** WS-27ak, not beside it.
+- **No endpoint change, and no fallback below the minimum.** `/projects/search` is
+  capped-not-paged by a recorded decision in its own module docstring and answers `{"rows": []}`
+  to an empty `q`; `/projects/tasks` is paged with no minimum and no ranking. `isSearchable`
+  therefore reports the fact and stops — choosing between straddling the two (the list visibly
+  reorders at the two-character boundary) and reopening `search.py`'s paging decision is a
+  decision, not an edit.
+- **Nothing is wired to a call site.** The eventual target is `RelationsBlock.tsx`'s
+  `<Input placeholder="task id">` (`:336-347`), the only true long-list surface in `/projects`.
+  ⚠️ Recorded for whoever wires it: `search.py`'s `exclude_relatives_of` was built for exactly
+  that picker (WS-27w item 5) and has **zero client consumers** today.
+
+**Owed:** nothing visual — this slice renders nothing, so the four-theme pass does not apply to
+it. What it cannot prove is that a real scroller fires at the right moment; there is no DOM and
+no e2e here, and that stays review-only until the surface half lands.
 
 ## Board record (2026-08-09) — moved from work_plan.md §2
 

@@ -98,11 +98,12 @@ def _broker_enforced(action: str) -> bool:
     ``1``/``all``/``on`` to queue every write, or to a comma-list of action names
     to queue specific ones. This is the kill-switch — flip it without a redeploy
     (env var + service restart). Persistent handlers ARE registered at startup
-    (``tasks/broker_handlers.py``), so an approved queued write really executes.
-    ⚠️ NOT for every gated action: this class gates SIX action names but only
-    four have handlers, so approving a queued ``clickup.delete_task`` or
-    ``clickup.archive_task`` is refused and the row is marked ``failed``. Do not
-    turn this on before FOUNDATION_BUILDOUT_CHECKLIST §BO-1a and §BO-1b land.
+    (``tasks/broker_handlers.py``), so an approved queued write really executes:
+    since BO-1a **every** action name gated here has a ``_WRITERS`` entry, fenced
+    by ``tests/unit/test_task_broker_handlers.py``. Flipping the switch is an
+    OWNER action (``work_plan.md`` §6) — and note the residual it does NOT clear:
+    a ``pending_actions`` row queued before the flip is approvable afterwards, so
+    check ``SELECT action, status FROM pending_actions`` first.
     """
     import os
 

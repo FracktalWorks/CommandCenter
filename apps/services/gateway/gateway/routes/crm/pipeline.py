@@ -250,7 +250,15 @@ def _require_entry_fields(
        afterwards; a gate on that path would start refusing rows from the live
        upstream tenant on the next cycle after any settings-grid save, which is
        an OWNER-GATE change to a running loop (``work_plan.md`` §6 WS-26 (a)).
-       ``test_crm_pipeline.py`` fences the call sites structurally.
+       ``test_crm_pipeline.py`` fences this **twice**, both over the AST of
+       ``routes/crm/*.py``: the gate's call sites are exactly ``pipeline.py`` +
+       ``records.py`` (aliases and module-attribute forms resolved; a comment
+       naming it is not a call), and no static call path from
+       ``sync_zoho.pull_phase`` / ``import_zoho.apply_module`` reaches it. The
+       second fence is the load-bearing one — routing ``apply_record`` through
+       ``records._resolve_status`` adds no call site at all, and this function
+       is reached with ``chosen`` truthy because ``apply_record`` already sets
+       ``values["status_id"]`` itself.
 
     ⚠️ This paragraph previously said CREATE was not gated **at all** and
     counted the ungated create paths as **two**. Both were wrong — path 3 was

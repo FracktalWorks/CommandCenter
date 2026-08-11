@@ -165,7 +165,11 @@
 > `settings.test.ts` +13. **R8:** the migration was applied to a real PostgreSQL 16, replayed
 > three times for idempotency, and the package's own `insert_row`/`update_row`/`status_wire`
 > were run against it — the `TEXT[]` round-trip is the one thing the hermetic fakes cannot
-> answer. **Not deployed, not merged.**
+> answer. ⚠️ **Corrected 2026-08-11 (WS-26h2 repair round 1): this said "Not deployed,
+> not merged" and both halves were wrong about the merge.** WS-26h **MERGED in PR #425**
+> — `d471ae8`, and `git branch -a --contains d471ae8` lists `remotes/origin/main`.
+> **Deploy NOT independently verified**: a merge is not a deploy, and there is no
+> migration-ledger line for 169 and no log line in evidence here (non-negotiable 8).
 > · **WS-26h2 (entry requirements on the CHOSEN create stage): 🟢 BUILT 2026-08-11**
 > (branch `claude/crm-command-center-tasks-i8l7n4`; **no migration, no UI change, no change
 > to `core.STAGE_REQUIREABLE_FIELDS` or `board.ts::REQUIREABLE_FIELDS`**). The gate is **one
@@ -182,17 +186,42 @@
 > OWNER-GATE anywhere `sync_zoho.pull_phase` traverses (§6 WS-26 (a)). One of the three
 > create paths is gated; the other two — the DEFAULTED create together with `_create_deal`,
 > and `import_zoho.apply_record` → `core.upsert_by_zoho_id` — stay open. **Fences (R7):**
-> `test_crm_pipeline.py` +9 (the **sibling structural fence** for done-when 8, since the
-> existing one greps `apply_status_transition(` and does not fire on this change at all;
-> plus the sentinel's shape and `_is_blank`'s semantics re-asserted **on** the create path),
-> `test_crm_routes.py` +10, `test_crm_convert.py` +1. **Twelve mutants measured red**, and
-> one is worth recording: moving the gate to `core.insert_row` keyed on `crm_deals` — the
-> tempting "one seam" — leaves `test_crm_zoho_import.py` + `test_crm_zoho_sync.py` **136
-> green** (the importer duplicates the statement rather than delegating, so the pull walks
-> straight past it) and turns **only** the structural fence and the two D-CRM-13 cases red.
-> Done-when 9 held: neither Zoho test file was touched. `pipeline.py`'s docstring — which
-> still said CREATE was ungated and still counted the ungated paths as two — is corrected in
-> the same change (R4). **R8 does not bind this slice: no SQL, no migration, no predicate.**
+> `test_crm_pipeline.py` **67 → 84**, `test_crm_routes.py` **121 → 131**,
+> `test_crm_convert.py` **31 → 32** — **+28**, collected, counted against a worktree at
+> `591231d` rather than estimated. **Eighteen mutants measured red**, and one is worth
+> recording: moving the gate to `core.insert_row` keyed on `crm_deals` — the tempting "one
+> seam" — leaves `test_crm_zoho_import.py` + `test_crm_zoho_sync.py` **136 green** (the
+> importer duplicates the statement rather than delegating, so the pull walks straight past
+> it) and turns **only** the siting fence and the two D-CRM-13 cases red. Done-when 9 held:
+> neither Zoho test file was touched. `pipeline.py`'s docstring — which still said CREATE
+> was ungated and still counted the ungated paths as two — is corrected in the same change
+> (R4). **R8 does not bind this slice: no SQL, no migration, no predicate.**
+> ⚠️ **Repair round 1 (2026-08-11): a verifier FAILED this and a reviewer approved it with
+> findings; all nine done-whens were independently re-derived and met, and the defects were
+> in the CONTRACT and the docs rather than in the gate.** **(1)** Done-when 8's prescribed
+> fence — the set of files CONTAINING the literal `_require_entry_fields(` — is a text match
+> that could not back its own reachability docstring: `import_zoho.apply_record` calling
+> `records._resolve_status` stayed green (no new call site, yet the gate lands on the
+> **enabled** pull, and `apply_record` already sets `values["status_id"]` server-side so
+> `chosen` would be truthy for every pulled deal), an aliased import stayed green, and a
+> *comment* recording why the path must stay ungated turned it RED — making deletion of that
+> comment the cheapest way back to green. Replaced by **two AST fences**: call sites (real
+> `ast.Call` nodes, aliases and module-attribute forms resolved) and **transitive
+> reachability from `sync_zoho.pull_phase` / `import_zoho.apply_module`**, with the static,
+> `routes/crm/*.py`-scoped limit stated rather than implied. Eight shapes pinned against
+> synthetic packages so the fence going blind is a red test; all six re-measured against the
+> real package, including the comment case staying green. **(2)** Done-when 6's
+> `Decimal("0.00")` clause is **unsatisfiable through `POST /crm/deals`** — `DealIn.amount`
+> is `float | None` (measured: `Decimal('0.00')` → `0.0 <class 'float'>`) — so the criterion
+> was relabelled to what the test earns, not the test to what the criterion said. **(3)**
+> Two false deploy-state sentences in this header (WS-26h and WS-26i-export, both saying
+> "not merged" while both are on `origin/main`) are corrected above; the previous cycle
+> failed on the same class and it did not get to survive on "pre-existing". **(4)** The
+> fence count in this paragraph said `+9` where the measurement was `+8`, and the first
+> round's mutant tally was reported as twelve when thirteen were run (two carried the same
+> number). Every count here is now collected rather than recalled: **18 mutants red across
+> both rounds, plus one deliberate GREEN control** — a comment naming the gate, which the
+> replaced fence would have failed.
 > **Not deployed, not merged.**
 > WS-26i (data management): 🟡 SPEC-THIN, audit-narrow before dispatch — **except
 > WS-26i-export, below.**
@@ -243,7 +272,11 @@
 > at exactly the cap could return exactly the cap after a concurrent insert (READ COMMITTED)
 > and ship a partial file; it binds `cap + 1` and refuses on the rendered count.
 > **(4)** `X-Export-Rows` was unreachable through the proxy; both proxies forward it.
-> **Not deployed, not merged.** The other four WS-26i items stay 🔴 NO-GO.
+> ⚠️ **Corrected 2026-08-11 (same repair round, same defect class): WS-26i-export MERGED
+> in PR #426** — `7255344`, `git branch -a --contains 7255344` lists
+> `remotes/origin/main`. **Deploy NOT independently verified** — and note the Projects
+> BOM fix rides this merge, so `/projects/export/tasks.csv` is repaired in the tree, not
+> demonstrably in production. The other four WS-26i items stay 🔴 NO-GO.
 > **DEMO CRITICAL PATH (owner-directed 2026-08-07, §9.0): ~~dispatch D1 f~~ (∥ ~~D2 d-email~~) →
 > ~~D3 g~~ → ~~D4 d-write~~ → D5 d-autolead; h/i/e deferred past the demo. Full chain and all
 > gates intact — the order re-sequences, it does not thin.**
@@ -2458,23 +2491,51 @@ the caller's choice, `load_default_status` is the server's.)*
    in the body → **201**: `create_record` defaults an absent owner from the acting user
    before the status is resolved, so it is never absent. An explicit `"owner_email": null`
    → 422.
-6. `0` and `Decimal("0.00")` for a required `amount` are **values** (201); `""` and
-   `"   "` are **absent** (422). Same `_is_blank` semantics as the move path, asserted on
-   the create path rather than assumed to carry.
+6. The create path shares `_is_blank` with the move path, asserted **on** the create
+   path rather than assumed to carry: `0` for a required `amount` is a **value** (201),
+   and `""` / `"   "` on a required text field are **absent** (422).
+   ⚠️ **Corrected 2026-08-11 (repair round 1): this criterion originally also demanded
+   `Decimal("0.00")` → 201 through `POST /crm/deals`, which is unsatisfiable.** `DealIn.amount`
+   is `float | None` and `patch` on the create path is always `clean_payload(DealIn)`, so a
+   `Decimal` provably cannot reach the gate that way — measured:
+   `DealIn(name='x', amount=Decimal('0.00')).amount` → `0.0 <class 'float'>`. The `Decimal`
+   half belongs to the **move** path, where WS-26h measured it against a real `NUMERIC`
+   column; on the create path it is asserted at the gate itself
+   (`_require_entry_fields(status, NO_EXISTING_RECORD, {"amount": Decimal("0.00")})`), which
+   is what the shared `_is_blank` actually earns. The test is kept and relabelled, not
+   deleted — mutating `_is_blank` to plain falsiness turns it red.
 7. Creating a **lead** into a lead status is never gated — asserted explicitly, not left
    to the absence of the column (`169_crm_stage_discipline.sql` is deal-only, and
    `auto_lead.py:862` reaches `create_record` for leads).
-8. **Structural fence (R7), the load-bearing one.** Extend
-   `test_crm_pipeline.py::test_the_zoho_pull_never_enters_the_stage_gate`, or add a
-   sibling beside it, asserting the set of files under `routes/crm/` containing
-   `_require_entry_fields(` is **exactly** `["pipeline.py", "records.py"]`, with the
-   docstring stating why: `import_zoho.py` / `sync_zoho.py` / `core.py` appearing there
-   means the **enabled production sync loop** (600s, §6 WS-26 (a)) starts refusing rows
-   from the live upstream tenant on the next cycle after any settings-grid save. Assert
-   structurally, not by example — the plausible refactor ("make the importer use the
-   shared create seam") is exactly the one no example test would be watching. ⚠️ The
-   existing fence greps for the literal `apply_status_transition(` and would **not** fire
-   on this ticket's change; it protects the move gate only.
+8. **Structural fence (R7), the load-bearing one.** A sibling of
+   `test_crm_pipeline.py::test_the_zoho_pull_never_enters_the_stage_gate` (which greps the
+   literal `apply_status_transition(` and would **not** fire on this ticket's change — it
+   protects the move gate only), asserting that no `routes/crm/` code outside
+   `pipeline.py` + `records.py` can reach `_require_entry_fields`. `import_zoho.py` /
+   `sync_zoho.py` / `core.py` reaching it means the **enabled production sync loop**
+   (600s, §6 WS-26 (a)) starts refusing rows from the live upstream tenant on the next
+   cycle after any settings-grid save. Assert structurally, not by example — the plausible
+   refactor ("make the importer use the shared create seam") is exactly the one no example
+   test would be watching.
+   ⚠️ **Corrected 2026-08-11 (repair round 1): the shape this criterion originally
+   prescribed — "the set of files CONTAINING the literal `_require_entry_fields(`" — is a
+   text match, and it could not back the reachability claim its own docstring made.** Three
+   holes, all measured: `import_zoho.apply_record` calling `records._resolve_status` stays
+   GREEN (no new call site, yet the gate lands on the pull — and `apply_record` already sets
+   `values["status_id"]` server-side, so `chosen` would be truthy for every pulled deal);
+   an aliased import stays GREEN; and a **comment** in `import_zoho.py` recording why the
+   path must stay ungated turns it RED, making deletion of that comment the cheapest way
+   back to green. What ships instead is **two AST fences over `routes/crm/*.py`**:
+   `test_the_entry_gate_is_called_from_exactly_two_files` (real call nodes, aliases and
+   module-attribute forms resolved, comments and docstrings ignored) and
+   `test_no_zoho_pull_path_can_reach_the_entry_gate` (transitive static call graph from
+   `sync_zoho.pull_phase` and `import_zoho.apply_module`, reporting the chain it found).
+   **Stated limit, so the claim does not outrun the mechanism:** the graph is STATIC and
+   scoped to `routes/crm/*.py` — it does not see dispatch through a variable, a registry
+   dict or a callback handed across the package boundary, and nothing in the package
+   reaches the gate that way today. Eight shapes are pinned against synthetic packages
+   (`test_the_siting_fences_see_the_shapes_they_claim_to_see`) so "the fence went blind" is
+   a red test, and all six were re-measured against the real package.
 9. `test_crm_zoho_import.py` and `test_crm_zoho_sync.py` pass **unchanged** — no edit to
    either file is permitted in this PR. An edit there is the signal the gate was mis-sited.
 
@@ -2586,7 +2647,7 @@ before any build.)*
 *(Built on branch `claude/crm-command-center-tasks-i8l7n4`; as-built record in this file's
 status header. Both traps hit and fenced. **The first cut did NOT meet done-when 5 end to
 end and claimed it did** — see the repair note below. All seven met after repair round 1.
-Not deployed, not merged.)*
+MERGED in PR #426 (`7255344`, on `origin/main`); deploy not independently verified.)*
 
 ⚠️ **Repair round 1, 2026-08-11 — four defects, one of them decisive.** An independent
 verifier and an adversarial reviewer converged on the same byte-level finding, and it is

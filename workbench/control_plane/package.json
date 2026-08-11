@@ -9,10 +9,11 @@
     "lint": "eslint",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:e2e": "npm run build && playwright test",
+    "test:e2e": "npm run build && node scripts/run-e2e.mjs",
     "build:icons": "node scripts/build-icon-packs.mjs"
   },
   "dependencies": {
+    "@base-ui/react": "^1.7.0",
     "@iconify/react": "^6.0.2",
     "@monaco-editor/react": "^4.7.0",
     "@tiptap/extension-image": "^3.29.2",

@@ -2,8 +2,23 @@
 
 > **Product:** CommandCenter · **Feature:** Projects (the People Center's primary work-management
 > module, sliced into every other Center) · **Created:** 2026-08-05 · **Updated: 2026-08-11**
-> (**WS-27am's narrowed slice built — §11.29**; **WS-27bd's — §11.30**; each narrowed, and
-> what each STRUCK is the more useful half of the record) ·
+> (**WS-27ak's narrowed slice built — §11.31**; **WS-27am's — §11.29**; **WS-27bd's — §11.30**;
+> each narrowed, and what each STRUCK is the more useful half of the record) ·
+> 🟢 **WS-27ak item (1) `Modal` BUILT 2026-08-11 on `ws-27ak-modal-primitive`, NOT merged and
+> NOT deployed** (§11.31) — `src/components/ui/Modal.tsx` over **`@base-ui/react@1.7.0`**
+> (D-PM-15), the **only** file in the tree allowed to import the substrate (conformance rule
+> **8**, which is why this slice necessarily edited the root `CLAUDE.md`), and all **six** of
+> `/projects`' hand-rolled dialogs render it. `app/projects/page.tsx` was **not touched** and
+> `overlayOpen` still reports the truth — the wrapper is strictly controlled and holds no open
+> state, pinned by a Playwright case that presses `g t` under an open dialog and asserts the
+> page does not navigate. Frontend only — no migration, no API change; one new dependency.
+> 🔴 **Two of the ticket's done-whens were factually impossible against the substrate the
+> decision chose, and are restated here rather than reported as met** — see §11.31: there is no
+> `outsidePressEvent` prop on `Dialog.Root` in 1.7.0 (the behaviour is right, the mechanism is a
+> rendered `Dialog.Backdrop`), and **`@base-ui/react` never sets a real `inert` attribute** — it
+> marks the background `aria-hidden` and contains focus with guard nodes, so a screen reader
+> cannot walk in but **find-in-page still can**. Items (2) Tooltip, (3) Toast, (4) Combobox and
+> (5) Skeleton are **not built**. ·
 > **Previously updated 2026-08-10**
 > (status truth pass + tenancy alignment — R4; **WS-27ag shell/mobile slice built the same
 > day**; **S4 convergence slice built the same day — §11.21**; **S6 card-pills slice built the
@@ -2242,6 +2257,10 @@ for the copy-link affordance. (4) **`Combobox`** — our `Select` is a styled na
 
 > ### ⚠️ Audit outcome 2026-08-11 — **GO-NARROWED to item (1) Modal**, after doc repairs
 >
+> 🟢 **Item (1) BUILT 2026-08-11 — `ws-27ak-modal-primitive`, NOT merged, NOT deployed. Full
+> record and the two done-whens that could not be met as written: §11.31.** Items (2)–(5)
+> unchanged by that slice.
+>
 > **Done when:** `src/components/ui/Modal.tsx` wraps **`@base-ui/react@^1.7.0`**'s `dialog`
 > (see D-PM-15 for the verified package, licence and the deprecated name NOT to install), is
 > the only import of that library outside `src/components/ui/`, and **all six of `/projects`'
@@ -2266,8 +2285,14 @@ for the copy-link affordance. (4) **`Combobox`** — our `Select` is a styled na
 >
 > ⚠️ **A second obligation the ticket implies but does not state:** Base UI's default
 > `outsidePressEvent` is `'sloppy'` (fires on `pointerdown`); the ticket's "press must start
-> *and* end outside" is `'intentional'`. The wrapper sets it, and a source scan asserts no
-> call site overrides it.
+> *and* end outside" is `'intentional'`.
+> 🔴 **Corrected 2026-08-11 at build time — "the wrapper sets it" is not possible. There is no
+> `outsidePressEvent` prop on `Dialog.Root` in `@base-ui/react@1.7.0`**;
+> `dialog/root/useDialogRoot.mjs:23-33` computes it internally and returns `'intentional'`
+> whenever a backdrop element exists. So the source scan pins the **rendered
+> `Dialog.Backdrop`**, not a prop name that does not exist (§11.31). The
+> pattern is the one this file keeps recording: an API read off notes rather than
+> re-derived from the package.
 >
 > 🔴 **There is already a Modal in this tree, and building the ticket as written authors a
 > second one** — the WS-27bd(5) ContextMenu situation repeating.
@@ -5285,6 +5310,98 @@ closes it" is **review-only** in this tree: `vitest.config.ts` is `environment: 
 viewport-flip, the click-away catcher and the Escape handler are the promoted file's own,
 unchanged and already in production on /tasks' five call sites — but nothing here re-proves
 them. **The four-theme visual pass is also owed**, as for every UI slice in this environment.
+
+### 11.31 WS-27ak item (1) — the `Modal` primitive, and six dialogs onto it (built 2026-08-11)
+
+**Branch `ws-27ak-modal-primitive`, cut from `be26999b`. NOT merged, NOT deployed.** Frontend
+only: no migration, no gateway change, one new dependency.
+
+**Built.** `workbench/control_plane/src/components/ui/Modal.tsx` — a CommandCenter wrapper over
+`@base-ui/react@1.7.0`'s `dialog` (D-PM-15's substrate; installed under the **new** name, not the
+deprecated `@base-ui-components/react` whose `latest` is a release candidate). Semantic tokens
+only, `<Icon name>` for glyphs, every control a `<Button>`. Six `/projects` dialogs render it:
+`ShortcutsSheet` · `SearchPalette` · `ImportClickUp` · `FieldManager` · `TagManager` ·
+`LifecyclePolicy`. **`app/projects/page.tsx` is unchanged**, as the audit required.
+
+**`overlayOpen` survives, and that is the load-bearing part.** The wrapper is **strictly
+controlled** — `open` in, `onClose` out, no internal open state — so `page.tsx:968-974`'s
+`overlayOpen` is still derived from the page's own state and `:1039`'s window listener still
+returns early on it. Fenced in a real browser: with a dialog up, `g` then `t` does **not**
+navigate to `/tasks`, and the same sequence works again the moment it closes.
+
+**Measured before → after, same harness, same page (`/projects`, no auth, no API mocking):**
+
+| | before (`00c47c6b`) | after |
+|---|---|---|
+| `activeElement` after open | `BODY` | inside the popup |
+| focus inside after 6 Tabs | `false ×6` | `true` for 10 Tabs and 6 Shift+Tabs |
+| background marked | nothing | `aria-hidden="true"`, cleared on close |
+| `activeElement` after close | `A` (an arbitrary anchor) | the opener, by identity |
+| page scroll under an open dialog | scrolls | locked, no width change, freed on close |
+
+**Fence:** `workbench/control_plane/e2e/modal.spec.ts` — 8 cases, Playwright (D-PM-21), all
+mutation-measured. `npm run test:e2e` **could not run in this environment at all** (it set
+neither `PLAYWRIGHT_*` variable and Playwright looked for a browser revision that is not
+installed); it now goes through `scripts/run-e2e.mjs`, which fills them in when the pre-installed
+Chromium is really there and changes nothing otherwise. Static fence: **conformance rule 8** —
+nothing outside `src/components/ui/` may import the substrate, plus a `package.json` check that a
+*second* substrate cannot arrive through a vendored registry (D-PM-15 condition 2). Rule 8 tripped
+the suite's own rule-count assertion, so `workbench/control_plane/AGENTS.md` and the root
+`CLAUDE.md` now say **eight**; that edit is mechanical and expected.
+
+🔴 **Two of the ticket's done-whens are factually impossible against the substrate D-PM-15 chose.
+Restated, not dropped — and not reported as met.**
+
+1. **"outside-click dismissal only when the press both started *and* ended outside."** The
+   behaviour is delivered; the mechanism named in the dispatch brief is not. **There is no
+   `outsidePressEvent` prop on `Dialog.Root` in 1.7.0** — `dialog/root/useDialogRoot.mjs:23-33`
+   computes it internally and returns `'intentional'` **whenever a backdrop element exists**
+   (`<Dialog.Backdrop>`, or the internal one `<Dialog.Portal>` renders for `modal === true`). The
+   wrapper renders both, exposes no way to turn either off, and conformance rule 8 asserts the
+   backdrop is still there. ⚠️ The *discriminating* browser case is the direction nobody writes
+   down: a press that starts on the backdrop and is **released inside** the dialog. Measured —
+   `intentional` keeps it open, `sloppy` has already closed it on `pointerdown`. The
+   drag-out-of-the-dialog direction the ticket names does **not** discriminate the two (Base UI's
+   `insideReactTree` guard covers it either way), which is exactly the sort of fence that passes
+   for the wrong reason.
+2. 🔴 **"the background is `inert`, not merely covered" is NOT met, and cannot be by this
+   substrate.** `@base-ui/react@1.7.0` **never sets a real `inert` attribute** on the background:
+   `FloatingFocusManager.mjs:339` calls `markOthers(…, { ariaHidden: modal })` and nothing in the
+   package passes `inert: true` (`markOthers.mjs:147-155` defaults it to `false`). What it does is
+   `aria-hidden="true"` plus a `data-base-ui-inert` marker, and focus containment via guard nodes.
+   **Consequence:** a screen reader cannot walk into the background and Tab cannot leave the
+   dialog — but **find-in-page still can**. The dispatch brief asserted the opposite ("its
+   `markOthers` sets a real `inert` attribute on siblings"); that is wrong for 1.7.0 and the code
+   is cited above. Closing the gap means either a Base UI change or the wrapper marking body
+   children itself, which is a second implementation of `markOthers` and therefore **a board
+   decision, not an agent's**.
+
+**Deliberate behaviour changes, recorded because they are changes.** `FieldManager`, `TagManager`
+and `LifecyclePolicy` had **no** Escape and **no** outside-press dismissal at all; they have both
+now, uniformly, because a primitive whose behaviour is per-call-site is not a primitive.
+`TagManager`'s inline rename gained `stopPropagation` on Escape so the first press still leaves the
+field rather than closing the dialog — the substrate binds Escape on `document`, which sits above
+React's root container. `ShortcutsSheet` lost its own window-Escape listener (the reason for it —
+"nothing in the sheet is focused" — no longer holds) and the search palette moved from `pt-24` to
+the shared `pt-16`.
+
+**`src/lib/outsideClick.ts` is NOT consumed by this Modal, deliberately.** Its docstring names
+"Wave 2's Modal / Tooltip / Combobox" as why it exists ahead of need; Base UI brings its own
+outside-press handling with a start-and-end rule the hand-rolled walker does not express. It
+remains the answer for a popover we do not build on the substrate. Written down in
+`AGENTS.md` rule 8 so the tree does not have two answers and no record of why.
+
+**Retirement owed, not done:** `app/email/components/automation/ui.tsx:15` exports a second
+`Modal` with **five** consumers and no focus trap, focus return, scroll lock, `role` or
+`aria-modal`. Its call sites were left alone. Naming it here is the same move WS-27bd made for the
+email `ContextMenu`; adding a sixth consumer is the thing not to do.
+
+**Also verified, since D-PM-15 flagged it as unknown:** Next 16.2.6 / Turbopack interop with Base
+UI **works** — `npx next build` exit 0 with the substrate imported.
+
+**Not built, and not attempted:** items (2) Tooltip and (5) Skeleton (NO-GO — their done-when is a
+count of the problem), (3) Toast, (4) Combobox. **Owed:** the four-theme visual pass, as for every
+UI slice here — no test in this tree looks at a layout.
 
 ## Board record (2026-08-09) — moved from work_plan.md §2
 

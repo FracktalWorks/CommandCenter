@@ -95,11 +95,13 @@ Rules that make it work:
 - **The UI is one product, themed centrally.** Every app is a projection, never
   a surface with its own look: no app-local palette, no second colour
   vocabulary, no hand-rolled control. `workbench/control_plane/DESIGN_SYSTEM.md`
-  is the contract and `AGENTS.md` beside it carries the seven rules and their
+  is the contract and `AGENTS.md` beside it carries the eight rules and their
   fences — both are auto-loaded when you touch UI code. Owner directive
   2026-08-10. Categorical hues (contexts, tags, labels) go through the
   `--cat-1…8` ramp via `src/lib/categorical.ts`, never a raw Tailwind palette
-  class. The conformance suite checks seven regexes and **nothing tests layout
+  class. Headless primitives come from `src/components/ui/` — `@base-ui/react`
+  is the one substrate (D-PM-15) and `Modal.tsx` is the only file allowed to
+  import it. The conformance suite checks eight regexes and **nothing tests layout
   or cross-app continuity**, so the theme-switch check (Fluent → Material →
   Graphite, on your surface *and* its neighbour) is the real gate.
 - **Keep branches short and integrate often.** Long branches are the root cause

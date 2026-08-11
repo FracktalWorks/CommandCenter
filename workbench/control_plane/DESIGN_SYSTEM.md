@@ -244,6 +244,38 @@ just `tech-transition`. Respect `prefers-reduced-motion`.
 
 ---
 
+## 4a. Overlays — one scrim, one layer
+
+*(Added WS-27ak. This section did not exist, and its absence was measurable: at
+`00c47c6b` the tree drew overlay backdrops in **six** different values —
+`bg-black/40`, `/50`, `/60`, `/70`, `bg-background/70`, `bg-background/80`,
+`bg-foreground/20` — across ad-hoc `z-40 · 50 · [60] · [70] · [75] · [80] ·
+[90] · [95]`. Nothing was wrong with any one of them; there was simply nothing
+to be right about.)*
+
+**Do not build an overlay by hand. Use `Modal` from `src/components/ui/`.** It
+carries the scrim, the layer, the focus trap, `inert` on the rest of the
+document, scroll lock with scrollbar compensation, Escape and focus return —
+none of which is expressible in a class string, which is why it is a component
+and not an entry in this table.
+
+If you are building the *next* overlay primitive (drawer, sheet, popover), these
+are its values:
+
+| Decision | Value | Why this one |
+|---|---|---|
+| Scrim | `bg-background/80` | A **semantic token**, so it follows the theme and the colour mode. `bg-black/60` is neither — and it passes every conformance regex today only because `PALETTE_CLASS` lists the numbered ramps, not `black`/`white`. `/80` over `/70` because the dimmer scrim let a busy board read through it as noise. |
+| Layer | `z-50` | Where all six `/projects` dialogs already sat. A portalled popup is appended to `<body>`, i.e. after the app root in document order, so it needs no more than this. **Do not invent `z-[60]` to win a fight** — two overlays at the same layer stack by mount order, which is the order the reader opened them in. |
+| Surface | `rounded-lg border border-border bg-card shadow-lg` | The card vocabulary, so a dialog is the same object as a panel. |
+| Scroll lock | the primitive's | Locking `overflow` without compensating for the scrollbar width shifts the whole page sideways as the dialog opens. Base UI uses `scrollbar-gutter: stable` where supported and measures the gutter where it is not. |
+
+Fence: conformance rule 8 (`src/lib/theme/conformance.test.ts`) — nothing
+outside `src/components/ui/` may import the substrate, so a hand-rolled dialog
+cannot quietly become the seventh scrim colour. The *values* in the table above
+are advisory; what is enforced is that there is one place to change them.
+
+---
+
 ## 5. Apps that run in the sandbox
 
 Custom Apps, generative-UI cards and React artifacts run in an **opaque-origin

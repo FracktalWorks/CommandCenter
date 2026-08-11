@@ -12,8 +12,15 @@
  * without being recreated. What is personal is the *overlay*: disposition,
  * context, defer. That is why this file selects and triages but never edits
  * shared fields, other than through `complete`, which is deliberately shared.
+ *
+ * WS-27bd gives its cards the same right-click menu the board has — the shared
+ * `@/components/ContextMenu`, filled from the same `lib/taskMenu.ts` registry.
+ * It offers strictly less here, and that is the registry doing its job rather
+ * than a second menu being kinder: this lens spans many projects, so there is
+ * no one status axis to move along, and it has no bulk selection to join.
  */
-import Icon from "@/components/Icon";
+import { ContextMenu, type CtxItem } from "@/components/ContextMenu";
+import Icon, { themedIcon } from "@/components/Icon";
 import { StatusChip } from "@/components/StatusChip";
 import { TaskCardShell, TaskCardTitle } from "@/components/TaskCardShell";
 import { TaskMeta } from "@/components/TaskMeta";
@@ -24,7 +31,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { accentForDisposition } from "../lib/accent";
 import { myWorkApi, type TaskRow } from "../lib/api";
-import { cardChips } from "../lib/card";
+import { cardChips, taskDeepLink } from "../lib/card";
+import { type TaskMenuActions, taskMenuItems } from "../lib/taskMenu";
 import {
   LANE_LABELS,
   actionLine,
@@ -70,6 +78,10 @@ export function MyWork({ onSelect }: Props) {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /** WS-27bd — where the right-click landed, and on which card. */
+  const [menu, setMenu] = useState<{ x: number; y: number; task: MyTaskRow } | null>(
+    null
+  );
 
   // Reloading is a dependency bump rather than a callback, so every fetch —
   // the first one, a context switch, and the one after a mutation — runs
@@ -127,6 +139,59 @@ export function MyWork({ onSelect }: Props) {
     },
     []
   );
+
+  /**
+   * WS-27bd — what a right-click can do here.
+   *
+   * `toggleSelect` and `setStatus` are unreachable rather than unimplemented:
+   * the registry gates them on `canSelect` and on there being statuses, and
+   * this lens supplies neither. They are written as no-ops (not throws) because
+   * a menu row that crashes the pane would be a worse answer to a bug in the
+   * gating than a row that does nothing — `taskMenu.test.ts` is what actually
+   * keeps them off the screen.
+   */
+  const menuActions: TaskMenuActions = {
+    open: (task) => onSelect(task),
+    copyLink: (task) => {
+      void (async () => {
+        try {
+          await navigator.clipboard.writeText(
+            taskDeepLink(task, window.location.origin)
+          );
+        } catch {
+          // No "Copied" state to flip (the menu closes on select), so a denied
+          // or insecure-context write claims nothing; the catch only keeps it
+          // from becoming an unhandled rejection.
+        }
+      })();
+    },
+    toggleSelect: () => {},
+    setStatus: () => {},
+  };
+
+  const openMenu = (task: MyTaskRow, event: React.MouseEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setMenu({ x: event.clientX, y: event.clientY, task });
+  };
+
+  const menuItems = (task: MyTaskRow): CtxItem[] => {
+    // Same six-line adaptation the board does: the registry names a glyph and
+    // the component resolves it, so `lib/taskMenu.ts` never imports a
+    // component and stays testable in this tree's node runner.
+    const ctx = { task, statuses: [], canSelect: false, selected: false };
+    return taskMenuItems(ctx).map((entry): CtxItem =>
+      entry.kind === "item"
+        ? {
+            kind: "item",
+            label: entry.label,
+            icon: entry.icon ? themedIcon(entry.icon) : undefined,
+            checked: entry.checked,
+            onSelect: () => entry.run(menuActions, ctx),
+          }
+        : entry
+    );
+  };
 
   async function submitCapture(event: React.FormEvent) {
     event.preventDefault();
@@ -226,6 +291,7 @@ export function MyWork({ onSelect }: Props) {
                 busy={busy === task.id}
                 onSelect={onSelect}
                 onRun={run}
+                onContextMenu={openMenu}
               />
             ))}
           </section>
@@ -252,12 +318,24 @@ export function MyWork({ onSelect }: Props) {
                   busy={busy === task.id}
                   onSelect={onSelect}
                   onRun={run}
+                  onContextMenu={openMenu}
                 />
               ))
             )}
           </section>
         ))}
       </div>
+
+      {/* One menu for the pane, positioned at the pointer — the same component
+          the board and /tasks raise. */}
+      {menu ? (
+        <ContextMenu
+          x={menu.x}
+          y={menu.y}
+          items={menuItems(menu.task)}
+          onClose={() => setMenu(null)}
+        />
+      ) : null}
     </div>
   );
 }
@@ -284,18 +362,22 @@ function Row({
   busy,
   onSelect,
   onRun,
+  onContextMenu,
 }: {
   task: MyTaskRow;
   now: Date;
   busy: boolean;
   onSelect: (task: TaskRow) => void;
   onRun: (taskId: string, work: () => Promise<unknown>) => Promise<void>;
+  /** WS-27bd — raises the shared right-click menu at the pointer. */
+  onContextMenu: (task: MyTaskRow, event: React.MouseEvent) => void;
 }) {
   const completed = Boolean(task.completed_at);
   return (
     <TaskCardShell
       className={`mb-1.5 ${busy ? "pointer-events-none opacity-50" : ""}`}
       completed={completed}
+      onContextMenu={(event) => onContextMenu(task, event)}
       // Stated, not omitted: My work is a flat personal list with no keyboard
       // cursor — it is not a board lane or a grouped list, so there is nothing
       // for Arrow keys to walk. `sharedTaskUi`'s fence requires the literal

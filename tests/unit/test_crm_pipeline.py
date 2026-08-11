@@ -1129,11 +1129,40 @@ def test_the_transition_is_the_only_writer_of_status_change_rows() -> None:
 # until WS-26h-fence parameterised it, and one set of helpers now answers for
 # both gates.
 #
-# Known limit, stated because the docstrings must not outrun it: this is a
-# STATIC call graph over `routes/crm/*.py`. It sees direct calls, aliased
-# imports, module-attribute calls and function-body imports; it does not see
-# dispatch through a variable, a registry dict or a callback handed across the
-# package boundary. Nothing in this package reaches either gate that way today.
+# Known limit, stated because the docstrings must not outrun it — and restated
+# in repair round 1, where the limit block itself was the overclaim.
+#
+# This is a STATIC call graph over `routes/crm/*.py`. It READS: direct calls;
+# aliased imports; module-attribute calls; function-body imports; **relative
+# imports at any level** (`from .pipeline import …`, `from . import pipeline`,
+# `from ..crm.pipeline import …`); **star imports**; **symbols re-exported
+# through the package `__init__`**; a name bound to the package itself
+# (`from .. import crm` → `crm.pipeline.f()`); and **calls written at module
+# level**, outside any `def`.
+#
+# It is BLIND to four shapes, each measured against a copy of the real package
+# rather than reasoned about:
+#
+#   1. Dispatch through a VALUE — `_MOVE = apply_status_transition` then
+#      `_MOVE(…)`, a registry dict, `functools.partial`, or a callback handed
+#      across the package boundary. The name is never written as a call.
+#   2. An attribute taken off an EXPRESSION rather than a name —
+#      `importlib.import_module("…pipeline").apply_status_transition(…)`,
+#      `getattr(pipeline, "apply_status_transition")(…)`, `globals()[…](…)`.
+#      ⚠️ **The substring scan this replaced caught the `importlib` form**,
+#      because the literal `apply_status_transition(` is still written there.
+#      That one is a residual REGRESSION and is left open deliberately: closing
+#      it means resolving an unbound attribute against every top-level name in
+#      the package, which makes an innocent `db.close()` able to fabricate a
+#      call chain, and a fence that cries wolf is one people edit.
+#   3. Reachability enters at `_SYNC_ENTRY_POINTS` only. Module-level code is a
+#      call SITE (so a module-level call TO a gate is caught) but is not an
+#      entry POINT, so an indirect route that begins at import time —
+#      `_PRIMED = patch_record(…)` at module level — is seen by neither
+#      reachability fence.
+#   4. Anything outside `routes/crm/*.py`.
+#
+# Nothing in this package reaches either gate by any of the four today.
 
 #: WS-26h — the status transition itself, and its three effects.
 _MOVE_GATE = ("pipeline", "apply_status_transition")
@@ -1141,9 +1170,28 @@ _MOVE_GATE = ("pipeline", "apply_status_transition")
 #: WS-26h2 — the entry requirements on the stage a caller CHOSE (D-CRM-13).
 _ENTRY_GATE = ("pipeline", "_require_entry_fields")
 
-#: Where the ENABLED 600s Zoho pull enters this package. Anything these two can
+#: Where the ENABLED 600s Zoho sync enters this package. Anything these can
 #: reach runs against the live upstream tenant every cycle.
-_PULL_ENTRY_POINTS = (("sync_zoho", "pull_phase"), ("import_zoho", "apply_module"))
+#:
+#: ⚠️ `_run_cycle_locked` and not just `pull_phase`, added by repair round 1:
+#: one cycle PULLS **and then PUSHES** — `pull_phase` at `sync_zoho.py:1172`,
+#: then `apply_zoho_deletes`, `push_records`, `push_activities`,
+#: `push_tombstones` (and below them `apply_push_result` / `_settle` / `_fail`).
+#: A gate reached only from the push half runs against the live tenant every
+#: cycle just as surely, and entering at `pull_phase` alone reported `[]` for it.
+#: The loop's own three frames are entered so a rename inside the chain cannot
+#: quietly narrow the fence.
+_SYNC_ENTRY_POINTS = (
+    ("sync_zoho", "_sync_loop"),
+    ("sync_zoho", "run_cycle"),
+    ("sync_zoho", "_run_cycle_locked"),
+    ("sync_zoho", "pull_phase"),
+    ("import_zoho", "apply_module"),
+)
+
+#: Calls written at module level rather than inside a `def`. They run at IMPORT
+#: time, so they are call sites like any other; they are not entry points.
+_MODULE_FRAME = "<module>"
 
 
 def _dotted(node: object) -> str | None:
@@ -1160,45 +1208,153 @@ def _dotted(node: object) -> str | None:
     return ".".join(reversed(parts))
 
 
-def _crm_imports(tree) -> tuple[dict[str, tuple[str, str]], dict[str, str]]:
-    """``(local name -> (module, function), local alias -> module stem)``.
+def _crm_target(node, package: str) -> str | None:
+    """What an ``ImportFrom`` imports FROM, as a path inside the CRM package.
 
-    Read from the WHOLE tree, so an import inside a function body counts —
-    that is how the "one seam" mutant reached the gate from ``core.py``.
+    ``""`` is the package itself, ``"pipeline"`` is that submodule, ``None`` is
+    "not this package".
+
+    ⚠️ **Relative forms are resolved, and that is the whole point of this
+    helper** (repair round 1). ``from .pipeline import apply_status_transition``
+    is the same import as the absolute spelling — same call, same live-system
+    consequence — but its ``node.module`` is ``"pipeline"`` with ``level=1``,
+    and ``from . import pipeline`` has ``node.module is None``. Gating on
+    ``node.module.startswith("gateway.routes.crm.")`` saw neither, so the fence
+    could be respelled around in one line: a fence with a spelling it does not
+    know is a fence with a hole, and the substring scan this replaced had no
+    such hole.
     """
-    import ast
+    absolute = "gateway.routes." + package
+    module = node.module or ""
+    if node.level == 0:
+        if module == absolute:
+            return ""
+        if module.startswith(absolute + "."):
+            return module[len(absolute) + 1:]
+        return None
+    if node.level == 1:
+        # `from . import x` → "", `from .pipeline import x` → "pipeline".
+        return module
+    # `level >= 2` walks up out of the package, so it has to be named again to
+    # land back inside it: `from ..crm.pipeline import x`.
+    if module == package:
+        return ""
+    if module.startswith(package + "."):
+        return module[len(package) + 1:]
+    return None
 
-    names: dict[str, tuple[str, str]] = {}
+
+def _package_alias(root: str, stems: frozenset[str]) -> dict[str, str]:
+    """A local name bound to the PACKAGE — so ``root.pipeline.f()`` resolves."""
+    return {f"{root}.{stem}": stem for stem in stems}
+
+
+def _from_submodule(
+    stem: str, aliases, exports: dict[str, frozenset[str]],
+) -> dict[str, frozenset[tuple[str, str]]]:
+    """``from .pipeline import X`` / ``import *`` → local name -> candidates."""
+    names: dict[str, frozenset[tuple[str, str]]] = {}
+    for alias in aliases:
+        if alias.name == "*":
+            names.update({
+                fn: frozenset({(stem, fn)}) for fn in exports.get(stem, frozenset())
+            })
+        else:
+            names[alias.asname or alias.name] = frozenset({(stem, alias.name)})
+    return names
+
+
+def _from_package(
+    aliases, stems: frozenset[str], exports: dict[str, frozenset[str]],
+) -> tuple[dict[str, frozenset[tuple[str, str]]], dict[str, str]]:
+    """``from . import pipeline`` / ``from . import a_reexported_symbol``.
+
+    A submodule binds a MODULE; anything else is a symbol re-exported through
+    the package ``__init__``, which names its defining module only up to
+    ambiguity — so every module that DEFINES the name is a candidate.
+    """
+    names: dict[str, frozenset[tuple[str, str]]] = {}
     modules: dict[str, str] = {}
-    for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom) and node.module:
-            if node.module.startswith("gateway.routes.crm."):
-                src = node.module.rsplit(".", 1)[1]
-                for alias in node.names:
-                    names[alias.asname or alias.name] = (src, alias.name)
-            elif node.module == "gateway.routes.crm":
-                for alias in node.names:
-                    modules[alias.asname or alias.name] = alias.name
-        elif isinstance(node, ast.Import):
-            for alias in node.names:
-                if alias.name.startswith("gateway.routes.crm."):
-                    modules[alias.asname or alias.name] = alias.name.rsplit(".", 1)[1]
+    for alias in aliases:
+        if alias.name in stems:
+            modules[alias.asname or alias.name] = alias.name
+        elif alias.name == "*":
+            for stem in stems:
+                _merge_names(names, _from_submodule(stem, aliases, exports))
+        else:
+            found = frozenset(
+                (stem, alias.name) for stem in stems
+                if alias.name in exports.get(stem, frozenset())
+            )
+            if found:
+                names[alias.asname or alias.name] = found
     return names, modules
 
 
-def _resolved_call(
+def _merge_names(into: dict, more: dict) -> None:
+    """Union, never overwrite: two imports can bind the same local name."""
+    for key, value in more.items():
+        into[key] = into.get(key, frozenset()) | value
+
+
+def _crm_imports(
+    tree, *, package: str, stems: frozenset[str], exports: dict[str, frozenset[str]],
+) -> tuple[dict[str, frozenset[tuple[str, str]]], dict[str, str]]:
+    """``(local name -> {(module, function), …}, local alias -> module stem)``.
+
+    Read from the WHOLE tree, so an import inside a function body counts —
+    that is how the "one seam" mutant reached the gate from ``core.py``.
+
+    A local name maps to a SET, not one pair, because a symbol re-exported
+    through the package ``__init__`` names its defining module only up to
+    ambiguity. Over-approximating there is the safe direction.
+    """
+    import ast
+
+    absolute = "gateway.routes." + package
+    names: dict[str, frozenset[tuple[str, str]]] = {}
+    modules: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            rest = _crm_target(node, package)
+            if rest in stems:
+                _merge_names(names, _from_submodule(rest, node.names, exports))
+            elif rest == "":
+                more, more_modules = _from_package(node.names, stems, exports)
+                _merge_names(names, more)
+                modules.update(more_modules)
+            elif rest is None and (node.module or "") in ("gateway.routes", ""):
+                # `from gateway.routes import crm` / `from .. import crm` bind
+                # the package itself under a plain name.
+                for alias in node.names:
+                    if alias.name == package:
+                        modules.update(
+                            _package_alias(alias.asname or alias.name, stems),
+                        )
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name.startswith(absolute + "."):
+                    modules[alias.asname or alias.name] = alias.name.rsplit(".", 1)[1]
+                elif alias.name == absolute:
+                    modules.update(
+                        _package_alias(alias.asname or alias.name, stems),
+                    )
+    return names, modules
+
+
+def _resolved_calls(
     call, *, module: str, names: dict, modules: dict, own: set[str],
-) -> tuple[str, str] | None:
-    """One ``ast.Call`` → the ``(module, function)`` it names, if we can say."""
+) -> frozenset[tuple[str, str]]:
+    """One ``ast.Call`` → the ``(module, function)`` pairs it may name."""
     target = _dotted(call.func)
     if target is None:
-        return None
+        return frozenset()
     if "." in target:
         prefix, attr = target.rsplit(".", 1)
-        return (modules[prefix], attr) if prefix in modules else None
+        return frozenset({(modules[prefix], attr)}) if prefix in modules else frozenset()
     if target in names:
         return names[target]
-    return (module, target) if target in own else None
+    return frozenset({(module, target)}) if target in own else frozenset()
 
 
 def _crm_call_graph(package) -> dict[tuple[str, str], set[tuple[str, str]]]:
@@ -1208,28 +1364,50 @@ def _crm_call_graph(package) -> dict[tuple[str, str], set[tuple[str, str]]]:
     their bare name, and an import inside one function is treated as visible to
     the whole module. A fence guarding a live loop should answer "maybe" as
     "yes"; the failure it must never produce is a quiet green.
+
+    Module-level calls are collected under ``_MODULE_FRAME`` rather than
+    dropped: they run at import time, and leaving them out made a call written
+    outside any ``def`` invisible to the call-site fence.
     """
     import ast
 
-    graph: dict[tuple[str, str], set[tuple[str, str]]] = {}
+    stems = frozenset(path.stem for path in package.glob("*.py"))
+    trees: dict[str, object] = {}
+    exports: dict[str, frozenset[str]] = {}
     for path in sorted(package.glob("*.py")):
-        module = path.stem
         tree = ast.parse(path.read_text(encoding="utf-8"))
-        names, modules = _crm_imports(tree)
+        trees[path.stem] = tree
+        # Top-level defs only: what a `*` or an `__init__` re-export can carry.
+        exports[path.stem] = frozenset(
+            node.name for node in tree.body
+            if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
+        )
+
+    graph: dict[tuple[str, str], set[tuple[str, str]]] = {}
+    for module, tree in sorted(trees.items()):
+        names, modules = _crm_imports(
+            tree, package=package.name, stems=stems, exports=exports,
+        )
         defs = [
             node for node in ast.walk(tree)
             if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
         ]
         own = {node.name for node in defs}
-        for node in defs:
-            calls = graph.setdefault((module, node.name), set())
-            for sub in ast.walk(node):
-                if isinstance(sub, ast.Call):
-                    found = _resolved_call(
-                        sub, module=module, names=names, modules=modules, own=own,
-                    )
-                    if found is not None:
-                        calls.add(found)
+        scopes: list[tuple[str, list]] = [
+            (node.name, [c for c in ast.walk(node) if isinstance(c, ast.Call)])
+            for node in defs
+        ]
+        nested = {id(call) for _fn, calls in scopes for call in calls}
+        scopes.append((_MODULE_FRAME, [
+            call for call in ast.walk(tree)
+            if isinstance(call, ast.Call) and id(call) not in nested
+        ]))
+        for fn, calls in scopes:
+            edges = graph.setdefault((module, fn), set())
+            for sub in calls:
+                edges |= _resolved_calls(
+                    sub, module=module, names=names, modules=modules, own=own,
+                )
     return graph
 
 
@@ -1273,18 +1451,29 @@ def _gate_reached_from(package, entries, gate: tuple[str, str]) -> list[str]:
 def test_the_move_gate_is_called_from_exactly_two_files() -> None:
     """WS-26h, half one — the DIRECT case.
 
-    ``pipeline.py`` defines :func:`apply_status_transition` and calls it from
-    ``_stamp_converted`` (the conversion's won-status move); ``records.py``
-    calls it from ``patch_record``, the one request path that moves a status.
+    Two FILES may call :func:`apply_status_transition`: ``pipeline.py``, which
+    defines it, and ``records.py``, the one request path that moves a status.
     Nothing else — in particular not import_zoho / sync_zoho / broker_handlers
     / auto_lead, the four that run outside a member request.
 
-    ⚠️ **This also pins the SEAM'S LOCATION, and that is load-bearing for
-    WS-26i-bulk**: extracting ``patch_record``'s body into a new module so bulk
-    can call it with a caller's ``db`` changes this set and turns this red. The
-    fence is not an obstacle to that extraction — it is the thing that makes
-    the extraction announce itself instead of quietly growing a second CRM
-    writer. Re-point the expected set in the same change.
+    ⚠️ **FILE-level, and deliberately not function-level.** The assertion is
+    over ``f"{module}.py"``, so moving the call to another function *inside*
+    ``records.py`` keeps it green. That is not an oversight: WS-26i-bulk
+    done-when 1 extracts ``patch_record``'s body into ``apply_record_patch`` in
+    the same file, and a function-level assertion would turn that sanctioned
+    change red and contradict its "passes with zero edits" clause. The property
+    this fence owns is *which file the seam lives in*; **which function inside
+    it is not claimed here, and nothing asserts it.** (It was claimed in this
+    docstring until repair round 1, which is the same overclaim-by-docstring
+    defect the whole ticket exists to remove.)
+
+    ⚠️ **The seam's LOCATION is what this pins, and it is load-bearing for
+    WS-26i-bulk done-when 1**, which decides the seam **stays in
+    ``records.py``** — so this fence passes there with zero edits. Measured:
+    extracting the call into a new ``routes/crm/bulk_seam.py`` reports
+    ``['bulk_seam.py', 'pipeline.py']`` and goes red, with ``records.py``
+    dropping out, so the failure names the relocation rather than merely
+    growing the list.
 
     Converted from a literal ``"apply_status_transition(" in path.read_text()``
     scan by WS-26h-fence. Measured on the real package before the conversion:
@@ -1313,11 +1502,19 @@ def test_the_zoho_pull_never_enters_the_stage_gate() -> None:
     keeps the create-side refusal off the loop. Changing that loop is
     OWNER-GATE (``work_plan.md`` §6 WS-26 (a)), so this must fail in CI rather
     than be fixed forward.
+
+    ⚠️ **The whole cycle, not the pull half** (repair round 1). Entering only
+    at ``pull_phase`` left the PUSH half — ``push_records`` /
+    ``push_activities`` / ``push_tombstones`` and below them
+    ``apply_push_result`` / ``_settle`` / ``_fail`` — reporting ``[]`` for a
+    gate reached from it, while it would run against the live tenant every
+    cycle just the same. Measured: a gate reached from ``apply_push_result``
+    was green at ``pull_phase`` and is red at ``_run_cycle_locked``.
     """
     from pathlib import Path
 
     package = Path(crm_core.__file__).parent
-    chain = _gate_reached_from(package, _PULL_ENTRY_POINTS, _MOVE_GATE)
+    chain = _gate_reached_from(package, _SYNC_ENTRY_POINTS, _MOVE_GATE)
     assert chain == [], " -> ".join(chain)
 
 
@@ -1369,7 +1566,7 @@ def test_no_zoho_pull_path_can_reach_the_entry_gate() -> None:
     from pathlib import Path
 
     package = Path(crm_core.__file__).parent
-    chain = _gate_reached_from(package, _PULL_ENTRY_POINTS, _ENTRY_GATE)
+    chain = _gate_reached_from(package, _SYNC_ENTRY_POINTS, _ENTRY_GATE)
     assert chain == [], " -> ".join(chain)
 
 
@@ -1413,10 +1610,25 @@ _FENCE_SOURCES = {
         "async def apply_module(db):\n"
         "    await apply_record(db)\n"
     ),
+    # The cycle's own chain, not just its pull half: `_run_cycle_locked` calls
+    # `pull_phase` AND the three push phases, and `_SYNC_ENTRY_POINTS` enters at
+    # the loop. Without these frames the widened entry points would be fenced by
+    # nothing and the push-half case below could not go red.
     "sync_zoho.py": (
         "from gateway.routes.crm.import_zoho import apply_module\n"
         "async def pull_phase(db):\n"
         "    await apply_module(db)\n"
+        "async def apply_push_result(db, row):\n"
+        "    pass\n"
+        "async def push_records(db):\n"
+        "    await apply_push_result(db, None)\n"
+        "async def _run_cycle_locked(db):\n"
+        "    await pull_phase(db)\n"
+        "    await push_records(db)\n"
+        "async def run_cycle(db):\n"
+        "    await _run_cycle_locked(db)\n"
+        "async def _sync_loop(db):\n"
+        "    await run_cycle(db)\n"
     ),
 }
 
@@ -1579,6 +1791,110 @@ _FENCE_CASES = [
         (_SITED, True),
         (_SITED, True),
     ),
+    # ── repair round 1: the spellings the first AST cut could not read ─────
+    #
+    # Every one of these was measured **green on the AST fence and RED on the
+    # substring scan it replaced** — i.e. a capability the conversion removed.
+    # The reviewer found the first; the rest share its cause. Each is a
+    # one-line respelling of a case above, which is exactly what makes them
+    # dangerous: `from .pipeline import …` is the same import, the same call
+    # and the same live-system consequence as the absolute spelling, and
+    # `pyproject.toml` selects no `TID` rules, so nothing else refuses one.
+    (
+        "a RELATIVE-import move-gate call in import_zoho",
+        "import_zoho.py",
+        "from .pipeline import apply_status_transition\n"
+        "async def moved(db, record):\n"
+        "    await apply_status_transition(db)\n",
+        (_SITED, False),
+        (["import_zoho.py", "pipeline.py", "records.py"], False),
+    ),
+    (
+        "a RELATIVE-import entry-gate call in import_zoho",
+        "import_zoho.py",
+        "from .pipeline import _require_entry_fields\n"
+        "def gated(status, values):\n"
+        "    _require_entry_fields(status, None, values)\n",
+        (["import_zoho.py", "pipeline.py", "records.py"], False),
+        (_SITED, False),
+    ),
+    (
+        "a `from . import pipeline` move-gate call in import_zoho",
+        "import_zoho.py",
+        "from . import pipeline as _p\n"
+        "async def moved(db, record):\n"
+        "    await _p.apply_status_transition(db)\n",
+        (_SITED, False),
+        (["import_zoho.py", "pipeline.py", "records.py"], False),
+    ),
+    (
+        # ⚠️ Over-approximates on purpose: `exports` is every top-level def, so
+        # a `*` is treated as binding underscore-prefixed names too, which a
+        # real `import *` would not. "Maybe" answered as "yes" is the safe
+        # direction for a fence guarding a running loop.
+        "a STAR-import move-gate call in import_zoho",
+        "import_zoho.py",
+        "from .pipeline import *\n"
+        "async def moved(db, record):\n"
+        "    await apply_status_transition(db)\n",
+        (_SITED, False),
+        (["import_zoho.py", "pipeline.py", "records.py"], False),
+    ),
+    (
+        # A symbol re-exported through the package `__init__`. The first cut
+        # read this as a MODULE import and resolved the call to nothing.
+        "a package RE-EXPORT move-gate call in import_zoho",
+        "import_zoho.py",
+        "from gateway.routes.crm import apply_status_transition\n"
+        "async def moved(db, record):\n"
+        "    await apply_status_transition(db)\n",
+        (_SITED, False),
+        (["import_zoho.py", "pipeline.py", "records.py"], False),
+    ),
+    (
+        # Outside any `def`, so it runs at IMPORT time — and the first cut
+        # walked only function bodies.
+        "a MODULE-LEVEL move-gate call in import_zoho",
+        "import_zoho.py",
+        "from .pipeline import apply_status_transition\n"
+        "_PRIMED = apply_status_transition(None)\n",
+        (_SITED, False),
+        (["import_zoho.py", "pipeline.py", "records.py"], False),
+    ),
+    (
+        "a parent-package move-gate call in import_zoho",
+        "import_zoho.py",
+        "from .. import crm\n"
+        "async def moved(db, record):\n"
+        "    await crm.pipeline.apply_status_transition(db)\n",
+        (_SITED, False),
+        (["import_zoho.py", "pipeline.py", "records.py"], False),
+    ),
+    (
+        # The decisive case, respelled relatively. This is the one that makes
+        # the regression an EXPOSURE rather than a wart: the shape the whole
+        # reachability fence exists to catch, written in one line the fence
+        # could not read.
+        "the importer routed through the patch seam, RELATIVE import",
+        "import_zoho.py",
+        "from .records import patch_record\n"
+        "async def apply_record(db, values):\n"
+        "    await patch_record(db, None, values)\n",
+        (_SITED, True),
+        (_SITED, True),
+    ),
+    (
+        # ⚠️ Reachable through the PUSH half only. This case is green unless
+        # `_SYNC_ENTRY_POINTS` enters at the cycle rather than at `pull_phase`
+        # — measured both ways.
+        "the PUSH half routed through the patch seam",
+        "sync_zoho.py",
+        "from .records import patch_record\n"
+        "async def apply_push_result(db, row):\n"
+        "    await patch_record(db, None, {})\n",
+        (_SITED, True),
+        (_SITED, True),
+    ),
 ]
 
 
@@ -1611,7 +1927,7 @@ def test_the_siting_fences_see_the_shapes_they_claim_to_see(
     ):
         label = f"{name} · {gate[1]}"
         assert _gate_call_files(package, gate) == expected_files, label
-        chain = _gate_reached_from(package, _PULL_ENTRY_POINTS, gate)
+        chain = _gate_reached_from(package, _SYNC_ENTRY_POINTS, gate)
         assert bool(chain) is reachable, (
             f"{label}: {' -> '.join(chain) or 'unreachable'}"
         )

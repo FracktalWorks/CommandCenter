@@ -260,8 +260,41 @@
 > against the new cases: `ast.walk(tree)` → `tree.body` (2 red, one per gate),
 > `_resolved_call` dropping the import branch (15 red), `_gate_call_files` ignoring its
 > `gate` argument (10 red), `_gate_reached_from` ignoring it (1 red). **R8 does not bind:
-> no SQL, no migration, no predicate.** Neither Zoho suite was edited. **Not deployed, not
-> merged.**
+> no SQL, no migration, no predicate.** Neither Zoho suite was edited.
+> ⚠️ **Repair round 1 (2026-08-11): verifier PASSED, reviewer REQUEST-CHANGES on a P1 —
+> and the P1 was a REGRESSION against the fence the conversion deleted.** `_crm_imports`
+> gated on `node.module.startswith("gateway.routes.crm.")`, so a **relative** import
+> (`node.module == "pipeline"`, `level=1`) matched nothing and `from . import pipeline`
+> (`node.module is None`) was dropped before the branch was reached. The substring scan
+> caught **any** spelling; the first AST cut caught one. Measured old-vs-new against a copy
+> of the real package, **six** shapes were green-where-old-was-red — relative import,
+> `from . import pipeline`, star import, `__init__` re-export, module-level call (outside any
+> `def`), and a name bound to the package (`from .. import crm` → `crm.pipeline.f()`) — **and
+> the decisive indirect route respelled `from .records import patch_record` was green on both
+> fences**, i.e. one line would have put the transition on the enabled 600s pull with all four
+> fences green. Not hypothetical: `orchestrator` and `meeting_bot` already carry 19 relative
+> imports, and `pyproject.toml` selects no `TID` rules, so nothing else refuses one. All six
+> now read, each with its own synthetic case, each measured red first — the suite is
+> **15 → 24 cases** and the file **92 → 101**. Two more findings fixed in the same round:
+> **reachability entered at `pull_phase` only**, so a gate reached from the PUSH half
+> (`push_records` / `apply_push_result` / `_settle` / `_fail`) reported `[]` while running
+> every cycle — the entry set is now the cycle itself (`_sync_loop` / `run_cycle` /
+> `_run_cycle_locked`), measured green-then-red; and the call-file docstring **claimed
+> function-level siting an assertion over `f"{module}.py"` does not have** — corrected to
+> claim only the file, deliberately, because WS-26i-bulk done-when 1 moves the call to
+> `apply_record_patch` inside `records.py` and a function-level assertion would turn that
+> sanctioned change red. Ten helper mutants now measured red (six of them new).
+> ⚠️ **What is still blind, measured rather than reasoned, because a limit block that
+> under-lists its holes is the very defect this ticket exists to remove:** dispatch through a
+> VALUE (a variable, a registry dict, `partial`, a cross-package callback — the substring scan
+> missed these too); an attribute taken off an EXPRESSION rather than a name
+> (`importlib.import_module("…").apply_status_transition(…)`, `getattr(pipeline, "…")(…)`) —
+> **the substring scan CAUGHT the `importlib` form, so this one is a residual REGRESSION,
+> left open deliberately** because closing it means resolving unbound attributes against every
+> top-level name in the package, which lets an innocent `db.close()` fabricate a call chain
+> and a fence that cries wolf is one people edit; an indirect route beginning at module level
+> (module-level code is a call SITE but not an entry POINT); and anything outside
+> `routes/crm/*.py`. **Not deployed, not merged.**
 > WS-26i (data management): 🟡 SPEC-THIN, audit-narrow before dispatch — **except
 > WS-26i-export, below.**
 > · **WS-26i-export (the filtered-list CSV export): 🟢 BUILT + REPAIRED 2026-08-11** (branch
@@ -2574,11 +2607,33 @@ the caller's choice, `load_default_status` is the server's.)*
    `test_the_entry_gate_is_called_from_exactly_two_files` (real call nodes, aliases and
    module-attribute forms resolved, comments and docstrings ignored) and
    `test_no_zoho_pull_path_can_reach_the_entry_gate` (transitive static call graph from
-   `sync_zoho.pull_phase` and `import_zoho.apply_module`, reporting the chain it found).
+   ~~`sync_zoho.pull_phase`~~ **`sync_zoho._sync_loop` / `run_cycle` / `_run_cycle_locked` —
+   widened 2026-08-11, repair round 1** — and `import_zoho.apply_module`, reporting the chain
+   it found). Entering at `pull_phase` fenced only the pull half: a cycle also PUSHES
+   (`push_records` / `push_activities` / `push_tombstones`, and below them
+   `apply_push_result` / `_settle` / `_fail`), and a gate reached from the push half ran
+   against the live tenant every cycle while both reachability fences reported `[]`. Measured
+   green at `pull_phase`, red at `_run_cycle_locked`.
    **Stated limit, so the claim does not outrun the mechanism:** the graph is STATIC and
    scoped to `routes/crm/*.py` — it does not see dispatch through a variable, a registry
    dict or a callback handed across the package boundary, and nothing in the package
-   reaches the gate that way today. Eight shapes are pinned against synthetic packages
+   reaches the gate that way today.
+   ⚠️ **This limit statement was itself an overclaim until 2026-08-11 (WS-26h-fence repair
+   round 1) — the same defect one layer up.** It listed three blind spots and had **six
+   more**, every one of them a shape the deleted substring scan CAUGHT: relative imports at
+   any level (`from .pipeline import …`, `from . import pipeline`, `from ..crm.pipeline import
+   …`), star imports, a symbol re-exported through the package `__init__`, a name bound to the
+   package itself (`from .. import crm` → `crm.pipeline.f()`), and calls written at module
+   level outside any `def`. All six are now READ and each has a synthetic case. **What is still
+   blind, measured rather than reasoned:** dispatch through a value (a variable, a registry
+   dict, `functools.partial`, a cross-package callback — the substring scan missed these too);
+   an attribute taken off an EXPRESSION rather than a name
+   (`importlib.import_module("…").apply_status_transition(…)`, `getattr(pipeline, "…")(…)`) —
+   ⚠️ **the substring scan CAUGHT the `importlib` form, so this one is a residual regression,
+   left open deliberately** because closing it means resolving unbound attributes against every
+   top-level name in the package, which lets an innocent `db.close()` fabricate a call chain;
+   and an indirect route that begins at module level, since module-level code is a call SITE
+   but not an entry POINT. Eight shapes are pinned against synthetic packages
    (`test_the_siting_fences_see_the_shapes_they_claim_to_see`) so "the fence went blind" is
    a red test, and all six were re-measured against the real package. *(**2026-08-11,
    WS-26h-fence:** that suite is now **fifteen** cases and asserts **both** gates on every
@@ -2724,7 +2779,8 @@ before any build.)*
 >   new module reports `['bulk_seam.py', 'pipeline.py']` and goes red, with `records.py`
 >   dropping out of the set. `test_the_zoho_pull_never_enters_the_stage_gate` beside it is
 >   the reachability half and stays green either way, provided the new home is not reachable
->   from `sync_zoho.pull_phase` / `import_zoho.apply_module`.
+>   from the sync cycle (`sync_zoho._sync_loop` / `run_cycle` / `_run_cycle_locked`, which
+>   covers the push half too) or from `import_zoho.apply_module`.
 > - **CSV import — NO-GO, no precedent.** Neither `import_tasks.py` (local mirror) nor
 >   `import_clickup.py` (API) is CSV. Inherits two hazards: every created row is born
 >   `zoho_dirty` and mass-creates upstream, and §6 WS-26 (b) records that a `UNIQUE` index on
@@ -2812,7 +2868,9 @@ before any build.)*
    > fence goes **RED** reporting `['bulk_seam.py', 'pipeline.py']` — note `records.py` drops
    > out of the set entirely, so the failure names the relocation rather than merely adding to
    > the list — while `test_the_zoho_pull_never_enters_the_stage_gate` stays **GREEN**, because
-   > the new module is not reachable from `sync_zoho.pull_phase` / `import_zoho.apply_module`.
+   > the new module is not reachable from the sync cycle (`sync_zoho._sync_loop` / `run_cycle` /
+   > `_run_cycle_locked`, which covers the push half too) or from
+   > `import_zoho.apply_module`.
    > So the "zero edits" clause splits: the **reachability** test passes unedited either way,
    > and it is the **call-file** test that must be left green by keeping the seam in
    > `records.py`. It is now an **AST call-graph** check rather than a text match, which means
@@ -2846,10 +2904,17 @@ Confirmed exactly as written: `core.py:53-57` (the `_get_db` leaves — `sync_zo
 `sync_zoho.PUSH_BATCH_LIMIT = 500`, `projects/bulk.py:62` (`MAX_BULK = 500`) and `:318` (the
 422), `pipeline.py:121-128` / `:129` / `:138` / `:147` / `:288-294`, `_crm_fakes.py:1038-1069`,
 `test_db_engine_seam.py:515`, `test_crm_zoho_sync.py:1799`, and that none of `import_zoho.py` /
-`sync_zoho.py` / `broker_handlers.py` imports `records`. **One count made exact:** done-when 2's
-"~42" and the §10 block's "~33" are the same measurement at two scopes and both are close —
-measured **41** qualified `records.patch_record(` call sites across `tests/unit/`, of which
-**34** are in `test_crm_pipeline.py`, 8 in `test_crm_routes.py` and 1 in `test_crm_zoho_sync.py`.
+`sync_zoho.py` / `broker_handlers.py` imports `records`. **One count made exact — and corrected once, 2026-08-11
+(repair round 1), because the first attempt mixed the two conventions in the very sentence
+announcing it had removed the ambiguity.** ⚠️ **Count qualified call sites, not bare text.**
+Measured: **41** `crm_records.patch_record(` call sites across `tests/unit/` — **32** in
+`test_crm_pipeline.py` (not 34), 8 in `test_crm_routes.py`, 1 in `test_crm_zoho_sync.py:1799`.
+The **34** first recorded here was `grep -c "patch_record("` over `test_crm_pipeline.py`, which
+counts prose and fixture strings as well as calls; that number has since moved to **37** purely
+because this ticket's own fence fixtures added more `patch_record(` text, which is the argument
+for the qualified convention rather than a matter of taste. Done-when 2's "~42" is the total
+(41) and the §10 block's "~33" is `test_crm_pipeline.py`'s share (32); both are the right
+quantity approximated, and **32 / 41 are the numbers to check against.**
 
 ### WS-26i-export — The filtered-list CSV export · 🟢 BUILT + REPAIRED 2026-08-11 · no migration
 *(Built on branch `claude/crm-command-center-tasks-i8l7n4`; as-built record in this file's

@@ -1095,62 +1095,51 @@ def test_the_transition_is_the_only_writer_of_status_change_rows() -> None:
     assert writers == ["pipeline.py"], writers
 
 
-def test_the_zoho_pull_never_enters_the_stage_gate() -> None:
-    """WS-26h — the importer and the sync engine must NOT route their status
-    writes through :func:`apply_status_transition`.
-
-    This is a live-system property, not a style preference. The sync loop is
-    **enabled on production** and pulls every cycle; a pulled deal carries
-    whatever stage Zoho has it in, and it carries no obligation to satisfy an
-    entry requirement somebody set here afterwards. Routing the pull through
-    the gate would make one settings-grid save start failing every cycle for a
-    whole Zoho module — fail-closed in the wrong direction, on a loop nobody is
-    watching.
-
-    Asserted structurally rather than by example, because the refactor that
-    would break it is a plausible one ("make the importer use the shared
-    transition helper for consistency") and no example test would be looking.
-    """
-    from pathlib import Path
-
-    package = Path(crm_core.__file__).parent
-    callers = sorted(
-        path.name for path in package.glob("*.py")
-        if "apply_status_transition(" in path.read_text(encoding="utf-8")
-    )
-    # `pipeline.py` defines it; `records.py` is the one request path that moves
-    # a status. Nothing else — in particular not import_zoho / sync_zoho /
-    # broker_handlers / auto_lead, the four that run outside a member request.
-    assert callers == ["pipeline.py", "records.py"], callers
-
-
-# ── WS-26h2 · where the create gate is allowed to be (done-when 8) ──────────
+# ── WS-26h + WS-26h2 · where the two stage gates are allowed to be ─────────
 #
-# The fence above greps for `apply_status_transition(` and protects the MOVE
-# gate only — it does not fire on WS-26h2's change at all. The two below hold
-# the same live-system property one function lower down, and they are TWO
-# because one assertion could not back the claim:
+# ONE mechanism, TWO gates. `routes/crm/` has two places a status write can be
+# refused, and the same live-system property guards both: the ENABLED 600s Zoho
+# pull must reach NEITHER. A pulled record carries whatever stage Zoho has it
+# in and no obligation to satisfy a requirement somebody set here afterwards,
+# so a gate on that path turns one settings-grid save into a whole Zoho module
+# failing every cycle — fail-closed in the wrong direction, on a loop nobody is
+# watching, and changing that loop is OWNER-GATE (`work_plan.md` §6 WS-26 (a)).
+#
+#   * `_MOVE_GATE`  — `pipeline.apply_status_transition` (WS-26h), the status
+#     TRANSITION and its three effects.
+#   * `_ENTRY_GATE` — `pipeline._require_entry_fields` (WS-26h2), the entry
+#     requirements, reached unconditionally from the move gate and directly
+#     from `records._resolve_status` on the create path.
+#
+# Each gate gets TWO fences, because one assertion cannot back the claim:
 #
 #   * `_gate_call_files` answers "which files CALL the gate" — the direct case.
 #   * `_gate_reached_from` answers "can the enabled 600s pull REACH it" — the
 #     indirect case, which is the one a call-site set is blind to.
 #
-# Repair round 1 found the first version overclaiming: it matched the literal
-# `_require_entry_fields(` in file TEXT, so `import_zoho.apply_record` calling
-# `records._resolve_status` (which already sets `values["status_id"]`
-# server-side, so `chosen` would be truthy on every pulled deal) stayed green —
-# and so did an aliased import — while a COMMENT in `import_zoho.py` saying the
-# path must never call the gate would have turned it red, making deletion of
-# that comment the cheapest way back to green. Both directions are wrong, and
-# AST call nodes fix both.
+# Both gates' fences were TEXT MATCHES first and both were wrong in the same
+# two directions. Measured against the real package (h2's repair round 1 for
+# the entry gate, this ticket's conversion round for the move gate): an ALIASED
+# import in `import_zoho.py` left the fence GREEN, and a COMMENT in
+# `import_zoho.py` saying the path must never call the gate turned it RED —
+# making deletion of that comment the cheapest way back to green. The move
+# gate's text fence was blind to the indirect route as well
+# (`import_zoho.apply_record` → `records.patch_record`). AST call nodes fix all
+# three. Do not reintroduce a third mechanism: `_GATE` was a module constant
+# until WS-26h-fence parameterised it, and one set of helpers now answers for
+# both gates.
 #
 # Known limit, stated because the docstrings must not outrun it: this is a
 # STATIC call graph over `routes/crm/*.py`. It sees direct calls, aliased
 # imports, module-attribute calls and function-body imports; it does not see
 # dispatch through a variable, a registry dict or a callback handed across the
-# package boundary. Nothing in this package reaches the gate that way today.
+# package boundary. Nothing in this package reaches either gate that way today.
 
-_GATE = ("pipeline", "_require_entry_fields")
+#: WS-26h — the status transition itself, and its three effects.
+_MOVE_GATE = ("pipeline", "apply_status_transition")
+
+#: WS-26h2 — the entry requirements on the stage a caller CHOSE (D-CRM-13).
+_ENTRY_GATE = ("pipeline", "_require_entry_fields")
 
 #: Where the ENABLED 600s Zoho pull enters this package. Anything these two can
 #: reach runs against the live upstream tenant every cycle.
@@ -1244,16 +1233,21 @@ def _crm_call_graph(package) -> dict[tuple[str, str], set[tuple[str, str]]]:
     return graph
 
 
-def _gate_call_files(package) -> list[str]:
-    """The files containing a real CALL to the gate, under any local name."""
+def _gate_call_files(package, gate: tuple[str, str]) -> list[str]:
+    """The files containing a real CALL to ``gate``, under any local name.
+
+    ``gate`` is an argument rather than a module constant so the move gate and
+    the entry gate are expressed through ONE mechanism — a second copy of this
+    walk keyed on a different name is the defect, not the feature.
+    """
     graph = _crm_call_graph(package)
     return sorted({
-        f"{module}.py" for (module, _fn), calls in graph.items() if _GATE in calls
+        f"{module}.py" for (module, _fn), calls in graph.items() if gate in calls
     })
 
 
-def _gate_reached_from(package, entries) -> list[str]:
-    """The call chain by which ``entries`` reaches the gate, or ``[]``."""
+def _gate_reached_from(package, entries, gate: tuple[str, str]) -> list[str]:
+    """The call chain by which ``entries`` reaches ``gate``, or ``[]``."""
     graph = _crm_call_graph(package)
     parents: dict[tuple[str, str], tuple[str, str] | None] = {}
     queue = []
@@ -1266,7 +1260,7 @@ def _gate_reached_from(package, entries) -> list[str]:
             if target in parents:
                 continue
             parents[target] = node
-            if target == _GATE:
+            if target == gate:
                 chain, cursor = [], target
                 while cursor is not None:
                     chain.append(f"{cursor[0]}.{cursor[1]}")
@@ -1274,6 +1268,57 @@ def _gate_reached_from(package, entries) -> list[str]:
                 return list(reversed(chain))
             queue.append(target)
     return []
+
+
+def test_the_move_gate_is_called_from_exactly_two_files() -> None:
+    """WS-26h, half one — the DIRECT case.
+
+    ``pipeline.py`` defines :func:`apply_status_transition` and calls it from
+    ``_stamp_converted`` (the conversion's won-status move); ``records.py``
+    calls it from ``patch_record``, the one request path that moves a status.
+    Nothing else — in particular not import_zoho / sync_zoho / broker_handlers
+    / auto_lead, the four that run outside a member request.
+
+    ⚠️ **This also pins the SEAM'S LOCATION, and that is load-bearing for
+    WS-26i-bulk**: extracting ``patch_record``'s body into a new module so bulk
+    can call it with a caller's ``db`` changes this set and turns this red. The
+    fence is not an obstacle to that extraction — it is the thing that makes
+    the extraction announce itself instead of quietly growing a second CRM
+    writer. Re-point the expected set in the same change.
+
+    Converted from a literal ``"apply_status_transition(" in path.read_text()``
+    scan by WS-26h-fence. Measured on the real package before the conversion:
+    an aliased import in ``import_zoho.py`` left it GREEN and a COMMENT saying
+    the path must never call the gate turned it RED. Calls are AST nodes now,
+    so both are answered the right way round.
+    """
+    from pathlib import Path
+
+    package = Path(crm_core.__file__).parent
+    assert _gate_call_files(package, _MOVE_GATE) == ["pipeline.py", "records.py"]
+
+
+def test_the_zoho_pull_never_enters_the_stage_gate() -> None:
+    """WS-26h, half two — the INDIRECT case, and the load-bearing one.
+
+    The importer and the sync engine must not route their status writes
+    through :func:`apply_status_transition`, and "must not" is a REACHABILITY
+    claim: ``import_zoho.apply_record`` calling ``records.patch_record`` puts
+    the transition on the enabled pull without either Zoho module ever naming
+    it. The old text-match fence stayed green on exactly that shape.
+
+    A pulled deal carries whatever stage Zoho has it in and no obligation to
+    satisfy an entry requirement somebody set here afterwards — and the move
+    gate reaches the entry gate unconditionally, so this is also the fence that
+    keeps the create-side refusal off the loop. Changing that loop is
+    OWNER-GATE (``work_plan.md`` §6 WS-26 (a)), so this must fail in CI rather
+    than be fixed forward.
+    """
+    from pathlib import Path
+
+    package = Path(crm_core.__file__).parent
+    chain = _gate_reached_from(package, _PULL_ENTRY_POINTS, _MOVE_GATE)
+    assert chain == [], " -> ".join(chain)
 
 
 def test_the_entry_gate_is_called_from_exactly_two_files() -> None:
@@ -1297,7 +1342,7 @@ def test_the_entry_gate_is_called_from_exactly_two_files() -> None:
     from pathlib import Path
 
     package = Path(crm_core.__file__).parent
-    assert _gate_call_files(package) == ["pipeline.py", "records.py"]
+    assert _gate_call_files(package, _ENTRY_GATE) == ["pipeline.py", "records.py"]
 
 
 def test_no_zoho_pull_path_can_reach_the_entry_gate() -> None:
@@ -1324,13 +1369,17 @@ def test_no_zoho_pull_path_can_reach_the_entry_gate() -> None:
     from pathlib import Path
 
     package = Path(crm_core.__file__).parent
-    chain = _gate_reached_from(package, _PULL_ENTRY_POINTS)
+    chain = _gate_reached_from(package, _PULL_ENTRY_POINTS, _ENTRY_GATE)
     assert chain == [], " -> ".join(chain)
 
 
-# The five shapes the two fences above claim to tell apart, run against
+# The shapes the four fences above claim to tell apart, run against
 # synthetic packages so "the fence went blind" is a red test rather than a
 # silent gap (the `test_crm_agent.py` path-guard convention).
+
+#: Where BOTH gates are allowed to be called from — the real package's answer
+#: for `_MOVE_GATE` and for `_ENTRY_GATE` alike.
+_SITED = ["pipeline.py", "records.py"]
 
 _FENCE_SOURCES = {
     "pipeline.py": (
@@ -1338,13 +1387,23 @@ _FENCE_SOURCES = {
         "    pass\n"
         "def apply_status_transition(db):\n"
         "    _require_entry_fields(1, 2, {})\n"
+        # The conversion's won-status move — why `pipeline.py` is in the move
+        # gate's own call-file set, exactly as in the real package.
+        "async def _stamp_converted(db, lead):\n"
+        "    await apply_status_transition(db)\n"
     ),
     "records.py": (
         "from gateway.routes.crm.pipeline import _require_entry_fields\n"
+        "from gateway.routes.crm.pipeline import apply_status_transition\n"
         "def _resolve_status(db, values):\n"
         "    _require_entry_fields(1, 2, values)\n"
         "def create_record(db):\n"
         "    _resolve_status(db, {})\n"
+        # The one request path that MOVES a status. Its body is what
+        # WS-26i-bulk would extract, which is why the move gate's call-file
+        # fence is what announces that extraction.
+        "async def patch_record(db, record, values):\n"
+        "    await apply_status_transition(db)\n"
     ),
     "core.py": "async def insert_row(db, table, values):\n    pass\n",
     "import_zoho.py": (
@@ -1361,34 +1420,38 @@ _FENCE_SOURCES = {
     ),
 }
 
-#: ``(name, file, extra source, expected call files, gate is reachable)``.
+#: ``(name, file, extra source, entry-gate answer, move-gate answer)`` where an
+#: answer is ``(expected call files, the gate is reachable from the pull)``.
+#: BOTH gates are asserted on EVERY case, so a shape aimed at one of them
+#: cannot quietly move the other's answer.
 _FENCE_CASES = [
-    ("baseline", None, "", ["pipeline.py", "records.py"], False),
+    ("baseline", None, "", (_SITED, False), (_SITED, False)),
+    # ── the ENTRY gate's shapes (WS-26h2) ──────────────────────────────────
     (
-        "a comment naming the gate is not a call",
+        "a comment naming the entry gate is not a call",
         "import_zoho.py",
         "# never calls _require_entry_fields(...) — the pull must stay ungated\n"
         "GATE_DOC = 'see _require_entry_fields(status, record, patch)'\n",
-        ["pipeline.py", "records.py"],
-        False,
+        (_SITED, False),
+        (_SITED, False),
     ),
     (
-        "a direct call added to import_zoho",
+        "a direct entry-gate call added to import_zoho",
         "import_zoho.py",
         "from gateway.routes.crm.pipeline import _require_entry_fields\n"
         "def gated(status, values):\n"
         "    _require_entry_fields(status, None, values)\n",
-        ["import_zoho.py", "pipeline.py", "records.py"],
-        False,
+        (["import_zoho.py", "pipeline.py", "records.py"], False),
+        (_SITED, False),
     ),
     (
-        "a direct call added to sync_zoho",
+        "a direct entry-gate call added to sync_zoho",
         "sync_zoho.py",
         "from gateway.routes.crm.pipeline import _require_entry_fields\n"
         "def gated(status, values):\n"
         "    _require_entry_fields(status, None, values)\n",
-        ["pipeline.py", "records.py", "sync_zoho.py"],
-        False,
+        (["pipeline.py", "records.py", "sync_zoho.py"], False),
+        (_SITED, False),
     ),
     (
         # ⚠️ The import is INSIDE the function on purpose, and this is the case
@@ -1401,31 +1464,31 @@ _FENCE_CASES = [
         # the one the reachability fence cannot help with (`core.insert_row` is
         # not reached from the pull entry points). A fixture with a top-level
         # import would model a siting that cannot exist.
-        "a direct call added to core, imported inside the function",
+        "a direct entry-gate call added to core, imported inside the function",
         "core.py",
         "async def insert_row_gated(db, table, values):\n"
         "    from gateway.routes.crm.pipeline import _require_entry_fields\n"
         "    _require_entry_fields(None, None, values)\n",
-        ["core.py", "pipeline.py", "records.py"],
-        False,
+        (["core.py", "pipeline.py", "records.py"], False),
+        (_SITED, False),
     ),
     (
-        "an aliased import in import_zoho",
+        "an aliased entry-gate import in import_zoho",
         "import_zoho.py",
         "from gateway.routes.crm.pipeline import _require_entry_fields as _gate\n"
         "def gated(status, values):\n"
         "    _gate(status, None, values)\n",
-        ["import_zoho.py", "pipeline.py", "records.py"],
-        False,
+        (["import_zoho.py", "pipeline.py", "records.py"], False),
+        (_SITED, False),
     ),
     (
-        "a module-attribute call in import_zoho",
+        "a module-attribute entry-gate call in import_zoho",
         "import_zoho.py",
         "from gateway.routes.crm import pipeline\n"
         "def gated(status, values):\n"
         "    pipeline._require_entry_fields(status, None, values)\n",
-        ["import_zoho.py", "pipeline.py", "records.py"],
-        False,
+        (["import_zoho.py", "pipeline.py", "records.py"], False),
+        (_SITED, False),
     ),
     (
         "the importer routed through the shared create seam",
@@ -1436,33 +1499,122 @@ _FENCE_CASES = [
         "from gateway.routes.crm.records import _resolve_status\n"
         "async def apply_record(db, values):\n"
         "    await _resolve_status(db, values)\n",
-        ["pipeline.py", "records.py"],
-        True,
+        (_SITED, True),
+        (_SITED, False),
+    ),
+    # ── the MOVE gate's shapes (WS-26h), pinned the same way ───────────────
+    (
+        # The case the TEXT fence got backwards: it went RED on this comment,
+        # making deletion of the comment the cheapest way back to green.
+        "a comment naming the move gate is not a call",
+        "import_zoho.py",
+        "# never calls apply_status_transition(...) — the pull carries whatever\n"
+        "# stage Zoho has, and the gate would refuse live upstream rows\n"
+        "GATE_DOC = 'see apply_status_transition(db, entity, record, ...)'\n",
+        (_SITED, False),
+        (_SITED, False),
+    ),
+    (
+        "a direct move-gate call added to import_zoho",
+        "import_zoho.py",
+        "from gateway.routes.crm.pipeline import apply_status_transition\n"
+        "async def moved(db, record):\n"
+        "    await apply_status_transition(db)\n",
+        (_SITED, False),
+        (["import_zoho.py", "pipeline.py", "records.py"], False),
+    ),
+    (
+        "a direct move-gate call added to sync_zoho",
+        "sync_zoho.py",
+        "from gateway.routes.crm.pipeline import apply_status_transition\n"
+        "async def moved(db, record):\n"
+        "    await apply_status_transition(db)\n",
+        (_SITED, False),
+        (["pipeline.py", "records.py", "sync_zoho.py"], False),
+    ),
+    (
+        # ⚠️ Function-body import for the same reason as the entry gate's core
+        # case — a top-level `from …pipeline import …` in the real `core.py`
+        # raises `ImportError` on the circular `CLOSING_TYPES`. A fixture with
+        # a top-level import would pin nothing about `_crm_imports`' whole-tree
+        # walk, which is the F1 gap repair round 2 closed for the entry gate.
+        "a direct move-gate call added to core, imported inside the function",
+        "core.py",
+        "async def insert_row_moved(db, table, values):\n"
+        "    from gateway.routes.crm.pipeline import apply_status_transition\n"
+        "    await apply_status_transition(db)\n",
+        (_SITED, False),
+        (["core.py", "pipeline.py", "records.py"], False),
+    ),
+    (
+        # The case the TEXT fence was BLIND to: measured green on the real
+        # package before this conversion.
+        "an aliased move-gate import in import_zoho",
+        "import_zoho.py",
+        "from gateway.routes.crm.pipeline import apply_status_transition as _move\n"
+        "async def moved(db, record):\n"
+        "    await _move(db)\n",
+        (_SITED, False),
+        (["import_zoho.py", "pipeline.py", "records.py"], False),
+    ),
+    (
+        "a module-attribute move-gate call in import_zoho",
+        "import_zoho.py",
+        "from gateway.routes.crm import pipeline\n"
+        "async def moved(db, record):\n"
+        "    await pipeline.apply_status_transition(db)\n",
+        (_SITED, False),
+        (["import_zoho.py", "pipeline.py", "records.py"], False),
+    ),
+    (
+        # The decisive one, and the second shape the TEXT fence was blind to:
+        # `apply_record` is the function the pull already runs, so routing it
+        # at the shared PATCH seam adds no call site anywhere and lands the
+        # transition — and, through it, the entry gate — on the enabled loop.
+        "the importer routed through the shared patch seam",
+        "import_zoho.py",
+        "from gateway.routes.crm.records import patch_record\n"
+        "async def apply_record(db, values):\n"
+        "    await patch_record(db, None, values)\n",
+        (_SITED, True),
+        (_SITED, True),
     ),
 ]
 
 
 @pytest.mark.parametrize(
-    ("name", "target", "extra", "expected_files", "reachable"),
+    ("name", "target", "extra", "entry", "move"),
     _FENCE_CASES,
     ids=[case[0] for case in _FENCE_CASES],
 )
 def test_the_siting_fences_see_the_shapes_they_claim_to_see(
     tmp_path, name: str, target: str | None, extra: str,
-    expected_files: list[str], reachable: bool,
+    entry: tuple[list[str], bool], move: tuple[list[str], bool],
 ) -> None:
-    """The last case is the whole reason there are two fences: the importer
-    routed through ``records._resolve_status`` adds NO call site — the file set
-    is unchanged and green — and is caught only by reachability."""
+    """Each gate's last case is the whole reason it has two fences: the
+    importer routed through ``records._resolve_status`` (entry) or
+    ``records.patch_record`` (move) adds NO call site — the file set is
+    unchanged and green — and is caught only by reachability.
+
+    The two "a comment naming the gate is not a call" cases and the two
+    "aliased import" cases are the ones the superseded text-match fences got
+    exactly backwards, in both directions.
+    """
     package = tmp_path / "crm"
     package.mkdir()
     for filename, source in _FENCE_SOURCES.items():
         body = source + (extra if filename == target else "")
         (package / filename).write_text(body, encoding="utf-8")
 
-    assert _gate_call_files(package) == expected_files, name
-    chain = _gate_reached_from(package, _PULL_ENTRY_POINTS)
-    assert bool(chain) is reachable, f"{name}: {' -> '.join(chain) or 'unreachable'}"
+    for gate, (expected_files, reachable) in (
+        (_ENTRY_GATE, entry), (_MOVE_GATE, move),
+    ):
+        label = f"{name} · {gate[1]}"
+        assert _gate_call_files(package, gate) == expected_files, label
+        chain = _gate_reached_from(package, _PULL_ENTRY_POINTS, gate)
+        assert bool(chain) is reachable, (
+            f"{label}: {' -> '.join(chain) or 'unreachable'}"
+        )
 
 
 # ── WS-26h2 · the create gate's own shape ───────────────────────────────────

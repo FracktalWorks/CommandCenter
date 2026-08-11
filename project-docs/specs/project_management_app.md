@@ -2031,6 +2031,57 @@ cancelled item, and **today counts as due**; ours must be one function, not seve
 (6) **Selection self-heals**: when the filtered list changes, drop selected ids that are no
 longer present, so a bulk action cannot fire at something off-screen.
 
+> ### ⚠️ Audit outcome 2026-08-11 — **GO-NARROWED to (1), (2) and a subset of (5)**
+> Re-derived from the tree, not from this ticket's own prose. **Two of six items describe
+> work that already exists**, which is what an unaudited "measured" header buys you.
+>
+> **Done when:** (1) `TaskList.tsx` and `TableView.tsx` render a `ControlLink` in the task
+> **title cell** — ⚠️ *not* around the row: both are `<tr onClick=…>` (`TaskList.tsx:318-321`,
+> `TableView.tsx:533-541`) and an `<a>` cannot wrap a `<tr>`; a pure `src/lib/controlLink.ts`
+> passes a test asserting plain left-click intercepts while `metaKey`/`ctrlKey`/`shiftKey`/
+> `altKey`/`button===1` do not (**assert middle-click explicitly — the upstream reference
+> missed exactly that case**); and a structural assertion in the `sharedTaskUi.test.ts:332`
+> idiom proves both files *render* it, not merely import it. (2) an outside-click walker bails
+> on `data-prevent-outside-click`, consumed at `NotificationBell.tsx:75-80`, with the
+> parent/attribute accessor **injected** so it is testable in this tree's node environment.
+> (5) `app/projects/lib/mywork.ts:64` stops disagreeing with the other predicates about
+> completion.
+> ⚠️ `TaskCardShell.tsx` is **out of scope**: it is a `role="button"` div by the documented
+> decision in its own comment at lines 70-73 (nested interactive elements inside an anchor are
+> invalid HTML).
+>
+> **(5) re-scoped — the ticket's own two claims are both wrong.** There are not "seven"
+> predicates; there are **three in TypeScript and one in SQL**: the shared
+> `src/lib/taskCard.ts:190` (correct — excludes completed) · `src/app/projects/lib/mywork.ts:64`
+> (**no completion check at all** — a finished task with a past due date renders overdue in
+> MyWork, and *that* is the real defect) · `src/app/tasks/lib/waiting.ts:68` (deliberately
+> different under a documented contract — **out of scope, do not merge it**) ·
+> `gateway/routes/projects/filters.py:182` (the best of the four: excludes done *and*
+> cancelled). Not overdue predicates and not to be merged: `tasks/lib/priority.ts:36,50`,
+> `CalendarView.tsx:195`, `StartupRitual.tsx:106` are "due soon" horizon scans.
+> 🔴 **"today counts as due" is REFUSED as under-specified and is now an owner question.**
+> Adopting it inverts two deliberately-pinned assertions that carry their reasoning in
+> comments — `src/lib/taskCard.test.ts:174` and `src/app/projects/lib/mywork.test.ts:35-42`
+> ("Pins `<` rather than `<=`: a task is late once the moment has passed, not at the moment
+> itself") — **and** changes `filters.py:182`, dragging R8 (verify SQL against a real database)
+> and R6 into a ticket labelled "logic-only, no dependency". Our store is timestamp-granular;
+> the reference is date-granular. That is a semantic choice, not a bug fix.
+>
+> **~~(3) lazy tooltip mounting~~ — MOVED to WS-27ak(2), Wave 2.** There is no `Tooltip`
+> component in `src/` at all, so there is no positioning machinery to mount lazily; the native
+> `title=` attribute has none. The item had no target here and its dependency was invisible.
+>
+> **~~(4) selected-first ordering~~ — STRUCK pending a named target.** The ticket names no
+> multi-select. The nearest candidate, the FilterBar tag row (`FilterBar.tsx:369-385`, already
+> ordered `byUsage`), is a permanently-visible chip strip with **no "open" moment**, so
+> "sorted on open and frozen while open" is meaningless there. Re-mint when a real
+> open/close multi-select exists.
+>
+> **~~(6) selection self-heals~~ — ALREADY SHIPPED. Struck.** `app/projects/page.tsx:722-733`
+> prunes the selection off `onScreen` through `src/lib/selection.ts:105 prune`, and
+> `app/tasks/lib/taskStore.ts:923` does the same. Verified verbatim — the shipped comment even
+> uses this ticket's own example ("select forty, narrow to three").
+
 **WS-27am — the three-state list surface.** 🟢 AGENT-SAFE.
 (1) The **empty-state triad**: filters-active-but-no-match (action: *Clear filters*),
 never-populated (action: *Create*), and no-permission — the last renders the CTA
@@ -2041,6 +2092,40 @@ three states — with their judgement call kept: **an empty calendar still rende
 empty chrome is meaningful there and not in a table. (3) A **per-layout error boundary**
 whose Retry re-mounts by bumping a key rather than clearing a flag (which re-crashes
 instantly). A malformed group shape must not blank the app.
+
+> ### ⚠️ Audit outcome 2026-08-11 — **GO-NARROWED to (3) in full and (1) as a capability**
+>
+> **Done when:** (3) `src/components/LayoutBoundary.tsx` wraps every canvas rendered by
+> `app/projects/page.tsx`, its Retry re-mounts by **bumping a key**, and a structural
+> assertion in the `sharedTaskUi.test.ts` idiom proves every canvas is inside it — measured,
+> **the tree contains zero error boundaries**: no `ErrorBoundary`, no `componentDidCatch`, no
+> Next `error.tsx`, so a malformed group shape blanks the whole app today. (1) the
+> **no-permission arm only**: `EmptyState.tsx` gains an *additive optional* disabled-with-reason
+> action and `emptyStateCopy` gains the third arm, unit-tested, **wired at no call site this
+> wave** (every candidate call site belongs to a parallel agent).
+>
+> **(1) is two-thirds already shipped.** `src/components/EmptyState.tsx` (promoted by S4) plus
+> `app/projects/lib/emptyState.ts:46 emptyStateCopy` already deliver filters-active-but-no-match
+> and never-populated, consumed at `TaskBoard.tsx:471` and `TaskList.tsx:207`. Only the
+> no-permission arm — CTA **disabled rather than hidden** — is new.
+>
+> **~~(2) the loader/empty/error HOC~~ — STRUCK for this wave; the doc must name its surfaces
+> first.** "One HOC **per layout**" never says which layouts: `/projects` has five canvases plus
+> MyWork, and the sentence reads tree-wide. An item that cannot be enumerated cannot be closed,
+> so it cannot be dispatched. Re-mint with the surface set written down.
+>
+> **The duplicate `EmptyState` is NOT this ticket's.** `app/tasks/components/ItemList.tsx:490`
+> declares a second one, but **WS-27ah owns retiring it** by name (§9.3, "Retire the duplicate
+> and add the SEAM row… or record why not"), and `EmptyState.tsx`'s own docstring already says
+> that edit is held by another slice. WS-27ah is Wave 4.
+>
+> ⚠️ **Two done-whens here are inherently review-only and must not be faked.** "A malformed
+> group shape must not blank the app" and "Retry re-mounts rather than re-crashing" require
+> rendering a throwing child. This tree **cannot** do that: `vitest.config.ts` is
+> `environment: "node"` with `include: ["src/**/*.test.ts"]`, so `.tsx` tests are not even
+> collected, and there is no jsdom, happy-dom or `@testing-library` installed. Adding one is a
+> substrate decision, not a papercut ticket. A pure test that Retry increments a key asserts
+> the arithmetic, not the remount — label it as such rather than letting it read as a fence.
 
 **WS-27an — the inline-autosave contract.** 🟢 AGENT-SAFE. Six behaviours, and the third is
 the one everybody omits: 1.5s debounce; save on blur with trim; **save on unmount if
@@ -2332,6 +2417,52 @@ forever. (5) **Context menu on cards and rows**, reading the same action registr
 already uses — one registry, two surfaces; measured, `/projects` has zero `onContextMenu`.
 **REF:** [`apps/web/src/lib/shortcuts/provider.tsx`](https://github.com/paca-ai/paca/blob/09dab28e3caee9e43891697998dcfa7fcf76991c/apps/web/src/lib/shortcuts/provider.tsx) · [`apps/web/src/components/plugins/PluginMarketplacePanel.tsx`](https://github.com/paca-ai/paca/blob/09dab28e3caee9e43891697998dcfa7fcf76991c/apps/web/src/components/plugins/PluginMarketplacePanel.tsx) · [`apps/web/src/components/home/UpdateBanner.tsx`](https://github.com/paca-ai/paca/blob/09dab28e3caee9e43891697998dcfa7fcf76991c/apps/web/src/components/home/UpdateBanner.tsx) · [`apps/web/src/components/projects/interactions/task-context-menu.tsx`](https://github.com/paca-ai/paca/blob/09dab28e3caee9e43891697998dcfa7fcf76991c/apps/web/src/components/projects/interactions/task-context-menu.tsx)
 
+> ### ⚠️ Audit outcome 2026-08-11 — **GO-NARROWED to (5) cards-only and (2)**
+> Three of five items describe work that is already done or has no target in this tree.
+>
+> **Done when:** (5) `src/components/ContextMenu.tsx` exists **as a promotion of
+> `app/tasks/components/ContextMenu.tsx`**, both `/tasks` and `/projects` consume that one
+> implementation, /projects cards (`TaskBoard.tsx`, `MyWork.tsx`) open it, its items are
+> derived from `app/projects/lib/commands.ts`, and a structural fence asserts **exactly one
+> shared ContextMenu** with the pre-existing `email/components/EmailList.tsx` copy recorded as
+> a **named exemption** — a fence that is silently red on arrival, or silently passes over a
+> known second copy, is worse than none. (2) `RelationsBlock.tsx` keeps `pending: Set<id>` and
+> `errors: Map<id,string>` in a pure reducer, so three concurrent operations show three
+> spinners and one failure is attributed to one row.
+>
+> 🔴 **(5) is a PROMOTION, and the ticket's own wording is the trap.** "Context menu on cards
+> and rows" reads like a build. A working generic one already exists at
+> `app/tasks/components/ContextMenu.tsx` — `CtxItem[]` union, viewport flip, Escape, click-away
+> — wired at **five** call sites (`tasks/components/TaskCard.tsx:216,298`, `InboxCard.tsx:173`,
+> `calendar/TimeGrid.tsx:521`, `calendar/UnscheduledRail.tsx:136`), and a **second** lives at
+> `email/components/EmailList.tsx:429,697`. A third would be a CLAUDE.md §5 defect authored by
+> the ticket that was meant to prevent it. ✅ `TaskCardShell.tsx` already **accepts and wires**
+> `onContextMenu` (lines 41/63/82) — /projects simply never passes it, so this is a
+> pass-through. ⚠️ The registry is `app/projects/lib/commands.ts`, **not** `src/lib/commands.ts`
+> — §11.25's shorthand misleads on the path.
+> ⚠️ **Cards only this wave.** The row half waits for WS-27al, which is making table rows
+> link-navigable in the same click path.
+>
+> **~~(1) shortcuts release unclaimed keys~~ — NO-GO.** Its own stated fence ("`preventDefault`
+> is not called when no handler is registered") is a good test **of a registry that does not
+> exist**. Keyboard handling lives in three unrelated places (`projects/page.tsx:1034`,
+> `projects/lib/search.ts:118-140`, `projects/lib/commands.ts:388-396`); consolidating them
+> mints a **third** keyboard seam, which is a seam decision, not a papercut. Separately,
+> **nothing binds `Mod+F` anywhere** — zero matches — so "falls through to find-in-page" is
+> already true by absence.
+>
+> **~~(3) clipboard failure never claims success~~ — ALREADY TRUE at all eight sites. Struck.**
+> Six of eight `clipboard.writeText` calls have an explicit `catch` that deliberately does not
+> flip "Copied", including /projects' own at `TaskPanel.tsx:493-506`, which carries a comment
+> explaining why. The two `.then()` sites (`MessageActionBar.tsx:33`, `MarkdownMessage.tsx:132`)
+> never run their success branch on rejection either — they leak an unhandled rejection, which
+> is a different and smaller defect. Re-scoping this as "one clipboard helper, eight call
+> sites" would be a legitimate ticket, but it is **a different one** and not this wave's.
+>
+> **~~(4) signature-keyed banner dismissal~~ — STRUCK, no target.** No dismissible banner with a
+> persist-forever key exists anywhere. The nearest seam, `src/lib/dismissedTools.ts`, is
+> already id-keyed — i.e. already signature-keyed in spirit.
+
 #### 9.5.3 Decisions owed
 
 **D-PM-19 (owed) — the agent autonomy gate.** **The single most important gap in either
@@ -2486,10 +2617,10 @@ written a day earlier against a description of the tree rather than a count of i
 | Focus traps, whole tree | **0** | All 7 grep hits for `focus-trap\|FocusTrap\|inert` are the *word* "inert" in prose comments. Not one real trap, not one `inert` attribute. |
 | Files with a hand-rolled `fixed inset-0` overlay | **69** | The population the missing trap applies to. |
 | Toast system (`useToast` / `<Toaster>` / `ToastProvider`) | **0** | ⚠️ **Worse than §9.4 stated.** There is no confirmation channel at all — a mutation either reports inline or reports nothing. This moved Toast up WS-27ak's order. |
-| Files using the native `title=` tooltip | **125** | §9.4 said ~157; the real figure is 125. Unstyled, ~500ms delayed, invisible on touch. |
+| Files using the native `title=` tooltip | **157** | ⚠️ **Corrected 2026-08-11.** This row first read "**125**, §9.4 said ~157; the real figure is 125" — that was my error, not §9.4's. `title="` matches 125 files, `title={` matches 108, and `title=` matches **157**. §9.4's figure was right; my narrower grep was not, and a count quoted without its method is not a measurement. Unstyled, ~500ms delayed, invisible on touch. |
 | Files improvising `animate-pulse` | **26** | §9.4 said ~20. |
 | Headless-primitive library in `package.json` | **none** | No Radix, no Base UI, no Headless UI, no cmdk, no sonner, no floating-ui. Confirms §9.4's framing: WS-27ab's palette is hand-rolled too. |
-| `<Link>` / `<a href>` on a Projects task card | **0** | 124 `onClick`, 0 `role="button"`. cmd/ctrl/middle-click cannot open a task in a new tab **anywhere** in `/projects`. |
+| `<Link>` / `<a href>` anywhere under `src/app/projects` | **0** | ⚠️ **Corrected 2026-08-11.** First written as "124 `onClick`, 0 `role=\"button\"`"; both halves were wrong. The real count is **122** `onClick` lines across 23 files, and `role="button"` is **not** absent — `TaskCardShell.tsx:74` emits it for every /projects card. **The gap is the missing `<a href>`, not the missing button role**: cmd/ctrl/shift/middle-click cannot open a task in a new tab anywhere in `/projects`. ⚠️ The list rows are `<tr>` (`TaskList.tsx:318`, `TableView.tsx:533`), so a link lands in the **title cell** — an `<a>` cannot wrap a `<tr>`. |
 | `onContextMenu` in `/projects` | **0** | ✅ **Cheaper than §9.5 implied**: `src/components/TaskCardShell.tsx` already *accepts* the prop and `/tasks` already ships `app/tasks/components/ContextMenu.tsx`. WS-27bd(5) is wiring, not building. |
 | `EmptyState` implementations | **2** | `src/components/EmptyState.tsx` + a local one at `app/tasks/components/ItemList.tsx:490`. |
 

@@ -140,11 +140,17 @@
 > re-reading before extending this:** `0` and `False` are VALUES and only `None`/blank text
 > count as absent (`_is_blank`, mirrored in `board.ts`) — a falsiness test would refuse a
 > genuine ₹0 deal, and it was measured against a real `NUMERIC` column returning
-> `Decimal('0.00')`; and **CREATE is deliberately not gated** — `POST /crm/deals` with an
-> explicit `status_id`, and the convert path's `_create_deal`, both write without coming
-> through the transition, so a settings-grid edit cannot retroactively make quick-create or
-> lead conversion refusable. Recorded in the function's own docstring rather than fixed by
-> ambush. Rot is **presentation only** (`board.ts::rotLevel` → `ROT_TONES`, amber past the
+> `Decimal('0.00')`; and **CREATE was deliberately not gated** — recorded in the
+> function's own docstring rather than fixed by ambush, and **now resolved by D-CRM-13
+> and ticketed as WS-26h2**: the explicit-`status_id` create is gated, the DEFAULTED
+> create and the convert path stay open, so a settings-grid edit still cannot
+> retroactively make quick-create or lead conversion refusable. ⚠️ **This paragraph
+> previously undercounted the ungated create paths as two** (`POST /crm/deals`,
+> `_create_deal`). **There are three.** The third is `import_zoho.apply_record` →
+> `core.upsert_by_zoho_id`, reached by the backfill route *and* by `sync_zoho.pull_phase`
+> — the **enabled** 600s loop — and it is the one that must remain ungated forever.
+> Corrected 2026-08-11; the same undercount in `pipeline.py`'s docstring was corrected in
+> the same PR. Rot is **presentation only** (`board.ts::rotLevel` → `ROT_TONES`, amber past the
 > threshold, destructive past 2×, strictly-past so a card is fine ON the allowance day):
 > nothing moves, closes or hides. `LostReasonModal` was **absorbed** into `MoveModal`
 > rather than sat beside — a lost stage can also be a gated one, and two dialogs each
@@ -959,6 +965,51 @@ WS-2 (the standing "rotate Zoho token" P0 becomes "revoke", strictly better).
   payload is unchanged and the browser is the caller's own. If the owner would rather have
   richer chat answers, the thing to change is this line, not the payload — and the room
   clearance filter is the mechanism that would have to carry it instead.
+
+- **D-CRM-13 — `DECISION (agent-proposed, owner DELEGATED the call 2026-08-11)`: entry
+  requirements gate the stage a caller CHOSE, never the stage the server DEFAULTED to.**
+  WS-26h shipped with CREATE ungated and recorded the gap; the 2026-08-11 audit found
+  that closing it naively inverts the feature. Measured, not argued: `QuickCreateModal`
+  sends no `status_id` at all and `ConvertDeal` has no `status_id` field
+  (`_create_deal` always calls `load_default_status`), so **every deal the product
+  creates lands in the default stage.** The recorded hole is therefore reachable by
+  direct API call only — not by any UI, and not by the CRM agent, which POSTs only
+  `/crm/leads` and `/convert`. Meanwhile a gate on the defaulted path would 422
+  quick-create and *every* lead conversion the moment an owner puts `required_fields`
+  on the default lane, which `admin.py` permits with no restriction. Worse:
+  `organization_id` is requirable and **neither surface can supply it** —
+  `ConvertModal.tsx:126` renders "This lead names no company, so no organization is
+  created" and offers no picker — so a default lane requiring it would make those
+  leads permanently unconvertible.
+
+  **The principle, so this is a rule rather than a workaround: entry requirements
+  exist to prove a deal EARNED its way into a stage, and a deal in the default lane
+  has claimed nothing yet.** The default lane is where deals start, not somewhere they
+  advance to; demanding proof of progress to enter it is a category error. Creating
+  straight into a late stage by API *is* a claim worth checking, and that is precisely
+  the case this gates.
+
+  This does **not** overturn `records._resolve_status`'s recorded doctrine — *"the gate
+  belongs to the status, not to the verb that reached it."* That comment governs the
+  **lost-reason** rule, which is a property of a TERMINAL status: a deal is lost or it
+  is not, however it got there. Entry requirements are a property of an ENTRY lane. Same
+  word, two different questions; the doctrine is scoped to the terminal case and stays
+  there. Anyone reading the two side by side should read this paragraph, not re-derive
+  the tension.
+
+  **Direction of travel, deliberately chosen:** this is the permissive reading, and
+  tightening later is cheap — delete the "caller supplied `status_id`" condition and
+  the strict rule falls out. The strict reading is not cheaply reversible: it ships an
+  organization picker, tells users conversion can be refused, and makes the ~1,516
+  imported leads a judgement call nobody can automate. Same expand-then-contract logic
+  R6 applies to schema, applied to product behaviour.
+
+  ⚠️ **Rider — NOT built under this decision, owed back to the owner.** `admin.py`
+  currently allows `required_fields` on the default status, which under D-CRM-13 is
+  configuration that silently does nothing. Refusing it there would make the rule
+  self-evident at the point of use instead of documented three files away. It is banked
+  rather than assumed because it changes an existing settings surface and could reject
+  configuration already saved.
 
 **Build-time decisions, recorded post-hoc (WS-26a implementer, 2026-08-05 — owner may
 overrule any of them):**
@@ -2327,6 +2378,89 @@ columns.
 **Tests:** extend `tests/unit/test_crm_pipeline.py`; vitest `board.test.ts` (rot,
 move-plan).
 
+### WS-26h2 — Entry requirements on the CHOSEN create stage · 🟢 AGENT-SAFE · no migration
+*(Minted 2026-08-11 from the WS-26h CREATE-gap audit. Contract authored by the
+spec-auditor, not by the implementer. Closes the create half of the gap **for the case a
+caller actually chose the stage**, and leaves the defaulted case deliberately open per
+**D-CRM-13** — which is where WS-26h's rationale actually bites.
+`records._resolve_status` already distinguishes the two: `values.get("status_id")` is
+the caller's choice, `load_default_status` is the server's.)*
+
+> ⚠️ **The audit corrected a miscount that both this spec and `pipeline.py`'s docstring
+> carried: there are THREE ungated create paths, not two.** The third is
+> `import_zoho.apply_record` → `core.upsert_by_zoho_id`, reached by the backfill route
+> **and by `sync_zoho.pull_phase` — the enabled 600s production loop.** It builds its own
+> `INSERT … ON CONFLICT (zoho_id) DO UPDATE` and calls neither `core.insert_row` nor
+> `records.create_record`. **It must stay ungated.** An implementer told there are two
+> paths will find the third and gate it, and the next sync cycle will start refusing rows
+> from the live upstream tenant. Both stale sentences are corrected in this ticket's PR
+> under R4.
+
+- Server: in `records._resolve_status` (`records.py:139`), beside the existing
+  lost-reason create refusal, apply `pipeline._require_entry_fields` **only when the
+  caller supplied `status_id`.** Never when the status came from `load_default_status`.
+- `_require_entry_fields` must accept "no existing row" as a first-class shape rather
+  than being handed `None` and relying on `getattr(None, field, None)` (`pipeline.py:168`).
+- The gate must be **importable into `records.py` and reachable from nowhere else.** It
+  must not be placed in `core.insert_row`, `core.upsert_by_zoho_id`,
+  `import_zoho.apply_record` or `apply_module`. `core.insert_row` keyed on
+  `table == "crm_deals"` is the tempting "one seam" and misses the pull today **only
+  because `upsert_by_zoho_id` duplicates the statement rather than delegating** — do not
+  build on that accident.
+- No migration, no UI change, no change to `core.STAGE_REQUIREABLE_FIELDS` or
+  `board.ts::REQUIREABLE_FIELDS`.
+
+**Done-when** (each measured red first, per R7):
+1. `POST /crm/deals` with an explicit `status_id` naming a stage whose `required_fields`
+   the body does not satisfy → **422 naming exactly the missing fields**, and no
+   `crm_deals` row is written.
+2. The same POST carrying the missing fields in the same body → **201**, one row,
+   `status_id` as sent.
+3. `POST /crm/deals` with **no** `status_id`, against a default stage carrying
+   `required_fields = {amount}` and a body with no amount → **201**. The defaulted path
+   is not gated (D-CRM-13).
+4. `POST /crm/leads/{id}/convert`, default stage carrying
+   `required_fields = {organization_id}`, on a lead naming no company → **200 and a deal
+   created.** Conversion is never refusable by a settings-grid edit.
+5. `required_fields = {owner_email}` on an explicitly-chosen stage with no `owner_email`
+   in the body → **201**: `create_record` defaults an absent owner from the acting user
+   before the status is resolved, so it is never absent. An explicit `"owner_email": null`
+   → 422.
+6. `0` and `Decimal("0.00")` for a required `amount` are **values** (201); `""` and
+   `"   "` are **absent** (422). Same `_is_blank` semantics as the move path, asserted on
+   the create path rather than assumed to carry.
+7. Creating a **lead** into a lead status is never gated — asserted explicitly, not left
+   to the absence of the column (`169_crm_stage_discipline.sql` is deal-only, and
+   `auto_lead.py:862` reaches `create_record` for leads).
+8. **Structural fence (R7), the load-bearing one.** Extend
+   `test_crm_pipeline.py::test_the_zoho_pull_never_enters_the_stage_gate`, or add a
+   sibling beside it, asserting the set of files under `routes/crm/` containing
+   `_require_entry_fields(` is **exactly** `["pipeline.py", "records.py"]`, with the
+   docstring stating why: `import_zoho.py` / `sync_zoho.py` / `core.py` appearing there
+   means the **enabled production sync loop** (600s, §6 WS-26 (a)) starts refusing rows
+   from the live upstream tenant on the next cycle after any settings-grid save. Assert
+   structurally, not by example — the plausible refactor ("make the importer use the
+   shared create seam") is exactly the one no example test would be watching. ⚠️ The
+   existing fence greps for the literal `apply_status_transition(` and would **not** fire
+   on this ticket's change; it protects the move gate only.
+9. `test_crm_zoho_import.py` and `test_crm_zoho_sync.py` pass **unchanged** — no edit to
+   either file is permitted in this PR. An edit there is the signal the gate was mis-sited.
+
+**Tests:** extend `tests/unit/test_crm_pipeline.py` and `tests/unit/test_crm_routes.py`;
+`tests/unit/test_crm_convert.py` for done-when 4.
+
+**Gate label: 🟢 AGENT-SAFE — conditional, and the condition is done-whens 8 and 9.**
+Stated so a reviewer can check it rather than trust it: the slice touches no Zoho code,
+needs no migration, flips no flag, and writes nothing to the live tenant beyond what any
+native create already does (a created deal is born `zoho_dirty` and pushes within one
+cycle — unchanged here). **It becomes OWNER-GATE the moment the check is placed anywhere
+`sync_zoho.pull_phase` traverses**, because §6 WS-26 (a) governs changes to a *running*
+loop. The gate label is a property of the implementation SITE, not of the ticket.
+
+**R8 does not bind this slice** — it introduces no SQL, no migration and no predicate.
+The `TEXT[]` round-trip it depends on was verified against a real Postgres 16 by WS-26h
+and is unchanged. Say so in the PR rather than leaving a reviewer to ask.
+
 ### WS-26i — Data management: merge, bulk, import/export, saved views · 🔴 AUDITED NO-GO 2026-08-11 — doc remediation is the next ticket
 *(§5.1 system 4. Deliberately thin — the WS-26d lesson: four things behind one done-when
 is how a ticket goes undispatchable. Each item below gets its own spec-auditor narrowing
@@ -2537,6 +2671,25 @@ PR (R4).
                   tests/unit/test_crm_migration.py tests/unit/test_crm_reports.py \
                   tests/unit/test_crm_email_timeline.py \
                   tests/unit/test_crm_stage_metadata.py -q
+    cd workbench/control_plane && npx tsc --noEmit && npx vitest run
+
+    # WS-26h + WS-26h2 — stage discipline: the MOVE gate and the CREATE gate.
+    # WS-26h shipped with a Tests: line but was never given a §10 block; this
+    # covers both halves.
+    # ⚠️ Every CRM route test shares tests/unit/_crm_fakes.py, so no file here
+    # is ever run alone: a drifted fake shows up as a SIBLING failing, not as
+    # this one passing.
+    # ⚠️ The two Zoho files are in this list for a reason — they are the
+    # evidence that the create gate did NOT land on the enabled production sync
+    # loop, and they must pass with ZERO edits (WS-26h2 done-when 9).
+    uv run pytest tests/unit/test_crm_pipeline.py tests/unit/test_crm_routes.py \
+                  tests/unit/test_crm_convert.py tests/unit/test_crm_migration.py \
+                  tests/unit/test_crm_stage_metadata.py \
+                  tests/unit/test_crm_stage_discipline_parity.py \
+                  tests/unit/test_crm_zoho_import.py tests/unit/test_crm_zoho_sync.py \
+                  tests/unit/test_crm_reports.py tests/unit/test_crm_email_timeline.py \
+                  tests/unit/test_crm_export.py -q
+    # WS-26h's UI half only (rot badges, move plan) — WS-26h2 renders nothing:
     cd workbench/control_plane && npx tsc --noEmit && npx vitest run
 
     # WS-26d read half — the agent, the parse-only WhatsApp constant, AND the

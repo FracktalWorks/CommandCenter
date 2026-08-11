@@ -1989,7 +1989,36 @@ a counterexample, not a model.
 
 #### 9.4.1 Owner decisions owed — these gate the tickets under them
 
-**D-PM-15 (owed, but now evidenced) — the headless-primitive substrate.** Base UI vs Radix
+> ### ✅ **D-PM-15 — ANSWERED 2026-08-11: Base UI.**
+> `DECISION (owner-answered 2026-08-11).` Chosen over Radix and over building on
+> `floating-ui`, on the evidence below: **Plane's `propel` and Paca (17 of its 24 primitives)
+> each chose Base UI independently, for exactly the primitive set WS-27ak enumerates.**
+>
+> **What this unblocks:** WS-27ak, in the debt order §9.7.2 fixed — **Modal → Tooltip → Toast
+> → Skeleton**. Measured at `ebf68f4e`: **zero focus traps** across **69** hand-rolled
+> `fixed inset-0` overlays · **no toast system at all** (no `useToast`, no `<Toaster>`, no
+> `ToastProvider`) · native `title=` tooltips in **157** files · `animate-pulse` improvised in
+> **26**.
+>
+> **Three conditions this decision carries, each of which has already failed somewhere we can
+> point at:**
+> 1. **Every primitive gets a CommandCenter wrapper in `src/components/ui/`** carrying
+>    `.cc-control`, resolving icons through `<Icon name>`, using only semantic tokens. Call
+>    sites import ours, never the library's, or the library's defaults become a second design
+>    system. **R7: the conformance suite gains a rule naming that import restriction, or the
+>    rule is advisory.**
+> 2. **One substrate, and the rule binds vendored registries too.** Paca's `package.json`
+>    carries Base UI **and** `radix-ui`, the second reaching exactly one file, inherited from a
+>    vendored component registry. That is the second-substrate failure walking in the back
+>    door — observed, not hypothesised. A `cva`/shadcn-style registry drop is the usual vector.
+> 3. **Base UI has no Combobox.** It closes WS-27ak items 1, 2, 3 and 5; **item 4 stays a
+>    build whichever substrate won**, which is why WS-27bc is sequenced ahead of this decision
+>    rather than behind it (§9.7.2).
+>
+> ⚠️ **Verify each licence at install time.** `node_modules` was absent from the read clones,
+> so every licence claim in §9.4 comes from a manifest, not from a package.
+
+**~~D-PM-15 (owed, but now evidenced)~~ — the headless-primitive substrate.** Base UI vs Radix
 vs Headless UI. Everything in WS-27ak depends on it and **picking two would create the
 parallel seam our own rules forbid**, so this is one choice made once.
 

@@ -1,7 +1,9 @@
 # Projects App — Master Plan (native project management; ClickUp retirement path)
 
 > **Product:** CommandCenter · **Feature:** Projects (the People Center's primary work-management
-> module, sliced into every other Center) · **Created:** 2026-08-05 · **Updated: 2026-08-10**
+> module, sliced into every other Center) · **Created:** 2026-08-05 · **Updated: 2026-08-11**
+> (**WS-27am's narrowed slice built — §11.28**; its item 2 struck as unbuildable-as-written) ·
+> **Previously updated 2026-08-10**
 > (status truth pass + tenancy alignment — R4; **WS-27ag shell/mobile slice built the same
 > day**; **S4 convergence slice built the same day — §11.21**; **S6 card-pills slice built the
 > same day — §11.23**; **WS-27ac calendar week/overflow slice built the same day — §11.24**;
@@ -115,6 +117,23 @@
 > UTF-8 BOM, so the saved file differed from the bytes the endpoint produced). It also found
 > a **hermetic-fake defect**: `_projects_fakes` read `?status_category=` as "hide closed
 > work", so `status_category=done` returned the OPEN tasks — fixed here. ·
+> 🟢 **WS-27am BUILT 2026-08-11 (NARROWED), on branch `ws-27am-layout-boundary`, NOT merged
+> and NOT deployed** (§11.28) — §9.4.2's item 3 in full plus item 1 as a primitive.
+> **The tree had no error boundary anywhere** (zero `componentDidCatch`, no `error.tsx`), so
+> one malformed group shape blanked the whole app: `src/components/LayoutBoundary.tsx` now
+> wraps `/projects`' canvas region, keyed by layout and project, and its **Retry re-mounts by
+> bumping a key** — arithmetic kept pure in `src/lib/layoutBoundary.ts` because vitest here is
+> node-env and cannot render. `EmptyState` gains the triad's **third arm**: a CTA drawn
+> **disabled rather than hidden** (`disabled`/`disabledReason` + `emptyStateCopy`'s
+> `canCreate`), all optional, defaults unchanged, **wired at no call site** — the three list
+> surfaces were held open by sibling slices and an additive prop needs no edit there.
+> 🔴 **§9.4.2's item 2 (the loader/empty/error HOC) is STRUCK, not built**: "one HOC per
+> layout" names no layouts and reads tree-wide, so it cannot be closed as written — a doc
+> blocker, not a build. Frontend only — no migration, no API change. ⚠️ Two claims are
+> **review-only and not fenced** ("a malformed shape must not blank the app", "Retry
+> re-mounts rather than re-crashing"): both need a render with a throwing child, and adding a
+> DOM substrate to this runner is a decision above this ticket's pay grade. Four-theme sweep
+> owed. ·
 > **Owner:** vjvarada · **Board row: WS-27**
 >
 > **Tenancy (audited 2026-08-10 — this spec previously cited no tenancy decision at all).**
@@ -4411,6 +4430,79 @@ consumes any of this yet**: the per-user overlay is served by `list_views` and t
 still reads `collapsed_lanes` from the shared config, so the behaviour changes only when a
 frontend slice adopts it. (3) The feed has **no client** in-tree — it is built for the
 agents/mobile consumers P-27 names.
+
+### 11.28 WS-27am (narrowed) — the error boundary, and the third empty state (built 2026-08-11)
+
+The ticket in §9.4.2 carries three items. **Two were built, one is struck**, and the strike
+is the part worth reading.
+
+**Struck: item 2, the loader/empty/error HOC.** The sentence is *"one HOC **per layout**"*
+and it never says which layouts. `/projects` alone has five canvases plus `MyWork`, and the
+clause reads tree-wide — so "done" is unknowable and the surface set would have been the
+implementer's guess, not the spec's decision. Recorded as a doc blocker rather than closed
+by guessing. `page.tsx`'s `renderState()` seam (WS-27ag left it marked) is untouched and
+still owed.
+
+**Item 3 — the per-layout error boundary — is the substance of the slice.** Measured before
+building: **the tree had no error boundary at all** — zero `componentDidCatch`, zero
+`ErrorBoundary`, no Next.js `error.tsx`. One malformed group shape thrown out of one card
+took React's whole root down, and the user got a white document: no chrome, no nav, and
+nothing saying which of "empty" and "broken" had happened.
+
+- `src/components/LayoutBoundary.tsx` — the class boundary, mounted in
+  `app/projects/page.tsx` around the canvas scroll region. Scoped to the **canvases**, which
+  are the code that walks server-shaped data, so the tree, toolbar, filter bar and task panel
+  stay alive while one canvas is broken: switching view, clearing a filter and picking
+  another project are all still available, and all three are plausible ways out.
+- **Retry bumps a key; it never clears a flag.** `state.attempt` is the guarded subtree's
+  `key` and only ever increments. The arithmetic lives in `src/lib/layoutBoundary.ts` so it
+  can be tested at all — vitest here is `environment: "node"` and its `include` covers
+  `.test.ts` only, so a `.tsx` test is not even collected.
+- `caught()` deliberately returns **only** `error`. It is `getDerivedStateFromError`, whose
+  return value React *merges* — an `attempt` in it would reset the key on every crash and
+  turn the key bump silently back into a flag clear. That is a fenced assertion, not a
+  comment.
+- The boundary is **keyed by layout and project** in `page.tsx`, so a crashed canvas does not
+  follow the user to data that is fine.
+
+**Item 1 — the no-permission arm — landed as a primitive capability, wired at no call site.**
+Two-thirds of the triad shipped with S4 (§11.21): `src/components/EmptyState.tsx` plus
+`app/projects/lib/emptyState.ts` already answer *filtered-to-nothing* and *never populated*.
+The third arm renders its CTA **disabled rather than hidden**, so the reader learns the
+action exists *and* that it is not theirs — hidden, they learn neither and go looking.
+`EmptyStateAction` gains optional `disabled` / `disabledReason` (and `onClick` becomes
+optional, because a disabled action has nothing to run); `emptyStateCopy` gains optional
+`canCreate`, defaulting **true** so every existing caller renders exactly what it did. The
+reason is rendered, not only tooltipped: a disabled button is not focusable, so `title`
+alone is unreachable from a keyboard and never appears on a touch screen. Precedence is
+**filtered → no-permission → status-axis → empty**, and the argued step is the middle one —
+a viewer on a column-less board must not be told *"add a status"*, because unfollowable
+advice reads as a broken app rather than as limited access. `TaskBoard`/`TaskList`/
+`TableView` were **not** edited: an additive optional prop needs no call-site change, and
+those files were held open by sibling slices.
+
+**Fences added** (R7), all mutation-measured red and restored byte-identical:
+`src/lib/layoutBoundary.test.ts` — the arithmetic (retry advances and never re-uses a key;
+`caught` cannot reset it) **and** a source scan in `sharedTaskUi.test.ts`'s idiom asserting
+the boundary is declared once, consumes the tested helpers rather than re-deriving them,
+hands `attempt` to React as a `key`, and **is the scroll region's only child**, which is what
+makes a seventh canvas guarded without anybody remembering to add a row. `emptyState.test.ts`
+gains the no-permission arm — present-but-disabled, never absent, never enabled, and
+outranked by filters.
+Mutants: hiding the CTA (4 red) · enabling it (2) · rendering `MyWork` outside the boundary
+(2) · dropping the boundary's `key` (1) · Retry clearing the flag (1) · dropping the child
+`key` (1) · `caught` returning `attempt: 0` (2) · `retry` re-using its key (3).
+
+⚠️ **Honestly outside any fence, and labelled review-only:** *"a malformed group shape must
+not blank the app"* and *"Retry re-mounts rather than re-crashing"* need a render with a
+throwing child. This runner has no jsdom and no testing-library, and adding a DOM substrate
+to fence one component is a substrate decision, not a papercut ticket — so it was **not**
+done. Those two claims are checked by throwing from a canvas and looking. The four-theme
+sweep on the fallback is owed for the same reason every UI slice in this wave owes one: no
+browser runs here. Also owed: `renderState()`'s retirement onto `EmptyState`, a caller that
+actually passes `canCreate` (the per-project write grant is not on the client's row shapes
+yet), and a `/tasks`-side boundary — `LayoutBoundary` is shared by placement, with one
+consumer.
 
 ## Board record (2026-08-09) — moved from work_plan.md §2
 

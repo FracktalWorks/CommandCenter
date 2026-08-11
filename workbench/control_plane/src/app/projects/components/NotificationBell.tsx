@@ -16,6 +16,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import Button from "@/components/ui/Button";
+import { domClickWalk, shouldDismiss } from "@/lib/outsideClick";
 
 import { type NotificationRow, notificationsApi } from "../lib/api";
 import {
@@ -69,12 +70,19 @@ export function NotificationBell({ onOpenTask }: {
   }, [load]);
 
   // Click-away, so the panel behaves like every other popover in the app.
+  //
+  // WS-27al(2) — the containment test is now the shared walker, which also
+  // honours `data-prevent-outside-click`. Nothing in /projects portals a
+  // control out of this panel *yet*, so today the two behave identically; the
+  // moment Wave 2's Combobox or date picker renders to `<body>`, containment
+  // alone would say "outside" and close the panel under the thing you were
+  // using. One answer, in `@/lib/outsideClick`, rather than one per popover.
   useEffect(() => {
     if (!open) return;
     const away = (event: MouseEvent) => {
-      if (box.current && !box.current.contains(event.target as Node)) {
-        setOpen(false);
-      }
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      if (shouldDismiss(target, domClickWalk(box.current))) setOpen(false);
     };
     document.addEventListener("mousedown", away);
     return () => document.removeEventListener("mousedown", away);

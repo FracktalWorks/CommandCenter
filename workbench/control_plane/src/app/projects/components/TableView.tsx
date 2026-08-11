@@ -24,6 +24,7 @@
  * Every group ends in the WS-27y quick-add, pre-filled with the group's value.
  */
 
+import { ControlLink } from "@/components/ControlLink";
 import Icon from "@/components/Icon";
 import { StatusChip } from "@/components/StatusChip";
 import { AvatarStack } from "@/components/TaskMeta";
@@ -36,7 +37,7 @@ import type { FieldRow, StatusRow, TaskRow } from "../lib/api";
 import { projectsApi } from "../lib/api";
 import { parseAssignees } from "../lib/assignees";
 import { sortForView } from "../lib/board";
-import { taskRef } from "../lib/card";
+import { taskDeepLink, taskRef } from "../lib/card";
 import { type FieldDef, displayValue, toInput, toWire } from "../lib/customFields";
 import { type GroupBy, type TaskGroup, UNSET, personLabel } from "../lib/grouping";
 import { dueInstantForDay, quickAddPrefill } from "../lib/quickAdd";
@@ -584,11 +585,23 @@ export function TableView({
                         <span className="text-muted-foreground">
                           {taskRef(task) ?? ""}
                         </span>
-                        <span
+                        {/* WS-27al(1) — a real `<a href>` on the title, so
+                            cmd/ctrl/shift/middle-click open the task in a new
+                            tab. A plain click is intercepted and does exactly
+                            what the cell's own handler does: park the cursor
+                            here and open the panel. It cannot delegate to that
+                            handler by bubbling, because a modified click must
+                            NOT open the panel as well as the tab. */}
+                        <ControlLink
+                          href={taskDeepLink(task)}
+                          onActivate={() => {
+                            setCell({ row: flatIndex, col: 0, editing: false });
+                            onSelect(task);
+                          }}
                           className={task.completed_at ? "line-through opacity-60" : ""}
                         >
                           {task.title}
-                        </span>
+                        </ControlLink>
                       </span>
                     </td>
                     {columns.map((column, columnIndex) => {

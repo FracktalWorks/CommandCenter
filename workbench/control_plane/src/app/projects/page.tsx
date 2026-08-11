@@ -87,7 +87,8 @@ import {
   toConfig,
   toQuery,
 } from "./lib/grouping";
-import { exportPath, filenameFromDisposition, saveCsv } from "./lib/export";
+import { filenameFromDisposition, saveCsv } from "@/lib/export";
+import { EXPORT_FILENAME, exportPath } from "./lib/export";
 import { DEFAULT_SHOWN } from "./lib/shownFields";
 import { toggleLane } from "./lib/swimlanes";
 import { type TableSort, sortQuery } from "./lib/table";
@@ -600,7 +601,10 @@ function ProjectsWorkspace() {
       // saved file would then differ from the bytes the endpoint produced.
       saveCsv(
         await res.blob(),
-        filenameFromDisposition(res.headers.get("content-disposition"))
+        filenameFromDisposition(
+          res.headers.get("content-disposition"),
+          EXPORT_FILENAME
+        )
       );
     } catch (err) {
       setError(String((err as Error).message));

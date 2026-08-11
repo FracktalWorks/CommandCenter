@@ -55,7 +55,15 @@ Control Plane (Next.js browser UI) and local development tools.
   composed a second time — while a refusal from the same endpoint still arrives as the JSON
   it actually is. Any other `[...path]` proxy that grows a non-JSON route needs the same
   change; the others are JSON-only today and correct as they stand.
-  Spec: `project-docs/specs/project_management_app.md` §11.26
+  ⚠️ **The content type was only half of it.** Both the Projects and CRM proxies then
+  did `await res.text()` and rebuilt the response — and `Response.text()` is a UTF-8
+  decode, which **strips the leading BOM** the gateway emits so Excel on Windows does not
+  read the file as the system code page. Measured on node v22: upstream `EF BB BF 4E 61
+  6D` relayed as `4E 61 6D 65`. Both now read `res.arrayBuffer()` and pass the bytes, and
+  both forward `X-Export-Rows` (this proxy is the only route to it). Fence:
+  `src/lib/export.test.ts` runs each proxy end to end over a BOM'd body.
+  Spec: `project-docs/specs/project_management_app.md` §11.26 and
+  `project-docs/specs/crm_app.md` §9 (WS-26i-export)
 - Agent-generated files (artefacts) are proxied via /api/agent/workspace/{sessionId}/file?path=
 - Image URLs in markdown are rewritten through the workspace file proxy automatically
 - Agents SHOULD write generated files to .tmp/ or outputs/ for discoverability

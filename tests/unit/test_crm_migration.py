@@ -716,12 +716,36 @@ def _declared_not_null_defaults(bare: str, table: str) -> set[str]:
 #: they are outside the guard's remit even though the SQL declares them.
 _PLATFORM_STAMPED: frozenset[str] = frozenset({"created_at", "updated_at"})
 
+#: ``ADD COLUMN IF NOT EXISTS required_fields TEXT[] NOT NULL DEFAULT '{}'`` —
+#: the same shape one migration later. Read from the WS-26h migration and NOT
+#: from the sync one for the reason stated above: `zoho_dirty` also arrives as
+#: a defaulted NOT NULL ALTER, but no request body may name it, so it is
+#: outside this guard's remit exactly as `created_at` is. `required_fields` is
+#: inside it — the settings grid PATCHes the column by name.
+_ALTER_NOT_NULL_DEFAULT_RE = re.compile(
+    r"ALTER\s+TABLE\s+(\w+)\s+ADD\s+COLUMN(?:\s+IF\s+NOT\s+EXISTS)?\s+(\w+)\s+"
+    r"[^;]*?\bNOT\s+NULL\b[^;]*?\bDEFAULT\b",
+    re.I | re.S,
+)
 
-def test_the_defaulted_not_null_map_matches_the_migration(bare: str) -> None:
+
+def _altered_not_null_defaults(bare: str, table: str) -> set[str]:
+    return {
+        column for altered, column in _ALTER_NOT_NULL_DEFAULT_RE.findall(bare)
+        if altered == table
+    }
+
+
+def test_the_defaulted_not_null_map_matches_the_migration(
+    bare: str, discipline_bare: str,
+) -> None:
     from gateway.routes.crm.core import NOT_NULL_DEFAULTED
 
     for table, declared_map in NOT_NULL_DEFAULTED.items():
-        declared = _declared_not_null_defaults(bare, table) - _PLATFORM_STAMPED
+        declared = (
+            _declared_not_null_defaults(bare, table)
+            | _altered_not_null_defaults(discipline_bare, table)
+        ) - _PLATFORM_STAMPED
         assert declared == set(declared_map), (
             f"{table}: the migration declares NOT NULL DEFAULT on "
             f"{sorted(declared)} but core.NOT_NULL_DEFAULTED says "
@@ -745,4 +769,181 @@ def test_every_crm_table_with_such_a_column_is_in_the_map(bare: str) -> None:
     assert not missing, (
         f"{missing} declare a defaulted NOT NULL column but have no entry in "
         "core.NOT_NULL_DEFAULTED, so an explicit null there is still a 500."
+    )
+
+
+# ── WS-26h · the stage-discipline migration ─────────────────────────────────
+#
+# Two columns on `crm_deal_statuses` and nothing else: `required_fields` (the
+# deal columns a stage demands before a deal may ENTER it) and `max_dwell_days`
+# (the rot threshold, NULL = never). Found by CONTENT like every other
+# migration here, so a renumber in review costs nothing (R1).
+
+
+def _discipline_migration() -> Path:
+    found = [
+        path for path in sorted(MIGRATIONS.glob("*.sql"))
+        if path.name != "schema.generated.sql"
+        and "required_fields" in path.read_text(encoding="utf-8")
+    ]
+    assert len(found) == 1, (
+        f"expected exactly one migration adding required_fields, found "
+        f"{[p.name for p in found]}"
+    )
+    return found[0]
+
+
+@pytest.fixture(scope="module")
+def discipline_bare() -> str:
+    return "\n".join(
+        re.sub(r"--.*$", "", line)
+        for line in _discipline_migration().read_text(encoding="utf-8").splitlines()
+    )
+
+
+def test_the_discipline_migration_sorts_after_the_spine_it_alters() -> None:
+    """Same two forever-true properties as the spine's, plus ordering.
+
+    The ladder is replayed in filename order, so an ALTER that sorted before
+    the CREATE it depends on would abort partway.
+    """
+    numbers = sorted(
+        int(path.name.split("_", 1)[0])
+        for path in MIGRATIONS.glob("*.sql")
+        if path.name.split("_", 1)[0].isdigit()
+    )
+    mine = int(_discipline_migration().name.split("_", 1)[0])
+    spine = int(_crm_migration().name.split("_", 1)[0])
+
+    assert numbers.count(mine) == 1, (
+        f"two migrations share number {mine} — the ladder replays them in "
+        "filename order, so one of them runs against the wrong schema"
+    )
+    assert mine - 1 in numbers, "the ladder has a gap below the WS-26h migration"
+    assert mine > spine, (
+        "the stage-discipline migration ALTERs crm_deal_statuses, which the CRM "
+        "spine creates, so it must sort after it"
+    )
+
+
+def test_the_discipline_header_says_what_why_and_what_it_depends_on() -> None:
+    lines = _discipline_migration().read_text(encoding="utf-8").splitlines()
+    header = "\n".join(
+        line for line in lines[: next(
+            i for i, line in enumerate(lines)
+            if line.strip() and not line.lstrip().startswith("--")
+        )]
+    )
+    for required in ("What:", "Why:", "Depends on:"):
+        assert required in header, f"the WS-26h migration header has no '{required}'"
+    assert "144_crm.sql" in header, (
+        "the header must name the migration whose table it alters"
+    )
+
+
+def test_every_discipline_column_add_is_guarded(discipline_bare: str) -> None:
+    """`infra/postgres/README.md` — the ladder is replayed every time, so a
+    bare ADD COLUMN fails on the second pass and takes the release with it."""
+    adds = re.findall(r"ADD\s+COLUMN(\s+IF\s+NOT\s+EXISTS)?", discipline_bare, re.I)
+    assert adds, "the WS-26h migration adds no column"
+    assert all(guard for guard in adds), (
+        "every ADD COLUMN in the WS-26h migration needs IF NOT EXISTS"
+    )
+
+
+def test_the_discipline_migration_drops_or_tightens_nothing(
+    discipline_bare: str,
+) -> None:
+    """R6 — expand only. We cannot roll back, and the currently-running code
+    meets this schema for a window, so the contract half belongs later."""
+    for forbidden in (
+        "DROP", "TRUNCATE", "DELETE FROM", "SET NOT NULL", "ALTER COLUMN",
+        "RENAME",
+    ):
+        assert forbidden not in discipline_bare.upper(), (
+            f"the WS-26h migration contains '{forbidden}' — it is additive and "
+            "expand-only by contract"
+        )
+
+
+def test_it_adds_exactly_the_two_columns_the_ticket_names(
+    discipline_bare: str,
+) -> None:
+    added = set(re.findall(
+        r"ALTER\s+TABLE\s+(\w+)\s+ADD\s+COLUMN(?:\s+IF\s+NOT\s+EXISTS)?\s+(\w+)",
+        discipline_bare,
+        re.I,
+    ))
+    assert added == {
+        ("crm_deal_statuses", "required_fields"),
+        ("crm_deal_statuses", "max_dwell_days"),
+    }, f"the WS-26h migration adds {sorted(added)}"
+
+
+def test_rot_never_defaults_to_a_threshold(discipline_bare: str) -> None:
+    """`max_dwell_days` is nullable and undefaulted: NULL means "never rots".
+
+    A default would silently give every existing lane a rot policy nobody
+    chose, and every card on the live board would grow a badge it never earned.
+    """
+    statement = re.search(
+        r"ADD\s+COLUMN(?:\s+IF\s+NOT\s+EXISTS)?\s+max_dwell_days[^;]*",
+        discipline_bare,
+        re.I,
+    )
+    assert statement is not None
+    assert "DEFAULT" not in statement.group(0).upper()
+    assert "NOT NULL" not in statement.group(0).upper()
+
+
+def test_lead_statuses_gain_nothing(discipline_bare: str) -> None:
+    """Both columns are deal-only, the same asymmetry `probability` has: the
+    allowlist is deal columns, and rot is measured off `status_changed_at`,
+    which migration 144 gave deals and withheld from leads."""
+    assert "crm_lead_statuses" not in discipline_bare
+
+
+#: ``    probability SMALLINT NOT NULL DEFAULT 0,`` → ``probability``. Anchored
+#: on a type keyword so a CHECK continuation line is not read as a column.
+_COLUMN_RE = re.compile(
+    r"^\s+(\w+)\s+(?:UUID|TEXT|INT|SMALLINT|BOOLEAN|TIMESTAMPTZ|DATE|NUMERIC|JSONB)\b",
+    re.MULTILINE,
+)
+
+
+def _declared_columns(bare: str, table: str) -> set[str]:
+    body = bare.split(f"CREATE TABLE IF NOT EXISTS {table}", 1)[1].split(");", 1)[0]
+    return set(_COLUMN_RE.findall(body))
+
+
+def test_the_deal_only_field_set_matches_the_schema(
+    bare: str, discipline_bare: str,
+) -> None:
+    """R7 — `admin.DEAL_ONLY_FIELDS` is hand-kept, so it is derived here.
+
+    It decides which payload fields answer 422 on a LEAD status instead of
+    reaching an INSERT that names a column `crm_lead_statuses` has not got. A
+    fourth deal-only column added to the model and forgotten there would be
+    silently accepted and then surface as a driver 500 — the exact defect
+    WS-26c dw 3 recorded for `probability`.
+    """
+    from gateway.routes.crm.admin import DEAL_ONLY_FIELDS, StatusIn
+
+    deal = _declared_columns(bare, "crm_deal_statuses") | {
+        column for altered, column in re.findall(
+            r"ALTER\s+TABLE\s+(\w+)\s+ADD\s+COLUMN(?:\s+IF\s+NOT\s+EXISTS)?\s+(\w+)",
+            discipline_bare,
+            re.I,
+        )
+        if altered == "crm_deal_statuses"
+    }
+    lead = _declared_columns(bare, "crm_lead_statuses")
+    # Intersected with the payload model: a deal-only column no request body
+    # can name needs no refusal, because no request can offer it.
+    expected = (deal - lead) & set(StatusIn.model_fields)
+
+    assert expected == set(DEAL_ONLY_FIELDS), (
+        f"the schema says the deal-only status fields a payload may name are "
+        f"{sorted(expected)}, but admin.DEAL_ONLY_FIELDS says "
+        f"{sorted(DEAL_ONLY_FIELDS)}"
     )

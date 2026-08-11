@@ -32,9 +32,18 @@
 > and `/crm` is **live**. The Zoho backfill has been **run and is complete** — 737
 > organizations, 1,189 contacts, 1,516 leads, 551 deals, 1,909 notes; **zero dirty rows and
 > zero unmatched owners**. §7.1's pre-flip curl check was verified against the tenant: the
-> RFC-1123 `If-Modified-Since` header is honored (304). **Nothing has ever written the Zoho
-> tenant** — that is still true, and stays true until the owner flips `CRM_ZOHO_SYNC`:
-> enabling the flag and any hand-run push cycle against prod remain OWNER-GATE
+> RFC-1123 `If-Modified-Since` header is honored (304).
+> ⚠️ **CORRECTED 2026-08-11 (WS-26i audit).** This paragraph used to end "**Nothing has ever
+> written the Zoho tenant** — that is still true, and stays true until the owner flips
+> `CRM_ZOHO_SYNC`". **That is false and has been since 2026-08-06**, when the owner ENABLED
+> the sync loop (§6 WS-26 (a); struck in this file's own Board record, which the header had
+> not been swept to match). **The loop is RUNNING**: it cycles every 600s, and
+> `core.mark_dirty_on_insert` / `mark_dirty_on_update` stamp every native write to the four
+> `ZOHO_TRACKED_TABLES` — so **any CRM write lands in the live Zoho tenant within one
+> cycle**, and a delete propagates as a real upstream DELETE via
+> `core.record_zoho_tombstone`. This is the sentence an implementer reads before deciding
+> whether a write is safe, which is why it is corrected here rather than only downstream.
+> What remains OWNER-GATE is changing the running loop and any hand-run push cycle
 > (`work_plan.md` §6).
 > · **WS-26d-email: 🟢 MERGED + DEPLOYED 2026-08-07 (PR #392)** — the
 > caller-scoped email→CRM timeline join, the address index (migration 154,
@@ -112,10 +121,95 @@
 > reads. 47 hermetic cases + 20 vitest + the 14-row shared fixture on both sides; 5
 > mutants measured red. One fake-fidelity bug found and fixed on the way: `_crm_fakes`'
 > `lower(col) = :param` reader matched a NULL column, which SQL never does.
-> · **WS-26h (stage discipline):
-> 🟢 SPECCED 2026-08-07, dispatchable — §5.1 is the blueprint, trigger was the owner's
-> first live board session (lanes out of order, imported stages at 0% probability).
-> WS-26i (data management): 🟡 SPEC-THIN, audit-narrow before dispatch.
+> · **WS-26h (stage discipline): 🟢 BUILT 2026-08-11** (branch
+> `claude/crm-command-center-tasks-i8l7n4`, migration **169** — number taken from the
+> directory at build time per R1 and re-checked at merge; every test finds the file by
+> CONTENT so a renumber in review is free). `crm_deal_statuses` gains
+> `required_fields TEXT[] NOT NULL DEFAULT '{}'` and a nullable `max_dwell_days SMALLINT`,
+> both **deal-only** — the same asymmetry `probability` already has, because the allowlist
+> is deal columns and rot is measured off `status_changed_at`, which 144 gave deals and
+> withheld from leads. The gate is `pipeline.py::_require_entry_fields`, called from
+> `apply_status_transition` immediately after the lost-reason refusal, so it inherits all
+> three of that rule's properties: **entry-only** (`records.patch_record` enters the
+> transition only when `status_id` actually MOVES), **refused before any of the three
+> effects**, and **satisfiable by the SAME PATCH** — which is what lets the modal send
+> fields + status in one request. `core.STAGE_REQUIREABLE_FIELDS` is the allowlist and is
+> validated when the column is WRITTEN, never when it is read: a typo'd name can never be
+> satisfied by any deal, so validating on the way out would leave a lane that refuses every
+> move with a message about a field that does not exist. ⚠️ **Two decisions worth
+> re-reading before extending this:** `0` and `False` are VALUES and only `None`/blank text
+> count as absent (`_is_blank`, mirrored in `board.ts`) — a falsiness test would refuse a
+> genuine ₹0 deal, and it was measured against a real `NUMERIC` column returning
+> `Decimal('0.00')`; and **CREATE is deliberately not gated** — `POST /crm/deals` with an
+> explicit `status_id`, and the convert path's `_create_deal`, both write without coming
+> through the transition, so a settings-grid edit cannot retroactively make quick-create or
+> lead conversion refusable. Recorded in the function's own docstring rather than fixed by
+> ambush. Rot is **presentation only** (`board.ts::rotLevel` → `ROT_TONES`, amber past the
+> threshold, destructive past 2×, strictly-past so a card is fine ON the allowance day):
+> nothing moves, closes or hides. `LostReasonModal` was **absorbed** into `MoveModal`
+> rather than sat beside — a lost stage can also be a gated one, and two dialogs each
+> raised by its own 422 is the shape where a user answers a question and is refused again.
+> **Fences (R7):** `test_crm_pipeline.py` +24 cases (the gate, the entry-only property, the
+> zero/blank pair, both settings validators); `test_crm_migration.py` grew a WS-26h section
+> and its `NOT_NULL_DEFAULTED` derivation now reads ALTER-added columns too — the sync
+> migration stays excluded with its existing reason (`zoho_dirty` is platform-written, this
+> column is PATCHed by name); **`test_crm_stage_discipline_parity.py` is new** and reads
+> `REQUIREABLE_FIELDS` out of `board.ts`, holding the two-language allowlist together the
+> way `CATEGORY_HUES` is held — measured red in both directions; `board.test.ts` +14,
+> `settings.test.ts` +13. **R8:** the migration was applied to a real PostgreSQL 16, replayed
+> three times for idempotency, and the package's own `insert_row`/`update_row`/`status_wire`
+> were run against it — the `TEXT[]` round-trip is the one thing the hermetic fakes cannot
+> answer. **Not deployed, not merged.**
+> WS-26i (data management): 🟡 SPEC-THIN, audit-narrow before dispatch — **except
+> WS-26i-export, below.**
+> · **WS-26i-export (the filtered-list CSV export): 🟢 BUILT + REPAIRED 2026-08-11** (branch
+> `claude/crm-command-center-tasks-i8l7n4`, **no migration**, **read-only — the live
+> Zoho tenant is untouched**). `routes/crm/export.py` =
+> `GET /crm/export/{leads,deals,contacts,organizations}.csv`, four literal paths with the
+> `export/` segment FIRST so `/crm/leads/{record_id}` cannot shadow it. The filters are the
+> caller's, through the SAME `core.list_contract` the list uses — which brings its refusals
+> with it (`?status_id` on contacts/organizations, an unknown sort key, an unknown
+> direction are all 422). ⚠️ **`ListQuery.limit` is deliberately never bound**: it is the
+> page clamp (`MAX_PAGE_SIZE = 100`) and binding it would have exported the first 100 rows
+> of the 1,516-row lead list with a 200 and no warning. The row cap is
+> `export.MAX_EXPORT_ROWS = 10_000` — "the whole CRM twice over" against a measured 3,993 —
+> and exceeding it is a **422 naming the real count**, never a partial file, checked with a
+> `count(*)` over the same WHERE before a row is rendered. **`csv_cell`, the BOM and the
+> RFC-4180 writer were PROMOTED out of `routes/projects/export.py` into
+> `gateway/csv_export.py`** and both apps now consume it (Projects re-exports the names, so
+> its test file was untouched): a formula guard with two copies is one that does not get
+> the next fix. Client half: `app/crm/lib/columns.ts` (the column vocabulary lifted out of
+> `RecordList.tsx`, which keeps only the JSX renderers), `filters.exportQuery` built by
+> deleting the page off `listQuery`, `api.exportRecords`, an Export `Button` on the four
+> list tabs, and `@/lib/export` — `filenameFromDisposition`/`saveCsv` promoted out of
+> Projects with the fallback filename made a required argument. ⚠️ **The CRM BFF proxy did
+> `res.json()` then `NextResponse.json(…)` unconditionally**, so a `text/csv` body arrived
+> as `{}` with a 200; it now passes the upstream `Content-Type` and `Content-Disposition`
+> through, the arm Projects already carried. **Fences (R7):** `tests/unit/test_crm_export.py`
+> (47 cases) — the page-clamp trap end to end at 150 rows, the cap refusal, its boundary and
+> the READ-COMMITTED race past it, the parameter-parity sweep per entity, the column
+> vocabulary READ out of `columns.ts` the way `test_crm_stage_discipline_parity.py` reads
+> `board.ts`, and done-when 7 asserted **twice**: no writer is imported (AST) and every
+> statement an export issues is a `SELECT`; `src/lib/export.test.ts` RUNS both BFF proxies
+> end to end over a BOM'd body and also sweeps them for the JSON-stamping shape;
+> `filters.test.ts` +4. Every fence was measured red before its code existed.
+> ⚠️ **Repair round 1 (2026-08-11), recorded because three of the four defects were fences
+> that passed while broken** — full write-up in §9. **(1)** Both BFF proxies did
+> `await res.text()`, a UTF-8 decode, which **strips the BOM the gateway emits**; measured
+> `EF BB BF 4E 61 6D` in, `4E 61 6D 65` out, so done-when 5 was not met end to end. Both now
+> read `res.arrayBuffer()`. **This also fixes the same bug in Projects** —
+> `api/projects/[...path]` has carried the identical arm since WS-27ae, so
+> `/projects/export/tasks.csv` reaches Excel without its BOM; it is fixed here deliberately,
+> not by accident. ⚠️ Evidenced precisely, after a verifier challenged an earlier "in
+> production" phrasing: WS-27ae is **on `main`** (`1de846a` is an ancestor of `origin/main`
+> via `ebf68f4`, PR #422) and `deploy` reported success on that SHA — **almost certainly
+> live, not proven live**, because a green job is not delivery evidence (non-negotiable 8).
+> **(2)** The done-when-1 parity fence compared the SHALLOW `dependant.query_params`, empty
+> on both sides because both use a class `Depends()` — it now recurses. **(3)** `LIMIT :cap`
+> at exactly the cap could return exactly the cap after a concurrent insert (READ COMMITTED)
+> and ship a partial file; it binds `cap + 1` and refuses on the rendered count.
+> **(4)** `X-Export-Rows` was unreachable through the proxy; both proxies forward it.
+> **Not deployed, not merged.** The other four WS-26i items stay 🔴 NO-GO.
 > **DEMO CRITICAL PATH (owner-directed 2026-08-07, §9.0): ~~dispatch D1 f~~ (∥ ~~D2 d-email~~) →
 > ~~D3 g~~ → ~~D4 d-write~~ → D5 d-autolead; h/i/e deferred past the demo. Full chain and all
 > gates intact — the order re-sequences, it does not thin.**
@@ -2199,7 +2293,11 @@ silently dropping unmatched names (e), `trim()` off the owner predicate (f), the
 upper bound (g), the leaderboard's upper bound alone (h), and `moveDeal` reverted to its
 hard-coded board fetch (i, three vitest cases).
 
-### WS-26h — Stage discipline: entry requirements + rot · 🟢 AGENT-SAFE · after f2
+### WS-26h — Stage discipline: entry requirements + rot · ✅ BUILT 2026-08-11 · 🟢 AGENT-SAFE · after f2
+*(Built on branch `claude/crm-command-center-tasks-i8l7n4`, migration 169, no owner gate
+touched. The ticket below is left as written — it is what was built against; the status
+header's WS-26h paragraph records what shipped, what was measured, and the one gap left
+open on purpose.)*
 *(§5.1 system 3. The mechanism exists in miniature: lost-type moves already demand a
 reason — `needsLostReason` in `board.ts`, enforced server-side. Generalize exactly that,
 change nothing about it.)*
@@ -2229,21 +2327,191 @@ columns.
 **Tests:** extend `tests/unit/test_crm_pipeline.py`; vitest `board.test.ts` (rot,
 move-plan).
 
-### WS-26i — Data management: merge, bulk, import/export, saved views · 🟡 SPEC-THIN — audit before dispatch
+### WS-26i — Data management: merge, bulk, import/export, saved views · 🔴 AUDITED NO-GO 2026-08-11 — doc remediation is the next ticket
 *(§5.1 system 4. Deliberately thin — the WS-26d lesson: four things behind one done-when
 is how a ticket goes undispatchable. Each item below gets its own spec-auditor narrowing
 before any build.)*
+
+> **Audit record — 2026-08-11, all five items judged separately. Do not re-run this
+> audit from the same starting point; it cost ~440s and every anchor below was opened on
+> the code, not recalled.** The row fails §1 contract point **3** (no "Done-when" and no
+> "Tests" line — the only ticket in §9 with neither), point **5** (§10 carries no WS-26i
+> verification block) and point **7** (§9's header makes an unlabeled item read AGENT-SAFE,
+> and four of the six sub-behaviours write the LIVE Zoho tenant, so the absent label is
+> doing work it cannot do). **No implementer may be dispatched from this section until a
+> per-item done-when exists.**
+>
+> **Per item:**
+> - **Duplicate merge — NO-GO, doc-blocked on the spec's own admission, and it is the
+>   destructive one.** §7.1 has no merge semantics and the writer has no merge verb. Three
+>   uncosted consequences: the loser's tombstone issues a **real DELETE against the live
+>   tenant** and we cannot roll back (R6); re-pointed activities do not follow, because
+>   `crm_activities` is outside `ZOHO_TRACKED_TABLES` and §7.1 says activity deletes sync in
+>   neither direction, so the loser's notes stay attached upstream to a record we then
+>   delete; and `ORGANIZATIONS.cascades` under-describes an org merge — `crm_contacts.organization_id`
+>   and `crm_deals.organization_id` are both `ON DELETE SET NULL` and the existing
+>   `DeleteResponse.cascaded` never reports them. Needs merge written into §7.1 and a
+>   D-CRM number. **Probably needs §6 registration too.**
+> - **Bulk actions — NO-GO on point 3; sequence it SECOND even once specced.** Two findings
+>   the precedent hides: (a) **the reuse seam Projects had does not exist here** —
+>   Projects' bulk reuses `automation.apply_task_patch(db, …)`, but CRM's
+>   `records.patch_record` OWNS its own session, so it cannot be called inside a bulk
+>   transaction; the ticket must first extract a `db`-taking patch seam or it grows a second
+>   CRM writer (the defect CLAUDE.md §4 names). (b) **WS-26h collision, larger than
+>   "bulk status change"** — `pipeline._require_entry_fields` raises a raw `HTTPException(422)`,
+>   while Projects' per-record catch is on a typed `TaskPatchError`, so that catch does not
+>   transfer; a bulk `{"status_id": X}` mass-refuses every deal missing X's `required_fields`,
+>   and each accepted move writes both a `crm_status_changes` and a `crm_activities` row
+>   (~1,500 inserts for a 500-row lane move).
+> - **CSV import — NO-GO, no precedent.** Neither `import_tasks.py` (local mirror) nor
+>   `import_clickup.py` (API) is CSV. Inherits two hazards: every created row is born
+>   `zoho_dirty` and mass-creates upstream, and §6 WS-26 (b) records that a `UNIQUE` index on
+>   `crm_leads.email` was REFUSED — so "match-by-email first" has no uniqueness to lean on.
+>   Also enters WS-26h's recorded gap from the far side: **CREATE is not gated**, so an
+>   import can seed deals into a stage whose entry requirements they do not satisfy.
+> - **Saved views — NO-GO on point 3, and its persistence call is doc-blocked in the DB
+>   direction.** `serializeView`/`parseView` do round-trip the whole view, so "a saved view
+>   is a named URL" holds. But a table means migration 170 **and** pre-empts an owner call the
+>   tenancy plan explicitly parks: `specs/multi_tenancy.md` §58-65 records that on `crm_*`,
+>   `organization_id` already means the CUSTOMER COMPANY, and *"that must be decided before
+>   WS-29d touches `crm_*`"* — while `test_tenancy_boundary.py::test_a_new_table_must_carry_a_tenant_key`
+>   refuses the table without one. A genuine pincer, and a doc blocker rather than a build one.
+> - **CSV EXPORT — the recommended slice, and the ONLY one clearable by a single doc edit.**
+>   It touches the live Zoho tenant not at all, needs no migration, collides with WS-26h not
+>   at all, and has a line-for-line sibling reviewed 24 hours earlier
+>   (`routes/projects/export.py`, WS-27ae). Real need: ~4,000 records whose only export route
+>   today is the Zoho UI we are retiring. **The auditor wrote the done-when block that clears
+>   it; adding that block to this section is the next ticket.**
+>
+> ⚠️ **Two traps recorded for whoever takes the export slice — both measured, neither
+> guessable from this spec.** (1) `core.list_contract` clamps `page_size` to
+> `MAX_PAGE_SIZE = 100`: reuse it for the WHERE clause ONLY and override the LIMIT, or the
+> export silently returns the first 100 rows of a 1,516-row lead list — the exact silent
+> truncation an export must never do, arriving through the door marked "reuse the shared
+> builder". (2) The CRM BFF proxy (`src/app/api/crm/[...path]/route.ts`) does `res.json()`
+> then `NextResponse.json(...)` unconditionally, so a `text/csv` body becomes `{}` with a
+> 200; Projects hit this and fixed it.
+>
+> **Two further drifts found and corrected in this same pass:** the bullet below said
+> "3.4k records total today" — the measured backfill is **3,993** (737 + 1,189 + 1,516 +
+> 551) and that count is five days old; and the saved-views bullet cited a "QuickFilters
+> precedent" for persistence — `QuickFilters.tsx` is a hardcoded 13-entry `CHIPS` array with
+> **zero `localStorage`**, and there is no `localStorage` anywhere under `src/app/crm/`, so
+> that precedent does not exist. Both are struck in the bullets below.
 - **Duplicate merge** (contacts/orgs): the convert modal's match rules already FIND
   duplicates (`convert.ts`, §3.7 mirror); merge = pick survivor, re-point FKs (deals,
   activities, deal_contacts), and — the hard part — express the loser to Zoho under
   D-CRM-7 semantics (a merge is an update+delete pair with tombstone implications;
   spec against §7.1 before building).
 - **Bulk actions** on the lists: multi-select → owner/status change, delete. Per-record
-  endpoints vs a bulk endpoint is an audit-time call (3.4k records total today).
+  endpoints vs a bulk endpoint is an audit-time call (~~3.4k~~ **3,993** records as
+  measured at the backfill, 2026-08-06 — corrected 2026-08-11; it is the number this
+  endpoint-shape decision rests on).
 - **CSV import/export**: export = current list filter, server-streamed; import = the Zoho
   importer's dedup discipline generalized (match-by-email first).
 - **Saved views**: the URL grammar IS the view (`urlState.ts`); a saved view is a named
-  URL. Per-user table vs localStorage is an audit-time call (QuickFilters precedent).
+  URL. Per-user table vs localStorage is an audit-time call ~~(QuickFilters precedent)~~ —
+  **struck 2026-08-11: there is no such precedent.** `QuickFilters.tsx` is a hardcoded
+  13-entry `CHIPS` array that persists nothing, and `src/app/crm/` contains no
+  `localStorage` at all. The DB direction is doc-blocked on the `crm_*` `organization_id`
+  naming call — see the audit record above.
+
+### WS-26i-export — The filtered-list CSV export · 🟢 BUILT + REPAIRED 2026-08-11 · no migration
+*(Built on branch `claude/crm-command-center-tasks-i8l7n4`; as-built record in this file's
+status header. Both traps hit and fenced. **The first cut did NOT meet done-when 5 end to
+end and claimed it did** — see the repair note below. All seven met after repair round 1.
+Not deployed, not merged.)*
+
+⚠️ **Repair round 1, 2026-08-11 — four defects, one of them decisive.** An independent
+verifier and an adversarial reviewer converged on the same byte-level finding, and it is
+recorded here rather than quietly fixed because three of the four were fences that
+*passed while the thing they fence was broken*:
+
+1. **The UTF-8 BOM was destroyed in transit.** The gateway emits it
+   (`gateway/csv_export.py`) and `test_crm_export.py` asserts it, but the BFF proxy did
+   `await res.text()` — a UTF-8 *decode*, which strips a leading byte order mark — and
+   rebuilt the response from the decoded string. Measured on node v22: upstream
+   `EF BB BF 4E 61 6D`, relayed `4E 61 6D 65`. Excel on Windows then reads the 3,993-row
+   Zoho backfill as the system code page and "Café" arrives as "CafÃ©", which is the exact
+   failure the BOM exists to prevent. Both proxies now read `res.arrayBuffer()` and pass
+   the bytes. **`api/projects/[...path]` carried the identical arm, so Projects' export
+   has served BOM-less CSV since WS-27ae** — fixed here rather than left broken while the
+   shared fence documents the broken shape as correct. That is a deliberate one-line reach
+   outside this ticket, not scope creep. ⚠️ **Deploy state, stated exactly** (an earlier
+   draft claimed "production" and a verifier rightly refused it): WS-27ae is on `main`
+   (`1de846a` ancestor of `origin/main` via `ebf68f4`, PR #422) and the `deploy` workflow
+   reported success on that SHA at 2026-08-10T23:53:53Z. Nobody has read back a ledger
+   line or a deployed SHA, so it is **almost certainly live, not proven live** — the
+   distinction CLAUDE.md non-negotiable 8 exists to keep. The defect is in merged code
+   either way.
+2. **The done-when-1 parity fence was vacuous.** It compared
+   `route.dependant.query_params`, which is the SHALLOW set; both the list and the export
+   take their filters through a class `Depends()`, so it was `set() - set()` on all four
+   entities. Adding a `city` filter to `records.ListParams` — the exact drift it claims to
+   catch — left all 46 cases green. It now recurses `dependant.dependencies`, asserts its
+   own precondition (that the flattening actually found `ListParams`), and checks the
+   reverse direction too. Measured red under that mutation on all four entities.
+3. **The LIMIT could ship a partial file instead of refusing.** `_tenant_session()` opens
+   one transaction but Postgres defaults to READ COMMITTED, so the `count(*)` and the row
+   query take different snapshots: count 9,998 → no 422 → a concurrent auto-lead insert
+   lands → `LIMIT :cap` at exactly `MAX_EXPORT_ROWS` returns exactly `MAX_EXPORT_ROWS` →
+   a partial file with a 200. The row query now binds `cap + 1` and refuses on the
+   rendered count, so the invariant no longer depends on the count and the render
+   agreeing. The extra row is evidence for a refusal, never rendered.
+4. **`X-Export-Rows` was a shipped no-op** — the BFF proxy forwarded two headers and this
+   was not one of them, so the header's stated purpose ("for anything reading this
+   programmatically") had no caller that could serve it. Forwarded rather than deleted:
+   Projects' gateway sets it too and both its unit and live suites assert it, so deleting
+   would have been the asymmetric choice.
+
+`src/lib/export.test.ts` no longer greps source for the defect it was pinning
+(`expect(source).toContain("await res.text()")`, commented "`res.text()` keeps the
+bytes" — it does not). It now **runs** both proxies end to end over a BOM'd `text/csv`
+body and compares bytes, checks a 422 from the same endpoint still arrives as readable
+JSON, and checks the filename and row count survive.
+
+*(Minted 2026-08-11 by the WS-26i audit, which is recorded above. This is the one of the
+five WS-26i items clearable by a doc edit alone: it touches the live Zoho tenant **not at
+all**, needs no migration, collides with WS-26h not at all, and has a line-for-line sibling
+in `routes/projects/export.py` (WS-27ae). Real need: ~4,000 records whose only export route
+today is the Zoho UI we are retiring. **The other four items stay NO-GO** — do not widen
+this ticket into them.)*
+
+`GET /crm/export/{entity}.csv` for the four entities, mirroring `routes/projects/export.py`.
+
+**Done-when:**
+1. The filters are the caller's, built by the **same** `core.list_contract` the list
+   endpoint uses — `q`, `status_id`, `owner`, `source`, `include_converted`, `sort`, `dir`.
+   A second filter parser is a defect.
+2. `?status_id` on contacts/organizations → **422** (the existing refusal, not a silent
+   ignore); unknown `sort` key → 422 naming the entity's allowlist; unknown `dir` → 422.
+3. **Complete or refused.** A `count(*)` over the same WHERE runs before any row is
+   rendered; over `MAX_EXPORT_ROWS` → 422 naming the real count and the cap. Never
+   truncated.
+4. Columns are the entity's declared vocabulary in declaration order, promoted out of
+   `RecordList.tsx` into `src/app/crm/lib/columns.ts` so a Python fence can read the
+   TypeScript — the mechanism `test_crm_stage_discipline_parity.py` already uses for
+   `board.ts`.
+5. RFC 4180 via `csv.writer(lineterminator="\r\n", quoting=QUOTE_MINIMAL)` + a UTF-8 BOM;
+   server-owned `Content-Disposition` filename built from the entity slug only, never from
+   free text.
+6. The BFF proxy passes the upstream `Content-Type` and `Content-Disposition` through
+   instead of stamping `application/json`; a 422 from the same endpoint still arrives as
+   JSON.
+7. Read-only: no `INSERT`, no `UPDATE`, no `zoho_dirty`, no tombstone. **Asserted, not
+   assumed** — the sync loop is running and any dirtied row is pushed to the live tenant
+   within one 600s cycle.
+
+**Tests:** new `tests/unit/test_crm_export.py`; vitest for the client half.
+
+⚠️ **Two traps, both measured 2026-08-11, neither guessable from this spec.**
+**(1)** `core.list_contract` clamps `page_size` to `MAX_PAGE_SIZE = 100`. Reuse it for the
+WHERE clause ONLY and override the LIMIT — reusing it verbatim silently exports the first
+100 rows of a 1,516-row lead list, which is the exact silent truncation done-when 3 forbids,
+arriving through the door marked "reuse the shared builder".
+**(2)** The CRM BFF proxy (`src/app/api/crm/[...path]/route.ts`) does `res.json()` then
+`NextResponse.json(...)` unconditionally, so a `text/csv` body becomes `{}` with a 200.
+Projects hit this and fixed it — copy their arm, comment and all.
 
 ### WS-26e — Cutover + retirement · 🔴 OWNER-GATE end-to-end
 Final import + parity report; §6 consumers repointed; §7.4 inventory retired; Zoho refresh
@@ -2260,6 +2528,16 @@ PR (R4).
                   tests/unit/test_crm_convert.py tests/unit/test_crm_migration.py \
                   tests/unit/test_org_access_control.py \
                   tests/unit/test_org_access_enforcement.py -q
+
+    # WS-26i-export — the CSV export. ⚠️ Every CRM route test shares
+    # tests/unit/_crm_fakes.py, so the new file is NEVER run alone: a fake that
+    # drifts shows up as another suite failing, not as this one passing.
+    uv run pytest tests/unit/test_crm_export.py tests/unit/test_crm_routes.py \
+                  tests/unit/test_crm_pipeline.py tests/unit/test_crm_convert.py \
+                  tests/unit/test_crm_migration.py tests/unit/test_crm_reports.py \
+                  tests/unit/test_crm_email_timeline.py \
+                  tests/unit/test_crm_stage_metadata.py -q
+    cd workbench/control_plane && npx tsc --noEmit && npx vitest run
 
     # WS-26d read half — the agent, the parse-only WhatsApp constant, AND the
     # four registration fences the slice leans on. Run all seven together: a

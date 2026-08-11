@@ -14,7 +14,15 @@
 
 import Icon from "@/components/Icon";
 import { useState } from "react";
-import { needsLostReason, planMove, type BoardLane, type DealMove } from "../lib/board";
+import {
+  needsLostReason,
+  planMove,
+  rotLevel,
+  ROT_TONES,
+  type BoardLane,
+  type DealMove,
+  type RotLevel,
+} from "../lib/board";
 import { compactMoney, money, shortEmail, stageAgeLabel } from "../lib/format";
 import type { Deal, Status } from "../lib/types";
 
@@ -117,6 +125,11 @@ export default function KanbanBoard({
                     key={deal.id}
                     deal={deal}
                     warnLost={needsLostReason(deal, lane.status)}
+                    // WS-26h rot: presentation only. The card's EXISTING
+                    // stage-age badge changes colour and nothing else moves,
+                    // closes or hides — discipline by visibility, not locks.
+                    rot={rotLevel(deal.status_changed_at, lane.status.max_dwell_days)}
+                    maxDwellDays={lane.status.max_dwell_days ?? null}
                     onDragStart={(e) => {
                       // ⚠️ Firefox refuses to START a drag unless dragstart
                       // sets something on the dataTransfer — without this the
@@ -153,12 +166,16 @@ export default function KanbanBoard({
 function DealCard({
   deal,
   warnLost,
+  rot,
+  maxDwellDays,
   onDragStart,
   onDragEnd,
   onOpen,
 }: {
   deal: Deal;
   warnLost: boolean;
+  rot: RotLevel;
+  maxDwellDays: number | null;
   onDragStart: (e: React.DragEvent<HTMLElement>) => void;
   onDragEnd: () => void;
   onOpen: () => void;
@@ -185,8 +202,12 @@ function DealCard({
           {money(deal.amount, deal.currency)}
         </span>
         <span
-          className="text-[10px] text-muted-foreground"
-          title="Time in this stage"
+          className={`text-[10px] ${ROT_TONES[rot]}`}
+          title={
+            maxDwellDays === null
+              ? "Time in this stage"
+              : `Time in this stage — this stage allows ${maxDwellDays} day(s)`
+          }
         >
           {stageAgeLabel(deal.status_changed_at)}
         </span>

@@ -6,6 +6,7 @@
 //
 // Spec: project-docs/specs/crm_app.md §5 surface 1.
 
+import { stageAgeDays } from "./format";
 import type { Deal, Pipeline, PipelineLane, Status, StatusType } from "./types";
 
 /** A lane as the board renders it — the wire lane plus its display totals. */
@@ -255,3 +256,108 @@ export function needsLostReason(
 ): boolean {
   return target.type === "lost" && !deal.lost_reason_id;
 }
+
+// ── WS-26h · stage discipline (spec §5.1 system 3) ────────────────────────
+//
+// Two mechanisms, deliberately unlike each other. Entry requirements are a
+// GATE — the same 422 the lost reason raises, read forward so the modal asks
+// before the card animates. Rot is PRESENTATION and nothing else: a badge
+// changes colour, no move is blocked, nothing is closed or hidden. Pipedrive's
+// lesson, adopted on purpose.
+
+/**
+ * The deal columns a stage may demand. Mirrors
+ * `routes/crm/core.py::STAGE_REQUIREABLE_FIELDS`.
+ *
+ * ⚠️ Two hand-kept lists are not a vocabulary, so this one is FENCED rather
+ * than trusted: `tests/unit/test_crm_stage_discipline_parity.py` reads this
+ * array out of this file and asserts it against the Python tuple, the same
+ * shape as the seed-colour fence in `test_projects_migration.py`. Extend both
+ * sides or neither.
+ */
+export const REQUIREABLE_FIELDS = [
+  "amount",
+  "expected_close_date",
+  "organization_id",
+  "owner_email",
+] as const;
+
+export type RequireableField = (typeof REQUIREABLE_FIELDS)[number];
+
+/** What each requirable field is called where a human reads it. */
+export const REQUIREABLE_FIELD_LABELS: Record<RequireableField, string> = {
+  amount: "Amount",
+  expected_close_date: "Expected close date",
+  organization_id: "Organization",
+  owner_email: "Owner",
+};
+
+/**
+ * Is this value absent for the purposes of an entry requirement?
+ *
+ * Mirrors `pipeline.py::_is_blank`, including the part that matters: `0` is a
+ * number somebody typed and an empty string is an unfilled box. A plain
+ * falsiness test would refuse a genuine ₹0 deal, which a pipeline really does
+ * hold — and, worse here than on the server, it would do so by popping a modal
+ * the server would then have accepted without.
+ */
+function isBlank(value: unknown): boolean {
+  if (value === null || value === undefined) return true;
+  return typeof value === "string" && !value.trim();
+}
+
+/**
+ * What the TARGET stage demands that this deal has not got — in the stage's
+ * own order, so the modal's fields read the way the grid was written.
+ *
+ * `pending` is the same PATCH's own edits, so a modal that has just collected
+ * `amount` stops asking for it. That mirrors the server reading `patch` before
+ * the row, and it is what lets fields + status travel in ONE request.
+ */
+export function missingRequiredFields(
+  deal: Partial<Record<RequireableField, unknown>>,
+  target: Pick<Status, "required_fields">,
+  pending: Partial<Record<string, unknown>> = {}
+): RequireableField[] {
+  return (target.required_fields ?? [])
+    .filter((field): field is RequireableField =>
+      (REQUIREABLE_FIELDS as readonly string[]).includes(field)
+    )
+    .filter((field) =>
+      isBlank(field in pending ? pending[field] : deal[field])
+    );
+}
+
+/**
+ * How overdue a card is in its stage. Presentation only.
+ *
+ * `"fresh"` also covers "we cannot say": a stage with no threshold, and a deal
+ * with no `status_changed_at`, are both answered as not-rotted rather than as
+ * rotted — the same rule `stageAgeDays` follows in returning null instead of 0.
+ * Colouring a card on the strength of a missing timestamp is how a badge stops
+ * meaning anything.
+ */
+export type RotLevel = "fresh" | "warn" | "over";
+
+export function rotLevel(
+  since: string | null | undefined,
+  maxDwellDays: number | null | undefined,
+  now: Date = new Date()
+): RotLevel {
+  if (!maxDwellDays || maxDwellDays <= 0) return "fresh";
+  const days = stageAgeDays(since, now);
+  if (days === null) return "fresh";
+  // Strictly past, not "at": a 14-day threshold means a card is fine ON day 14
+  // and overdue on day 15. `>=` would flag a deal the moment it hit the number
+  // the owner set as the allowance.
+  if (days > maxDwellDays * 2) return "over";
+  if (days > maxDwellDays) return "warn";
+  return "fresh";
+}
+
+/** The tone a rotted card's age badge wears. House tokens, never a colour. */
+export const ROT_TONES: Record<RotLevel, string> = {
+  fresh: "text-muted-foreground",
+  warn: "text-warning",
+  over: "text-destructive",
+};

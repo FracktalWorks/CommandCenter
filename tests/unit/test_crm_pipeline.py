@@ -287,6 +287,422 @@ async def test_the_lost_gate_applies_to_leads_too(db: FakeCrmDB) -> None:
     assert exc.value.status_code == 422
 
 
+# ── WS-26h · stage entry requirements ───────────────────────────────────────
+#
+# The lost gate above, generalized: a stage may demand any of
+# `core.STAGE_REQUIREABLE_FIELDS` before a deal is allowed to ENTER it. Every
+# property the lost gate has is asserted again here, because "generalize
+# exactly that" is the ticket and a generalisation that quietly dropped
+# refuse-before-the-effects would be a regression wearing a new feature's name.
+
+
+def _gate(db: FakeCrmDB, stage, *fields: str) -> None:
+    """Put entry requirements on a seeded stage, as the settings grid would."""
+    for row in db.rows("crm_deal_statuses"):
+        if str(row["id"]) == str(stage.id):
+            row["required_fields"] = list(fields)
+            return
+    raise AssertionError(f"no such seeded stage: {stage}")
+
+
+async def test_entering_a_gated_stage_without_the_field_is_422(
+    db: FakeCrmDB,
+) -> None:
+    stages = _deal_pipeline(db)
+    _gate(db, stages["Proposal"], "amount")
+    deal = _seed_deal(db, stages["Qualification"], amount=None)
+
+    with pytest.raises(HTTPException) as exc:
+        await crm_records.patch_record(
+            DEALS, str(deal.id),
+            crm_core.DealIn(status_id=str(stages["Proposal"].id)), USER,
+        )
+
+    assert exc.value.status_code == 422
+    # The refusal NAMES what is missing: "422" in a toast is not an answer to
+    # "why can I not move this card".
+    assert "amount" in str(exc.value.detail)
+    assert "Proposal" in str(exc.value.detail)
+
+
+async def test_the_refusal_names_every_missing_field_at_once(
+    db: FakeCrmDB,
+) -> None:
+    """Not the first one — a modal that asks for `amount`, is refused again for
+    `owner_email` and again for the close date is three round trips."""
+    stages = _deal_pipeline(db)
+    _gate(db, stages["Proposal"], "amount", "expected_close_date", "owner_email")
+    deal = _seed_deal(
+        db, stages["Qualification"],
+        amount=None, expected_close_date=None, owner_email=None,
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await crm_records.patch_record(
+            DEALS, str(deal.id),
+            crm_core.DealIn(status_id=str(stages["Proposal"].id)), USER,
+        )
+
+    detail = str(exc.value.detail)
+    for field in ("amount", "expected_close_date", "owner_email"):
+        assert field in detail
+
+
+async def test_a_refused_entry_writes_nothing_at_all(db: FakeCrmDB) -> None:
+    """Refused BEFORE the transition's three effects, exactly as the lost gate
+    is — otherwise a rejected move still leaves a funnel row saying it
+    happened."""
+    stages = _deal_pipeline(db)
+    _gate(db, stages["Proposal"], "amount")
+    deal = _seed_deal(db, stages["Qualification"], amount=None)
+
+    with pytest.raises(HTTPException):
+        await crm_records.patch_record(
+            DEALS, str(deal.id),
+            crm_core.DealIn(status_id=str(stages["Proposal"].id)), USER,
+        )
+
+    assert db.rows("crm_status_changes") == []
+    assert db.rows("crm_activities") == []
+    assert db.rows(DEALS.table)[0]["status_id"] == str(stages["Qualification"].id)
+    assert db.committed == 0
+
+
+async def test_the_same_patch_may_carry_the_missing_field(db: FakeCrmDB) -> None:
+    """The ticket's whole shape: ONE PATCH with fields + status together. Two
+    requests could half-apply, and the half that lands is the one that moved
+    the deal."""
+    stages = _deal_pipeline(db)
+    _gate(db, stages["Proposal"], "amount")
+    deal = _seed_deal(db, stages["Qualification"], amount=None)
+
+    result = await crm_records.patch_record(
+        DEALS, str(deal.id),
+        crm_core.DealIn(status_id=str(stages["Proposal"].id), amount=400000),
+        USER,
+    )
+
+    assert result["status_id"] == str(stages["Proposal"].id)
+    assert result["amount"] == 400000
+    assert len(db.rows("crm_status_changes")) == 1
+
+
+async def test_a_field_already_on_the_deal_satisfies_the_requirement(
+    db: FakeCrmDB,
+) -> None:
+    stages = _deal_pipeline(db)
+    _gate(db, stages["Proposal"], "amount")
+    deal = _seed_deal(db, stages["Qualification"], amount=250000)
+
+    result = await crm_records.patch_record(
+        DEALS, str(deal.id),
+        crm_core.DealIn(status_id=str(stages["Proposal"].id)), USER,
+    )
+
+    assert result["status_id"] == str(stages["Proposal"].id)
+
+
+async def test_a_non_move_patch_is_never_blocked_by_requirements(
+    db: FakeCrmDB,
+) -> None:
+    """Entry-only. §5.1 chose visibility over locks: a deal already sitting in a
+    stage it no longer satisfies must stay editable — including editable
+    TOWARDS satisfying it."""
+    stages = _deal_pipeline(db)
+    _gate(db, stages["Proposal"], "amount", "owner_email")
+    deal = _seed_deal(
+        db, stages["Proposal"], amount=None, owner_email=None,
+    )
+
+    result = await crm_records.patch_record(
+        DEALS, str(deal.id), crm_core.DealIn(next_step="Send the quote"), USER,
+    )
+
+    assert result["next_step"] == "Send the quote"
+    assert db.rows("crm_status_changes") == []
+
+
+async def test_a_patch_restating_the_current_status_is_not_an_entry(
+    db: FakeCrmDB,
+) -> None:
+    """`records.patch_record` only treats a body as a transition when the
+    status actually MOVES, and the gate must inherit that — a card re-saved in
+    place is not an entry."""
+    stages = _deal_pipeline(db)
+    _gate(db, stages["Proposal"], "amount")
+    deal = _seed_deal(db, stages["Proposal"], amount=None)
+
+    result = await crm_records.patch_record(
+        DEALS, str(deal.id),
+        crm_core.DealIn(status_id=str(stages["Proposal"].id)), USER,
+    )
+
+    assert result["status_id"] == str(stages["Proposal"].id)
+    assert db.rows("crm_status_changes") == []
+
+
+async def test_a_zero_amount_satisfies_an_amount_requirement(
+    db: FakeCrmDB,
+) -> None:
+    """0 is a number somebody typed, not a blank box. A plain falsiness test
+    here would refuse a genuine ₹0 deal, which a pipeline really does hold."""
+    stages = _deal_pipeline(db)
+    _gate(db, stages["Proposal"], "amount")
+    deal = _seed_deal(db, stages["Qualification"], amount=0)
+
+    result = await crm_records.patch_record(
+        DEALS, str(deal.id),
+        crm_core.DealIn(status_id=str(stages["Proposal"].id)), USER,
+    )
+
+    assert result["status_id"] == str(stages["Proposal"].id)
+
+
+async def test_a_blank_string_does_not_satisfy_a_requirement(
+    db: FakeCrmDB,
+) -> None:
+    """An empty text box is not a filled one — the opposite end of the same
+    rule as the zero above."""
+    stages = _deal_pipeline(db)
+    _gate(db, stages["Proposal"], "owner_email")
+    deal = _seed_deal(db, stages["Qualification"], owner_email="   ")
+
+    with pytest.raises(HTTPException) as exc:
+        await crm_records.patch_record(
+            DEALS, str(deal.id),
+            crm_core.DealIn(status_id=str(stages["Proposal"].id)), USER,
+        )
+
+    assert exc.value.status_code == 422
+    assert "owner_email" in str(exc.value.detail)
+
+
+async def test_clearing_a_field_in_the_same_patch_that_moves_is_refused(
+    db: FakeCrmDB,
+) -> None:
+    """What matters is the state the write LEAVES, not what was stored a moment
+    ago: a PATCH that nulls `amount` while entering a stage that requires it
+    must not be waved through on the strength of the old value."""
+    stages = _deal_pipeline(db)
+    _gate(db, stages["Proposal"], "amount")
+    deal = _seed_deal(db, stages["Qualification"], amount=400000)
+
+    with pytest.raises(HTTPException) as exc:
+        await crm_records.patch_record(
+            DEALS, str(deal.id),
+            crm_core.DealIn(status_id=str(stages["Proposal"].id), amount=None),
+            USER,
+        )
+
+    assert exc.value.status_code == 422
+    assert db.rows("crm_status_changes") == []
+
+
+async def test_an_ungated_stage_requires_nothing(db: FakeCrmDB) -> None:
+    """Every stage until somebody sets a requirement — i.e. the whole live
+    board on the day this ships."""
+    stages = _deal_pipeline(db)
+    deal = _seed_deal(
+        db, stages["Qualification"],
+        amount=None, expected_close_date=None, owner_email=None,
+    )
+
+    result = await crm_records.patch_record(
+        DEALS, str(deal.id),
+        crm_core.DealIn(status_id=str(stages["Proposal"].id)), USER,
+    )
+
+    assert result["status_id"] == str(stages["Proposal"].id)
+
+
+async def test_leads_have_no_entry_requirements(db: FakeCrmDB) -> None:
+    """`crm_lead_statuses` has no such column, so the gate must read absent as
+    "nothing required" rather than raising an AttributeError on every lead
+    move — the same asymmetry `probability` and `status_changed_at` have."""
+    stages = _lead_pipeline(db)
+    lead = db.seed(LEADS.table, lead_name="Asha", status_id=stages["New"].id)
+
+    result = await crm_records.patch_record(
+        LEADS, str(lead.id),
+        crm_core.LeadIn(status_id=str(stages["Contacted"].id)), USER,
+    )
+
+    assert result["status_id"] == str(stages["Contacted"].id)
+
+
+async def test_the_lost_gate_still_fires_first_on_a_gated_lost_stage(
+    db: FakeCrmDB,
+) -> None:
+    """Both gates guard the same move. The lost reason is the more specific
+    refusal and stays the one the caller is told about first, unchanged — the
+    ticket says generalize the mechanism, not renumber the existing rule."""
+    stages = _deal_pipeline(db)
+    _gate(db, stages["Closed Lost"], "amount")
+    deal = _seed_deal(db, stages["Qualification"], amount=None)
+
+    with pytest.raises(HTTPException) as exc:
+        await crm_records.patch_record(
+            DEALS, str(deal.id),
+            crm_core.DealIn(status_id=str(stages["Closed Lost"].id)), USER,
+        )
+
+    assert "lost_reason_id" in str(exc.value.detail)
+
+
+# ── WS-26h · what the settings grid may write ───────────────────────────────
+
+async def test_an_unknown_required_field_name_is_422(db: FakeCrmDB) -> None:
+    """The allowlist is checked on the way IN. A name no deal can ever carry
+    would make its lane refuse every move with a message about a field that
+    does not exist — a lane bricked by a typo."""
+    stages = _deal_pipeline(db)
+
+    with pytest.raises(HTTPException) as exc:
+        await crm_admin.patch_status(
+            "deal", str(stages["Proposal"].id),
+            crm_admin.StatusIn(required_fields=["amont"]), USER,
+        )
+
+    assert exc.value.status_code == 422
+    assert "amont" in str(exc.value.detail)
+    assert db.rows("crm_deal_statuses")[1].get("required_fields") is None
+
+
+@pytest.mark.parametrize(
+    "field", ["status_id", "probability", "name", "zoho_id", "id"],
+)
+async def test_only_requirable_columns_may_be_required(
+    db: FakeCrmDB, field: str,
+) -> None:
+    """Real deal columns that are still not requirable: what the move sets,
+    what the platform supplies, what is already NOT NULL, what is provenance."""
+    stages = _deal_pipeline(db)
+
+    with pytest.raises(HTTPException) as exc:
+        await crm_admin.patch_status(
+            "deal", str(stages["Proposal"].id),
+            crm_admin.StatusIn(required_fields=[field]), USER,
+        )
+
+    assert exc.value.status_code == 422
+
+
+async def test_a_repeated_required_field_is_422(db: FakeCrmDB) -> None:
+    """The blocked-move 422 lists what is missing, and a duplicate would name
+    the same field twice in it."""
+    stages = _deal_pipeline(db)
+
+    with pytest.raises(HTTPException) as exc:
+        await crm_admin.patch_status(
+            "deal", str(stages["Proposal"].id),
+            crm_admin.StatusIn(required_fields=["amount", "amount"]), USER,
+        )
+
+    assert exc.value.status_code == 422
+
+
+async def test_the_settings_grid_can_set_both_columns(db: FakeCrmDB) -> None:
+    stages = _deal_pipeline(db)
+
+    result = await crm_admin.patch_status(
+        "deal", str(stages["Proposal"].id),
+        crm_admin.StatusIn(
+            required_fields=["amount", "expected_close_date"], max_dwell_days=14,
+        ),
+        USER,
+    )
+
+    assert result.required_fields == ["amount", "expected_close_date"]
+    assert result.max_dwell_days == 14
+
+
+async def test_the_requirements_can_be_cleared(db: FakeCrmDB) -> None:
+    """An empty list is how a stage stops demanding things — and it must be a
+    legal write, or a requirement set by mistake is permanent."""
+    stages = _deal_pipeline(db)
+    _gate(db, stages["Proposal"], "amount")
+
+    result = await crm_admin.patch_status(
+        "deal", str(stages["Proposal"].id),
+        crm_admin.StatusIn(required_fields=[]), USER,
+    )
+
+    assert result.required_fields == []
+
+
+@pytest.mark.parametrize("days", [0, -1, 40000])
+async def test_a_rot_threshold_outside_the_column_is_422(
+    db: FakeCrmDB, days: int,
+) -> None:
+    """0 would paint every card in the stage amber the moment it arrived, which
+    reads as a bug rather than as a policy; NULL is how you say "never"."""
+    stages = _deal_pipeline(db)
+
+    with pytest.raises(HTTPException) as exc:
+        await crm_admin.patch_status(
+            "deal", str(stages["Proposal"].id),
+            crm_admin.StatusIn(max_dwell_days=days), USER,
+        )
+
+    assert exc.value.status_code == 422
+
+
+async def test_a_rot_threshold_may_be_cleared_to_never(db: FakeCrmDB) -> None:
+    stages = _deal_pipeline(db)
+
+    result = await crm_admin.patch_status(
+        "deal", str(stages["Proposal"].id),
+        crm_admin.StatusIn(max_dwell_days=None), USER,
+    )
+
+    assert result.max_dwell_days is None
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"required_fields": ["amount"]},
+        {"max_dwell_days": 14},
+    ],
+)
+async def test_a_lead_status_refuses_both_deal_only_columns(
+    db: FakeCrmDB, payload: dict,
+) -> None:
+    """`crm_lead_statuses` has neither column, so an INSERT/UPDATE naming one
+    would surface as a driver error rather than as the 422 this rule already
+    knows how to say — WS-26c dw 3, one ticket later."""
+    stages = _lead_pipeline(db)
+
+    with pytest.raises(HTTPException) as exc:
+        await crm_admin.patch_status(
+            "lead", str(stages["New"].id), crm_admin.StatusIn(**payload), USER,
+        )
+
+    assert exc.value.status_code == 422
+    assert "deal-only" in str(exc.value.detail)
+
+
+async def test_a_position_only_patch_is_still_not_a_forecast_decision(
+    db: FakeCrmDB,
+) -> None:
+    """The WS-26f regression, re-asserted because WS-26h adds two validators
+    ABOVE the clamp's early return: a reorder must not start answering 422
+    about a probability the caller never mentioned, or the settings grid's
+    reorder loop aborts partway and leaves duplicate positions behind."""
+    stages = _deal_pipeline(db)
+    # A lane already contradicting D-CRM-10, the shape the Zoho importer mints.
+    contradictory = db.seed(
+        "crm_deal_statuses", name="Imported Won", type="won", position=70,
+        probability=0,
+    )
+
+    result = await crm_admin.patch_status(
+        "deal", str(contradictory.id), crm_admin.StatusIn(position=15), USER,
+    )
+
+    assert result.position == 15
+
+
 # ── closed_at and probability ───────────────────────────────────────────────
 
 @pytest.mark.parametrize("stage", ["Closed Won", "Closed Lost"])
@@ -677,3 +1093,32 @@ def test_the_transition_is_the_only_writer_of_status_change_rows() -> None:
         and 'insert_row(db, "crm_status_changes"' in path.read_text(encoding="utf-8")
     )
     assert writers == ["pipeline.py"], writers
+
+
+def test_the_zoho_pull_never_enters_the_stage_gate() -> None:
+    """WS-26h — the importer and the sync engine must NOT route their status
+    writes through :func:`apply_status_transition`.
+
+    This is a live-system property, not a style preference. The sync loop is
+    **enabled on production** and pulls every cycle; a pulled deal carries
+    whatever stage Zoho has it in, and it carries no obligation to satisfy an
+    entry requirement somebody set here afterwards. Routing the pull through
+    the gate would make one settings-grid save start failing every cycle for a
+    whole Zoho module — fail-closed in the wrong direction, on a loop nobody is
+    watching.
+
+    Asserted structurally rather than by example, because the refactor that
+    would break it is a plausible one ("make the importer use the shared
+    transition helper for consistency") and no example test would be looking.
+    """
+    from pathlib import Path
+
+    package = Path(crm_core.__file__).parent
+    callers = sorted(
+        path.name for path in package.glob("*.py")
+        if "apply_status_transition(" in path.read_text(encoding="utf-8")
+    )
+    # `pipeline.py` defines it; `records.py` is the one request path that moves
+    # a status. Nothing else — in particular not import_zoho / sync_zoho /
+    # broker_handlers / auto_lead, the four that run outside a member request.
+    assert callers == ["pipeline.py", "records.py"], callers

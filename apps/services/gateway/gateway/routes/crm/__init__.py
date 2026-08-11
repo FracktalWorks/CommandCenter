@@ -29,6 +29,12 @@ API. It is a sibling of ``import_zoho`` rather than part of it because it
 imports records nowhere: it rewrites native config, and its one deal-row write
 (the ``closed_at`` proxy) deliberately bypasses ``core.update_row``.
 
+``export.py`` is WS-26i-export — ``GET /crm/export/{entity}.csv``, the
+filtered-list CSV export. Read-only, no migration, and the one WS-26i item that
+touches the live Zoho tenant not at all. Its ``export/`` segment comes FIRST for
+the shadowing reason above: ``/crm/leads/export.csv`` would sit under
+``/crm/leads/{record_id}``.
+
 ``reports.py`` is WS-26g — the four read-only ``/crm/reports/*`` blocks
 (forecast by stage, funnel, win/loss, owner leaderboard) over
 ``crm_status_changes`` and ``crm_deals``. It writes nothing and adds no
@@ -39,6 +45,7 @@ migration; the weighted-₹ expression it shares with ``pipeline`` lives in
 from gateway.routes.crm import activities as _activities  # noqa: F401
 from gateway.routes.crm import admin as _admin  # noqa: F401
 from gateway.routes.crm import deal_contacts as _deal_contacts  # noqa: F401
+from gateway.routes.crm import export as _export  # noqa: F401
 from gateway.routes.crm import import_zoho as _import_zoho  # noqa: F401
 from gateway.routes.crm import pipeline as _pipeline  # noqa: F401
 from gateway.routes.crm import records as _records  # noqa: F401

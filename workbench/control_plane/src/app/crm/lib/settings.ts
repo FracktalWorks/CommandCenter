@@ -16,6 +16,7 @@
 //      says so before the request, because "422" in a toast is not an answer
 //      to "why can I not save this row".
 
+import { REQUIREABLE_FIELDS } from "./board";
 import type { StageMetadataReport, StatusType } from "./types";
 
 /** Lanes are numbered in tens so a lane can be inserted between two by hand. */
@@ -156,6 +157,10 @@ export type StatusDraft = {
   color?: string;
   /** Deal statuses only — a lead status has no win probability. */
   probability?: number | null;
+  /** Deal statuses only (WS-26h) — entry requirements. */
+  required_fields?: string[];
+  /** Deal statuses only (WS-26h) — rot threshold; null/undefined = never. */
+  max_dwell_days?: number | null;
 };
 
 /**
@@ -192,6 +197,29 @@ export function validateStatusDraft(
       `stage a different type.`
     );
   }
+
+  // WS-26h. Same division of labour as the clamp above: the gateway is the
+  // boundary and re-checks every PATCH, and this is the sentence that explains
+  // the 422 before it happens.
+  const unknown = (draft.required_fields ?? []).filter(
+    (field) => !(REQUIREABLE_FIELDS as readonly string[]).includes(field)
+  );
+  if (unknown.length > 0) {
+    return `${JSON.stringify(unknown)} cannot be required on a stage.`;
+  }
+
+  const dwell = draft.max_dwell_days;
+  if (dwell !== null && dwell !== undefined) {
+    if (!Number.isInteger(dwell) || dwell < 1 || dwell > 32767) {
+      // Word-for-word the gateway's refusal (admin.py::_validate_max_dwell_days),
+      // so hitting the server anyway never produces a second, differently
+      // worded version of the same rule.
+      return (
+        "'max_dwell_days' is a whole number of days from 1 to 32767, or null " +
+        `for a stage that never rots: ${dwell} is neither.`
+      );
+    }
+  }
   return null;
 }
 
@@ -207,6 +235,11 @@ export function validateLostReasonDraft(label: string): string | null {
  * `probability` are judged TOGETHER by the clamp, so resending an unchanged
  * `probability` alongside a changed `type` is the difference between a 422
  * the editor caused and one the data did.
+ *
+ * ⚠️ Arrays are compared by CONTENT (WS-26h's `required_fields`). Identity
+ * would report every re-render of a row as a change, because a checkbox that
+ * toggles a field on and back off leaves a new array holding the old contents
+ * — and a grid whose Save button never goes quiet is a grid nobody trusts.
  */
 export function changedFields<T extends Record<string, unknown>>(
   before: T,
@@ -214,7 +247,19 @@ export function changedFields<T extends Record<string, unknown>>(
 ): Partial<T> {
   const out: Partial<T> = {};
   for (const key of Object.keys(after) as (keyof T)[]) {
-    if (before[key] !== after[key]) out[key] = after[key];
+    if (!sameValue(before[key], after[key])) out[key] = after[key];
   }
   return out;
+}
+
+function sameValue(before: unknown, after: unknown): boolean {
+  if (Array.isArray(before) && Array.isArray(after)) {
+    // Order-sensitive on purpose: `required_fields` is stored as written and
+    // the blocked-move 422 lists it in that order, so a reorder IS a change.
+    return (
+      before.length === after.length &&
+      before.every((item, index) => item === after[index])
+    );
+  }
+  return before === after;
 }

@@ -97,8 +97,8 @@
 > visual sweep was actually run this time** (Playwright + the pre-installed Chromium, fixtures
 > at the network boundary), which closes the check af/ag/S1/S3/S4/S5 all left owed *for this
 > surface*; one honest finding recorded in §11.23 about Material dark's pale `--warning`. ·
-> 🟢 **WS-27ab BUILT 2026-08-10 — merged onto `claude/paca-research-task-management-a1f6zd`, in PR #422; NOT on `main` and NOT
-> deployed** (§11.25) — view ergonomics, from Plane research P-14/15/16: the task panel gains
+> 🟢 **WS-27ab BUILT 2026-08-10 — merged onto `claude/paca-research-task-management-a1f6zd`, in PR #422 — **MERGED to `main` 2026-08-11** (`ebf68f4`);
+> the ~~NOT on `main` and NOT deployed~~ clause is struck, it was true only while #422 was open** (§11.25) — view ergonomics, from Plane research P-14/15/16: the task panel gains
 > **peek → side → full**, persisted per user, and Escape hands focus back to the card that
 > opened it; the saved-view association **survives an edit** and `FilterBar` grows a
 > dirty-view row (**Update view · Save as new · Reset**) driven by ONE pure
@@ -109,8 +109,8 @@
 > moved**, both keys have been in `DEFAULT_SHOWN` since WS-27x. Frontend only — no migration,
 > no API change (the view update uses the existing `PATCH /projects/views/{id}`). ✅ Browser
 > driven, and the four-theme × two-mode sweep run. ·
-> 🟢 **WS-27ac BUILT 2026-08-10 — merged onto `claude/paca-research-task-management-a1f6zd`, in PR #422; NOT on `main` and NOT
-> deployed** (§11.24) — the calendar gains a **week** layout, an **exact** `+N more` that
+> 🟢 **WS-27ac BUILT 2026-08-10 — merged onto `claude/paca-research-task-management-a1f6zd`, in PR #422 — **MERGED to `main` 2026-08-11** (`ebf68f4`);
+> the ~~NOT on `main` and NOT deployed~~ clause is struck, it was true only while #422 was open** (§11.24) — the calendar gains a **week** layout, an **exact** `+N more` that
 > expands, and a drop that says why it refused. The week is the month grid's own row, not a
 > second calculation: `mondayOffset` and `runOfDays` are shared, `MonthGrid` became
 > `CalendarGrid` with a `layout` discriminator, and `calendarWindow`/`taskDays`/`placeTasks`/
@@ -121,8 +121,8 @@
 > sweep and every gesture (overflow, quick-add, drag-reschedule, refusal) driven in a real
 > browser, pinned to UTC+5:30. ⚠️ One honest limit recorded in §11.24: of the two drop
 > refusals only the foreign-payload one is reachable today. ·
-> 🟢 **WS-27ae (EXPORT THIRD) BUILT 2026-08-10 — merged onto `claude/paca-research-task-management-a1f6zd`, in PR #422;
-> NOT on `main` and NOT deployed** (§11.26) — `GET /projects/export/tasks.csv`: the caller's
+> 🟢 **WS-27ae (EXPORT THIRD) BUILT 2026-08-10 — merged onto `claude/paca-research-task-management-a1f6zd`, in PR #422 — **MERGED to `main` 2026-08-11** (`ebf68f4`);
+> the ~~NOT on `main` and NOT deployed~~ clause is struck** (§11.26) — `GET /projects/export/tasks.csv`: the caller's
 > current filters through the one shared `build_task_filters`, the view's `shown_fields` as
 > the columns (in the vocabulary's order, which is what the table draws), `#` and `Title`
 > unconditional, and a toolbar `Export` button. **No migration** (R1: no number taken; 168 is
@@ -137,7 +137,24 @@
 > 390 px viewport were checked; and it caught a real defect (`Response.text()` strips the
 > UTF-8 BOM, so the saved file differed from the bytes the endpoint produced). It also found
 > a **hermetic-fake defect**: `_projects_fakes` read `?status_category=` as "hide closed
-> work", so `status_category=done` returned the OPEN tasks — fixed here. ·
+> work", so `status_category=done` returned the OPEN tasks — fixed here.
+> 🔧 **Correction 2026-08-11: the BOM fix above was only half applied, and this export has
+> served BOM-less CSV ever since it began serving at all.** ⚠️ **What is evidenced, stated
+> exactly** (an earlier draft of this line said "in production" and was asked to justify it,
+> correctly): WS-27ae is on `main` — `1de846a` is an ancestor of `origin/main`, merged by
+> `ebf68f4` (PR #422) — and the `deploy` workflow reported **success** on `ebf68f4` at
+> 2026-08-10T23:53:53Z. That is strong but it is *a green job*, and CLAUDE.md
+> non-negotiable 8 says delivery is verified by evidence and never by one: nobody has read a
+> ledger line or a deployed SHA back for this change. So: **almost certainly live, not
+> proven live.** The defect is real either way — it is in the merged code — and the fix does
+> not depend on which it is. `saveCsv` kept the last hop as bytes, but the BFF proxy
+> (`src/app/api/projects/[...path]/route.ts`) did `await res.text()` and rebuilt the
+> response — the same UTF-8 decode one hop earlier, so the BOM was already gone. Measured on
+> node v22 through the real handler: `EF BB BF 4E 61 6D` in, `4E 61 6D 65` out. Found and
+> fixed while building the CRM's copy of the arm (WS-26i-export, `crm_app.md` §9); the proxy
+> now reads `res.arrayBuffer()` and also forwards `X-Export-Rows`. Fence:
+> `src/lib/export.test.ts` runs both proxies end to end over a BOM'd body. **The fix rides
+> the WS-26i-export branch and is not deployed.** ·
 > 🟢 **WS-27am BUILT 2026-08-11 (NARROWED), merged onto `claude/paca-research-task-management-a1f6zd`, NOT merged to `main`
 > and NOT deployed** (§11.29) — §9.4.2's item 3 in full plus item 1 as a primitive.
 > **The tree had no error boundary anywhere** (zero `componentDidCatch`, no `error.tsx`), so
@@ -4589,8 +4606,7 @@ file is written, and the button recovers.
 ⚠️ **`saveCsv` takes a `Blob`, and the first version did not — this was a real defect caught
 only by running it.** `Response.text()` decodes UTF-8 with `TextDecoder`, which **strips a
 leading byte order mark**, so the file the browser saved was measurably different from the
-bytes the endpoint produced and the server's Excel fix was silently undone. Keeping the body
-as bytes end to end is what makes them the same file.
+bytes the endpoint produced and the server's Excel fix was silently undone.
 
 The BFF proxy (`src/app/api/projects/[...path]/route.ts`) previously stamped
 `Content-Type: application/json` on **every** response. It now forwards the gateway's own
@@ -4598,6 +4614,25 @@ content type and its `Content-Disposition`; the filename is therefore the server
 choice, read back by `filenameFromDisposition` rather than composed a second time in the
 browser. A refusal from the same endpoint is still JSON and still arrives as JSON, because
 the proxy reads what upstream sent rather than what the route usually sends.
+
+🔧 **Correction, 2026-08-11 (WS-26i-export repair round 1) — this export has shipped
+WITHOUT its BOM since WS-27ae, and the paragraph above was wrong to say the bytes survived
+"end to end".** `saveCsv` taking a `Blob` fixed the last hop only. The BFF proxy did
+`const text = await res.text()` and rebuilt the response from the decoded string, which is
+the *same* decode, one hop earlier: the BOM was gone before `saveCsv` ever saw it. Measured
+on node v22 through the real handler — upstream `EF BB BF 4E 61 6D`, relayed
+`4E 61 6D 65`. A task titled "Café" therefore reaches Excel on Windows as "CafÃ©", which is
+exactly what the gateway's BOM exists to prevent.
+
+Found while building the CRM's copy of this proxy arm (`crm_app.md` §9, WS-26i-export) and
+fixed here in the same change, because leaving one of two identical proxies broken while the
+new shared fence documents the shape as correct is worse than either. The proxy now reads
+`res.arrayBuffer()` and passes the bytes; it also forwards `X-Export-Rows`, which the
+gateway has set since WS-27ae and no caller could reach. **Fence:**
+`src/lib/export.test.ts` RUNS both proxies over a BOM'd `text/csv` body and compares bytes
+(a decoded comparison cannot see a BOM at all) — replacing the previous version, which
+asserted `toContain("await res.text()")` and so pinned the defect in place. Measured red
+under the revert. **Not deployed** — the fix rides the WS-26i-export branch.
 
 #### A hermetic-fake defect this ticket found (worth more than the feature)
 

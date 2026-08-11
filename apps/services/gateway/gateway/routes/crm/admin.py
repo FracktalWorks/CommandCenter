@@ -25,6 +25,7 @@ from typing import Any
 from acb_auth import UserContext, get_current_user
 from fastapi import Depends, HTTPException
 from gateway.routes.crm.core import (
+    STAGE_REQUIREABLE_FIELDS,
     STATUS_TYPES,
     LostReasonModel,
     StatusModel,
@@ -56,6 +57,10 @@ class StatusIn(BaseModel):
     is_default: bool | None = None
     #: Deal statuses only; ignored (and rejected) for lead statuses.
     probability: int | None = None
+    #: Deal statuses only (WS-26h) — see :data:`core.STAGE_REQUIREABLE_FIELDS`.
+    required_fields: list[str] | None = None
+    #: Deal statuses only (WS-26h) — ``None`` means this stage never rots.
+    max_dwell_days: int | None = None
 
 
 class LostReasonIn(BaseModel):
@@ -86,6 +91,85 @@ CLAMPED_PROBABILITY: dict[str, int] = {"won": 100, "lost": 0}
 #: The two fields whose movement the clamp judges. A PATCH naming neither is
 #: not a forecast decision and must never be refused on forecast grounds.
 CLAMPED_FIELDS: frozenset[str] = frozenset({"type", "probability"})
+
+#: Columns `crm_deal_statuses` has and `crm_lead_statuses` has not. Naming one
+#: of them on a lead status is a 422 rather than a silently dropped value or a
+#: driver error about a column that does not exist.
+#:
+#: Hand-kept, and therefore FENCED rather than trusted: a fourth deal-only
+#: column added without being added here would be silently accepted on a lead
+#: status — the exact defect WS-26c dw 3 recorded for `probability`.
+#: `test_crm_migration.py::test_the_deal_only_field_set_matches_the_schema`
+#: derives the same set from the two CREATE TABLE bodies plus the WS-26h ALTER
+#: and fails if this one drifts from it.
+DEAL_ONLY_FIELDS: frozenset[str] = frozenset({
+    "probability", "required_fields", "max_dwell_days",
+})
+
+
+def _validate_required_fields(values: dict[str, Any]) -> None:
+    """`required_fields` names real, requirable deal columns — or it is a 422.
+
+    Judged when the column is WRITTEN, never when it is read. A name that is
+    not a deal column can never be satisfied by any deal, so a lane holding one
+    would refuse every move into it with a message about a field that does not
+    exist — a lane bricked by a typo in a settings grid. Refusing the save is
+    the cheap end of that.
+    """
+    if "required_fields" not in values:
+        return
+    supplied = values["required_fields"]
+    if supplied is None:
+        # An explicit null on a NOT NULL DEFAULT column: `insert_row` /
+        # `update_row`'s own guard owns that message, and answering it here
+        # would give one mistake two different 422s — the same division of
+        # labour the clamp above already keeps.
+        return
+    if not isinstance(supplied, list):
+        raise HTTPException(
+            status_code=422,
+            detail="'required_fields' is a list of deal column names.",
+        )
+    unknown = [name for name in supplied if name not in STAGE_REQUIREABLE_FIELDS]
+    if unknown:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"{unknown} cannot be required on a stage. One of: "
+                f"{list(STAGE_REQUIREABLE_FIELDS)}."
+            ),
+        )
+    if len(set(supplied)) != len(supplied):
+        # Not cosmetic: the 422 a blocked move raises LISTS what is missing,
+        # and a duplicated name would name the same field twice in it.
+        raise HTTPException(
+            status_code=422,
+            detail=f"'required_fields' lists a field twice: {supplied}.",
+        )
+
+
+def _validate_max_dwell_days(values: dict[str, Any]) -> None:
+    """A rot threshold is a positive number of days, or NULL for "never".
+
+    Zero is refused rather than accepted as a synonym for NULL: a 0-day
+    threshold would paint every card in the stage amber the moment it arrived,
+    which reads as a bug rather than as a policy. The upper bound is the
+    column's own — `SMALLINT` — and a threshold nobody reaches is NULL's job.
+    """
+    if "max_dwell_days" not in values:
+        return
+    supplied = values["max_dwell_days"]
+    if supplied is None:
+        return
+    days = int(supplied)
+    if not 1 <= days <= 32767:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "'max_dwell_days' is a whole number of days from 1 to 32767, or "
+                f"null for a stage that never rots: {days} is neither."
+            ),
+        )
 
 
 def _effective(
@@ -118,13 +202,29 @@ def _validate_status(
     # `{"probability": null}` would otherwise reach an INSERT naming a column
     # `crm_lead_statuses` has not got, and surface as a driver error rather
     # than as the 422 this rule already knows how to say (WS-26c dw 3).
-    if kind == "lead" and "probability" in values:
-        raise HTTPException(
-            status_code=422,
-            detail="Lead statuses have no probability — that column is deal-only.",
-        )
+    #
+    # WS-26h's two columns join `probability` on exactly the same footing:
+    # `crm_deal_statuses` has them and `crm_lead_statuses` does not, so ONE
+    # check over :data:`DEAL_ONLY_FIELDS` is the one that cannot forget the
+    # third of them.
+    if kind == "lead":
+        offered = sorted(DEAL_ONLY_FIELDS & values.keys())
+        if offered:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"Lead statuses have no {', '.join(offered)} — "
+                    f"{'those columns are' if len(offered) > 1 else 'that column is'}"
+                    " deal-only."
+                ),
+            )
     if kind != "deal":
         return
+    # Both run BEFORE the clamp's early return below: a PATCH naming neither
+    # `type` nor `probability` is not a forecast decision, but it can still
+    # carry a bad `required_fields` or a 0-day rot threshold.
+    _validate_required_fields(values)
+    _validate_max_dwell_days(values)
     # ⚠️ **The clamp judges a TRANSITION, not a resting state.** It fires only
     # when the payload itself names `type` or `probability`; a PATCH that
     # touches neither is not a forecast decision and cannot be refused on

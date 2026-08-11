@@ -112,6 +112,25 @@ WEIGHTED_SQL = (
     "AS weighted"
 )
 
+#: The deal columns a stage may demand before a deal is allowed to ENTER it
+#: (WS-26h, §5.1 system 3) — an allowlist, validated when `required_fields` is
+#: written rather than when it is read.
+#:
+#: An allowlist and not free text because the column is user-managed through
+#: the settings grid: a typo'd name would name a column no deal can ever carry,
+#: and the lane it guards would refuse every move with a message about a field
+#: that does not exist. Validating on the way IN means the bad value never
+#: reaches the row, so no lane can be bricked by a save.
+#:
+#: All four are nullable columns on `crm_deals` that a human fills in — which
+#: is the whole population a requirement can sensibly name. `status_id` is not
+#: here (it is what the move sets), nor is any NOT NULL column (already
+#: guaranteed), nor `probability` (D-CRM-10 inherits it from the stage, so
+#: demanding it would demand something the platform is about to supply).
+STAGE_REQUIREABLE_FIELDS: tuple[str, ...] = (
+    "amount", "expected_close_date", "organization_id", "owner_email",
+)
+
 #: `crm_activities.type`, mirrored from the same migration.
 ACTIVITY_TYPES: tuple[str, ...] = (
     "note", "call", "meeting", "task", "status_change", "system",
@@ -321,6 +340,14 @@ class StatusModel(BaseModel):
     is_default: bool = False
     #: Deal statuses only — a lead status has no win probability.
     probability: int | None = None
+    #: Deal statuses only (WS-26h) — the deal columns a deal must carry before
+    #: it may ENTER this stage, drawn from :data:`STAGE_REQUIREABLE_FIELDS`.
+    #: Empty on a lead status, which is the honest answer rather than a
+    #: convenient one: leads have no entry requirements.
+    required_fields: list[str] = []
+    #: Deal statuses only (WS-26h) — days a deal may sit here before its card
+    #: wears an age badge. ``None`` = this stage never rots.
+    max_dwell_days: int | None = None
 
 
 class LostReasonModel(BaseModel):
@@ -569,6 +596,12 @@ def status_wire(row: Any) -> StatusModel:
         type=getattr(row, "type", "open"),
         is_default=bool(getattr(row, "is_default", False)),
         probability=getattr(row, "probability", None),
+        # `or []` covers both a lead-status row (no such column) and the window
+        # R6 opens on deploy, where the running code meets a table that has not
+        # got the column yet. Copied rather than aliased so a caller cannot
+        # mutate the row's own list.
+        required_fields=list(getattr(row, "required_fields", None) or []),
+        max_dwell_days=getattr(row, "max_dwell_days", None),
     )
 
 
@@ -881,7 +914,13 @@ NOT_NULL_DEFAULTED: dict[str, frozenset[str]] = {
     "crm_leads": frozenset({"source"}),
     "crm_deals": frozenset({"source", "currency", "status_changed_at"}),
     "crm_lead_statuses": frozenset({"color", "is_default"}),
-    "crm_deal_statuses": frozenset({"color", "is_default", "probability"}),
+    # `required_fields` arrives by ALTER in the WS-26h migration rather than in
+    # 144's CREATE TABLE, and it is here for the same reason the others are: the
+    # settings grid PATCHes it, so an explicit `null` is a request a client can
+    # actually make and must answer 422 rather than a driver 500.
+    "crm_deal_statuses": frozenset({
+        "color", "is_default", "probability", "required_fields",
+    }),
     "crm_lost_reasons": frozenset({"position"}),
     "crm_deal_contacts": frozenset({"is_primary"}),
     # Platform-written only (pipeline.apply_status_transition), and named here

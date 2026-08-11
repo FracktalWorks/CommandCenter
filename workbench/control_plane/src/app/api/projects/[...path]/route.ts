@@ -77,8 +77,17 @@ async function forward(
       res = await fetch(upstream, { ...init, signal: AbortSignal.timeout(30_000) });
     }
 
-    const text = await res.text();
-    if (!text) return new NextResponse(null, { status: res.status });
+    // ⚠️ **BYTES, not a string.** `Response.text()` is a UTF-8 *decode*, and a
+    // UTF-8 decode strips a leading byte order mark; re-encoding the decoded
+    // string then ships the file without it. `GET /projects/export/tasks.csv`
+    // has answered with a BOM since WS-27ae and this proxy has been deleting
+    // it ever since — a task titled "Café" reaches Excel on Windows as
+    // "CafÃ©", which is the exact failure the BOM exists to prevent. Measured
+    // on node v22: upstream `EF BB BF 4E 61 6D` relayed as `4E 61 6D 65`.
+    // (Found while fixing the CRM's copy of this arm, WS-26i-export; fenced
+    // for BOTH proxies by `src/lib/export.test.ts`.)
+    const buf = await res.arrayBuffer();
+    if (buf.byteLength === 0) return new NextResponse(null, { status: res.status });
     // ⚠️ The response type is the GATEWAY's, not a constant. This used to
     // stamp `application/json` on everything, which is right for every route
     // but one: WS-27ae's `GET /export/tasks.csv` answers `text/csv` with a
@@ -94,7 +103,12 @@ async function forward(
     // Forwarded because the FILENAME is the server's to choose — dropping it
     // would leave the client inventing a second one that drifts.
     if (disposition) headers["Content-Disposition"] = disposition;
-    return new NextResponse(text, { status: res.status, headers });
+    // The gateway's honest row count beside the file. Forwarded because a
+    // header no caller can reach is a header that does not exist: this proxy
+    // is the ONLY route to the export.
+    const exportRows = res.headers.get("x-export-rows");
+    if (exportRows) headers["X-Export-Rows"] = exportRows;
+    return new NextResponse(buf, { status: res.status, headers });
   } catch (err) {
     return NextResponse.json(
       { detail: `Projects gateway unreachable: ${String(err)}` },

@@ -22,7 +22,12 @@ import Icon from "@/components/Icon";
 import Button from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { useState } from "react";
-import { statusTone, TONE_COLORS } from "../lib/board";
+import {
+  REQUIREABLE_FIELD_LABELS,
+  REQUIREABLE_FIELDS,
+  statusTone,
+  TONE_COLORS,
+} from "../lib/board";
 import {
   backfillRan,
   changedFields,
@@ -445,6 +450,8 @@ function StatusRow({
         type: draft.type,
         probability: draft.probability,
         color: draft.color,
+        required_fields: draft.required_fields,
+        max_dwell_days: draft.max_dwell_days,
       },
       kind
     );
@@ -551,6 +558,75 @@ function StatusRow({
         disabled={saving}
         onClick={() => void onRemove()}
       />
+
+      {/* WS-26h — on its own line, because it is a sentence rather than a
+          field: the lane above says what this stage IS, and this says what it
+          demands and how long it tolerates a deal sitting in it. */}
+      {kind === "deal" && (
+        <div className="flex w-full flex-wrap items-center gap-3 pl-6">
+          <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
+            Requires
+          </span>
+          {REQUIREABLE_FIELDS.map((field) => {
+            const on = (draft.required_fields ?? []).includes(field);
+            return (
+              <label
+                key={field}
+                className="flex items-center gap-1 text-xs text-muted-foreground"
+              >
+                <input
+                  type="checkbox"
+                  checked={on}
+                  onChange={() =>
+                    setDraft({
+                      ...draft,
+                      // Rebuilt from the allowlist rather than pushed/spliced,
+                      // so the stored order is always the allowlist's — the
+                      // blocked-move 422 lists these, and an order that
+                      // depended on click sequence would make the same stage
+                      // read differently to two people who set it up.
+                      required_fields: REQUIREABLE_FIELDS.filter((name) =>
+                        name === field
+                          ? !on
+                          : (draft.required_fields ?? []).includes(name)
+                      ),
+                    })
+                  }
+                  className="accent-primary"
+                />
+                {REQUIREABLE_FIELD_LABELS[field]}
+              </label>
+            );
+          })}
+          <label
+            className="flex items-center gap-1 text-xs text-muted-foreground"
+            title="Days in this stage before a card's age badge warns. Empty = never rots."
+          >
+            rots after
+            <Input
+              inputSize="sm"
+              type="number"
+              min={1}
+              max={32767}
+              value={draft.max_dwell_days ?? ""}
+              onChange={(e) =>
+                setDraft({
+                  ...draft,
+                  // An emptied box is "never", which is NULL — not 0, which
+                  // the gateway refuses precisely because it would paint every
+                  // card in the stage amber the moment it arrived.
+                  max_dwell_days:
+                    e.target.value === "" ? null : Number(e.target.value),
+                })
+              }
+              className="w-16"
+              aria-label="Rot threshold in days"
+            />
+            days
+          </label>
+        </div>
+      )}
+
       {invalid && (
         <p className="w-full text-xs text-destructive">{invalid}</p>
       )}

@@ -16,7 +16,7 @@ import { create } from "zustand";
 import * as api from "./api";
 import { CrmError } from "./api";
 import { applyMove, toBoardLanes, type BoardLane, type DealMove } from "./board";
-import { listQuery } from "./filters";
+import { exportQuery, listQuery } from "./filters";
 import {
   applyPatches,
   reorderFailureMessage,
@@ -77,6 +77,16 @@ type CrmState = {
   /** WS-26g — the reports tab's read. All four blocks, in one pass. */
   loadReports: (view: CrmView) => Promise<void>;
   loadList: (entity: EntitySlug, view: CrmView) => Promise<void>;
+  /**
+   * WS-26i-export — the visible list, as a CSV.
+   *
+   * A read, so it does not touch `saving`; but it DOES surface its refusal
+   * through the same banner every write uses, because the useful answer here
+   * is a refusal: the gateway answers 422 naming the matched count when the
+   * filter is wider than the export cap, and a download button that silently
+   * did nothing would read as broken.
+   */
+  exportList: (entity: EntitySlug, view: CrmView) => Promise<void>;
   loadRecord: (entity: EntitySlug, id: string) => Promise<void>;
   loadDirectories: () => Promise<void>;
   moveDeal: (move: DealMove, extra?: Record<string, unknown>) => Promise<void>;
@@ -236,6 +246,15 @@ export const useCrmStore = create<CrmState>((set, get) => ({
       set({ error: message(err), rows: [], total: 0 });
     } finally {
       set({ loading: false });
+    }
+  },
+
+  async exportList(entity, view) {
+    set({ error: null });
+    try {
+      await api.exportRecords(entity, exportQuery(entity, view));
+    } catch (err) {
+      set({ error: message(err) });
     }
   },
 

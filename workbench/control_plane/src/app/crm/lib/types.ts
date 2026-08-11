@@ -25,6 +25,15 @@ export type Status = {
   is_default: boolean;
   /** Deal statuses only — a lead status has no win probability. */
   probability?: number | null;
+  /**
+   * Deal statuses only (WS-26h) — the deal columns a deal must carry before it
+   * may ENTER this stage. The gateway always sends it (empty on a lead
+   * status), and it is optional here only for the R6 window in which a
+   * newer browser bundle meets an older gateway.
+   */
+  required_fields?: string[];
+  /** Deal statuses only (WS-26h) — days before a card rots. Null = never. */
+  max_dwell_days?: number | null;
 };
 
 /** The two status vocabularies, and the URL segment each lives at. */

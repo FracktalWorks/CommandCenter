@@ -32,9 +32,18 @@
 > and `/crm` is **live**. The Zoho backfill has been **run and is complete** — 737
 > organizations, 1,189 contacts, 1,516 leads, 551 deals, 1,909 notes; **zero dirty rows and
 > zero unmatched owners**. §7.1's pre-flip curl check was verified against the tenant: the
-> RFC-1123 `If-Modified-Since` header is honored (304). **Nothing has ever written the Zoho
-> tenant** — that is still true, and stays true until the owner flips `CRM_ZOHO_SYNC`:
-> enabling the flag and any hand-run push cycle against prod remain OWNER-GATE
+> RFC-1123 `If-Modified-Since` header is honored (304).
+> ⚠️ **CORRECTED 2026-08-11 (WS-26i audit).** This paragraph used to end "**Nothing has ever
+> written the Zoho tenant** — that is still true, and stays true until the owner flips
+> `CRM_ZOHO_SYNC`". **That is false and has been since 2026-08-06**, when the owner ENABLED
+> the sync loop (§6 WS-26 (a); struck in this file's own Board record, which the header had
+> not been swept to match). **The loop is RUNNING**: it cycles every 600s, and
+> `core.mark_dirty_on_insert` / `mark_dirty_on_update` stamp every native write to the four
+> `ZOHO_TRACKED_TABLES` — so **any CRM write lands in the live Zoho tenant within one
+> cycle**, and a delete propagates as a real upstream DELETE via
+> `core.record_zoho_tombstone`. This is the sentence an implementer reads before deciding
+> whether a write is safe, which is why it is corrected here rather than only downstream.
+> What remains OWNER-GATE is changing the running loop and any hand-run push cycle
 > (`work_plan.md` §6).
 > · **WS-26d-email: 🟢 MERGED + DEPLOYED 2026-08-07 (PR #392)** — the
 > caller-scoped email→CRM timeline join, the address index (migration 154,
@@ -112,9 +121,45 @@
 > reads. 47 hermetic cases + 20 vitest + the 14-row shared fixture on both sides; 5
 > mutants measured red. One fake-fidelity bug found and fixed on the way: `_crm_fakes`'
 > `lower(col) = :param` reader matched a NULL column, which SQL never does.
-> · **WS-26h (stage discipline):
-> 🟢 SPECCED 2026-08-07, dispatchable — §5.1 is the blueprint, trigger was the owner's
-> first live board session (lanes out of order, imported stages at 0% probability).
+> · **WS-26h (stage discipline): 🟢 BUILT 2026-08-11** (branch
+> `claude/crm-command-center-tasks-i8l7n4`, migration **169** — number taken from the
+> directory at build time per R1 and re-checked at merge; every test finds the file by
+> CONTENT so a renumber in review is free). `crm_deal_statuses` gains
+> `required_fields TEXT[] NOT NULL DEFAULT '{}'` and a nullable `max_dwell_days SMALLINT`,
+> both **deal-only** — the same asymmetry `probability` already has, because the allowlist
+> is deal columns and rot is measured off `status_changed_at`, which 144 gave deals and
+> withheld from leads. The gate is `pipeline.py::_require_entry_fields`, called from
+> `apply_status_transition` immediately after the lost-reason refusal, so it inherits all
+> three of that rule's properties: **entry-only** (`records.patch_record` enters the
+> transition only when `status_id` actually MOVES), **refused before any of the three
+> effects**, and **satisfiable by the SAME PATCH** — which is what lets the modal send
+> fields + status in one request. `core.STAGE_REQUIREABLE_FIELDS` is the allowlist and is
+> validated when the column is WRITTEN, never when it is read: a typo'd name can never be
+> satisfied by any deal, so validating on the way out would leave a lane that refuses every
+> move with a message about a field that does not exist. ⚠️ **Two decisions worth
+> re-reading before extending this:** `0` and `False` are VALUES and only `None`/blank text
+> count as absent (`_is_blank`, mirrored in `board.ts`) — a falsiness test would refuse a
+> genuine ₹0 deal, and it was measured against a real `NUMERIC` column returning
+> `Decimal('0.00')`; and **CREATE is deliberately not gated** — `POST /crm/deals` with an
+> explicit `status_id`, and the convert path's `_create_deal`, both write without coming
+> through the transition, so a settings-grid edit cannot retroactively make quick-create or
+> lead conversion refusable. Recorded in the function's own docstring rather than fixed by
+> ambush. Rot is **presentation only** (`board.ts::rotLevel` → `ROT_TONES`, amber past the
+> threshold, destructive past 2×, strictly-past so a card is fine ON the allowance day):
+> nothing moves, closes or hides. `LostReasonModal` was **absorbed** into `MoveModal`
+> rather than sat beside — a lost stage can also be a gated one, and two dialogs each
+> raised by its own 422 is the shape where a user answers a question and is refused again.
+> **Fences (R7):** `test_crm_pipeline.py` +24 cases (the gate, the entry-only property, the
+> zero/blank pair, both settings validators); `test_crm_migration.py` grew a WS-26h section
+> and its `NOT_NULL_DEFAULTED` derivation now reads ALTER-added columns too — the sync
+> migration stays excluded with its existing reason (`zoho_dirty` is platform-written, this
+> column is PATCHed by name); **`test_crm_stage_discipline_parity.py` is new** and reads
+> `REQUIREABLE_FIELDS` out of `board.ts`, holding the two-language allowlist together the
+> way `CATEGORY_HUES` is held — measured red in both directions; `board.test.ts` +14,
+> `settings.test.ts` +13. **R8:** the migration was applied to a real PostgreSQL 16, replayed
+> three times for idempotency, and the package's own `insert_row`/`update_row`/`status_wire`
+> were run against it — the `TEXT[]` round-trip is the one thing the hermetic fakes cannot
+> answer. **Not deployed, not merged.**
 > WS-26i (data management): 🟡 SPEC-THIN, audit-narrow before dispatch.
 > **DEMO CRITICAL PATH (owner-directed 2026-08-07, §9.0): ~~dispatch D1 f~~ (∥ ~~D2 d-email~~) →
 > ~~D3 g~~ → ~~D4 d-write~~ → D5 d-autolead; h/i/e deferred past the demo. Full chain and all
@@ -2199,7 +2244,11 @@ silently dropping unmatched names (e), `trim()` off the owner predicate (f), the
 upper bound (g), the leaderboard's upper bound alone (h), and `moveDeal` reverted to its
 hard-coded board fetch (i, three vitest cases).
 
-### WS-26h — Stage discipline: entry requirements + rot · 🟢 AGENT-SAFE · after f2
+### WS-26h — Stage discipline: entry requirements + rot · ✅ BUILT 2026-08-11 · 🟢 AGENT-SAFE · after f2
+*(Built on branch `claude/crm-command-center-tasks-i8l7n4`, migration 169, no owner gate
+touched. The ticket below is left as written — it is what was built against; the status
+header's WS-26h paragraph records what shipped, what was measured, and the one gap left
+open on purpose.)*
 *(§5.1 system 3. The mechanism exists in miniature: lost-type moves already demand a
 reason — `needsLostReason` in `board.ts`, enforced server-side. Generalize exactly that,
 change nothing about it.)*
@@ -2229,21 +2278,94 @@ columns.
 **Tests:** extend `tests/unit/test_crm_pipeline.py`; vitest `board.test.ts` (rot,
 move-plan).
 
-### WS-26i — Data management: merge, bulk, import/export, saved views · 🟡 SPEC-THIN — audit before dispatch
+### WS-26i — Data management: merge, bulk, import/export, saved views · 🔴 AUDITED NO-GO 2026-08-11 — doc remediation is the next ticket
 *(§5.1 system 4. Deliberately thin — the WS-26d lesson: four things behind one done-when
 is how a ticket goes undispatchable. Each item below gets its own spec-auditor narrowing
 before any build.)*
+
+> **Audit record — 2026-08-11, all five items judged separately. Do not re-run this
+> audit from the same starting point; it cost ~440s and every anchor below was opened on
+> the code, not recalled.** The row fails §1 contract point **3** (no "Done-when" and no
+> "Tests" line — the only ticket in §9 with neither), point **5** (§10 carries no WS-26i
+> verification block) and point **7** (§9's header makes an unlabeled item read AGENT-SAFE,
+> and four of the six sub-behaviours write the LIVE Zoho tenant, so the absent label is
+> doing work it cannot do). **No implementer may be dispatched from this section until a
+> per-item done-when exists.**
+>
+> **Per item:**
+> - **Duplicate merge — NO-GO, doc-blocked on the spec's own admission, and it is the
+>   destructive one.** §7.1 has no merge semantics and the writer has no merge verb. Three
+>   uncosted consequences: the loser's tombstone issues a **real DELETE against the live
+>   tenant** and we cannot roll back (R6); re-pointed activities do not follow, because
+>   `crm_activities` is outside `ZOHO_TRACKED_TABLES` and §7.1 says activity deletes sync in
+>   neither direction, so the loser's notes stay attached upstream to a record we then
+>   delete; and `ORGANIZATIONS.cascades` under-describes an org merge — `crm_contacts.organization_id`
+>   and `crm_deals.organization_id` are both `ON DELETE SET NULL` and the existing
+>   `DeleteResponse.cascaded` never reports them. Needs merge written into §7.1 and a
+>   D-CRM number. **Probably needs §6 registration too.**
+> - **Bulk actions — NO-GO on point 3; sequence it SECOND even once specced.** Two findings
+>   the precedent hides: (a) **the reuse seam Projects had does not exist here** —
+>   Projects' bulk reuses `automation.apply_task_patch(db, …)`, but CRM's
+>   `records.patch_record` OWNS its own session, so it cannot be called inside a bulk
+>   transaction; the ticket must first extract a `db`-taking patch seam or it grows a second
+>   CRM writer (the defect CLAUDE.md §4 names). (b) **WS-26h collision, larger than
+>   "bulk status change"** — `pipeline._require_entry_fields` raises a raw `HTTPException(422)`,
+>   while Projects' per-record catch is on a typed `TaskPatchError`, so that catch does not
+>   transfer; a bulk `{"status_id": X}` mass-refuses every deal missing X's `required_fields`,
+>   and each accepted move writes both a `crm_status_changes` and a `crm_activities` row
+>   (~1,500 inserts for a 500-row lane move).
+> - **CSV import — NO-GO, no precedent.** Neither `import_tasks.py` (local mirror) nor
+>   `import_clickup.py` (API) is CSV. Inherits two hazards: every created row is born
+>   `zoho_dirty` and mass-creates upstream, and §6 WS-26 (b) records that a `UNIQUE` index on
+>   `crm_leads.email` was REFUSED — so "match-by-email first" has no uniqueness to lean on.
+>   Also enters WS-26h's recorded gap from the far side: **CREATE is not gated**, so an
+>   import can seed deals into a stage whose entry requirements they do not satisfy.
+> - **Saved views — NO-GO on point 3, and its persistence call is doc-blocked in the DB
+>   direction.** `serializeView`/`parseView` do round-trip the whole view, so "a saved view
+>   is a named URL" holds. But a table means migration 170 **and** pre-empts an owner call the
+>   tenancy plan explicitly parks: `specs/multi_tenancy.md` §58-65 records that on `crm_*`,
+>   `organization_id` already means the CUSTOMER COMPANY, and *"that must be decided before
+>   WS-29d touches `crm_*`"* — while `test_tenancy_boundary.py::test_a_new_table_must_carry_a_tenant_key`
+>   refuses the table without one. A genuine pincer, and a doc blocker rather than a build one.
+> - **CSV EXPORT — the recommended slice, and the ONLY one clearable by a single doc edit.**
+>   It touches the live Zoho tenant not at all, needs no migration, collides with WS-26h not
+>   at all, and has a line-for-line sibling reviewed 24 hours earlier
+>   (`routes/projects/export.py`, WS-27ae). Real need: ~4,000 records whose only export route
+>   today is the Zoho UI we are retiring. **The auditor wrote the done-when block that clears
+>   it; adding that block to this section is the next ticket.**
+>
+> ⚠️ **Two traps recorded for whoever takes the export slice — both measured, neither
+> guessable from this spec.** (1) `core.list_contract` clamps `page_size` to
+> `MAX_PAGE_SIZE = 100`: reuse it for the WHERE clause ONLY and override the LIMIT, or the
+> export silently returns the first 100 rows of a 1,516-row lead list — the exact silent
+> truncation an export must never do, arriving through the door marked "reuse the shared
+> builder". (2) The CRM BFF proxy (`src/app/api/crm/[...path]/route.ts`) does `res.json()`
+> then `NextResponse.json(...)` unconditionally, so a `text/csv` body becomes `{}` with a
+> 200; Projects hit this and fixed it.
+>
+> **Two further drifts found and corrected in this same pass:** the bullet below said
+> "3.4k records total today" — the measured backfill is **3,993** (737 + 1,189 + 1,516 +
+> 551) and that count is five days old; and the saved-views bullet cited a "QuickFilters
+> precedent" for persistence — `QuickFilters.tsx` is a hardcoded 13-entry `CHIPS` array with
+> **zero `localStorage`**, and there is no `localStorage` anywhere under `src/app/crm/`, so
+> that precedent does not exist. Both are struck in the bullets below.
 - **Duplicate merge** (contacts/orgs): the convert modal's match rules already FIND
   duplicates (`convert.ts`, §3.7 mirror); merge = pick survivor, re-point FKs (deals,
   activities, deal_contacts), and — the hard part — express the loser to Zoho under
   D-CRM-7 semantics (a merge is an update+delete pair with tombstone implications;
   spec against §7.1 before building).
 - **Bulk actions** on the lists: multi-select → owner/status change, delete. Per-record
-  endpoints vs a bulk endpoint is an audit-time call (3.4k records total today).
+  endpoints vs a bulk endpoint is an audit-time call (~~3.4k~~ **3,993** records as
+  measured at the backfill, 2026-08-06 — corrected 2026-08-11; it is the number this
+  endpoint-shape decision rests on).
 - **CSV import/export**: export = current list filter, server-streamed; import = the Zoho
   importer's dedup discipline generalized (match-by-email first).
 - **Saved views**: the URL grammar IS the view (`urlState.ts`); a saved view is a named
-  URL. Per-user table vs localStorage is an audit-time call (QuickFilters precedent).
+  URL. Per-user table vs localStorage is an audit-time call ~~(QuickFilters precedent)~~ —
+  **struck 2026-08-11: there is no such precedent.** `QuickFilters.tsx` is a hardcoded
+  13-entry `CHIPS` array that persists nothing, and `src/app/crm/` contains no
+  `localStorage` at all. The DB direction is doc-blocked on the `crm_*` `organization_id`
+  naming call — see the audit record above.
 
 ### WS-26e — Cutover + retirement · 🔴 OWNER-GATE end-to-end
 Final import + parity report; §6 consumers repointed; §7.4 inventory retired; Zoho refresh

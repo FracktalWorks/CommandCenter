@@ -126,6 +126,7 @@ async def apply_status_transition(
                 "required to move a record into it."
             ),
         )
+    _require_entry_fields(status, record, patch)
 
     previous_id = getattr(record, "status_id", None)
     previous = (
@@ -162,6 +163,75 @@ async def apply_status_transition(
         if chosen is None and getattr(status, "probability", None) is not None:
             updates["probability"] = status.probability
     return updates
+
+
+def _require_entry_fields(status: Any, record: Any, patch: dict[str, Any]) -> None:
+    """WS-26h — 422 unless the deal carries everything the TARGET stage demands.
+
+    The generalisation of the lost-reason rule directly above, and deliberately
+    shaped the same way: refused **before** any of the transition's three
+    effects, naming what is missing, and satisfied by the SAME PATCH that moves
+    the record. "Move it and fill this in" would be two requests, and the half
+    that lands is the one that moved the deal.
+
+    Three properties worth stating, because each is a decision:
+
+    **Entry-only.** This is reached from :func:`apply_status_transition`, which
+    ``records.py`` calls only when a body actually moves ``status_id``. A deal
+    already sitting in a stage it no longer satisfies is never blocked from
+    being edited — including from being edited towards satisfying it. A rule
+    that made a lane un-editable would be a lock, and §5.1 chose visibility
+    over locks.
+
+    **The patch counts.** ``patch`` is the caller's own body, so
+    ``{"status_id": …, "amount": 400000}`` satisfies an ``amount`` requirement
+    in one statement. Read through the same "payload, else row" idiom
+    ``admin._effective`` uses, for the same reason: what matters is the state
+    the write LEAVES, not what was stored a moment ago.
+
+    **Empty is not missing-but-fine.** ``""`` and ``0`` are treated
+    differently on purpose: a blank string is an unfilled text box, while a
+    genuine zero ``amount`` is a number somebody typed. Only ``None`` and
+    blank/whitespace text count as absent.
+
+    Stages with no requirements — every stage until somebody sets one, and
+    every LEAD status, whose table has no such column — return immediately.
+
+    ⚠️ **Known and deliberate gap: CREATE is not gated.** ``POST /crm/deals``
+    with an explicit ``status_id`` writes the row without coming through here,
+    and so does the convert path's ``_create_deal``. WS-26h scopes the rule to
+    the move path (spec §9), and widening it silently would make the quick-create
+    modal and every lead conversion refusable by a settings-grid edit made
+    elsewhere. Recorded rather than fixed by ambush; a later ticket may close it.
+    """
+    required = getattr(status, "required_fields", None) or []
+    missing = [
+        field for field in required
+        if _is_blank(
+            patch[field] if field in patch else getattr(record, field, None)
+        )
+    ]
+    if missing:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"'{status.name}' requires {missing} before a deal can enter "
+                "it. Send the missing field(s) in the same request as the "
+                "status change."
+            ),
+        )
+
+
+def _is_blank(value: Any) -> bool:
+    """Absent for the purposes of an entry requirement.
+
+    ``0`` and ``False`` are values; ``None`` and whitespace-only text are not.
+    A plain falsiness test here would let a stage requiring ``amount`` refuse a
+    genuine ₹0 deal, which is a real thing a pipeline holds.
+    """
+    if value is None:
+        return True
+    return isinstance(value, str) and not value.strip()
 
 
 def _dwell_seconds(since: Any, changed_at: Any) -> int | None:

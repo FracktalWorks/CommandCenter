@@ -4,9 +4,14 @@ import { describe, expect, it } from "vitest";
 import {
   applyMove,
   boardTotals,
+  missingRequiredFields,
   moveRequest,
   needsLostReason,
   planMove,
+  REQUIREABLE_FIELD_LABELS,
+  REQUIREABLE_FIELDS,
+  ROT_TONES,
+  rotLevel,
   statusTone,
   toBoardLanes,
   weightedDeal,
@@ -451,5 +456,116 @@ describe("needsLostReason", () => {
     expect(needsLostReason({ lost_reason_id: null }, LOST)).toBe(true);
     expect(needsLostReason({ lost_reason_id: "r1" }, LOST)).toBe(false);
     expect(needsLostReason({ lost_reason_id: null }, PROPOSAL)).toBe(false);
+  });
+});
+
+// ── WS-26h · stage discipline ─────────────────────────────────────────────
+
+describe("missingRequiredFields", () => {
+  const gated = { required_fields: ["amount", "owner_email"] };
+
+  it("names everything the target stage demands and the deal has not got", () => {
+    expect(
+      missingRequiredFields({ amount: null, owner_email: null }, gated)
+    ).toEqual(["amount", "owner_email"]);
+  });
+
+  it("stops asking for what the deal already carries", () => {
+    expect(
+      missingRequiredFields({ amount: 400000, owner_email: null }, gated)
+    ).toEqual(["owner_email"]);
+  });
+
+  it("counts a zero amount as filled in", () => {
+    // 0 is a number somebody typed. A falsiness test here would pop a modal
+    // for a ₹0 deal the gateway would have accepted without one — the client
+    // being STRICTER than the boundary, which is a feature nobody can reach.
+    expect(missingRequiredFields({ amount: 0, owner_email: "a@b.c" }, gated))
+      .toEqual([]);
+  });
+
+  it("counts a whitespace-only string as empty", () => {
+    expect(missingRequiredFields({ amount: 1, owner_email: "  " }, gated))
+      .toEqual(["owner_email"]);
+  });
+
+  it("lets the same PATCH's own edits satisfy a requirement", () => {
+    // This is what makes fields + status ONE request: the modal collects a
+    // value and the check stops asking for it, exactly as the gateway reads
+    // `patch` before the row.
+    expect(
+      missingRequiredFields({ amount: null, owner_email: null }, gated, {
+        amount: 400000,
+        owner_email: "asha@fracktal.in",
+      })
+    ).toEqual([]);
+  });
+
+  it("requires nothing of an ungated stage", () => {
+    expect(missingRequiredFields({ amount: null }, PROPOSAL)).toEqual([]);
+    expect(missingRequiredFields({ amount: null }, { required_fields: [] }))
+      .toEqual([]);
+  });
+
+  it("ignores a field name the client does not know", () => {
+    // R6's window in reverse: an older bundle meeting a newer gateway that has
+    // grown a fifth requirable column. Passing it through would render an
+    // input for a field this build cannot label, so it is dropped and the
+    // gateway's own 422 stays the boundary.
+    expect(missingRequiredFields({}, { required_fields: ["not_a_column"] }))
+      .toEqual([]);
+  });
+
+  it("every requirable field has a label", () => {
+    // A missing label renders as `undefined` in the modal's own heading.
+    for (const field of REQUIREABLE_FIELDS) {
+      expect(REQUIREABLE_FIELD_LABELS[field]).toBeTruthy();
+    }
+  });
+});
+
+describe("rotLevel", () => {
+  const NOW = new Date("2026-08-11T12:00:00Z");
+  const daysAgo = (days: number) =>
+    new Date(NOW.getTime() - days * 86_400_000).toISOString();
+
+  it("says fresh when the stage has no threshold", () => {
+    expect(rotLevel(daysAgo(400), null, NOW)).toBe("fresh");
+    expect(rotLevel(daysAgo(400), undefined, NOW)).toBe("fresh");
+  });
+
+  it("says fresh when there is no stage-age timestamp", () => {
+    // "We were never told" is not a measurement. Colouring a card on the
+    // strength of a missing timestamp is how a badge stops meaning anything.
+    expect(rotLevel(null, 14, NOW)).toBe("fresh");
+    expect(rotLevel("not a date", 14, NOW)).toBe("fresh");
+  });
+
+  it("is fine ON the threshold and warns the day after", () => {
+    expect(rotLevel(daysAgo(13), 14, NOW)).toBe("fresh");
+    expect(rotLevel(daysAgo(14), 14, NOW)).toBe("fresh");
+    expect(rotLevel(daysAgo(15), 14, NOW)).toBe("warn");
+  });
+
+  it("is fine ON twice the threshold and turns over the day after", () => {
+    expect(rotLevel(daysAgo(27), 14, NOW)).toBe("warn");
+    expect(rotLevel(daysAgo(28), 14, NOW)).toBe("warn");
+    expect(rotLevel(daysAgo(29), 14, NOW)).toBe("over");
+  });
+
+  it("handles a one-day threshold at both boundaries", () => {
+    expect(rotLevel(daysAgo(1), 1, NOW)).toBe("fresh");
+    expect(rotLevel(daysAgo(2), 1, NOW)).toBe("warn");
+    expect(rotLevel(daysAgo(3), 1, NOW)).toBe("over");
+  });
+
+  it("every level has a tone, and none of them is a raw colour", () => {
+    for (const level of ["fresh", "warn", "over"] as const) {
+      expect(ROT_TONES[level]).toMatch(/^text-[a-z-]+$/);
+    }
+    // Rot must be legible as a MEASUREMENT — the house's warning/destructive
+    // tones — never as a hue somebody picked (DESIGN_SYSTEM rule 4).
+    expect(ROT_TONES.warn).toBe("text-warning");
+    expect(ROT_TONES.over).toBe("text-destructive");
   });
 });

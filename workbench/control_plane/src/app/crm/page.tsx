@@ -24,13 +24,19 @@ import { useAccess } from "@/components/AccessProvider";
 import { hasCapability } from "@/lib/access";
 import ConvertModal from "./components/ConvertModal";
 import KanbanBoard from "./components/KanbanBoard";
-import LostReasonModal from "./components/LostReasonModal";
+import MoveModal from "./components/MoveModal";
 import PipelineSettings from "./components/PipelineSettings";
 import QuickCreateModal from "./components/QuickCreateModal";
 import RecordList from "./components/RecordList";
 import Reports from "./components/Reports";
 import RecordSheet from "./components/RecordSheet";
-import { boardTotals, needsLostReason, type DealMove } from "./lib/board";
+import {
+  boardTotals,
+  missingRequiredFields,
+  needsLostReason,
+  type DealMove,
+  type RequireableField,
+} from "./lib/board";
 import { activeChip, applyChip, chipsFor } from "./lib/filters";
 import { compactMoney } from "./lib/format";
 import { useCrmStore } from "./lib/store";
@@ -77,9 +83,12 @@ function CrmPageInner() {
   const { access } = useAccess();
   const [creating, setCreating] = useState<EntitySlug | null>(null);
   const [converting, setConverting] = useState<Lead | null>(null);
-  const [pendingLoss, setPendingLoss] = useState<{
+  /** A move the gateway would refuse as sent — held until the modal answers. */
+  const [pendingMove, setPendingMove] = useState<{
     move: DealMove;
     status: Status;
+    needsReason: boolean;
+    missing: RequireableField[];
   } | null>(null);
 
   /** Every navigation in this app is a URL rewrite — Back closes the sheet. */
@@ -149,11 +158,21 @@ function CrmPageInner() {
   async function moveDeal(move: DealMove, target: Status) {
     const deal =
       store.lanes.flatMap((l) => l.rows).find((d) => d.id === move.dealId) ??
-      (store.record as { id?: string; lost_reason_id?: string | null } | null);
-    if (deal && needsLostReason(deal, target)) {
-      // Ask before the 422 — the gateway refuses a lost move with no reason
-      // before writing any of the transition's three effects.
-      setPendingLoss({ move, status: target });
+      (store.record as Record<string, unknown> | null);
+    // Both gates read forward, in the gateway's own order. It refuses either
+    // one BEFORE writing any of the transition's three effects, so a board
+    // that discovered them from an error toast would have already animated the
+    // card into the lane it is not allowed to be in.
+    const needsReason = Boolean(deal && needsLostReason(deal, target));
+    const missing = deal ? missingRequiredFields(deal, target) : [];
+    if (needsReason || missing.length > 0) {
+      // The picker the organization requirement needs. Requested here rather
+      // than on mount because the directory is a picker, not a mirror — and
+      // unconditionally rather than only for that one field, because the call
+      // is idempotent and a branch on which field is missing is a branch that
+      // gets it wrong once.
+      store.loadDirectories();
+      setPendingMove({ move, status: target, needsReason, missing });
       return;
     }
     await store.moveDeal(move);
@@ -369,17 +388,22 @@ function CrmPageInner() {
         />
       )}
 
-      {pendingLoss && (
-        <LostReasonModal
-          statusName={pendingLoss.status.name}
+      {pendingMove && (
+        <MoveModal
+          statusName={pendingMove.status.name}
+          needsReason={pendingMove.needsReason}
+          missing={pendingMove.missing}
           reasons={store.lostReasons}
+          organizations={store.organizations}
           saving={store.saving}
-          onCancel={() => setPendingLoss(null)}
+          onCancel={() => setPendingMove(null)}
           onConfirm={async (payload) => {
-            const { move } = pendingLoss;
-            setPendingLoss(null);
-            // The reason travels WITH the move — one PATCH that either lands
-            // or does not, rather than two that can half-apply.
+            const { move } = pendingMove;
+            setPendingMove(null);
+            // The reason and the required fields travel WITH the move — one
+            // PATCH that either lands or does not, rather than two that can
+            // half-apply, where the half that lands is the one that moved the
+            // deal.
             await store.moveDeal(move, payload);
             if (view.record) store.loadRecord(view.record.entity, view.record.id);
           }}

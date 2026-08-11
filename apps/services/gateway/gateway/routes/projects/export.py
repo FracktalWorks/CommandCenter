@@ -61,18 +61,29 @@ the request already carries; the caller's identity comes from the authenticated
 Visibility is the same grant clause every other read binds, so the export can
 never contain a task the caller could not open.
 
-**CSV injection is neutralised, not documented away.** See :func:`csv_cell`.
+**CSV injection is neutralised, not documented away.** See
+:func:`gateway.csv_export.csv_cell`, the shared writer this file re-exports.
 """
 
 from __future__ import annotations
 
-import csv
-import io
 import re
 from typing import Any
 
 from acb_auth import UserContext, get_current_user
 from fastapi import Depends, HTTPException, Response
+
+# The gateway's ONE CSV writer (WS-26i-export promoted it out of this file when
+# the CRM became the second export). `csv_cell` is a security control, and a
+# security control with two copies is one that does not get the next fix —
+# CLAUDE.md §4. Re-exported below so this module's public surface is unchanged.
+from gateway.csv_export import (
+    BOM,
+    FORMULA_LEADERS,
+    INJECTION_GUARD,
+    csv_cell,
+    csv_document,
+)
 from gateway.routes.projects.core import (
     DIRECTIONS,
     TASK_SORTS,
@@ -132,68 +143,6 @@ FIELD_LABELS: dict[str, str] = {
 #: A row you cannot identify is not a row: without the number a line in the file
 #: cannot be matched back to a task, and without the title nobody can read it.
 UNCONDITIONAL_HEADERS: tuple[str, str] = ("#", "Title")
-
-#: The first characters a spreadsheet treats as the start of a FORMULA.
-#:
-#: ``=``/``+``/``-``/``@`` are Excel's and Google Sheets' formula leaders; TAB
-#: and CR are in the list because both strip to nothing before the leader is
-#: read, so ``\t=cmd|'/c calc'!A0`` is the same attack with a byte in front.
-FORMULA_LEADERS: tuple[str, ...] = ("=", "+", "-", "@", "\t", "\r")
-
-#: A cell that is exactly a number — the one thing that may keep a leading ``-``.
-#:
-#: Without this exemption an estimate of ``-30`` would export as ``'-30`` and
-#: every numeric column would arrive in the spreadsheet as text, which breaks
-#: the sums people export a CSV to compute. A bare number is not a formula:
-#: Excel reads ``-5`` as the number minus five, while ``-5+cmd`` is not a number
-#: and is therefore still guarded.
-_BARE_NUMBER = re.compile(r"^[-+]?\d+(?:\.\d+)?$")
-
-#: The prefix a guarded cell gets.
-INJECTION_GUARD = "'"
-
-#: Excel reads a UTF-8 CSV as the system code page unless it sees a BOM, so a
-#: task titled "Café" arrives as "CafÃ©" without one. The byte order mark is the
-#: only thing that makes a non-ASCII export readable to the audience that opens
-#: it in Excel, which is this feature's whole audience.
-BOM = "﻿"
-
-
-def csv_cell(value: Any) -> str:
-    """One value → the text that goes in the cell, formula-neutralised.
-
-    **The decision, stated so it can be argued with rather than discovered:** a
-    cell whose first character is one of :data:`FORMULA_LEADERS` is prefixed
-    with a single apostrophe. A task titled ``=SUM(A1:A9)`` exports as
-    ``'=SUM(A1:A9)``.
-
-    Why a prefix and not "quote it": quoting does **not** help — Excel evaluates
-    the cell after the CSV quoting is stripped, which is why `csv.QUOTE_ALL` is
-    not a mitigation for this at all. Why guard rather than document: the values
-    here are counterparty-authored (task titles, tags, custom-field text — an
-    imported ClickUp workspace is thousands of strings nobody in this company
-    typed), and the payoff is `=cmd|'/c calc'!A0`, which executes with the
-    credentials of whoever double-clicks the file. That is arbitrary code
-    execution on the accountant's laptop in exchange for a formatting nicety.
-
-    Why the apostrophe is acceptable: it is **visible, reversible and one
-    character**, so a person who genuinely wanted a formula can see what
-    happened and delete it. A silently executing formula has no such tell.
-
-    A bare number (:data:`_BARE_NUMBER`) is exempt — see its note.
-
-    ``None`` is the empty cell, never the string ``"None"``.
-    """
-    if value is None:
-        return ""
-    text_value = value if isinstance(value, str) else str(value)
-    if not text_value:
-        return ""
-    if _BARE_NUMBER.match(text_value):
-        return text_value
-    if text_value[0] in FORMULA_LEADERS:
-        return INJECTION_GUARD + text_value
-    return text_value
 
 
 def resolve_columns(
@@ -431,22 +380,20 @@ async def export_tasks_csv(
                 row["attachment_count"] = files.get(str(row["id"]), 0)
 
     columns = resolve_columns(shown_fields, definitions)
-    buffer = io.StringIO()
-    # `\r\n` and QUOTE_MINIMAL are RFC 4180: the module quotes any cell holding
-    # a comma, a quote or a newline and doubles embedded quotes. That half is
-    # NOT hand-rolled here on purpose — every hand-written CSV writer in the
-    # world gets the embedded-newline case wrong.
-    writer = csv.writer(buffer, lineterminator="\r\n", quoting=csv.QUOTE_MINIMAL)
-    writer.writerow([*UNCONDITIONAL_HEADERS, *(header for _, header in columns)])
-    for row in exported:
-        writer.writerow([
-            csv_cell(row.get("task_number")),
-            csv_cell(row.get("title")),
-            *(csv_cell(_render(key, row, statuses)) for key, _ in columns),
-        ])
-
     return Response(
-        content=BOM + buffer.getvalue(),
+        # RFC 4180, the BOM and the formula guard all live in the shared writer
+        # — see the import note at the top of this file.
+        content=csv_document(
+            [*UNCONDITIONAL_HEADERS, *(header for _, header in columns)],
+            (
+                [
+                    row.get("task_number"),
+                    row.get("title"),
+                    *(_render(key, row, statuses) for key, _ in columns),
+                ]
+                for row in exported
+            ),
+        ),
         media_type="text/csv; charset=utf-8",
         headers={
             # The server owns the filename so there is ONE of it: the browser

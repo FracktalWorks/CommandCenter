@@ -160,7 +160,39 @@
 > three times for idempotency, and the package's own `insert_row`/`update_row`/`status_wire`
 > were run against it — the `TEXT[]` round-trip is the one thing the hermetic fakes cannot
 > answer. **Not deployed, not merged.**
-> WS-26i (data management): 🟡 SPEC-THIN, audit-narrow before dispatch.
+> WS-26i (data management): 🟡 SPEC-THIN, audit-narrow before dispatch — **except
+> WS-26i-export, below.**
+> · **WS-26i-export (the filtered-list CSV export): 🟢 BUILT 2026-08-11** (branch
+> `claude/crm-command-center-tasks-i8l7n4`, **no migration**, **read-only — the live
+> Zoho tenant is untouched**). `routes/crm/export.py` =
+> `GET /crm/export/{leads,deals,contacts,organizations}.csv`, four literal paths with the
+> `export/` segment FIRST so `/crm/leads/{record_id}` cannot shadow it. The filters are the
+> caller's, through the SAME `core.list_contract` the list uses — which brings its refusals
+> with it (`?status_id` on contacts/organizations, an unknown sort key, an unknown
+> direction are all 422). ⚠️ **`ListQuery.limit` is deliberately never bound**: it is the
+> page clamp (`MAX_PAGE_SIZE = 100`) and binding it would have exported the first 100 rows
+> of the 1,516-row lead list with a 200 and no warning. The row cap is
+> `export.MAX_EXPORT_ROWS = 10_000` — "the whole CRM twice over" against a measured 3,993 —
+> and exceeding it is a **422 naming the real count**, never a partial file, checked with a
+> `count(*)` over the same WHERE before a row is rendered. **`csv_cell`, the BOM and the
+> RFC-4180 writer were PROMOTED out of `routes/projects/export.py` into
+> `gateway/csv_export.py`** and both apps now consume it (Projects re-exports the names, so
+> its test file was untouched): a formula guard with two copies is one that does not get
+> the next fix. Client half: `app/crm/lib/columns.ts` (the column vocabulary lifted out of
+> `RecordList.tsx`, which keeps only the JSX renderers), `filters.exportQuery` built by
+> deleting the page off `listQuery`, `api.exportRecords`, an Export `Button` on the four
+> list tabs, and `@/lib/export` — `filenameFromDisposition`/`saveCsv` promoted out of
+> Projects with the fallback filename made a required argument. ⚠️ **The CRM BFF proxy did
+> `res.json()` then `NextResponse.json(…)` unconditionally**, so a `text/csv` body arrived
+> as `{}` with a 200; it now passes the upstream `Content-Type` and `Content-Disposition`
+> through, the arm Projects already carried. **Fences (R7):** `tests/unit/test_crm_export.py`
+> (46 cases) — the page-clamp trap end to end at 150 rows, the cap refusal and its boundary,
+> the parameter-parity sweep per entity, the column vocabulary READ out of `columns.ts` the
+> way `test_crm_stage_discipline_parity.py` reads `board.ts`, and done-when 7 asserted
+> **twice**: no writer is imported (AST) and every statement an export issues is a `SELECT`;
+> `src/lib/export.test.ts` sweeps both BFF proxies for the JSON-stamping shape;
+> `filters.test.ts` +4. Every fence was measured red before its code existed.
+> **Not deployed, not merged.** The other four WS-26i items stay 🔴 NO-GO.
 > **DEMO CRITICAL PATH (owner-directed 2026-08-07, §9.0): ~~dispatch D1 f~~ (∥ ~~D2 d-email~~) →
 > ~~D3 g~~ → ~~D4 d-write~~ → D5 d-autolead; h/i/e deferred past the demo. Full chain and all
 > gates intact — the order re-sequences, it does not thin.**
@@ -2367,7 +2399,11 @@ before any build.)*
   `localStorage` at all. The DB direction is doc-blocked on the `crm_*` `organization_id`
   naming call — see the audit record above.
 
-### WS-26i-export — The filtered-list CSV export · 🟢 AGENT-SAFE · no migration
+### WS-26i-export — The filtered-list CSV export · 🟢 BUILT 2026-08-11 · no migration
+*(Built on branch `claude/crm-command-center-tasks-i8l7n4`; as-built record in this file's
+status header. All seven done-whens met, both traps hit and fenced. Not deployed, not
+merged.)*
+
 *(Minted 2026-08-11 by the WS-26i audit, which is recorded above. This is the one of the
 five WS-26i items clearable by a doc edit alone: it touches the live Zoho tenant **not at
 all**, needs no migration, collides with WS-26h not at all, and has a line-for-line sibling

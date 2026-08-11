@@ -9,6 +9,7 @@
 // flattened them all to "request failed" would leave the UI unable to explain
 // a refusal, which is the difference between a rule and a bug.
 
+import { filenameFromDisposition, saveCsv } from "@/lib/export";
 import { moveRequest, type DealMove, type MoveExtras } from "./board";
 import { queryString, type ListQuery } from "./filters";
 import type {
@@ -115,6 +116,48 @@ export function deleteRecord(
   id: string
 ): Promise<{ deleted: string; entity: string; cascaded: Record<string, number> }> {
   return call(`/${entity}/${id}`, { method: "DELETE" });
+}
+
+// ── The CSV export (WS-26i-export) ────────────────────────────────────────
+
+/** What a download is called when the proxy dropped the server's header. */
+export function exportFilename(entity: EntitySlug): string {
+  return `crm-${entity}.csv`;
+}
+
+/**
+ * The current filter as a CSV, saved by the browser.
+ *
+ * ⚠️ Not `call()`: that parses every body as JSON, and this one is `text/csv`.
+ * A refusal from the SAME endpoint is still JSON, though — the gateway answers
+ * 422 naming the matched count when a filter is wider than the export cap
+ * rather than handing back a partial file — so the error path reuses
+ * `detailOf` and throws the same `CrmError` every other call does, and the
+ * refusal lands in the store's one error banner.
+ *
+ * ⚠️ `blob()`, never `text()`: decoding to a string strips the UTF-8 BOM the
+ * gateway emits so Excel reads non-ASCII names correctly, and the saved file
+ * would then differ from the bytes the endpoint produced.
+ */
+export async function exportRecords(
+  entity: EntitySlug,
+  query: ListQuery
+): Promise<void> {
+  const res = await fetch(`/api/crm/export/${entity}.csv${queryString(query)}`);
+  if (!res.ok) {
+    const body = (await res.json().catch(() => ({}))) as {
+      detail?: unknown;
+      error?: string;
+    };
+    throw new CrmError(detailOf(body) || `Export failed (${res.status})`, res.status);
+  }
+  saveCsv(
+    await res.blob(),
+    filenameFromDisposition(
+      res.headers.get("content-disposition"),
+      exportFilename(entity)
+    )
+  );
 }
 
 // ── The board ─────────────────────────────────────────────────────────────

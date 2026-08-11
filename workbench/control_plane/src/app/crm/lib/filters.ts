@@ -71,6 +71,27 @@ export function listQuery(
 }
 
 /**
+ * The same view, as the CSV export's query (WS-26i-export).
+ *
+ * ⚠️ Built by calling `listQuery` and DELETING the page, rather than by
+ * assembling a second parameter set. Two builders would drift and then the
+ * file and the screen would disagree about what the caller was looking at —
+ * the bug class this module's one-builder rule exists for, and the reason the
+ * gateway reuses `core.list_contract` on its side too.
+ *
+ * The page goes because the export has none: half a filter's records in a file
+ * is the silent truncation the endpoint refuses (it answers 422 naming the
+ * real count instead), so sending `page_size` could only ever mean something
+ * the server does not do.
+ */
+export function exportQuery(entity: EntitySlug, view: CrmView): ListQuery {
+  const query = { ...listQuery(entity, view) };
+  delete query.page;
+  delete query.page_size;
+  return query;
+}
+
+/**
  * Is this a sort key the gateway will accept for this entity?
  *
  * Belt-and-braces behind `selectTab`'s clear: an unknown key is a 422 that

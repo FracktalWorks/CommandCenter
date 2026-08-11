@@ -78,6 +78,14 @@ Four rules on top of the three above. Each one exists because it was broken:
    key. Fences: `sharedTaskUi.test.ts`'s "the chip tone→class table" SEAM row, and
    `app/projects/lib/card.test.ts`'s assertion that every chip kind `cardChips` can
    emit maps onto a real `shownFields` key (S6).
+   The same rule outside colour: **`src/lib/export.ts` is the one CSV-download seam**
+   (`filenameFromDisposition`, `saveCsv`), consumed by Projects and the CRM. Its two
+   traps are why it is shared rather than copied — `res.text()` strips the UTF-8 BOM the
+   gateway emits for Excel, so the body must stay a `Blob`; and the filename is the
+   SERVER's, read back off `Content-Disposition` rather than composed here. Each app
+   keeps only its own `exportQuery`/`exportPath`. Fence: `src/lib/export.test.ts`, which
+   also sweeps every BFF proxy fronting an export for the `NextResponse.json`
+   content-type stamp that turns a `text/csv` download into `{}` with a 200.
 5. **A category and a name must resolve to the same colour.** Some apps know
    what a lane *means* (Projects has `STATUS_CATEGORIES`); some can only read
    what it is *called* (Tasks' stages are user-typed). Those two routes must

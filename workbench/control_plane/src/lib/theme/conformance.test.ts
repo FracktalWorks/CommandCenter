@@ -39,17 +39,26 @@
  *    side by side. Use `<Select>` from `components/ui/Input.tsx`, and keep the
  *    file input hidden behind a `<Button>` — which is what every correct call
  *    site in this tree already does.
- * 8. **The headless substrate is imported in exactly one place.** D-PM-15 chose
- *    Base UI for the primitive layer and attached two conditions to the choice:
- *    every primitive arrives as a CommandCenter wrapper in `components/ui/`,
- *    and there is **one** substrate. Both fail the same way — quietly, one call
- *    site at a time — because `@base-ui/react` ships its own unstyled-but-
- *    opinionated defaults, and a page that imports `Dialog` directly gets the
- *    library's product decisions rather than ours. Observed in Paca, not
- *    imagined: its `package.json` carries Base UI *and* `radix-ui`, the second
- *    reaching exactly one file, inherited from a vendored component registry.
- *    So the rule is an import restriction rather than a style regex, and it is
- *    the R7 fence D-PM-15 condition 1 asks for by name.
+ * 8. **The headless substrate is wrapped in `components/ui/`, and the wrappers
+ *    stay wired.** D-PM-15 chose Base UI for the primitive layer and attached
+ *    two conditions to the choice: every primitive arrives as a CommandCenter
+ *    wrapper in `components/ui/`, and there is **one** substrate. Both fail the
+ *    same way — quietly, one call site at a time — because `@base-ui/react`
+ *    ships its own unstyled-but-opinionated defaults, and a page that imports
+ *    `Dialog` directly gets the library's product decisions rather than ours.
+ *    Observed in Paca, not imagined: its `package.json` carries Base UI *and*
+ *    `radix-ui`, the second reaching exactly one file, inherited from a vendored
+ *    component registry. So the core of the rule is an import restriction rather
+ *    than a style regex, and it is the R7 fence D-PM-15 condition 1 asks for by
+ *    name. **`Toast.tsx` (WS-27ak item 3) is the second wrapper** and the rule
+ *    covers it by directory rather than by name — but it also brings a failure a
+ *    directory rule cannot see: a toast primitive whose **provider is not
+ *    mounted** degrades every call site to a silent no-op, which is the exact
+ *    defect class the primitive exists to remove, arriving through its own front
+ *    door. So this rule additionally pins the provider's mount in
+ *    `app/layout.tsx`, the wrapper's own portal + viewport, and that the wired
+ *    `/projects` call sites still go through `useToast`. All of that is one
+ *    rule — *the primitive layer is real where it claims to be* — not a ninth.
  *
  * ## Ratchet, not a wall
  *
@@ -957,6 +966,112 @@ describe("the headless substrate is wrapped, not imported", () => {
       notWired,
       "These no longer import `Modal`, so the scan above fences nothing for " +
         "them. Either they regressed, or this list is stale.",
+    ).toEqual([]);
+  });
+
+  // ── The Toast primitive (WS-27ak item 3) ─────────────────────────────────
+
+  /**
+   * The provider's mount point.
+   *
+   * ⚠️ **This is the one fence in the file that guards a SILENCE.** Every other
+   * assertion here catches something rendering wrongly; this one catches
+   * something not rendering at all. `useToast()` falls back to a no-op API when
+   * no provider is above it — deliberately, because `useToastManager()` throws
+   * and a mutation handler must not take the page down — so deleting
+   * `<ToastProvider>` from the layout turns off every confirmation in the app
+   * while `tsc`, `vitest` and `next build` all stay green. Measured: with the
+   * mount removed, the whole suite passes except this case.
+   */
+  const TOAST_LAYOUT = "app/layout.tsx";
+
+  it("the toast provider is mounted app-wide", () => {
+    const layout = read(TOAST_LAYOUT);
+    expect(
+      /from "@\/components\/ui\/Toast"/.test(layout),
+      `${TOAST_LAYOUT} no longer imports ToastProvider — every useToast() call ` +
+        "site in the app is now a silent no-op.",
+    ).toBe(true);
+    expect(
+      /<ToastProvider[\s>]/.test(strip(layout)),
+      `${TOAST_LAYOUT} imports ToastProvider but does not render it. A toast ` +
+        "raised with no provider above it is dropped on the floor, and nothing " +
+        "else in this tree goes red for that.",
+    ).toBe(true);
+  });
+
+  it("the Toast wrapper renders the parts without which nothing appears", () => {
+    // Comments stripped: the file's header discusses `Toast.Portal` and the
+    // viewport at length, and a gate a docstring can satisfy is not a gate
+    // (rule 7's `stripTags` and the Modal case above learned the same thing).
+    const toast = strip(read("components/ui/Toast.tsx"));
+    // The portal is what puts the viewport outside the app tree, so a toast is
+    // not clipped by an `overflow-hidden` panel or buried under a page's own
+    // stacking context. The viewport is the live region itself.
+    expect(toast, "Toast must render Toast.Portal").toMatch(/<BaseToast\.Portal/);
+    expect(toast, "Toast must render Toast.Viewport — it IS the aria-live region")
+      .toMatch(/<BaseToast\.Viewport/);
+    // Whether a message INTERRUPTS a screen-reader user is decided once, from
+    // the variant, in `lib/toast.ts` — where it is unit-tested. This component
+    // may pass a priority through but may not *choose* one, so the literal is
+    // the fence: no `"high"` here at all. (`show()` computed its own ternary in
+    // the first draft, which was a second answer to the same question.)
+    expect(
+      /["']high["']/.test(toast),
+      "Toast.tsx decides a priority itself. `priorityFor()` in lib/toast.ts is " +
+        "the one answer to \"does this interrupt\", and it is the half a node " +
+        "test can actually reach.",
+    ).toBe(false);
+    expect(
+      strip(read("lib/toast.ts")),
+      "lib/toast.ts no longer maps a variant to a priority — the assertion " +
+        "above now fences nothing.",
+    ).toMatch(/["']high["']/);
+  });
+
+  /**
+   * The `/projects` call sites WS-27ak(3) wired, and the reason the list is
+   * three rather than a sweep: the slice proves the primitive, it does not
+   * convert the app.
+   *
+   * ⚠️ Deliberately checks the CALL, not only the import. `sharedTaskUi.test.ts`
+   * records the same trap: a file that imports a module and never reaches it
+   * satisfies an import scan forever while the behaviour is gone.
+   */
+  const TOAST_CALLERS = [
+    "app/projects/components/TaskPanel.tsx",
+    "app/projects/components/TableView.tsx",
+    "app/projects/components/NotificationBell.tsx",
+  ];
+
+  it("the wired /projects mutations still report through the primitive", () => {
+    const unwired = TOAST_CALLERS.filter((f) => {
+      const src = strip(read(f));
+      return (
+        !/from "@\/components\/ui\/Toast"/.test(src) || !/toast\.promise\(/.test(src)
+      );
+    });
+    expect(
+      unwired,
+      "These import `useToast` but no longer call `toast.promise(…)`, or have " +
+        "stopped importing it. Before WS-27ak(3) each of them wrote to a " +
+        "surface the reader had usually scrolled away from, or — the bell — to " +
+        "nowhere at all. Either they regressed, or this list is stale.",
+    ).toEqual([]);
+  });
+
+  it("no call site reaches around the promise form", () => {
+    // The whole point of item 3 is ONE toast mutated in place. A call site that
+    // fires `show()` for the start and again for the end is back to three
+    // toasts for one operation, and neither of them can be the loading one.
+    const offenders = TOAST_CALLERS.filter(
+      (f) => (strip(read(f)).match(/toast\.show\(/g) ?? []).length > 0,
+    );
+    expect(
+      offenders,
+      "A wired mutation is calling `toast.show()`. A mutation with a promise " +
+        "behind it uses `toast.promise(…)`, which mutates one toast through " +
+        "loading → success | error; `show()` is for a fact with no promise.",
     ).toEqual([]);
   });
 });

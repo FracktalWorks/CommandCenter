@@ -16,6 +16,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import Button from "@/components/ui/Button";
+import { useToast } from "@/components/ui/Toast";
 import { domClickWalk, shouldDismiss } from "@/lib/outsideClick";
 
 import { type NotificationRow, notificationsApi } from "../lib/api";
@@ -37,6 +38,9 @@ export function NotificationBell({ onOpenTask }: {
   /** Opens a task in the page's own panel, so the bell never navigates away. */
   onOpenTask?: (taskId: string) => void;
 }) {
+  // WS-27ak(3) — `dismissAll` below was the only mutation in `/projects` that
+  // reported NOTHING on either outcome. See its own note.
+  const toast = useToast();
   const [rows, setRows] = useState<NotificationRow[]>([]);
   const [unread, setUnread] = useState<UnreadSplit>({ total: 0, mentions: 0 });
   const [open, setOpen] = useState(false);
@@ -109,6 +113,21 @@ export function NotificationBell({ onOpenTask }: {
     else window.location.assign(linkTo(row));
   };
 
+  /**
+   * WS-27ak(3) — the third call site of the toast primitive, and the one that
+   * reported **nothing at all**.
+   *
+   * The optimistic clear is what made it dangerous: the badge went to zero and
+   * every dot cleared the instant it was clicked, so a refusal looked
+   * *identical* to a success until the next sixty-second poll quietly put the
+   * unread rows back. Neither outcome had a channel — the success wrote
+   * nothing anywhere, and the failure was swallowed into a silent `load()`.
+   *
+   * The retry runs the SAME closure under the SAME key, which is what makes
+   * this the honest demonstration of dedupe: the failed toast becomes the
+   * retry's loading toast in place rather than a second toast beside it.
+   * `markAllRead` is idempotent, so a retry is always safe.
+   */
   const dismissAll = async () => {
     const ids = unreadIds(rows);
     if (!ids.length) return;
@@ -116,11 +135,26 @@ export function NotificationBell({ onOpenTask }: {
     setRows((prev) =>
       prev.map((r) => (r.read_at ? r : { ...r, read_at: new Date().toISOString() })),
     );
-    try {
-      await notificationsApi.markAllRead();
-    } catch {
-      void load();
-    }
+    const run = async (): Promise<void> => {
+      try {
+        await toast.promise(notificationsApi.markAllRead(), {
+          key: "projects:notifications-mark-all-read",
+          loading: "Marking everything read…",
+          // The server's count, not `ids.length`: another tab may have read
+          // some of them already, and a number the reader can disprove is
+          // worse than no number.
+          success: ({ marked }) =>
+            marked === 1 ? "1 notification marked read" : `${marked} notifications marked read`,
+          error: "Couldn't mark your notifications read",
+          errorAction: { label: "Retry", onClick: () => void run() },
+        });
+      } catch {
+        // The optimistic clear is now a lie, so put the truth back. The toast
+        // has already said what happened and stays up until dismissed.
+        void load();
+      }
+    };
+    await run();
   };
 
   const count = badge(unread.total);

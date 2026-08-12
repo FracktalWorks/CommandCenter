@@ -5623,7 +5623,52 @@ UI **works** — `npx next build` exit 0 with the substrate imported.
 
 **Not built, and not attempted:** items (2) Tooltip and (5) Skeleton (NO-GO — their done-when is a
 count of the problem), (3) Toast, (4) Combobox. **Owed:** the four-theme visual pass, as for every
-UI slice here — no test in this tree looks at a layout.
+UI slice here — no test in this tree looks at a layout. *(Toast landed afterwards as slice 2 —
+§11.32.)*
+
+### 11.32 WS-27ak item (3) — the `Toast` primitive, and the two things its own tests got wrong (built 2026-08-11, repaired and verified 2026-08-12)
+
+**Status: BUILT on `ws-27ak-toast`, VERIFIED 2026-08-12, merged via PR #430.** Frontend only: no
+migration, no gateway change. `src/lib/toast.ts` (the message rules, the dedupe key and the promise
+state machine, as a pure module) + `src/components/ui/Toast.tsx` on `@base-ui/react@1.7.0`'s
+`toast`, wired at four call sites (`layout.tsx`, `NotificationBell.tsx`, `TableView.tsx`,
+`TaskPanel.tsx`), fenced by `src/lib/toast.test.ts`, `e2e/toast.spec.ts` and an extension of
+conformance rule 8.
+
+**Verified independently 2026-08-12** (the implementing agent died on an API limit before any of
+this ran, and the PR was opened as a draft saying so): `npx tsc --noEmit` exit 0 · `npx vitest run`
+**88 files / 1983 tests** exit 0 · `npx next build` exit 0 · **`npx playwright test e2e/toast.spec.ts`
+6/6**, with `e2e/modal.spec.ts` 10/10 as the control.
+
+🔴 **Two of the six browser tests were red, and BOTH were the test's fault, not the component's.**
+Worth recording because each is a trap the next e2e author will hit:
+
+1. **`[role="alert"]` counted Next's route announcer.** Next renders a permanent assertive live
+   region, `#__next-route-announcer__`, inside a **shadow root** on `<next-route-announcer>`.
+   Playwright's selector engine pierces open shadow roots and `document.querySelectorAll` does not
+   — so the page reads as one alert from the console and two from the test, and every count in that
+   test was off by one. Now excluded by id.
+2. **`getByRole` cannot see a high-priority toast's controls.** `priority: "high"` — which is what
+   makes an error assertive — also makes Base UI stamp `aria-hidden="true"` on the *visible* toast
+   until the viewport is focused (`ToastRoot.mjs:418`), deliberately, so a reader is not told the
+   same thing twice. Its `Retry` and dismiss buttons go out of the a11y tree with it. The two clicks
+   are now structural, with the reason written at each; **F6 is the reader's way in** and the last
+   test in the file already walked that path.
+
+⚠️ **And one fence in the snapshot was dead — found by mutation, not by reading.** The test named
+*"a keyed re-fire updates the toast rather than stacking a second one"* fired the second toast from
+the **Retry** button, whose handler closes the toast *before* re-running the closure (deliberate:
+closing afterwards would dismiss the toast the retry had just raised). With nothing on screen there
+is nothing to stack against, so with `toastIdFor` stubbed to `undefined` the test **still passed**.
+The second fire now comes from pressing "Mark all read" again — the button survives a failed mark,
+and the error toast is still up. Measured under the same mutation: **2 toasts mid-flight and 2
+settled**, test red. Dedupe was never unfenced (`toast.test.ts` pins `toastIdFor`, 2 tests red under
+the mutation) — but nothing in a browser proved the *behaviour*, which is what the name claimed.
+
+**Owed, unchanged:** the four-theme visual pass (Fluent → Material → Graphite), as for every UI
+slice here. And the constraint the docstring carries stands: **do not raise a toast from inside a
+`Modal`** — `markOthers` hides the toast portal as a sibling of the dialog portal, so the three
+wired call sites are all outside dialogs. Lifting it is a board decision, not a call site's.
 
 ### 11.33 WS-27be — the search index nobody could use, and the missing minimum (built 2026-08-11)
 

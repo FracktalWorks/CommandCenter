@@ -29,6 +29,7 @@ import Icon from "@/components/Icon";
 import { StatusChip } from "@/components/StatusChip";
 import { AvatarStack } from "@/components/TaskMeta";
 import { Input } from "@/components/ui/Input";
+import { useToast } from "@/components/ui/Toast";
 import { durationLabel } from "@/lib/taskCard";
 import { useMemo, useRef, useState } from "react";
 
@@ -101,6 +102,9 @@ export function TableView({
   onSaved,
   onSelect,
 }: Props) {
+  // WS-27ak(3) — a cell edit on a spreadsheet is the mutation furthest from
+  // wherever the one inline error line is drawn; see `saveCell`.
+  const toast = useToast();
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
   const [cell, setCell] = useState(NO_CELL);
   const [error, setError] = useState<string | null>(null);
@@ -160,10 +164,30 @@ export function TableView({
     gridRef.current?.focus();
   }
 
+  /**
+   * WS-27ak(3) — the second call site of the toast primitive.
+   *
+   * A table is where the gap was widest: the edit happens in a cell that may
+   * be a thousand pixels from the single inline error line this component
+   * draws, and on success the only signal was a row flash that is gone in
+   * 600ms and absent entirely if the row scrolled.
+   *
+   * Keyed on the TASK, so editing three cells of one row in a row mutates one
+   * toast rather than stacking three — and editing three different rows still
+   * says three things, because they are three facts.
+   *
+   * ⚠️ `setError` stays; see `TaskPanel.changeStatus` for the argument.
+   */
   async function saveCell(task: TaskRow, patch: Record<string, unknown>) {
     setError(null);
     try {
-      const fresh = await projectsApi.patchTask(task.id, patch);
+      const fresh = await toast.promise(projectsApi.patchTask(task.id, patch), {
+        key: `projects:task-edit:${task.id}`,
+        loading: "Saving…",
+        success: (row) => `Saved “${row.title}”`,
+        error: "Couldn't save that edit",
+        errorAction: { label: "Retry", onClick: () => void saveCell(task, patch) },
+      });
       onSaved(fresh);
       flash(task.id);
     } catch (err) {

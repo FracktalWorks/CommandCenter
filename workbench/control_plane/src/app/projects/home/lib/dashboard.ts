@@ -107,6 +107,27 @@ export function shortName(actor: string): string {
   return local || actor;
 }
 
+/**
+ * The name to print for a person in a workload row.
+ *
+ * `shortName` is a LAST resort — it takes the local part of an email, so a real
+ * colleague renders as "kiruba" rather than "Kirubakaran S". That is fine for
+ * an actor string with nothing behind it (an assignee is free text: D-PM-4
+ * allows `email | agent:<name>`, and neither has to be a member), and wrong for
+ * anyone who has an `app_user` row.
+ *
+ * The workload endpoint now returns `name` from `app_user.display_name`, so
+ * prefer it and fall back only when there is genuinely nothing better. One
+ * helper rather than the same ternary at each call site, because the two
+ * surfaces that show people (`/projects/home`'s panel and `/projects/workload`)
+ * drifting apart on how a person is named is exactly the kind of split rule 4
+ * exists to prevent.
+ */
+export function personLabel(person: { actor: string; name?: string | null }): string {
+  const named = person.name?.trim();
+  return named || shortName(person.actor);
+}
+
 
 /**
  * Health model values → what a human reads (D-OPEN-5).

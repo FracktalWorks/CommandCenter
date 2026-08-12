@@ -35,7 +35,7 @@ import { SkeletonRows } from "@/components/ui/Skeleton";
 import { type AccentHue, accentForHue } from "@/lib/statusAccent";
 
 import { describeActivity } from "../lib/activity";
-import { SIGNAL_LABELS, ringSegments, shortName } from "./lib/dashboard";
+import { SIGNAL_LABELS, personLabel, ringSegments, shortName } from "./lib/dashboard";
 
 interface Summary {
   total: number; in_progress: number; blocked: number; paused: number;
@@ -57,7 +57,7 @@ interface ActivityRow {
   task_id: string; title: string; parent: string | null;
 }
 interface PersonRow {
-  actor: string; tracked: string; percent: number; band: string; hue: string;
+  actor: string; name?: string | null; tracked: string; percent: number; band: string; hue: string;
   open_projects: number;
 }
 
@@ -309,7 +309,7 @@ export default function ControlCenterPage() {
                   <li key={p.actor}>
                     <div className="flex items-baseline justify-between gap-2">
                       <span className="min-w-0 truncate text-[11px] text-foreground">
-                        {shortName(p.actor)}
+                        {personLabel(p)}
                       </span>
                       <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
                         {p.tracked} · {p.open_projects} open

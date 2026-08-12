@@ -475,8 +475,16 @@ async def ops_workload(
                 f"    AND e.started_at >= now() - INTERVAL '{window}' "
                 "  GROUP BY e.actor"
                 "), capacity AS ("
-                "  SELECT lower(u.email) AS actor, u.weekly_capacity_hours AS hours "
-                "  FROM app_user u WHERE u.weekly_capacity_hours IS NOT NULL"
+                # Carries the display name as well as the hours, and no longer
+                # filters on `weekly_capacity_hours IS NOT NULL`: that filter
+                # meant a person without a stated capacity was dropped from the
+                # join entirely, so the UI had nothing to render but the email
+                # local-part and every workload row read "kiruba" rather than
+                # "Kirubakaran S". Null hours are already handled downstream
+                # (`stated_hours is None` → assumed), so widening this is safe.
+                "  SELECT lower(u.email) AS actor, u.weekly_capacity_hours AS hours, "
+                "         u.display_name AS display_name "
+                "  FROM app_user u"
                 "), assigned AS ("
                 "  SELECT a.assignee AS actor, count(*) AS open_projects, "
                 # Counted in the same pass rather than three queries: the
@@ -495,7 +503,7 @@ async def ops_workload(
                 "       COALESCE(asg.open_projects, 0) AS open_projects, "
                 "       COALESCE(asg.overdue, 0) AS overdue, "
                 "       COALESCE(asg.blocked, 0) AS blocked, "
-                "       cap.hours AS stated_hours "
+                "       cap.hours AS stated_hours, cap.display_name AS display_name "
                 "FROM tracked tr FULL OUTER JOIN assigned asg ON asg.actor = tr.actor "
                 "LEFT JOIN capacity cap ON cap.actor = lower(COALESCE(tr.actor, asg.actor)) "
                 "ORDER BY 2 DESC, 1"
@@ -524,6 +532,11 @@ async def ops_workload(
             band, hue = ops.workload_band(pct, secs)
             people.append({
                 "actor": r.actor,
+                # The name a human reads. Falls back to the actor string rather
+                # than to null so the UI never has to decide what to draw for a
+                # person with no `app_user` row — an assignee is free text
+                # (D-PM-4: `email | agent:<name>`) and need not be a member.
+                "name": (getattr(r, "display_name", None) or "").strip() or None,
                 "seconds": secs,
                 "tracked": ops.format_duration(secs),
                 "capacity_hours": round(capacity, 2),

@@ -32,10 +32,10 @@ import Progress from "@/components/ui/Progress";
 import { SkeletonRows } from "@/components/ui/Skeleton";
 import { type AccentHue, accentForHue } from "@/lib/statusAccent";
 
-import { shortName } from "../home/lib/dashboard";
+import { personLabel } from "../home/lib/dashboard";
 
 interface PersonRow {
-  actor: string; seconds: number; tracked: string;
+  actor: string; name?: string | null; seconds: number; tracked: string;
   capacity_hours: number; capacity_assumed: boolean;
   percent: number; band: string; hue: string;
   open_projects: number; overdue: number; blocked: number;
@@ -116,7 +116,7 @@ export default function WorkloadPage() {
               return (
                 <li key={p.actor} className="rounded-lg border border-border bg-card p-3">
                   <div className="flex flex-wrap items-baseline gap-2">
-                    <span className="text-sm font-medium text-foreground">{shortName(p.actor)}</span>
+                    <span className="text-sm font-medium text-foreground">{personLabel(p)}</span>
                     <span className={`rounded px-1.5 py-0.5 text-[10px] ${tone.soft} ${tone.text}`}>
                       {BAND_LABEL[p.band] ?? p.band}
                     </span>

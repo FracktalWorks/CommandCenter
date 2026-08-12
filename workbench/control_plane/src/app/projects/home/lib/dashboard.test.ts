@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { SIGNAL_LABELS, ringSegments, shortName } from "./dashboard";
+import { SIGNAL_LABELS, ringSegments, shortName, personLabel } from "./dashboard";
 
 const stage = (id: string, name: string, count: number) => ({ id, name, count });
 
@@ -92,5 +92,25 @@ describe("SIGNAL_LABELS", () => {
     ]) {
       expect(SIGNAL_LABELS[s], s).toBeDefined();
     }
+  });
+});
+
+describe("personLabel", () => {
+  // The defect: every workload row read "kiruba" because the only name the UI
+  // had was the email's local part. The endpoint carries `display_name` now.
+  it("prefers the person's real name", () => {
+    expect(personLabel({ actor: "kiruba@fracktal.in", name: "Kirubakaran S" }))
+      .toBe("Kirubakaran S");
+  });
+
+  it("falls back to the actor when there is no member behind it", () => {
+    // An assignee is free text (D-PM-4) — it need not be an app_user at all.
+    expect(personLabel({ actor: "jasim@fracktal.in" })).toBe("jasim");
+    expect(personLabel({ actor: "agent:delivery", name: null })).toBe("delivery");
+  });
+
+  it("treats a blank display name as absent rather than printing nothing", () => {
+    // `display_name` is nullable AND free text, so "" and "  " both reach here.
+    expect(personLabel({ actor: "shahul@fracktal.in", name: "   " })).toBe("shahul");
   });
 });

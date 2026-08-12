@@ -73,12 +73,12 @@ from gateway.routes.projects.notifications import (
     new_mentions,
     notify,
 )
-from gateway.routes.projects.watchers import ensure_watchers
 from gateway.routes.projects.relations import (
     DIRECTED_TYPES,
     assert_no_block_cycle,
 )
 from gateway.routes.projects.tags import apply_task_tags
+from gateway.routes.projects.watchers import ensure_watchers
 from pydantic import BaseModel
 from sqlalchemy import text
 
@@ -88,7 +88,37 @@ from sqlalchemy import text
 _TRACKED_TASK_FIELDS: tuple[str, ...] = (
     "title", "description", "importance", "due_at", "start_date",
     "estimate_mins", "type_id", "parent_task_id", "project_id",
+    # WS-27bm. A health reassessment is history — "who decided this was
+    # critical, and when" is exactly the question §45 says must survive.
+    "health",
 )
+
+#: ``stage_id`` is deliberately ABSENT from the tuple above. A stage move gets
+#: its own `stage_change` verb (see `patch_task`), and tracking it here as well
+#: would file two timeline entries for one act — the same double-entry that
+#: splitting `status_id` out of the generic path avoids.
+
+#: Distinguishes "not in the payload" from "explicitly cleared to null" —
+#: `None` is a legitimate stage (no stage set), so it cannot double as absent.
+_UNSET = object()
+
+
+async def _stage_name(db: Any, stage_id: Any) -> str:
+    """A stage's name for the timeline, or "No stage".
+
+    Resolved at WRITE time and stored in the entry, not looked up at read time:
+    a stage that is later renamed or deleted must not rewrite history that
+    already happened (the same rule `record_field_change` follows for FK
+    labels).
+    """
+    if not stage_id:
+        return "No stage"
+    row = (await db.execute(
+        text("SELECT name FROM pm_stages WHERE id = CAST(:sid AS uuid)"),
+        {"sid": str(stage_id)},
+    )).fetchone()
+    return row.name if row else "Unknown stage"
+
 
 _LINK_TYPES: tuple[str, ...] = ("blocks", "relates_to", "duplicates")
 
@@ -360,6 +390,13 @@ async def patch_task(
             if custom_changes:
                 values["custom_fields"] = merged
 
+        # Split out for the reason `status_id` is: a stage move owes a NAMED
+        # timeline entry, and until WS-27bm it wrote nothing at all —
+        # `stage_id` was in neither the tracked-fields tuple nor a verb of its
+        # own, so moving a project from CAD to Prototype left no trace. The
+        # second axis was invisible in the history it exists to produce.
+        new_stage = values.pop("stage_id", _UNSET)
+
         after = before
         if values:
             await assert_epic_has_no_parent(
@@ -384,6 +421,21 @@ async def patch_task(
                 await record_field_change(
                     db, created_by=actor(user), task_id=task_id, changes=changes,
                 )
+        if new_stage is not _UNSET and str(new_stage or "") != str(before.stage_id or ""):
+            after = await update_row(db, "pm_tasks", task_id, {"stage_id": new_stage})
+            await record_activity(
+                db, activity_type="stage_change", created_by=actor(user),
+                task_id=task_id,
+                body=f"{await _stage_name(db, before.stage_id)} → "
+                     f"{await _stage_name(db, new_stage)}",
+                meta={
+                    "from": await _stage_name(db, before.stage_id),
+                    "to": await _stage_name(db, new_stage),
+                    "from_id": str(before.stage_id) if before.stage_id else None,
+                    "to_id": str(new_stage) if new_stage else None,
+                },
+            )
+
         moved = None
         if new_status is not None and str(new_status) != str(before.status_id):
             moved = await apply_status_transition(

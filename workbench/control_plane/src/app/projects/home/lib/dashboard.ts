@@ -106,3 +106,17 @@ export function shortName(actor: string): string {
   const [local] = actor.split("@");
   return local || actor;
 }
+
+
+/**
+ * Health model values → what a human reads (D-OPEN-5).
+ *
+ * The MODEL keeps `healthy | at_risk | critical`; the screen shows words. Kept
+ * here rather than in each surface so the list, the panel and any future report
+ * cannot end up calling `at_risk` three different things.
+ */
+export const HEALTH_LABELS: Record<string, { label: string; hue: string }> = {
+  healthy: { label: "Healthy", hue: "green" },
+  at_risk: { label: "At risk", hue: "amber" },
+  critical: { label: "Critical", hue: "red" },
+};

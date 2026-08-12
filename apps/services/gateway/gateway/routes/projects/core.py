@@ -383,6 +383,20 @@ TASK_SORTS: dict[str, str] = {
     "title": f"t.title {{dir}}, {SORT_TIEBREAK}",
     "task_number": f"t.task_number {{dir}} NULLS LAST, {SORT_TIEBREAK}",
     "completed_at": f"t.completed_at {{dir}} NULLS LAST, {SORT_TIEBREAK}",
+    # WS-27bp. Sorting the management list by the two axes migration 171 added.
+    # `health` ranks worst-first on a DESC, which is what a manager means by
+    # "sort by health" — NULL (unassessed) sorts last either way rather than
+    # masquerading as healthy.
+    "health": (
+        "array_position(ARRAY['critical','at_risk','healthy'], t.health) {dir} "
+        f"NULLS LAST, {SORT_TIEBREAK}"
+    ),
+    # By pipeline POSITION, never by name: "CAD" before "Concept" alphabetically
+    # is not a pipeline, and the position column is what makes it one.
+    "stage": (
+        "(SELECT g.position FROM pm_stages g WHERE g.id = t.stage_id) {dir} "
+        f"NULLS LAST, {SORT_TIEBREAK}"
+    ),
     "status": (
         f"(SELECT array_position({_CATEGORY_RANK_ARRAY}, s.category)"
         f" FROM pm_task_statuses s WHERE s.id = t.status_id) {{dir}} NULLS LAST, "

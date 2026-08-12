@@ -36,7 +36,8 @@ limitations). Do not add product specs to `docs/`.
 | `specs/subscription_console.md` | WS-30 |
 | `specs/future_modules_roadmap.md` | D21 roadmap (no rows until specced) |
 | `specs/crm_app.md` | WS-26 |
-| `specs/project_management_app.md` | WS-27 |
+| `specs/project_management_app.md` | WS-27 — **the owning spec**; §11.n build records live here |
+| `../ProjectApp_Plan.md` *(repo ROOT)* | WS-27 **Project Operations** (owner brief 2026-08-12) — the UI contract screen by screen, the aggregate endpoints still owed, and the S3–S19 slice sequence. **Subordinate to `project_management_app.md`, which stays the single owning spec (§1.6);** this doc owns the *remaining UI delivery* only. Its own precedence rule: the code wins over it, and `work_plan.md` wins over it. |
 | `specs/people_center_app.md` | WS-28 |
 | `specs/department_centers.md` | WS-13 · WS-14 · WS-15 · WS-16 (+ §5 Center roster of record, D22) |
 | `specs/colleague_onboarding.md` | WS-24 |

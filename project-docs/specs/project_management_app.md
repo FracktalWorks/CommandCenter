@@ -1,7 +1,15 @@
 # Projects App — Master Plan (native project management; ClickUp retirement path)
 
 > **Product:** CommandCenter · **Feature:** Projects (the People Center's primary work-management
-> module, sliced into every other Center) · **Created:** 2026-08-05 · **Updated: 2026-08-11**
+> module, sliced into every other Center) · **Created:** 2026-08-05 · **Updated: 2026-08-12**
+> (**WS-27bg built — §11.35, migration 171: the Project Operations foundation + work API,
+> on `ws-27-project-ops`, NOT merged and NOT deployed.** Stage as a second axis, blockers,
+> next action, health, server-owned time tracking and handoff — extending the existing tree
+> and activity spine rather than adding a per-level table zoo (D-PM-2). The lifecycle state
+> machine is enforced in `core.apply_status_transition` behind
+> **`projects_enforce_transitions`, default OFF** — flipping it is an owner act. Owning
+> plan for the remaining UI work: **`ProjectApp_Plan.md`** at the repo root.) ·
+> **Prior: 2026-08-11**
 > (**WS-27be built — §11.33, migration 170**; **WS-27ak's narrowed slice built — §11.31**;
 > **WS-27bc's one dispatchable slice built — §11.34**;
 > **WS-27am's — §11.29**; **WS-27bd's — §11.30**;
@@ -5871,6 +5879,130 @@ in the gateway's own words (`search.py:68-71`): "returning half the workspace."
 **Owed:** nothing visual — this slice renders nothing, so the four-theme pass does not apply to
 it. What it cannot prove is that a real scroller fires at the right moment; there is no DOM and
 no e2e here, and that stays review-only until the surface half lands.
+
+### 11.35 WS-27bg — Project Operations: the foundation and the work API (built 2026-08-12)
+
+**Status: BUILT 2026-08-12. Branch `ws-27-project-ops`, two commits (`f4123bd6`, `4cfed230`)
+off `efd843a2`. NOT merged, NOT deployed.** Migration **171** (number taken at build time,
+R1 — **re-check at merge**), one new gateway module, one new routeless domain module, stage
+CRUD added to `admin.py`, and one new setting. Owning plan: `ProjectApp_Plan.md` (owner
+brief 2026-08-12) parts 0–II.
+
+**What the owner asked for and what already existed.** The brief describes a
+CLIENT → PROGRAM → PROJECT → WORK → TIME operations system. About sixty per cent of it was
+already built: `pm_projects`' self-FK tree, `pm_tasks`, `pm_activities` as the single
+timeline spine, `pm_task_links` for dependencies, `pm_notifications`, `pm_task_attachments`,
+`pm_task_assignees`' `email | agent:<name>` vocabulary, and grants. **The brief's own first
+rule is "do not duplicate", so none of that was rebuilt.**
+
+**No `pm_clients` / `pm_programs` tables.** D-PM-2 already took the hierarchy decision —
+one self-FK, types as data — and per-level tables are the zoo it rejected and the importer
+flattens. Client and Program are a **`kind`** on the existing node, which already carries
+grants, counters, statuses and tenancy.
+
+**Status and Stage became two axes, without a second lifecycle column.**
+`pm_task_statuses.category` has been the machine-readable half of a status since 146 and
+already *was* the brief's lifecycle status — it was missing exactly two values, so 171
+widens it with `paused` and `blocked`. Stage is a genuinely new, separately configurable
+entity (`pm_stages`, shaped like `pm_task_statuses`). A parallel `project_status` column
+beside `category` would have been CLAUDE.md §5's second-way-to-do-a-thing, and the two
+would have disagreed inside a release.
+
+**Migration 171.** `pm_projects.kind` · `pm_stages` + `pm_tasks.stage_id` ·
+`pm_tasks.health` (NULL = unassessed, distinct from healthy) · `next_action`/`_owner`/`_due`
+denormalised with a partial index for "active work with no next move" · `pm_blockers`
+(11 kinds, `waiting_on`, resolution required by CHECK) · `pm_time_entries` ·
+category CHECK widened · activity CHECK widened by **five** verbs, not the brief's sixteen
+(COMMENT_ADDED is already `comment`, FILE_ADDED already `attachment`; synonyms would give
+the timeline two words for one event).
+
+**R6:** every column nullable, every table additive, nothing renamed. Both CHECKs are
+**widened**, and a widening cannot fail on existing data — the `NOT VALID`/`VALIDATE` dance
+R6 prescribes is for tightening and does not apply. **R5:** all three tables carry
+`organization_id` and derive it through 161's `pm_organization_from_parent()`; the RLS
+policy set was regenerated, which `test_tenant_coverage` had correctly failed on.
+
+**R7 — the fence that matters.** `uq_pm_time_entries_one_open_per_actor`, a partial unique
+index on `(actor) WHERE ended_at IS NULL`. A handler check loses the race the moment two
+tabs click START together, and double-counted engineering time is the one defect here that
+nobody notices until an invoice is wrong. `duration_secs` is a **GENERATED** column for the
+same reason: no API, migration or future handler *can* write a client-supplied duration.
+
+**R8 — verified against a real Postgres, not asserted.** Replayed twice for idempotency,
+then each constraint exercised individually: second open session refused · generated
+duration unwritable and computing 90s correctly · resume allowed after close · backwards
+session refused · blocker resolved-without-reason refused · unknown blocker kind refused ·
+`work_session`/`handoff` accepted and `nonsense` refused · tenancy trigger deriving the org
+from the parent task.
+
+**`operations.py` — routeless, following `mapping.py`'s precedent.** Pure functions over
+plain values, no session and no ambient clock, so the state machine is exhaustively
+testable and the handlers stay thin. It owns the three rules the brief puts server-side:
+legal transitions (§42), session length from timestamps (§41), and at-risk derivation
+(§24, where a human assessment always wins).
+
+**The state machine is enforced in `core.apply_status_transition`, NOT in the new routes.**
+Every status mover already funnels through that helper — the PATCH route, the board drag,
+the sync, automation — so a guard placed in `work.py` would be one the board walks around,
+and the brief §40 is explicit that transitions must not be bypassable through the API.
+🔴 It ships behind **`projects_enforce_transitions`, default OFF** (ship dark): the legacy
+movers are unchanged; the work routes pass `enforce=True` unconditionally because nothing
+depends on their permissiveness. **Flipping it is the owner's act** — a board drag from
+Delivered back to Paused starts answering 422.
+
+**Stage CRUD went into `admin.py`**, beside statuses and types, rather than a `stages.py`:
+same kind of thing (per-root configuration reshaped without a deploy), and a second module
+is a second home for one concept.
+
+**⚠️ Four defects found by driving the real stack rather than reading the code.** The first
+end-to-end run of the work API was **24/40**; the final run is 43/43. Each of these would
+have passed a hermetic test:
+
+1. **`pm_task_assignees.assigned_by` is NOT NULL** and handoff did not set it — a 500.
+   `tasks.py:700` already had the correct shape including the conflict target; it was
+   written from memory instead of read.
+2. **No project could pause or block.** `_seed_root` seeds four lanes and neither is
+   `paused` nor `blocked`, and `work._status_for` resolves the lane BY CATEGORY — so the
+   flagship button of the brief answered 422 on every project, including new ones. Both
+   lanes added to the seed, and both hues to `CATEGORY_HUES`, which
+   `test_seed_status_colours_match_the_shared_vocabulary` requires in the same change.
+3. **`core.STATUS_CATEGORIES` was a stale mirror** of the widened CHECK. `validate_choice`
+   refuses an unknown category *before* the insert, so creating a Paused lane 422'd while
+   the database would have accepted it. **This is migration 150's `attachment` failure, one
+   column over.** Fixed and fenced: `test_the_category_vocabulary_mirror_is_exact` reads the
+   CHECK out of the migrations rather than restating it.
+4. **`TaskModel` omitted the new columns**, and `row_to_dict` filters to the model's fields
+   — so `next_action` was written correctly and never returned. A successful write that
+   looks like a failed one.
+
+**⚠️ A defect in the tests themselves, found by mutation.** The remark-required fence was
+parametrised over `REMARK_REQUIRED`; emptying that set produces an empty parameter list,
+which pytest **SKIPS** rather than fails — so deleting the entire pause-needs-a-reason rule
+left the suite green. Membership is now pinned in its own assertion and the mutation
+re-run confirms red. Mutation-tested both ways: allowing `COMPLETED → PAUSED` also goes red.
+
+**Verification.** 363 unit tests green · 431 frontend tests green (conformance + contrast +
+the `statusAccent` fence gating the two new hues) · ruff blocking gate clean · mypy clean on
+`operations.py` · migration applied and re-applied on a real database · 43/43 on an
+end-to-end run through BFF → gateway → Postgres.
+
+**Owed, and NOT closed by this slice:**
+- **No UI is wired to any of it.** Nothing in the front end calls a work route. That is the
+  bulk of the remaining plan (S4–S19 there).
+- **No aggregate endpoints** — no dashboard, workload, attention, pipeline or
+  blocker-breakdown route exists.
+- **The four-theme sweep (WS-27bf)** is untouched and this slice adds nothing visual, so it
+  neither pays it down nor increases it.
+- 🔴 **A separate live defect found on the way and deliberately not fixed here:**
+  `acb_auth.ensure_owner_bootstrap()` cannot run on a fresh database — `access.py:550` uses
+  `ON CONFLICT (email)` and migration 162 replaced that unique constraint with the
+  functional index `app_user_email_lower_key ON (lower(email))`. It logs
+  `ownership_bootstrap_failed` and provisions nobody. Production does not feel it because it
+  bootstrapped before 162 and `_HAS_OWNER_SQL` short-circuits — so it bites a **new tenant,
+  a restore to scratch, disaster recovery, or a laptop**, i.e. the "way back in" path that
+  exists because of the 2026-07-30 lockout. The fix is one word,
+  `ON CONFLICT (lower(email))`, verified against a real database; it belongs in its own
+  ticket with its own fence, not smuggled into this one.
 
 ## Board record (2026-08-09) — moved from work_plan.md §2
 

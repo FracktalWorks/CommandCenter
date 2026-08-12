@@ -25,6 +25,13 @@ database**, and read the next paragraph before you do.
 scratch database and catastrophic against anything you care about. Point them at a throwaway
 copy, never at production, and never at a database whose contents you have not just backed up.
 
+⚠️ **`live_ws27be.py` also SEEDS VOLUME** — 60,000 tasks by default (`WS27BE_ROWS`), because a
+query plan on ten rows is a sequential scan whatever indexes exist, and a "measurement" taken
+there would prove nothing. It takes about a minute, and it needs its own database rather than
+the shared `cc`; `WS27BE_DATABASE_URL` points it somewhere. It is also the only script here that
+APPLIES a migration itself (found by content, applied twice, to check idempotency), so it
+mutates the schema of whatever it is pointed at.
+
 ## What each one pins
 
 | Script | Ticket | The thing only a database could answer |
@@ -40,6 +47,7 @@ copy, never at production, and never at a database whose contents you have not j
 | `live_ws27s.py` | task card | Page-wide aggregates over `= ANY(CAST(:ids AS uuid[]))` |
 | `live_ws27t.py` | timeline | Edges with both ends in a window; a DATE beside a timestamptz in `UNION ALL` |
 | `live_ws27ae_delta.py` | delta sync | The tombstone trigger firing on a project **CASCADE** — the fake models no FKs, so its `_delete` mirror can only prove the endpoint path |
+| `live_ws27be.py` | search indexes | **The QUERY PLAN** — `Filter:` vs `Index Cond:` before and after `pg_trgm`, with the caller's real bound parameters. A fake has no planner, so the dead `idx_pm_tasks_fts` was invisible to every unit test for 24 migrations |
 | `live_ws29.py` | tenancy | **Two tenants, real routes — proves isolation and 404-never-403** |
 | `live_ws29e.py` | admin tenancy | Two orgs, two admins — roster, invite, roles, groups, overrides |
 | `prove_bootstrap.sh` | WS-25 D1 | `git reset --hard` renames, so a self-rewriting script runs stale steps and **exits 0** |

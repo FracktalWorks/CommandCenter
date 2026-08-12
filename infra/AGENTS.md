@@ -15,6 +15,7 @@ Docker Compose, Postgres schema, LiteLLM tier config. LLM routing is via the gat
 - **LiteLLM uses Prisma internally → `DATABASE_URL` MUST be `postgresql://` (plain, no `+psycopg` suffix)**
 - All LLM calls go through the gateway `/v1/chat/completions` endpoint (Python litellm SDK, no proxy)
 - Redis is vanilla alpine (redis-stack deferred)
+- **Postgres extensions in use: `uuid-ossp`, `vector` (pgvector), and — since `170_projects_search_trgm.sql` (WS-27be) — `pg_trgm`.** All three are `CREATE EXTENSION IF NOT EXISTS` inside migrations rather than image setup; `pg_trgm` ships in `postgres:16`'s contrib and is **trusted**, so the non-superuser the ladder connects as can create it. ⚠️ `pg_trgm` is not decoration: `pm_tasks.title`/`.description` carry `gin_trgm_ops` GIN indexes and are the ONLY thing that makes `/projects/search`'s `ILIKE '%…%'` an index condition rather than a scan of the table. `idx_pm_tasks_fts` (the `to_tsvector` index from 146) is retained but **serves nothing** — `ILIKE` cannot use it — and its drop is a recorded follow-up (project_management_app.md §11.33), not an oversight
 - Langfuse container is defined but **opt-in behind `--profile obs`** and dormant (no OTLP export wired by default; the `langfuse` Python package is not installed). Distributed tracing is tracked as BO-5.
 - Compose profiles: `core` (postgres+redis), `memory` (neo4j, for Graphiti), `obs` (langfuse + postgres/redis), `sandbox`
 

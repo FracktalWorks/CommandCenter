@@ -39,7 +39,7 @@ from gateway.routes.projects import search as pm_search
 from gateway.routes.projects import tasks as pm_tasks
 from gateway.routes.projects import tree as pm_tree
 from gateway.routes.projects import views as pm_views
-from gateway.routes.projects.filters import like_escape
+from gateway.routes.projects.filters import build_task_filters, like_escape
 from gateway.routes.projects.search import MAX_HITS, MIN_QUERY, task_number
 
 from tests.unit._projects_fakes import (
@@ -105,14 +105,32 @@ def test_escaping_is_total_no_metacharacter_survives_unescaped(term: str) -> Non
             assert escaped[index - 1] == "\\", escaped
 
 
-def test_the_list_endpoint_escapes_too_not_only_search() -> None:
+@pytest.mark.parametrize(
+    ("term", "bound_pattern"),
+    [
+        ("task_id", r"%task\_id%"),
+        ("50%", r"%50\%%"),
+        ("back\\slash", r"%back\\slash%"),
+        ("  padded  ", "%padded%"),
+    ],
+)
+def test_the_list_endpoint_escapes_too_not_only_search(
+    term: str, bound_pattern: str,
+) -> None:
     """⚠️ The defect was on `build_task_filters`, which the board and every
     saved view read through. Fixing only the new endpoint would leave the bug
-    exactly where people meet it."""
-    source = Path(
-        "apps/services/gateway/gateway/routes/projects/filters.py"
-    ).read_text(encoding="utf-8")
-    assert 'params["q"] = f"%{like_escape(q.strip())}%"' in source
+    exactly where people meet it.
+
+    ⚠️ **This used to assert on the SOURCE TEXT of that one line** — and WS-27be
+    had to reshape the line (a minimum-length branch went in above it), which
+    broke a test whose subject had not changed at all. A fence that pins a
+    spelling fails on refactors and passes on a rewrite that keeps the spelling
+    and drops the behaviour. So it asserts on the BOUND VALUE instead: the
+    pattern `build_task_filters` hands the database, which is the thing that was
+    wrong.
+    """
+    _, params = build_task_filters(q=term)
+    assert params["q"] == bound_pattern
 
 
 # ── task_number ─────────────────────────────────────────────────────────────

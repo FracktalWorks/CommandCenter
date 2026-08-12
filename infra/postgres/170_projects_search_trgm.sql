@@ -1,0 +1,126 @@
+-- ============================================================================
+-- 170_projects_search_trgm.sql — WS-27be: make the task search servable.
+--
+-- ⚠️ The number was taken from the directory at BUILD time (R1) and is
+--    re-checked at merge. `tests/unit/test_projects_migration.py` finds this
+--    file by CONTENT (`gin_trgm_ops`), never by number, so a renumber in
+--    review costs nothing.
+--
+-- What: `pg_trgm`, plus three indexes that between them let the planner serve
+--       `/projects/search` and the list endpoint's `?q=` from indexes instead
+--       of a full scan of `pm_tasks`.
+--
+-- ── The defect ──────────────────────────────────────────────────────────────
+--
+-- Migration 146 created `idx_pm_tasks_fts` as
+--
+--     GIN (to_tsvector('english', coalesce(title,'') || ' ' ||
+--                                 coalesce(description,'')))
+--
+-- and NOTHING has ever been able to use it. The only queries that search those
+-- columns — `routes/projects/search.py::_SEARCH_SQL` and
+-- `routes/projects/filters.py::build_task_filters` — both spell the predicate
+-- `title ILIKE '%term%' OR description ILIKE '%term%'`, and `ILIKE` is not an
+-- operator any `to_tsvector` GIN index supports. So every search has been a
+-- full scan of `pm_tasks` with an index sitting beside it that looks like it
+-- covers the case. Nobody noticed because the table is small, which is exactly
+-- the condition under which this stays invisible until it is expensive.
+--
+-- ── Why trigrams and not `websearch_to_tsquery` ─────────────────────────────
+--
+-- Owner decision, WS-27be: the index moves to the query, not the query to the
+-- index. Full-text search would use the index that is already here, but it is a
+-- PRODUCT change rather than an optimisation — `to_tsvector`/`websearch_to_tsquery`
+-- stems ("parsing" stops matching "parser"), drops stop-words, and cannot match
+-- inside a word at all, so searching `task_i` for `task_id` would return
+-- nothing. Our search is substring-oriented on purpose (people type partial
+-- titles and partial task numbers), and `gin_trgm_ops` keeps every answer
+-- byte-identical while making it servable. Measured below.
+--
+-- ── The three indexes, and why three ────────────────────────────────────────
+--
+--   idx_pm_tasks_title_trgm        ILIKE on `title`
+--   idx_pm_tasks_description_trgm  ILIKE on `description`
+--   idx_pm_tasks_task_number       the third arm of the same OR
+--
+-- The predicate is an OR, and a BitmapOr forms only when EVERY arm is indexed
+-- WELL. Two trigram indexes and no third one is the trap this migration was one
+-- line away from falling into, because `search.py::task_number` turns `#42` (and
+-- a bare `42`) into a third arm — `… OR task_number = 42` — the moment anybody
+-- types a number, which in a task tracker is constantly.
+--
+-- ⚠️ **`(root_project_id, task_number)` looks like it covers that arm and does
+-- not.** It is the UNIQUE constraint from 146, and `task_number` is its SECOND
+-- column, so a bare `task_number = :n` can only be answered by reading the
+-- WHOLE composite index. Postgres will do exactly that rather than give up, and
+-- the plan says `Bitmap Index Scan on pm_tasks_root_project_id_task_number_key`
+-- — a line that reads like the index is working. Measured by
+-- `tests/live/live_ws27be.py` at 60k rows: that arm alone costs 1693 planner
+-- units and 298 buffers, against 4.4 units and 1 buffer for the dedicated
+-- btree, taking the whole search from 26 to 324 buffers. On a larger
+-- measurement database (240k rows) the planner stopped bothering with the
+-- composite altogether and dropped the entire disjunction back to a scan:
+-- 195 ms, versus 1.6 ms once this btree existed.
+--
+-- So: `task_number` gets its own plain, non-unique btree. Uniqueness stays where
+-- it belongs — a task number is unique per root project, not globally.
+--
+-- For scale on the text arms, from the same harness: `q=quicksilver` over 60k
+-- rows goes 653 ms → 0.7 ms, and the list endpoint's `?q=` 442 ms → 0.3 ms.
+--
+-- ── R6, expand/contract ─────────────────────────────────────────────────────
+--
+-- Every statement here is ADDITIVE. In particular `idx_pm_tasks_fts` is
+-- **deliberately left in place**: dropping it in the same change would remove
+-- the only other text index in the same breath as introducing an untried one,
+-- and we cannot roll back. Its removal is a follow-up whose trigger is named in
+-- project_management_app.md §11.33 — once `pg_stat_user_indexes.idx_scan` for
+-- `idx_pm_tasks_title_trgm` is non-zero on the live database and `idx_pm_tasks_fts`
+-- is still zero, the drop is safe and is a migration of its own.
+--
+-- No new table, so nothing for R5 to key; no column is renamed or tightened, so
+-- old code meets this schema unchanged (an index the running gateway does not
+-- know about is invisible to it).
+--
+-- ── Locking ─────────────────────────────────────────────────────────────────
+--
+-- Plain `CREATE INDEX` — the idiom every other migration here uses. It takes a
+-- SHARE lock: reads continue, writes to `pm_tasks` wait. `apply_migrations.sh`
+-- sets `lock_timeout` and retries, so a stale reader delays this rather than
+-- freezing the table. NOT `CONCURRENTLY`: on failure it leaves an INVALID index
+-- behind that a later replay will not repair, and the runner's retry loop would
+-- turn one lock blip into a dead index nobody looks for. The three builds took
+-- ~5 s over 240k rows on the measurement database; production `pm_tasks` is
+-- smaller than that by orders of magnitude.
+-- ============================================================================
+
+-- `pg_trgm` is a TRUSTED extension in PG 13+ (`trusted = true` in its control
+-- file), so the database owner can create it without superuser — which is what
+-- `apply_migrations.sh` connects as. This is the first use of it in the tree.
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+
+-- ── The two text arms ───────────────────────────────────────────────────────
+--
+-- Two single-column indexes, not one over the concatenation: the query filters
+-- the COLUMNS separately, and an expression index over `title || description`
+-- can only be used by a query that spells the same expression. Splitting them
+-- also lets the planner drop the description arm when only the title matches,
+-- which is the common case (see the `quicksilver` plan: the description arm
+-- returned 0 rows and cost 19 buffers).
+--
+-- `gin_trgm_ops` serves both `LIKE` and `ILIKE` — trigram matching is
+-- case-insensitive by construction, so no second lower() index is needed.
+CREATE INDEX IF NOT EXISTS idx_pm_tasks_title_trgm
+    ON pm_tasks USING GIN (title gin_trgm_ops);
+
+CREATE INDEX IF NOT EXISTS idx_pm_tasks_description_trgm
+    ON pm_tasks USING GIN (description gin_trgm_ops);
+
+-- ── The third arm ───────────────────────────────────────────────────────────
+--
+-- `search.py::task_number` turns `#42` / `42` into an extra OR arm on
+-- `task_number`. Without this, that arm is answered by reading the whole
+-- `(root_project_id, task_number)` unique index — see the header. Plain and
+-- non-unique on purpose: task numbers repeat across root projects.
+CREATE INDEX IF NOT EXISTS idx_pm_tasks_task_number
+    ON pm_tasks (task_number);

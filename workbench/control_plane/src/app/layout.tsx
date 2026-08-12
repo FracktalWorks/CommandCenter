@@ -39,6 +39,7 @@ import AppShell from "@/components/AppShell";
 import Providers from "@/components/Providers";
 import ThemeStyles from "@/components/ThemeStyles";
 import { ToastProvider } from "@/components/ui/Toast";
+import { TooltipProvider } from "@/components/ui/Tooltip";
 import { themeBootScript } from "@/lib/theme/boot";
 
 export const metadata: Metadata = {
@@ -97,9 +98,21 @@ export default function RootLayout({
             without the provider every `useToast()` call site degrades to a
             silent no-op and no other test in the tree would go red. */}
         <ToastProvider>
-          <Providers>
-            <AppShell>{children}</AppShell>
-          </Providers>
+          {/* WS-27ak(2) — the tooltip DELAY GROUP, not the tooltips themselves.
+              `Tooltip` works without this; what the provider adds is that a row
+              of icon buttons behaves as one group, so hovering the second one
+              opens immediately instead of waiting again. Mounted here rather
+              than inside `Providers` for the same reason the toast host is: it
+              needs no session, no theme context and no access decision.
+              ⚠️ It is only a grouping context — it renders no DOM of its own,
+              so nothing is fenced by its presence and nothing breaks by its
+              absence. That makes it the opposite of `ToastProvider`, which is
+              load-bearing; do not copy that comment's fencing claim onto it. */}
+          <TooltipProvider>
+            <Providers>
+              <AppShell>{children}</AppShell>
+            </Providers>
+          </TooltipProvider>
         </ToastProvider>
       </body>
     </html>

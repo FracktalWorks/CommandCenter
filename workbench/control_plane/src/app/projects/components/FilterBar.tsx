@@ -33,6 +33,7 @@
 import Icon from "@/components/Icon";
 import Badge from "@/components/ui/Badge";
 import Button from "@/components/ui/Button";
+import Tooltip from "@/components/ui/Tooltip";
 import { Input } from "@/components/ui/Input";
 import { useEffect, useState } from "react";
 
@@ -333,12 +334,12 @@ export function FilterBar({
         {/* WS-27ae — what you export is what you are looking at: these
             filters, those columns. The house `Button`, never an `<a download>`
             dressed as one: this is a fetch whose refusal has to be shown. */}
+        <Tooltip content="Export these filters and columns as a CSV">
         <Button
           variant="secondary"
           size="sm"
           icon="Download"
           disabled={exporting}
-          title="Export these filters and columns as a CSV"
           onClick={async () => {
             setExporting(true);
             try {
@@ -350,6 +351,7 @@ export function FilterBar({
         >
           {exporting ? "Exporting…" : "Export"}
         </Button>
+        </Tooltip>
 
         {isFiltered(filters) ? (
           <Button
@@ -423,13 +425,14 @@ export function FilterBar({
                   row below says what changed, and this only has to answer
                   "is this chip still telling the truth". */}
               {view.id === activeViewId && drift.dirty ? (
-                <span
-                  className="ml-1 align-middle text-[10px]"
-                  aria-label="edited since it was saved"
-                  title="Edited since it was saved"
-                >
-                  ●
-                </span>
+                <Tooltip content="Edited since it was saved">
+                  <span
+                    className="ml-1 align-middle text-[10px]"
+                    aria-label="edited since it was saved"
+                  >
+                    ●
+                  </span>
+                </Tooltip>
               ) : null}
             </button>
             <button

@@ -84,7 +84,11 @@ async def ops_summary(user: UserContext = Depends(get_current_user)) -> dict:
                 " count(*) FILTER (WHERE t.due_at < now())           AS overdue, "
                 " count(*) FILTER (WHERE t.health = 'at_risk')       AS at_risk, "
                 " count(*) FILTER (WHERE t.health = 'critical')      AS critical, "
-                " count(*) FILTER (WHERE t.next_action IS NULL)      AS no_next_action "
+                " count(*) FILTER (WHERE t.next_action IS NULL)      AS no_next_action, "
+                "  count(*) FILTER (WHERE EXISTS ("
+                "     SELECT 1 FROM pm_blockers b WHERE b.task_id = t.id "
+                "       AND b.resolved_at IS NULL "
+                "       AND b.kind IN ('client_input','client_approval'))) AS awaiting_client "
                 f"{where}"
             ),
             params,
@@ -95,6 +99,10 @@ async def ops_summary(user: UserContext = Depends(get_current_user)) -> dict:
             "not_started": int(row.not_started), "overdue": int(row.overdue),
             "at_risk": int(row.at_risk), "critical": int(row.critical),
             "no_next_action": int(row.no_next_action),
+            # Distinct from `blocked`: a project can be blocked on a supplier or
+            # on ourselves. This is the subset the CUSTOMER is holding, which is
+            # the one management chases differently.
+            "awaiting_client": int(row.awaiting_client),
             "basis": "Open work you can see — excludes delivered, cancelled and archived.",
         }
 

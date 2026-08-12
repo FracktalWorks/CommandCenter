@@ -50,13 +50,59 @@ describe("the Projects app is reachable", () => {
     expect(featureForPath("/projects")).not.toBe("center.sales");
   });
 
-  it("is ONE pane, not one per Center", () => {
+  it("is not forked per Center (D-OPEN-13)", () => {
     // department_centers.md §1 rule 2 — a Center item is (app + scope), and
     // forking the app per department is the bloat failure mode to refuse in
     // review. This is that rule, made mechanical.
+    //
+    // ⚠️ **Narrowed 2026-08-12 by owner decision (D-OPEN-13), from
+    // `toHaveLength(1)`.** The old form asserted ONE pane, which is broader
+    // than the rule it cites: it also refused a second SURFACE of the same app
+    // (`/projects/my-work`, `/projects/home`), which is not forking per
+    // department and is what the plan's §15/§14 ask for.
+    //
+    // The three assertions below are the rule itself rather than a proxy for
+    // it, so the fence still fails on the thing it was built to catch:
+    //
+    //   1. no pane may carry a `?center=` scope — that IS the per-Center
+    //      projection, and `lib/centers.ts` is where a Center links in;
+    //   2. no pane may be `/projects/<center-slug>`, the same fork by path;
+    //   3. the pane COUNT may not reach the number of Centers — the shape of
+    //      "somebody added one each" no matter how they spelled it.
+    //
+    // Verified red-first against all three: see the commit that narrowed it.
     const items = NAV_SECTIONS.flatMap((s) => s.items);
     const projectPanes = items.filter((i) => i.href?.startsWith(PROJECTS_HREF));
-    expect(projectPanes).toHaveLength(1);
+
+    expect(projectPanes.length, "/projects has no nav entry at all").toBeGreaterThan(0);
+
+    for (const pane of projectPanes) {
+      expect(
+        pane.href,
+        `${pane.href} scopes the app to a Center — that belongs in lib/centers.ts, not the rail`,
+      ).not.toMatch(/[?&]center=/);
+
+      for (const centre of CENTERS) {
+        expect(
+          pane.href,
+          `${pane.href} is a per-Center fork of the app by path`,
+        ).not.toBe(`${PROJECTS_HREF}/${centre.slug}`);
+      }
+    }
+
+    // The teeth. One pane per Center is the failure; if the count ever reaches
+    // the roster size, that is what has happened however it was spelled.
+    expect(
+      projectPanes.length,
+      `${projectPanes.length} Projects panes against ${CENTERS.length} Centers — ` +
+        "this is the per-Center fork department_centers.md §1 rule 2 refuses",
+    ).toBeLessThan(CENTERS.length);
+
+    // Every surface of the app is gated on the app's own slug, so promoting a
+    // surface can never accidentally hide it behind a Center's feature.
+    for (const pane of projectPanes) {
+      expect(pane.feature, `${pane.href} is gated on ${pane.feature}`).toBe(PROJECTS_FEATURE);
+    }
   });
 });
 

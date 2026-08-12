@@ -159,6 +159,38 @@ export const NAV_SECTIONS: NavSection[] = [
         note: "Departments, projects and team tasks",
         feature: "projects",
       },
+      // Two more SURFACES of that same app — not two more Centers.
+      //
+      // D-OPEN-13 (owner-decided 2026-08-12). The rule above forbids forking
+      // the app PER DEPARTMENT; these are per-AUDIENCE, one each for the two
+      // people the operations brief is written for: the engineer who needs to
+      // start work in one click (§15) and the manager who needs to know what
+      // is stuck (§14). `registration.test.ts` was narrowed in the same change
+      // from "exactly one pane" to the rule it actually cites — no `?center=`
+      // scope, no `/projects/<center-slug>`, and the pane count may never
+      // reach the number of Centers.
+      //
+      // The four operations views (Blocked · Awaiting · Paused · Active) are
+      // deliberately NOT here: they are drill-downs the Control Center already
+      // links and counts, and six Projects rows would make one app shout over
+      // every other in the rail.
+      //
+      // Both inherit the `projects` feature by prefix match (access.ts:113),
+      // so neither is an ungated route.
+      {
+        href: "/projects/my-work",
+        label: "My work",
+        icon: "ListTodo",
+        note: "Start, pause and finish your work",
+        feature: "projects",
+      },
+      {
+        href: "/projects/home",
+        label: "Control Center",
+        icon: "LayoutDashboard",
+        note: "What needs attention, and who is waiting",
+        feature: "projects",
+      },
       // The people behind the work, next to it. Its own feature slug rather
       // than riding `tasks`: a manager who needs the org chart and the
       // assignee picker should not have to be handed the personal GTD task

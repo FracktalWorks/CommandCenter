@@ -151,6 +151,10 @@ class ProjectModel(BaseModel):
     id: str
     name: str
     description: str | None = None
+    #: Migration 171 — what this node IS (client / programme / project).
+    #: ⚠️ A column the table has and this model does not is a column the API
+    #: silently DROPS; `TaskModel` hit exactly that with `next_action`.
+    kind: str | None = None
     parent_project_id: str | None = None
     task_prefix: str | None = None
     status: str = "active"
@@ -170,9 +174,16 @@ class ProjectModel(BaseModel):
     archived_at: str | None = None
 
 
+#: `pm_projects.kind` (migration 171). What a node IS, so the tree can carry a
+#: client and a vehicle programme without a table per level (D-PM-2).
+#: NULL stays legal and means "untyped", which every pre-171 row is.
+PROJECT_KINDS: tuple[str, ...] = ("department", "client", "program", "project")
+
+
 class ProjectIn(BaseModel):
     name: str | None = None
     description: str | None = None
+    kind: str | None = None
     parent_project_id: str | None = None
     task_prefix: str | None = None
     status: str | None = None

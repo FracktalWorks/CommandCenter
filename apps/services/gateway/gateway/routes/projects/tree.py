@@ -28,6 +28,7 @@ from acb_auth import UserContext, get_current_user
 from fastapi import Depends, HTTPException
 from gateway.routes.projects.core import (
     LIFECYCLE_FIELDS,
+    PROJECT_KINDS,
     PROJECT_SOURCES,
     PROJECT_STATUSES,
     GrantModel,
@@ -252,6 +253,7 @@ async def create_node(
         raise HTTPException(status_code=422, detail="A project needs a name.")
     validate_choice(values.get("status"), PROJECT_STATUSES, "project status")
     validate_choice(values.get("source"), PROJECT_SOURCES, "source")
+    validate_choice(values.get("kind"), PROJECT_KINDS, "project kind")
     validate_lifecycle_settings(values)
     _refuse_lifecycle_on_child(values, values.get("parent_project_id"))
     values["name"] = name
@@ -310,6 +312,7 @@ async def patch_node(
     values = clean_payload(payload)
     validate_choice(values.get("status"), PROJECT_STATUSES, "project status")
     validate_choice(values.get("source"), PROJECT_SOURCES, "source")
+    validate_choice(values.get("kind"), PROJECT_KINDS, "project kind")
     validate_lifecycle_settings(values)
     # Re-parenting is a MOVE, with its own cycle check and root re-stamping.
     # Accepting it here as an ordinary field would skip both.

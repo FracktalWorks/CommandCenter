@@ -347,3 +347,102 @@ def test_ordinary_work_is_healthy() -> None:
         category=ops.IN_PROGRESS, due_at=ahead(days=14), last_activity_at=ago(hours=2),
     )
     assert ops.derive_health(row, NOW) == ops.HEALTHY
+
+
+# ── Attention (WS-27bn) ─────────────────────────────────────────────────────
+
+def _att(**kw) -> ops.AttentionInput:
+    return ops.AttentionInput(category=kw.pop("category", ops.IN_PROGRESS), **kw)
+
+
+def test_closed_work_never_needs_attention() -> None:
+    """A delivered project cannot be on the list, or the list grows forever."""
+    for category in (ops.COMPLETED, ops.CANCELLED):
+        row = _att(category=category, due_at=ago(days=30), assignees=0)
+        assert ops.attention_signals(row, NOW) == []
+        assert ops.attention_score(row, NOW) == 0
+
+
+def test_healthy_moving_work_has_no_signals() -> None:
+    row = _att(
+        due_at=ahead(days=10), next_action="Chase M&M",
+        assignees=1, last_activity_at=ago(hours=3),
+    )
+    assert ops.attention_signals(row, NOW) == []
+
+
+def test_the_signals_are_named_not_just_scored() -> None:
+    """A row that says 55 and not why is a row nobody acts on."""
+    row = _att(
+        category=ops.BLOCKED, blocked_since=ago(days=9),
+        due_at=ago(days=2), next_action=None, assignees=1,
+    )
+    signals = ops.attention_signals(row, NOW)
+    assert "blocked_long" in signals
+    assert "overdue" in signals
+    assert "no_next_action" in signals
+    assert "blocked" not in signals, "long-blocked must not double-count as blocked"
+
+
+def test_worse_work_scores_higher() -> None:
+    mild = _att(due_at=ago(days=1), next_action="x", assignees=1)
+    bad = _att(
+        category=ops.BLOCKED, blocked_since=ago(days=20),
+        due_at=ago(days=20), assignees=0, health=ops.CRITICAL,
+    )
+    assert ops.attention_score(bad, NOW) > ops.attention_score(mild, NOW)
+
+
+def test_not_started_work_is_not_nagged_for_a_next_action() -> None:
+    """Otherwise the whole backlog is on the attention list on day one."""
+    for category in (ops.NOT_STARTED, ops.BACKLOG):
+        row = _att(category=category, next_action=None, assignees=1)
+        assert "no_next_action" not in ops.attention_signals(row, NOW)
+
+
+def test_unassigned_open_work_is_flagged() -> None:
+    row = _att(assignees=0, next_action="x")
+    assert "no_owner" in ops.attention_signals(row, NOW)
+
+
+def test_every_signal_carries_a_weight() -> None:
+    """A signal with no weight scores zero and silently stops mattering."""
+    produced = set()
+    for row in (
+        _att(category=ops.BLOCKED, blocked_since=ago(days=1), assignees=0),
+        _att(category=ops.BLOCKED, blocked_since=ago(days=30), assignees=0),
+        _att(due_at=ago(days=1), health=ops.CRITICAL, assignees=1, next_action="x"),
+        _att(health=ops.AT_RISK, assignees=1, next_action="x"),
+        _att(last_activity_at=ago(days=30), assignees=1, next_action="x"),
+        _att(assignees=1),
+    ):
+        produced |= set(ops.attention_signals(row, NOW))
+    assert produced, "no signals produced — the fixtures stopped exercising it"
+    assert produced <= set(ops.ATTENTION_WEIGHTS)
+
+
+# ── Workload ────────────────────────────────────────────────────────────────
+
+def test_workload_percent_is_not_clamped() -> None:
+    """104% is the interesting number — it is why the card exists."""
+    assert ops.workload_percent(3600 * 42, 40.0) == 105.0
+
+
+def test_workload_percent_survives_zero_capacity() -> None:
+    assert ops.workload_percent(3600, 0) == 0.0
+
+
+@pytest.mark.parametrize(
+    "pct,band",
+    [(140, ops.OVER_CAPACITY), (100, ops.OVER_CAPACITY), (99.9, ops.HIGH_LOAD),
+     (80, ops.HIGH_LOAD), (79, ops.HEALTHY_LOAD), (50, ops.HEALTHY_LOAD),
+     (49, ops.LIGHT_LOAD), (0, ops.LIGHT_LOAD)],
+)
+def test_workload_bands(pct: float, band: str) -> None:
+    assert ops.workload_band(pct)[0] == band
+
+
+def test_workload_bands_resolve_to_shared_vocabulary_hues() -> None:
+    """Four ad-hoc colours here would be a second status palette (rule 4)."""
+    for _, band, hue in ops.WORKLOAD_BANDS:
+        assert hue in {"gray", "red", "amber", "green", "blue", "violet"}, band

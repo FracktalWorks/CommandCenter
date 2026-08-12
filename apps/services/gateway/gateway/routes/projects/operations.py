@@ -260,6 +260,128 @@ def derive_health(row: HealthInput, now: datetime) -> str | None:
     return HEALTHY
 
 
+# ── Attention ───────────────────────────────────────────────────────────────
+#
+# "What needs attention?" is the dashboard's first question (§44) and it has no
+# single answer in the data: a project can be overdue, or blocked for a
+# fortnight, or silently unowned, and each is a different kind of wrong. So it
+# is a SCORE over named signals rather than a filter, and the signals come back
+# with it — a row that says "23" and not why is a row nobody acts on.
+
+
+@dataclass(frozen=True)
+class AttentionInput:
+    category: str
+    due_at: datetime | None = None
+    blocked_since: datetime | None = None
+    last_activity_at: datetime | None = None
+    next_action: str | None = None
+    assignees: int = 0
+    health: str | None = None
+
+
+#: What each signal is worth. Ordered by how much a human would care, not by
+#: how easy it is to compute. Weights are round numbers on purpose: this is a
+#: ranking, and pretending to three significant figures would invite somebody
+#: to tune it instead of fixing the underlying work.
+ATTENTION_WEIGHTS: dict[str, int] = {
+    "critical": 40,       # somebody already judged it critical
+    "overdue": 30,        # a promise is broken
+    "blocked_long": 25,   # blocked past a working week
+    "no_owner": 20,       # nobody is going to pick this up by accident
+    "blocked": 15,        # blocked at all
+    "no_next_action": 10, # nothing says what happens next
+    "stale": 10,          # nothing has happened in a long time
+    "at_risk": 5,
+}
+
+
+def attention_signals(row: AttentionInput, now: datetime) -> list[str]:
+    """Which things are wrong with this project, by name.
+
+    Closed work has no signals: a delivered project cannot need attention, and
+    including it would put every finished thing in the list forever.
+    """
+    if is_closed(row.category):
+        return []
+
+    out: list[str] = []
+    if row.health == CRITICAL:
+        out.append("critical")
+    elif row.health == AT_RISK:
+        out.append("at_risk")
+    if row.due_at is not None and row.due_at < now:
+        out.append("overdue")
+    if row.category == BLOCKED:
+        blocked_for = (now - row.blocked_since) if row.blocked_since else None
+        if blocked_for is not None and blocked_for >= BLOCKED_CRITICAL:
+            out.append("blocked_long")
+        else:
+            out.append("blocked")
+    if row.assignees == 0:
+        out.append("no_owner")
+    # Not-started work is not expected to have a next action yet; demanding one
+    # would flag the entire backlog and make the list useless.
+    if not (row.next_action or "").strip() and row.category not in (NOT_STARTED, BACKLOG):
+        out.append("no_next_action")
+    if row.last_activity_at is not None and (now - row.last_activity_at) >= STALE_AT_RISK:
+        out.append("stale")
+    return out
+
+
+def attention_score(row: AttentionInput, now: datetime) -> int:
+    """The sum of what is wrong. Higher is worse; 0 means nothing is."""
+    return sum(ATTENTION_WEIGHTS.get(s, 0) for s in attention_signals(row, now))
+
+
+# ── Workload ────────────────────────────────────────────────────────────────
+
+#: Hours in a working day and week, until a real capacity model exists.
+#:
+#: ⚠️ **A DEFAULT, not a fact.** Plan §26 lists per-person capacity as a schema
+#: addition still owed (S14). Every percentage derived from these must state
+#: its basis on screen (acceptance 39) — "82% of 8h/day" is a number somebody
+#: can argue with; "82%" is one they cannot.
+DEFAULT_DAILY_HOURS = 8.0
+DEFAULT_WEEKLY_HOURS = 40.0
+
+OVER_CAPACITY = "over"
+HIGH_LOAD = "high"
+HEALTHY_LOAD = "healthy"
+LIGHT_LOAD = "light"
+
+#: The four bands the mock draws, and the hue each resolves to. Names, not
+#: classes — the caller maps them through the shared vocabulary
+#: (`statusAccent.ts`), because four ad-hoc colours here would be a second
+#: status palette (AGENTS.md rule 4).
+WORKLOAD_BANDS: tuple[tuple[float, str, str], ...] = (
+    (100.0, OVER_CAPACITY, "red"),
+    (80.0, HIGH_LOAD, "amber"),
+    (50.0, HEALTHY_LOAD, "green"),
+    (0.0, LIGHT_LOAD, "gray"),
+)
+
+
+def workload_band(percent: float) -> tuple[str, str]:
+    """`(band, hue)` for a load percentage. Never raises, including on 0."""
+    for floor, band, hue in WORKLOAD_BANDS:
+        if percent >= floor:
+            return band, hue
+    return LIGHT_LOAD, "gray"
+
+
+def workload_percent(seconds: int, capacity_hours: float) -> float:
+    """Tracked seconds against capacity, as a percentage.
+
+    **Not clamped.** 104% is the interesting number — it is the whole reason
+    the card exists — and rounding it down to 100 hides the person who is
+    over-committed. The BAR clamps its own width; the value does not.
+    """
+    if capacity_hours <= 0:
+        return 0.0
+    return round((seconds / 3600.0) / capacity_hours * 100.0, 1)
+
+
 def utcnow() -> datetime:
     """One clock for the package. Timezone-aware always — a naive datetime
     subtracted from an aware one raises, and the place that discovers it is a

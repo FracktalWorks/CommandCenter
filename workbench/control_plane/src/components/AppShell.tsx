@@ -41,6 +41,7 @@ import { FocusSession } from "@/app/tasks/components/FocusMode";
 // in-progress meeting recording follows the user across every app (spec §5.2).
 import { LiveDock } from "@/app/notes/components/LiveDock";
 import { RecordingDock } from "@/app/notes/components/RecordingDock";
+import { WorkTimerDock } from "@/components/WorkTimerDock";
 // ---------------------------------------------------------------------------
 // Mobile drawer context — lets child pages inject content into the hamburger
 // drawer without AppShell needing to know about sessions or filters.
@@ -92,6 +93,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
         <FocusSession />
         <RecordingDock />
         <LiveDock />
+        <WorkTimerDock />
 
         {/* Floating "Mobile view" pill — only when desktop is forced on a phone. */}
         {isNarrow && forceDesktop && (
@@ -135,6 +137,11 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
         <RecordingDock />
         {/* Server-side "live now" presence (bot calls / other devices). */}
         <LiveDock />
+        {/* The running work session. Mounted on the phone too, deliberately:
+            "a running timer is visible from every screen" matters MOST here,
+            where the engineer starting work on the shop floor is the one who
+            cannot see a desktop header. */}
+        <WorkTimerDock />
 
         {/* Unified drawer (slide-up panel for bottom-nav tab content) */}
         {drawerOpen && (

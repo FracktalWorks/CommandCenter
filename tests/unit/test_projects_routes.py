@@ -796,8 +796,13 @@ async def test_a_new_root_project_gets_a_working_board(db: FakeProjectsDB) -> No
     types = [t for t in db.rows("pm_task_types") if str(t["project_id"]) == created["id"]]
 
     assert {s["category"] for s in statuses} == {
-        "backlog", "todo", "in_progress", "done",
-    }
+        "backlog", "todo", "in_progress", "blocked", "paused", "done",
+    }, (
+        "A new project must be able to pause and block on its first day. "
+        "`POST /projects/tasks/{id}/work/pause` resolves the lane by CATEGORY "
+        "(work.py `_status_for`), so a seed without one answers 422 and the "
+        "Project Operations buttons are dead on every new project."
+    )
     assert sum(1 for s in statuses if s["is_default"]) == 1
     assert {v["view_type"] for v in views} == {"list", "board"}
     assert "Epic" in {t["name"] for t in types}

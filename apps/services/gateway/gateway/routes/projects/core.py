@@ -42,7 +42,7 @@ from typing import Any
 from uuid import UUID
 
 from acb_auth import UserContext, require_feature_router
-from acb_common import get_logger
+from acb_common import get_logger, get_settings
 from fastapi import APIRouter, HTTPException, Query
 
 # The shared seam (BO-10 → MT-1c/H2). `_tenant_session` IS
@@ -73,6 +73,11 @@ PROJECT_STATUSES: tuple[str, ...] = ("active", "on_hold", "done", "archived")
 #: parked-at-the-front-door value that :func:`triage_exclusion_clause` keys off.
 STATUS_CATEGORIES: tuple[str, ...] = (
     "backlog", "todo", "in_progress", "done", "cancelled", "triage",
+    # Migration 171 (Project Operations). The two lifecycle states an
+    # operations board turns on. Neither is a CLOSING category: paused and
+    # blocked work is still outstanding, and stamping `completed_at` on it
+    # would drop it out of every "what is still open" read.
+    "paused", "blocked",
 )
 
 #: The one category the default list reads exclude (WS-27u). A constant rather
@@ -200,6 +205,16 @@ class TaskModel(BaseModel):
     #: never null: "no custom values" and "they have not loaded" must not be the
     #: same thing to a client.
     custom_fields: dict = {}
+    #: Project Operations (migration 171). ⚠️ A column the table has and this
+    #: model does not is a column the API silently DROPS — `row_to_dict` filters
+    #: to the model's fields, so the write succeeds, the database is correct,
+    #: and the client sees nothing. Measured: pause wrote `next_action` and the
+    #: task read back without it, which looked like a failed write and was not.
+    stage_id: str | None = None
+    health: str | None = None
+    next_action: str | None = None
+    next_action_owner: str | None = None
+    next_action_due: str | None = None
     created_by: str | None = None
     source: str = "manual"
     clickup_id: str | None = None
@@ -220,6 +235,13 @@ class TaskIn(BaseModel):
     estimate_mins: int | None = None
     start_date: str | None = None
     due_at: str | None = None
+    #: Project Operations (migration 171). `stage_id` and `health` are ordinary
+    #: PATCHable fields — moving a project from CAD to Prototype is a routine
+    #: edit, not a ceremony. The next action is deliberately NOT here: it goes
+    #: through `PUT /tasks/{id}/next-action`, which writes the activity row that
+    #: makes the change auditable. A PATCH would let it change with no trace.
+    stage_id: str | None = None
+    health: str | None = None
     tags: list[str] | None = None
     custom_fields: dict | None = None
     source: str | None = None
@@ -1156,20 +1178,31 @@ async def require_status_in_project(db: Any, root_id: str, status_id: str) -> An
 
 async def apply_status_transition(
     db: Any, task: Any, new_status_id: str, *, created_by: str,
-    automation: bool = False,
+    automation: bool = False, remark: str | None = None, enforce: bool | None = None,
 ) -> dict[str, Any]:
-    """Move a task to a new status. **Three effects, one helper.**
+    """Move a task to a new status. **Four effects, one helper.**
 
-    1. the new ``status_id``;
-    2. ``completed_at`` — stamped when the task crosses INTO a closing category,
+    1. the lifecycle transition is CHECKED (WS-27 Project Operations);
+    2. the new ``status_id``;
+    3. ``completed_at`` — stamped when the task crosses INTO a closing category,
        cleared when it crosses back out. Cleared, not left: a reopened task that
        keeps its completion stamp is done according to every report and open
        according to the board;
-    3. a ``status_change`` activity naming both ends.
+    4. a ``status_change`` activity naming both ends.
 
     Every mutator that can move a status calls this — the PATCH route today, the
     sync and the automation action later — because a write that sets only the
-    column looks right in the UI and silently empties the timeline.
+    column looks right in the UI and silently empties the timeline. That is
+    also why the state machine lives HERE and not in the new work routes: a
+    guard the board can walk around is not a guard (§40).
+
+    ``enforce`` — ``None`` (the default) reads the
+    ``projects_enforce_transitions`` setting, which ships OFF so the board's
+    existing free movement is unchanged. The Project Operations routes pass
+    ``enforce=True`` explicitly: they are new surfaces and nothing depends on
+    their being permissive. ``remark`` is what satisfies the states that owe an
+    explanation; the legacy callers pass none and, with the flag off, are never
+    asked for one.
     """
     old_status = await require_row(
         db, "pm_task_statuses", str(task.status_id), "Status",
@@ -1177,6 +1210,19 @@ async def apply_status_transition(
     new_status = await require_status_in_project(
         db, str(task.root_project_id), str(new_status_id),
     )
+
+    if enforce is None:
+        enforce = bool(getattr(get_settings(), "projects_enforce_transitions", False))
+    if enforce:
+        # Imported here rather than at module scope: `operations` imports
+        # nothing from `core`, and keeping it that way means the dependency has
+        # one direction and cannot become a cycle when the rules grow.
+        from gateway.routes.projects import operations as _ops
+
+        try:
+            _ops.check_transition(old_status.category, new_status.category, remark)
+        except _ops.TransitionError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     values: dict[str, Any] = {"status_id": str(new_status.id)}
     was_closed = old_status.category in CLOSING_CATEGORIES

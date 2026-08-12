@@ -44,6 +44,45 @@ def test_closed_categories_match_core() -> None:
     assert ops._CLOSED == CLOSING_CATEGORIES
 
 
+def _category_check_values() -> set[str]:
+    """The category vocabulary as the DATABASE will enforce it.
+
+    Same method as the activity-vocabulary fence, for the same reason: taking
+    the LAST migration that constrains the column, because later ones replace
+    the CHECK wholesale and the newest definition is what survives a replay.
+    """
+    migrations = Path(__file__).resolve().parents[2] / "infra" / "postgres"
+    latest: str | None = None
+    for path in sorted(migrations.glob("*.sql"), key=lambda p: p.name):
+        if path.name == "schema.generated.sql":
+            continue
+        text = "\n".join(
+            re.sub(r"--.*$", "", line)
+            for line in path.read_text(encoding="utf-8").splitlines()
+        )
+        for match in re.finditer(
+            r"CHECK\s*\(\s*category\s+IN\s*\((.*?)\)\s*\)", text, re.I | re.S,
+        ):
+            latest = match.group(1)
+    assert latest is not None, "no migration constrains pm_task_statuses.category"
+    return set(re.findall(r"'([a-z_]+)'", latest))
+
+
+def test_the_category_vocabulary_mirror_is_exact() -> None:
+    """``core.STATUS_CATEGORIES`` must equal the database's CHECK.
+
+    ⚠️ This fence exists because the mirror broke the day it was widened.
+    Migration 171 added `paused` and `blocked` to the CHECK; the Python tuple
+    was not updated, and `validate_choice` refuses an unknown category BEFORE
+    the insert — so creating a Paused lane answered 422 while the database
+    would have accepted it happily. Exactly the failure `pm_activities.type`
+    already had once (150's `attachment`), one column over.
+    """
+    from gateway.routes.projects.core import STATUS_CATEGORIES
+
+    assert set(STATUS_CATEGORIES) == _category_check_values()
+
+
 def test_every_lifecycle_state_is_a_real_category() -> None:
     """Every state in the machine must be a value the DATABASE will accept.
 

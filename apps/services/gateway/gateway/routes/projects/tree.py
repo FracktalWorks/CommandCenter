@@ -108,6 +108,13 @@ _SEED_STATUSES: tuple[tuple[str, str, int, str, bool], ...] = (
     ("Backlog",     "gray",   10, "backlog",     True),
     ("To do",       "gray",   20, "todo",        False),
     ("In progress", "blue",   30, "in_progress", False),
+    # Migration 171. Without these two a NEW project has nowhere to pause or
+    # block to, and `POST /work/pause` answers 422 "this project has no
+    # 'paused' status" — i.e. the flagship button of the Project Operations
+    # brief is broken on every project until somebody hand-adds a lane. Found
+    # by driving the API against a real database rather than by reading it.
+    ("Blocked",     "red",    32, "blocked",     False),
+    ("Paused",      "amber",  34, "paused",      False),
     ("Done",        "green",  40, "done",        False),
 )
 

@@ -51,6 +51,7 @@ from gateway.routes.projects import tasks as _tasks  # noqa: F401
 from gateway.routes.projects import tree as _tree  # noqa: F401
 from gateway.routes.projects import views as _views  # noqa: F401
 from gateway.routes.projects import watchers as _watchers  # noqa: F401
+from gateway.routes.projects import work as _work  # noqa: F401
 from gateway.routes.projects.core import router
 
 __all__ = ["router"]

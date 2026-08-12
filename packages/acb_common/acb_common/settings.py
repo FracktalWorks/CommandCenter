@@ -131,6 +131,22 @@ class Settings(BaseSettings):
     # Flipping it is an OWNER-GATE act (work_plan.md §6 (b)).
     crm_auto_lead: bool = False
 
+    # Projects · lifecycle state machine (WS-27 Project Operations, brief §42).
+    #
+    # OFF ships the machine without enforcing it on the LEGACY movers — the
+    # board's drag-and-drop and the PATCH route, which have always allowed any
+    # status to reach any other. The Project Operations routes (start / pause /
+    # resume / complete / handoff) enforce it unconditionally regardless of this
+    # flag: they are new surfaces, so nothing depends on their permissiveness.
+    #
+    # Flip it and a board drag from Delivered straight back to Paused starts
+    # answering 422 instead of silently producing a task that was completed and
+    # then paused without ever being resumed. That is the intended end state
+    # (§40: "users cannot bypass state transitions through API calls"), but it
+    # is a visible behaviour change on a surface people use every day, so it
+    # ships dark and the flip is the owner's.
+    projects_enforce_transitions: bool = False
+
     # Gmail (Phase 1, WBS 1.3)
     gmail_sa_json_path: str = ""         # service-account key file
     gmail_workspace_domain: str = ""     # e.g. fracktal.in

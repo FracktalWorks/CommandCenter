@@ -52,6 +52,31 @@ class StatusIn(BaseModel):
     is_default: bool | None = None
 
 
+class StageIn(BaseModel):
+    """A pipeline stage (migration 171).
+
+    Stages live here beside statuses and types because they are the same KIND
+    of thing — per-root configuration the owner reshapes without a deploy — and
+    a separate `stages.py` would be a second home for one concept.
+    """
+
+    name: str | None = None
+    color: str | None = None
+    position: int | None = None
+    is_default: bool | None = None
+    is_terminal: bool | None = None
+
+
+class StageModel(BaseModel):
+    id: str
+    project_id: str
+    name: str
+    color: str | None = None
+    position: int
+    is_default: bool
+    is_terminal: bool
+
+
 class TypeIn(BaseModel):
     name: str | None = None
     icon: str | None = None
@@ -198,6 +223,109 @@ async def delete_status(
             {"sid": status_id},
         )
         return {"deleted": status_id, "tasks_affected": 0}
+
+
+# ── Stages (migration 171) ──────────────────────────────────────────────────
+#
+# The second axis. Status is WHERE IN THE LIFECYCLE ("in progress", "paused");
+# stage is WHERE IN THE PIPELINE ("CAD", "prototype", "fitment"). Both are
+# per-root data for the same reason: every project type has a different
+# pipeline, and a hard-coded one is wrong for the next customer.
+
+@router.get("/nodes/{project_id}/stages")
+async def list_stages(
+    project_id: str, user: UserContext = Depends(get_current_user),
+) -> dict:
+    async with _tenant_session() as db:
+        vis = await resolve_visibility(db, user)
+        root = await _root_for(db, vis, project_id)
+        rows = (await db.execute(
+            text(
+                "SELECT * FROM pm_stages WHERE project_id = CAST(:root AS uuid) "
+                "ORDER BY position, name"
+            ),
+            {"root": root},
+        )).fetchall()
+        return {
+            "rows": [row_to_dict(r, StageModel) for r in rows], "total": len(rows),
+        }
+
+
+@router.post("/nodes/{project_id}/stages", status_code=201)
+async def create_stage(
+    project_id: str, payload: StageIn,
+    user: UserContext = Depends(get_current_user),
+) -> dict:
+    values = clean_payload(payload)
+    name = str(values.get("name") or "").strip()
+    if not name:
+        raise HTTPException(status_code=422, detail="A stage needs a name.")
+
+    async with _tenant_session() as db:
+        vis = await resolve_visibility(db, user)
+        root = await _root_for(db, vis, project_id)
+        row = (await db.execute(
+            text(
+                "INSERT INTO pm_stages "
+                "(project_id, name, color, position, is_default, is_terminal) "
+                "VALUES (CAST(:root AS uuid), :name, :color, :position, "
+                "        :is_default, :is_terminal) RETURNING *"
+            ),
+            {
+                "root": root, "name": name,
+                "color": values.get("color"),
+                "position": values.get("position") or 0,
+                "is_default": bool(values.get("is_default")),
+                "is_terminal": bool(values.get("is_terminal")),
+            },
+        )).fetchone()
+        if row.is_default:
+            await _clear_other_defaults(db, "pm_stages", root, str(row.id))
+        return row_to_dict(row, StageModel)
+
+
+@router.patch("/stages/{stage_id}")
+async def patch_stage(
+    stage_id: str, payload: StageIn,
+    user: UserContext = Depends(get_current_user),
+) -> dict:
+    values = clean_payload(payload)
+    async with _tenant_session() as db:
+        existing = await require_row(db, "pm_stages", stage_id, "Stage")
+        vis = await resolve_visibility(db, user)
+        await load_visible_project(db, vis, str(existing.project_id))
+        if not values:
+            return row_to_dict(existing, StageModel)
+        row = await update_row(db, "pm_stages", stage_id, values)
+        if values.get("is_default"):
+            await _clear_other_defaults(
+                db, "pm_stages", str(row.project_id), stage_id,
+            )
+        return row_to_dict(row, StageModel)
+
+
+@router.delete("/stages/{stage_id}")
+async def delete_stage(
+    stage_id: str, user: UserContext = Depends(get_current_user),
+) -> dict:
+    """Delete a stage.
+
+    Unlike a status, this does NOT 409 when tasks are in it:
+    ``pm_tasks.stage_id`` is ``ON DELETE SET NULL`` (migration 171), because a
+    task with no stage is a legitimate state — most of them start that way —
+    whereas a task with no status is not. So the count is reported rather than
+    refused, and the caller learns how many were un-staged.
+    """
+    async with _tenant_session() as db:
+        existing = await require_row(db, "pm_stages", stage_id, "Stage")
+        vis = await resolve_visibility(db, user)
+        await load_visible_project(db, vis, str(existing.project_id))
+        in_use = await count_where(db, "pm_tasks", "stage_id", stage_id)
+        await db.execute(
+            text("DELETE FROM pm_stages WHERE id = CAST(:sid AS uuid)"),
+            {"sid": stage_id},
+        )
+        return {"deleted": stage_id, "tasks_affected": in_use}
 
 
 # ── Types ───────────────────────────────────────────────────────────────────

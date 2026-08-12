@@ -187,6 +187,14 @@ const CATEGORY_HUES: Record<string, AccentHue> = {
   done: "green",
   cancelled: "red",
   triage: "violet",
+  // Migration 171 (Project Operations). Two states an operations board turns
+  // on, and they must not look alike: `paused` is a decision we took (amber —
+  // stopped, ours to restart), `blocked` is a wall somebody else put up (red —
+  // it needs chasing). Sharing a hue with `cancelled` is deliberate and
+  // harmless: the two never appear in the same lane, and red is the colour
+  // "this is not moving and it is not fine" already means here.
+  paused: "amber",
+  blocked: "red",
 };
 
 /**

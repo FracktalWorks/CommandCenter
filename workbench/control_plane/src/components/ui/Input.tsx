@@ -145,4 +145,47 @@ export function Select({
   );
 }
 
+export type DateInputProps = Omit<InputProps, "type" | "icon"> & {
+  /** `date` for a day, `datetime-local` when the time of day matters. */
+  precision?: "date" | "datetime";
+};
+
+/**
+ * A themed date field (WS-27bh).
+ *
+ * The tree carries raw `<input type="date">` in 12 files, each with its own
+ * class string. This is `Input` with the type set and one CSS rule the plain
+ * component cannot carry.
+ *
+ * ## Why a native date input and not a calendar popover
+ *
+ * The mock's date fields are all *single dates on a form* — expected resume,
+ * due date, target date. The native control already gives keyboard entry,
+ * locale-correct ordering, the platform's own calendar, mobile's date wheel,
+ * and validation, for nothing. A hand-built popover would have to re-earn all
+ * of that, and `@base-ui/react` has no date picker to lean on. **If a range
+ * picker or an inline month grid is ever needed, that is a different component
+ * and a different slice** — do not grow this one into it.
+ *
+ * The one thing the native control gets wrong for us: WebKit and Blink render
+ * the calendar glyph in the UA's own colour, which is near-black on a dark
+ * theme and effectively invisible. `dark:[color-scheme:dark]` tells the browser
+ * to draw its internal widgets for a dark surface, which fixes the glyph, the
+ * clear button and the spin controls in one declaration and stays correct on
+ * every theme because it keys off the mode rather than a palette.
+ */
+export function DateInput({
+  precision = "date",
+  className = "",
+  ...rest
+}: DateInputProps) {
+  return (
+    <Input
+      {...rest}
+      type={precision === "datetime" ? "datetime-local" : "date"}
+      className={`dark:[color-scheme:dark] ${className}`}
+    />
+  );
+}
+
 export default Input;

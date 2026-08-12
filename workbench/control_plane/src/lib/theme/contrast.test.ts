@@ -5,17 +5,22 @@
  * reads fine to the author and not at all to someone on a dimmer screen. This
  * runs the arithmetic so a new theme cannot ship unreadable.
  *
- * The RapidTool exceptions
- * ------------------------
- * Seven pairs in the default theme are below AA. They are the app's ORIGINAL
- * colours, preserved token-for-token when the theming engine was built, and
+ * The RapidTool exceptions — CLEARED 2026-08-12 (WS-27bt)
+ * -------------------------------------------------------
+ * This block used to read "seven pairs in the default theme are below AA …
  * fixing them means changing how the shipped product looks — a design decision
- * for whoever owns the brand, not a side effect of adding a test.
+ * for whoever owns the brand, not a side effect of adding a test."
  *
- * So they are recorded below with their measured ratios and treated as a
- * ratchet: each may not get worse, and `every recorded shortfall is still a
- * shortfall` fails once one is fixed, which forces the entry to be deleted
- * rather than quietly outliving the problem. New themes get no such latitude.
+ * The owner made that decision: "Need good colours and contrast, make it look
+ * fresh and modern." So the seven were fixed at the token layer rather than
+ * excused, and `KNOWN_SHORTFALLS` is now empty — which is the state the ratchet
+ * was built to reach. The list stays (with its four guard tests) because a
+ * future theme may need it; nothing may be added to it without the same
+ * measurement and the same owner call.
+ *
+ * The ratchet worked exactly as designed here: emptying the palette's failures
+ * FORCED the entries out, because `every recorded shortfall is still a
+ * shortfall` goes red the moment a listed pair starts passing.
  */
 
 import { describe, expect, it } from "vitest";
@@ -44,6 +49,14 @@ const PAIRS: Pair[] = [
   { fg: "popoverForeground", bg: "popover", min: AA_NORMAL_TEXT },
   { fg: "mutedForeground", bg: "background", min: AA_NORMAL_TEXT },
   { fg: "mutedForeground", bg: "card", min: AA_NORMAL_TEXT },
+  // Added WS-27bt. This was the gap that mattered most and the one the gate
+  // could not see: `text-muted-foreground` on a `bg-muted` row is the single
+  // most common small-text pairing in the product (every table subhead, every
+  // secondary line, every 10–11px caption), and it was the FAILING one —
+  // 4.33:1 — while the same ink on a white card passed at 4.75:1 and made the
+  // token look fine. Measuring an ink against only its best background is how
+  // a palette ships unreadable in exactly its most-used position.
+  { fg: "mutedForeground", bg: "muted", min: AA_NORMAL_TEXT },
   { fg: "primaryForeground", bg: "primary", min: AA_NORMAL_TEXT },
   { fg: "secondaryForeground", bg: "secondary", min: AA_NORMAL_TEXT },
   { fg: "accentForeground", bg: "accent", min: AA_NORMAL_TEXT },
@@ -77,13 +90,19 @@ const key = (themeId: string, mode: string, p: Pair) => `${themeId}/${mode}/${p.
  * means picking a new colour — see the module comment.
  */
 const KNOWN_SHORTFALLS: Record<string, number> = {
-  "rapidtool/dark/destructiveForeground-on-destructive": 3.63,
-  "rapidtool/light/accentForeground-on-accent": 2.16,
-  "rapidtool/light/destructiveForeground-on-destructive": 3.59,
-  "rapidtool/light/successForeground-on-success": 1.9,
-  "rapidtool/light/warningForeground-on-warning": 1.5,
-  "rapidtool/light/success-on-card": 1.99,
-  "rapidtool/light/warning-on-card": 1.57,
+  // Empty since WS-27bt — every theme now meets AA outright. The seven entries
+  // that lived here, with the ratios they shipped at, for the record:
+  //
+  //   rapidtool/light/warningForeground-on-warning        1.50  → 5.55
+  //   rapidtool/light/successForeground-on-success        1.90  → 6.10
+  //   rapidtool/light/warning-on-card                     1.57  → 5.55
+  //   rapidtool/light/success-on-card                     1.99  → 6.10
+  //   rapidtool/light/accentForeground-on-accent          2.16  → 4.66
+  //   rapidtool/light/destructiveForeground-on-destructive 3.59 → 6.47
+  //   rapidtool/dark/destructiveForeground-on-destructive  3.63 → 5.12
+  //
+  // 1.50:1 is white text on bright yellow. It was not "slightly low"; it was
+  // invisible, and it shipped for as long as the product has existed.
 };
 
 /** Float noise guard — ratios are compared to two decimal places. */
@@ -184,6 +203,55 @@ describe("theme contrast", () => {
       (id) => !id.startsWith("rapidtool/"),
     );
     expect(offenders, "new themes must meet AA outright").toEqual([]);
+  });
+
+  /**
+   * A card must be visible as a card (WS-27bt).
+   *
+   * Everything above measures INK against a surface. Nothing measured the
+   * surfaces against each other — and RapidTool light shipped `card` and
+   * `background` both at `hsl(0 0% 100%)`, a literal 1.00:1. A dashboard of
+   * seven cards was seven white rectangles on white, separated only by a
+   * border at 1.23:1. Every ink pair on that screen passed; the screen still
+   * looked flat, because "is this text readable" and "is this a card" are
+   * different questions and only the first had a test.
+   *
+   * ## Why EITHER/OR rather than two thresholds
+   *
+   * The themes legitimately disagree about how a surface is bounded: Material
+   * separates by elevation and tone, Fluent by a crisp 1px line. Requiring
+   * both would force every theme into the same idiom, which is precisely what
+   * a theming engine exists to avoid. So the rule is that a card must be
+   * distinguishable **somehow** — by fill or by edge.
+   *
+   * ## Why 1.2 and not WCAG's 3.0
+   *
+   * ⚠️ This is a DESIGN floor, not an accessibility claim. WCAG 1.4.11 asks
+   * 3:1 for boundaries "required to identify" a component, and exempts the
+   * rest; a 3:1 card border is a dark grey rule that essentially no design
+   * system draws. 1.2:1 is near the perceptual floor for a large-area
+   * luminance edge — enough to say "there is an edge here", which is the claim
+   * being made. Do not cite this test as WCAG conformance.
+   */
+  it("draws every card as a distinguishable surface", () => {
+    const SEPARATION_MIN = 1.2;
+    const failures: string[] = [];
+    for (const theme of THEMES) {
+      for (const mode of ["dark", "light"] as const) {
+        const c = theme.colors[mode];
+        const elevation = contrast(c.card, c.background);
+        const edge = contrast(c.border, c.card);
+        if (elevation === null || edge === null) continue;
+        const best = Math.max(elevation, edge);
+        if (best < SEPARATION_MIN) {
+          failures.push(
+            `${theme.id}/${mode}: card/page ${elevation.toFixed(2)}:1, ` +
+              `border/card ${edge.toFixed(2)}:1 — neither reaches ${SEPARATION_MIN}`,
+          );
+        }
+      }
+    }
+    expect(failures, "a card must be separated by fill or by edge").toEqual([]);
   });
 });
 

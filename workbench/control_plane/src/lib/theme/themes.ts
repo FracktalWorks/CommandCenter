@@ -106,29 +106,37 @@ const rapidtool: Theme = {
   },
   colors: {
     dark: {
-      background: "hsl(220 13% 8%)",
+      // Dark mode was already close — one pair failed the gate. What it lacked
+      // was SEPARATION: a 16% border on a 10% card is 1.10:1, so the cards were
+      // held apart by a line nobody can see. Page drops, card lifts, border
+      // roughly doubles its step.
+      background: "hsl(220 16% 7%)",
       foreground: "hsl(210 40% 98%)",
-      card: "hsl(220 13% 10%)",
+      card: "hsl(220 14% 11%)",
       cardForeground: "hsl(210 40% 98%)",
-      popover: "hsl(220 13% 12%)",
+      popover: "hsl(220 14% 13%)",
       popoverForeground: "hsl(210 40% 98%)",
-      primary: "hsl(198 89% 50%)",
-      primaryForeground: "hsl(220 13% 8%)",
-      secondary: "hsl(220 13% 14%)",
+      primary: "hsl(198 89% 55%)",
+      primaryForeground: "hsl(220 16% 7%)",
+      secondary: "hsl(220 14% 15%)",
       secondaryForeground: "hsl(210 40% 98%)",
-      muted: "hsl(220 13% 15%)",
-      mutedForeground: "hsl(215 20% 65%)",
+      muted: "hsl(220 14% 16%)",
+      mutedForeground: "hsl(215 22% 71%)",
       accent: "hsl(27 96% 61%)",
-      accentForeground: "hsl(220 13% 8%)",
-      destructive: "hsl(0 63% 60%)",
-      destructiveForeground: "hsl(210 40% 98%)",
-      border: "hsl(220 13% 16%)",
-      input: "hsl(220 13% 16%)",
-      ring: "hsl(198 89% 50%)",
-      success: "hsl(142 76% 47%)",
-      successForeground: "hsl(220 13% 8%)",
-      warning: "hsl(47 96% 53%)",
-      warningForeground: "hsl(220 13% 8%)",
+      accentForeground: "hsl(24 60% 10%)",
+      // The one dark shortfall: near-white ink on a mid red measured 3.63:1.
+      // On a dark theme a semantic fill is the LIGHT element, so its ink has to
+      // be dark — which is the pattern the other three fills here already used.
+      // `destructive` was the only one still reaching for white.
+      destructive: "hsl(0 72% 62%)",
+      destructiveForeground: "hsl(0 60% 10%)",
+      border: "hsl(220 12% 20%)",
+      input: "hsl(220 12% 20%)",
+      ring: "hsl(198 89% 55%)",
+      success: "hsl(142 70% 52%)",
+      successForeground: "hsl(145 70% 8%)",
+      warning: "hsl(41 96% 58%)",
+      warningForeground: "hsl(32 80% 10%)",
       // Categorical ramp — vivid, matching RapidTool's saturated register.
       "cat-1": "hsl(215 85% 61%)",
       "cat-2": "hsl(27 85% 47%)",
@@ -148,29 +156,49 @@ const rapidtool: Theme = {
       sidebarRing: "hsl(198 89% 50%)",
     },
     light: {
-      background: "hsl(0 0% 100%)",
-      foreground: "hsl(222.2 84% 4.9%)",
+      // The page steps BACK and the card comes forward. Before this, both were
+      // `hsl(0 0% 100%)` — a measured 1.00:1, i.e. no elevation at all, and a
+      // dashboard of seven cards was seven white rectangles on white held apart
+      // by a border at 1.23:1. That is the single reason the light mode read as
+      // flat, and no amount of component work could have fixed it.
+      background: "hsl(210 24% 97%)",
+      foreground: "hsl(222 47% 11%)",
       card: "hsl(0 0% 100%)",
-      cardForeground: "hsl(222.2 84% 4.9%)",
+      cardForeground: "hsl(222 47% 11%)",
       popover: "hsl(0 0% 100%)",
-      popoverForeground: "hsl(222.2 84% 4.9%)",
-      primary: "hsl(198 89% 35%)",
+      popoverForeground: "hsl(222 47% 11%)",
+      primary: "hsl(198 89% 32%)",
       primaryForeground: "hsl(0 0% 100%)",
-      secondary: "hsl(210 40% 96%)",
-      secondaryForeground: "hsl(222.2 84% 4.9%)",
-      muted: "hsl(210 40% 96%)",
-      mutedForeground: "hsl(215.4 16.3% 46.9%)",
-      accent: "hsl(27 96% 61%)",
-      accentForeground: "hsl(210 40% 98%)",
-      destructive: "hsl(0 84.2% 60.2%)",
-      destructiveForeground: "hsl(210 40% 98%)",
-      border: "hsl(214.3 31.8% 91.4%)",
-      input: "hsl(214.3 31.8% 91.4%)",
-      ring: "hsl(198 89% 50%)",
-      success: "hsl(142 76% 47%)",
-      successForeground: "hsl(210 40% 98%)",
-      warning: "hsl(47 96% 53%)",
-      warningForeground: "hsl(210 40% 98%)",
+      secondary: "hsl(210 28% 94%)",
+      secondaryForeground: "hsl(222 47% 11%)",
+      muted: "hsl(210 28% 94%)",
+      // Was 46.9% — which cleared AA on a white card (4.75:1) and FAILED on a
+      // muted row (4.33:1). The app draws `text-muted-foreground` at 10–11px on
+      // both, so the tinted case was the common one and it was the failing one.
+      mutedForeground: "hsl(215 19% 41%)",
+      // ⚠️ BRAND SHIFT, deliberate. The four semantic inks below each have to
+      // work TWO ways: as text on a white card, and as a fill carrying
+      // `*-foreground` text. Both directions want a darker colour, and the
+      // shipped values were tuned for neither — white-on-warning measured
+      // 1.50:1, effectively invisible. Deepening them is what the contrast gate
+      // meant by "a design decision for whoever owns the brand"; the owner
+      // asked for it on 2026-08-12. The bright register is not lost — it lives
+      // on in `statusAccent`'s `soft` tints, which is where a loud hue belongs.
+      accent: "hsl(24 88% 40%)",
+      accentForeground: "hsl(0 0% 100%)",
+      destructive: "hsl(0 72% 42%)",
+      destructiveForeground: "hsl(0 0% 100%)",
+      border: "hsl(214 25% 88%)",
+      input: "hsl(214 25% 88%)",
+      ring: "hsl(198 89% 42%)",
+      success: "hsl(145 70% 26%)",
+      successForeground: "hsl(0 0% 100%)",
+      // Hue moved 47° → 32°. Yellow is the one hue that cannot reach 4.5:1 on
+      // white and still look yellow: at the lightness AA demands, 47° reads
+      // olive-brown. 32° reads amber, which is what "warning" is supposed to
+      // look like anyway.
+      warning: "hsl(32 92% 32%)",
+      warningForeground: "hsl(0 0% 100%)",
       "cat-1": "hsl(215 85% 47%)",
       "cat-2": "hsl(27 85% 36%)",
       "cat-3": "hsl(142 85% 26%)",

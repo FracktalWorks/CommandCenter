@@ -6,7 +6,7 @@
 --
 -- ENABLE + FORCE ROW LEVEL SECURITY + the policy. Instant — no scan. ⚠️ AND IT IS A CLIFF: the moment this applies, any connection that has not bound app.tenant_id reads ZERO ROWS. That is the fail-closed property working (§0.1). MT-1c must be deployed AND VERIFIED first, or the product goes dark.
 --
--- Tables in this phase: 137
+-- Tables in this phase: 140
 --
 -- ⚠️ NOT COVERED BY THIS FILE — `organization_id` already means something
 -- else on these tables, so scoping them by that name would corrupt a
@@ -643,6 +643,13 @@ CREATE POLICY pm_activities_tenant_isolation ON pm_activities
     USING      (organization_id = current_setting('app.tenant_id', true)::uuid)
     WITH CHECK (organization_id = current_setting('app.tenant_id', true)::uuid);
 
+ALTER TABLE pm_blockers ENABLE ROW LEVEL SECURITY;
+ALTER TABLE pm_blockers FORCE  ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS pm_blockers_tenant_isolation ON pm_blockers;
+CREATE POLICY pm_blockers_tenant_isolation ON pm_blockers
+    USING      (organization_id = current_setting('app.tenant_id', true)::uuid)
+    WITH CHECK (organization_id = current_setting('app.tenant_id', true)::uuid);
+
 ALTER TABLE pm_custom_fields ENABLE ROW LEVEL SECURITY;
 ALTER TABLE pm_custom_fields FORCE  ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS pm_custom_fields_tenant_isolation ON pm_custom_fields;
@@ -682,6 +689,13 @@ ALTER TABLE pm_recurrences ENABLE ROW LEVEL SECURITY;
 ALTER TABLE pm_recurrences FORCE  ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS pm_recurrences_tenant_isolation ON pm_recurrences;
 CREATE POLICY pm_recurrences_tenant_isolation ON pm_recurrences
+    USING      (organization_id = current_setting('app.tenant_id', true)::uuid)
+    WITH CHECK (organization_id = current_setting('app.tenant_id', true)::uuid);
+
+ALTER TABLE pm_stages ENABLE ROW LEVEL SECURITY;
+ALTER TABLE pm_stages FORCE  ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS pm_stages_tenant_isolation ON pm_stages;
+CREATE POLICY pm_stages_tenant_isolation ON pm_stages
     USING      (organization_id = current_setting('app.tenant_id', true)::uuid)
     WITH CHECK (organization_id = current_setting('app.tenant_id', true)::uuid);
 
@@ -759,6 +773,13 @@ ALTER TABLE pm_tasks ENABLE ROW LEVEL SECURITY;
 ALTER TABLE pm_tasks FORCE  ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS pm_tasks_tenant_isolation ON pm_tasks;
 CREATE POLICY pm_tasks_tenant_isolation ON pm_tasks
+    USING      (organization_id = current_setting('app.tenant_id', true)::uuid)
+    WITH CHECK (organization_id = current_setting('app.tenant_id', true)::uuid);
+
+ALTER TABLE pm_time_entries ENABLE ROW LEVEL SECURITY;
+ALTER TABLE pm_time_entries FORCE  ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS pm_time_entries_tenant_isolation ON pm_time_entries;
+CREATE POLICY pm_time_entries_tenant_isolation ON pm_time_entries
     USING      (organization_id = current_setting('app.tenant_id', true)::uuid)
     WITH CHECK (organization_id = current_setting('app.tenant_id', true)::uuid);
 

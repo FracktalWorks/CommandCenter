@@ -137,6 +137,61 @@ Rules that make it work:
   memory and calendar suites deselected.
 - `uv run pytest …` is the runner. Frontend: `npx tsc --noEmit && npx vitest run`
   in `workbench/control_plane`.
+- **A fresh clone has neither `.venv` nor `node_modules`.** `uv sync` at the root;
+  `npm install` in `workbench/control_plane`. Nothing frontend runs before that.
+- **A browser DOES run here.** `e2e/` is Playwright (`npm run test:e2e`, which is
+  `next build` then `scripts/run-e2e.mjs`); `e2e/theming.spec.ts` already asserts
+  Fluent/Material/Graphite control personality. D-PM-21 chose Playwright and
+  **refused jsdom**, so a rendering "done when" is fenced in a real browser or it
+  is review-only. Two traps that cost a day on 2026-08-12: the config runs
+  `next start` against a **prebuilt** `.next`, so a stale build 404s every route
+  and fails the suite for reasons unrelated to your diff (`npx next build`
+  first, and keep a known-green spec as the control); and Next's route announcer
+  lives in a shadow root, so a bare `[role="alert"]` query counts it.
+- **This file is itself fenced.** `src/lib/theme/conformance.test.ts` asserts that
+  the rule count this file and `workbench/control_plane/AGENTS.md` quote next to
+  the word "conformance" matches the suite's own header list. Editing that
+  sentence's number — or deleting it — turns the suite red.
+
+## 7. The tree, in one screen
+
+| Path | What lives there |
+|---|---|
+| `apps/services/gateway/gateway/routes/<app>/` | FastAPI routes per app (`projects/`, `tasks/`, `crm/`, `email/`, `notes/`, `people/`, `whatsapp/`, `workflows/`, `admin/`, `apps/`) |
+| `apps/services/{orchestrator,ingestion,email_ingestion,action_broker,reconciler,meeting_bot,whatsapp_*}` | the other deployed services |
+| `apps/agents/`, `apps/skills/` | first-party agents and pip-installable skills |
+| `packages/acb_*` | shared libs — `acb_common` (settings, logging, **the one DB engine seam** `acb_common.db`), `acb_graph`, `acb_llm`, `acb_audit`, `acb_skills`, `acb_memory`, `acb_auth` |
+| `workbench/control_plane/` | the Next.js 16 / React 19 / Tailwind v4 UI — **every app's front end** |
+| `infra/`, `deploy/hostinger/` | docker-compose + numbered SQL migrations · VPS systemd units behind Caddy |
+| `tests/unit`, `tests/integration`, `evals/` | pytest suites · Promptfoo + Inspect AI + golden trajectories |
+
+Inside the UI: `src/app/<app>/page.tsx` + `components/` + `lib/` (pure helpers
+with colocated vitest) · `src/app/api/<app>/[...path]/route.ts` is the BFF proxy
+to the gateway (never point a browser at the gateway — it carries no
+credentials) · `src/components/ui/` holds the primitives · `src/lib/theme/` is
+the theming engine.
+
+## 8. Working on the Projects app (`/projects`, WS-27)
+
+- Spec `project-docs/specs/project_management_app.md`: **§5** is the UI contract,
+  **§9.7** the owner's usability sequencing (four waves), **§11.20–11.34** the
+  per-slice build records — read the record for the surface you are touching
+  before re-deriving it. Backend is `routes/projects/*.py`, tables are `pm_*`.
+- `src/app/projects/page.tsx` is ~1,770 lines and the hottest file in the tree.
+  It owns the shell, the five view modes, the keyboard/command layer and the
+  overlay set; the six dialogs own their own files and are already on `Modal`, so
+  most dialog work does **not** touch `page.tsx`. Prefer adding to `lib/` (pure +
+  tested) over growing the page.
+- Wave 2 is merged and deployed (Modal `#429`, Toast `#430`, trgm index `#431`).
+  **Owed and highest-leverage: WS-27bf, the four-theme visual sweep — nothing
+  exists, no branch, and every slice since WS-27am owes it.** Tooltip (ak-2) and
+  Skeleton (ak-5) have acceptance criteria written in spec §9.4.2 and are
+  dispatchable; WS-27c/g/h are gated.
+- Known live divergences worth fixing while you are in there: `page.tsx`'s two
+  remaining hand-rolled overlays (the mobile task panel at `z-[60]`, and the
+  `full`-mode scrim at `bg-background/70`) disagree with the one scrim
+  `DESIGN_SYSTEM.md` §4a documents (`bg-background/80`, `z-50`), and neither
+  traps focus.
 - `.claude/` (agents, commands, hooks, settings) is **tracked** — every checkout
   inherits the same review loop and the same refusals (D29). Local-only and
   derived paths stay ignored; the CodeGraph index is rebuilt, never committed.

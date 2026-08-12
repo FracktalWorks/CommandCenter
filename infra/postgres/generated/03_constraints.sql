@@ -6,7 +6,7 @@
 --
 -- SET NOT NULL + FK + index. ⚠️ THIS IS THE ACCESS EXCLUSIVE PHASE — it scans each table. Apply in a window, table by table if necessary, and never behind a long-running transaction (see the generator docstring: that is the exact shape of the 14h44m outage).
 --
--- Tables in this phase: 137
+-- Tables in this phase: 140
 --
 -- ⚠️ NOT COVERED BY THIS FILE — `organization_id` already means something
 -- else on these tables, so scoping them by that name would corrupt a
@@ -1067,6 +1067,18 @@ ALTER TABLE pm_activities ADD CONSTRAINT pm_activities_org_fk
     FOREIGN KEY (organization_id) REFERENCES organization(id) ON DELETE CASCADE;
 CREATE INDEX IF NOT EXISTS pm_activities_org_idx ON pm_activities (organization_id);
 
+-- pm_blockers
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM pm_blockers WHERE organization_id IS NULL) THEN
+        RAISE EXCEPTION 'MT-1b: pm_blockers still has unowned rows — run phase 2 (backfill) to completion first';
+    END IF;
+END $$;
+ALTER TABLE pm_blockers ALTER COLUMN organization_id SET NOT NULL;
+ALTER TABLE pm_blockers ADD CONSTRAINT pm_blockers_org_fk
+    FOREIGN KEY (organization_id) REFERENCES organization(id) ON DELETE CASCADE;
+CREATE INDEX IF NOT EXISTS pm_blockers_org_idx ON pm_blockers (organization_id);
+
 -- pm_custom_fields
 DO $$
 BEGIN
@@ -1138,6 +1150,18 @@ ALTER TABLE pm_recurrences ALTER COLUMN organization_id SET NOT NULL;
 ALTER TABLE pm_recurrences ADD CONSTRAINT pm_recurrences_org_fk
     FOREIGN KEY (organization_id) REFERENCES organization(id) ON DELETE CASCADE;
 CREATE INDEX IF NOT EXISTS pm_recurrences_org_idx ON pm_recurrences (organization_id);
+
+-- pm_stages
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM pm_stages WHERE organization_id IS NULL) THEN
+        RAISE EXCEPTION 'MT-1b: pm_stages still has unowned rows — run phase 2 (backfill) to completion first';
+    END IF;
+END $$;
+ALTER TABLE pm_stages ALTER COLUMN organization_id SET NOT NULL;
+ALTER TABLE pm_stages ADD CONSTRAINT pm_stages_org_fk
+    FOREIGN KEY (organization_id) REFERENCES organization(id) ON DELETE CASCADE;
+CREATE INDEX IF NOT EXISTS pm_stages_org_idx ON pm_stages (organization_id);
 
 -- pm_tags
 DO $$
@@ -1270,6 +1294,18 @@ ALTER TABLE pm_tasks ALTER COLUMN organization_id SET NOT NULL;
 ALTER TABLE pm_tasks ADD CONSTRAINT pm_tasks_org_fk
     FOREIGN KEY (organization_id) REFERENCES organization(id) ON DELETE CASCADE;
 CREATE INDEX IF NOT EXISTS pm_tasks_org_idx ON pm_tasks (organization_id);
+
+-- pm_time_entries
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM pm_time_entries WHERE organization_id IS NULL) THEN
+        RAISE EXCEPTION 'MT-1b: pm_time_entries still has unowned rows — run phase 2 (backfill) to completion first';
+    END IF;
+END $$;
+ALTER TABLE pm_time_entries ALTER COLUMN organization_id SET NOT NULL;
+ALTER TABLE pm_time_entries ADD CONSTRAINT pm_time_entries_org_fk
+    FOREIGN KEY (organization_id) REFERENCES organization(id) ON DELETE CASCADE;
+CREATE INDEX IF NOT EXISTS pm_time_entries_org_idx ON pm_time_entries (organization_id);
 
 -- pm_view_task_positions
 DO $$

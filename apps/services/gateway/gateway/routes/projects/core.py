@@ -100,6 +100,11 @@ CLOSING_CATEGORIES: frozenset[str] = frozenset({"done", "cancelled"})
 ACTIVITY_TYPES: tuple[str, ...] = (
     "comment", "status_change", "field_change", "link", "assignment",
     "agent_run", "sync", "system", "attachment", "mention",
+    # Project Operations (migration 171). The verb is the type; which verb it
+    # was goes in `meta.action`, matching how the ten above already work —
+    # `work_session` covers started/paused/resumed/completed rather than
+    # minting four synonyms the timeline would have to reconcile.
+    "work_session", "stage_change", "blocker", "next_action", "handoff",
 )
 
 #: `pm_projects.source` / `pm_tasks.source`. Tasks carry two extra origins.

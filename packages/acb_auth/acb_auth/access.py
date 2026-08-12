@@ -547,7 +547,24 @@ member AS (
     INSERT INTO app_user (email, display_name, role, status,
                           organization_id, joined_at)
     SELECT :email, :email, 'executive', 'active', org.id, now() FROM org
-    ON CONFLICT (email) DO UPDATE
+    -- ⚠️ `(lower(email))`, NOT `(email)`. Migration 162 DROPPED
+    -- `app_user_email_key` (the byte-exact UNIQUE) and replaced it with the
+    -- functional index `app_user_email_lower_key ON app_user (lower(email))`,
+    -- because every lookup in this codebase matches case-insensitively (R10).
+    --
+    -- `ON CONFLICT` needs an inference target that matches a real unique index.
+    -- Against the bare column there is no longer one, so this raised
+    -- `InvalidColumnReferenceError: there is no unique or exclusion constraint
+    -- matching the ON CONFLICT specification`, `ensure_owner_bootstrap()`
+    -- logged `ownership_bootstrap_failed`, and NOBODY was provisioned.
+    --
+    -- Production never saw it: it bootstrapped an owner before 162 ever ran,
+    -- and `_HAS_OWNER_SQL` short-circuits the whole function once one exists.
+    -- It bit only a database with no owner YET — a new tenant, a restore to
+    -- scratch, disaster recovery, or a laptop. Which is to say: the way back in
+    -- that this function exists to provide, after the 2026-07-30 lockout, was
+    -- itself locked out.
+    ON CONFLICT (lower(email)) DO UPDATE
         SET status = 'active',
             organization_id = COALESCE(app_user.organization_id,
                                        EXCLUDED.organization_id)

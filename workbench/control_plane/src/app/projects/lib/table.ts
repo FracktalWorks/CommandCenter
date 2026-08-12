@@ -35,6 +35,12 @@ export const TASK_SORT_KEYS = [
   "task_number",
   "completed_at",
   "status",
+  // WS-27bp — the two axes migration 171 added. Mirrors `core.TASK_SORTS`,
+  // and `table.test.ts` fails if the two lists drift: adding a sort to the
+  // gateway without adding it here leaves a column the server can order and
+  // the UI cannot ask for.
+  "health",
+  "stage",
 ] as const;
 
 export type SortKey = (typeof TASK_SORT_KEYS)[number];

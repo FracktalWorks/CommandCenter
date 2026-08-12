@@ -55,6 +55,14 @@ interface PersonRow {
   open_projects: number;
 }
 
+/** The four operations views, with labels already in sentence case. */
+const OPS_VIEWS = [
+  { state: "blocked", label: "Blocked" },
+  { state: "awaiting", label: "Awaiting" },
+  { state: "paused", label: "Paused" },
+  { state: "active", label: "Active" },
+] as const;
+
 const HUES: Record<string, AccentHue> = {
   blocked: "red", awaiting: "red", paused: "amber", in_progress: "blue",
   at_risk: "amber", total: "gray", not_started: "gray",
@@ -339,7 +347,15 @@ export default function ControlCenterPage() {
         </div>
 
         <div className="mt-4 flex flex-wrap gap-2">
-          {(["blocked", "awaiting", "paused", "active"] as const).map((state) => (
+          {/* ⚠️ The label is a plain string, NOT a `<span className="capitalize">`.
+              `text-transform` does not cascade-merge: a `capitalize` on the child
+              overrides Graphite's `uppercase` on the button, so these four
+              rendered sentence-case beside an uppercase "MY WORK" and "BOARD".
+              Caught by the four-theme sweep and by nothing else — the
+              conformance suite checks eight regexes and none of them can see a
+              control that quietly opted out of the theme's label treatment
+              (DESIGN_SYSTEM §8). Capitalise the DATA, never the element. */}
+          {OPS_VIEWS.map(({ state, label }) => (
             <Button
               key={state}
               variant="secondary"
@@ -347,7 +363,7 @@ export default function ControlCenterPage() {
               icon="Filter"
               onClick={() => router.push(`/projects/ops/${state}`)}
             >
-              <span className="capitalize">{state}</span>
+              {label}
             </Button>
           ))}
           <span className="self-center text-[11px] text-muted-foreground">

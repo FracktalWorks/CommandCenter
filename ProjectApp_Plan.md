@@ -992,7 +992,7 @@ branches in flight is the ceiling. Slice IDs `WS-27a`–`WS-27bf` are taken; sta
 | **S16** | `WS-27bt` | Seed for the 29 projects, idempotent | S1 |
 | **S17** | `WS-27bu` | Metric snapshots + KPI deltas | S10 |
 | **S18** | `WS-27bv` | Empty / loading / error states, responsive, scrim fixes, keyboard | all |
-| **S19** | `WS-27bf` | **The four-theme visual sweep** — owed since WS-27am | all |
+| **S19** | `WS-27bf` | **The four-theme visual sweep** — owed since WS-27am. ⚠️ **PARTIAL 2026-08-12**: `/projects/home` and `/projects/my-work` swept across all 4 themes × both modes (16 captures, theme and mode asserted, one defect found and fixed). **Still owed**: the five board views, the five dialogs, and the timer dock — and cross-app continuity, which is the half no capture can judge. | all |
 
 **S19 is already owed and every slice adds to its debt.** Do not let it slip further.
 

@@ -38,6 +38,7 @@ const robotoMono = Roboto_Mono({
 import AppShell from "@/components/AppShell";
 import Providers from "@/components/Providers";
 import ThemeStyles from "@/components/ThemeStyles";
+import { ToastProvider } from "@/components/ui/Toast";
 import { themeBootScript } from "@/lib/theme/boot";
 
 export const metadata: Metadata = {
@@ -86,9 +87,20 @@ export default function RootLayout({
             Runs ahead of hydration, so there is no flash of the default theme.
             Mirrors how next-themes handles the light/dark class. */}
         <script dangerouslySetInnerHTML={{ __html: themeBootScript() }} />
-        <Providers>
-          <AppShell>{children}</AppShell>
-        </Providers>
+        {/* WS-27ak(3) — THE confirmation channel, mounted once and above
+            everything. Outside `Providers` on purpose: a toast needs no
+            session, no theme context and no access decision, and a mutation
+            that fails while any of those are re-resolving is exactly when it
+            must still be able to say so. It must also outlive the surface that
+            raised it — a panel that closes on save is the ordinary case — so it
+            cannot live inside a page. Fenced by `conformance.test.ts` rule 8:
+            without the provider every `useToast()` call site degrades to a
+            silent no-op and no other test in the tree would go red. */}
+        <ToastProvider>
+          <Providers>
+            <AppShell>{children}</AppShell>
+          </Providers>
+        </ToastProvider>
       </body>
     </html>
   );

@@ -57,6 +57,7 @@ import Icon from "@/components/Icon";
 import Badge from "@/components/ui/Badge";
 import Button from "@/components/ui/Button";
 import { Input, Select, Textarea } from "@/components/ui/Input";
+import { useToast } from "@/components/ui/Toast";
 import { StatusChip } from "@/components/StatusChip";
 import { useEffect, useRef, useState } from "react";
 
@@ -245,6 +246,9 @@ export function TaskPanel({
   mode = "side",
   onMode,
 }: Props) {
+  // WS-27ak(3) — the confirmation channel. `changeStatus` below is the one
+  // mutation on this panel wired to it in that slice.
+  const toast = useToast();
   const [timeline, setTimeline] = useState<ActivityRow[]>([]);
   const [comment, setComment] = useState("");
   const [notDelivered, setNotDelivered] = useState<string | null>(null);
@@ -399,11 +403,45 @@ export function TaskPanel({
     onChanged(fresh);
   }
 
+  /**
+   * WS-27ak(3) — the first call site of the toast primitive.
+   *
+   * Before it, moving a task through its lanes from here confirmed **nothing**:
+   * the select changed, the panel reloaded, and whether the write landed was
+   * something you inferred from the chip. A failure said so in the inline line
+   * at the top of a panel that is routinely scrolled past its own header.
+   *
+   * ⚠️ **`setError` stays.** The toast is an addition, not a replacement: it is
+   * persistent and carries Retry, but `useToast()` degrades to a no-op when no
+   * provider is above it, and a call site with no second channel would then
+   * fail silently — the exact defect this primitive exists to remove, arriving
+   * through its own front door. Retiring the inline lines is a later ticket
+   * with the provider fence (`conformance.test.ts` rule 8) already in place.
+   */
   async function changeStatus(statusId: string) {
     setBusy(true);
     setError(null);
     try {
-      await projectsApi.patchTask(task.id, { status_id: statusId });
+      // Only the PATCH is inside the toast. Folding `reload()` in as well
+      // would report a failed re-read as a failed status change, which is a
+      // different, and wrong, sentence.
+      await toast.promise(projectsApi.patchTask(task.id, { status_id: statusId }), {
+        // Keyed on the TASK, so hammering the select mutates one toast rather
+        // than stacking one per keystroke.
+        key: `projects:task-status:${task.id}`,
+        loading: "Changing status…",
+        // Derived from the row the server sent back, not from the id that was
+        // asked for — so the toast names where the task actually landed.
+        success: (fresh) =>
+          `Moved to ${statuses.find((s) => s.id === fresh.status_id)?.name ?? "a new lane"}`,
+        error: "Couldn't change the status",
+        errorAction: {
+          label: "Retry",
+          // Never rejects — `changeStatus` catches — so this cannot become an
+          // unhandled rejection from a click handler.
+          onClick: () => void changeStatus(statusId),
+        },
+      });
       await reload();
     } catch (err) {
       setError(String((err as Error).message));

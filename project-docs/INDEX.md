@@ -33,6 +33,7 @@ limitations). Do not add product specs to `docs/`.
 | `work_plan.md` | THE BOARD — §1 contract · §2 rows · §3 decisions · §4 owners · §6 gates |
 | `../FOUNDATION_BUILDOUT_CHECKLIST.md` *(repo ROOT)* | WS-1 · WS-4 · WS-5 |
 | `specs/saas_multitenancy.md` (+ `_implementation`, `_handover`) | WS-29 — hand the **handover** to the executing agent |
+| `specs/platform_control_plane.md` | WS-31 — the central subscription/seat/AI-metering service (D32) |
 | `specs/subscription_console.md` | WS-30 |
 | `specs/future_modules_roadmap.md` | D21 roadmap (no rows until specced) |
 | `specs/crm_app.md` | WS-26 |

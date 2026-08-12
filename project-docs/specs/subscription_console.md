@@ -12,6 +12,17 @@ be re-litigated here; purchase-flow copy is buildable. Standing page rules: a
 typical-month credit anchor, and no internal vocabulary (atoms/slices/modules)
 customer-facing.
 
+> ⚠️ **Substrate moved — D32.2 (2026-08-12).** The tables this console reads
+> (`org_module_entitlement`, `user_module_seat`, `credit_ledger`, `usage_rollup`,
+> `invoice`) now live in the **central Control Plane service**, not in each
+> CommandCenter deployment: **`specs/platform_control_plane.md` (WS-31)**. This
+> console becomes a **client** of that service rather than a reader of CC-local
+> tables. **Nothing about its scope, its surfaces or its access rules changes** —
+> SC-1/SC-2/SC-3 read exactly as written, and D19.3's hard cap, D23's Center
+> framing and D24's customer framing are all carried unchanged. Update the data
+> source, not the design. The seat vocabulary it renders (purchased / assigned /
+> available) is defined once in WS-31 §3.3 — do not recompute it here.
+
 **What this is.** The console a **customer's org admin** uses to manage their
 Command Center subscription: see what **Centers and add-ons** they own (modules
 are internal atoms, never the customer frame — D23), assign seats, watch AI

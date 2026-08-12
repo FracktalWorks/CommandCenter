@@ -2,7 +2,14 @@
 
 **Status:** Architecture of record (owner-requested 2026-08-08) · **Board row: `work_plan.md` §2 → WS-29 · Decision: D15** · **§11 is the dispatchable ticket list — start there; [`saas_multitenancy_implementation.md`](saas_multitenancy_implementation.md) is its child and holds the build shapes** · **Owner:** vjvarada ·
 **Supersedes:** `tenancy_and_visibility.md` §1 and §6 · **Verified against code:** 2026-08-08,
-working tree at `b09093a` · **Updated 2026-08-10 (D23 pass): pricing is
+working tree at `b09093a` · ⚠️ **Updated 2026-08-12 (D32 pass): §3.1 is REVERSED and
+MT-3 is ABSORBED.** AI metering, per-org keys, the rate card and the credit ledger now
+live in a **central Control Plane service** — owning spec
+[`platform_control_plane.md`](platform_control_plane.md) (**WS-31**). §3.2–§3.5's design
+is unchanged and still binding; only its placement moved. **D15 is untouched** — tenancy
+is still a ROW, the deployment still a placement. Read §3's banner before citing §3.
+MT-1's tenancy retrofit (H2–H6) is **unaffected and still the long pole**. ·
+**Updated 2026-08-10 (D23 pass): pricing is
 CENTER-SHAPED — §2.4b is the customer-facing shape of record** (Center packages
 ₹600/₹300 + all-Centers seat ₹1,800 + add-ons Builder ₹500/Workflows ₹300 + Complete ₹3,000 (D24); modules demoted
 to internal billing atoms; D20's Team/Business retired; ₹10 credit model and D19.3
@@ -1192,10 +1199,32 @@ the `FEATURES` tuple is **invisible even to an owner holding `*`**. Keep the pin
 
 ## 3. DECISION — resell AI through the existing `/v1` choke point, priced in CREDITS
 
-> ### `Do not reintroduce a separate proxy. The gateway's /v1 already IS the proxy.`
-> ### `Sell internal credits, not provider tokens.`
+> ⚠️ **§3.1 IS REVERSED — D32.1 (owner, 2026-08-12).** Owning spec for the
+> replacement: **`specs/platform_control_plane.md` (WS-31)**. AI is now metered and
+> routed by a **central Control Plane service**; CommandCenter's `/v1` becomes a
+> forwarder. **Do not build §3.1's "keep it all in the gateway" shape.**
+>
+> **What §3.1 got right and still binds:** CommandCenter must not grow a *second
+> tenancy boundary*. It does not — the Router sits OUTSIDE CC as a supplier, never
+> sees a CC session and never resolves a tenant from request input.
+>
+> **What it did not weigh:** **§5.1's silo rollout.** §3.1 reasoned about one pooled
+> box, where the tenant is already resolved in-process. With one deployment per
+> customer, "keep metering in your own code" means the rate card, the margin and the
+> credit balance sit on the **customer's own box**, N times over — and a provider
+> swap becomes N deploys, which is the drift §5.1 condition 3 warns about.
+>
+> **What survives unchanged and is NOT re-litigated by WS-31:** everything below
+> about *what* is metered and *how it is priced* — §3.2's four additions (per-org
+> virtual keys, pre-flight Redis gate, post-flight metering, the rate card), the
+> `usage_event`/`request_id` idempotency contract, D19.2's credit unit, §3.3's
+> soft-block and overdraft, and §3.4's BYOK-as-a-tier. Only the **placement** of the
+> mechanism moved. Read §3.2–§3.5 as still-binding design; read §3.1 as history.
 
-### 3.1 Why not a separate LLM proxy process
+> ### ~~`Do not reintroduce a separate proxy. The gateway's /v1 already IS the proxy.`~~ *(reversed — D32.1)*
+> ### `Sell internal credits, not provider tokens.` *(stands)*
+
+### 3.1 Why not a separate LLM proxy process — ⚠️ **REVERSED by D32.1; kept as the record of what the reversal had to answer**
 
 The obvious move is to put LiteLLM Proxy (or similar) in front of everything and use its
 virtual keys, team budgets and spend tracking — which are genuinely good features.
@@ -2095,7 +2124,7 @@ Each names the one thing that would make it so. **Do not hand these to an agent 
 | Ticket | Scope | Owning § | To become dispatchable |
 |---|---|---|---|
 | **MT-2** Entitlements | `module_catalog` · **`center_package` + `plan_catalog` (D23/D20 — the sales objects)** · `org_module_entitlement` · `user_module_seat` (**with `source ∈ center/plan/alacarte`**) · the `intersect()` mask · 402-vs-403 · `ModuleGate` + upsell · non-HTTP gating · per-org feature flags + release channel · **the one-assignment act (seat + membership + entitlements + grants, D23.2)** | §2, §2.4b, §1.4b | ~~The SKU list and price points~~ **INPUT ANSWERED — final shape D23 2026-08-10 (§2.4b; D18/D19's module-first answers superseded).** Remaining to dispatch: write the seven-point ticket contract onto §2/§2.4b (per-item done-whens + verification) — the input is no longer the blocker |
-| **MT-3** AI credits | Per-org virtual keys · Redis budget gate + per-run circuit breaker · `usage_event` (idempotent on `request_id`) · `model_rate_card` · `credit_ledger` · BYOK tier | §3 | ~~The credit-to-rupee rate and target gross margin~~ **INPUT ANSWERED 2026-08-09 (D18: ₹10 AI-action unit, ~50% margin — §8 item 2).** Remaining to dispatch: the per-action cost model in the rate card + the seven-point contract onto §3 |
+| ~~**MT-3** AI credits~~ **→ ABSORBED by WS-31 (D32.2, 2026-08-12)** | Per-org virtual keys · Redis budget gate + per-run circuit breaker · `usage_event` (idempotent on `request_id`) · `model_rate_card` · `credit_ledger` · BYOK tier | §3 (design) — **placement now `specs/platform_control_plane.md`** | **DO NOT DISPATCH FROM HERE.** Every item listed moved to the central Control Plane as CP-3/CP-4/CP-6, with the seven-point contract written there. The *design* in §3.2–§3.5 is unchanged and still binding; only where it runs moved (see the §3 banner) |
 | **MT-4** Billing | `payment_provider` seam · Stripe + Razorpay · webhooks → entitlements · dunning state machine · Operator Console · reconciler | §4 | **The provider split decision** (§8 item 3) and MT-2 shipped |
 | **MT-5** Tiers & compliance | Per-tenant envelope encryption · dedicated-DB tier activation · **drop Neo4j / graph into Postgres** · residency · SOC 2 groundwork | §1.1a, §0.9.4 | Nothing blocking. ⚠️ **Envelope encryption should be pulled into MT-1 if MT-0d or MT-1g touch those columns anyway** — retrofitting encryption onto populated columns is materially harder |
 

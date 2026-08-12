@@ -244,6 +244,62 @@ just `tech-transition`. Respect `prefers-reduced-motion`.
 
 ---
 
+## 4a. Overlays — one scrim, one layer
+
+*(Added WS-27ak. This section did not exist, and its absence was measurable: at
+`00c47c6b` the tree drew overlay backdrops in **seven** different values —
+`bg-black/40`, `/50`, `/60`, `/70`, `bg-background/70`, `bg-background/80`,
+`bg-foreground/20` — across ad-hoc `z-40 · 50 · [60] · [70] · [75] · [80] ·
+[90] · [95]`. Nothing was wrong with any one of them; there was simply nothing
+to be right about.)*
+
+**Do not build an overlay by hand. Use `Modal` from `src/components/ui/`.** It
+carries the scrim, the layer, the focus trap, `aria-hidden` on the rest of the
+document, scroll lock with scrollbar compensation, Escape and focus return —
+none of which is expressible in a class string, which is why it is a component
+and not an entry in this table.
+
+⚠️ **`aria-hidden`, not `inert` — the difference is find-in-page.**
+`@base-ui/react@1.7.0` never sets a real `inert` attribute (measured with a
+dialog open on `/projects`: `[inert]` elements **0**); `markOthers` sets
+`aria-hidden="true"` plus a `data-base-ui-inert` *marker*, and contains focus
+with guard nodes. So a screen reader cannot reach the background and Tab cannot
+leave the dialog, but **Ctrl+F can still find the text behind the scrim.** That
+gap is the substrate's and closing it is a board decision
+(`project_management_app.md` §11.31), not a call site's.
+
+If you are building the *next* overlay primitive (drawer, sheet, popover), these
+are its values:
+
+| Decision | Value | Why this one |
+|---|---|---|
+| Scrim | `bg-background/80` | A **semantic token**, so it follows the theme and the colour mode. `bg-black/60` is neither — and it passes every conformance regex today only because `PALETTE_CLASS` lists the numbered ramps, not `black`/`white`. `/80` over `/70` because the dimmer scrim let a busy board read through it as noise. |
+| Layer | `z-50` | Where all six `/projects` dialogs already sat. A portalled popup is appended to `<body>`, i.e. after the app root in document order, so it needs no more than this. **Do not invent `z-[60]` to win a fight** — two overlays at the same layer stack by mount order, which is the order the reader opened them in. |
+| Surface | `rounded-lg border border-border bg-card shadow-lg` | The card vocabulary, so a dialog is the same object as a panel. |
+| Scroll lock | the primitive's | Locking `overflow` without compensating for the scrollbar width shifts the whole page sideways as the dialog opens. Base UI uses `scrollbar-gutter: stable` where supported and measures the gutter where it is not. |
+
+**Fences (`src/lib/theme/conformance.test.ts`, rule 8), and what each one does
+*not* do:**
+
+* *"nothing outside `components/ui/` imports `@base-ui/react`"* — keeps the
+  substrate's defaults out of call sites. ⚠️ It does **not** stop a hand-rolled
+  dialog: a `fixed inset-0 bg-black/60` div imports nothing, which is exactly
+  how the 70 pre-WS-27ak overlays got there.
+* *"the converted `/projects` dialogs do not grow an overlay back by hand"* —
+  the six files WS-27ak moved onto `Modal` may not contain `fixed inset-0`.
+  Narrow on purpose: a tree-wide ban would flag ~70 files, ~21 of which are
+  dropdown dismiss-scrims and not dialogs at all. Retiring another overlay onto
+  `Modal` is how that list grows.
+* *"there is exactly one substrate in `package.json`"* — D-PM-15 condition 2.
+
+**Advisory, with no test behind it:** that a *new* surface uses `Modal` rather
+than hand-rolling an eighth scrim colour. Nothing in this tree can tell a new
+dialog from a new dropdown scrim, so that one is review. The *values* in the
+table above are advisory too; what is enforced is that there is one place to
+change them.
+
+---
+
 ## 5. Apps that run in the sandbox
 
 Custom Apps, generative-UI cards and React artifacts run in an **opaque-origin

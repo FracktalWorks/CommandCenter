@@ -55,7 +55,7 @@ export const ControlLink = forwardRef<HTMLAnchorElement, ControlLinkProps>(
         // `cc-link` is the themed keyboard focus ring (globals.css, sharing one
         // declaration with `.cc-control`). Without it every one of these — ~200
         // new focus stops on a long table — would draw Chrome's default outline
-        // instead of the theme's, which the conformance suite's seven regexes
+        // instead of the theme's, which the conformance suite's eight regexes
         // cannot see because nothing here tests focus appearance.
         //
         // `draggable={false}` because an <a href> is natively draggable, and

@@ -12,6 +12,7 @@
 
 import Button from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
+import Modal from "@/components/ui/Modal";
 import { useState } from "react";
 
 import { type ProjectRow, projectsApi } from "../lib/api";
@@ -59,79 +60,75 @@ export function LifecyclePolicy({ project, onClose, onSaved }: Props) {
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 p-4">
-      <div className="flex max-h-full w-full max-w-md flex-col overflow-hidden rounded-lg border border-border bg-card">
-        <header className="flex items-center justify-between border-b border-border px-3 py-2">
-          <div className="min-w-0">
-            <h3 className="text-sm font-medium text-foreground">Lifecycle</h3>
-            <p className="truncate text-xs text-muted-foreground">
-              {project.name} and everything under it — swept on a schedule
-            </p>
-          </div>
-          <Button variant="ghost" size="icon" icon="X" aria-label="Close" onClick={onClose} />
-        </header>
+    // WS-27ak — same as FieldManager: no Escape, no outside press and no focus
+    // trap before the primitive.
+    <Modal
+      open
+      onClose={onClose}
+      title="Lifecycle"
+      description={`${project.name} and everything under it — swept on a schedule`}
+      size="md"
+    >
+      {error ? (
+        <p className="border-b border-border bg-muted px-3 py-2 text-xs text-foreground">
+          {error}
+        </p>
+      ) : null}
 
-        {error ? (
-          <p className="border-b border-border bg-muted px-3 py-2 text-xs text-foreground">
-            {error}
-          </p>
-        ) : null}
-
-        <div className="space-y-3 p-3 text-sm">
-          <label className="block">
-            <span className="text-xs text-muted-foreground">
-              Archive done/cancelled tasks untouched for (months)
-            </span>
-            <Input
-              value={archiveMonths}
-              disabled={busy}
-              onChange={(e) => setArchiveMonths(e.target.value)}
-              placeholder="off"
-              aria-label="Archive after months"
-              className="mt-1"
-            />
-          </label>
-          <label className="block">
-            <span className="text-xs text-muted-foreground">
-              Close stale open tasks untouched for (months)
-            </span>
-            <Input
-              value={closeMonths}
-              disabled={busy}
-              onChange={(e) => setCloseMonths(e.target.value)}
-              placeholder="off"
-              aria-label="Close after months"
-              className="mt-1"
-            />
-            <span className="mt-0.5 block text-[10px] text-muted-foreground">
-              Tasks waiting in triage are never touched. Leave a box empty to
-              turn that policy off.
-            </span>
-          </label>
-          <label className="block">
-            <span className="text-xs text-muted-foreground">
-              Timezone (IANA name — sets the midnight the windows count from)
-            </span>
-            <Input
-              value={timezone}
-              disabled={busy}
-              onChange={(e) => setTimezone(e.target.value)}
-              placeholder="UTC"
-              aria-label="Project timezone"
-              className="mt-1"
-            />
-          </label>
-        </div>
-
-        <footer className="flex justify-end gap-2 border-t border-border px-3 py-2">
-          <Button variant="ghost" size="sm" onClick={onClose} disabled={busy}>
-            Cancel
-          </Button>
-          <Button size="sm" onClick={() => void save()} disabled={busy}>
-            Save
-          </Button>
-        </footer>
+      <div className="space-y-3 p-3 text-sm">
+        <label className="block">
+          <span className="text-xs text-muted-foreground">
+            Archive done/cancelled tasks untouched for (months)
+          </span>
+          <Input
+            value={archiveMonths}
+            disabled={busy}
+            onChange={(e) => setArchiveMonths(e.target.value)}
+            placeholder="off"
+            aria-label="Archive after months"
+            className="mt-1"
+          />
+        </label>
+        <label className="block">
+          <span className="text-xs text-muted-foreground">
+            Close stale open tasks untouched for (months)
+          </span>
+          <Input
+            value={closeMonths}
+            disabled={busy}
+            onChange={(e) => setCloseMonths(e.target.value)}
+            placeholder="off"
+            aria-label="Close after months"
+            className="mt-1"
+          />
+          <span className="mt-0.5 block text-[10px] text-muted-foreground">
+            Tasks waiting in triage are never touched. Leave a box empty to
+            turn that policy off.
+          </span>
+        </label>
+        <label className="block">
+          <span className="text-xs text-muted-foreground">
+            Timezone (IANA name — sets the midnight the windows count from)
+          </span>
+          <Input
+            value={timezone}
+            disabled={busy}
+            onChange={(e) => setTimezone(e.target.value)}
+            placeholder="UTC"
+            aria-label="Project timezone"
+            className="mt-1"
+          />
+        </label>
       </div>
-    </div>
+
+      <footer className="flex justify-end gap-2 border-t border-border px-3 py-2">
+        <Button variant="ghost" size="sm" onClick={onClose} disabled={busy}>
+          Cancel
+        </Button>
+        <Button size="sm" onClick={() => void save()} disabled={busy}>
+          Save
+        </Button>
+      </footer>
+    </Modal>
   );
 }

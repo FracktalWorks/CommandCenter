@@ -39,6 +39,17 @@
  *    side by side. Use `<Select>` from `components/ui/Input.tsx`, and keep the
  *    file input hidden behind a `<Button>` — which is what every correct call
  *    site in this tree already does.
+ * 8. **The headless substrate is imported in exactly one place.** D-PM-15 chose
+ *    Base UI for the primitive layer and attached two conditions to the choice:
+ *    every primitive arrives as a CommandCenter wrapper in `components/ui/`,
+ *    and there is **one** substrate. Both fail the same way — quietly, one call
+ *    site at a time — because `@base-ui/react` ships its own unstyled-but-
+ *    opinionated defaults, and a page that imports `Dialog` directly gets the
+ *    library's product decisions rather than ours. Observed in Paca, not
+ *    imagined: its `package.json` carries Base UI *and* `radix-ui`, the second
+ *    reaching exactly one file, inherited from a vendored component registry.
+ *    So the rule is an import restriction rather than a style regex, and it is
+ *    the R7 fence D-PM-15 condition 1 asks for by name.
  *
  * ## Ratchet, not a wall
  *
@@ -780,6 +791,173 @@ describe("selects and file pickers go through the primitives", () => {
       .filter((f) => f.endsWith(".tsx"))
       .reduce((n, f) => n + fileInputs(f).length, 0);
     expect(seen, "No file inputs found at all — the scan broke.").toBeGreaterThan(5);
+  });
+});
+
+// ── Rule 8: one headless substrate, imported in one place ───────────────────
+
+describe("the headless substrate is wrapped, not imported", () => {
+  /**
+   * `@base-ui/react` — D-PM-15's chosen substrate, and the only one.
+   *
+   * Matches the package and every subpath (`@base-ui/react/dialog`), in both
+   * `import … from` and `import(…)` form, so a lazily-imported popover cannot
+   * walk around the rule.
+   *
+   * ⚠️ **No `g` flag, deliberately.** A global regex carries `lastIndex`
+   * between `.test()` calls, so reusing one across a `filter()` skips every
+   * other file — a fence that passes because it did not look. The counting
+   * rules above get away with `g` because they go through `match()`.
+   */
+  const SUBSTRATE =
+    /from\s+["']@base-ui\/react(?:\/[^"']*)?["']|import\(\s*["']@base-ui\/react(?:\/[^"']*)?["']/;
+
+  /**
+   * Where the wrappers live. A directory prefix, not a file list: the whole
+   * point is that `components/ui/` is the home for the next primitive too, and
+   * a per-file allowlist would have to be edited by every one of them.
+   */
+  const WRAPPER_HOME = "components/ui/";
+
+  it("nothing outside components/ui/ imports @base-ui/react", () => {
+    const offenders = sourceFiles().filter(
+      (f) => !f.startsWith(WRAPPER_HOME) && SUBSTRATE.test(strip(read(f))),
+    );
+    expect(
+      offenders,
+      "Import the CommandCenter wrapper from `components/ui/`, not the " +
+        "substrate. D-PM-15 condition 1: a call site that reaches past the " +
+        "wrapper gets Base UI's own defaults — its scrim, its radius, its " +
+        "focus behaviour — and the library becomes a second design system one " +
+        "import at a time. If the primitive you need does not exist yet, add " +
+        "the wrapper beside Modal.tsx; that is the ticket.",
+    ).toEqual([]);
+  });
+
+  it("the wrapper home actually wraps something", () => {
+    // Guards the assertion above the only way it can lie: if nothing in the
+    // tree imported the substrate at all, the filter would pass forever while
+    // the rule fenced nothing. `Modal.tsx` is the first wrapper; this counts
+    // whatever is there.
+    const wrappers = sourceFiles().filter(
+      (f) => f.startsWith(WRAPPER_HOME) && SUBSTRATE.test(strip(read(f))),
+    );
+    expect(
+      wrappers.length,
+      "No file in components/ui/ imports @base-ui/react — either the scan " +
+        "broke or the substrate left the tree, and this rule is now vacuous.",
+    ).toBeGreaterThan(0);
+  });
+
+  it("there is exactly one substrate in package.json", () => {
+    // D-PM-15 condition 2, and the half a source scan cannot see: the second
+    // substrate arrives as a DEPENDENCY (a vendored shadcn/cva registry drop
+    // pulling in `radix-ui`), and only then as an import.
+    const manifest = JSON.parse(
+      readFileSync(fileURLToPath(new URL("../../../package.json", import.meta.url)), "utf8"),
+    ) as { dependencies?: Record<string, string>; devDependencies?: Record<string, string> };
+    const named = [
+      ...Object.keys(manifest.dependencies ?? {}),
+      ...Object.keys(manifest.devDependencies ?? {}),
+    ];
+    const rivals = named.filter((name) =>
+      /^(?:@radix-ui\/|radix-ui$|@headlessui\/|@base-ui-components\/|@ariakit\/|ariakit$|@reach\/)/.test(
+        name,
+      ),
+    );
+    expect(
+      rivals,
+      "A second headless-primitive substrate is in package.json. D-PM-15 " +
+        "picked one; two means two sets of defaults, two focus implementations " +
+        "and a wrapper layer that only covers half the tree. " +
+        "(`@base-ui-components/react` counts — it is the DEPRECATED old name " +
+        "of the same project, stuck at 1.0.0-rc.0.)",
+    ).toEqual([]);
+    expect(named, "The substrate itself is missing.").toContain("@base-ui/react");
+  });
+
+  it("the Modal wrapper does not hand outside-press dismissal to its callers", () => {
+    /**
+     * ⚠️ Not the fence the WS-27ak brief asked for, because the prop it names
+     * does not exist.
+     *
+     * The brief said to set `outsidePressEvent="intentional"` on `Dialog.Root`
+     * and to scan that no call site overrides it. `@base-ui/react@1.7.0`'s
+     * dialog has **no such prop** — `dialog/root/useDialogRoot.mjs:23-33`
+     * computes it internally and returns `'intentional'` (press must start AND
+     * end outside) **whenever a backdrop element exists**, falling back to
+     * `'sloppy'` for mouse only when there is none. So the observable the
+     * ticket wants is held by the wrapper rendering `Dialog.Backdrop` and
+     * `modal` — which is what this checks — and by no call site being able to
+     * turn either off, which is why `ModalProps` exposes neither.
+     */
+    // Comments stripped: this file's own header *explains* `outsidePressEvent`
+    // at length, and a gate a docstring can trip teaches people not to write
+    // docstrings (rule 7's `stripTags` learned the same thing).
+    const modal = strip(read("components/ui/Modal.tsx"));
+    expect(modal, "Modal must render Dialog.Backdrop — it is what makes " +
+      "outside press `intentional` rather than `sloppy`.").toMatch(/<Dialog\.Backdrop/);
+    expect(modal, "Modal must render Dialog.Portal — for modal dialogs it also " +
+      "renders the internal backdrop and is what puts the popup outside the " +
+      "app tree so the rest of the document can be marked inert.").toMatch(
+      /<Dialog\.Portal/,
+    );
+    for (const escape of ["disablePointerDismissal", "outsidePressEvent", "modal={"]) {
+      expect(
+        modal.includes(escape),
+        `Modal exposes \`${escape}\` — dismissal is the primitive's decision, ` +
+          "not a per-call-site one, or six dialogs behave six ways.",
+      ).toBe(false);
+    }
+  });
+
+  /**
+   * The six dialogs WS-27ak converted stay converted.
+   *
+   * ⚠️ This exists because the import restriction above does **not** catch the
+   * regression it was being credited with. A hand-rolled
+   * `<div className="fixed inset-0 bg-black/60">` imports nothing, so rule 8's
+   * scan is blind to it — which is precisely the 70-file status quo the
+   * primitive was written for. `DESIGN_SYSTEM.md` §4a used to name rule 8 as
+   * the fence against "the seventh scrim colour"; it was not one, and R7 says a
+   * rule names the test that makes breaking it fail or is labelled advisory.
+   *
+   * Deliberately **narrow**: these six files, not the tree. A tree-wide ban
+   * would flag 70 correct-for-now files, ~21 of which are dismiss-scrims for
+   * dropdowns and not dialogs at all, and a gate that cries wolf is one
+   * somebody switches off (this file's own header, "Ratchet, not a wall").
+   * Retiring another overlay onto `Modal` is how this list grows.
+   */
+  const CONVERTED = [
+    "app/projects/components/ShortcutsSheet.tsx",
+    "app/projects/components/SearchPalette.tsx",
+    "app/projects/components/ImportClickUp.tsx",
+    "app/projects/components/FieldManager.tsx",
+    "app/projects/components/TagManager.tsx",
+    "app/projects/components/LifecyclePolicy.tsx",
+  ];
+
+  it("the converted /projects dialogs do not grow an overlay back by hand", () => {
+    const offenders = CONVERTED.filter((f) => /fixed\s+inset-0/.test(strip(read(f))));
+    expect(
+      offenders,
+      "A dialog that was moved onto `Modal` has a hand-rolled `fixed inset-0` " +
+        "overlay again. That is a second scrim colour, a second z-layer and — " +
+        "measured across the 70 files that had one before WS-27ak — no focus " +
+        "trap, no focus return and no scroll lock. Put it inside `Modal`.",
+    ).toEqual([]);
+  });
+
+  it("the six converted dialogs are all still there and all still use Modal", () => {
+    // Guards the assertion above the two ways it can go vacuous: a renamed
+    // file (read() throws, so this is the readable failure) and a dialog that
+    // quietly stopped rendering the primitive while keeping a clean file.
+    const notWired = CONVERTED.filter((f) => !/from "@\/components\/ui\/Modal"/.test(read(f)));
+    expect(
+      notWired,
+      "These no longer import `Modal`, so the scan above fences nothing for " +
+        "them. Either they regressed, or this list is stale.",
+    ).toEqual([]);
   });
 });
 

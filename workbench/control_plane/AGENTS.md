@@ -26,10 +26,11 @@ The short version, because these are the three mistakes that actually happen:
    "Choose Files / No file chosen" is the browser's string in the browser's
    font and no theme can reach it.
 
-All three are enforced by `src/lib/theme/conformance.test.ts` (**seven** rules:
+All three are enforced by `src/lib/theme/conformance.test.ts` (**eight** rules:
 literals, `lucide-react`, bracket classes, solid-button chrome, raw palette
 classes, the `bg-accent text-accent-foreground` active pair rule 6 below forbids
-— since S4 — and, since S5, raw `<select>`s and visible file inputs), which
+— since S4 — since S5, raw `<select>`s and visible file inputs, and since
+WS-27ak, an `@base-ui/react` import outside `src/components/ui/`), which
 carries a frozen baseline for existing debt: a file with no
 budget must be clean, a baselined file may not get worse, and a baselined file
 that got *better* fails until you lower its number — so the debt figures never
@@ -57,7 +58,7 @@ app carries its own palette, that app is the one that looks broken on the day
 somebody changes the theme — and nobody notices until then, because a hardcoded
 value renders *fine*.
 
-Four rules on top of the three above. Each one exists because it was broken:
+Five rules on top of the three above. Each one exists because it was broken:
 
 4. **One vocabulary per concept, in `src/lib/` or `src/components/`, consumed by
    every app.** Status and lane colour is `src/lib/statusAccent.ts` — the single
@@ -149,10 +150,32 @@ Four rules on top of the three above. Each one exists because it was broken:
    not a bracket class — which is how ~950 of them accumulated. **CI catches it
    now** (conformance rule 5, per-file baselines that only go down), but the
    baseline is large: a file already in it can still get worse up to its budget.
+8. **A headless primitive is imported from `src/components/ui/`, never from the
+   library.** D-PM-15 chose **Base UI** (`@base-ui/react`) as the one substrate
+   for the primitive layer, on two conditions: every primitive arrives as a
+   CommandCenter wrapper carrying `.cc-control`, `<Icon name>` and semantic
+   tokens, and there is exactly one substrate. `src/components/ui/Modal.tsx`
+   (WS-27ak) is the worked example and the only file in the tree allowed to name
+   the library. **A dialog is not a `fixed inset-0` div** — before that wrapper,
+   70 files carried one and **zero** trapped focus or set `inert`; that is not
+   seventy bugs, it is a primitive nobody had written. Fences: conformance rule
+   8 — nothing outside `components/ui/` imports the substrate; no second
+   substrate in `package.json` (a vendored shadcn/`cva` registry pulling in
+   `radix-ui` is the observed vector, not a hypothetical one); and none of the
+   six converted `/projects` dialogs may contain `fixed inset-0`. ⚠️ **The
+   import rule does NOT catch a hand-rolled dialog** — a `fixed inset-0` div
+   imports nothing, which is how the 70 got there — so "a new surface uses
+   `Modal`" is **advisory**, review-only. ⚠️ Base UI marks the background
+   `aria-hidden` + `data-base-ui-inert`, never real `inert`: Ctrl+F still finds
+   the page behind the scrim.
+   ⚠️ `src/lib/outsideClick.ts` is **not** consumed by Modal, despite its
+   docstring naming "Wave 2's Modal": Base UI brings its own outside-press
+   handling with the start-and-end-outside rule the hand-rolled walker does not
+   express. It stays the answer for a popover we do not build on the substrate.
 
 **What CI cannot catch, and you must.** There is no structural or layout test in
 this tree: nothing asserts panel counts, shell adoption, mobile branches, or that
-two apps draw a card the same way. The conformance suite checks seven regexes.
+two apps draw a card the same way. The conformance suite checks eight regexes.
 (`src/lib/sharedTaskUi.test.ts` is the nearest thing to a structural test and is
 narrower than it sounds: it pins that a shared module is declared **once** and
 that each app still imports it — never that a surface actually uses it.)

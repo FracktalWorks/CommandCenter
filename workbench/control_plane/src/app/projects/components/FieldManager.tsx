@@ -19,6 +19,7 @@ import Icon from "@/components/Icon";
 import Badge from "@/components/ui/Badge";
 import Button from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
+import Modal from "@/components/ui/Modal";
 import { useEffect, useState } from "react";
 
 import { type FieldRow, projectsApi } from "../lib/api";
@@ -119,125 +120,122 @@ export function FieldManager({ projectId, projectName, onClose, onChanged }: Pro
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 p-4">
-      <div className="flex max-h-full w-full max-w-lg flex-col overflow-hidden rounded-lg border border-border bg-card">
-        <header className="flex items-center justify-between border-b border-border px-3 py-2">
-          <div className="min-w-0">
-            <h3 className="text-sm font-medium text-foreground">Custom fields</h3>
-            <p className="truncate text-xs text-muted-foreground">
-              Shared by {projectName} and everything under it
-            </p>
-          </div>
-          <Button variant="ghost" size="icon" icon="X" aria-label="Close" onClick={onClose} />
-        </header>
+    // WS-27ak — this dialog had NO Escape and NO outside-press dismissal at
+    // all, and nothing focusable was reachable from the keyboard once it was
+    // up. Both arrive with the primitive.
+    <Modal
+      open
+      onClose={onClose}
+      title="Custom fields"
+      description={`Shared by ${projectName} and everything under it`}
+      size="lg"
+    >
+      {error ? (
+        <p className="border-b border-border bg-muted px-3 py-2 text-xs text-foreground">
+          {error}
+        </p>
+      ) : null}
+      {notice ? (
+        <p className="border-b border-border px-3 py-2 text-xs text-muted-foreground">
+          {notice}
+        </p>
+      ) : null}
 
-        {error ? (
-          <p className="border-b border-border bg-muted px-3 py-2 text-xs text-foreground">
-            {error}
+      <div className="min-h-0 flex-1 overflow-y-auto p-3">
+        {loading ? (
+          <p className="text-xs text-muted-foreground">Loading…</p>
+        ) : fields.length === 0 ? (
+          <p className="text-xs text-muted-foreground">
+            No custom fields yet. Add one below — it appears on every task in
+            this project and everything under it.
           </p>
-        ) : null}
-        {notice ? (
-          <p className="border-b border-border px-3 py-2 text-xs text-muted-foreground">
-            {notice}
-          </p>
-        ) : null}
-
-        <div className="min-h-0 flex-1 overflow-y-auto p-3">
-          {loading ? (
-            <p className="text-xs text-muted-foreground">Loading…</p>
-          ) : fields.length === 0 ? (
-            <p className="text-xs text-muted-foreground">
-              No custom fields yet. Add one below — it appears on every task in
-              this project and everything under it.
-            </p>
-          ) : (
-            <ul className="space-y-1">
-              {ordered(fields as never).map((field) => (
-                <li
-                  key={field.id}
-                  className="flex items-center gap-2 rounded-md border border-border px-2 py-1.5"
-                >
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-sm text-foreground">
-                      {field.name}
-                    </span>
-                    <span className="block truncate text-[11px] text-muted-foreground">
-                      {field.field_key}
-                      {field.options.length ? ` · ${field.options.join(", ")}` : ""}
-                    </span>
+        ) : (
+          <ul className="space-y-1">
+            {ordered(fields as never).map((field) => (
+              <li
+                key={field.id}
+                className="flex items-center gap-2 rounded-md border border-border px-2 py-1.5"
+              >
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-sm text-foreground">
+                    {field.name}
                   </span>
-                  <Badge>{FIELD_TYPE_LABELS[field.field_type as FieldType]}</Badge>
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    icon="Trash2"
-                    aria-label={`Delete ${field.name}`}
-                    title={`Delete “${field.name}” and clear it from every task`}
-                    onClick={() => void remove(field as FieldRow)}
-                  />
-                </li>
+                  <span className="block truncate text-[11px] text-muted-foreground">
+                    {field.field_key}
+                    {field.options.length ? ` · ${field.options.join(", ")}` : ""}
+                  </span>
+                </span>
+                <Badge>{FIELD_TYPE_LABELS[field.field_type as FieldType]}</Badge>
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  icon="Trash2"
+                  aria-label={`Delete ${field.name}`}
+                  title={`Delete “${field.name}” and clear it from every task`}
+                  onClick={() => void remove(field as FieldRow)}
+                />
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
+      <form onSubmit={create} className="border-t border-border p-3">
+        <div className="flex flex-wrap items-end gap-2">
+          <label className="min-w-[8rem] flex-1 text-[11px] text-muted-foreground">
+            Name
+            <Input
+              inputSize="sm"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="Customer PO"
+              aria-label="Field name"
+            />
+          </label>
+          <label className="text-[11px] text-muted-foreground">
+            Type
+            <select
+              aria-label="Field type"
+              className={`${SELECT} block`}
+              value={type}
+              onChange={(e) => setType(e.target.value as FieldType)}
+            >
+              {FIELD_TYPES.map((option) => (
+                <option key={option} value={option}>
+                  {FIELD_TYPE_LABELS[option]}
+                </option>
               ))}
-            </ul>
-          )}
+            </select>
+          </label>
+          <Button type="submit" size="sm" loading={busy} disabled={!name.trim()}>
+            Add
+          </Button>
         </div>
 
-        <form onSubmit={create} className="border-t border-border p-3">
-          <div className="flex flex-wrap items-end gap-2">
-            <label className="min-w-[8rem] flex-1 text-[11px] text-muted-foreground">
-              Name
-              <Input
-                inputSize="sm"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder="Customer PO"
-                aria-label="Field name"
-              />
-            </label>
-            <label className="text-[11px] text-muted-foreground">
-              Type
-              <select
-                aria-label="Field type"
-                className={`${SELECT} block`}
-                value={type}
-                onChange={(e) => setType(e.target.value as FieldType)}
-              >
-                {FIELD_TYPES.map((option) => (
-                  <option key={option} value={option}>
-                    {FIELD_TYPE_LABELS[option]}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <Button type="submit" size="sm" loading={busy} disabled={!name.trim()}>
-              Add
-            </Button>
-          </div>
+        {needsOptions(type) ? (
+          <label className="mt-2 block text-[11px] text-muted-foreground">
+            Choices, comma separated
+            <Input
+              inputSize="sm"
+              value={options}
+              onChange={(e) => setOptions(e.target.value)}
+              placeholder="EU, IN, US"
+              aria-label="Choices"
+            />
+          </label>
+        ) : null}
 
-          {needsOptions(type) ? (
-            <label className="mt-2 block text-[11px] text-muted-foreground">
-              Choices, comma separated
-              <Input
-                inputSize="sm"
-                value={options}
-                onChange={(e) => setOptions(e.target.value)}
-                placeholder="EU, IN, US"
-                aria-label="Choices"
-              />
-            </label>
-          ) : null}
-
-          {name.trim() ? (
-            // Shown BEFORE the field exists, because this is the last moment
-            // anybody can change it: the key is what every stored value is
-            // filed under and the API refuses to rename it.
-            <p className="mt-2 flex items-center gap-1 text-[11px] text-muted-foreground">
-              <Icon name="Key" size={11} />
-              Key <code className="text-foreground">{keyPreview(name)}</code> —
-              permanent once created.
-            </p>
-          ) : null}
-        </form>
-      </div>
-    </div>
+        {name.trim() ? (
+          // Shown BEFORE the field exists, because this is the last moment
+          // anybody can change it: the key is what every stored value is
+          // filed under and the API refuses to rename it.
+          <p className="mt-2 flex items-center gap-1 text-[11px] text-muted-foreground">
+            <Icon name="Key" size={11} />
+            Key <code className="text-foreground">{keyPreview(name)}</code> —
+            permanent once created.
+          </p>
+        ) : null}
+      </form>
+    </Modal>
   );
 }

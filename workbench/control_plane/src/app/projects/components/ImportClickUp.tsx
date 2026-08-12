@@ -28,6 +28,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import Icon from "@/components/Icon";
 import Button from "@/components/ui/Button";
+import Modal from "@/components/ui/Modal";
 
 import { type TaskAccountRow, importApi } from "../lib/api";
 import {
@@ -162,292 +163,275 @@ export function ImportClickUp({
   const notice = plan ? unmappedNotice(mapping) : null;
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-foreground/20 p-4"
-      onClick={onClose}
+    // WS-27ak — the hand-rolled scrim, its click-away and the bespoke header
+    // are the Modal's now. The backdrop dismissal it had was `pointerdown`-ish
+    // by construction (one `onClick` on the scrim); the substrate's is
+    // `intentional`, so a selection dragged off this form no longer closes it.
+    <Modal
+      open
+      onClose={onClose}
+      title="Bring your work in"
+      description="Every Preview writes nothing. Only the buttons that say so write."
+      size="3xl"
+      className="max-h-[88vh]"
     >
-      <div
-        role="dialog"
-        aria-label="Import from ClickUp"
-        className="flex max-h-[88vh] w-full max-w-3xl flex-col overflow-hidden rounded-xl border border-border bg-card shadow-xl"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <header className="flex items-center justify-between border-b border-border px-4 py-3">
-          <div>
-            <h2 className="text-sm font-semibold text-foreground">
-              Bring your work in
-            </h2>
-            <p className="text-xs text-muted-foreground">
-              Every Preview writes nothing. Only the buttons that say so write.
-            </p>
-          </div>
-          <Button
-            variant="ghost"
-            size="icon-xs"
-            icon="X"
-            aria-label="Close"
-            onClick={onClose}
-          />
-        </header>
-
-        <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-3">
-          {/* ── The fast path, offered FIRST ──────────────────────────────
-              Everything the Tasks app already mirrors, under one department.
-              It is first because it is what somebody with an empty board
-              actually wants: no token, no tenant read, no mapping decision.
-              Splitting into real departments later is a `/move` per subtree,
-              because each child remembers its ClickUp Space. */}
-          <section className="rounded-md border border-border p-3">
-            <h3 className="text-xs font-medium text-foreground">
-              Everything already synced, under one department
-            </h3>
-            <p className="mt-0.5 text-[11px] text-muted-foreground">
-              Uses the ClickUp data the Tasks app has already pulled down — no
-              ClickUp call, no mapping to decide. Split it into real departments
-              whenever you like; each project remembers which Space it came
-              from, so that is a move rather than a re-import.
-            </p>
-            <div className="mt-2 flex flex-wrap items-center gap-2">
-              <label className="flex items-center gap-1 text-[11px] text-muted-foreground">
-                Department
-                <input
-                  value={department}
-                  aria-label="Department name"
-                  onChange={(e) => setDepartment(e.target.value)}
-                  className={FIELD}
-                />
-              </label>
-              <Button
-                variant="secondary"
-                size="sm"
-                loading={busy === "mirror"}
-                disabled={busy !== null || !department.trim()}
-                onClick={() => fromTasks(true)}
-              >
-                Preview — writes nothing
-              </Button>
-              <Button
-                size="sm"
-                icon="Download"
-                loading={busy === "mirror"}
-                disabled={busy !== null || !department.trim()}
-                onClick={() => fromTasks(false)}
-              >
-                Bring it all in
-              </Button>
-            </div>
-          </section>
-
-          <details className="rounded-md border border-border p-3">
-            <summary className="cursor-pointer text-xs font-medium text-foreground">
-              Or import from ClickUp directly, mapping Spaces to Centers
-            </summary>
-            <p className="mt-1 text-[11px] text-muted-foreground">
-              Reads the live tenant. Slower, needs a working token, and asks you
-              to decide who can see each Space — the right shape for the real
-              migration.
-            </p>
-            <div className="mt-2 space-y-3">
-          {/* ── Step 1: which workspace ───────────────────────────────── */}
-          {accounts === null ? (
-            <p className="text-xs text-muted-foreground">Looking for a connected ClickUp account…</p>
-          ) : accounts.length === 0 ? (
-            // Named precisely: "no account" and "the import is broken" must not
-            // look the same, and this one has an obvious fix.
-            <p className="text-xs text-foreground">
-              No ClickUp account is connected. Connect one in the Tasks app
-              first — this import reuses that connection rather than asking for
-              a second token.
-            </p>
-          ) : (
-            <label className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-              Workspace
-              <select
-                value={accountId}
-                aria-label="ClickUp account"
-                onChange={(e) => {
-                  setAccountId(e.target.value);
-                  setPlan(null);
-                  setSummary(null);
-                }}
+      <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-3">
+        {/* ── The fast path, offered FIRST ──────────────────────────────
+            Everything the Tasks app already mirrors, under one department.
+            It is first because it is what somebody with an empty board
+            actually wants: no token, no tenant read, no mapping decision.
+            Splitting into real departments later is a `/move` per subtree,
+            because each child remembers its ClickUp Space. */}
+        <section className="rounded-md border border-border p-3">
+          <h3 className="text-xs font-medium text-foreground">
+            Everything already synced, under one department
+          </h3>
+          <p className="mt-0.5 text-[11px] text-muted-foreground">
+            Uses the ClickUp data the Tasks app has already pulled down — no
+            ClickUp call, no mapping to decide. Split it into real departments
+            whenever you like; each project remembers which Space it came
+            from, so that is a move rather than a re-import.
+          </p>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <label className="flex items-center gap-1 text-[11px] text-muted-foreground">
+              Department
+              <input
+                value={department}
+                aria-label="Department name"
+                onChange={(e) => setDepartment(e.target.value)}
                 className={FIELD}
-              >
-                <option value="">— pick one —</option>
-                {accounts.map((a) => (
-                  <option key={a.id} value={a.id}>
-                    {a.label || a.workspace_id}
-                  </option>
-                ))}
-              </select>
-              <label className="flex items-center gap-1">
-                <input
-                  type="checkbox"
-                  checked={useLlm}
-                  onChange={(e) => setUseLlm(e.target.checked)}
-                />
-                {/* Stated because it costs money and because the plan is
-                    perfectly usable without it. */}
-                Use the model to suggest Centers (costs budget)
-              </label>
-              <Button
-                size="sm"
-                icon="Search"
-                loading={busy === "plan"}
-                disabled={!accountId || busy !== null}
-                onClick={preview}
-              >
-                Preview — reads ClickUp, writes nothing
-              </Button>
+              />
             </label>
-          )}
+            <Button
+              variant="secondary"
+              size="sm"
+              loading={busy === "mirror"}
+              disabled={busy !== null || !department.trim()}
+              onClick={() => fromTasks(true)}
+            >
+              Preview — writes nothing
+            </Button>
+            <Button
+              size="sm"
+              icon="Download"
+              loading={busy === "mirror"}
+              disabled={busy !== null || !department.trim()}
+              onClick={() => fromTasks(false)}
+            >
+              Bring it all in
+            </Button>
+          </div>
+        </section>
 
-          {error ? (
-            <p role="alert" className="text-xs text-destructive">
-              {error}
+        <details className="rounded-md border border-border p-3">
+          <summary className="cursor-pointer text-xs font-medium text-foreground">
+            Or import from ClickUp directly, mapping Spaces to Centers
+          </summary>
+          <p className="mt-1 text-[11px] text-muted-foreground">
+            Reads the live tenant. Slower, needs a working token, and asks you
+            to decide who can see each Space — the right shape for the real
+            migration.
+          </p>
+          <div className="mt-2 space-y-3">
+        {/* ── Step 1: which workspace ───────────────────────────────── */}
+        {accounts === null ? (
+          <p className="text-xs text-muted-foreground">Looking for a connected ClickUp account…</p>
+        ) : accounts.length === 0 ? (
+          // Named precisely: "no account" and "the import is broken" must not
+          // look the same, and this one has an obvious fix.
+          <p className="text-xs text-foreground">
+            No ClickUp account is connected. Connect one in the Tasks app
+            first — this import reuses that connection rather than asking for
+            a second token.
+          </p>
+        ) : (
+          <label className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+            Workspace
+            <select
+              value={accountId}
+              aria-label="ClickUp account"
+              onChange={(e) => {
+                setAccountId(e.target.value);
+                setPlan(null);
+                setSummary(null);
+              }}
+              className={FIELD}
+            >
+              <option value="">— pick one —</option>
+              {accounts.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.label || a.workspace_id}
+                </option>
+              ))}
+            </select>
+            <label className="flex items-center gap-1">
+              <input
+                type="checkbox"
+                checked={useLlm}
+                onChange={(e) => setUseLlm(e.target.checked)}
+              />
+              {/* Stated because it costs money and because the plan is
+                  perfectly usable without it. */}
+              Use the model to suggest Centers (costs budget)
+            </label>
+            <Button
+              size="sm"
+              icon="Search"
+              loading={busy === "plan"}
+              disabled={!accountId || busy !== null}
+              onClick={preview}
+            >
+              Preview — reads ClickUp, writes nothing
+            </Button>
+          </label>
+        )}
+
+        {error ? (
+          <p role="alert" className="text-xs text-destructive">
+            {error}
+          </p>
+        ) : null}
+
+        {/* ── Step 2: what is actually there, and where it goes ──────── */}
+        {plan && counts ? (
+          <>
+            <p className="text-xs text-foreground">
+              <strong>{counts.spaces}</strong> Spaces ·{" "}
+              <strong>{counts.folders}</strong> folders ·{" "}
+              <strong>{counts.lists}</strong> lists ·{" "}
+              <strong>{counts.tasks}</strong> tasks in workspace{" "}
+              {plan.workspace_id}.
             </p>
-          ) : null}
+            <p className="text-[11px] text-muted-foreground">
+              A Space becomes a department; folders and lists become
+              subprojects beneath it. Pick the Center each Space belongs to —
+              that is what decides who can see it, so it is your call and not
+              the suggestion&apos;s.
+            </p>
 
-          {/* ── Step 2: what is actually there, and where it goes ──────── */}
-          {plan && counts ? (
-            <>
-              <p className="text-xs text-foreground">
-                <strong>{counts.spaces}</strong> Spaces ·{" "}
-                <strong>{counts.folders}</strong> folders ·{" "}
-                <strong>{counts.lists}</strong> lists ·{" "}
-                <strong>{counts.tasks}</strong> tasks in workspace{" "}
-                {plan.workspace_id}.
-              </p>
-              <p className="text-[11px] text-muted-foreground">
-                A Space becomes a department; folders and lists become
-                subprojects beneath it. Pick the Center each Space belongs to —
-                that is what decides who can see it, so it is your call and not
-                the suggestion&apos;s.
-              </p>
-
-              <div className="overflow-x-auto">
-                <table className="w-full min-w-[36rem] text-left text-xs">
-                  <thead className="text-muted-foreground">
-                    <tr>
-                      <th className="py-1 pr-2 font-medium">Space</th>
-                      <th className="py-1 pr-2 font-medium">Contents</th>
-                      <th className="py-1 pr-2 font-medium">Center</th>
-                      <th className="py-1 font-medium">Why</th>
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[36rem] text-left text-xs">
+                <thead className="text-muted-foreground">
+                  <tr>
+                    <th className="py-1 pr-2 font-medium">Space</th>
+                    <th className="py-1 pr-2 font-medium">Contents</th>
+                    <th className="py-1 pr-2 font-medium">Center</th>
+                    <th className="py-1 font-medium">Why</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {plan.spaces.map((space) => (
+                    <tr key={space.space_id} className="border-t border-border align-top">
+                      <td className="py-1.5 pr-2 text-foreground">{space.name}</td>
+                      <td className="py-1.5 pr-2 text-muted-foreground">
+                        {space.task_count} tasks · {space.list_count} lists ·{" "}
+                        {space.assignee_count} people
+                      </td>
+                      <td className="py-1.5 pr-2">
+                        <select
+                          value={mapping[space.space_id] ?? ""}
+                          aria-label={`Center for ${space.name}`}
+                          onChange={(e) =>
+                            setMapping((prev) => ({
+                              ...prev,
+                              [space.space_id]: e.target.value,
+                            }))
+                          }
+                          className={FIELD}
+                        >
+                          {centerChoices().map((c) => (
+                            <option key={c.value} value={c.value}>
+                              {c.label}
+                            </option>
+                          ))}
+                        </select>
+                      </td>
+                      <td className="py-1.5 text-[11px] text-muted-foreground">
+                        {confidenceLabel(space.suggestion?.confidence)}
+                        {space.suggestion?.evidence?.length ? (
+                          <span> — {space.suggestion.evidence[0]}</span>
+                        ) : null}
+                      </td>
                     </tr>
-                  </thead>
-                  <tbody>
-                    {plan.spaces.map((space) => (
-                      <tr key={space.space_id} className="border-t border-border align-top">
-                        <td className="py-1.5 pr-2 text-foreground">{space.name}</td>
-                        <td className="py-1.5 pr-2 text-muted-foreground">
-                          {space.task_count} tasks · {space.list_count} lists ·{" "}
-                          {space.assignee_count} people
-                        </td>
-                        <td className="py-1.5 pr-2">
-                          <select
-                            value={mapping[space.space_id] ?? ""}
-                            aria-label={`Center for ${space.name}`}
-                            onChange={(e) =>
-                              setMapping((prev) => ({
-                                ...prev,
-                                [space.space_id]: e.target.value,
-                              }))
-                            }
-                            className={FIELD}
-                          >
-                            {centerChoices().map((c) => (
-                              <option key={c.value} value={c.value}>
-                                {c.label}
-                              </option>
-                            ))}
-                          </select>
-                        </td>
-                        <td className="py-1.5 text-[11px] text-muted-foreground">
-                          {confidenceLabel(space.suggestion?.confidence)}
-                          {space.suggestion?.evidence?.length ? (
-                            <span> — {space.suggestion.evidence[0]}</span>
-                          ) : null}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-
-              {notice ? (
-                <p className="rounded-md border border-border p-2 text-[11px] text-muted-foreground">
-                  {notice}
-                </p>
-              ) : null}
-            </>
-          ) : null}
-
+                  ))}
+                </tbody>
+              </table>
             </div>
-          </details>
 
-          {/* ── What a run did, or would do ────────────────────────────── */}
-          {summary ? (
-            <div className="rounded-md border border-border p-2">
-              <p className="text-xs text-foreground">
-                {summary.dry_run ? "Dry run — nothing was written. " : ""}
-                {describeSummary(summary)}
+            {notice ? (
+              <p className="rounded-md border border-border p-2 text-[11px] text-muted-foreground">
+                {notice}
               </p>
-              {summary.grants_applied.length ? (
-                <p className="mt-1 text-[11px] text-muted-foreground">
-                  Grants applied: {summary.grants_applied.join(", ")}
-                </p>
-              ) : null}
-              {summary.unmapped_spaces.length ? (
-                <p className="mt-1 text-[11px] text-muted-foreground">
-                  Imported with no Center: {summary.unmapped_spaces.join(", ")}
-                </p>
-              ) : null}
-              {summary.parity.length ? (
-                // The parity table is the honest check: if ClickUp says 412 and
-                // the board shows 300, this is where that shows up.
-                <p className="mt-1 text-[11px] text-muted-foreground">
-                  ClickUp had:{" "}
-                  {summary.parity
-                    .map((p) => `${p.space} ${p.clickup_tasks}`)
-                    .join(" · ")}
-                </p>
-              ) : null}
-            </div>
-          ) : null}
+            ) : null}
+          </>
+        ) : null}
 
-          {done ? (
-            <p className="flex items-center gap-1.5 text-xs text-foreground">
-              <Icon name="Check" size={13} /> Imported. Close this and the tree
-              on the left will have your departments in it.
+          </div>
+        </details>
+
+        {/* ── What a run did, or would do ────────────────────────────── */}
+        {summary ? (
+          <div className="rounded-md border border-border p-2">
+            <p className="text-xs text-foreground">
+              {summary.dry_run ? "Dry run — nothing was written. " : ""}
+              {describeSummary(summary)}
             </p>
-          ) : null}
-        </div>
+            {summary.grants_applied.length ? (
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                Grants applied: {summary.grants_applied.join(", ")}
+              </p>
+            ) : null}
+            {summary.unmapped_spaces.length ? (
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                Imported with no Center: {summary.unmapped_spaces.join(", ")}
+              </p>
+            ) : null}
+            {summary.parity.length ? (
+              // The parity table is the honest check: if ClickUp says 412 and
+              // the board shows 300, this is where that shows up.
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                ClickUp had:{" "}
+                {summary.parity
+                  .map((p) => `${p.space} ${p.clickup_tasks}`)
+                  .join(" · ")}
+              </p>
+            ) : null}
+          </div>
+        ) : null}
 
-        <footer className="flex flex-wrap items-center justify-end gap-2 border-t border-border px-4 py-3">
-          <Button variant="ghost" onClick={onClose}>
-            {done ? "Done" : "Cancel"}
-          </Button>
-          {plan && !done ? (
-            <>
-              <Button
-                variant="secondary"
-                loading={busy === "dry"}
-                disabled={busy !== null}
-                onClick={() => run(true)}
-              >
-                Dry run — writes nothing
-              </Button>
-              <Button
-                icon="Download"
-                loading={busy === "import"}
-                disabled={busy !== null}
-                onClick={() => run(false)}
-              >
-                Import {plan.spaces.length} Spaces — writes
-              </Button>
-            </>
-          ) : null}
-        </footer>
+        {done ? (
+          <p className="flex items-center gap-1.5 text-xs text-foreground">
+            <Icon name="Check" size={13} /> Imported. Close this and the tree
+            on the left will have your departments in it.
+          </p>
+        ) : null}
       </div>
-    </div>
+
+      <footer className="flex flex-wrap items-center justify-end gap-2 border-t border-border px-4 py-3">
+        <Button variant="ghost" onClick={onClose}>
+          {done ? "Done" : "Cancel"}
+        </Button>
+        {plan && !done ? (
+          <>
+            <Button
+              variant="secondary"
+              loading={busy === "dry"}
+              disabled={busy !== null}
+              onClick={() => run(true)}
+            >
+              Dry run — writes nothing
+            </Button>
+            <Button
+              icon="Download"
+              loading={busy === "import"}
+              disabled={busy !== null}
+              onClick={() => run(false)}
+            >
+              Import {plan.spaces.length} Spaces — writes
+            </Button>
+          </>
+        ) : null}
+      </footer>
+    </Modal>
   );
 }

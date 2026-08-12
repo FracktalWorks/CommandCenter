@@ -36,6 +36,7 @@
 
 import Icon from "@/components/Icon";
 import { Input } from "@/components/ui/Input";
+import Modal from "@/components/ui/Modal";
 import { useEffect, useRef, useState } from "react";
 
 import { projectsApi } from "../lib/api";
@@ -130,8 +131,9 @@ export function SearchPalette({
     return () => clearTimeout(timer);
   }, [query, open]);
 
-  if (!open) return null;
-
+  // WS-27ak — no early `if (!open) return null`. `Modal` is controlled and the
+  // substrate owns mounting, so bailing here would tear the popup out from
+  // under its own focus-return rather than letting it hand focus back.
   const view = paletteState({ query, loading, hits, truncated, error });
   const found = view.kind === "results" ? view.hits : [];
   // Applicable commands first, then the ones the query names. Both halves are
@@ -158,168 +160,166 @@ export function SearchPalette({
   }
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-start justify-center bg-background/70 pt-24"
-      onClick={onClose}
-      role="presentation"
+    // No `title`: this palette's first row IS its header, so the name is given
+    // as `label` and the Modal draws no header of its own. `initialFocus` aims
+    // at the box rather than letting "first tabbable element" decide.
+    <Modal
+      open={open}
+      onClose={onClose}
+      label="Search tasks"
+      size="xl"
+      placement="top"
+      initialFocus={inputRef}
     >
-      <div
-        className="w-full max-w-xl overflow-hidden rounded-lg border border-border bg-card shadow-lg"
-        onClick={(e) => e.stopPropagation()}
-        role="dialog"
-        aria-modal="true"
-        aria-label="Search tasks"
-      >
-        <div className="flex items-center gap-2 border-b border-border px-3">
-          <Icon name="Search" className="h-4 w-4 shrink-0 text-muted-foreground" />
-          <Input
-            ref={inputRef}
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search tasks, or type a command…"
-            aria-label="Search tasks and commands"
-            className="border-0 focus:border-0"
-            onKeyDown={(e) => {
-              const action = paletteKey(e);
-              if (!action) return;
-              // Claimed before the browser sees them: an unhandled ArrowUp
-              // moves the text caret to the start of the query, so the
-              // selection and the cursor would both move on one key.
-              e.preventDefault();
-              if (action === "close") onClose();
-              if (action === "down")
-                setCursor((c) => moveSelection(c, 1, pickable.length));
-              if (action === "up")
-                setCursor((c) => moveSelection(c, -1, pickable.length));
-              if (action === "open" && pickable.length > 0) activate(at);
-            }}
-          />
-          <kbd className="shrink-0 rounded border border-border px-1 text-[10px] text-muted-foreground">
-            esc
-          </kbd>
-        </div>
+      <div className="flex items-center gap-2 border-b border-border px-3">
+        <Icon name="Search" className="h-4 w-4 shrink-0 text-muted-foreground" />
+        <Input
+          ref={inputRef}
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search tasks, or type a command…"
+          aria-label="Search tasks and commands"
+          className="border-0 focus:border-0"
+          onKeyDown={(e) => {
+            const action = paletteKey(e);
+            if (!action) return;
+            // Claimed before the browser sees them: an unhandled ArrowUp
+            // moves the text caret to the start of the query, so the
+            // selection and the cursor would both move on one key.
+            e.preventDefault();
+            if (action === "close") onClose();
+            if (action === "down")
+              setCursor((c) => moveSelection(c, 1, pickable.length));
+            if (action === "up")
+              setCursor((c) => moveSelection(c, -1, pickable.length));
+            if (action === "open" && pickable.length > 0) activate(at);
+          }}
+        />
+        <kbd className="shrink-0 rounded border border-border px-1 text-[10px] text-muted-foreground">
+          esc
+        </kbd>
+      </div>
 
-        <div className="max-h-96 overflow-y-auto">
-          {/* The task-search states. They speak for the TASK half only now, so
-              each one is worded as such — a palette that says "nothing
-              matches" while eight commands are listed under the message is a
-              palette arguing with itself. */}
-          {view.kind === "idle" ? (
-            <p className="px-3 py-2 text-[11px] text-muted-foreground">
-              Two characters searches your tasks. A number like{" "}
-              <code className="text-foreground">#42</code> finds that one.
-            </p>
-          ) : null}
-          {view.kind === "searching" || view.kind === "typing" ? (
-            <p className="px-3 py-2 text-[11px] text-muted-foreground">
-              Searching tasks…
-            </p>
-          ) : null}
-          {view.kind === "empty" ? (
-            <p className="px-3 py-2 text-[11px] text-muted-foreground">
-              No task matches “{query.trim()}”.
-            </p>
-          ) : null}
-          {view.kind === "error" ? (
-            <p className="px-3 py-2 text-xs text-destructive">{view.message}</p>
-          ) : null}
+      <div className="max-h-96 overflow-y-auto">
+        {/* The task-search states. They speak for the TASK half only now, so
+            each one is worded as such — a palette that says "nothing
+            matches" while eight commands are listed under the message is a
+            palette arguing with itself. */}
+        {view.kind === "idle" ? (
+          <p className="px-3 py-2 text-[11px] text-muted-foreground">
+            Two characters searches your tasks. A number like{" "}
+            <code className="text-foreground">#42</code> finds that one.
+          </p>
+        ) : null}
+        {view.kind === "searching" || view.kind === "typing" ? (
+          <p className="px-3 py-2 text-[11px] text-muted-foreground">
+            Searching tasks…
+          </p>
+        ) : null}
+        {view.kind === "empty" ? (
+          <p className="px-3 py-2 text-[11px] text-muted-foreground">
+            No task matches “{query.trim()}”.
+          </p>
+        ) : null}
+        {view.kind === "error" ? (
+          <p className="px-3 py-2 text-xs text-destructive">{view.message}</p>
+        ) : null}
 
-          {/* Nothing at all — no command and no task. Suppressed when the task
-              half already said so, or a short query would show this message
-              alongside "No task matches" for the same word. */}
-          {rows.length === 0 && view.kind !== "empty" && view.kind !== "error" ? (
-            <p className="px-3 py-4 text-xs text-muted-foreground">
-              Nothing matches “{query.trim()}”.
-            </p>
-          ) : null}
+        {/* Nothing at all — no command and no task. Suppressed when the task
+            half already said so, or a short query would show this message
+            alongside "No task matches" for the same word. */}
+        {rows.length === 0 && view.kind !== "empty" && view.kind !== "error" ? (
+          <p className="px-3 py-4 text-xs text-muted-foreground">
+            Nothing matches “{query.trim()}”.
+          </p>
+        ) : null}
 
-          <ul>
-            {rows.map((row, index) => {
-              if (row.kind === "section")
-                return (
-                  <li
-                    key={row.key}
-                    className="px-3 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground"
-                  >
-                    {row.label}
-                  </li>
-                );
-              const pick = pickable.indexOf(index);
-              // AGENTS.md rule 6 — the house's active token. This row was the
-              // app's other `bg-accent text-accent-foreground`.
-              const selectedClass =
-                pick === at ? "bg-primary/10 text-primary" : "hover:bg-muted";
-              if (row.kind === "command")
-                return (
-                  <li key={row.key}>
-                    <button
-                      type="button"
-                      onMouseEnter={() => setCursor(pick)}
-                      onClick={() => activate(pick)}
-                      className={`flex w-full items-center gap-2 px-3 py-2 text-left ${selectedClass}`}
-                    >
-                      <Icon
-                        name={row.command.icon}
-                        className="h-3.5 w-3.5 shrink-0 text-muted-foreground"
-                      />
-                      <span className="min-w-0 flex-1 truncate text-sm">
-                        {row.command.label}
-                      </span>
-                      {row.command.sequence ? (
-                        <span className="flex shrink-0 items-center gap-0.5">
-                          {sequenceLabel(row.command)
-                            .split(" ")
-                            .map((key, i) => (
-                              <kbd
-                                key={`${row.key}:${i}`}
-                                className="rounded border border-border px-1 text-[10px] text-muted-foreground"
-                              >
-                                {key}
-                              </kbd>
-                            ))}
-                        </span>
-                      ) : null}
-                    </button>
-                  </li>
-                );
+        <ul>
+          {rows.map((row, index) => {
+            if (row.kind === "section")
+              return (
+                <li
+                  key={row.key}
+                  className="px-3 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground"
+                >
+                  {row.label}
+                </li>
+              );
+            const pick = pickable.indexOf(index);
+            // AGENTS.md rule 6 — the house's active token. This row was the
+            // app's other `bg-accent text-accent-foreground`.
+            const selectedClass =
+              pick === at ? "bg-primary/10 text-primary" : "hover:bg-muted";
+            if (row.kind === "command")
               return (
                 <li key={row.key}>
                   <button
                     type="button"
                     onMouseEnter={() => setCursor(pick)}
                     onClick={() => activate(pick)}
-                    className={`flex w-full items-baseline gap-2 px-3 py-2 text-left ${selectedClass}`}
+                    className={`flex w-full items-center gap-2 px-3 py-2 text-left ${selectedClass}`}
                   >
-                    <span
-                      className={`min-w-0 flex-1 truncate text-sm ${
-                        row.hit.completed_at ? "line-through opacity-60" : ""
-                      }`}
-                    >
-                      {highlight(row.hit.title, query).map((part, i) => (
-                        <span
-                          key={`${row.key}:${i}`}
-                          className={part.match ? "font-semibold text-primary" : ""}
-                        >
-                          {part.text}
-                        </span>
-                      ))}
+                    <Icon
+                      name={row.command.icon}
+                      className="h-3.5 w-3.5 shrink-0 text-muted-foreground"
+                    />
+                    <span className="min-w-0 flex-1 truncate text-sm">
+                      {row.command.label}
                     </span>
-                    <span className="shrink-0 text-[11px] text-muted-foreground">
-                      {hitContext(row.hit)}
-                    </span>
+                    {row.command.sequence ? (
+                      <span className="flex shrink-0 items-center gap-0.5">
+                        {sequenceLabel(row.command)
+                          .split(" ")
+                          .map((key, i) => (
+                            <kbd
+                              key={`${row.key}:${i}`}
+                              className="rounded border border-border px-1 text-[10px] text-muted-foreground"
+                            >
+                              {key}
+                            </kbd>
+                          ))}
+                      </span>
+                    ) : null}
                   </button>
                 </li>
               );
-            })}
-          </ul>
+            return (
+              <li key={row.key}>
+                <button
+                  type="button"
+                  onMouseEnter={() => setCursor(pick)}
+                  onClick={() => activate(pick)}
+                  className={`flex w-full items-baseline gap-2 px-3 py-2 text-left ${selectedClass}`}
+                >
+                  <span
+                    className={`min-w-0 flex-1 truncate text-sm ${
+                      row.hit.completed_at ? "line-through opacity-60" : ""
+                    }`}
+                  >
+                    {highlight(row.hit.title, query).map((part, i) => (
+                      <span
+                        key={`${row.key}:${i}`}
+                        className={part.match ? "font-semibold text-primary" : ""}
+                      >
+                        {part.text}
+                      </span>
+                    ))}
+                  </span>
+                  <span className="shrink-0 text-[11px] text-muted-foreground">
+                    {hitContext(row.hit)}
+                  </span>
+                </button>
+              </li>
+            );
+          })}
+        </ul>
 
-          {view.kind === "results" && view.truncated ? (
-            <p className="border-t border-border px-3 py-2 text-[11px] text-muted-foreground">
-              More matches than fit — add a word to narrow it.
-            </p>
-          ) : null}
+        {view.kind === "results" && view.truncated ? (
+          <p className="border-t border-border px-3 py-2 text-[11px] text-muted-foreground">
+            More matches than fit — add a word to narrow it.
+          </p>
+        ) : null}
         </div>
-      </div>
-    </div>
+    </Modal>
   );
 }

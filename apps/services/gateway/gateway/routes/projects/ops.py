@@ -33,6 +33,7 @@ from fastapi import Depends, Query
 from gateway.routes.projects import operations as ops
 from gateway.routes.projects.core import (
     _tenant_session,
+    from_jsonb,
     now,
     resolve_visibility,
     router,
@@ -349,6 +350,66 @@ _STATES: dict[str, str] = {
         f"        AND b.kind IN {_EXTERNAL_KINDS})"
     ),
 }
+
+
+@router.get("/ops/activity")
+async def ops_activity(
+    limit: int = Query(20, ge=1, le=100),
+    discussion: bool = Query(True, description="Include comments and mentions."),
+    user: UserContext = Depends(get_current_user),
+) -> dict:
+    """The portfolio's recent history — the Control Center's live feed.
+
+    Scoped through the same visibility clause as every other aggregate, so the
+    feed cannot mention a task the caller has no grant on. An activity row is a
+    disclosure: "jasim handed off the Z121 bumper" names work, a person and a
+    programme in one sentence.
+
+    ⚠️ **Bounded, never "all history"** (§28). The table grows forever — 222
+    rows against 29 projects on day one — and a feed that pages through it is a
+    feed that gets slower every week. `limit` is capped at 100 and the default
+    is what fits on the card.
+
+    `discussion=false` drops comments and mentions, which is the difference the
+    brief §32 insists on: comments are talk, activities are the audit record. A
+    busy project can bury its own state changes under a conversation.
+    """
+    async with _tenant_session() as db:
+        vis = await resolve_visibility(db, user)
+        where, params = _scope(vis)
+        rows = (await db.execute(
+            text(
+                "SELECT a.id, a.type, a.body, a.meta, a.created_by, a.created_at, "
+                "       a.task_id, t.title, p.name AS parent_name "
+                "FROM pm_activities a "
+                "JOIN pm_tasks t ON t.id = a.task_id "
+                "JOIN pm_projects p ON p.id = t.project_id "
+                "WHERE a.deleted_at IS NULL "
+                + ("" if discussion else "AND a.type NOT IN ('comment','mention') ")
+                + "  AND a.task_id IN ("
+                f"    SELECT t.id {where}"
+                "  ) "
+                "ORDER BY a.created_at DESC LIMIT :lim"
+            ),
+            {**params, "lim": limit},
+        )).fetchall()
+        return {
+            "rows": [
+                {
+                    "id": str(r.id), "type": r.type, "body": r.body,
+                    "meta": from_jsonb(r.meta) or {},
+                    "created_by": r.created_by, "created_at": r.created_at,
+                    "task_id": str(r.task_id), "title": r.title,
+                    "parent": r.parent_name,
+                }
+                for r in rows
+            ],
+            "total": len(rows),
+            "basis": (
+                "The most recent history across work you can see"
+                + ("." if discussion else ", excluding comments and mentions.")
+            ),
+        }
 
 
 #: How each view is sorted. See the note at the ORDER BY below.

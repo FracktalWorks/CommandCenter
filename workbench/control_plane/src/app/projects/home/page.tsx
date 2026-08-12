@@ -34,6 +34,7 @@ import Progress from "@/components/ui/Progress";
 import { SkeletonRows } from "@/components/ui/Skeleton";
 import { type AccentHue, accentForHue } from "@/lib/statusAccent";
 
+import { describeActivity } from "../lib/activity";
 import { SIGNAL_LABELS, ringSegments, shortName } from "./lib/dashboard";
 
 interface Summary {
@@ -50,6 +51,11 @@ interface AttentionRow {
 }
 interface StageRow { id: string; name: string; count: number }
 interface BlockerRow { kind: string; blockers: number; projects: number; oldest_days: number | null }
+interface ActivityRow {
+  id: string; type: string; body: string | null; meta: Record<string, unknown>;
+  created_by: string | null; created_at: string | null;
+  task_id: string; title: string; parent: string | null;
+}
 interface PersonRow {
   actor: string; tracked: string; percent: number; band: string; hue: string;
   open_projects: number;
@@ -74,19 +80,24 @@ export default function ControlCenterPage() {
   const [pipeline, setPipeline] = useState<{ rows: StageRow[]; unstaged: number; basis: string } | null>(null);
   const [blockers, setBlockers] = useState<{ rows: BlockerRow[]; blockers: number; projects: number; basis: string } | null>(null);
   const [workload, setWorkload] = useState<{ rows: PersonRow[]; basis: string } | null>(null);
+  const [feed, setFeed] = useState<{ rows: ActivityRow[]; basis: string } | null>(null);
+  /** History only by default — comments are talk, activities are the record (§32). */
+  const [withTalk, setWithTalk] = useState(false);
   const [loading, setLoading] = useState(true);
   const router = useRouter();
 
   const load = useCallback(async () => {
     const j = (p: string) =>
       fetch(`/api/projects/ops/${p}`, { cache: "no-store" }).then((r) => (r.ok ? r.json() : null));
-    const [s, a, pl, b, w] = await Promise.all([
+    const [s, a, pl, b, w, f] = await Promise.all([
       j("summary"), j("attention?limit=8"), j("pipeline"),
       j("blockers/breakdown"), j("workload?period=week"),
+      j(`activity?limit=12&discussion=${withTalk}`),
     ]);
     setSummary(s); setAttention(a); setPipeline(pl); setBlockers(b); setWorkload(w);
+    setFeed(f);
     setLoading(false);
-  }, []);
+  }, [withTalk]);
 
   useEffect(() => {
     const run = async () => { await load(); };
@@ -345,6 +356,63 @@ export default function ControlCenterPage() {
             ) : null}
           </section>
         </div>
+
+        {/* ── Recent activity ─────────────────────────────────────────────
+            Rendered through `describeActivity`, the SAME formatter the task
+            panel uses. The plan §14 is explicit: two renderers over one event
+            stream will drift, and this feed and the panel show the same rows. */}
+        <section className="mt-4 rounded-lg border border-border bg-card">
+          <header className="flex items-center gap-2 border-b border-border px-3 py-2">
+            <h2 className="text-xs font-semibold text-foreground">Recent activity</h2>
+            <Button
+              variant="ghost" size="sm"
+              aria-pressed={withTalk}
+              onClick={() => setWithTalk((v) => !v)}
+              className="ml-auto"
+            >
+              {withTalk ? "Hide comments" : "Show comments"}
+            </Button>
+          </header>
+          {loading ? (
+            <div className="p-3"><SkeletonRows rows={4} height="h-8" /></div>
+          ) : !feed?.rows.length ? (
+            <p className="p-6 text-center text-xs text-muted-foreground">
+              No activity recorded yet.
+            </p>
+          ) : (
+            <ul className="divide-y divide-border">
+              {feed.rows.map((a) => {
+                const look = describeActivity(a);
+                const tone = accentForHue(look.hue as AccentHue);
+                return (
+                  <li key={a.id}>
+                    <button
+                      type="button"
+                      onClick={() => router.push(`/projects?task=${a.task_id}`)}
+                      className="flex w-full items-start gap-2 px-3 py-1.5 text-left hover:bg-muted tech-transition"
+                    >
+                      <Icon name={look.icon} size={12} className={`mt-0.5 shrink-0 ${tone.text}`} />
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-xs text-foreground">{look.text}</span>
+                        <span className="block truncate text-[11px] text-muted-foreground">
+                          {a.parent ? `${a.parent} · ` : ""}{a.title}
+                          {a.created_by ? ` · ${shortName(a.created_by)}` : ""}
+                        </span>
+                      </span>
+                      {a.created_at ? (
+                        <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
+                          {new Date(a.created_at).toLocaleDateString(undefined, {
+                            day: "numeric", month: "short",
+                          })}
+                        </span>
+                      ) : null}
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </section>
 
         <div className="mt-4 flex flex-wrap gap-2">
           {/* ⚠️ The label is a plain string, NOT a `<span className="capitalize">`.

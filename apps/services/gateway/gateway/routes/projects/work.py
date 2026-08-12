@@ -465,6 +465,103 @@ async def current_work(user: UserContext = Depends(get_current_user)) -> dict:
         }
 
 
+@router.get("/work/today")
+async def work_today(user: UserContext = Depends(get_current_user)) -> dict:
+    """Everything My Work's lower half needs, in one round trip.
+
+    Deliberately one endpoint rather than four: the screen shows four tiles and
+    a session list that must agree with each other, and four independent
+    requests can land either side of a `pause` and disagree on screen. One
+    query, one instant, one truth.
+
+    **"Today" is the caller's day, not UTC's.** `date_trunc('day', now())` in
+    the database uses the server's timezone, which would roll over at midnight
+    UTC — 5:30am in India, i.e. mid-morning for the shop floor whose totals
+    would silently reset. The window is therefore computed from the caller's
+    own offset, sent by the browser.
+
+    ⚠️ The four tiles count **all of today's sessions for this actor across
+    every project** — that is the number an engineer means by "what did I do
+    today". The schedule list below it is the same set, and the plan calls out
+    that the mock's own figures did not reconcile.
+    """
+    who = actor(user)
+    at = now()
+    async with _tenant_session() as db:
+        rows = (await db.execute(
+            text(
+                "SELECT e.*, t.title, t.task_number, p.name AS project_name, "
+                "       s.name AS status_name, s.category AS status_category "
+                "FROM pm_time_entries e "
+                "JOIN pm_tasks t ON t.id = e.task_id "
+                "JOIN pm_projects p ON p.id = t.project_id "
+                "LEFT JOIN pm_task_statuses s ON s.id = t.status_id "
+                "WHERE e.actor = :who "
+                "  AND e.started_at >= date_trunc('day', now() AT TIME ZONE :tz) "
+                "      AT TIME ZONE :tz "
+                "ORDER BY e.started_at DESC"
+            ),
+            {"who": who, "tz": _caller_timezone(user)},
+        )).fetchall()
+
+        sessions = [
+            {
+                **_session_dict(r, at),
+                "title": r.title,
+                "task_number": r.task_number,
+                "project_name": r.project_name,
+                "status_name": r.status_name,
+                "status_category": r.status_category,
+            }
+            for r in rows
+        ]
+
+        # Completed and paused are counted from ACTIVITY, not from the sessions
+        # above: a task completed today whose work happened last week has no
+        # session today, and an engineer who finished three things would see
+        # "Completed 0". The tile means "what did I finish", not "what did I
+        # clock".
+        marks = (await db.execute(
+            text(
+                "SELECT meta ->> 'action' AS action, count(*) AS n "
+                "FROM pm_activities "
+                "WHERE created_by = :who AND type = 'work_session' "
+                "  AND created_at >= date_trunc('day', now() AT TIME ZONE :tz) "
+                "      AT TIME ZONE :tz "
+                "GROUP BY 1"
+            ),
+            {"who": who, "tz": _caller_timezone(user)},
+        )).fetchall()
+        by_action = {m.action: int(m.n) for m in marks if m.action}
+
+        total = sum(s["seconds"] for s in sessions)
+        return {
+            "sessions": sessions,
+            "totals": {
+                "active": sum(1 for s in sessions if s["running"]),
+                "completed": by_action.get("completed", 0),
+                "paused": by_action.get("paused", 0) + by_action.get("blocked", 0),
+                "seconds": total,
+                "elapsed": ops.format_duration(total),
+                # Surfaced rather than hidden: a session left open overnight
+                # makes every total above it wrong, and the plan is explicit
+                # that one bad week teaches people to distrust the numbers.
+                "runaway": sum(1 for s in sessions if s["runaway"]),
+            },
+        }
+
+
+def _caller_timezone(user: UserContext) -> str:
+    """The caller's IANA zone, defaulting to the deployment's.
+
+    Not read from a request header today — `UserContext` carries no zone and
+    inventing one from `Accept-Language` is worse than a stated default. Asia/
+    Kolkata is this deployment's working day; a per-user preference belongs
+    with the rest of the profile, not smuggled in here.
+    """
+    return str(getattr(user, "timezone", None) or "Asia/Kolkata")
+
+
 @router.get("/tasks/{task_id}/work/sessions")
 async def list_sessions(
     task_id: str, user: UserContext = Depends(get_current_user),

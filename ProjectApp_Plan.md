@@ -1065,6 +1065,7 @@ visible from every screen · 39. every percentage on screen states its basis ·
 | **D-OPEN-9** | Stage progress percent (78%) has no definition. | Pick one rule, implement as a tested pure function. |
 | **D-OPEN-10** | KPI deltas need history nobody stores. | Ship without deltas until the snapshot job lands (S17). |
 | **D-OPEN-11** | Mock spells `WS02 Raptor X`; source data says `W502`. | `W502`. Transcription error in the mock. |
+| **D-OPEN-12** | **Two surfaces are called "My Work".** `/projects`' tree has a "My work" node — `app/projects/components/MyWork.tsx`, the WS-27e GTD *triage* lens (disposition, context, defer). The plan's Screen 2 is `/projects/my-work`, a work *execution* home (start/pause/complete, waiting on me). Both are built and both are legitimate; the shared name is not. | Owner's call. Options: rename the triage lens to "Triage" or "My inbox"; or fold it into `/projects/my-work` as a second tab. Do NOT delete either — they answer different questions. |
 
 ## 37. Execution rules
 

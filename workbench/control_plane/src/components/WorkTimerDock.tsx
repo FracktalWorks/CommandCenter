@@ -123,10 +123,14 @@ export function WorkTimerDock() {
     Math.floor((now - new Date(state.session.started_at).getTime()) / 1000),
   );
 
-  // On the task's own page the header already carries the controls; a floating
-  // copy of them over the surface that owns them is noise.
-  const onItsOwnPage = pathname?.startsWith("/projects") && pathname.includes(state.task.id);
-  if (onItsOwnPage) return null;
+  // Defer to any surface that already shows this session. On the task's own
+  // page the header carries the controls, and My Work draws a 3xl timer three
+  // inches away — a floating copy is not redundancy, it is two clocks that can
+  // disagree by a tick and make the reader check which one is right.
+  const ownsTheTimer =
+    pathname === "/projects/my-work" ||
+    Boolean(pathname?.startsWith("/projects") && pathname.includes(state.task.id));
+  if (ownsTheTimer) return null;
 
   return (
     <div

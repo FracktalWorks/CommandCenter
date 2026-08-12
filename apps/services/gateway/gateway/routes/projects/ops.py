@@ -34,6 +34,7 @@ from gateway.routes.projects import operations as ops
 from gateway.routes.projects.core import (
     _tenant_session,
     from_jsonb,
+    load_visible_task,
     now,
     require_organization,
     resolve_visibility,
@@ -197,6 +198,101 @@ async def _deltas(db: Any, vis: Any, row: Any) -> dict[str, Any]:
             for p in prior if p.metric in today
         },
     }
+
+
+@router.get("/tasks/{task_id}/stage-history")
+async def stage_history(
+    task_id: str, user: UserContext = Depends(get_current_user),
+) -> dict:
+    """How long this project actually spent in each stage.
+
+    ## Derived from history, not from planned dates
+
+    Plan §26 lists `pm_stages.planned_start` / `planned_end` as the schema this
+    needs. **This does not add them**, and the reason is that they answer a
+    different question badly: a planned date is a column somebody has to
+    maintain, and the first week nobody does, the chart shows a plan that never
+    happened and quietly stops being read.
+
+    `stage_change` activities (WS-27bm) already record every real transition
+    with its timestamp. Reading those gives *what actually happened*, needs no
+    migration, and cannot go stale — the chart is the history.
+
+    Planned-vs-actual is a legitimate future want. It is additive on top of
+    this, and it should not be built until somebody is actually maintaining the
+    plan half.
+
+    ## Shape
+    Segments in order, each with the stage it was in and how long for. The last
+    one is open — it ends `now`, and says so with `current: true` rather than
+    pretending to an end date.
+    """
+    at = now()
+    async with _tenant_session() as db:
+        vis = await resolve_visibility(db, user)
+        task = await load_visible_task(db, vis, task_id)
+
+        rows = (await db.execute(
+            text(
+                "SELECT meta ->> 'from' AS from_name, meta ->> 'to' AS to_name, "
+                "       created_at "
+                "FROM pm_activities "
+                "WHERE task_id = CAST(:tid AS uuid) AND type = 'stage_change' "
+                "  AND deleted_at IS NULL "
+                "ORDER BY created_at"
+            ),
+            {"tid": task_id},
+        )).fetchall()
+
+        if not rows:
+            # No transition recorded. If it HAS a stage it was set at creation
+            # or before WS-27bm, so the honest answer is one open segment from
+            # the task's own start rather than an empty chart.
+            current = (await db.execute(
+                text("SELECT g.name FROM pm_stages g WHERE g.id = :sid"),
+                {"sid": str(task.stage_id)},
+            )).fetchone() if task.stage_id else None
+            if current is None:
+                return {"rows": [], "total_days": 0, "basis": "No stage history recorded."}
+            began = task.created_at
+            return {
+                "rows": [{
+                    "stage": current.name, "from": began, "to": None,
+                    "days": max(0, (at - began).days), "current": True,
+                }],
+                "total_days": max(0, (at - began).days),
+                "basis": (
+                    "No stage transitions recorded — showing the current stage "
+                    "since the project was created."
+                ),
+            }
+
+        segments = []
+        # The first segment starts when the project did, in whatever stage it
+        # was in before the first recorded move.
+        cursor = task.created_at or rows[0].created_at
+        for r in rows:
+            segments.append({
+                "stage": r.from_name or "No stage",
+                "from": cursor, "to": r.created_at,
+                "days": max(0, (r.created_at - cursor).days),
+                "current": False,
+            })
+            cursor = r.created_at
+        segments.append({
+            "stage": rows[-1].to_name or "No stage",
+            "from": cursor, "to": None,
+            "days": max(0, (at - cursor).days),
+            "current": True,
+        })
+        return {
+            "rows": segments,
+            "total_days": sum(s["days"] for s in segments),
+            "basis": (
+                "Actual time in each stage, from recorded transitions. The last "
+                "segment is still open."
+            ),
+        }
 
 
 @router.get("/ops/attention")

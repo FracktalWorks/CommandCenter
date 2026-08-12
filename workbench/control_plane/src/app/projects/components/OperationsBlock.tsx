@@ -29,6 +29,7 @@ import Progress from "@/components/ui/Progress";
 import { type AccentHue, accentForHue } from "@/lib/statusAccent";
 
 import { SIGNAL_LABELS, shortName } from "../home/lib/dashboard";
+import { StageGantt } from "./StageGantt";
 
 interface Stage { id: string; name: string; position: number }
 interface Blocker {
@@ -216,6 +217,10 @@ export function OperationsBlock({
 
       {/* Time — actual against estimate. Actual is the SUM of closed sessions,
           which is the server's number; nothing here adds anything up. */}
+      <Row label="Stage history">
+        <StageGantt taskId={taskId} />
+      </Row>
+
       <Row label="Time">
         <div>
           <p className="tabular-nums">

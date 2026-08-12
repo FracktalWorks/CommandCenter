@@ -49,7 +49,15 @@ from sqlalchemy import text
 #: The kinds a row may carry, mirrored from migration 152's CHECK and pinned by
 #: `test_projects_notifications`. `assigned` is the one that matters most —
 #: §11.2's complaint is literally "assignment is silent".
-NOTIFICATION_KINDS: tuple[str, ...] = ("assigned", "mention", "comment")
+NOTIFICATION_KINDS: tuple[str, ...] = (
+    "assigned", "mention", "comment",
+    # WS-27bk / migration 172. Mirrors the database CHECK, and
+    # `notify()` refuses an unknown kind BEFORE the insert — so a
+    # widening the database accepted and this tuple did not would make
+    # every work notification a 422 on a successful action. Fenced by
+    # `test_the_notification_kind_mirror_is_exact`.
+    "completed", "handoff", "blocked",
+)
 
 #: How much of a comment a notification quotes. Long enough to know whether it
 #: needs you, short enough that the bell is a list rather than a reading task.

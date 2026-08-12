@@ -33,6 +33,7 @@ from __future__ import annotations
 from typing import Any
 
 from acb_auth import UserContext, get_current_user
+from acb_common import get_logger
 from fastapi import Depends, HTTPException
 from gateway.routes.projects import operations as ops
 from gateway.routes.projects.core import (
@@ -49,6 +50,8 @@ from gateway.routes.projects.core import (
 )
 from pydantic import BaseModel
 from sqlalchemy import text
+
+_log = get_logger("gateway.projects.work")
 
 # ── Payloads ────────────────────────────────────────────────────────────────
 
@@ -77,6 +80,12 @@ class PauseIn(BaseModel):
 class CompleteIn(BaseModel):
     remark: str | None = None
     deliverable: str | None = None
+    #: Tell the other assignees and watchers. Defaults OFF — §0.5's "no
+    #: notification spam", and because the common case is finishing your own
+    #: work, which nobody needs to be told about. Plumbed through rather than
+    #: left to the UI: the plan's §20.2 notes that a checkbox with no field
+    #: behind it is a control that lies.
+    notify: bool = False
 
 
 class BlockerIn(BaseModel):
@@ -402,6 +411,15 @@ async def complete_work(
         )
 
         total = await _task_total_seconds(db, str(task.id))
+        delivery = {"notified": [], "skipped": []}
+        if payload.notify:
+            # Opt-in, and `notify()` excludes the actor and anyone who cannot
+            # see the task — so "tell the team" never becomes "tell a stranger
+            # about work they have no grant on".
+            delivery = await _notify_assignees(
+                db, task, who, kind="completed",
+                excerpt=remark[:160] or None,
+            )
         await record_activity(
             db, activity_type="work_session", created_by=who, task_id=str(task.id),
             body=f"Completed: {remark}",
@@ -417,7 +435,55 @@ async def complete_work(
             "seconds": seconds,
             "total_seconds": total,
             "total": ops.format_duration(total),
+            "notified": delivery["notified"],
+            "not_notified": delivery["skipped"],
         }
+
+
+async def _notify_assignees(
+    db: Any, task: Any, who: str, *, kind: str, excerpt: str | None,
+    extra: list[str] | None = None,
+) -> dict[str, list[str]]:
+    """Tell the people on this task, through the ONE notification seam.
+
+    Reuses `notifications.notify()` rather than inserting rows here: that
+    function already excludes the actor, drops `agent:` recipients (an agent has
+    no bell), and — the part worth not reimplementing — filters to people who
+    can actually SEE the task, so a notification never reveals work the
+    recipient has no grant on.
+
+    Best-effort by design. A notification that cannot be written must not fail
+    the completion it describes; the work is the fact, the bell is a courtesy.
+
+    ⚠️ **Returns `notify()`'s `{notified, skipped}` and the caller must surface
+    it.** `deliverable()` drops anyone who cannot see the task — including an
+    address that is not a member of this organization at all — so handing work
+    to somebody outside the tenant writes no notification and, without this
+    return value, answers 200 as though it had. Measured: a handoff to
+    `kiruba@fracktal.in`, who has no `app_user` row on this deployment, told
+    nobody and said nothing. That is `notify()`'s own docstring warning ("a
+    mention that silently went nowhere leaves the author believing a colleague
+    was pulled in") arriving through this function.
+    """
+    from gateway.routes.projects.notifications import notify as _notify
+
+    rows = (await db.execute(
+        text(
+            "SELECT assignee FROM pm_task_assignees WHERE task_id = CAST(:tid AS uuid)"
+        ),
+        {"tid": str(task.id)},
+    )).fetchall()
+    recipients = [r.assignee for r in rows] + list(extra or [])
+    if not recipients:
+        return {"notified": [], "skipped": []}
+    try:
+        return await _notify(
+            db, recipients=recipients, kind=kind, task_id=str(task.id),
+            actor_id=who, excerpt=excerpt,
+        )
+    except Exception as exc:  # Best-effort by design — see the docstring.
+        _log.warning("work_notify_failed", kind=kind, task=str(task.id), error=str(exc)[:200])
+        return {"notified": [], "skipped": list(recipients)}
 
 
 async def _task_total_seconds(db: Any, task_id: str) -> int:
@@ -854,6 +920,12 @@ async def hand_off(
         if session is not None and str(session.task_id) == str(task.id):
             await _close_session(db, session, reason="handoff", remark=reason)
 
+        # NEVER opt-in. Being handed work you did not ask for is exactly the
+        # thing you must be told about (§17: ownership never changes silently).
+        delivery = await _notify_assignees(
+            db, task, who, kind="handoff",
+            excerpt=(payload.message or reason)[:160], extra=[to],
+        )
         await record_activity(
             db, activity_type="handoff", created_by=who, task_id=str(task.id),
             body=f"{who} → {to}: {reason}",
@@ -862,4 +934,10 @@ async def hand_off(
                 "reason": reason, "message": payload.message,
             },
         )
-        return {"task_id": str(task.id), "from": who, "to": to, "reason": reason}
+        # The caller needs to know when the recipient was NOT told — they are
+        # outside this organization, or cannot see the project. The handoff
+        # itself still stands; what changes is what the UI says about it.
+        return {
+            "task_id": str(task.id), "from": who, "to": to, "reason": reason,
+            "notified": delivery["notified"], "not_notified": delivery["skipped"],
+        }

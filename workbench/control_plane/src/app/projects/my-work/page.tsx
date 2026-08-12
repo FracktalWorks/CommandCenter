@@ -34,6 +34,12 @@ import { useToast } from "@/components/ui/Toast";
 import { accentForHue, type AccentHue } from "@/lib/statusAccent";
 
 import {
+  BlockerDialog,
+  CompleteDialog,
+  HandoffDialog,
+  PauseDialog,
+} from "../components/WorkDialogs";
+import {
   type TaskLike,
   type TodaySession,
   rankUpNext,
@@ -73,6 +79,8 @@ export default function MyWorkPage() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
+  /** Which dialog is up. One value, so two cannot open at once. */
+  const [dialog, setDialog] = useState<"pause" | "complete" | "handoff" | "blocker" | null>(null);
   const router = useRouter();
   const toast = useToast();
 
@@ -199,27 +207,22 @@ export default function MyWorkPage() {
                     minute: "2-digit",
                   })}
                 </p>
-                <div className="mt-3 flex gap-2">
-                  {/* Pause and Complete both need a remark, which the server
-                      enforces — so they open dialogs rather than posting here.
-                      Those are WS-27bk; until then this routes to the task. */}
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    icon="Pause"
-                    onClick={() => router.push(`/projects?task=${current.task!.id}`)}
-                  >
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {/* Both need a remark the SERVER enforces, so they open
+                      dialogs rather than posting from here. */}
+                  <Button variant="secondary" size="sm" icon="Pause" onClick={() => setDialog("pause")}>
                     Pause
                   </Button>
                   {/* NOT destructive — the mock draws this red and red is the
                       danger colour. A success path must not wear it (D-OPEN-4). */}
-                  <Button
-                    variant="primary"
-                    size="sm"
-                    icon="Check"
-                    onClick={() => router.push(`/projects?task=${current.task!.id}`)}
-                  >
+                  <Button variant="primary" size="sm" icon="Check" onClick={() => setDialog("complete")}>
                     Complete
+                  </Button>
+                  <Button variant="ghost" size="sm" icon="ArrowRightLeft" onClick={() => setDialog("handoff")}>
+                    Hand off
+                  </Button>
+                  <Button variant="ghost" size="sm" icon="OctagonAlert" onClick={() => setDialog("blocker")}>
+                    Blocked
                   </Button>
                 </div>
               </div>
@@ -374,6 +377,42 @@ export default function MyWorkPage() {
           )}
         </div>
       </div>
+
+      {/* Mounted once, driven by one state value. `Modal` is controlled and
+          holds no open state of its own, so the page stays the single source
+          of truth for whether an overlay is up. */}
+      {current.task ? (
+        <>
+          <PauseDialog
+            open={dialog === "pause"}
+            onClose={() => setDialog(null)}
+            taskId={current.task.id}
+            taskTitle={current.task.title}
+            onDone={load}
+          />
+          <CompleteDialog
+            open={dialog === "complete"}
+            onClose={() => setDialog(null)}
+            taskId={current.task.id}
+            taskTitle={current.task.title}
+            onDone={load}
+          />
+          <HandoffDialog
+            open={dialog === "handoff"}
+            onClose={() => setDialog(null)}
+            taskId={current.task.id}
+            taskTitle={current.task.title}
+            onDone={load}
+          />
+          <BlockerDialog
+            open={dialog === "blocker"}
+            onClose={() => setDialog(null)}
+            taskId={current.task.id}
+            taskTitle={current.task.title}
+            onDone={load}
+          />
+        </>
+      ) : null}
     </div>
   );
 }

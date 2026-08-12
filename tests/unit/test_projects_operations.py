@@ -44,30 +44,6 @@ def test_closed_categories_match_core() -> None:
     assert ops._CLOSED == CLOSING_CATEGORIES
 
 
-def _category_check_values() -> set[str]:
-    """The category vocabulary as the DATABASE will enforce it.
-
-    Same method as the activity-vocabulary fence, for the same reason: taking
-    the LAST migration that constrains the column, because later ones replace
-    the CHECK wholesale and the newest definition is what survives a replay.
-    """
-    migrations = Path(__file__).resolve().parents[2] / "infra" / "postgres"
-    latest: str | None = None
-    for path in sorted(migrations.glob("*.sql"), key=lambda p: p.name):
-        if path.name == "schema.generated.sql":
-            continue
-        text = "\n".join(
-            re.sub(r"--.*$", "", line)
-            for line in path.read_text(encoding="utf-8").splitlines()
-        )
-        for match in re.finditer(
-            r"CHECK\s*\(\s*category\s+IN\s*\((.*?)\)\s*\)", text, re.I | re.S,
-        ):
-            latest = match.group(1)
-    assert latest is not None, "no migration constrains pm_task_statuses.category"
-    return set(re.findall(r"'([a-z_]+)'", latest))
-
-
 def test_the_category_vocabulary_mirror_is_exact() -> None:
     """``core.STATUS_CATEGORIES`` must equal the database's CHECK.
 
@@ -80,7 +56,60 @@ def test_the_category_vocabulary_mirror_is_exact() -> None:
     """
     from gateway.routes.projects.core import STATUS_CATEGORIES
 
-    assert set(STATUS_CATEGORIES) == _category_check_values()
+    assert set(STATUS_CATEGORIES) == _check_values(
+        "pm_task_statuses_category_check", "category",
+    )
+
+
+def _check_values(constraint: str, column: str) -> set[str]:
+    """A CHECK's allowed values, as the DATABASE will enforce them.
+
+    ⚠️ Keyed on the CONSTRAINT NAME, not the column. Matching `CHECK (kind IN
+    (...))` by column alone finds five different tables' constraints — custom
+    apps, copilot events, workflows, pm_notifications — and taking "the last
+    file" then asserts against whichever table happens to sort last. Measured:
+    the first version of this helper compared the notification kinds against a
+    workflow's vocabulary and failed with a diff nobody could read.
+
+    The same trap applies to `category`, which five migrations constrain. That
+    fence passed only because 171 currently sorts last; a `category` CHECK
+    added in 173 on any other table would have silently repointed it. Both are
+    keyed by name now.
+    """
+    migrations = Path(__file__).resolve().parents[2] / "infra" / "postgres"
+    latest: str | None = None
+    pattern = re.compile(
+        rf"{re.escape(constraint)}[\s\S]{{0,120}}?"
+        rf"CHECK\s*\(\s*{column}\s+IN\s*\((.*?)\)\s*\)",
+        re.I | re.S,
+    )
+    for path in sorted(migrations.glob("*.sql"), key=lambda p: p.name):
+        if path.name == "schema.generated.sql":
+            continue
+        text = "\n".join(
+            re.sub(r"--.*$", "", line)
+            for line in path.read_text(encoding="utf-8").splitlines()
+        )
+        for match in pattern.finditer(text):
+            latest = match.group(1)
+    assert latest is not None, f"no migration defines {constraint}"
+    return set(re.findall(r"'([a-z_]+)'", latest))
+
+
+def test_the_notification_kind_mirror_is_exact() -> None:
+    """``notifications.NOTIFICATION_KINDS`` must equal the database's CHECK.
+
+    The THIRD mirror in this workstream, after `pm_activities.type` (broke on
+    migration 150) and `pm_task_statuses.category` (broke on 171). `notify()`
+    refuses an unknown kind before the insert, so a widening the database
+    accepted and this tuple did not would turn every work notification into a
+    422 on an otherwise successful action.
+    """
+    from gateway.routes.projects.notifications import NOTIFICATION_KINDS
+
+    assert set(NOTIFICATION_KINDS) == _check_values(
+        "pm_notifications_kind_check", "kind",
+    )
 
 
 def test_every_lifecycle_state_is_a_real_category() -> None:

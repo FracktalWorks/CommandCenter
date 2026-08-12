@@ -199,7 +199,7 @@ owning specs are the archive; this file owns ordering, gates and states only.
 
 | — | **Future modules roadmap** (KB · Marketing · Support · dashboards-colour · Builder/Workflows slicing rule) *(named 2026-08-09, D21)* | 🔴 not dispatchable | `specs/future_modules_roadmap.md` | No WS rows until each earns a §1-contract spec; Dashboards colour lands in WS-15's acceptance; the Builder/Workflows visibility-tier-at-creation rule binds reviews now (D12). |
 | WS-30 | **Subscription Console — customer-facing billing surface** *(minted 2026-08-09)* | 🔴 MT-2 first | **`specs/subscription_console.md`** | Manage-only at launch: **Centers & add-ons panel · users × Centers seat grid (D23)** · credit monitor · seat writes under D19.3's hard cap · role presets (D24.5) · change-request flow (fulfilment 🔴 OWNER-GATE during silo phase). Sequencing: MT-2 tables → SC-1 → SC-2/SC-3 → SC-4 with MT-4. Business inputs answered (D19 + D23 + **D24** — framing closed); blockers: MT-2's substrate and the MT-2/MT-3 ticket contracts. (2026-08-10) |
-| WS-31 | **Platform Control Plane — the subscription, seat and AI-metering engine** *(minted 2026-08-12, D32)* | 🟢 CP-1 dispatchable | **`specs/platform_control_plane.md`** | The central service `§0.9.2` always named, extracted from each deployment: org registry + placement · plan catalog/subscriptions/**seats purchased vs assigned vs available** · per-org `llm_api_key` · the **AI Router** (tier→model binding, rate card, `usage_event`, `credit_ledger`, balance gate) · Operator Console. **D32 reverses `saas_multitenancy.md` §3.1** (banner in place) on an argument §3.1 never weighed — under §5.1 silos, metering inside CC puts the rate card and the balance on the *customer's* box. **D15 untouched**: tenancy is still a ROW, deployment still a placement. **Absorbs MT-3 whole** and pulls MT-2/MT-4 forward of their §11.1 position — WS-30 becomes a *client* of this service, not a reader of CC-local tables; WS-16 Phase E is the same mechanism (per-member caps as a policy against the org pool). Model access reworked: **customers never see a model**, tiers are the only vocabulary, the picker leaves the product, a bare model id 400s instead of being coerced. Sequencing CP-1→CP-8; **CP-4 (Router pass-through, unpriced, flag OFF) before CP-6 sets a rate card** — price on measured burn, not estimates. 🔴 Gates: the `GATEWAY_INTERNAL_TOKEN`/`LITELLM_MASTER_KEY` split is a hard prerequisite for per-org keys and is the **owner's** redeploy; deploying the service, live Razorpay keys, real entitlement/credit edits and issuing a production `cc_live_` key are all OWNER-GATE. Open (commercial, non-blocking): AI-only SKU, trial credits, auto-top-up threshold. (2026-08-12) |
+| WS-31 | **Platform Control Plane — the subscription, seat and AI-metering engine** *(minted 2026-08-12, D32)* | 🔴 **CP-0 FIRST** (D33) | **`specs/platform_control_plane.md`** | The central service `§0.9.2` always named, extracted from each deployment: org registry + placement · plan catalog/subscriptions/**seats purchased vs assigned vs available** · per-org `llm_api_key` · the **AI Router** (tier→model binding, rate card, `usage_event`, `credit_ledger`, balance gate) · Operator Console. **D32 reverses `saas_multitenancy.md` §3.1** (banner in place) on an argument §3.1 never weighed — under §5.1 silos, metering inside CC puts the rate card and the balance on the *customer's* box. **D15 untouched**: tenancy is still a ROW, deployment still a placement. **Absorbs MT-3 whole** and pulls MT-2/MT-4 forward of their §11.1 position — WS-30 becomes a *client* of this service, not a reader of CC-local tables; WS-16 Phase E is the same mechanism (per-member caps as a policy against the org pool). Model access reworked: **customers never see a model**, tiers are the only vocabulary, the picker leaves the product, a bare model id 400s instead of being coerced. Sequencing CP-1→CP-8; **CP-4 (Router pass-through, unpriced, flag OFF) before CP-6 sets a rate card** — price on measured burn, not estimates. 🔴 Gates: the `GATEWAY_INTERNAL_TOKEN`/`LITELLM_MASTER_KEY` split is a hard prerequisite for per-org keys and is the **owner's** redeploy; deploying the service, live Razorpay keys, real entitlement/credit edits and issuing a production `cc_live_` key are all OWNER-GATE. Open (commercial, non-blocking): AI-only SKU, trial credits, auto-top-up threshold (⚠️ **cap it below ₹15,000** — D33.4b). · ⚠️ **RE-ORDERED 2026-08-12 by D33** (`specs/saas_operations_doctrine.md`): **CP-0 runs first** — sign-in is pinned to one Microsoft Entra directory and auth **fails OPEN** when unconfigured (`workbench/control_plane/src/auth.ts`), so **today the product can onboard exactly one customer: us**, and a mis-provisioned box is open. Neither was covered by any existing ticket. **CP-2a** (signup + idempotent provisioning + GST fields at signup) added — no signup route exists in the app tree at all. Sequence is now CP-0 → CP-1 → CP-2 → CP-2a → CP-3 → CP-4 → CP-5 → CP-6 → CP-7 → CP-8. (2026-08-12) |
 
 ### Apps
 
@@ -231,6 +231,57 @@ Resolutions for the cross-doc conflicts the audit surfaced. D1–D8, **D13**, **
 are owner calls, taken and dated. ⚠️ Two entries below are superseded and kept as
 records: **D11** (re-taken by D15) and **D10 part 1's planning premise** (re-scoped
 by D15/D16) — read their banners before citing either.
+
+- **D33 — The personal-brain assumptions that do not survive, and the two nobody had
+  found.** *(owner-directed 2026-08-12 — "we might have made a lot of decisions
+  initially that are not scalable anymore… create documentation to overwrite some of
+  the initial architecture decisions"; audit `agent-taken` and measured against the
+  working tree the same day. Owning spec: **`specs/saas_operations_doctrine.md`** —
+  §2 the eight capability domains, §3 the Indian commercial/legal layer, §4 the
+  twelve-finding audit, §5 the gap table.)*
+  1. **Two findings are NEW, in one file, and both block customer #1 —
+     not customer #2.** `workbench/control_plane/src/auth.ts`: **(a)** sign-in is
+     pinned to **one Microsoft Entra directory** (*"the tenant-level app registration
+     ensures only users in the Fracktal Microsoft 365 directory can sign in"*) — a
+     paying customer's staff are not in our directory, so **today the product can
+     onboard exactly one customer: us**; **(b)** auth **fails OPEN** when unconfigured
+     (*"if no AUTH_MICROSOFT_ENTRA_ID_ID is set, middleware allows all traffic"*) —
+     a mis-provisioned production box is wide open and reads as working. **No existing
+     ticket covered either.** Now **CP-0**, ordered ahead of the whole WS-31 sequence.
+  2. **There is no signup.** No `signup`/`register`/`onboard` route exists in the app
+     tree; the only way in is `ensure_owner_bootstrap()` promoting an
+     `EXECUTIVE_EMAILS` address (`acb_auth/access.py:581`). Invite-only is a product
+     decision; *no signup at all* is a missing product. Now **CP-2a**, with
+     provisioning required to be **idempotent and resumable**.
+  3. **Not every old convenience is a defect, and one must NOT be "fixed".**
+     `ProviderKeyStore._resolve_org` resolving "the sole organization" and **raising
+     once a second exists** (`acb_llm/key_store.py:124`) is the correct pattern — it
+     **fails closed and names its successor**. Recorded so a future agent does not
+     helpfully replace it with a silent default. `colleague_onboarding.md` likewise
+     stays as-is: it is the **internal staff** path and must not be merged with the
+     customer path, because a customer is not a colleague — no shared directory, no
+     shared threat model.
+  4. **Three build-order changes with legal, not architectural, reasons**
+     (`saas_operations_doctrine.md` §3, sources dated in §9 — re-check before relying):
+     **(a)** capture **GSTIN + registered state at signup**, in the org-creating slice
+     — SaaS is an 18% service supply and B2B invoices need both; **(b)** the **RBI
+     E-mandate Framework 2026** clears recurring debits without OTP only to
+     **₹15,000/transaction**, which makes ~25 seats at ₹600 a real product boundary,
+     makes annual billing a friction escape rather than just a discount, and means
+     **auto-top-up above the cap will fail exactly when a customer is out of credits
+     mid-workflow** — so cap the default top-up below it and treat a failed mandate as
+     the §3.3 soft-block path; **(c)** **model the DPDP consent record now**, while the
+     tables are empty — *model training / product improvement / benchmarking are named
+     secondary purposes needing their own consent*, which for an AI product is the
+     sharp edge (Consent Manager obligations Nov 2026, full compliance May 2027).
+  5. **Two capability domains have NO owner** and need one before customer #1:
+     **compliance** (§3.3, and it carries a date) and **per-tenant restore** (D31 /
+     `saas_multitenancy.md` §6.6 — a whole-cluster restore rolls every other customer
+     back). Naming them here is not the same as ticketing them; both still need a
+     seven-point contract before dispatch.
+  6. **The audit is the record; do not re-run it from the same starting point.**
+     Findings 6, 7, 9, 10 and 12 were already tracked (MT-1i, §6.3, D31, D32.7, D10) and
+     are listed in §4 only so one table answers "what did we assume as a personal app".
 
 - **D32 — The platform engine: eight calls taken 2026-08-12** *(owner-directed in
   session — "Command Center is evolving to a SaaS platform… I want to rework the way

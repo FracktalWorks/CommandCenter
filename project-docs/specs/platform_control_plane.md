@@ -373,6 +373,22 @@ secure an identity provider in the same quarter as everything else here.
 Each is an acceptance unit. **All are 🟢 AGENT-SAFE to build**; the OWNER-GATE items
 are in §8 and are all *operational*, never *constructional*.
 
+**CP-0 · Auth that a customer can actually use.** 🔴 **Ordered FIRST by D33 — it did
+not exist when this spec was written and it blocks customer #1, not customer #2.**
+Today sign-in is pinned to **one Microsoft Entra directory** (`workbench/control_plane/
+src/auth.ts`: *"the tenant-level app registration ensures only users in the Fracktal
+Microsoft 365 directory can sign in"*), and auth **fails OPEN** when unconfigured
+(*"if no AUTH_MICROSOFT_ENTRA_ID_ID is set, middleware allows all traffic"*). A paying
+customer's staff are not in your directory. Scope: accept identities from directories
+we do not control; fail **closed** in every non-dev environment; correct the
+`acb_auth/deps.py` docstring, which still describes a Google/`fracktal.in` mechanism the
+code does not implement. **Done when:** a sign-in from a directory other than Fracktal's
+succeeds against a fixture; a deployment with auth env unset **refuses traffic** in a
+non-dev environment and a test pins it (verified-red-first — the current behaviour must
+fail the new test before the fix); the docstring names the mechanism actually in force;
+`npx tsc --noEmit && npx vitest run` green. **Registering any real IdP application is
+🔴 OWNER-GATE** — build against fixtures and hand it over.
+
 **CP-1 · The service skeleton and registry.** New deployable
 `apps/services/platform/` following the existing service pattern (FastAPI, `uv`
 workspace member, `infra/docker-compose.yml` entry beside `gateway`). Its own
@@ -436,7 +452,19 @@ last-login/actives) plus the nightly drift job. **Done when:** the console rende
 from the Control Plane alone with no per-deployment round trip on the request path;
 the reconciler alerts on a seeded drift between seat counts and subscription items.
 
-**Sequencing.** CP-1 → CP-2 → CP-3 → CP-4 → CP-5 → CP-6 → CP-7 → CP-8. CP-4 is
+**CP-2a · Signup and provisioning.** *(Added by D33 — §4 finding 4: no signup route
+exists anywhere in the app tree; the only way in is `ensure_owner_bootstrap()` promoting
+an `EXECUTIVE_EMAILS` address.)* Self-serve signup creating the org, its first owner, its
+placement and its trial, plus **GST fields captured at signup** (GSTIN + registered
+state — `saas_operations_doctrine.md` §3.1: retrofitting a GSTIN onto an already-invoiced
+org is a customer conversation, not a migration). **Done when:** provisioning is
+**idempotent and resumable** — a run interrupted after any step and re-run produces one
+org, not two, and a test kills it at each step; the lifecycle states of §4.1d are
+enforced with `suspended` keeping **login working** while features lock; an org reaching
+`cancelled` retains data through a named export window.
+
+**Sequencing.** **CP-0** → CP-1 → CP-2 → **CP-2a** → CP-3 → CP-4 → CP-5 → CP-6 → CP-7 →
+CP-8. CP-4 is
 where revenue-relevant data starts existing (real per-org burn, unpriced), and it is
 worth reaching before CP-6 sets a rate card, because a rate card set on estimates is
 a rate card you change on customers.

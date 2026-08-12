@@ -75,6 +75,8 @@ import {
 } from "../lib/api";
 import { taskDeepLink, taskRef } from "../lib/card";
 import { isAutomated } from "../lib/lifecycle";
+import { describeActivity } from "../lib/activity";
+import { type AccentHue, accentForHue } from "@/lib/statusAccent";
 import { CustomFieldValues } from "./CustomFieldValues";
 import { TagPicker } from "./TagPicker";
 import { RepeatEditor } from "./RepeatEditor";
@@ -973,9 +975,20 @@ export function TaskPanel({
           <section>
             <SectionLabel icon="History">Activity</SectionLabel>
             <ol className="space-y-3">
-              {timeline.map((activity) => (
+              {timeline.map((activity) => {
+                // ⚠️ LOOK from the shared formatter, TEXT from `describe()`.
+                // Deliberate: `activity.ts` owns the icon and hue vocabulary so
+                // the panel and any future feed cannot drift (plan §17.3),
+                // while `describe()` stays the text because it resolves
+                // `custom.<key>` into a field's real label from `defs` — data
+                // the shared module has no access to and should not fetch.
+                // Splitting them along what each one KNOWS is not duplication.
+                const look = describeActivity(activity);
+                const tone = accentForHue(look.hue as AccentHue);
+                return (
                 <li key={activity.id} className="text-sm">
                   <p className="flex items-center gap-1 text-xs text-muted-foreground">
+                    <Icon name={look.icon} size={12} className={`shrink-0 ${tone.text}`} />
                     {/* WS-27z — an automated entry says so. The flag is the row's
                         meta.automation, written only by the workflow engine; a
                         sweep archiving a task must not read as a person did it. */}
@@ -995,7 +1008,8 @@ export function TaskPanel({
                     {describe(activity, fields)}
                   </p>
                 </li>
-              ))}
+                );
+              })}
               {timeline.length === 0 ? (
                 <li className="text-sm text-muted-foreground">
                   Nothing on the timeline yet.

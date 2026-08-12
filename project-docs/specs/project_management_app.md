@@ -2,8 +2,23 @@
 
 > **Product:** CommandCenter · **Feature:** Projects (the People Center's primary work-management
 > module, sliced into every other Center) · **Created:** 2026-08-05 · **Updated: 2026-08-11**
-> (**WS-27ak's narrowed slice built — §11.31**; **WS-27am's — §11.29**; **WS-27bd's — §11.30**;
+> (**WS-27bc's one dispatchable slice built — §11.34**; **WS-27ak's narrowed slice built —
+> §11.31**; **WS-27am's — §11.29**; **WS-27bd's — §11.30**;
 > each narrowed, and what each STRUCK is the more useful half of the record) ·
+> 🟢 **WS-27bc's `pagedPicker` BUILT 2026-08-11 on `ws-27bc-paged-picker`, NOT merged and NOT
+> deployed** (§11.34) — `app/projects/lib/pagedPicker.ts`: a 48px scroll-threshold predicate
+> whose boundary is inclusive, page accumulation that dedupes by id (the list is ordered by
+> `updated_at`, so a row legitimately crosses a page boundary), a terminal state **derived** from
+> a short page rather than a `hasMore` flag that can disagree with the rows, and a min-length
+> gate that **imports** `MIN_QUERY` and `isCurrent` from `./search` — fenced by a source scan,
+> because no behavioural test can tell a shared constant from a second copy. Pure module, 31
+> cases, 9/9 mutants red; **no component, no endpoint change, no call site wired, no debounce.**
+> 🔴 **WS-27bc as a whole remains NO-GO** (§9.5.2): its central "leading-wildcard scan"
+> justification is **struck as false** (the predicate is `ILIKE '%…%'` either way and `pg_trgm`
+> appears zero times in `infra/`; the minimum bounds the RESULT SET), its 300ms contradicts
+> seven ad-hoc debounce copies with no shared helper, and `/projects/search` (capped-not-paged,
+> by decision) versus `/projects/tasks` (paged, unranked) is a decision nobody has taken. Its
+> surface half is re-sequenced **behind** WS-27ak, not beside it. ·
 > 🟢 **WS-27ak item (1) `Modal` BUILT 2026-08-11, REPAIRED the same day on
 > `ws-27ak-modal-repair` (repair round 1 of 2 — two behavioural fixes, three corrected
 > records, one new structural fence), NOT merged and NOT deployed** (§11.31) —
@@ -327,7 +342,7 @@ extra middle phase two-way sync demands.
 | The `/tasks` app over it | `gateway/routes/tasks/` — 21 modules, ~11.8k lines, ~68 endpoints behind `require_feature_router("tasks")`; **27 `user_id = :` predicates in `items.py`** (owner-scoped by design) |
 | People substrate | `gtd_people` (+ resumes, `capability_embedding vector(1536)`); WS-24 N4: directory open, HR fields restricted |
 | Centers scaffold | `lib/centers.ts` (People Center's five sub-apps all `status:"planned"`), `140_center_features.sql` + `141_seed_center_groups.sql`, `center.people` in `FEATURES` — **Centers gate navigation, not data** (migration 140's own header) |
-| Broker chokepoint for ClickUp writes | `providers.py::_broker_gate` → `broker_handlers._WRITERS` (4 handlers for 6 gated actions — **BO-1a**); `_push_pending_item` ignores the pending marker (**BO-1b**) |
+| Broker chokepoint for ClickUp writes | `providers.py::_broker_gate` → `broker_handlers._WRITERS`. **BO-1a + BO-1b landed 2026-08-11**: all 6 gated actions have handlers (AST-derived fence), and `_push_pending_item` honours the pending marker (`sync_state='awaiting_approval'`). ⚠️ Still open — **BO-1d**: four *other* callers index the marker as a result (`accounts.py:335`/`:403`, `planning.py:377` → HTTP 500 under enforcement; `items.py:790` swallows a queued update). **That is what blocks the `ACTION_BROKER_ENFORCE` flip**, not BO-1a/BO-1b |
 
 Consequences that shape this plan:
 - **There is no org-level native store to extend in place.** `gtd_*` is per-user by
@@ -966,7 +981,9 @@ live ClickUp workspace with no human in between. Three properties bound that cos
 (`created_by='agent:<name>'` on the activity, plus the broker audit row), reversible from
 the timeline (§3.8's `field_change` carries old and new), and the whole class becomes
 queue-on-approval the moment `ACTION_BROKER_ENFORCE` is flipped — itself an owner gate, and
-one whose two flip-blockers (BO-1a, BO-1b) WS-27c already depends on. **Consequence that
+one whose flip-blockers WS-27c already depends on (BO-1a and BO-1b landed 2026-08-11;
+**BO-1d, the four callers that index the pending marker as a result, is open and is what
+now blocks the flip**). **Consequence that
 motivated the call:** WS-27f's agent dispatch is demoable against real portfolio data
 during coexistence rather than only against tasks created after cutover.
 
@@ -1099,6 +1116,35 @@ when revisited is `plane_pm_research_2026-08.md` §6 Q1 — the anchor-capabilit
 physically separate route module with read-only models, no member-roster endpoint, per-board
 kill switch, and the RLS-bypass point that must be resolved before `SET LOCAL app.tenant_id`.
 Until then the gateway's posture is unchanged: no anonymous tenant-data read routes exist.
+
+**D-PM-24 — The `inert` gap in `Modal` is ACCEPTED. We do not re-implement `markOthers`.**
+`DECISION (2026-08-11, owner-delegated).` WS-27ak slice 1's done-when said *"the background is
+`inert`, not merely covered (so find-in-page and a screen reader cannot walk into it)"*.
+**`@base-ui/react@1.7.0` cannot deliver the first half** — `FloatingFocusManager:339` passes
+`ariaHidden`, `markOthers` defaults `inert: false`, nothing in the package ever passes
+`inert: true`, and the only real `inert` sits on the portal's own `InternalBackdrop` while
+**closed**. Measured in Chromium: `[inert] = 0`; the background carries `aria-hidden="true"`
+plus a `data-base-ui-inert` marker.
+
+**What we actually have, stated precisely so nobody has to re-derive it:** screen readers
+**cannot** reach the background · Tab **cannot** leave the dialog (guard nodes) · **Ctrl+F
+still finds the page behind the scrim.**
+
+**Accepted, for three reasons.** (1) The two properties that carry real accessibility weight
+are both covered; find-in-page reaching background text is an annoyance, not a failure.
+(2) **Every dialog we ship is dismissible** — nothing in this product depends on hard
+isolation, which is what `inert` is really for. (3) Closing it means the wrapper walking
+`document.body`'s children itself, i.e. **a second implementation of `markOthers`** — the
+parallel seam CLAUDE.md §5 forbids, and a permanent maintenance liability against an upstream
+that will very likely add the flag.
+
+⚠️ **Revisit on either trigger**, and they are cheap to notice: Base UI exposes an `inert`
+option (watch `markOthers`' signature, which already accepts one), **or** we design a
+non-dismissible confirm gate — a destructive-action modal that must not be escaped is the
+first surface where "merely covered" stops being good enough.
+**R7: advisory.** No test can assert the *absence* of a substrate feature; what IS fenced is
+that the docs no longer claim otherwise (`Modal.tsx`'s header, `DESIGN_SYSTEM.md` §4a, and
+§11.31 were all corrected in repair round 1 after two of them shipped the false claim).
 
 **D-PM-21 — UI behaviour is verified in a REAL BROWSER (Playwright), narrowly. No jsdom.**
 `DECISION (2026-08-11, owner-delegated: "make the decisions as per what you recommend").`
@@ -1278,8 +1324,12 @@ grants applied, and a parity summary; (7) permission floor is `admin:access:mana
 WS-26b finding: `integrations:use:*` gates nothing); (8) a dry-run mode reports counts
 writing nothing.
 
-**WS-27c — two-way coexistence sync.** 🟡 **blocked on BO-1a + BO-1b (WS-1)**; build
-AGENT-SAFE once they land · 🔴 enabling push against the real workspace is OWNER-GATE.
+**WS-27c — two-way coexistence sync.** 🟢 **UNBLOCKED for build 2026-08-11 — BO-1a +
+BO-1b landed (WS-1)**; AGENT-SAFE · 🔴 enabling push against the real workspace is
+OWNER-GATE, and that gate is **also** behind **BO-1d** (the four callers that still index
+the broker's pending marker as a result — `accounts.py:335`/`:403`, `planning.py:377`,
+`items.py:790`). Read BO-1d before writing criterion (2): it is the same class of bug at a
+different layer, and this workstream must not reproduce it.
 Done when: (1) delta pull + webhook fan-in share one idempotent upsert path; (2) every
 outbound mutation flows through `_broker_gate` and a pending disposition is honoured (the
 BO-1b class is fenced by a test that fails on an empty provider id marked synced); (3) the
@@ -2342,6 +2392,55 @@ for the copy-link affordance. (4) **`Combobox`** — our `Select` is a styled na
 > a definition of done. Item (3) Toast has a real criterion and survives. Do not dispatch
 > (2) or (5) until each has acceptance.
 
+> ### ✅ Acceptance criteria for items (2) Tooltip and (5) Skeleton — written 2026-08-11
+> Both were **NO-GO** because their entire done-when was a count of the problem
+> (*"we use the native `title` attribute in ~157 files"*, *"~20 files improvise
+> `animate-pulse`"*) rather than a definition of done. A count is a reason to act, not a
+> description of what "acted" looks like. Written here by the workstream owner so they stop
+> being undispatchable; scope only — the sequencing in §9.7.2 is unchanged.
+>
+> **Item (2) — `Tooltip`. Done when:**
+> 1. `src/components/ui/Tooltip.tsx` wraps `@base-ui/react`'s `tooltip` and is covered by
+>    conformance **rule 8** (no new rule; the count is pinned by a fence across three files).
+> 2. **Hover-intent, not raw hover** — a delay before showing (~400ms) and a *shorter* delay
+>    on the way out, so crossing a toolbar does not strobe every icon. This is the whole
+>    reason the native `title` feels broken, and it is the criterion to hold.
+> 3. **Reachable without a pointer**: it shows on keyboard focus, not only on hover, and
+>    dismisses on Escape. The native attribute never appears on focus at all.
+> 4. **Touch has an answer, even if the answer is "nothing"** — `(hover: hover)` /
+>    `(pointer: fine)`, never UA-sniffing (§9.4.4 refuses that by name). A tooltip that is
+>    unreachable on a phone must not be the only carrier of information the user needs.
+> 5. **It is not the accessible name.** `aria-describedby`, and the trigger keeps its own
+>    label — a tooltip used *as* the label disappears for anyone who cannot hover.
+> 6. ⚠️ **`app/email/components/automation/ui.tsx:132` already exports `HoverPopover`**, a
+>    partial answer with its own consumers. Same treatment as `Modal`/`ContextMenu`: leave it,
+>    record it for retirement, do **not** author a third.
+> 7. **Convert a named starting set, not "157 files"** — a slice picks one surface
+>    (`/projects`' toolbar is the obvious first), converts it completely, and the rest follows
+>    per surface. A sweep of 157 files is a long branch, which is the root cause behind three
+>    migration collisions and a duplicated tenancy design.
+> **Fences:** hover-intent timing is pure logic in a `.ts` module (delay in, state out) and
+> unit-testable; show-on-focus and dismiss-on-Escape are Playwright (D-PM-21); "not the
+> accessible name" is a structural scan. Do not fence 7 with a count — a ratchet on
+> `title="` occurrences would make every unrelated file's edit a chore.
+>
+> **Item (5) — `Skeleton`. Done when:**
+> 1. `src/components/ui/Skeleton.tsx`, themed, replacing improvised `animate-pulse` at a
+>    **named** starting set of surfaces (same per-surface rule as above).
+> 2. **It respects `prefers-reduced-motion`** — we already hold this rule tree-wide and the
+>    upstream reference does not (§9.4's "where we are AHEAD"). A pulsing skeleton is exactly
+>    the animation that triggers people.
+> 3. **Irregularity is derived, never random.** §9.4.4 refuses `Math.random()` in a skeleton
+>    render by name: it re-randomises every render and makes the placeholder shimmer *shape*
+>    change under the reader. Hash the row index.
+> 4. **It matches the shape it replaces** — a skeleton whose height differs from the loaded
+>    row causes a layout jump on arrival, which is worse than a spinner. Same line count, same
+>    approximate widths.
+> 5. **A minimum on-screen time** (~300ms) once shown, so a fast response does not produce a
+>    flash of skeleton — the defect that makes teams rip skeletons out again.
+> **Fences:** 3, 4 and 5 are pure logic (hash→width, shape derivation, the min-display state
+> machine) and belong in a `.ts` module; 2 is a structural scan for the reduced-motion guard.
+
 **WS-27al — the logic-only wins.** 🟢 AGENT-SAFE, no library, no design decision, no
 dependency on D-PM-15. The cheapest real quality in this whole section:
 (1) **`ControlLink`** — a row that is a real `<a href>` but intercepts plain left-click to
@@ -2735,6 +2834,22 @@ performance fence, not a nicety.
 > Contract point 3 fails outright: **there is no "Done when".** Three constants are not
 > acceptance. Everything below is verified against the code, not against the ticket.
 >
+> 🟢 **Amended 2026-08-11 — the one dispatchable slice below is now BUILT (§11.34), on branch
+> `ws-27bc-paged-picker`, NOT merged and NOT deployed.** `app/projects/lib/pagedPicker.ts` +
+> its test: the threshold predicate, page accumulation with dedupe by id, a terminal state
+> derived from a short page, and a min-length gate that **imports** `MIN_QUERY` and `isCurrent`
+> from `./search` rather than re-deriving either — held there by a source scan, not only by
+> behaviour. 9/9 mutants red. Point 2's false justification is struck **in the module's own
+> docstring**, so the correction travels with the code.
+> **The ticket as a whole stays NO-GO, and nothing else below moved:** point 3 (the debounce
+> number, and the seven ad-hoc copies with no shared helper) is untouched — a shared debounce is
+> its own ticket and this slice deliberately minted neither an eighth copy nor a half seam;
+> point 4 (two endpoints, incompatible contracts) is untouched and is why `isSearchable` reports
+> the minimum and stops instead of choosing a fallback; point 6 (the surface half, behind
+> WS-27ak) is untouched — there is no component, popover or listbox in this slice, and it is
+> wired to no call site. What is left of WS-27bc after §11.34 is exactly the two decisions and
+> the surface.
+>
 > **1. A third of it is already shipped — the confident third.** "Server-side search debounced
 > with a minimum query length of 2" exists in `gateway/routes/projects/search.py:72`
 > (`MIN_QUERY = 2`, enforced at `:228`, answering empty rather than 422) and
@@ -2779,7 +2894,8 @@ performance fence, not a nicety.
 > shell here is the second-substrate failure condition 2 exists to prevent, arriving through a
 > ticket instead of a vendored registry.
 >
-> ➡️ **The one slice dispatchable today** is substrate-independent and has no component in it:
+> ➡️ **The one slice dispatchable today — 🟢 BUILT 2026-08-11, §11.34** — is
+> substrate-independent and has no component in it:
 > a pure `app/projects/lib/pagedPicker.ts` + test — threshold predicate, page accumulation and
 > dedupe, min-length gate — reusing `search.ts:80`'s existing `isCurrent()` stale-response
 > guard rather than re-deriving it. ⚠️ And its real target is
@@ -5482,6 +5598,95 @@ UI **works** — `npx next build` exit 0 with the substrate imported.
 **Not built, and not attempted:** items (2) Tooltip and (5) Skeleton (NO-GO — their done-when is a
 count of the problem), (3) Toast, (4) Combobox. **Owed:** the four-theme visual pass, as for every
 UI slice here — no test in this tree looks at a layout.
+
+### 11.34 WS-27bc (the one dispatchable slice) — `pagedPicker`, a pure module with no picker in it (built 2026-08-11)
+
+**Status: BUILT 2026-08-11. Branch `ws-27bc-paged-picker`, cut from `583a0d38` on
+`claude/paca-research-task-management-a1f6zd`. NOT merged, NOT deployed.** Frontend only:
+**no migration, no gateway change, no new dependency, no component, and no call site wired.**
+Verification: `npx tsc --noEmit` exit 0 · `npx vitest run` **86 files / 1947 tests**, exit 0
+(base was 85 / 1916 — this slice is the one new file and its 31 cases).
+
+**The ticket is still NO-GO; this is the substrate-independent remainder** §9.5.2's audit
+identified as genuinely unbuilt. Everything the audit blocked stayed blocked and is listed below
+rather than quietly skipped.
+
+**Built.** `workbench/control_plane/src/app/projects/lib/pagedPicker.ts` +
+`pagedPicker.test.ts` — four pieces of arithmetic and nothing else:
+
+1. **`shouldLoadMore(scrollTop, clientHeight, scrollHeight, threshold = 48)`** — pure numbers,
+   no element and no `IntersectionObserver`, because `vitest.config.ts` here is
+   `environment: "node"` and a decision taken inside a component would have no fence at all.
+   Two boundary rules are deliberate and both are asserted: **at** the threshold counts as
+   reached (`<=`, not `<` — a scroller resting exactly on the line would otherwise wait for a
+   pixel of scroll a trackpad's momentum may never deliver), and a scroller whose content does
+   not fill its viewport is **already at its end**, which is the classic "first page did not
+   fill the box so no scroll event ever fires and paging stalls at page 1" bug answered in the
+   predicate rather than at each call site. A non-finite measurement asks for nothing.
+2. **`appendPage` — dedupe by id, first position wins, last payload wins.** The hazard is real
+   and not defensive: `/projects/tasks` is ordered by `updated_at`, so page N+1 is a second
+   query against a table that moved in between and a row can legitimately come back. Keeping the
+   **first position** stops the list re-sorting under the reader's cursor; keeping the **last
+   payload** stops it rendering a title we have just been told is stale.
+3. **A terminal state that is derived, never flagged.** `done` is a property of the page in
+   hand (`page.length < pageSize`), not a `hasMore` boolean kept beside the rows that can be
+   updated on one path and not the other. ⚠️ It is computed from the **raw** page length, never
+   from how many rows the dedupe actually added — a full page whose rows were all already on
+   screen adds nothing, and reading that as the end of the list truncates the picker at whatever
+   the reader happened to have seen. `pageSize <= 0` is treated as done, or the caller asks
+   forever for a page that cannot contain anything.
+4. **The min-length gate and the stale-response guard are both IMPORTED.** `MIN_QUERY` and
+   `isCurrent` come from `app/projects/lib/search.ts` (`:27` and `:80`), which already mirror
+   `gateway/routes/projects/search.py:72` and already solve the out-of-order-response bug. A
+   third copy of the number, or a second query comparison, is the CLAUDE.md §5 defect — and this
+   module is precisely where someone would add one.
+
+**The structural assertion is the reason this file was worth writing carefully.** A behavioural
+test cannot tell a shared constant from a second copy that happens to hold the same number today,
+so `pagedPicker.test.ts` closes with a source scan (the `controlLink.test.ts` /
+`sharedTaskUi.test.ts` idiom, rooted at `src/` via `import.meta.url` so a checkout with agent
+worktrees does not scan itself): the module must import both names from `./search`, must declare
+neither itself, and must actually **call** `isCurrent(` and reference `MIN_QUERY` outside the
+import line — an import a module never uses is what a half-finished revert leaves behind.
+
+**Fences mutation-measured 9/9 red, file restored byte-identical:** `<=` → `<` at the threshold
+(2 red) · dedupe removed, pages concatenated (5 red) · a repeated row keeping its stale payload
+(2 red) · `done` derived from accumulated growth instead of the raw page (1 red) · the
+stale-response guard removed (2 red) · `>=` → `>` on the minimum (3 red) · the `pageSize <= 0`
+guard removed (1 red) · the minimum no longer trimming (1 red) · **`MIN_QUERY` re-declared
+locally instead of imported (2 red — the §5 rule made executable).**
+
+🔴 **Struck, corrected in the module's own docstring: the ticket's central justification.**
+WS-27bc claims the minimum stops "a leading-wildcard scan with no index behind it." It does not.
+The gateway's predicate is `ILIKE '%…%'` either way and `'%ab%'` is exactly as unindexable as
+`'%a%'`; `pg_trgm` appears zero times in `infra/`. What the minimum bounds is the **result set**,
+in the gateway's own words (`search.py:68-71`): "returning half the workspace."
+
+**Not built, each for a recorded reason — these are findings, not omissions:**
+- **No debounce helper, shared or local.** There are **seven** ad-hoc copies in the tree
+  (`projects/lib/search.ts`'s `DEBOUNCE_MS = 180`, `FilterBar.tsx:162`'s inline `300`,
+  `RecipientInput`'s `200`, …) and no shared one. Minting an eighth is the defect; minting a
+  shared one and leaving seven is half a seam. That is its own ticket, and the ticket's "300ms"
+  is the number it has to reconcile.
+- **No component, no popover, no listbox.** A picker's surface owes `aria-expanded`,
+  `aria-controls`, `aria-activedescendant`, focus return and outside-press — all of which
+  D-PM-15 condition 1 says arrive as a wrapper under `src/components/ui/`. Hand-rolling that
+  shell here is the second-substrate failure condition 2 exists to prevent. The surface half is
+  re-sequenced **behind** WS-27ak, not beside it.
+- **No endpoint change, and no fallback below the minimum.** `/projects/search` is
+  capped-not-paged by a recorded decision in its own module docstring and answers `{"rows": []}`
+  to an empty `q`; `/projects/tasks` is paged with no minimum and no ranking. `isSearchable`
+  therefore reports the fact and stops — choosing between straddling the two (the list visibly
+  reorders at the two-character boundary) and reopening `search.py`'s paging decision is a
+  decision, not an edit.
+- **Nothing is wired to a call site.** The eventual target is `RelationsBlock.tsx`'s
+  `<Input placeholder="task id">` (`:336-347`), the only true long-list surface in `/projects`.
+  ⚠️ Recorded for whoever wires it: `search.py`'s `exclude_relatives_of` was built for exactly
+  that picker (WS-27w item 5) and has **zero client consumers** today.
+
+**Owed:** nothing visual — this slice renders nothing, so the four-theme pass does not apply to
+it. What it cannot prove is that a real scroller fires at the right moment; there is no DOM and
+no e2e here, and that stays review-only until the surface half lands.
 
 ## Board record (2026-08-09) — moved from work_plan.md §2
 

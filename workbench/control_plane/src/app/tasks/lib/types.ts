@@ -6,6 +6,8 @@
 // against mock data (see mockData.ts); when the gateway `/tasks` API lands,
 // these types stay and only the data source swaps.
 
+import type { SyncState } from "./syncState";
+
 /** Where a task/project lives and who is the source of truth. */
 export type Source = "LOCAL" | "SYNCED";
 
@@ -172,10 +174,13 @@ export interface GtdItem {
   subtaskCount?: number;
   /** when set, the task is archived (hidden from active views) */
   archivedAt?: string;
-  /** sync lifecycle: 'local' (ours) · 'pending' (queued to push to the PM tool,
-   *  Action-Broker-gated) · 'synced' (written back). Lets you clarify now and
-   *  finish/push to ClickUp/Jira later. */
-  syncState?: "local" | "pending" | "synced";
+  /** sync lifecycle: 'local' (ours) · 'pending' (staged for the member's own
+   *  push) · 'awaiting_approval' (pushed, but the Action Broker QUEUED the
+   *  outward write for a human approver — nothing exists in the tool yet) ·
+   *  'synced' (written back). Lets you clarify now and finish/push to
+   *  ClickUp/Jira later. The three questions the UI asks of this value live in
+   *  `lib/syncState.ts`, which owns the type — never compare to a literal. */
+  syncState?: SyncState;
 
   // hard landscape
   /** ISO date string */

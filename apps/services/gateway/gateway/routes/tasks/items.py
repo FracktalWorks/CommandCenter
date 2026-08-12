@@ -1305,7 +1305,20 @@ async def _push_pending_item(db: Any, item_id: str, uid: str) -> Any:
     its own `_tenant_session` block, whose clean exit commits (H2: a mid-block
     commit would drop the tenant GUC for the refresh read). Raises 400 with a
     reason when the item isn't in a pushable state (no account, no provider
-    project)."""
+    project).
+
+    ⚠️ The provider write may be QUEUED rather than performed: under
+    `ACTION_BROKER_ENFORCE`, `providers._broker_gate` returns a pending marker
+    and nothing exists upstream. That lands `sync_state='awaiting_approval'`
+    with `provider_task_id` untouched — never `'synced'` (BO-1b: a green
+    "synced" task that exists in no workspace is the bug this closes).
+
+    ⚠️ **Accepted gap, recorded rather than fixed** (§BO-1b's own non-goal, "no
+    reconciliation job"): approving that queued action executes the write in the
+    broker, but nothing carries the resulting `provider_task_id` back onto this
+    row — it stays `awaiting_approval` forever, so the next `/tasks/sync` pull
+    inserts the upstream task as a **second** row (`sync.py`'s upsert conflicts
+    on `(account_id, provider_task_id)`, which this row still lacks)."""
     row = await _fetch_item(db, item_id, uid)
     if row.sync_state != "pending" or not row.account_id:
         raise HTTPException(status_code=400,
@@ -1349,6 +1362,28 @@ async def _push_pending_item(db: Any, item_id: str, uid: str) -> Any:
         "due_at_ms": due_ms,
         "assignee_id": assignee.get("provider_user_id"),
     })
+    if created.get("pending"):
+        # The broker QUEUED the write (see the docstring). Record that state and
+        # stop. `provider_task_id` stays untouched — writing the marker's empty
+        # string would be a UNIQUE violation, not a harmless no-op: a staged item
+        # is `source='SYNCED'` (see `/items/{id}/organize`), so it falls inside
+        # `uq_gtd_items_provider ON gtd_items(account_id, provider_task_id)
+        # WHERE source <> 'LOCAL'` (48_task_manager_gtd.sql:122). NULL is exempt
+        # there (Postgres treats NULLs as distinct); `''` is a real value, so the
+        # SECOND queued push on the same account would fail the UPDATE outright.
+        # ⚠️ Do not restore the old reason ("every downstream reader treats a
+        # set-but-empty id the same as a real one") — it is false. The readers
+        # test TRUTHINESS (`_push_patch_upstream` at :769, the purge guard at
+        # :445), so `''` reads as ABSENT, not as an id. Absent is what we want
+        # here; the uniqueness index is why we must not write the empty string
+        # to get it. No subtasks either — there is no parent to hang them off.
+        await db.execute(
+            text("""UPDATE gtd_items
+                    SET sync_state = 'awaiting_approval', updated_at = now()
+                    WHERE id = :id"""),
+            {"id": item_id},
+        )
+        return _row_to_item(await _fetch_item(db, item_id, uid))
     parent_tid = created.get("provider_task_id")
     await db.execute(
         text("""UPDATE gtd_items
@@ -1468,7 +1503,17 @@ async def _push_child_subtasks(
 ) -> None:
     """Create the local subtasks of a just-pushed parent as ClickUp subtasks.
     Each child POSTs to the same list with `parent` set; a child that fails is
-    left LOCAL (its row keeps parent_item_id) so a later push can retry it."""
+    left LOCAL (its row keeps parent_item_id) so a later push can retry it.
+
+    ⚠️ The queued-child branch below is **defence in depth and is unreachable
+    through `POST /tasks/items/{id}/push`**: parent and child share one action
+    name (`clickup.create_task`), so `ACTION_BROKER_ENFORCE` can never queue the
+    child without also queueing the parent — and a queued parent returns before
+    this function is called (`_push_pending_item`'s pending branch, and the
+    `if parent_tid:` guard behind it). Do NOT "fix" that guard to make this fire:
+    a queued parent has no upstream id, so its children would be created as
+    top-level tasks. The branch exists so a future per-action enforce list, or a
+    second caller, cannot resurrect BO-1b's bug on the subtask path."""
     children = (await db.execute(
         text("""SELECT id, title, next_action, description, provider_status
                   FROM gtd_items
@@ -1487,6 +1532,14 @@ async def _push_child_subtasks(
             })
         except Exception:
             _log.warning("tasks.push.subtask_failed", child_id=str(c.id))
+            continue
+        if sub.get("pending"):
+            await db.execute(
+                text("""UPDATE gtd_items
+                        SET sync_state = 'awaiting_approval', updated_at = now()
+                        WHERE id = :id"""),
+                {"id": str(c.id)},
+            )
             continue
         await db.execute(
             text("""UPDATE gtd_items

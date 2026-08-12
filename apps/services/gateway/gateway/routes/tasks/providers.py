@@ -98,11 +98,33 @@ def _broker_enforced(action: str) -> bool:
     ``1``/``all``/``on`` to queue every write, or to a comma-list of action names
     to queue specific ones. This is the kill-switch — flip it without a redeploy
     (env var + service restart). Persistent handlers ARE registered at startup
-    (``tasks/broker_handlers.py``), so an approved queued write really executes.
-    ⚠️ NOT for every gated action: this class gates SIX action names but only
-    four have handlers, so approving a queued ``clickup.delete_task`` or
-    ``clickup.archive_task`` is refused and the row is marked ``failed``. Do not
-    turn this on before FOUNDATION_BUILDOUT_CHECKLIST §BO-1a and §BO-1b land.
+    (``tasks/broker_handlers.py``), so an approved queued write really executes:
+    since BO-1a **every** action name gated here has a ``_WRITERS`` entry, fenced
+    by ``tests/unit/test_task_broker_handlers.py``.
+
+    ⚠️ **DO NOT FLIP THIS ON. BO-1a and BO-1b did not make the flip safe** —
+    they cleared the handler-ROUTING blocker (an approved queued write executes)
+    and the sync-STATE blocker (a queued push writes ``awaiting_approval``, not
+    a false ``synced``). A third class is still open, ticketed as **BO-1d**
+    (``FOUNDATION_BUILDOUT_CHECKLIST.md`` §BO-1): four callers of a gated write
+    never read the pending marker this gate returns, so under enforcement
+
+    * ``routes/tasks/accounts.py`` — ``created["id"]`` on the pending marker →
+      **KeyError → HTTP 500** on ``POST /tasks/accounts/{id}/projects`` and on
+      ``POST /tasks/accounts/{id}/folders``;
+    * ``routes/tasks/planning.py`` — ``list_ref = created["id"]`` → the same
+      **500** on ``POST /tasks/plan/apply`` with ``target="clickup"``;
+    * ``routes/tasks/items.py::_push_patch_upstream`` — no 500, but a member's
+      edit to a synced task reports local success with **nothing upstream and no
+      state saying so**.
+
+    (``planning.py`` already defends against this shape at its per-task create
+    below the list create, which is why the gap is a known one in that file
+    rather than a new discovery.) Flipping the switch is an OWNER action
+    (``work_plan.md`` §6) and now has a **named blocking ticket** — plus a
+    residual BO-1d does not clear either: a ``pending_actions`` row queued before
+    the flip is approvable afterwards, so check
+    ``SELECT action, status FROM pending_actions`` first.
     """
     import os
 

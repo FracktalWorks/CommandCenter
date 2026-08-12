@@ -35,6 +35,7 @@ from gateway.routes.projects.core import (
     _tenant_session,
     from_jsonb,
     now,
+    require_organization,
     resolve_visibility,
     router,
     task_visibility_clause,
@@ -100,6 +101,8 @@ async def ops_summary(user: UserContext = Depends(get_current_user)) -> dict:
             "not_started": int(row.not_started), "overdue": int(row.overdue),
             "at_risk": int(row.at_risk), "critical": int(row.critical),
             "no_next_action": int(row.no_next_action),
+            # Only for days actually held — never extrapolated (D-OPEN-10).
+            "deltas": await _deltas(db, vis, row),
             # Distinct from `blocked`: a project can be blocked on a supplier or
             # on ourselves. This is the subset the CUSTOMER is holding, which is
             # the one management chases differently.
@@ -111,6 +114,89 @@ async def ops_summary(user: UserContext = Depends(get_current_user)) -> dict:
             "awaiting_client": int(row.awaiting_client),
             "basis": "Open work you can see — excludes delivered, cancelled and archived.",
         }
+
+
+#: The tiles worth keeping a history of. A subset of what `ops_summary`
+#: returns on purpose: `total` and the four states are the ones a delta means
+#: something for. "16 with no next action, up 3" is noise, not a trend.
+SNAPSHOT_METRICS: tuple[str, ...] = (
+    "total", "in_progress", "blocked", "paused", "overdue", "awaiting_client",
+)
+
+
+@router.post("/ops/snapshot", status_code=201)
+async def ops_snapshot(user: UserContext = Depends(get_current_user)) -> dict:
+    """Record today's numbers, so tomorrow can show a delta.
+
+    Idempotent per day (`ON CONFLICT … DO UPDATE`): a job that fires twice must
+    not double-count, and a re-run after a fix must correct the day rather than
+    refuse it.
+
+    ⚠️ **Nothing schedules this.** Wiring a timer to it is deploy reach, which
+    is OWNER-GATE (work_plan.md §6) — so this endpoint is the mechanism and the
+    scheduling is the owner's act. Until then the table fills when somebody
+    calls it, and `ops_summary` shows a delta only for days it actually holds.
+    """
+    summary = await ops_summary(user)
+    async with _tenant_session() as db:
+        vis = await resolve_visibility(db, user)
+        org = require_organization(vis)
+        written = []
+        for metric in SNAPSHOT_METRICS:
+            if metric not in summary:
+                continue
+            await db.execute(
+                text(
+                    "INSERT INTO pm_metric_snapshots "
+                    "  (organization_id, captured_on, metric, value) "
+                    "VALUES (CAST(:org AS uuid), CURRENT_DATE, :metric, :value) "
+                    "ON CONFLICT (organization_id, captured_on, metric) "
+                    "DO UPDATE SET value = EXCLUDED.value, created_at = now()"
+                ),
+                {"org": org, "metric": metric, "value": summary[metric]},
+            )
+            written.append(metric)
+        return {"captured": written, "count": len(written)}
+
+
+async def _deltas(db: Any, vis: Any, row: Any) -> dict[str, Any]:
+    """Change since the most recent snapshot, per metric.
+
+    **Absent rather than zero when there is no history.** A tile reading
+    "0% vs last month" on a database with one day of data is a lie a reader
+    cannot detect; an absent delta is a gap they can see. The response says
+    which day it compared against so nobody assumes a month.
+    """
+    org = vis.params.get("org") or vis.params.get("organization_id")
+    if not org:
+        try:
+            org = require_organization(vis)
+        except Exception:  # No organization resolved — no history to compare.
+            return {"since": None, "values": {}}
+
+    prior = (await db.execute(
+        text(
+            "SELECT metric, value, captured_on FROM pm_metric_snapshots "
+            "WHERE organization_id = CAST(:org AS uuid) "
+            "  AND captured_on < CURRENT_DATE "
+            "  AND captured_on = ("
+            "    SELECT max(captured_on) FROM pm_metric_snapshots "
+            "    WHERE organization_id = CAST(:org AS uuid) "
+            "      AND captured_on < CURRENT_DATE)"
+        ),
+        {"org": str(org)},
+    )).fetchall()
+    if not prior:
+        return {"since": None, "values": {}}
+
+    today = {m: int(getattr(row, m, 0) or 0) for m in SNAPSHOT_METRICS if hasattr(row, m)}
+    return {
+        "since": prior[0].captured_on,
+        "values": {
+            p.metric: today[p.metric] - int(p.value)
+            for p in prior if p.metric in today
+        },
+    }
 
 
 @router.get("/ops/attention")

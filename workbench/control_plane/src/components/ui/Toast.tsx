@@ -75,6 +75,14 @@
  * * `priority: "high"` (**errors only**) additionally renders a
  *   visually-hidden `role="alert"` copy — i.e. assertive (`:219`). Errors are
  *   the only thing that earns an interruption.
+ * * ⚠️ **The price of `priority: "high"`, measured, not assumed:** the same
+ *   flag makes Base UI stamp `aria-hidden="true"` on the VISIBLE toast until
+ *   the viewport takes focus (`ToastRoot.mjs:418`) — deliberate, because the
+ *   assertive copy is already saying the words and a reader should not hear
+ *   them twice. The cost is that an error's **`Retry` and dismiss controls are
+ *   out of the a11y tree** while unfocused; F6 is the way in, and the last
+ *   test in `e2e/toast.spec.ts` walks that path. It is also why two tests
+ *   there address toast controls structurally: `getByRole` cannot see them.
  * * **Dismissible from the keyboard, two ways.** Escape while a toast has focus
  *   closes that toast (`toast/root/ToastRoot.mjs:374`), and F6 moves focus into
  *   the viewport from anywhere on the page (`ToastViewport.mjs`), so a toast is

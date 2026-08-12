@@ -221,18 +221,38 @@ test.describe("Toast", () => {
     await markAllRead(page);
     await expect(page.locator(ERROR)).toHaveCount(1);
 
-    // The Retry button IS the second fire of the same key: it re-runs the same
-    // closure, which calls `toast.promise` with `key:
-    // "projects:notifications-mark-all-read"` again while the first toast is
-    // still on screen. Without dedupe this is where the second toast appears.
-    markRead = { status: 200, body: { marked: 1 }, delayMs: 250 };
-    await page.locator(TOAST).getByRole("button", { name: "Retry" }).click();
-
+    // ⚠️ The second fire has to come from the BELL, not from Retry, and that
+    // is the whole reason this step exists. Retry's handler closes the toast
+    // before it re-runs the closure (`Toast.tsx`, and deliberately: closing
+    // afterwards would dismiss the toast the retry had just raised), so by the
+    // time the second `toast.promise` lands there is nothing on screen for a
+    // second toast to stack against — measured, dedupe removed: the Retry path
+    // still leaves exactly one toast, so it cannot fence this at all. Pressing
+    // "Mark all read" again can: the button survives a failed mark (the unread
+    // count did not move), and the error toast is still up. Measured with
+    // `toastIdFor` stubbed to `undefined`: 2 toasts mid-flight and 2 settled.
+    markRead = { status: 503, body: { detail: "the gateway is down" }, delayMs: 250 };
+    await page.getByRole("button", { name: "Mark all read" }).click();
     await expect(page.locator(LOADING)).toHaveCount(1);
     await expect(
       page.locator(TOAST),
-      "the retry stacked a second toast instead of updating the first",
+      "a second press of the same operation stacked a second toast",
     ).toHaveCount(1);
+    await expect(page.locator(ERROR)).toHaveCount(1);
+    await expect(page.locator(TOAST)).toHaveCount(1);
+
+    markRead = { status: 200, body: { marked: 1 }, delayMs: 250 };
+    // Addressed structurally, not by role: an error is `priority: "high"`, and
+    // Base UI stamps `aria-hidden="true"` on a high-priority toast's root until
+    // the viewport is focused (`ToastRoot.mjs:418`) — the assertive copy is
+    // doing the announcing, so the visible one is kept out of the a11y tree.
+    // Its controls go with it, which is why `getByRole` finds nothing here.
+    // That path is not lost, it is F6's, and the last test in this file walks
+    // it. What Retry pins below is the PATCH MERGE, not the dedupe.
+    await page.locator(TOAST).locator("button", { hasText: "Retry" }).click();
+
+    await expect(page.locator(LOADING)).toHaveCount(1);
+    await expect(page.locator(TOAST)).toHaveCount(1);
     await expect(page.locator(SUCCESS)).toHaveCount(1);
     await expect(page.locator(TOAST)).toHaveCount(1);
     await expect(page.locator(SUCCESS)).toContainText("1 notification marked read");
@@ -244,7 +264,15 @@ test.describe("Toast", () => {
   });
 
   test("an error is announced assertively; a success is not", async ({ page }) => {
-    const alerts = () => page.locator('[role="alert"]');
+    // Next ships a permanent assertive live region of its own — the route
+    // announcer, `#__next-route-announcer__`, inside a shadow root on
+    // `<next-route-announcer>`. Playwright's selector engine pierces open
+    // shadow roots, so a bare `[role="alert"]` counts it and every assertion
+    // below is off by one; `document.querySelectorAll` does NOT pierce, which
+    // is why the same page looks like it has one alert from the console. Only
+    // toast alerts belong in this count.
+    const alerts = () =>
+      page.locator('[role="alert"]:not(#__next-route-announcer__)');
 
     markRead = { status: 422, body: { detail: REFUSAL }, delayMs: 50 };
     await markAllRead(page);
@@ -261,7 +289,13 @@ test.describe("Toast", () => {
 
     // A success must NOT interrupt: a "Saved" talking over a screen-reader
     // user mid-sentence is how the whole channel gets turned off.
-    await page.locator(TOAST).getByRole("button", { name: "Dismiss notification" }).click();
+    // Structural for the same reason as the Retry click above — this toast is
+    // the high-priority one, so its close button is out of the a11y tree until
+    // the viewport takes focus.
+    await page
+      .locator(TOAST)
+      .locator('button[aria-label="Dismiss notification"]')
+      .click();
     await expect(page.locator(TOAST)).toHaveCount(0);
     markRead = { status: 200, body: { marked: 2 }, delayMs: 50 };
     await page.reload();

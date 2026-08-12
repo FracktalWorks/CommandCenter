@@ -41,6 +41,25 @@ CLOSED_CATEGORIES: tuple[str, ...] = ("done", "cancelled")
 #: an unbounded `IN` list is a way to hand the database a megabyte of literals.
 MAX_MULTI = 100
 
+#: The shortest text query either search surface will run (WS-27be).
+#:
+#: **It lives here, not in `search.py`, because there is one rule and two
+#: readers.** `search.py` enforced this from the day it was written and the list
+#: endpoint's `?q=` did not, so `GET /projects/tasks?q=a` was an unbounded
+#: substring scan at the one surface nothing capped — the exact query the search
+#: palette has always refused. `search.py` imports the constant from here (this
+#: module is the one it already depends on, so the arrow only points one way);
+#: two copies of a threshold is how they stop matching.
+#:
+#: ⚠️ **Two characters is one below the length a trigram index can serve.**
+#: `pg_trgm` extracts whole trigrams from the pattern, and `%ab%` contains none
+#: — measured on 240k rows, a 2-character term is still a 168 ms full scan while
+#: a 3-character one is 0.4 ms off `idx_pm_tasks_title_trgm` (migration 170).
+#: Raising this to 3 would make every accepted query servable, but it is a
+#: PRODUCT change — "qa", "ui" and "hr" are real searches — so it is recorded as
+#: owed in project_management_app.md §11.33 rather than taken here.
+MIN_QUERY = 2
+
 
 def split_csv(raw: str | None) -> list[str]:
     """``"a, b ,,c"`` → ``["a", "b", "c"]``.
@@ -198,9 +217,26 @@ def build_task_filters(
         clauses.append("t.importance >= :importance_gte")
         params["importance_gte"] = importance_gte
 
-    if q and q.strip():
+    # WS-27be. A text query shorter than `MIN_QUERY` matches NOTHING rather than
+    # being dropped — the same answer `/projects/search` has always given
+    # (`{"rows": []}`, not a 422), now given by the list endpoint too.
+    #
+    # **Dropping the clause would be the worse bug.** A one-character `q` would
+    # then return the whole board, so the client that sent it renders an
+    # unfiltered list while believing it is filtered — a filter that silently
+    # does not filter. `FALSE` keeps the contract "you asked for a substring
+    # search and got the tasks that match it"; there are simply none, because we
+    # will not run a substring scan that short.
+    #
+    # A literal, not a bound parameter: the planner constant-folds it into a
+    # one-time filter and the query never touches `pm_tasks` at all, which is
+    # the entire point.
+    term = (q or "").strip()
+    if term and len(term) < MIN_QUERY:
+        clauses.append("FALSE")
+    elif term:
         clauses.append("(t.title ILIKE :q OR t.description ILIKE :q)")
-        params["q"] = f"%{like_escape(q.strip())}%"
+        params["q"] = f"%{like_escape(term)}%"
 
     # WS-27m. TWO tag filters, because both questions get asked and one cannot
     # answer the other: `tags` is ANY (`&&` — "show me bugs or regressions"),

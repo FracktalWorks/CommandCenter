@@ -2,8 +2,22 @@
 
 > **Product:** CommandCenter · **Feature:** Projects (the People Center's primary work-management
 > module, sliced into every other Center) · **Created:** 2026-08-05 · **Updated: 2026-08-11**
-> (**WS-27ak's narrowed slice built — §11.31**; **WS-27am's — §11.29**; **WS-27bd's — §11.30**;
+> (**WS-27be built — §11.33, migration 170**; **WS-27ak's narrowed slice built — §11.31**;
+> **WS-27am's — §11.29**; **WS-27bd's — §11.30**;
 > each narrowed, and what each STRUCK is the more useful half of the record) ·
+> 🟢 **WS-27be BUILT 2026-08-11 on `ws-27be-trgm-search-index`, NOT merged and NOT deployed**
+> (§11.33) — `pg_trgm` + `gin_trgm_ops` on `pm_tasks.title`/`.description` and a plain btree on
+> `task_number`, in `infra/postgres/170_projects_search_trgm.sql` (number taken at build time,
+> R1; **re-check at merge**). `idx_pm_tasks_fts` — dead since migration 146, because `ILIKE`
+> cannot use a `to_tsvector` index — is **kept**, additive-only per R6; its drop and the
+> `pg_stat_user_indexes.idx_scan` trigger for it are recorded in §11.33. `MIN_QUERY` moved from
+> `search.py` to `filters.py`, so the list endpoint's `?q=` now enforces the same minimum the
+> palette always did and answers `{"rows": []}` rather than 422 or the whole board. Verified
+> against a **real Postgres** at 60k rows (R8): `Filter:` → `Index Cond:`, 652.9 ms → 0.71 ms on
+> search, 441.7 ms → 0.31 ms on the list — `tests/live/live_ws27be.py`, 23 checks green.
+> ⚠️ **Two things are owed:** the `idx_pm_tasks_fts` drop, and a product decision on raising
+> `MIN_QUERY` to 3 — trigram indexes cannot serve a 2-character pattern, so the shortest
+> ACCEPTED query is the longest UNSERVABLE one (127 ms, measured). ·
 > 🟢 **WS-27ak item (1) `Modal` BUILT 2026-08-11, REPAIRED the same day on
 > `ws-27ak-modal-repair` (repair round 1 of 2 — two behavioural fixes, three corrected
 > records, one new structural fence), NOT merged and NOT deployed** (§11.31) —
@@ -2846,7 +2860,19 @@ already uses — one registry, two surfaces; measured, `/projects` has zero `onC
 > persist-forever key exists anywhere. The nearest seam, `src/lib/dismissedTools.ts`, is
 > already id-keyed — i.e. already signature-keyed in spirit.
 
-**WS-27be — the task search index nobody can use, and the missing minimum.** 🟢 AGENT-SAFE,
+**WS-27be — the task search index nobody can use, and the missing minimum.**
+✅ **BUILT 2026-08-11 — as-built in §11.33.** Branch `ws-27be-trgm-search-index`, migration
+`170_projects_search_trgm.sql`. NOT merged, NOT deployed. **Landed on the `pg_trgm` route**
+(the owner's directive; the plans support it — `Filter:` became `Index Cond:`, 652.9 ms →
+0.71 ms at 60k rows), plus **a third index the ticket did not ask for and the fix does not work
+without**: `task_number` needed its own btree or the numeric OR arm keeps the whole disjunction
+un-servable (§11.33). `idx_pm_tasks_fts` is **left in place** per R6, with its drop and the
+trigger for it recorded in §11.33. `MIN_QUERY` moved to `filters.py` and `search.py` re-exports
+it. **Two things are owed, not done:** the `idx_pm_tasks_fts` drop, and the product decision on
+raising `MIN_QUERY` to 3 — a 2-character query is one character below what a trigram index can
+serve and still costs 127 ms. *Original ticket, verbatim, below.*
+
+🟢 AGENT-SAFE,
 needs a migration. **Found 2026-08-11 while auditing WS-27bc; it is bigger than that ticket
 and unrelated to its scope, so it is minted here rather than smuggled in.**
 
@@ -5482,6 +5508,119 @@ UI **works** — `npx next build` exit 0 with the substrate imported.
 **Not built, and not attempted:** items (2) Tooltip and (5) Skeleton (NO-GO — their done-when is a
 count of the problem), (3) Toast, (4) Combobox. **Owed:** the four-theme visual pass, as for every
 UI slice here — no test in this tree looks at a layout.
+
+### 11.33 WS-27be — the search index nobody could use, and the missing minimum (built 2026-08-11)
+
+**Status: BUILT 2026-08-11. Branch `ws-27be-trgm-search-index`, cut from `583a0d38` on
+`claude/paca-research-task-management-a1f6zd`. NOT merged, NOT deployed.** One migration
+(`170_projects_search_trgm.sql` — number taken from the directory at build time, R1; re-check at
+merge), one gateway module changed, no API shape change, no frontend change. Verification:
+`uv run ruff check <the six touched files>` exit 0 · `uv run pytest tests/unit/test_projects_filters.py
+tests/unit/test_projects_migration.py tests/unit/test_projects_search.py tests/unit/test_projects_routes.py
+tests/unit/test_migration_prefixes.py` **294 passed**, exit 0 · the whole `/projects` unit surface
+(20 files) **669 passed**, exit 0 · `uv run python tests/live/live_ws27be.py` **23 checks, all
+green**, exit 0, against a real Postgres 16 with 60k seeded tasks.
+
+**The defect, restated from the plans rather than from the ticket.** `146_projects.sql` created
+`idx_pm_tasks_fts` over `to_tsvector('english', title || ' ' || description)`. Nothing has ever
+used it: both readers of those columns — `search.py::_SEARCH_SQL` and
+`filters.build_task_filters` — spell the predicate `ILIKE '%…%'`, and no `to_tsvector` index
+serves `ILIKE`. Measured at 60k rows, the `BEFORE` plan reaches `pm_tasks` through
+`idx_pm_tasks_project_id`, applies the ILIKE as a **`Filter`**, and throws away **59,935 rows**
+to return 51.
+
+**The decision, and the sanity check the owner asked for.** `pg_trgm` + `gin_trgm_ops`, not
+`websearch_to_tsquery`. The owner's reasoning holds and is worth restating as a *product* claim,
+not a performance one: full-text search stems (`parsing` stops matching `parser`), drops
+stop-words, and cannot match inside a word at all — `task_i` would return nothing for `task_id`,
+and `50%` and `#42` stop meaning what they mean. Our search box is documented as
+substring-oriented (§11.18, and `like_escape` exists precisely because people search
+identifiers). Trigrams keep every answer byte-identical. `EXPLAIN` confirms the planner takes
+them, so the "recommend dropping `idx_pm_tasks_fts` instead" branch did not have to be taken.
+
+**Measured, same harness, same statements, before → after** (`tests/live/live_ws27be.py`, 60k
+tasks in one tenant, plans taken with the caller's REAL bound parameters through asyncpg — not a
+hand-written `EXPLAIN` with the term spliced in as a literal, which answers a different question):
+
+| statement | before | after | rows filtered before → after |
+|---|---:|---:|---|
+| `/projects/search?q=quicksilver` | 652.9 ms | **0.71 ms** | 59,935 → 2 |
+| `/projects/search?q=1234` (numeric) | 558.5 ms | **0.30 ms** | 59,985 → 2 |
+| `/projects/tasks?q=quicksilver` | 441.7 ms | **0.31 ms** | 59,935 → 1 |
+
+The claim that carries this is not the millisecond count, it is the plan line: `Filter: (title
+~~* '%quicksilver%')` became `Index Cond: (title ~~* '%quicksilver%')` under a `BitmapOr`.
+
+**Three indexes, and the one that was nearly missed.** A `BitmapOr` forms only when every arm is
+indexed well. `search.py::task_number` turns `#42` — or a bare `42` — into a third arm,
+`OR task_number = 42`, and **`(root_project_id, task_number)` looks like it covers that and does
+not**: `task_number` is its second column, so the arm is answered by reading the *whole* composite
+index. Postgres does exactly that rather than give up, and the plan prints `Bitmap Index Scan on
+pm_tasks_root_project_id_task_number_key`, a line that reads like the index working. It costs
+1693 planner units and 298 buffers against 4.4 and 1 for a dedicated btree; on a 240k-row
+measurement database the planner abandoned the disjunction altogether and the whole search fell
+back to a scan (195 ms vs 1.6 ms). So `idx_pm_tasks_task_number` ships in the same migration.
+⚠️ **This is one line beyond the ticket's literal "index on the searched columns", and it is
+named here rather than absorbed**: without it the fix is invisible to anyone who types a task
+number, which in a task tracker is constantly.
+
+**R6 — `idx_pm_tasks_fts` is deliberately NOT dropped.** Removing the only other text index in
+the same change that introduces an untried one, on a ladder we cannot roll back, is the trade the
+rule exists to refuse. **The follow-up and its trigger, recorded so it is not lost:** once
+`pg_stat_user_indexes.idx_scan` for `idx_pm_tasks_title_trgm` is **non-zero** on the live database
+and for `idx_pm_tasks_fts` is still **zero** (`SELECT indexrelname, idx_scan FROM
+pg_stat_user_indexes WHERE relname = 'pm_tasks'`), `DROP INDEX idx_pm_tasks_fts` is a migration of
+its own. It reclaims ~18 MB per 240k tasks and, more usefully, stops the next reader believing
+search is covered. Fenced meanwhile: `test_the_old_full_text_index_is_not_dropped_in_the_same_change`.
+
+**The missing minimum, and why it is `FALSE` rather than a dropped clause.** `filters.py` accepted
+any non-empty `q`; `search.py` has always enforced `MIN_QUERY = 2`. The constant **moved into
+`filters.py`** and `search.py` re-exports it — one rule, one definition, and the dependency arrow
+already pointed that way. A sub-minimum `q` now appends a literal `FALSE`, so the answer is
+`{"rows": [], "total": 0}`, matching `search.py:228`'s empty-result-not-422 choice; the plan is
+`Result → One-Time Filter: false` and `pm_tasks` is never touched (0.016 ms). **Dropping the
+clause would have been the worse fix**: a one-character `q` would return the whole board, so a
+client that sent it renders an unfiltered list believing it is filtered.
+
+**The client needed no change, and that is the point.** `FilterBar.tsx:162` sends what was typed
+and renders what the server answers, so with empty-result semantics the two agree by
+construction. Teaching the client the threshold would put a second copy of `MIN_QUERY` in
+TypeScript — the disagreement this ticket was opened about, reintroduced on the other side.
+
+**Honest limit, measured not assumed: `MIN_QUERY = 2` is one character below what a trigram index
+can serve.** `pg_trgm` extracts whole trigrams from the pattern and `%qu%` contains none. The
+planner still *names* the index in the plan — and then reads every entry: **127.5 ms** for `?q=qu`
+against 0.31 ms for a 3-character term, i.e. no better than before. Raising the minimum to 3
+would make every accepted query servable, but "qa", "ui" and "hr" are real searches, so it is a
+**product decision and is owed, not taken**. The harness prints both numbers on every run so the
+cost stays visible.
+
+**Tenancy (R5).** No new table, nothing to key. The index does **not** defeat the tenant
+predicate: the trigram bitmap finds candidate rows and `organization_id = :vis_org` plus the grant
+closure are applied as filters above it, so the row set is unchanged. Fenced live in two
+directions — org A's search for the planted token returns its own hits and not org B's
+identically-titled task; org B's returns exactly its one.
+
+**Fences (R7), each mutation-measured.** Ten source mutations, each turning a named test red:
+dropping the `FALSE` clause (3 fail) · removing the minimum (6) · lowering it to 1 (7) ·
+`search.py` declaring its own `MIN_QUERY` (7 — the value comparison alone would **not** catch this,
+because CPython caches small integers, so the fence is structural) · dropping the LIKE escape (3) ·
+deleting the description index (1) · deleting the `task_number` index (1) · removing
+`CREATE EXTENSION` (1) · un-guarding a `CREATE INDEX` (1) · adding the `DROP INDEX` this migration
+must not carry (1). The live harness was mutation-measured too: deleting the `task_number` index
+from the migration turns two of its checks red and its exit code to 1.
+
+⚠️ **One existing fence was rewritten, not deleted.**
+`test_the_list_endpoint_escapes_too_not_only_search` asserted on the **source text** of the single
+line this ticket had to reshape — so it failed on a refactor whose subject it did not touch, and
+would equally have passed on a rewrite that kept the spelling and dropped the behaviour. It now
+asserts on the **bound pattern** `build_task_filters` hands the database, across four
+metacharacter cases. Same claim, strictly stronger.
+
+**Not done, deliberately.** The `idx_pm_tasks_fts` drop (above, with its trigger) · raising
+`MIN_QUERY` to 3 (product decision, owed) · anything on the `to_tsvector` route (the decision went
+the other way and the plans support it) · a per-tenant partial index (`pm_tasks` is not big enough
+for that to be anything but a guess).
 
 ## Board record (2026-08-09) — moved from work_plan.md §2
 

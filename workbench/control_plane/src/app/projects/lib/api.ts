@@ -47,6 +47,20 @@ export interface TaskRow {
   start_date?: string | null;
   due_at?: string | null;
   completed_at?: string | null;
+  /**
+   * Project Operations (migration 171). ⚠️ A field the API returns and this
+   * interface does not declare is a field the UI cannot read — the same trap
+   * `TaskModel` hit server-side with `next_action`, one layer up.
+   *
+   * `stage` is the SECOND axis: `status_id` says where in the lifecycle,
+   * `stage_id` says where in the pipeline. They are orthogonal.
+   */
+  stage_id?: string | null;
+  /** `healthy | at_risk | critical`. NULL means NOT ASSESSED, not healthy. */
+  health?: string | null;
+  next_action?: string | null;
+  next_action_owner?: string | null;
+  next_action_due?: string | null;
   tags?: string[];
   created_at?: string | null;
   assignees?: string[];

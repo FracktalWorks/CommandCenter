@@ -79,6 +79,7 @@ import { CustomFieldValues } from "./CustomFieldValues";
 import { TagPicker } from "./TagPicker";
 import { RepeatEditor } from "./RepeatEditor";
 import { RelationsBlock } from "./RelationsBlock";
+import { OperationsBlock } from "./OperationsBlock";
 import { changeLabel } from "../lib/customFields";
 import {
   assigneeLabel,
@@ -832,6 +833,24 @@ export function TaskPanel({
           {/* Both halves existed in the schema since WS-27a with no surface:
               links could be created and deleted but never listed, and subtasks
               could be created but never shown. */}
+          <section>
+            <SectionLabel icon="Activity">Operations</SectionLabel>
+            {/* WS-27bl. Stage, health, next action, blocker and time — added
+                HERE rather than as a second, tabbed detail PAGE. This panel is
+                already what every view opens, so a parallel surface would be
+                the two-things-called-My-Work trap (D-OPEN-12) repeated. */}
+            <OperationsBlock
+              taskId={task.id}
+              rootProjectId={String(task.root_project_id)}
+              stageId={task.stage_id ?? null}
+              health={task.health ?? null}
+              nextAction={task.next_action ?? null}
+              nextActionOwner={task.next_action_owner ?? null}
+              estimateMins={task.estimate_mins ?? null}
+              onChanged={() => void reload()}
+            />
+          </section>
+
           <section>
             <SectionLabel icon="GitBranch">Links &amp; subtasks</SectionLabel>
             <div className="space-y-2">

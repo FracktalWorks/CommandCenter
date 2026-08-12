@@ -362,8 +362,28 @@ WORKLOAD_BANDS: tuple[tuple[float, str, str], ...] = (
 )
 
 
-def workload_band(percent: float) -> tuple[str, str]:
-    """`(band, hue)` for a load percentage. Never raises, including on 0."""
+#: Nobody has logged any time in the window.
+#:
+#: ⚠️ A DISTINCT band, not `light`, and the distinction is the whole point.
+#: `light` is a claim — "this person has room". Zero tracked time does not
+#: support it: it means nobody clocked anything, which in a team that does not
+#: religiously track hours is the NORMAL case.
+#:
+#: Measured on the seeded data: kiruba carries 9 open projects, 6 of them
+#: overdue and 1 blocked, and read as "Light" because no session was logged
+#: that week. A capacity screen that calls its most loaded engineer idle is
+#: worse than no capacity screen, because somebody will act on it.
+UNTRACKED = "untracked"
+
+
+def workload_band(percent: float, tracked_seconds: int | None = None) -> tuple[str, str]:
+    """`(band, hue)` for a load percentage. Never raises, including on 0.
+
+    ``tracked_seconds`` is optional so existing callers keep working, but pass
+    it: without it, zero time is indistinguishable from a light week.
+    """
+    if tracked_seconds is not None and tracked_seconds <= 0:
+        return UNTRACKED, "gray"
     for floor, band, hue in WORKLOAD_BANDS:
         if percent >= floor:
             return band, hue

@@ -446,3 +446,25 @@ def test_workload_bands_resolve_to_shared_vocabulary_hues() -> None:
     """Four ad-hoc colours here would be a second status palette (rule 4)."""
     for _, band, hue in ops.WORKLOAD_BANDS:
         assert hue in {"gray", "red", "amber", "green", "blue", "violet"}, band
+
+
+def test_zero_tracked_time_is_not_a_light_week() -> None:
+    """⚠️ Found by LOOKING at the workload screen, not by a failing assertion.
+
+    Measured on the seeded data: kiruba carries 9 open projects, 6 overdue and
+    1 blocked, and the screen labelled them "Light" — because the band was
+    derived from logged hours alone and nobody had logged any that week.
+
+    `light` is a CLAIM ("this person has room"). Zero tracked time does not
+    support it; it means nobody clocked anything, which in a team that does not
+    religiously track hours is the normal case. A capacity screen that calls
+    its most loaded engineer idle is worse than none, because somebody acts on
+    it.
+    """
+    assert ops.workload_band(0.0, 0)[0] == ops.UNTRACKED
+    assert ops.workload_band(0.0, 0)[0] != ops.LIGHT_LOAD
+    # A real light week — some time logged, well under capacity — still reads
+    # light. The distinction is zero, not small.
+    assert ops.workload_band(10.0, 3600)[0] == ops.LIGHT_LOAD
+    # Omitting the argument keeps the old behaviour for existing callers.
+    assert ops.workload_band(0.0)[0] == ops.LIGHT_LOAD

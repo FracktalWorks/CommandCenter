@@ -46,6 +46,10 @@ const BAND_LABEL: Record<string, string> = {
   high: "High",
   healthy: "Healthy",
   light: "Light",
+  // Distinct from Light on purpose — see `operations.UNTRACKED`. Saying "no
+  // time logged" is a fact; saying "Light" about somebody carrying nine
+  // projects is a claim the data does not support.
+  untracked: "No time logged",
 };
 
 export default function WorkloadPage() {

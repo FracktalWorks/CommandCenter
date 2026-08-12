@@ -339,7 +339,7 @@ async def ops_workload(
                 capacity, is_assumption = stated_week, False
 
             pct = ops.workload_percent(secs, capacity)
-            band, hue = ops.workload_band(pct)
+            band, hue = ops.workload_band(pct, secs)
             people.append({
                 "actor": r.actor,
                 "seconds": secs,

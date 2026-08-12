@@ -247,7 +247,8 @@ export default function ControlCenterPage() {
               <div className="flex items-center gap-4">
                 {/* Inline SVG ring — no chart library (plan §0.4). One circle
                     per segment, offset by the running total. */}
-                <svg viewBox="0 0 42 42" className="h-24 w-24 shrink-0 -rotate-90">
+                <div className="relative h-24 w-24 shrink-0">
+                <svg viewBox="0 0 42 42" className="h-24 w-24 -rotate-90">
                   <circle cx="21" cy="21" r="15.9" fill="none" strokeWidth="5"
                     className="stroke-muted" />
                   {ring.map((seg) => (
@@ -265,6 +266,18 @@ export default function ControlCenterPage() {
                     />
                   ))}
                 </svg>
+                {/* Every count in the legend is a share of THIS, and until now
+                    the number it is a share of was nowhere on the card. */}
+                <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
+                  <span className="text-base font-semibold leading-none tabular-nums text-foreground">
+                    {(pipeline?.rows ?? []).reduce((n, r) => n + r.count, 0) +
+                      (pipeline?.unstaged ?? 0)}
+                  </span>
+                  <span className="mt-0.5 text-[9px] uppercase tracking-wide text-muted-foreground">
+                    staged
+                  </span>
+                </div>
+                </div>
                 <ul className="min-w-0 flex-1 space-y-0.5">
                   {/* Every stage, including empty ones — "nothing has reached
                       Validation" is information the ring cannot show. */}
@@ -304,21 +317,53 @@ export default function ControlCenterPage() {
                 Nobody has work assigned.
               </p>
             ) : (
-              <ul className="space-y-2">
-                {workload.rows.slice(0, 6).map((p) => (
-                  <li key={p.actor}>
-                    <div className="flex items-baseline justify-between gap-2">
-                      <span className="min-w-0 truncate text-[11px] text-foreground">
-                        {personLabel(p)}
-                      </span>
-                      <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
-                        {p.tracked} · {p.open_projects} open
-                      </span>
-                    </div>
-                    <Progress value={p.percent} hue={p.hue as AccentHue} />
-                  </li>
-                ))}
-              </ul>
+              (() => {
+                const shown = workload.rows.slice(0, 6);
+                // ONE scale for every row, headroom only when somebody needs
+                // it. Per-row scaling would make 103% and 100% draw the same
+                // full bar — which is exactly what this panel must not do,
+                // since "over capacity" is the only alarming thing it says.
+                // Headroom, not a tight fit. At `max(100, highest)` the 100%
+                // line lands at 97% of the track for somebody on 103% — close
+                // enough to the bar's own end to be unreadable as a separate
+                // mark, which defeats the point. 8% of slack puts the line
+                // clearly inside the track and lets an over-capacity bar be
+                // seen CROSSING it. Floor of 110 so a team that is all under
+                // capacity still shows the line in the same place.
+                const scale = Math.max(110, ...shown.map((p) => p.percent * 1.08));
+                return (
+                  <ul className="space-y-2">
+                    {shown.map((p) => (
+                      <li key={p.actor}>
+                        <div className="flex items-baseline gap-2">
+                          <span className="min-w-0 flex-1 truncate text-[11px] text-foreground">
+                            {personLabel(p)}
+                          </span>
+                          {/* The percentage was never on screen. The bar alone
+                              cannot be read without a denominator, and the
+                              hours beside it are not one. */}
+                          <span
+                            className={`shrink-0 text-[11px] font-medium tabular-nums ${
+                              p.percent > 100 ? "text-destructive" : "text-foreground"
+                            }`}
+                          >
+                            {Math.round(p.percent)}%
+                          </span>
+                          <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
+                            {p.tracked} · {p.open_projects} open
+                          </span>
+                        </div>
+                        <Progress
+                          value={p.percent}
+                          max={scale}
+                          marker={100}
+                          hue={p.hue as AccentHue}
+                        />
+                      </li>
+                    ))}
+                  </ul>
+                );
+              })()
             )}
             {workload ? (
               <p className="mt-2 text-[10px] leading-tight text-muted-foreground">{workload.basis}</p>

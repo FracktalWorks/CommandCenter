@@ -36,6 +36,16 @@ export type ProgressProps = {
   showLabel?: boolean;
   /** Tailwind height utility. `h-1.5` reads as a meter; `h-2.5` as a bar. */
   height?: string;
+  /**
+   * Draw a reference tick at this value (same units as `value`).
+   *
+   * Exists because a clamped bar cannot express "over". Workload rows at 103%
+   * and at exactly 100% drew an identical full track, so the one fact the
+   * panel exists to report — this person is beyond their capacity — was the one
+   * it could not show. Pass `max` above 100 to leave room, and `marker={100}`
+   * to say where the line is. Without both, a full bar is ambiguous.
+   */
+  marker?: number;
   className?: string;
 };
 
@@ -46,6 +56,7 @@ export function Progress({
   label,
   showLabel = false,
   height = "h-1.5",
+  marker,
   className = "",
 }: ProgressProps) {
   const safeMax = max > 0 ? max : 100;
@@ -53,6 +64,13 @@ export function Progress({
   // Drawn width only. See rule 1 — the reported value below is unclamped.
   const width = Math.max(0, Math.min(100, Number.isFinite(raw) ? raw : 0));
   const accent = accentForHue(hue);
+  // Only meaningful strictly inside the track — a tick at 0% or 100% is
+  // indistinguishable from the track's own end and just looks like a glitch.
+  const markerRaw = marker === undefined ? null : (marker / safeMax) * 100;
+  const markerPct =
+    markerRaw !== null && Number.isFinite(markerRaw) && markerRaw > 0 && markerRaw < 100
+      ? markerRaw
+      : null;
 
   return (
     <div className={className}>
@@ -70,12 +88,23 @@ export function Progress({
         aria-valuemin={0}
         aria-valuemax={100}
         aria-label={label}
-        className={`w-full overflow-hidden rounded-full bg-muted ${height}`}
+        className={`relative w-full overflow-hidden rounded-full bg-muted ${height}`}
       >
         <div
           className={`${height} rounded-full ${accent.dot} tech-transition`}
           style={{ width: `${width}%` }}
         />
+        {markerPct !== null ? (
+          // Sits ON the fill, not behind it, so an over-capacity bar visibly
+          // crosses the line rather than hiding it. `bg-card` rather than a
+          // border colour: this is a gap punched through the bar, and it has
+          // to read against BOTH the muted track and the coloured fill.
+          <span
+            aria-hidden
+            className="absolute inset-y-0 w-0.5 rounded-full bg-card/90"
+            style={{ left: `${markerPct}%` }}
+          />
+        ) : null}
       </div>
     </div>
   );

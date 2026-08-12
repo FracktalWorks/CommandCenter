@@ -434,10 +434,17 @@ async def ops_blocker_breakdown(user: UserContext = Depends(get_current_user)) -
             "rows": out,
             "blockers": sum(r["blockers"] for r in out),
             "projects": sum(r["projects"] for r in out),
+            # Reader-facing prose, not field documentation. The previous
+            # version named the two JSON keys in backticks — which render as
+            # literal backticks in the panel, because this is a caption and
+            # nothing renders markdown here. It explained the payload to
+            # somebody reading the payload; the person reading the card wants
+            # to know why two numbers on their screen disagree.
             "basis": (
-                "Open blockers by kind. `blockers` counts blockers; `projects` "
-                "counts distinct projects — a project can carry several, so the "
-                "two totals differ and neither is wrong."
+                "Open blockers, grouped by what they are waiting on. One "
+                "project can be held up by several things at once, so the "
+                "blocker count runs ahead of the project count — both are "
+                "right."
             ),
         }
 

@@ -848,7 +848,7 @@ functions beside the existing ones; keep the handlers thin.
 |---|---|
 | Stage planning dates | `pm_stages.planned_start`, `planned_end` (nullable) |
 | Stage progress | `pm_stages.progress_pct` or a derived rule — decide first |
-| Person capacity | weekly hours per user, org default; new nullable column or settings row |
+| ~~Person capacity~~ ✅ **DONE** — `app_user.weekly_capacity_hours` (migration 173), nullable, CHECK 0 < h <= 168. NOT in `org_settings`: that table has no `organization_id`. The org default stays `operations.DEFAULT_WEEKLY_HOURS`; every row reports `capacity_assumed`. |
 | Break sessions | if D-OPEN-3 picks (a), nothing — just an `end_reason` value |
 | Complete-notify | plumb through `CompleteIn` |
 

@@ -292,6 +292,9 @@ async def ops_workload(
                 "  WHERE e.task_id IN (SELECT id FROM visible) "
                 f"    AND e.started_at >= now() - INTERVAL '{window}' "
                 "  GROUP BY e.actor"
+                "), capacity AS ("
+                "  SELECT lower(u.email) AS actor, u.weekly_capacity_hours AS hours "
+                "  FROM app_user u WHERE u.weekly_capacity_hours IS NOT NULL"
                 "), assigned AS ("
                 "  SELECT a.assignee AS actor, count(*) AS open_projects "
                 "  FROM pm_task_assignees a "
@@ -300,23 +303,43 @@ async def ops_workload(
                 ") "
                 "SELECT COALESCE(tr.actor, asg.actor) AS actor, "
                 "       COALESCE(tr.secs, 0) AS secs, "
-                "       COALESCE(asg.open_projects, 0) AS open_projects "
+                "       COALESCE(asg.open_projects, 0) AS open_projects, "
+                "       cap.hours AS stated_hours "
                 "FROM tracked tr FULL OUTER JOIN assigned asg ON asg.actor = tr.actor "
+                "LEFT JOIN capacity cap ON cap.actor = lower(COALESCE(tr.actor, asg.actor)) "
                 "ORDER BY 2 DESC, 1"
             ),
             params,
         )).fetchall()
 
         people = []
+        assumed = 0
         for r in rows:
             secs = int(r.secs or 0)
-            pct = ops.workload_percent(secs, hours)
+            # A stated weekly capacity (migration 173) beats the default. For a
+            # daily period it is prorated over five working days rather than
+            # seven: nobody's Monday capacity is their week divided by the
+            # calendar.
+            stated_week = float(r.stated_hours) if r.stated_hours is not None else None
+            if stated_week is None:
+                capacity, is_assumption = hours, True
+                assumed += 1
+            elif period == "day":
+                capacity, is_assumption = stated_week / 5.0, False
+            else:
+                capacity, is_assumption = stated_week, False
+
+            pct = ops.workload_percent(secs, capacity)
             band, hue = ops.workload_band(pct)
             people.append({
                 "actor": r.actor,
                 "seconds": secs,
                 "tracked": ops.format_duration(secs),
-                "capacity_hours": hours,
+                "capacity_hours": round(capacity, 2),
+                # The reader must be able to tell a measurement from a guess —
+                # a percentage against an invented denominator that does not
+                # say so is the thing this column exists to end.
+                "capacity_assumed": is_assumption,
                 "percent": pct,
                 "band": band,
                 "hue": hue,
@@ -326,10 +349,16 @@ async def ops_workload(
             "rows": people,
             "period": period,
             "capacity_hours": hours,
+            "assumed_count": assumed,
             "basis": (
-                f"Tracked time over the last {window} against a DEFAULT capacity of "
-                f"{hours:g}h — no per-person capacity is stored yet, so this is an "
-                f"assumption, not a measurement."
+                f"Tracked time over the last {window}, against each person's stated "
+                f"weekly capacity where one is set"
+                + (
+                    f". {assumed} of {len(people)} have none, and fall back to "
+                    f"{hours:g}h — an assumption, flagged per row as "
+                    f"`capacity_assumed`."
+                    if assumed else " — every person here has one stated."
+                )
             ),
         }
 

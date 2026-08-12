@@ -874,6 +874,23 @@ async def hand_off(
     reason = (payload.reason or "").strip()
     if not to:
         raise HTTPException(status_code=422, detail="Name who is taking it on.")
+    # D-PM-4: an actor is `email | agent:<name>` and nothing else. Without this
+    # a half-typed address becomes a real `pm_task_assignees` row — measured: a
+    # stray `kira` reached the workload report and appeared beside real people
+    # as somebody carrying projects. A name in a management report that belongs
+    # to nobody is worse than a missing one, because it gets counted.
+    #
+    # Deliberately a SHAPE check, not an existence check: handing work to a
+    # colleague who has not signed in yet is legitimate, and `notify()` already
+    # reports who could not be reached (`not_notified` in this route's answer).
+    if "@" not in to and not to.startswith("agent:"):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"'{to}' is not a work email or an `agent:<name>`. "
+                "Hand off to an address, so the person can be found and told."
+            ),
+        )
     if not reason:
         raise HTTPException(
             status_code=422,

@@ -62,14 +62,22 @@ from gateway.routes.projects.core import (
     triage_exclusion_clause,
     wire,
 )
-from gateway.routes.projects.filters import like_escape
+from gateway.routes.projects.filters import MIN_QUERY, like_escape
 from sqlalchemy import text
 
-#: Shorter than this and every query is a table scan returning half the
-#: workspace. Answered as an EMPTY result rather than a 422: a search box types
-#: one character on the way to typing three, and an error flashing in a palette
-#: on every keystroke is noise the user cannot act on.
-MIN_QUERY = 2
+# `MIN_QUERY` — the shortest text query either search surface will run — is
+# imported above and RE-EXPORTED here (`__all__`), not defined here (WS-27be).
+# Shorter than it and every query is a table scan returning half the workspace;
+# both surfaces answer an EMPTY result rather than a 422, because a search box
+# types one character on the way to typing three and an error flashing in a
+# palette on every keystroke is noise the user cannot act on.
+#
+# It moved to `filters` because `filters.build_task_filters` now enforces the
+# same threshold on the list endpoint's `?q=`, and the two must agree by
+# construction rather than by two people remembering. `filters` is the module
+# this one already imports, so the dependency arrow only points one way — and
+# the threshold's own rationale, including the trigram-length caveat, is written
+# beside the constant there.
 
 #: The most hits one search returns. Not a page — see the module docstring.
 MAX_HITS = 50

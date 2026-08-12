@@ -663,3 +663,98 @@ def test_the_repaint_covers_every_lane_the_seed_gets_wrong() -> None:
         "projects will render them differently from /tasks, and existing ones "
         "need a repaint migration beside the seed change."
     )
+
+
+# ── WS-27be · the trigram indexes, and the one that must NOT be dropped ─────
+#
+# `idx_pm_tasks_fts` (created by 146) is a `to_tsvector` GIN index, and the only
+# queries that search those columns spell the predicate `ILIKE '%…%'` — which no
+# `to_tsvector` index can serve. The migration found here adds indexes the
+# planner can actually use. Found by CONTENT (`gin_trgm_ops`), never by number:
+# R1 forbids pinning a migration number anywhere.
+
+
+def _trgm_migration() -> Path:
+    """The migration that makes ILIKE servable, whatever it is numbered."""
+    found = [
+        path for path in sorted(MIGRATIONS.glob("*.sql"))
+        if path.name != "schema.generated.sql"
+        and "gin_trgm_ops" in path.read_text(encoding="utf-8")
+    ]
+    assert len(found) == 1, (
+        f"expected exactly one migration adding trigram indexes, found "
+        f"{[p.name for p in found]}"
+    )
+    return found[0]
+
+
+@pytest.fixture(scope="module")
+def trgm() -> str:
+    raw = _trgm_migration().read_text(encoding="utf-8")
+    return "\n".join(re.sub(r"--.*$", "", line) for line in raw.splitlines())
+
+
+def test_the_extension_is_created_before_the_index_that_needs_it(trgm: str) -> None:
+    """`gin_trgm_ops` is an operator class the extension installs.
+
+    Without the `CREATE EXTENSION` every index below is a syntactically valid
+    statement that fails when the ladder is replayed — and the ladder is
+    replayed before services restart, with nothing to roll back to.
+    """
+    assert "CREATE EXTENSION IF NOT EXISTS pg_trgm" in trgm
+    assert trgm.index("CREATE EXTENSION IF NOT EXISTS pg_trgm") < trgm.index(
+        "gin_trgm_ops"
+    ), "the extension must be created before the first index that uses it"
+
+
+@pytest.mark.parametrize("column", ["title", "description"])
+def test_both_searched_text_columns_get_a_trigram_index(
+    trgm: str, column: str,
+) -> None:
+    """`search.py` and `filters.build_task_filters` both search title OR
+    description. Indexing one of the two leaves the OR un-servable: Postgres
+    forms a BitmapOr only when EVERY arm has an index."""
+    assert re.search(
+        rf"CREATE INDEX IF NOT EXISTS \w+\s+ON pm_tasks USING GIN "
+        rf"\({column} gin_trgm_ops\)",
+        trgm,
+    ), f"pm_tasks.{column} has no trigram index"
+
+
+def test_the_task_number_arm_is_indexed_too(trgm: str) -> None:
+    """The measured trap.
+
+    `search.py::task_number` turns `#42` into a third OR arm on `task_number`.
+    `(root_project_id, task_number)` looks like it covers that and does not:
+    `task_number` is its SECOND column, so a bare `task_number = :n` is answered
+    by reading the WHOLE composite index — 1693 planner units and 298 buffers
+    for that one arm at 60k rows, against 4.4 units and 1 buffer here, and on a
+    larger table the planner abandons the disjunction entirely (195 ms → 1.6 ms).
+    Numbers from `tests/live/live_ws27be.py`; this test only holds the shape.
+    """
+    assert re.search(
+        r"CREATE INDEX IF NOT EXISTS \w+\s+ON pm_tasks \(task_number\)", trgm,
+    ), "the task_number OR arm has no index, so the BitmapOr cannot form"
+
+
+def test_the_old_full_text_index_is_not_dropped_in_the_same_change(
+    trgm: str,
+) -> None:
+    """R6, expand/contract, and we cannot roll back.
+
+    `idx_pm_tasks_fts` is dead weight — but dropping it in the change that
+    introduces its untried replacement removes the only other text index on
+    `pm_tasks` in the same breath. The drop is a later migration whose trigger
+    is recorded in project_management_app.md §11.33.
+    """
+    assert "DROP INDEX" not in trgm.upper(), (
+        "this migration must be purely additive; the idx_pm_tasks_fts drop is a "
+        "later release (R6)"
+    )
+
+
+def test_every_index_here_is_guarded(trgm: str) -> None:
+    """The ladder re-runs any file whose checksum changed, so a bare
+    `CREATE INDEX` fails the whole replay on the second pass."""
+    for statement in re.findall(r"CREATE (?:UNIQUE )?INDEX[^;]*", trgm):
+        assert "IF NOT EXISTS" in statement, statement

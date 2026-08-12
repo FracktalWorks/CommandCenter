@@ -36,6 +36,7 @@ from gateway.routes.projects.filters import (
     CLOSED_CATEGORIES,
     GROUP_BY,
     MAX_MULTI,
+    MIN_QUERY,
     STATUS_CATEGORIES,
     VIEW_FILTER_KEYS,
     build_task_filters,
@@ -201,6 +202,70 @@ def test_search_covers_the_description_as_well_as_the_title():
 def test_a_whitespace_only_search_is_not_a_filter():
     """`%   %` matches every task with a space in it — i.e. everything, slowly."""
     assert "ILIKE" not in sql(q="   ")
+
+
+# ── the minimum, and the two ways it could be got wrong (WS-27be) ──────────
+#
+# `search.py` has enforced `MIN_QUERY` since it was written; the list endpoint
+# never did, so `GET /projects/tasks?q=a` was an unbounded substring scan at the
+# one surface with nothing capping it. These four pin the fix and both of the
+# plausible wrong fixes.
+
+@pytest.mark.parametrize("term", ["a", "#", " x "])
+def test_a_query_below_the_minimum_runs_no_substring_scan(term):
+    assert "ILIKE" not in sql(q=term)
+
+
+@pytest.mark.parametrize("term", ["a", "#", " x "])
+def test_a_query_below_the_minimum_matches_nothing_rather_than_everything(term):
+    """The wrong fix, and the reason this test exists.
+
+    Dropping the clause is the obvious implementation and it is worse than the
+    bug: a one-character `q` would return the WHOLE board, so a client that
+    sent it renders an unfiltered list while believing it is filtered. The
+    contract is the one `/projects/search` already keeps — you asked for a
+    substring search and got the tasks that match; there are none, because we
+    will not run a scan that short.
+    """
+    clauses, params = build_task_filters(q=term)
+    assert "FALSE" in clauses, (
+        f"{term!r} is below MIN_QUERY and must narrow the result to nothing; "
+        f"omitting the clause returns every task instead"
+    )
+    assert "q" not in params, "nothing should be bound for a query that never runs"
+
+
+def test_the_minimum_is_the_one_search_already_enforces():
+    """One rule, two surfaces — and only one place it is written down.
+
+    `search.py` re-exports this constant rather than declaring its own. Two
+    copies of a threshold is how a palette that refuses `a` and a list endpoint
+    that accepts it come back — which is the bug WS-27be fixed.
+
+    ⚠️ The value comparison alone would NOT catch a second declaration: CPython
+    caches small integers, so `search.MIN_QUERY is filters.MIN_QUERY` is true
+    even when `search.py` writes its own `MIN_QUERY = 2`. The structural half is
+    what makes this a fence.
+    """
+    from gateway.routes.projects import search as search_mod
+
+    assert search_mod.MIN_QUERY == MIN_QUERY
+    source = (
+        REPO / "apps" / "services" / "gateway" / "gateway" / "routes"
+        / "projects" / "search.py"
+    ).read_text(encoding="utf-8")
+    assert not re.search(r"^MIN_QUERY\s*=", source, re.M), (
+        "search.py declares its own MIN_QUERY — import it from filters instead, "
+        "or the two surfaces will disagree the first time one is edited"
+    )
+
+
+@pytest.mark.parametrize("term", ["ab", "abc", "extruder"])
+def test_a_query_at_or_above_the_minimum_still_searches(term):
+    clauses, params = build_task_filters(q=term)
+    assert "(t.title ILIKE :q OR t.description ILIKE :q)" in clauses
+    assert params["q"] == f"%{term}%"
+    assert len(term) >= MIN_QUERY
 
 
 # ── due_before ─────────────────────────────────────────────────────────────

@@ -292,7 +292,11 @@ export default function ControlCenterPage() {
 
           {/* ── Workload ──────────────────────────────────────────────────── */}
           <section className="rounded-lg border border-border bg-card p-3">
-            <h2 className="mb-2 text-xs font-semibold text-foreground">Team workload</h2>
+            <div className="mb-2 flex items-baseline gap-2">
+              <h2 className="text-xs font-semibold text-foreground">Team workload</h2>
+              <button type="button" onClick={() => router.push("/projects/workload")}
+                className="ml-auto text-[11px] text-primary hover:underline">All</button>
+            </div>
             {loading ? (
               <SkeletonRows rows={4} height="h-8" />
             ) : !workload?.rows.length ? (

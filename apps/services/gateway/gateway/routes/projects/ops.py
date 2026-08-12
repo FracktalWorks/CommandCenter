@@ -296,14 +296,23 @@ async def ops_workload(
                 "  SELECT lower(u.email) AS actor, u.weekly_capacity_hours AS hours "
                 "  FROM app_user u WHERE u.weekly_capacity_hours IS NOT NULL"
                 "), assigned AS ("
-                "  SELECT a.assignee AS actor, count(*) AS open_projects "
+                "  SELECT a.assignee AS actor, count(*) AS open_projects, "
+                # Counted in the same pass rather than three queries: the
+                # People screen shows all three side by side, and separate
+                # queries can land either side of a pause and disagree.
+                "         count(*) FILTER (WHERE t2.due_at < now()) AS overdue, "
+                "         count(*) FILTER (WHERE s2.category = 'blocked') AS blocked "
                 "  FROM pm_task_assignees a "
+                "  JOIN pm_tasks t2 ON t2.id = a.task_id "
+                "  JOIN pm_task_statuses s2 ON s2.id = t2.status_id "
                 "  WHERE a.task_id IN (SELECT id FROM visible) "
                 "  GROUP BY a.assignee"
                 ") "
                 "SELECT COALESCE(tr.actor, asg.actor) AS actor, "
                 "       COALESCE(tr.secs, 0) AS secs, "
                 "       COALESCE(asg.open_projects, 0) AS open_projects, "
+                "       COALESCE(asg.overdue, 0) AS overdue, "
+                "       COALESCE(asg.blocked, 0) AS blocked, "
                 "       cap.hours AS stated_hours "
                 "FROM tracked tr FULL OUTER JOIN assigned asg ON asg.actor = tr.actor "
                 "LEFT JOIN capacity cap ON cap.actor = lower(COALESCE(tr.actor, asg.actor)) "
@@ -344,6 +353,8 @@ async def ops_workload(
                 "band": band,
                 "hue": hue,
                 "open_projects": int(r.open_projects or 0),
+                "overdue": int(r.overdue or 0),
+                "blocked": int(r.blocked or 0),
             })
         return {
             "rows": people,

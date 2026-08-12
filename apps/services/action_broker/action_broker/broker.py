@@ -20,9 +20,24 @@ resume, WhatsApp broadcast, two app-tool actions, and the CRM's three
 ``crm.zoho_*`` sync pushes). It is therefore **live**, not inert:
 ``pending_actions`` persistence, the Control Plane approval binding
 (gateway ``routes/actions.py``) and the ClickUp task-write reroute all shipped
-2026-07-13. Remaining per FOUNDATION_BUILDOUT_CHECKLIST §BO-1: two gated ClickUp
-actions still have no handler (BO-1a), the queued-write ``sync_state`` marker is
-ignored (BO-1b), and email writes do not route through here at all (BO-1c).
+2026-07-13.
+
+Remaining per FOUNDATION_BUILDOUT_CHECKLIST §BO-1 — **corrected 2026-08-11; the
+first two below read as open for a day after they shipped, and this is the
+canonical file for the subsystem, so keep it true:**
+
+* ✅ **BO-1a** (2026-08-11) — every gated ClickUp action name now has a handler;
+  an ``ast``-derived fence over ``routes/tasks/providers.py`` fails if a seventh
+  arrives without one.
+* ✅ **BO-1b** (2026-08-11) — a broker-QUEUED push writes
+  ``gtd_items.sync_state='awaiting_approval'`` instead of a false ``'synced'``.
+* ☐ **BO-1d** — four callers of a gated ClickUp write still index the pending
+  marker as if it were a result: ``routes/tasks/accounts.py`` (create project,
+  create folder) and ``routes/tasks/planning.py`` (plan apply) hard-**500**
+  under enforcement, and ``routes/tasks/items.py::_push_patch_upstream``
+  silently swallows a queued update. **This is what still blocks flipping
+  ``ACTION_BROKER_ENFORCE``** — BO-1a + BO-1b did not make the flip safe.
+* ☐ **BO-1c** — email writes do not route through here at all.
 
 ⚠️ **A Zoho write client now exists** (2026-08-05, WS-26b —
 ``ingestion/sources/zoho/writer.py``), so the ``"zoho.email"`` example below is

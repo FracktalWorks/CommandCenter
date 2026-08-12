@@ -20,9 +20,20 @@ from acb_common import get_logger
 _log = get_logger("gateway.tasks.broker_handlers")
 
 # broker action → (raw-writer method on the provider, ordered arg keys in `args`)
+#
+# ⚠️ EVERY action name `providers.py` routes through `_broker_gate` must appear
+# here, or approving that queued write falls into `broker.execute()`'s no-handler
+# branch and the `pending_actions` row is marked `failed` (BO-1a). The keys of an
+# entry must match the `args` dict the gate's `audit_payload` carries at that
+# call site — the handler reads them positionally. Both directions are fenced by
+# `tests/unit/test_task_broker_handlers.py`.
 _WRITERS: dict[str, tuple[str, tuple[str, ...]]] = {
     "clickup.create_task": ("_raw_create_task", ("project_ref", "body")),
     "clickup.update_task": ("_raw_update_task", ("provider_task_id", "body")),
+    "clickup.delete_task": ("_raw_delete_task", ("provider_task_id",)),
+    "clickup.archive_task": (
+        "_raw_archive_task", ("provider_task_id", "archived"),
+    ),
     "clickup.create_project": (
         "_raw_create_project", ("name", "space_id", "folder_id"),
     ),

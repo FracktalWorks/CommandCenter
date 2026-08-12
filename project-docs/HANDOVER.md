@@ -302,7 +302,11 @@ Registered in `work_plan.md` §6. Do not execute; propose and stop.
 - Running either ClickUp import endpoint against production, and confirming a Space→Center
   mapping (D-PM-10). ⚠️ **The multi-tenant block on this is now LIFTED** — migration 161
   keyed the `pm_*` tables, which was the reason to wait.
-- Enabling the WS-27c outbound push (needs BO-1a + BO-1b).
+- Enabling the WS-27c outbound push. ⚠️ *Corrected 2026-08-11:* this said "needs BO-1a +
+  BO-1b", both of which landed — but they cleared only the handler-routing and sync-state
+  blockers. It needs **BO-1d**, the four callers that still index the broker's pending
+  marker as a result (`accounts.py:335`/`:403`, `planning.py:377` → HTTP 500 under
+  enforcement; `items.py:790` → a silently swallowed update).
 - The WS-27g cutover and ClickUp token revocation.
 - Granting `feature:projects` or `data:org:read` to any real member on the live box.
 - Flipping `ACTION_BROKER_ENFORCE`, `INGESTION_CONSUMER`, `CRM_ZOHO_SYNC`. ⚠️ The last two

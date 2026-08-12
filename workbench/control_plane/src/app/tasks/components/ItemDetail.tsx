@@ -15,6 +15,8 @@ import {
   relativeTime,
 } from "../lib/utils";
 import { Disposition, Energy, GtdItem, Person } from "../lib/types";
+import { canPush, hasUpstreamTask, syncBadge } from "../lib/syncState";
+import { TaskMeta } from "@/components/TaskMeta";
 import {
   apiItemDetail,
   apiItemStageOptions,
@@ -215,7 +217,10 @@ export function TaskDetail({
   // works. Keyed by item.id at the call site → remounts per task, so no reset.
   const [taskStages, setTaskStages] = useState<string[] | null>(null);
   useEffect(() => {
-    if (backend !== "live" || !isSynced || item.syncState === "pending") return;
+    // No provider round trip while the task exists only here: staged (`pending`)
+    // or held at the Action Broker (`awaiting_approval`) both mean there is no
+    // upstream task whose list statuses could be read.
+    if (backend !== "live" || !isSynced || !hasUpstreamTask(item.syncState)) return;
     let live = true;
     apiItemStageOptions(item.id)
       .then((s) => { if (live) setTaskStages(s); })
@@ -224,6 +229,10 @@ export function TaskDetail({
   }, [item.id, isSynced, item.syncState, backend]);
   const syncedStageOptions =
     taskStages && taskStages.length ? taskStages : stageOptions;
+
+  // The sync-lifecycle decisions, all three from the one table (lib/syncState).
+  const pushable = canPush(item.syncState);
+  const sync = syncBadge(item.syncState);
 
   const dueValue = item.dueAt ? item.dueAt.slice(0, 10) : "";
   // The promised-by date on the waiting-for record (null = no promise made).
@@ -731,8 +740,21 @@ export function TaskDetail({
           </section>
         )}
 
+        {/* Queued at the Action Broker: the push already happened, the outward
+            write is waiting on a human in /actions. Deliberately NO Push button
+            — pushing again would enqueue a second proposal for the same task. */}
+        {sync && !pushable && backend === "live" && (
+          <section className="rounded-lg border border-border bg-muted/30 px-3 py-2.5">
+            <TaskMeta chips={[sync]} className="text-xs" />
+            <p className="mt-1 text-[10px] text-muted-foreground">
+              Queued for approval — it does not exist in{" "}
+              {item.provider ?? "the tool"} yet.
+            </p>
+          </section>
+        )}
+
         {/* Pending push affordance */}
-        {item.syncState === "pending" && backend === "live" && (
+        {pushable && backend === "live" && (
           <section className="rounded-lg border border-warning/30 bg-warning/5 px-3 py-2.5">
             <div className="flex items-center justify-between gap-2">
               <span className="inline-flex items-center gap-1.5 text-xs font-medium text-warning">

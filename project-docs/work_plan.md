@@ -160,7 +160,7 @@ owning specs are the archive; this file owns ordering, gates and states only.
 
 | WS | Workstream | State | Owning spec · record | Gates · next (verified) |
 |---|---|---|---|---|
-| WS-1 | **Action Broker truth + completion** (BO-1) | 🟢 | `FOUNDATION_BUILDOUT_CHECKLIST.md` §BO-1 · board record 2026-08-09 | Broker loop LIVE and writing; handlers register at SIX sites; `crm.zoho_*` handlers live and the Zoho sync loop is **running** (§6 WS-26 (a)). Open, each AGENT-SAFE, one PR: **BO-1a** two unrouted ClickUp writers (approved delete/archive → `failed` rows) · **BO-1b** pending-marker ignored by `items._push_pending_item` (green "synced", empty `provider_task_id`) · **BO-1c** the email-verb decision, then handlers. 🔴 `ACTION_BROKER_ENFORCE` flip only after 1a+1b (§6). (2026-08-07) |
+| WS-1 | **Action Broker truth + completion** (BO-1) | 🟢 | `FOUNDATION_BUILDOUT_CHECKLIST.md` §BO-1 · board record 2026-08-09 | Broker loop LIVE and writing; handlers register at SIX sites; `crm.zoho_*` handlers live and the Zoho sync loop is **running** (§6 WS-26 (a)). **BO-1a + BO-1b BUILT 2026-08-11** (branch `ws-1-broker-routing`, one PR): all six gated ClickUp action names have handlers behind an AST-derived fence, and a broker-QUEUED push writes `sync_state='awaiting_approval'` with no `provider_task_id` instead of a false `synced`. Open: **BO-1d** (the flip blocker, see below), then **BO-1c** the email-verb decision + handlers. 🔴 `ACTION_BROKER_ENFORCE` flip (§6) — ⚠️ **corrected 2026-08-11 (repair round 1): this row previously said "both blockers now clear", and the flip is NOT safe.** BO-1a and BO-1b cleared the *handler-routing* and *sync-state* blockers only. **BO-1d is now minted and open**: four callers never read the gate's pending marker — `routes/tasks/accounts.py:335` (`POST /tasks/accounts/{id}/projects`) and `:403` (`…/folders`) and `routes/tasks/planning.py:377` (`POST /tasks/plan/apply`, `target:"clickup"`) all index `created["id"]` unconditionally and hard-**500** under enforcement; `routes/tasks/items.py:790` (`_push_patch_upstream`) silently swallows a queued update, reporting local success with nothing upstream. Do not flip until BO-1d lands. Standing residuals either way: the var is set in **no** environment; a `pending_actions` row queued before a flip stays approvable after one (check `SELECT action, status FROM pending_actions` first); and no reconciliation of an approved write back onto its `gtd_items` row (BO-1b's own non-goal) — the next `/tasks/sync` pull inserts it as a second row. (2026-08-11) |
 | WS-2 | **Secrets** (BO-8: rotate Zoho token, purge history, fail-closed) | 🔴 | checklist §BO-8 + `FOUNDATION_CONTINUATION.md` | OWNER-GATE end-to-end (force-push history purge, credential rotation). Standing P0 since 2026-07-11. WS-26e / WS-27g cutovers execute the Zoho / ClickUp revoke halves (§6 WS-26 (c), WS-27 (c)). |
 | WS-3 | **Isolation ladder** (BO-7 · HH-6 · T0–T2) | 🟢 a+b · ⏸ T2 | `permissions_sandbox_b6.md` §P5 · board record 2026-08-09 | P5-a (credential scoping), P5-b.1 (ceilings), WS-3a (record+refuse), WS-3b (rootfs+network) shipped. **T2/P5-c re-framed by D16 (2026-08-08):** parked as a **precondition of the §5.1 pooled cutover** (customer 8–12) — no longer "until a second org appears"; acceptance stays unwritten until the owner un-parks (§6 first blockquote). P5-b.3 scoped gateway key: unbuilt *and undesigned*. MT-0b's `organization.first_party` (migration 157, scratch-applied) retires this row's old "no `first_party` field exists anywhere" note. 🔴 flips: `AGENT_PERMISSION_MODE`, `ISOLATION_TIER_ENFORCE` (§6). (2026-08-03 · re-framed 2026-08-09) |
 | WS-4 | **Event-bus consumer + durable queue** (BO-20) | 🟢 a+f+b1 | checklist §BO-20 — **file at the REPO ROOT** · board record 2026-08-09 | §BO-20.0 answered: **Option A, in-process** (owner 2026-08-02). Built: BO-20a consumer (reviewed, four P2s repaired) · BO-20b slice 1 · BO-20f receiver parity (inert). Next, AGENT-SAFE in strict order: **BO-20b slice 2** (strict `dispatch_event` path + PEL/XAUTOCLAIM reclaim — the record pins eight traps; read it first) → BO-20c → (BO-20d, BO-20e). 🔴 `INGESTION_CONSUMER` flip (§6) + provisioning `ZOHO_WEBHOOK_SECRET`/`GMAIL_PUBSUB_TOKEN` on the box — ⚠️ D15 coda: those become **per-org** secrets at MT-1a+; one box-wide value cannot serve N tenants. (2026-08-03) |
@@ -1037,7 +1037,11 @@ drawio §12's stray Hostinger-token action item moved to WS-2's list.
 > only thing between here and the rotation is the owner choosing a window.
 
 Force-push / history rewrite (BO-8) · credential rotation (Zoho, Hostinger
-token) · enforcement flips (`ACTION_BROKER_ENFORCE`, `AGENT_PERMISSION_MODE=
+token) · enforcement flips (`ACTION_BROKER_ENFORCE` — ⚠️ **still UNSAFE as of
+2026-08-11 and blocked on BO-1d**, not merely owner-gated: three `/tasks`
+endpoints hard-500 and one write is silently swallowed because their callers
+never read `_broker_gate`'s pending marker. BO-1a + BO-1b landed and did not
+close this; see WS-1 and checklist §BO-1d · `AGENT_PERMISSION_MODE=
 enforce`, `MEM0_ENABLED`, `GRAPHITI_ENABLED`, `WHATSAPP_ENRICHMENT`,
 `SKILLS_FAIL_CLOSED` — the WS-23 fail-closed default-profile flip; review
 `skills_scope_out.md` §3 dynamic-agent rows first · `SKILLS_INDEX_ONLY` —
@@ -1238,10 +1242,11 @@ wrong map grants a Center visibility of another department's work. Code floor is
 `admin:access:manage`, per the WS-26b finding that `integrations:use:*` gates
 nothing ·
 **(b) enabling the WS-27c outbound push** against the real workspace — the sync's
-ClickUp writes flow through `_broker_gate`, and **BO-1a + BO-1b must both be in
-first** (the same two flip-blockers WS-1 names; approving a delete with no handler
-marks the row `failed`, and an ignored pending marker shows a green "synced" task
-that exists in no workspace) ·
+ClickUp writes flow through `_broker_gate`. BO-1a + BO-1b landed 2026-08-11 (approving
+a delete no longer marks the row `failed`; an ignored pending marker no longer shows a
+green "synced" task that exists in no workspace), so WS-27c is buildable — but
+**`ACTION_BROKER_ENFORCE` is now blocked on BO-1d**, the four callers that still index
+the gate's pending marker as a result (three hard-500, one silently swallowed) ·
 **(c) the WS-27g cutover + retirement** — final import + parity sign-off, flipping
 the sync to pull-only then off, repointing the graph-mirror consumers off the
 ClickUp arm, retiring `ingestion/sources/clickup/` + the `ClickUpProvider` arm +

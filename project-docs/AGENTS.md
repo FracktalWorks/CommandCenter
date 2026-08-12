@@ -126,7 +126,7 @@ The authoritative list is **root `AGENTS.md` → Global Constraints (1–11)** �
 | **Self_Mutation_Node** | `apps/orchestrator/orchestrator/mutation.py` — spawns the isolated mutation container, applies a tested fix, opens a PR. Monorepo targeting is gated by MT-0b (`organization.first_party`). |
 | **Hot-patch model** | Fix applied to the live clone immediately; the PR is audit record + rollback trigger. |
 | **Control Plane** | Next.js UI at `workbench/control_plane/`. Chat + HITL approvals. Not an editor. |
-| **Action Broker** | The single write path to source systems (`apps/action_broker/`), enforcing authority tiers. **Live since 2026-07-13**: handlers register at six sites (ClickUp, WhatsApp, workflow, app-publish, `crm.zoho_*`); `ACTION_BROKER_ENFORCE` ships OFF (audit-and-chokepoint posture) — the flip is owner-gated behind BO-1a+BO-1b (work_plan.md WS-1). |
+| **Action Broker** | The single write path to source systems (`apps/action_broker/`), enforcing authority tiers. **Live since 2026-07-13**: handlers register at six sites (ClickUp, WhatsApp, workflow, app-publish, `crm.zoho_*`); `ACTION_BROKER_ENFORCE` ships OFF (audit-and-chokepoint posture) — the flip is owner-gated and, since 2026-08-11, blocked on **BO-1d** (BO-1a+BO-1b landed and cleared only the handler-routing and sync-state blockers; four callers still treat the gate's pending marker as a result and three of them 500). See work_plan.md WS-1. |
 | **Reconciler** | Nightly drift-diff agent at `apps/reconciler/`. |
 | **HITL** | Human-in-the-loop approvals via Control Plane (or email/WhatsApp). |
 | **authority tier** | read / suggest / suggest+apply / autonomous — allowed scope of an agent's action on a resource type. |
@@ -142,5 +142,5 @@ The authoritative list is **root `AGENTS.md` → Global Constraints (1–11)** �
 
 - **WS-29 multi-tenancy** is in execution: Phase 0 built; H1 (migrations 157–159) scratch-verified with the prod apply riding **PR #404** (owner's merge); H2 — converting 561 session call sites — is the long pole and dispatches after the H1 gate. MT-2/MT-3 pricing inputs were answered 2026-08-09 (D18).
 - **App workstreams run in parallel under R5** (tenant-ready by construction — owner call D18): CRM (WS-26) a–g live with autolead PR #403 open; Projects (WS-27) a–n merged; People (WS-28) a+b live; Email/Tasks/Calendar/Notes/WhatsApp per their rows.
-- **Foundation**: broker enforce flip waits on BO-1a/1b; secrets purge+rotation (WS-2/BO-8) remains the standing P0; backups scheduled + restore-verified (BO-23); deploys recovered 2026-08-06/07 UTC with one open health-verify failure at tip (WS-25).
+- **Foundation**: broker enforce flip waits on **BO-1d** (BO-1a/1b landed 2026-08-11 and did *not* make the flip safe); secrets purge+rotation (WS-2/BO-8) remains the standing P0; backups scheduled + restore-verified (BO-23); deploys recovered 2026-08-06/07 UTC with one open health-verify failure at tip (WS-25).
 - **Owner-gated queue** (work_plan.md §6): PR #404 merge (H1), G1/G2 onboarding gates, enforcement flips, and the WS-26e/WS-27g cutovers.

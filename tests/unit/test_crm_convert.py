@@ -205,6 +205,32 @@ async def test_a_lead_with_no_company_gets_no_organization(
     assert result.deal["name"] == "Anitha Kumar"
 
 
+async def test_conversion_is_never_refusable_by_a_settings_grid_edit(
+    db: FakeCrmDB,
+) -> None:
+    """WS-26h2 done-when 4 — **D-CRM-13**, at the case that decided the rule.
+
+    `_create_deal` always calls `load_default_status` and `ConvertDeal` has no
+    `status_id` field at all, so a converted deal ALWAYS lands in the default
+    lane. Gate the defaulted path and an owner requiring `organization_id`
+    there makes every lead that names no company permanently unconvertible —
+    `ConvertModal.tsx` renders "This lead names no company, so no organization
+    is created" and offers no picker, so there is no request the user could
+    send instead. The requirement below is exactly that configuration, and the
+    conversion must still succeed.
+    """
+    for row in db.rows("crm_deal_statuses"):
+        row["required_fields"] = ["organization_id", "amount"]
+    lead = _lead(db, organization_name=None)
+
+    result = await convert_lead(str(lead.id), ConvertRequest(), USER)
+
+    assert result.organization is None
+    assert result.deal["organization_id"] is None
+    assert result.deal["amount"] is None
+    assert len(db.rows("crm_deals")) == 1
+
+
 async def test_a_caller_chosen_organization_wins(db: FakeCrmDB) -> None:
     db.seed("crm_organizations", name="Bosch India")
     chosen = db.seed("crm_organizations", name="Bosch Rexroth")

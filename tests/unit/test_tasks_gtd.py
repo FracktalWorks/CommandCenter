@@ -1740,6 +1740,178 @@ def test_push_carries_email_origin_reference_into_provider():
     assert "Captured from email" in src
 
 
+# ── BO-1b: a broker-QUEUED push never reports as synced ──────────────────────
+#
+# The pending marker is taken from the REAL `providers._broker_gate` (env var +
+# a stubbed `enqueue`), never hand-written here — a test that invents the marker
+# shape agrees with itself and would have passed against the bug too.
+
+class _PushFakeDb:
+    """The three statements `_push_pending_item` / `_push_child_subtasks` run:
+    the project lookup (`fetchone`), the child list (`fetchall`), and the row
+    UPDATEs, which are recorded verbatim."""
+
+    def __init__(self, provider_ref="list-5", children=()):
+        self._provider_ref = provider_ref
+        self._children = list(children)
+        self.updates: list[tuple[str, dict]] = []
+
+    async def execute(self, stmt, params=None):
+        sql = str(stmt)
+        if sql.lstrip().upper().startswith("UPDATE"):
+            self.updates.append((sql, dict(params or {})))
+            return SimpleNamespace(fetchone=lambda: None, fetchall=lambda: [])
+        return SimpleNamespace(
+            fetchone=lambda: SimpleNamespace(provider_ref=self._provider_ref),
+            fetchall=lambda: self._children,
+        )
+
+
+def _push_row(**kw):
+    base = dict(
+        id="item-1", sync_state="pending", account_id="acc-1",
+        project_id="proj-1", title="Ship it", next_action=None,
+        description=None, provider_status=None, due_at=None,
+        assignee=None, origin=None,
+    )
+    base.update(kw)
+    return SimpleNamespace(**base)
+
+
+def _patch_push_harness(monkeypatch, provider, row=None):
+    """Stub the item fetch, account ownership, credential decrypt and provider
+    construction so `_push_pending_item` reaches `provider` with no DB."""
+    from gateway.routes.tasks import items as tasks_items
+
+    item_row = row if row is not None else _push_row()
+
+    async def _fetch(db, item_id, uid):
+        return item_row
+
+    async def _owner(db, account_id, uid):
+        return SimpleNamespace(id=account_id, provider="clickup",
+                               workspace_id="ws1", credentials_encrypted=b"x")
+
+    monkeypatch.setattr(tasks_items, "_fetch_item", _fetch)
+    monkeypatch.setattr(tasks_items, "_assert_account_owner", _owner)
+    monkeypatch.setattr(
+        tasks_items, "_key_store",
+        lambda: SimpleNamespace(decrypt=lambda _b: '{"token": "t"}'))
+    monkeypatch.setattr(tasks_items, "build_provider", lambda *a, **k: provider)
+    monkeypatch.setattr(tasks_items, "_row_to_item", lambda r: r)
+    return item_row
+
+
+def _queueing_provider(monkeypatch):
+    """A REAL ClickUpProvider with enforcement on and the broker's enqueue
+    stubbed — so `create_task` returns the genuine pending marker and any HTTP
+    attempt would blow up rather than silently 'work'."""
+    import acb_graph
+    import action_broker
+    import gateway.routes.tasks.providers as prov
+
+    monkeypatch.setenv("ACTION_BROKER_ENFORCE", "all")
+
+    def _no_session():
+        raise ConnectionError("no db in test")
+
+    def _explode(*a, **k):
+        raise AssertionError("a queued write must never reach the provider HTTP")
+
+    monkeypatch.setattr(acb_graph, "get_session", _no_session)
+    monkeypatch.setattr(action_broker, "enqueue", lambda p: "act-9")
+    monkeypatch.setattr(prov.httpx, "AsyncClient", _explode)
+    return prov.ClickUpProvider(token="tok", workspace_id="ws1",
+                                account_id="acc-1")
+
+
+def test_a_queued_push_writes_awaiting_approval_and_no_provider_task_id(monkeypatch):
+    """BO-1b: under `ACTION_BROKER_ENFORCE=all` the write is QUEUED, so nothing
+    exists upstream. The row must land `sync_state='awaiting_approval'` and must
+    NOT claim a `provider_task_id` — the marker's empty string is otherwise
+    indistinguishable from a real id downstream."""
+    import asyncio
+
+    from gateway.routes.tasks import items as tasks_items
+
+    provider = _queueing_provider(monkeypatch)
+    _patch_push_harness(monkeypatch, provider)
+    db = _PushFakeDb()
+
+    asyncio.run(tasks_items._push_pending_item(db, "item-1", "u1"))
+
+    assert len(db.updates) == 1
+    sql, params = db.updates[0]
+    assert "sync_state = 'awaiting_approval'" in sql
+    assert "'synced'" not in sql
+    assert "provider_task_id" not in sql
+    assert set(params) == {"id"} and params["id"] == "item-1"
+
+
+def test_an_auto_applied_push_still_writes_synced(monkeypatch):
+    """The control: with enforcement OFF the same path is unchanged — the guard
+    is conditional on the marker, not a blanket refusal to sync."""
+    import asyncio
+
+    from gateway.routes.tasks import items as tasks_items
+
+    class _Applying:
+        async def create_task(self, project_ref, payload):
+            return {"provider_task_id": "T7", "provider_url": "u",
+                    "provider_status": "open"}
+
+    monkeypatch.delenv("ACTION_BROKER_ENFORCE", raising=False)
+    _patch_push_harness(monkeypatch, _Applying())
+    db = _PushFakeDb(children=[])
+
+    asyncio.run(tasks_items._push_pending_item(db, "item-1", "u1"))
+
+    sql, params = db.updates[0]
+    assert "sync_state = 'synced'" in sql
+    assert params["tid"] == "T7"
+
+
+def test_a_queued_subtask_write_also_never_reports_synced(monkeypatch):
+    """Defence in depth, and DELIBERATELY exercised by calling
+    `_push_child_subtasks` directly: **this branch is unreachable through
+    `POST /tasks/items/{id}/push`**. Parent and child share one action name
+    (`clickup.create_task`), so enforcement can never queue the child without
+    also queueing the parent, and a queued parent returns from
+    `_push_pending_item` before this function is called (and the `if parent_tid:`
+    guard sits behind that). Do not "fix" that guard to make this fire — a queued
+    parent has no upstream id, so its children would be created top-level."""
+    import asyncio
+
+    from gateway.routes.tasks import items as tasks_items
+
+    provider = _queueing_provider(monkeypatch)
+    child = SimpleNamespace(id="child-1", title="Sub", next_action=None,
+                            description=None, provider_status=None)
+    db = _PushFakeDb(children=[child])
+
+    asyncio.run(tasks_items._push_child_subtasks(
+        db, "item-1", "u1", provider, "list-5", "T1"))
+
+    assert len(db.updates) == 1
+    sql, params = db.updates[0]
+    assert "sync_state = 'awaiting_approval'" in sql
+    assert "provider_task_id" not in sql
+    assert params == {"id": "child-1"}
+
+
+def test_gtd_item_model_projects_awaiting_approval_unchanged():
+    """No migration and no model change: `sync_state` is a bare `str`, so the
+    third value passes through the API as-is."""
+    from gateway.routes.tasks.core import GtdItemModel
+
+    field = GtdItemModel.model_fields["sync_state"]
+    assert field.annotation is str
+    assert GtdItemModel(
+        id="i", title="t", sync_state="awaiting_approval",
+        created_at="2026-08-11T00:00:00Z", updated_at="2026-08-11T00:00:00Z",
+    ).sync_state == "awaiting_approval"
+
+
 def test_agent_item_format_shows_email_origin():
     from skill_task_gtd.core import _fmt_item
 
@@ -1751,6 +1923,26 @@ def test_agent_item_format_shows_email_origin():
     plain = _fmt_item({"id": "y" * 12, "title": "buy tape",
                        "disposition": "INBOX", "source": "LOCAL"})
     assert "from email" not in plain
+
+
+def test_agent_item_format_distinguishes_the_two_waiting_states():
+    """BO-1b repair: `awaiting_approval` was an unswept consumer of the widened
+    vocabulary — `_fmt_item` only tested for `'pending'`, so a queued item
+    rendered to the agent with NO marker at all and no provider link, and the
+    agent could not tell it from a normal task. The two states are not synonyms
+    and the rendered line must say which one it is."""
+    from skill_task_gtd.core import _fmt_item
+
+    staged = _fmt_item({"id": "a" * 12, "title": "t", "disposition": "NEXT",
+                        "source": "SYNCED", "sync_state": "pending"})
+    queued = _fmt_item({"id": "b" * 12, "title": "t", "disposition": "NEXT",
+                        "source": "SYNCED", "sync_state": "awaiting_approval"})
+    normal = _fmt_item({"id": "c" * 12, "title": "t", "disposition": "NEXT",
+                        "source": "SYNCED", "sync_state": "synced"})
+
+    assert "PENDING PUSH" in staged and "AWAITING APPROVAL" not in staged
+    assert "AWAITING APPROVAL" in queued and "PENDING PUSH" not in queued
+    assert "PENDING PUSH" not in normal and "AWAITING APPROVAL" not in normal
 
 
 # ---------------------------------------------------------------------------

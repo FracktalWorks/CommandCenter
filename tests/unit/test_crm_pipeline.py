@@ -1095,30 +1095,1000 @@ def test_the_transition_is_the_only_writer_of_status_change_rows() -> None:
     assert writers == ["pipeline.py"], writers
 
 
-def test_the_zoho_pull_never_enters_the_stage_gate() -> None:
-    """WS-26h — the importer and the sync engine must NOT route their status
-    writes through :func:`apply_status_transition`.
+# ── WS-26h + WS-26h2 · where the two stage gates are allowed to be ─────────
+#
+# ONE mechanism, TWO gates. `routes/crm/` has two places a status write can be
+# refused, and the same live-system property guards both: the ENABLED 600s Zoho
+# pull must reach NEITHER. A pulled record carries whatever stage Zoho has it
+# in and no obligation to satisfy a requirement somebody set here afterwards,
+# so a gate on that path turns one settings-grid save into a whole Zoho module
+# failing every cycle — fail-closed in the wrong direction, on a loop nobody is
+# watching, and changing that loop is OWNER-GATE (`work_plan.md` §6 WS-26 (a)).
+#
+#   * `_MOVE_GATE`  — `pipeline.apply_status_transition` (WS-26h), the status
+#     TRANSITION and its three effects.
+#   * `_ENTRY_GATE` — `pipeline._require_entry_fields` (WS-26h2), the entry
+#     requirements, reached unconditionally from the move gate and directly
+#     from `records._resolve_status` on the create path.
+#
+# Each gate gets TWO fences, because one assertion cannot back the claim:
+#
+#   * `_gate_call_files` answers "which files CALL the gate" — the direct case.
+#   * `_gate_reached_from` answers "can the enabled 600s pull REACH it" — the
+#     indirect case, which is the one a call-site set is blind to.
+#
+# Both gates' fences were TEXT MATCHES first and both were wrong in the same
+# two directions. Measured against the real package (h2's repair round 1 for
+# the entry gate, this ticket's conversion round for the move gate): an ALIASED
+# import in `import_zoho.py` left the fence GREEN, and a COMMENT in
+# `import_zoho.py` saying the path must never call the gate turned it RED —
+# making deletion of that comment the cheapest way back to green. The move
+# gate's text fence was blind to the indirect route as well
+# (`import_zoho.apply_record` → `records.patch_record`). AST call nodes fix all
+# three. Do not reintroduce a third mechanism: `_GATE` was a module constant
+# until WS-26h-fence parameterised it, and one set of helpers now answers for
+# both gates.
+#
+# Known limit, stated because the docstrings must not outrun it — and restated
+# in repair round 1, where the limit block itself was the overclaim.
+#
+# This is a STATIC call graph over `routes/crm/*.py`. It READS: direct calls;
+# aliased imports; module-attribute calls; function-body imports; **relative
+# imports at any level** (`from .pipeline import …`, `from . import pipeline`,
+# `from ..crm.pipeline import …`); **star imports**; **symbols re-exported
+# through the package `__init__`**; a name bound to the package itself
+# (`from .. import crm` → `crm.pipeline.f()`); and **calls written at module
+# level**, outside any `def`.
+#
+# It is BLIND to the shapes below. Each was measured against a copy of the real
+# package rather than reasoned about, and they are split by ONE question —
+# **is the gate's own name written immediately before a `(`?** — because that,
+# and not "expression versus name", is what the deleted substring scan keyed on,
+# and therefore what decides whether a hole is a REGRESSION against it.
+#
+#   A. The name is NEVER written before a `(`, so the substring scan was blind
+#      too. **Not regressions**; holes this fence never claimed to close:
+#        · dispatch through a value — `_MOVE = apply_status_transition` then
+#          `_MOVE(…)`, `functools.partial`, a callback handed across the
+#          package boundary;
+#        · a registry or object holding the gate under ANOTHER name —
+#          `_REGISTRY["move"](…)`, `Registry.move(…)`;
+#        · `getattr(pipeline, "apply_status_transition")(…)` — measured green
+#          on the old scan too, because `")("` intervenes and the literal
+#          `apply_status_transition(` never appears.
+#   B. The name IS written before a `(`, so the substring scan went RED.
+#      **Residual REGRESSIONS — two shapes, both left open deliberately.** Both
+#      are a call qualified by something the graph cannot tie to a package
+#      module:
+#        · `importlib.import_module("…pipeline").apply_status_transition(…)`
+#        · `_GATES.apply_status_transition(…)`, where `_GATES` is a local
+#          object or class rather than a module binding.
+#      ⚠️ **Why they stay open — the reason recorded in repair round 1 was
+#      FALSE and is corrected here.** It said closing them meant resolving
+#      unbound attributes against every top-level name, letting an innocent
+#      `db.close()` fabricate a chain. A reviewer disproved that by building
+#      it: a narrow resolver reading only STRING CONSTANTS adds no edges at all
+#      to the real package, reddens both forms, and never looks at `db.close()`.
+#      The real reason is reach, not risk. `importlib.import_module` appears
+#      ONCE in all of `apps/` + `packages/` (`orchestrator/declarative.py:100`,
+#      a plugin loader) and ZERO times in the gateway. Neither shape is the
+#      plausible refactor this fence exists to catch ("make the importer use
+#      the shared seam"); both are deliberate evasion, and a fence cannot be
+#      built against someone willing to edit the fence file.
+#   C. Reachability enters at `_SYNC_ENTRY_POINTS` only. Module-level code is a
+#      call SITE (so a module-level call TO a gate is caught) but is not an
+#      entry POINT, so an indirect route that begins at import time —
+#      `_PRIMED = patch_record(…)` at module level — is seen by neither
+#      reachability fence.
+#   D. Anything outside `routes/crm/*.py`.
+#
+# Nothing in this package reaches either gate by any of these today.
 
-    This is a live-system property, not a style preference. The sync loop is
-    **enabled on production** and pulls every cycle; a pulled deal carries
-    whatever stage Zoho has it in, and it carries no obligation to satisfy an
-    entry requirement somebody set here afterwards. Routing the pull through
-    the gate would make one settings-grid save start failing every cycle for a
-    whole Zoho module — fail-closed in the wrong direction, on a loop nobody is
-    watching.
+#: WS-26h — the status transition itself, and its three effects.
+_MOVE_GATE = ("pipeline", "apply_status_transition")
 
-    Asserted structurally rather than by example, because the refactor that
-    would break it is a plausible one ("make the importer use the shared
-    transition helper for consistency") and no example test would be looking.
+#: WS-26h2 — the entry requirements on the stage a caller CHOSE (D-CRM-13).
+_ENTRY_GATE = ("pipeline", "_require_entry_fields")
+
+#: Where the ENABLED 600s Zoho sync enters this package. Anything these can
+#: reach runs against the live upstream tenant every cycle.
+#:
+#: ⚠️ `_run_cycle_locked` and not just `pull_phase`, added by repair round 1:
+#: one cycle PULLS **and then PUSHES** — `pull_phase` at `sync_zoho.py:1172`,
+#: then `apply_zoho_deletes`, `push_records`, `push_activities`,
+#: `push_tombstones` (and below them `apply_push_result` / `_settle` / `_fail`).
+#: A gate reached only from the push half runs against the live tenant every
+#: cycle just as surely, and entering at `pull_phase` alone reported `[]` for it.
+#: The loop's own three frames are entered so a rename inside the chain cannot
+#: quietly narrow the fence.
+_SYNC_ENTRY_POINTS = (
+    ("sync_zoho", "_sync_loop"),
+    ("sync_zoho", "run_cycle"),
+    ("sync_zoho", "_run_cycle_locked"),
+    ("sync_zoho", "pull_phase"),
+    ("import_zoho", "apply_module"),
+)
+
+#: Calls written at module level rather than inside a `def`. They run at IMPORT
+#: time, so they are call sites like any other; they are not entry points.
+_MODULE_FRAME = "<module>"
+
+
+def _dotted(node: object) -> str | None:
+    """``a``/``a.b.c`` as a string, or None for anything else."""
+    import ast
+
+    parts: list[str] = []
+    while isinstance(node, ast.Attribute):
+        parts.append(node.attr)
+        node = node.value
+    if not isinstance(node, ast.Name):
+        return None
+    parts.append(node.id)
+    return ".".join(reversed(parts))
+
+
+def _crm_target(node, package: str) -> str | None:
+    """What an ``ImportFrom`` imports FROM, as a path inside the CRM package.
+
+    ``""`` is the package itself, ``"pipeline"`` is that submodule, ``None`` is
+    "not this package".
+
+    ⚠️ **Relative forms are resolved, and that is the whole point of this
+    helper** (repair round 1). ``from .pipeline import apply_status_transition``
+    is the same import as the absolute spelling — same call, same live-system
+    consequence — but its ``node.module`` is ``"pipeline"`` with ``level=1``,
+    and ``from . import pipeline`` has ``node.module is None``. Gating on
+    ``node.module.startswith("gateway.routes.crm.")`` saw neither, so the fence
+    could be respelled around in one line: a fence with a spelling it does not
+    know is a fence with a hole, and the substring scan this replaced had no
+    such hole.
+    """
+    absolute = "gateway.routes." + package
+    module = node.module or ""
+    if node.level == 0:
+        if module == absolute:
+            return ""
+        if module.startswith(absolute + "."):
+            return module[len(absolute) + 1:]
+        return None
+    if node.level == 1:
+        # `from . import x` → "", `from .pipeline import x` → "pipeline".
+        return module
+    # `level >= 2` walks up out of the package, so it has to be named again to
+    # land back inside it: `from ..crm.pipeline import x`.
+    if module == package:
+        return ""
+    if module.startswith(package + "."):
+        return module[len(package) + 1:]
+    return None
+
+
+def _package_alias(root: str, stems: frozenset[str]) -> dict[str, str]:
+    """A local name bound to the PACKAGE — so ``root.pipeline.f()`` resolves."""
+    return {f"{root}.{stem}": stem for stem in stems}
+
+
+def _from_submodule(
+    stem: str, aliases, exports: dict[str, frozenset[str]],
+) -> dict[str, frozenset[tuple[str, str]]]:
+    """``from .pipeline import X`` / ``import *`` → local name -> candidates."""
+    names: dict[str, frozenset[tuple[str, str]]] = {}
+    for alias in aliases:
+        if alias.name == "*":
+            names.update({
+                fn: frozenset({(stem, fn)}) for fn in exports.get(stem, frozenset())
+            })
+        else:
+            names[alias.asname or alias.name] = frozenset({(stem, alias.name)})
+    return names
+
+
+def _from_package(
+    aliases, stems: frozenset[str], exports: dict[str, frozenset[str]],
+) -> tuple[dict[str, frozenset[tuple[str, str]]], dict[str, str]]:
+    """``from . import pipeline`` / ``from . import a_reexported_symbol``.
+
+    A submodule binds a MODULE; anything else is a symbol re-exported through
+    the package ``__init__``, which names its defining module only up to
+    ambiguity — so every module that DEFINES the name is a candidate.
+    """
+    names: dict[str, frozenset[tuple[str, str]]] = {}
+    modules: dict[str, str] = {}
+    for alias in aliases:
+        if alias.name in stems:
+            modules[alias.asname or alias.name] = alias.name
+        elif alias.name == "*":
+            for stem in stems:
+                _merge_names(names, _from_submodule(stem, aliases, exports))
+        else:
+            found = frozenset(
+                (stem, alias.name) for stem in stems
+                if alias.name in exports.get(stem, frozenset())
+            )
+            if found:
+                names[alias.asname or alias.name] = found
+    return names, modules
+
+
+def _merge_names(into: dict, more: dict) -> None:
+    """Union, never overwrite: two imports can bind the same local name."""
+    for key, value in more.items():
+        into[key] = into.get(key, frozenset()) | value
+
+
+def _crm_imports(
+    tree, *, package: str, stems: frozenset[str], exports: dict[str, frozenset[str]],
+) -> tuple[dict[str, frozenset[tuple[str, str]]], dict[str, str]]:
+    """``(local name -> {(module, function), …}, local alias -> module stem)``.
+
+    Read from the WHOLE tree, so an import inside a function body counts —
+    that is how the "one seam" mutant reached the gate from ``core.py``.
+
+    A local name maps to a SET, not one pair, because a symbol re-exported
+    through the package ``__init__`` names its defining module only up to
+    ambiguity. Over-approximating there is the safe direction.
+    """
+    import ast
+
+    absolute = "gateway.routes." + package
+    names: dict[str, frozenset[tuple[str, str]]] = {}
+    modules: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            rest = _crm_target(node, package)
+            if rest in stems:
+                _merge_names(names, _from_submodule(rest, node.names, exports))
+            elif rest == "":
+                more, more_modules = _from_package(node.names, stems, exports)
+                _merge_names(names, more)
+                modules.update(more_modules)
+            elif rest is None and (node.module or "") in ("gateway.routes", ""):
+                # `from gateway.routes import crm` / `from .. import crm` bind
+                # the package itself under a plain name.
+                for alias in node.names:
+                    if alias.name == package:
+                        modules.update(
+                            _package_alias(alias.asname or alias.name, stems),
+                        )
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name.startswith(absolute + "."):
+                    modules[alias.asname or alias.name] = alias.name.rsplit(".", 1)[1]
+                elif alias.name == absolute:
+                    modules.update(
+                        _package_alias(alias.asname or alias.name, stems),
+                    )
+    return names, modules
+
+
+def _resolved_calls(
+    call, *, module: str, names: dict, modules: dict, own: set[str],
+) -> frozenset[tuple[str, str]]:
+    """One ``ast.Call`` → the ``(module, function)`` pairs it may name."""
+    target = _dotted(call.func)
+    if target is None:
+        return frozenset()
+    if "." in target:
+        prefix, attr = target.rsplit(".", 1)
+        return frozenset({(modules[prefix], attr)}) if prefix in modules else frozenset()
+    if target in names:
+        return names[target]
+    return frozenset({(module, target)}) if target in own else frozenset()
+
+
+def _crm_call_graph(package) -> dict[tuple[str, str], set[tuple[str, str]]]:
+    """``(module, function) -> the (module, function) pairs it calls``.
+
+    Over-approximates on purpose — nested and class-scoped defs merge into
+    their bare name, and an import inside one function is treated as visible to
+    the whole module. A fence guarding a live loop should answer "maybe" as
+    "yes"; the failure it must never produce is a quiet green.
+
+    Module-level calls are collected under ``_MODULE_FRAME`` rather than
+    dropped: they run at import time, and leaving them out made a call written
+    outside any ``def`` invisible to the call-site fence.
+    """
+    import ast
+
+    stems = frozenset(path.stem for path in package.glob("*.py"))
+    trees: dict[str, object] = {}
+    exports: dict[str, frozenset[str]] = {}
+    for path in sorted(package.glob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        trees[path.stem] = tree
+        # Top-level defs only: what a `*` or an `__init__` re-export can carry.
+        exports[path.stem] = frozenset(
+            node.name for node in tree.body
+            if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
+        )
+
+    graph: dict[tuple[str, str], set[tuple[str, str]]] = {}
+    for module, tree in sorted(trees.items()):
+        names, modules = _crm_imports(
+            tree, package=package.name, stems=stems, exports=exports,
+        )
+        defs = [
+            node for node in ast.walk(tree)
+            if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
+        ]
+        own = {node.name for node in defs}
+        scopes: list[tuple[str, list]] = [
+            (node.name, [c for c in ast.walk(node) if isinstance(c, ast.Call)])
+            for node in defs
+        ]
+        nested = {id(call) for _fn, calls in scopes for call in calls}
+        scopes.append((_MODULE_FRAME, [
+            call for call in ast.walk(tree)
+            if isinstance(call, ast.Call) and id(call) not in nested
+        ]))
+        for fn, calls in scopes:
+            edges = graph.setdefault((module, fn), set())
+            for sub in calls:
+                edges |= _resolved_calls(
+                    sub, module=module, names=names, modules=modules, own=own,
+                )
+    return graph
+
+
+def _gate_call_files(package, gate: tuple[str, str]) -> list[str]:
+    """The files containing a real CALL to ``gate``, under any local name.
+
+    ``gate`` is an argument rather than a module constant so the move gate and
+    the entry gate are expressed through ONE mechanism — a second copy of this
+    walk keyed on a different name is the defect, not the feature.
+    """
+    graph = _crm_call_graph(package)
+    return sorted({
+        f"{module}.py" for (module, _fn), calls in graph.items() if gate in calls
+    })
+
+
+def _gate_reached_from(package, entries, gate: tuple[str, str]) -> list[str]:
+    """The call chain by which ``entries`` reaches ``gate``, or ``[]``."""
+    graph = _crm_call_graph(package)
+    parents: dict[tuple[str, str], tuple[str, str] | None] = {}
+    queue = []
+    for entry in entries:
+        parents[entry] = None
+        queue.append(entry)
+    while queue:
+        node = queue.pop(0)
+        for target in sorted(graph.get(node, ())):
+            if target in parents:
+                continue
+            parents[target] = node
+            if target == gate:
+                chain, cursor = [], target
+                while cursor is not None:
+                    chain.append(f"{cursor[0]}.{cursor[1]}")
+                    cursor = parents[cursor]
+                return list(reversed(chain))
+            queue.append(target)
+    return []
+
+
+def test_the_move_gate_is_called_from_exactly_two_files() -> None:
+    """WS-26h, half one — the DIRECT case.
+
+    Two FILES may call :func:`apply_status_transition`: ``pipeline.py``, which
+    defines it, and ``records.py``, the one request path that moves a status.
+    Nothing else — in particular not import_zoho / sync_zoho / broker_handlers
+    / auto_lead, the four that run outside a member request.
+
+    ⚠️ **FILE-level, and deliberately not function-level.** The assertion is
+    over ``f"{module}.py"``, so moving the call to another function *inside*
+    ``records.py`` keeps it green. That is not an oversight: WS-26i-bulk
+    done-when 1 extracts ``patch_record``'s body into ``apply_record_patch`` in
+    the same file, and a function-level assertion would turn that sanctioned
+    change red and contradict its "passes with zero edits" clause. The property
+    this fence owns is *which file the seam lives in*; **which function inside
+    it is not claimed here, and nothing asserts it.** (It was claimed in this
+    docstring until repair round 1, which is the same overclaim-by-docstring
+    defect the whole ticket exists to remove.)
+
+    ⚠️ **The seam's LOCATION is what this pins, and it is load-bearing for
+    WS-26i-bulk done-when 1**, which decides the seam **stays in
+    ``records.py``** — so this fence passes there with zero edits. Measured:
+    extracting the call into a new ``routes/crm/bulk_seam.py`` reports
+    ``['bulk_seam.py', 'pipeline.py']`` and goes red, with ``records.py``
+    dropping out, so the failure names the relocation rather than merely
+    growing the list.
+
+    Converted from a literal ``"apply_status_transition(" in path.read_text()``
+    scan by WS-26h-fence. Measured on the real package before the conversion:
+    an aliased import in ``import_zoho.py`` left it GREEN and a COMMENT saying
+    the path must never call the gate turned it RED. Calls are AST nodes now,
+    so both are answered the right way round.
     """
     from pathlib import Path
 
     package = Path(crm_core.__file__).parent
-    callers = sorted(
-        path.name for path in package.glob("*.py")
-        if "apply_status_transition(" in path.read_text(encoding="utf-8")
+    assert _gate_call_files(package, _MOVE_GATE) == ["pipeline.py", "records.py"]
+
+
+def test_the_zoho_pull_never_enters_the_stage_gate() -> None:
+    """WS-26h, half two — the INDIRECT case, and the load-bearing one.
+
+    The importer and the sync engine must not route their status writes
+    through :func:`apply_status_transition`, and "must not" is a REACHABILITY
+    claim: ``import_zoho.apply_record`` calling ``records.patch_record`` puts
+    the transition on the enabled pull without either Zoho module ever naming
+    it. The old text-match fence stayed green on exactly that shape.
+
+    A pulled deal carries whatever stage Zoho has it in and no obligation to
+    satisfy an entry requirement somebody set here afterwards — and the move
+    gate reaches the entry gate unconditionally, so this is also the fence that
+    keeps the create-side refusal off the loop. Changing that loop is
+    OWNER-GATE (``work_plan.md`` §6 WS-26 (a)), so this must fail in CI rather
+    than be fixed forward.
+
+    ⚠️ **The whole cycle, not the pull half** (repair round 1). Entering only
+    at ``pull_phase`` left the PUSH half — ``push_records`` /
+    ``push_activities`` / ``push_tombstones`` and below them
+    ``apply_push_result`` / ``_settle`` / ``_fail`` — reporting ``[]`` for a
+    gate reached from it, while it would run against the live tenant every
+    cycle just the same. Measured: a gate reached from ``apply_push_result``
+    was green at ``pull_phase`` and is red at ``_run_cycle_locked``.
+    """
+    from pathlib import Path
+
+    package = Path(crm_core.__file__).parent
+    chain = _gate_reached_from(package, _SYNC_ENTRY_POINTS, _MOVE_GATE)
+    assert chain == [], " -> ".join(chain)
+
+
+def test_the_entry_gate_is_called_from_exactly_two_files() -> None:
+    """WS-26h2 done-when 8, half one — the DIRECT case.
+
+    ``pipeline.py`` defines the gate and calls it from
+    :func:`apply_status_transition`; ``records.py`` calls it from
+    ``_resolve_status``, the one create path where a caller may choose the
+    stage. Nothing else may call it at all.
+
+    ``core.py`` is the one to watch: ``insert_row`` keyed on
+    ``table == "crm_deals"`` is the tempting "one seam" and misses the Zoho
+    pull **today only because ``upsert_by_zoho_id`` duplicates the statement
+    rather than delegating**. Measured: with the gate moved there, both Zoho
+    suites stay green (136) and only this fence and the two D-CRM-13 cases go
+    red. Do not build on that accident.
+
+    Calls are read as AST nodes, so a comment or docstring **mentioning** the
+    gate — including this file's — is not a call, and an aliased import is.
+    """
+    from pathlib import Path
+
+    package = Path(crm_core.__file__).parent
+    assert _gate_call_files(package, _ENTRY_GATE) == ["pipeline.py", "records.py"]
+
+
+def test_no_zoho_pull_path_can_reach_the_entry_gate() -> None:
+    """WS-26h2 done-when 8, half two — the INDIRECT case, and the load-bearing
+    one.
+
+    A call-site set cannot see this: ``import_zoho.apply_record`` calling
+    ``records._resolve_status`` puts the gate on the pull without either Zoho
+    module ever naming it. That refactor ("make the importer use the shared
+    create seam") is the one this repo's own doctrine encourages, and
+    ``apply_record`` **already sets ``values["status_id"]`` server-side**, so
+    ``chosen`` would be truthy for every pulled deal.
+
+    What happens then is not a test failure, it is an incident: the sync loop
+    is ENABLED and pulls every 600s, so the first settings-grid save on a
+    Zoho-named lane starts 422-ing rows from the live upstream tenant, on a
+    loop nobody is watching. Changing that loop is OWNER-GATE
+    (``work_plan.md`` §6 WS-26 (a)), so this must fail in CI rather than be
+    fixed forward. ⚠️ Neither Zoho suite would catch it either — ``grep
+    required_fields`` over both returns nothing, so the gate is a silent no-op
+    against their fixtures, exactly as it was for the ``core.insert_row``
+    mutant.
+    """
+    from pathlib import Path
+
+    package = Path(crm_core.__file__).parent
+    chain = _gate_reached_from(package, _SYNC_ENTRY_POINTS, _ENTRY_GATE)
+    assert chain == [], " -> ".join(chain)
+
+
+# The shapes the four fences above claim to tell apart, run against
+# synthetic packages so "the fence went blind" is a red test rather than a
+# silent gap (the `test_crm_agent.py` path-guard convention).
+
+#: Where BOTH gates are allowed to be called from — the real package's answer
+#: for `_MOVE_GATE` and for `_ENTRY_GATE` alike.
+_SITED = ["pipeline.py", "records.py"]
+
+_FENCE_SOURCES = {
+    "pipeline.py": (
+        "def _require_entry_fields(status, record, patch):\n"
+        "    pass\n"
+        "def apply_status_transition(db):\n"
+        "    _require_entry_fields(1, 2, {})\n"
+        # The conversion's won-status move — why `pipeline.py` is in the move
+        # gate's own call-file set, exactly as in the real package.
+        "async def _stamp_converted(db, lead):\n"
+        "    await apply_status_transition(db)\n"
+    ),
+    "records.py": (
+        "from gateway.routes.crm.pipeline import _require_entry_fields\n"
+        "from gateway.routes.crm.pipeline import apply_status_transition\n"
+        "def _resolve_status(db, values):\n"
+        "    _require_entry_fields(1, 2, values)\n"
+        "def create_record(db):\n"
+        "    _resolve_status(db, {})\n"
+        # The one request path that MOVES a status. Its body is what
+        # WS-26i-bulk would extract, which is why the move gate's call-file
+        # fence is what announces that extraction.
+        "async def patch_record(db, record, values):\n"
+        "    await apply_status_transition(db)\n"
+    ),
+    "core.py": "async def insert_row(db, table, values):\n    pass\n",
+    "import_zoho.py": (
+        "from gateway.routes.crm.core import insert_row\n"
+        "async def apply_record(db):\n"
+        "    await insert_row(db, 'crm_deals', {})\n"
+        "async def apply_module(db):\n"
+        "    await apply_record(db)\n"
+    ),
+    # The cycle's own chain, not just its pull half: `_run_cycle_locked` calls
+    # `pull_phase` AND the three push phases, and `_SYNC_ENTRY_POINTS` enters at
+    # the loop. Without these frames the widened entry points would be fenced by
+    # nothing and the push-half case below could not go red.
+    "sync_zoho.py": (
+        "from gateway.routes.crm.import_zoho import apply_module\n"
+        "async def pull_phase(db):\n"
+        "    await apply_module(db)\n"
+        "async def apply_push_result(db, row):\n"
+        "    pass\n"
+        "async def push_records(db):\n"
+        "    await apply_push_result(db, None)\n"
+        "async def _run_cycle_locked(db):\n"
+        "    await pull_phase(db)\n"
+        "    await push_records(db)\n"
+        "async def run_cycle(db):\n"
+        "    await _run_cycle_locked(db)\n"
+        "async def _sync_loop(db):\n"
+        "    await run_cycle(db)\n"
+    ),
+}
+
+#: ``(name, file, extra source, entry-gate answer, move-gate answer)`` where an
+#: answer is ``(expected call files, the gate is reachable from the pull)``.
+#: BOTH gates are asserted on EVERY case, so a shape aimed at one of them
+#: cannot quietly move the other's answer.
+_FENCE_CASES = [
+    ("baseline", None, "", (_SITED, False), (_SITED, False)),
+    # ── the ENTRY gate's shapes (WS-26h2) ──────────────────────────────────
+    (
+        "a comment naming the entry gate is not a call",
+        "import_zoho.py",
+        "# never calls _require_entry_fields(...) — the pull must stay ungated\n"
+        "GATE_DOC = 'see _require_entry_fields(status, record, patch)'\n",
+        (_SITED, False),
+        (_SITED, False),
+    ),
+    (
+        "a direct entry-gate call added to import_zoho",
+        "import_zoho.py",
+        "from gateway.routes.crm.pipeline import _require_entry_fields\n"
+        "def gated(status, values):\n"
+        "    _require_entry_fields(status, None, values)\n",
+        (["import_zoho.py", "pipeline.py", "records.py"], False),
+        (_SITED, False),
+    ),
+    (
+        "a direct entry-gate call added to sync_zoho",
+        "sync_zoho.py",
+        "from gateway.routes.crm.pipeline import _require_entry_fields\n"
+        "def gated(status, values):\n"
+        "    _require_entry_fields(status, None, values)\n",
+        (["pipeline.py", "records.py", "sync_zoho.py"], False),
+        (_SITED, False),
+    ),
+    (
+        # ⚠️ The import is INSIDE the function on purpose, and this is the case
+        # that pins `_crm_imports`' whole-tree walk. The real `core.py` CANNOT
+        # import `pipeline` at top level — `pipeline` imports `CLOSING_TYPES`
+        # from `core`, so a module-level import raises `ImportError: cannot
+        # import name 'CLOSING_TYPES' from partially initialized module`. The
+        # "one seam" mis-siting this package is most likely to grow can
+        # therefore ONLY be written with a function-body import, and it is also
+        # the one the reachability fence cannot help with (`core.insert_row` is
+        # not reached from the pull entry points). A fixture with a top-level
+        # import would model a siting that cannot exist.
+        "a direct entry-gate call added to core, imported inside the function",
+        "core.py",
+        "async def insert_row_gated(db, table, values):\n"
+        "    from gateway.routes.crm.pipeline import _require_entry_fields\n"
+        "    _require_entry_fields(None, None, values)\n",
+        (["core.py", "pipeline.py", "records.py"], False),
+        (_SITED, False),
+    ),
+    (
+        "an aliased entry-gate import in import_zoho",
+        "import_zoho.py",
+        "from gateway.routes.crm.pipeline import _require_entry_fields as _gate\n"
+        "def gated(status, values):\n"
+        "    _gate(status, None, values)\n",
+        (["import_zoho.py", "pipeline.py", "records.py"], False),
+        (_SITED, False),
+    ),
+    (
+        "a module-attribute entry-gate call in import_zoho",
+        "import_zoho.py",
+        "from gateway.routes.crm import pipeline\n"
+        "def gated(status, values):\n"
+        "    pipeline._require_entry_fields(status, None, values)\n",
+        (["import_zoho.py", "pipeline.py", "records.py"], False),
+        (_SITED, False),
+    ),
+    (
+        "the importer routed through the shared create seam",
+        "import_zoho.py",
+        # `apply_record` is the function the pull already runs, and the one
+        # that already sets `values["status_id"]` — so this is the refactor as
+        # it would actually be written, not a spare function nothing calls.
+        "from gateway.routes.crm.records import _resolve_status\n"
+        "async def apply_record(db, values):\n"
+        "    await _resolve_status(db, values)\n",
+        (_SITED, True),
+        (_SITED, False),
+    ),
+    # ── the MOVE gate's shapes (WS-26h), pinned the same way ───────────────
+    (
+        # The case the TEXT fence got backwards: it went RED on this comment,
+        # making deletion of the comment the cheapest way back to green.
+        "a comment naming the move gate is not a call",
+        "import_zoho.py",
+        "# never calls apply_status_transition(...) — the pull carries whatever\n"
+        "# stage Zoho has, and the gate would refuse live upstream rows\n"
+        "GATE_DOC = 'see apply_status_transition(db, entity, record, ...)'\n",
+        (_SITED, False),
+        (_SITED, False),
+    ),
+    (
+        "a direct move-gate call added to import_zoho",
+        "import_zoho.py",
+        "from gateway.routes.crm.pipeline import apply_status_transition\n"
+        "async def moved(db, record):\n"
+        "    await apply_status_transition(db)\n",
+        (_SITED, False),
+        (["import_zoho.py", "pipeline.py", "records.py"], False),
+    ),
+    (
+        "a direct move-gate call added to sync_zoho",
+        "sync_zoho.py",
+        "from gateway.routes.crm.pipeline import apply_status_transition\n"
+        "async def moved(db, record):\n"
+        "    await apply_status_transition(db)\n",
+        (_SITED, False),
+        (["pipeline.py", "records.py", "sync_zoho.py"], False),
+    ),
+    (
+        # ⚠️ Function-body import for the same reason as the entry gate's core
+        # case — a top-level `from …pipeline import …` in the real `core.py`
+        # raises `ImportError` on the circular `CLOSING_TYPES`. A fixture with
+        # a top-level import would pin nothing about `_crm_imports`' whole-tree
+        # walk, which is the F1 gap repair round 2 closed for the entry gate.
+        "a direct move-gate call added to core, imported inside the function",
+        "core.py",
+        "async def insert_row_moved(db, table, values):\n"
+        "    from gateway.routes.crm.pipeline import apply_status_transition\n"
+        "    await apply_status_transition(db)\n",
+        (_SITED, False),
+        (["core.py", "pipeline.py", "records.py"], False),
+    ),
+    (
+        # The case the TEXT fence was BLIND to: measured green on the real
+        # package before this conversion.
+        "an aliased move-gate import in import_zoho",
+        "import_zoho.py",
+        "from gateway.routes.crm.pipeline import apply_status_transition as _move\n"
+        "async def moved(db, record):\n"
+        "    await _move(db)\n",
+        (_SITED, False),
+        (["import_zoho.py", "pipeline.py", "records.py"], False),
+    ),
+    (
+        "a module-attribute move-gate call in import_zoho",
+        "import_zoho.py",
+        "from gateway.routes.crm import pipeline\n"
+        "async def moved(db, record):\n"
+        "    await pipeline.apply_status_transition(db)\n",
+        (_SITED, False),
+        (["import_zoho.py", "pipeline.py", "records.py"], False),
+    ),
+    (
+        # The decisive one, and the second shape the TEXT fence was blind to:
+        # `apply_record` is the function the pull already runs, so routing it
+        # at the shared PATCH seam adds no call site anywhere and lands the
+        # transition — and, through it, the entry gate — on the enabled loop.
+        "the importer routed through the shared patch seam",
+        "import_zoho.py",
+        "from gateway.routes.crm.records import patch_record\n"
+        "async def apply_record(db, values):\n"
+        "    await patch_record(db, None, values)\n",
+        (_SITED, True),
+        (_SITED, True),
+    ),
+    # ── repair round 1: the spellings the first AST cut could not read ─────
+    #
+    # Every one of these was measured **green on the AST fence and RED on the
+    # substring scan it replaced** — i.e. a capability the conversion removed.
+    # The reviewer found the first; the rest share its cause. Each is a
+    # one-line respelling of a case above, which is exactly what makes them
+    # dangerous: `from .pipeline import …` is the same import, the same call
+    # and the same live-system consequence as the absolute spelling, and
+    # `pyproject.toml` selects no `TID` rules, so nothing else refuses one.
+    (
+        "a RELATIVE-import move-gate call in import_zoho",
+        "import_zoho.py",
+        "from .pipeline import apply_status_transition\n"
+        "async def moved(db, record):\n"
+        "    await apply_status_transition(db)\n",
+        (_SITED, False),
+        (["import_zoho.py", "pipeline.py", "records.py"], False),
+    ),
+    (
+        "a RELATIVE-import entry-gate call in import_zoho",
+        "import_zoho.py",
+        "from .pipeline import _require_entry_fields\n"
+        "def gated(status, values):\n"
+        "    _require_entry_fields(status, None, values)\n",
+        (["import_zoho.py", "pipeline.py", "records.py"], False),
+        (_SITED, False),
+    ),
+    (
+        "a `from . import pipeline` move-gate call in import_zoho",
+        "import_zoho.py",
+        "from . import pipeline as _p\n"
+        "async def moved(db, record):\n"
+        "    await _p.apply_status_transition(db)\n",
+        (_SITED, False),
+        (["import_zoho.py", "pipeline.py", "records.py"], False),
+    ),
+    (
+        # ⚠️ Over-approximates on purpose: `exports` is every top-level def, so
+        # a `*` is treated as binding underscore-prefixed names too, which a
+        # real `import *` would not. "Maybe" answered as "yes" is the safe
+        # direction for a fence guarding a running loop.
+        "a STAR-import move-gate call in import_zoho",
+        "import_zoho.py",
+        "from .pipeline import *\n"
+        "async def moved(db, record):\n"
+        "    await apply_status_transition(db)\n",
+        (_SITED, False),
+        (["import_zoho.py", "pipeline.py", "records.py"], False),
+    ),
+    (
+        # A symbol re-exported through the package `__init__`. The first cut
+        # read this as a MODULE import and resolved the call to nothing.
+        "a package RE-EXPORT move-gate call in import_zoho",
+        "import_zoho.py",
+        "from gateway.routes.crm import apply_status_transition\n"
+        "async def moved(db, record):\n"
+        "    await apply_status_transition(db)\n",
+        (_SITED, False),
+        (["import_zoho.py", "pipeline.py", "records.py"], False),
+    ),
+    (
+        # Outside any `def`, so it runs at IMPORT time — and the first cut
+        # walked only function bodies.
+        "a MODULE-LEVEL move-gate call in import_zoho",
+        "import_zoho.py",
+        "from .pipeline import apply_status_transition\n"
+        "_PRIMED = apply_status_transition(None)\n",
+        (_SITED, False),
+        (["import_zoho.py", "pipeline.py", "records.py"], False),
+    ),
+    (
+        "a parent-package move-gate call in import_zoho",
+        "import_zoho.py",
+        "from .. import crm\n"
+        "async def moved(db, record):\n"
+        "    await crm.pipeline.apply_status_transition(db)\n",
+        (_SITED, False),
+        (["import_zoho.py", "pipeline.py", "records.py"], False),
+    ),
+    (
+        # The decisive case, respelled relatively. This is the one that makes
+        # the regression an EXPOSURE rather than a wart: the shape the whole
+        # reachability fence exists to catch, written in one line the fence
+        # could not read.
+        "the importer routed through the patch seam, RELATIVE import",
+        "import_zoho.py",
+        "from .records import patch_record\n"
+        "async def apply_record(db, values):\n"
+        "    await patch_record(db, None, values)\n",
+        (_SITED, True),
+        (_SITED, True),
+    ),
+    (
+        # ⚠️ Reachable through the PUSH half only. This case is green unless
+        # `_SYNC_ENTRY_POINTS` enters at the cycle rather than at `pull_phase`
+        # — measured both ways.
+        "the PUSH half routed through the patch seam",
+        "sync_zoho.py",
+        "from .records import patch_record\n"
+        "async def apply_push_result(db, row):\n"
+        "    await patch_record(db, None, {})\n",
+        (_SITED, True),
+        (_SITED, True),
+    ),
+    (
+        # ── repair round 2 ────────────────────────────────────────────────
+        # The case that pins `_merge_names`' UNION. Two imports bind the same
+        # local name — the `TYPE_CHECKING` / `try: … except ImportError:`
+        # fallback, a real shape and not a contrivance — and only one branch
+        # names the gate. Union sees it; last-one-wins does not, and which
+        # branch "wins" is an accident of `ast.walk` order.
+        #
+        # ⚠️ This was the ONE helper mutant that survived repair round 1:
+        # `_merge_names` documented union semantics and nothing asserted them,
+        # so `into[key] = value` left the whole file green.
+        "the same local name bound by two imports (TYPE_CHECKING fallback)",
+        "import_zoho.py",
+        "from typing import TYPE_CHECKING\n"
+        "if TYPE_CHECKING:\n"
+        "    from .pipeline import apply_status_transition\n"
+        "else:\n"
+        "    from .core import apply_status_transition\n"
+        "async def _mv(db):\n"
+        "    return await apply_status_transition(db)\n",
+        (_SITED, False),
+        (["import_zoho.py", "pipeline.py", "records.py"], False),
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    ("name", "target", "extra", "entry", "move"),
+    _FENCE_CASES,
+    ids=[case[0] for case in _FENCE_CASES],
+)
+def test_the_siting_fences_see_the_shapes_they_claim_to_see(
+    tmp_path, name: str, target: str | None, extra: str,
+    entry: tuple[list[str], bool], move: tuple[list[str], bool],
+) -> None:
+    """Each gate's last case is the whole reason it has two fences: the
+    importer routed through ``records._resolve_status`` (entry) or
+    ``records.patch_record`` (move) adds NO call site — the file set is
+    unchanged and green — and is caught only by reachability.
+
+    The two "a comment naming the gate is not a call" cases and the two
+    "aliased import" cases are the ones the superseded text-match fences got
+    exactly backwards, in both directions.
+    """
+    package = tmp_path / "crm"
+    package.mkdir()
+    for filename, source in _FENCE_SOURCES.items():
+        body = source + (extra if filename == target else "")
+        (package / filename).write_text(body, encoding="utf-8")
+
+    for gate, (expected_files, reachable) in (
+        (_ENTRY_GATE, entry), (_MOVE_GATE, move),
+    ):
+        label = f"{name} · {gate[1]}"
+        assert _gate_call_files(package, gate) == expected_files, label
+        chain = _gate_reached_from(package, _SYNC_ENTRY_POINTS, gate)
+        assert bool(chain) is reachable, (
+            f"{label}: {' -> '.join(chain) or 'unreachable'}"
+        )
+
+
+def test_the_spec_quotes_the_real_number_of_fence_cases() -> None:
+    """The fence's own fence, added in repair round 2 (R7).
+
+    Two consecutive rounds found a **stale case count in `crm_app.md`** and
+    nothing failed — including in the §10 block an agent runs at dispatch,
+    where the number annotates a command whose real output disagreed with it.
+    A count nobody checks is a comment, so this checks it.
+
+    The spec writes the count in one canonical form, ``N-case synthetic
+    self-test``, everywhere it states it; every occurrence must equal the
+    length of :data:`_FENCE_CASES`.
+    """
+    import re
+    from pathlib import Path
+
+    spec = (
+        Path(__file__).resolve().parents[2]
+        / "project-docs" / "specs" / "crm_app.md"
+    ).read_text(encoding="utf-8")
+    quoted = re.findall(r"(\d+)-case synthetic self-test", spec)
+
+    # Its own precondition, because a regex that matches nothing agrees with
+    # everything — the WS-26i-export vacuous-fence lesson, applied here.
+    assert quoted, (
+        "crm_app.md no longer states the count in the pinned form "
+        "'N-case synthetic self-test' — restore it or this fence is vacuous"
     )
-    # `pipeline.py` defines it; `records.py` is the one request path that moves
-    # a status. Nothing else — in particular not import_zoho / sync_zoho /
-    # broker_handlers / auto_lead, the four that run outside a member request.
-    assert callers == ["pipeline.py", "records.py"], callers
+    assert [int(n) for n in quoted] == [len(_FENCE_CASES)] * len(quoted), (
+        f"crm_app.md quotes {quoted}; the suite has {len(_FENCE_CASES)} cases"
+    )
+
+
+# ── WS-26h2 · the create gate's own shape ───────────────────────────────────
+#
+# The route-level behaviour is in `test_crm_routes.py` (and the convert half in
+# `test_crm_convert.py`). What is asserted here is the shape `records.py` hands
+# the gate: "there is no existing row" as a first-class argument rather than a
+# `None` that happens to make `getattr` answer the same way.
+
+
+def _stage(name: str = "Proposal", *fields: str):
+    """A status row as `require_row` would return it, carrying requirements."""
+    from types import SimpleNamespace
+
+    return SimpleNamespace(name=name, type="ongoing", required_fields=list(fields))
+
+
+def test_with_no_existing_row_only_the_payload_can_satisfy_a_requirement() -> None:
+    with pytest.raises(HTTPException) as exc:
+        crm_pipeline._require_entry_fields(
+            _stage("Proposal", "amount"),
+            crm_pipeline.NO_EXISTING_RECORD,
+            {"name": "Printer order"},
+        )
+
+    assert exc.value.status_code == 422
+    assert "amount" in str(exc.value.detail)
+
+    # …and the same call with the field present is silent.
+    crm_pipeline._require_entry_fields(
+        _stage("Proposal", "amount"),
+        crm_pipeline.NO_EXISTING_RECORD,
+        {"name": "Printer order", "amount": 400000},
+    )
+
+
+def test_the_no_row_shape_is_a_distinct_object_not_none() -> None:
+    """Passing `None` would work by coincidence — `getattr(None, "amount",
+    None)` is also `None` — and would read forever after as somebody having
+    forgotten the record. The create case is something the gate is TOLD."""
+    assert crm_pipeline.NO_EXISTING_RECORD is not None
+    assert repr(crm_pipeline.NO_EXISTING_RECORD) == "NO_EXISTING_RECORD"
+
+
+def test_none_is_refused_rather_than_read_as_no_row() -> None:
+    """The fence that makes "first-class shape" more than a comment.
+
+    `getattr(None, field, None)` answers None for every field, so a caller that
+    lost the record on the way here would silently refuse a move it should have
+    allowed — the sentinel and a bug would be indistinguishable. They are not.
+    """
+    with pytest.raises(TypeError):
+        crm_pipeline._require_entry_fields(_stage("Proposal", "amount"), None, {})
+
+
+def test_the_no_row_sentinel_can_never_be_given_a_field() -> None:
+    """It is a module-level singleton; one that could carry an attribute would
+    be a global that could be made to satisfy somebody's requirement."""
+    with pytest.raises(AttributeError):
+        crm_pipeline.NO_EXISTING_RECORD.amount = 400000  # type: ignore[attr-defined]
+
+
+def test_a_decimal_zero_is_a_value_on_the_create_path_too() -> None:
+    """WS-26h2 done-when 6, the half `DealIn` cannot express: `amount` is typed
+    `float | None`, so a `Decimal` never survives the model — but `_is_blank`
+    is shared with the move path, where a real `NUMERIC` column returns
+    `Decimal('0.00')`, and "same semantics" is asserted rather than assumed."""
+    from decimal import Decimal
+
+    crm_pipeline._require_entry_fields(
+        _stage("Proposal", "amount"),
+        crm_pipeline.NO_EXISTING_RECORD,
+        {"amount": Decimal("0.00")},
+    )
+
+
+@pytest.mark.parametrize("blank", ["", "   "])
+def test_blank_text_is_absent_on_the_create_path_too(blank: str) -> None:
+    with pytest.raises(HTTPException) as exc:
+        crm_pipeline._require_entry_fields(
+            _stage("Proposal", "owner_email"),
+            crm_pipeline.NO_EXISTING_RECORD,
+            {"owner_email": blank},
+        )
+
+    assert exc.value.status_code == 422

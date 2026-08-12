@@ -289,6 +289,257 @@ async def test_an_unknown_source_is_422(db: FakeCrmDB) -> None:
     assert exc.value.status_code == 422
 
 
+# ── WS-26h2 · entry requirements on the CHOSEN create stage ─────────────────
+#
+# D-CRM-13: entry requirements gate the stage a caller CHOSE, never the stage
+# the server DEFAULTED to. `records._resolve_status` already distinguished the
+# two — `values.get("status_id")` is the caller's claim, `load_default_status`
+# is the server's — and only the first is a claim worth checking. The whole
+# reason the rule is shaped this way is the second test below: every deal the
+# PRODUCT creates lands in the default lane (`QuickCreateModal` sends no
+# `status_id`), so gating the defaulted path would 422 quick-create for
+# everyone the moment an owner put a requirement on the first lane.
+
+
+def _gate_stage(db: FakeCrmDB, stage, *fields: str) -> None:
+    """Put entry requirements on a seeded stage, as the settings grid would."""
+    for row in db.rows("crm_deal_statuses"):
+        if str(row["id"]) == str(stage.id):
+            row["required_fields"] = list(fields)
+            return
+    raise AssertionError(f"no such seeded stage: {stage}")
+
+
+def _late_stage(db: FakeCrmDB, *fields: str):
+    """A non-default lane a caller may name explicitly, with requirements."""
+    stage = db.seed(
+        "crm_deal_statuses", name="Proposal", position=30, type="ongoing",
+        is_default=False, probability=50,
+    )
+    _gate_stage(db, stage, *fields)
+    return stage
+
+
+async def test_creating_into_a_chosen_gated_stage_without_the_fields_is_422(
+    db: FakeCrmDB,
+) -> None:
+    """Done-when 1 — and the refusal names EXACTLY what is missing: a stage
+    demanding three fields, two of them absent, must not also name the one the
+    body supplied, or the modal asks for something already filled in."""
+    _seed_pipeline(db)
+    stage = _late_stage(db, "amount", "expected_close_date", "organization_id")
+
+    with pytest.raises(HTTPException) as exc:
+        await crm_records.create_record(
+            DEALS,
+            crm_core.DealIn(
+                name="Printer order", status_id=str(stage.id),
+                organization_id=str(uuid4()),
+            ),
+            USER,
+        )
+
+    assert exc.value.status_code == 422
+    detail = str(exc.value.detail)
+    assert "Proposal" in detail
+    assert "amount" in detail
+    assert "expected_close_date" in detail
+    assert "organization_id" not in detail
+
+
+async def test_a_refused_create_writes_no_deal_at_all(db: FakeCrmDB) -> None:
+    """Done-when 1's other half. Refused BEFORE `insert_row`, exactly as the
+    move gate is refused before the transition's three effects — a 422 that
+    still leaves a row is worse than no gate, because the caller believes
+    nothing happened."""
+    _seed_pipeline(db)
+    stage = _late_stage(db, "amount")
+
+    with pytest.raises(HTTPException):
+        await crm_records.create_record(
+            DEALS,
+            crm_core.DealIn(name="Printer order", status_id=str(stage.id)),
+            USER,
+        )
+
+    assert db.rows(DEALS.table) == []
+    assert db.committed == 0
+
+
+async def test_the_same_body_may_carry_the_missing_fields(db: FakeCrmDB) -> None:
+    """Done-when 2 — one request, not "create it and then fill this in"."""
+    _seed_pipeline(db)
+    stage = _late_stage(db, "amount")
+
+    deal = await crm_records.create_record(
+        DEALS,
+        crm_core.DealIn(
+            name="Printer order", status_id=str(stage.id), amount=400000,
+        ),
+        USER,
+    )
+
+    assert deal["status_id"] == str(stage.id)
+    assert deal["amount"] == 400000
+    assert len(db.rows(DEALS.table)) == 1
+
+
+async def test_a_requirement_on_the_DEFAULT_lane_never_blocks_a_create(
+    db: FakeCrmDB,
+) -> None:
+    """Done-when 3 — **D-CRM-13**, and the reason this ticket is not "close the
+    CREATE gap".
+
+    A deal in the default lane has claimed nothing yet, so demanding proof of
+    progress to enter it is a category error. Mechanically: `QuickCreateModal`
+    sends no `status_id`, so gating the defaulted path would 422 the only
+    create the product actually performs, for every user, the moment an owner
+    saved a requirement on the first lane — which `admin.py` permits with no
+    restriction at all.
+    """
+    _, default_stage = _seed_pipeline(db)
+    _gate_stage(db, default_stage, "amount")
+
+    deal = await crm_records.create_record(
+        DEALS, crm_core.DealIn(name="Printer order"), USER,
+    )
+
+    assert deal["status_id"] == str(default_stage.id)
+    assert deal["amount"] is None
+
+
+async def test_naming_the_default_lane_explicitly_IS_a_choice(
+    db: FakeCrmDB,
+) -> None:
+    """The condition is "did the caller supply `status_id`", not "is this lane
+    the default" — a body that names a stage has made the claim whichever lane
+    it names, and a rule keyed on the lane's `is_default` flag would flip for
+    every deal in flight the moment somebody moved the default."""
+    _, default_stage = _seed_pipeline(db)
+    _gate_stage(db, default_stage, "amount")
+
+    with pytest.raises(HTTPException) as exc:
+        await crm_records.create_record(
+            DEALS,
+            crm_core.DealIn(name="Printer order", status_id=str(default_stage.id)),
+            USER,
+        )
+
+    assert exc.value.status_code == 422
+
+
+async def test_an_absent_owner_is_never_missing_on_a_gated_stage(
+    db: FakeCrmDB,
+) -> None:
+    """Done-when 5 — `create_record` defaults an ABSENT `owner_email` to the
+    acting user before the status is resolved, so an `owner_email` requirement
+    is satisfied by every create that does not deliberately unassign."""
+    _seed_pipeline(db)
+    stage = _late_stage(db, "owner_email")
+
+    deal = await crm_records.create_record(
+        DEALS, crm_core.DealIn(name="Printer order", status_id=str(stage.id)),
+        USER,
+    )
+
+    assert deal["owner_email"] == USER.email
+
+
+async def test_an_explicit_null_owner_is_missing_on_a_gated_stage(
+    db: FakeCrmDB,
+) -> None:
+    """The other half of done-when 5. "Deliberately unassigned" and "not
+    mentioned" are different requests here too — and a lane that requires an
+    owner is refusing exactly the first one."""
+    _seed_pipeline(db)
+    stage = _late_stage(db, "owner_email")
+
+    with pytest.raises(HTTPException) as exc:
+        await crm_records.create_record(
+            DEALS,
+            crm_core.DealIn.model_validate({
+                "name": "Printer order",
+                "status_id": str(stage.id),
+                "owner_email": None,
+            }),
+            USER,
+        )
+
+    assert exc.value.status_code == 422
+    assert "owner_email" in str(exc.value.detail)
+
+
+async def test_a_zero_amount_satisfies_a_create_requirement(
+    db: FakeCrmDB,
+) -> None:
+    """Done-when 6 — `0` is a number somebody typed, and `_is_blank`'s
+    semantics are asserted on the create path rather than assumed to carry.
+    (`Decimal('0.00')` and blank text are in `test_crm_pipeline.py`, at the
+    gate: `DealIn.amount` is `float | None`, so neither survives the model.)"""
+    _seed_pipeline(db)
+    stage = _late_stage(db, "amount")
+
+    deal = await crm_records.create_record(
+        DEALS,
+        crm_core.DealIn(name="Printer order", status_id=str(stage.id), amount=0),
+        USER,
+    )
+
+    assert deal["amount"] == 0
+
+
+async def test_a_blank_owner_does_not_satisfy_a_create_requirement(
+    db: FakeCrmDB,
+) -> None:
+    """The opposite end of the same rule — an empty text box is not a filled
+    one, on POST as on PATCH."""
+    _seed_pipeline(db)
+    stage = _late_stage(db, "owner_email")
+
+    with pytest.raises(HTTPException) as exc:
+        await crm_records.create_record(
+            DEALS,
+            crm_core.DealIn(
+                name="Printer order", status_id=str(stage.id), owner_email="   ",
+            ),
+            USER,
+        )
+
+    assert exc.value.status_code == 422
+    assert db.rows(DEALS.table) == []
+
+
+async def test_creating_a_lead_into_a_chosen_lead_status_is_never_gated(
+    db: FakeCrmDB,
+) -> None:
+    """Done-when 7 — asserted by running the path, not inferred from the absent
+    column.
+
+    `auto_lead.py` reaches `create_record` for LEADS on the mail hook, and this
+    is the branch it takes: an explicitly chosen status, so the gate IS
+    entered. It must read a status row that has no `required_fields` attribute
+    at all as "nothing required" rather than raising — the same asymmetry
+    `probability` and `status_changed_at` already have. That the column can
+    never appear on `crm_lead_statuses` is pinned separately, in
+    `test_crm_migration.py::test_lead_statuses_gain_nothing`.
+    """
+    lead_status, _ = _seed_pipeline(db)
+    contacted = db.seed(
+        "crm_lead_statuses", name="Contacted", position=20, type="ongoing",
+        is_default=False,
+    )
+
+    lead = await crm_records.create_record(
+        LEADS,
+        crm_core.LeadIn(first_name="Asha", status_id=str(contacted.id)),
+        USER,
+    )
+
+    assert lead["status_id"] == str(contacted.id)
+    assert len(db.rows(LEADS.table)) == 1
+    assert str(lead_status.id) != str(contacted.id)
+
+
 @pytest.mark.parametrize(
     ("payload", "expected"),
     [

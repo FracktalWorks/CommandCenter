@@ -160,8 +160,18 @@ def _fmt_item(i: dict[str, Any]) -> str:
         bits.append(f"waiting on {i['waiting_on'].get('name')}")
     if i.get("due_at"):
         bits.append(f"due {i['due_at'][:10]}")
+    # `sync_state` has FOUR values and two of them are waiting states that are
+    # NOT synonyms (BO-1b): `pending` waits on the MEMBER's own push,
+    # `awaiting_approval` means the push already happened and the Action Broker
+    # queued the outward write for a human approver. Rendering only the first
+    # left a queued item indistinguishable from a normal one in the agent's
+    # context — no marker, and no provider link either, since nothing exists
+    # upstream to link to. Say which one it is.
     if i.get("sync_state") == "pending":
         bits.append("PENDING PUSH")
+    elif i.get("sync_state") == "awaiting_approval":
+        bits.append("AWAITING APPROVAL (queued in the Action Broker — "
+                    "nothing exists in the tool yet)")
     origin = i.get("origin") or {}
     if origin.get("kind") == "email":
         who = origin.get("from_name") or origin.get("from_email") or "email"

@@ -6,7 +6,9 @@ handler, which re-resolves the provider (mocked here) and runs the raw write.
 """
 from __future__ import annotations
 
+import ast
 import asyncio
+import pathlib
 from types import SimpleNamespace
 
 import gateway.routes.tasks.broker_handlers as bh
@@ -23,6 +25,15 @@ class _FakeProvider:
     async def _raw_update_task(self, provider_task_id, body):
         self.calls.append(("update_task", provider_task_id, body))
         return {"provider_task_id": provider_task_id}
+
+    async def _raw_delete_task(self, provider_task_id):
+        self.calls.append(("delete_task", provider_task_id))
+        # The real writer returns None — a delete has nothing to report back.
+        return None
+
+    async def _raw_archive_task(self, provider_task_id, archived):
+        self.calls.append(("archive_task", provider_task_id, archived))
+        return None
 
     async def _raw_create_project(self, name, space_id, folder_id):
         self.calls.append(("create_project", name, space_id, folder_id))
@@ -101,15 +112,121 @@ def test_handler_dispatches_create_folder(monkeypatch):
 
 
 def test_register_wires_every_writer_action():
+    """Registration is derived from ``_WRITERS`` — every entry gets a handler and
+    nothing else does. Says nothing about which actions `providers.py` gates;
+    that is the fence below."""
     import action_broker
     from action_broker.broker import _HANDLERS
     action_broker.clear_action_handlers()
     bh.register_task_broker_handlers()
-    assert set(_HANDLERS) == {
-        "clickup.create_task", "clickup.update_task", "clickup.create_project",
-        "clickup.create_folder",
-    }
+    assert set(_HANDLERS) == set(bh._WRITERS)
+    assert _HANDLERS, "registration wired nothing — the fence would be vacuous"
     action_broker.clear_action_handlers()
+
+
+# ── the derived fence (BO-1a): a gated action with no handler fails HERE ──────
+
+_PROVIDERS_PY = (
+    pathlib.Path(bh.__file__).resolve().parent / "providers.py"
+)
+
+
+def _gated_action_names() -> set[str]:
+    """Every literal action name passed to a ``…._broker_gate(...)`` call in
+    ``providers.py``, collected from its AST (never executed, never imported)."""
+    tree = ast.parse(_PROVIDERS_PY.read_text(encoding="utf-8"))
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if not (isinstance(func, ast.Attribute) and func.attr == "_broker_gate"):
+            continue
+        if not node.args:
+            continue
+        first = node.args[0]
+        if isinstance(first, ast.Constant) and isinstance(first.value, str):
+            names.add(first.value)
+    return names
+
+
+def test_every_gated_provider_action_has_a_writer():
+    """Every literal action name at a ``_broker_gate`` call site in
+    ``routes/tasks/providers.py`` has a ``_WRITERS`` entry — so a queued write
+    can actually execute on approval instead of landing in
+    ``broker.execute()``'s no-handler branch and marking the row ``failed``.
+
+    What this proves and what it does NOT (state the limits, or the fence gets
+    trusted for more than it checks):
+
+    * It is **blind to reachability**. A gated call site that no code path can
+      reach still counts, and a handler for a dead action still satisfies it.
+    * It is **blind to a non-literal action name** — a variable, an f-string or
+      a name built at runtime is silently skipped, so it cannot see a gate whose
+      action is computed.
+    * It is **blind to an aliased or indirect call.** The walk matches an
+      `ast.Attribute` named `_broker_gate`, so `g = self._broker_gate; await
+      g("clickup.x", …)` is an `ast.Name` at the call site and is skipped in
+      silence. Same for a gate reached through a wrapper or a `getattr`.
+    * It is **scoped to `providers.py` only**, and that file's own header
+      invites the gap: "Asana/Jira/Linear and a generic MCP connector slot in
+      beside it later." **A second connector module is not covered** — its gated
+      writes would satisfy this fence vacuously. Widen `_PROVIDERS_PY` to the
+      set of connector modules when one arrives. `routes/crm/broker_handlers.py`
+      has its own `broker_gate`, and `routes/apps/tools.py` derives action names
+      through `_broker_action_name`; neither surface is covered here either.
+    """
+    gated = _gated_action_names()
+    # Non-emptiness is the fence's own fence: an AST walk that stops matching
+    # (a renamed gate, a changed call shape) would otherwise pass vacuously.
+    assert gated, "no _broker_gate call sites found — the AST walk went blind"
+    missing = gated - set(bh._WRITERS)
+    assert not missing, (
+        f"gated in providers.py with no _WRITERS entry: {sorted(missing)}"
+    )
+
+
+def test_the_gated_payload_carries_every_arg_its_writer_reads(monkeypatch):
+    """The other half of BO-1a #1: a handler reads `args[k] for k in keys`, so
+    the gate's `audit_payload` at that call site must already carry those keys.
+    `clickup.archive_task`'s second arg (`archived`) is the one the four-entry
+    map never carried — assert the payload shape rather than assuming it.
+
+    ⚠️ **This sweeps all SIX gated actions, not just the two BO-1a added.** The
+    four pre-existing ones were only ever "checked" by the dispatch tests above,
+    which hand-write the `args` dict and would therefore agree with a wrong key
+    on both sides. Here the keys come from the REAL gate call site on one side
+    and from `_WRITERS` on the other, so a rename on either side fails."""
+    from gateway.routes.tasks.providers import ClickUpProvider
+
+    seen: dict[str, dict] = {}
+
+    async def _capture(self, action, target, audit_payload, do_write):
+        seen[action] = audit_payload
+        return {}
+
+    monkeypatch.setattr(ClickUpProvider, "_broker_gate", _capture)
+    prov = ClickUpProvider(token="tok", workspace_id="ws1", account_id="acc-1")
+
+    asyncio.run(prov.create_task("list-5", {"title": "x"}))
+    asyncio.run(prov.update_task("T1", {"title": "x"}))
+    asyncio.run(prov.delete_task("T1"))
+    asyncio.run(prov.archive_task("T1", True))
+    asyncio.run(prov.create_project("ws1", "P", "s1", None))
+    asyncio.run(prov.create_folder("ws1", "s1", "F"))
+
+    # Vacuity guard: a gated method that stopped reaching the gate (or a seventh
+    # that arrives unswept) must fail here rather than shrink the loop silently.
+    assert set(seen) == set(bh._WRITERS), sorted(set(bh._WRITERS) - set(seen))
+
+    for action, payload in seen.items():
+        keys = bh._WRITERS[action][1]
+        assert set(payload["args"]) == set(keys), action
+        assert payload["account_id"] == "acc-1"
+    assert seen["clickup.archive_task"]["args"] == {
+        "provider_task_id": "T1", "archived": True,
+    }
+    assert seen["clickup.delete_task"]["args"] == {"provider_task_id": "T1"}
 
 
 # ── end-to-end: enqueue → approve → handler executes ─────────────────────────
@@ -187,3 +304,62 @@ def test_approve_runs_the_task_handler_end_to_end(monkeypatch):
     # and the row was transitioned to applied
     assert any(u and u.get("status") == "applied" for u in session.updates)
     action_broker.clear_action_handlers()
+
+
+def _approve_queued(monkeypatch, provider, action, args):
+    """Run one enqueue→approve→execute cycle over a queued ``pending_actions``
+    row (shape as ``_load_proposal`` reads it) and return approve's result."""
+    import acb_graph
+    import action_broker
+
+    _patch_resolve(monkeypatch, provider)
+    row = {
+        "id": "22222222-2222-2222-2222-222222222222",
+        "actor": "tasks:clickup:ws:9",
+        "action": action,
+        "target": "task:T1",
+        "payload": {"account_id": "acc-1", "args": args},
+        "authority": "suggest+apply",
+        "destructive": True,
+        "disposition": "needs_approval",
+        "status": "pending",
+    }
+    session = _FakeSession([row])
+    monkeypatch.setattr(acb_graph, "get_session", lambda: session)
+
+    action_broker.clear_action_handlers()
+    bh.register_task_broker_handlers()
+    try:
+        return asyncio.run(action_broker.approve(str(row["id"]), "user:vijay")), session
+    finally:
+        action_broker.clear_action_handlers()
+
+
+def test_approving_a_queued_delete_ends_applied_not_failed(monkeypatch):
+    """BO-1a's actual bug: before the `_WRITERS` entry existed this approval fell
+    into `broker.execute()`'s no-handler branch and the row was marked `failed`.
+    A `_raw_delete_task` returning None must still count as applied."""
+    fake_provider = _FakeProvider()
+    res, session = _approve_queued(
+        monkeypatch, fake_provider, "clickup.delete_task",
+        {"provider_task_id": "T1"},
+    )
+
+    assert res["ok"] is True and res["status"] == "applied"
+    assert fake_provider.calls == [("delete_task", "T1")]
+    assert any(u and u.get("status") == "applied" for u in session.updates)
+    assert not any(u and u.get("status") == "failed" for u in session.updates)
+
+
+def test_approving_a_queued_archive_carries_the_archived_flag(monkeypatch):
+    """The archive twin — `archived` is the arg the four-entry map never carried,
+    so assert it reaches the provider rather than only that the row applied."""
+    fake_provider = _FakeProvider()
+    res, session = _approve_queued(
+        monkeypatch, fake_provider, "clickup.archive_task",
+        {"provider_task_id": "T1", "archived": True},
+    )
+
+    assert res["ok"] is True and res["status"] == "applied"
+    assert fake_provider.calls == [("archive_task", "T1", True)]
+    assert not any(u and u.get("status") == "failed" for u in session.updates)

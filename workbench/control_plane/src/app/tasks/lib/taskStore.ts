@@ -28,6 +28,7 @@ import {
   type ConnectedProvider,
 } from "./mockData";
 import { isCalendarItem, isTickled } from "./utils";
+import { type SyncState, canPush } from "./syncState";
 import {
   DEFAULT_FILTERS,
   DEFAULT_SORT,
@@ -206,7 +207,11 @@ function targetFields(
 ): {
   source: "LOCAL" | "SYNCED";
   provider: ProviderKind;
-  syncState: "local" | "pending";
+  /** Narrowed through `Extract` rather than re-typed as a local union: the two
+   *  values a NEW item can be born with are a subset of the one vocabulary
+   *  (`lib/syncState.ts`), never a second one. A spelling change there fails to
+   *  compile here instead of quietly leaving this literal behind. */
+  syncState: Extract<SyncState, "local" | "pending">;
   accountId?: string;
 } | null {
   if (!t) return null;
@@ -1338,7 +1343,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
             // immediately when the tool has everything it needs (a real
             // provider project). Otherwise it stays staged with the manual
             // Push affordance — never lost, never silently failing.
-            if (server.syncState === "pending" && server.projectId) {
+            if (canPush(server.syncState) && server.projectId) {
               try {
                 const pushed = await apiPushItem(server.id);
                 set((s) => ({

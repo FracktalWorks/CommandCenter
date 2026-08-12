@@ -59,7 +59,11 @@ from gateway.routes.crm.core import (
     update_row,
     validate_source,
 )
-from gateway.routes.crm.pipeline import apply_status_transition
+from gateway.routes.crm.pipeline import (
+    NO_EXISTING_RECORD,
+    _require_entry_fields,
+    apply_status_transition,
+)
 from pydantic import BaseModel
 from sqlalchemy import text
 
@@ -139,17 +143,34 @@ async def _get(entity: Entity, record_id: str) -> dict:
 async def _resolve_status(
     db: Any, entity: Entity, values: dict[str, Any],
 ) -> Any | None:
-    """The status a new record starts in, plus the two rules that ride on it.
+    """The status a new record starts in, plus the rules that ride on it.
 
     A record created straight into a ``lost``-type status needs a lost reason
     for the same reason a transition into one does — the gate belongs to the
-    status, not to the verb that reached it.
+    status, not to the verb that reached it. That doctrine is scoped to the
+    TERMINAL case and stays there: a deal is lost or it is not, however it got
+    there.
+
+    **Entry requirements are the other shape, and they are applied only when
+    the caller CHOSE the stage** (WS-26h2 / **D-CRM-13**). ``chosen`` is that
+    distinction, and it is the whole rule: a ``status_id`` in the body is a
+    claim that this deal has EARNED its way into that lane and is checked;
+    a stage that came from :func:`load_default_status` is where deals start,
+    has been claimed by nobody, and is never gated. Without that condition a
+    requirement on the default lane would 422 ``QuickCreateModal`` (which sends
+    no ``status_id``) and every lead conversion (``ConvertDeal`` has no such
+    field) — and ``organization_id`` is requirable while neither surface can
+    supply one, so those leads would become permanently unconvertible.
+
+    The permissive direction is deliberate and cheaply reversible: deleting the
+    ``if chosen`` condition yields the strict rule. The reverse is not.
     """
     if not entity.status_table:
         return None
+    chosen = values.get("status_id")
     status = (
-        await require_row(db, entity.status_table, str(values["status_id"]), "Status")
-        if values.get("status_id")
+        await require_row(db, entity.status_table, str(chosen), "Status")
+        if chosen
         else await load_default_status(db, entity.status_table)
     )
     if status.type == "lost" and not values.get("lost_reason_id"):
@@ -160,6 +181,14 @@ async def _resolve_status(
                 "required to create a record in it."
             ),
         )
+    if chosen:
+        # Beside the lost refusal and in the same order as the move path, so a
+        # stage that is both lost-type and gated answers the lost question
+        # first. `values` is the caller's own body — including the
+        # `owner_email` default `create_record` has already applied — so the
+        # requirement is judged on the state this write will LEAVE, and there
+        # is no stored row to fall back to.
+        _require_entry_fields(status, NO_EXISTING_RECORD, values)
     values["status_id"] = str(status.id)
     if has_column(entity, "probability") and values.get("probability") is None:
         # §3.4 — a deal with no stated probability inherits its stage's default.

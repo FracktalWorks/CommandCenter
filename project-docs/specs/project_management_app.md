@@ -342,7 +342,7 @@ extra middle phase two-way sync demands.
 | The `/tasks` app over it | `gateway/routes/tasks/` — 21 modules, ~11.8k lines, ~68 endpoints behind `require_feature_router("tasks")`; **27 `user_id = :` predicates in `items.py`** (owner-scoped by design) |
 | People substrate | `gtd_people` (+ resumes, `capability_embedding vector(1536)`); WS-24 N4: directory open, HR fields restricted |
 | Centers scaffold | `lib/centers.ts` (People Center's five sub-apps all `status:"planned"`), `140_center_features.sql` + `141_seed_center_groups.sql`, `center.people` in `FEATURES` — **Centers gate navigation, not data** (migration 140's own header) |
-| Broker chokepoint for ClickUp writes | `providers.py::_broker_gate` → `broker_handlers._WRITERS` (4 handlers for 6 gated actions — **BO-1a**); `_push_pending_item` ignores the pending marker (**BO-1b**) |
+| Broker chokepoint for ClickUp writes | `providers.py::_broker_gate` → `broker_handlers._WRITERS`. **BO-1a + BO-1b landed 2026-08-11**: all 6 gated actions have handlers (AST-derived fence), and `_push_pending_item` honours the pending marker (`sync_state='awaiting_approval'`). ⚠️ Still open — **BO-1d**: four *other* callers index the marker as a result (`accounts.py:335`/`:403`, `planning.py:377` → HTTP 500 under enforcement; `items.py:790` swallows a queued update). **That is what blocks the `ACTION_BROKER_ENFORCE` flip**, not BO-1a/BO-1b |
 
 Consequences that shape this plan:
 - **There is no org-level native store to extend in place.** `gtd_*` is per-user by
@@ -981,7 +981,9 @@ live ClickUp workspace with no human in between. Three properties bound that cos
 (`created_by='agent:<name>'` on the activity, plus the broker audit row), reversible from
 the timeline (§3.8's `field_change` carries old and new), and the whole class becomes
 queue-on-approval the moment `ACTION_BROKER_ENFORCE` is flipped — itself an owner gate, and
-one whose two flip-blockers (BO-1a, BO-1b) WS-27c already depends on. **Consequence that
+one whose flip-blockers WS-27c already depends on (BO-1a and BO-1b landed 2026-08-11;
+**BO-1d, the four callers that index the pending marker as a result, is open and is what
+now blocks the flip**). **Consequence that
 motivated the call:** WS-27f's agent dispatch is demoable against real portfolio data
 during coexistence rather than only against tasks created after cutover.
 
@@ -1322,8 +1324,12 @@ grants applied, and a parity summary; (7) permission floor is `admin:access:mana
 WS-26b finding: `integrations:use:*` gates nothing); (8) a dry-run mode reports counts
 writing nothing.
 
-**WS-27c — two-way coexistence sync.** 🟡 **blocked on BO-1a + BO-1b (WS-1)**; build
-AGENT-SAFE once they land · 🔴 enabling push against the real workspace is OWNER-GATE.
+**WS-27c — two-way coexistence sync.** 🟢 **UNBLOCKED for build 2026-08-11 — BO-1a +
+BO-1b landed (WS-1)**; AGENT-SAFE · 🔴 enabling push against the real workspace is
+OWNER-GATE, and that gate is **also** behind **BO-1d** (the four callers that still index
+the broker's pending marker as a result — `accounts.py:335`/`:403`, `planning.py:377`,
+`items.py:790`). Read BO-1d before writing criterion (2): it is the same class of bug at a
+different layer, and this workstream must not reproduce it.
 Done when: (1) delta pull + webhook fan-in share one idempotent upsert path; (2) every
 outbound mutation flows through `_broker_gate` and a pending disposition is honoured (the
 BO-1b class is fenced by a test that fails on an empty provider id marked synced); (3) the

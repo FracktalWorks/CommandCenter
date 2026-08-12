@@ -140,11 +140,17 @@
 > re-reading before extending this:** `0` and `False` are VALUES and only `None`/blank text
 > count as absent (`_is_blank`, mirrored in `board.ts`) — a falsiness test would refuse a
 > genuine ₹0 deal, and it was measured against a real `NUMERIC` column returning
-> `Decimal('0.00')`; and **CREATE is deliberately not gated** — `POST /crm/deals` with an
-> explicit `status_id`, and the convert path's `_create_deal`, both write without coming
-> through the transition, so a settings-grid edit cannot retroactively make quick-create or
-> lead conversion refusable. Recorded in the function's own docstring rather than fixed by
-> ambush. Rot is **presentation only** (`board.ts::rotLevel` → `ROT_TONES`, amber past the
+> `Decimal('0.00')`; and **CREATE was deliberately not gated** — recorded in the
+> function's own docstring rather than fixed by ambush, and **now resolved by D-CRM-13
+> and ticketed as WS-26h2**: the explicit-`status_id` create is gated, the DEFAULTED
+> create and the convert path stay open, so a settings-grid edit still cannot
+> retroactively make quick-create or lead conversion refusable. ⚠️ **This paragraph
+> previously undercounted the ungated create paths as two** (`POST /crm/deals`,
+> `_create_deal`). **There are three.** The third is `import_zoho.apply_record` →
+> `core.upsert_by_zoho_id`, reached by the backfill route *and* by `sync_zoho.pull_phase`
+> — the **enabled** 600s loop — and it is the one that must remain ungated forever.
+> Corrected 2026-08-11; the same undercount in `pipeline.py`'s docstring was corrected in
+> the same PR. Rot is **presentation only** (`board.ts::rotLevel` → `ROT_TONES`, amber past the
 > threshold, destructive past 2×, strictly-past so a card is fine ON the allowance day):
 > nothing moves, closes or hides. `LostReasonModal` was **absorbed** into `MoveModal`
 > rather than sat beside — a lost stage can also be a gated one, and two dialogs each
@@ -159,7 +165,126 @@
 > `settings.test.ts` +13. **R8:** the migration was applied to a real PostgreSQL 16, replayed
 > three times for idempotency, and the package's own `insert_row`/`update_row`/`status_wire`
 > were run against it — the `TEXT[]` round-trip is the one thing the hermetic fakes cannot
-> answer. **Not deployed, not merged.**
+> answer. ⚠️ **Corrected 2026-08-11 (WS-26h2 repair round 1): this said "Not deployed,
+> not merged" and both halves were wrong about the merge.** WS-26h **MERGED in PR #425**
+> — `d471ae8`, and `git branch -a --contains d471ae8` lists `remotes/origin/main`.
+> **Deploy NOT independently verified**: a merge is not a deploy, and there is no
+> migration-ledger line for 169 and no log line in evidence here (non-negotiable 8).
+> · **WS-26h2 (entry requirements on the CHOSEN create stage): 🟢 BUILT 2026-08-11**
+> (branch `claude/crm-command-center-tasks-i8l7n4`; **no migration, no UI change, no change
+> to `core.STAGE_REQUIREABLE_FIELDS` or `board.ts::REQUIREABLE_FIELDS`**). The gate is **one
+> call in `records._resolve_status`**, beside the create-side lost-reason refusal and in the
+> same order, under `if chosen:` — where `chosen = values.get("status_id")` is the caller's
+> own claim and `load_default_status` is the server's default (**D-CRM-13**). It sees
+> `values`, the caller's body *after* `create_record` has defaulted an absent `owner_email`
+> to the acting user, so an unstated owner is never "missing" while an explicit `null` is.
+> `_require_entry_fields` gained **`NO_EXISTING_RECORD`**, a first-class "there is no stored
+> row" shape, and now **refuses `None` with a `TypeError`** rather than reading it as one:
+> `getattr(None, field, None)` answers `None` for every field, so a miswired caller would
+> silently refuse a move it should have allowed and be indistinguishable from the create
+> case. ⚠️ **The gate label is a property of the SITE**: AGENT-SAFE in `records.py`,
+> OWNER-GATE anywhere `sync_zoho.pull_phase` traverses (§6 WS-26 (a)). One of the three
+> create paths is gated; the other two — the DEFAULTED create together with `_create_deal`,
+> and `import_zoho.apply_record` → `core.upsert_by_zoho_id` — stay open. **Fences (R7):**
+> `test_crm_pipeline.py` **67 → 84**, `test_crm_routes.py` **121 → 131**,
+> `test_crm_convert.py` **31 → 32** — **+28**, collected, counted against a worktree at
+> `591231d` rather than estimated. **Eighteen mutants measured red**, and one is worth
+> recording: moving the gate to `core.insert_row` keyed on `crm_deals` — the tempting "one
+> seam" — leaves `test_crm_zoho_import.py` + `test_crm_zoho_sync.py` **136 green** (the
+> importer duplicates the statement rather than delegating, so the pull walks straight past
+> it) and turns **only** the siting fence and the two D-CRM-13 cases red. Done-when 9 held:
+> neither Zoho test file was touched. `pipeline.py`'s docstring — which still said CREATE
+> was ungated and still counted the ungated paths as two — is corrected in the same change
+> (R4). **R8 does not bind this slice: no SQL, no migration, no predicate.**
+> ⚠️ **Repair round 1 (2026-08-11): a verifier FAILED this and a reviewer approved it with
+> findings; all nine done-whens were independently re-derived and met, and the defects were
+> in the CONTRACT and the docs rather than in the gate.** **(1)** Done-when 8's prescribed
+> fence — the set of files CONTAINING the literal `_require_entry_fields(` — is a text match
+> that could not back its own reachability docstring: `import_zoho.apply_record` calling
+> `records._resolve_status` stayed green (no new call site, yet the gate lands on the
+> **enabled** pull, and `apply_record` already sets `values["status_id"]` server-side so
+> `chosen` would be truthy for every pulled deal), an aliased import stayed green, and a
+> *comment* recording why the path must stay ungated turned it RED — making deletion of that
+> comment the cheapest way back to green. Replaced by **two AST fences**: call sites (real
+> `ast.Call` nodes, aliases and module-attribute forms resolved) and **transitive
+> reachability from `sync_zoho.pull_phase` / `import_zoho.apply_module`**, with the static,
+> `routes/crm/*.py`-scoped limit stated rather than implied. Eight shapes pinned against
+> synthetic packages so the fence going blind is a red test; all six re-measured against the
+> real package, including the comment case staying green. **(2)** Done-when 6's
+> `Decimal("0.00")` clause is **unsatisfiable through `POST /crm/deals`** — `DealIn.amount`
+> is `float | None` (measured: `Decimal('0.00')` → `0.0 <class 'float'>`) — so the criterion
+> was relabelled to what the test earns, not the test to what the criterion said. **(3)**
+> Two false deploy-state sentences in this header (WS-26h and WS-26i-export, both saying
+> "not merged" while both are on `origin/main`) are corrected above; the previous cycle
+> failed on the same class and it did not get to survive on "pre-existing". **(4)** The
+> fence count in this paragraph said `+9` where the measurement was `+8`, and the first
+> round's mutant tally was reported as twelve when thirteen were run (two carried the same
+> number). Every count here is now collected rather than recalled: **19 mutants red across
+> the three rounds, plus one deliberate GREEN control** — a comment naming the gate, which
+> the replaced fence would have failed.
+> ⚠️ **Repair round 2 (re-verify PASSED; one hole closed).** The new fence's own self-test
+> did not exercise the capability its helper's docstring leans on: `_crm_imports` walks the
+> WHOLE tree so a **function-body import** counts, but all eight fixtures imported at top
+> level, so mutating it to `tree.body` left the synthetic suite 8 green and the whole file
+> 84 green. Load-bearing, not academic — **`core.py` cannot import `pipeline` at top level**
+> (measured: `ImportError: cannot import name 'CLOSING_TYPES' from partially initialized
+> module 'gateway.routes.crm.core'`), so the "one seam" mis-siting the fence names as the
+> one to watch can ONLY be written as a function-body import, and `core.insert_row` is not
+> reachable from the pull entry points either. The `core.py` fixture modelled a siting that
+> cannot exist; its import moved inside the function, which makes the fixture realistic AND
+> pins the walk — the `tree.body` mutant now goes red. ~~**Also recorded, not built:** WS-26h's
+> own fence carries the same text-match defect…~~ — **BUILT 2026-08-11 as WS-26h-fence, below.**
+> **Not deployed, not merged.**
+> · **WS-26h-fence (WS-26h's siting fence converted to the AST mechanism): 🟢 BUILT
+> 2026-08-11** (branch `claude/crm-command-center-tasks-i8l7n4`, **test + docs only — no
+> `routes/crm/` change, no migration, no UI**). The banked wart above is paid off. `_GATE`
+> was a module-level constant; it is now an **argument** (`_gate_call_files(package, gate)`,
+> `_gate_reached_from(package, entries, gate)`) so **one** set of helpers answers for
+> **two** gates — `_MOVE_GATE = ("pipeline", "apply_status_transition")` (WS-26h) and
+> `_ENTRY_GATE = ("pipeline", "_require_entry_fields")` (WS-26h2). No third mechanism was
+> minted; the helpers were not forked. WS-26h now has the same **two** fences the entry gate
+> has: `test_the_move_gate_is_called_from_exactly_two_files` (direct call sites) and
+> `test_the_zoho_pull_never_enters_the_stage_gate` — the WS-26h name is **kept** and now
+> carries the reachability claim its docstring always made. ⚠️ **Measured against the real
+> package, applying and reverting each mutant, old fence vs new** (the last two are the
+> point — a conversion that keeps the old answer there achieves nothing): a direct call in
+> `import_zoho.py` → red / red; an **aliased** import → **GREEN / red**; the **indirect**
+> route `import_zoho.apply_record` → `records.patch_record` → **GREEN / red** (chain
+> reported: `import_zoho.apply_module -> import_zoho.apply_record -> records.patch_record ->
+> pipeline.apply_status_transition`); a **comment** naming the call → **RED / green**;
+> baseline → green / green. The synthetic self-test grew **8 → 15 cases** and now asserts
+> **both** gates on **every** case, so a shape aimed at one gate cannot quietly move the
+> other's answer; the move gate's fixture case for `core.py` uses a **function-body import**,
+> because repair round 2's F1 lesson is that a top-level fixture import pins nothing about
+> `_crm_imports`' whole-tree walk. Suite **84 → 92**. Four helper mutants measured red
+> against the new cases: `ast.walk(tree)` → `tree.body` (2 red, one per gate),
+> `_resolved_call` dropping the import branch (15 red), `_gate_call_files` ignoring its
+> `gate` argument (10 red), `_gate_reached_from` ignoring it (1 red). **R8 does not bind:
+> no SQL, no migration, no predicate.** Neither Zoho suite was edited.
+> ⚠️ **Repair round 1 (2026-08-11): verifier PASSED, reviewer REQUEST-CHANGES on a P1 —
+> and the P1 was a REGRESSION against the fence the conversion deleted.** `_crm_imports`
+> gated on `node.module.startswith("gateway.routes.crm.")`, so a **relative** import
+> (`node.module == "pipeline"`, `level=1`) matched nothing and `from . import pipeline`
+> (`node.module is None`) was dropped before the branch was reached. The substring scan
+> caught **any** spelling; the first AST cut caught one. Measured old-vs-new against a copy
+> of the real package, **six** shapes were green-where-old-was-red — relative import,
+> `from . import pipeline`, star import, `__init__` re-export, module-level call (outside any
+> `def`), and a name bound to the package (`from .. import crm` → `crm.pipeline.f()`) — **and
+> the decisive indirect route respelled `from .records import patch_record` was green on both
+> fences**, i.e. one line would have put the transition on the enabled 600s pull with all four
+> fences green. Not hypothetical: `orchestrator` and `meeting_bot` already carry 19 relative
+> imports, and `pyproject.toml` selects no `TID` rules, so nothing else refuses one. All six
+> now read, each with its own synthetic case, each measured red first — the suite is
+> **15 → 25 cases** and the file **92 → 103**. Two more findings fixed in the same round:
+> **reachability entered at `pull_phase` only**, so a gate reached from the PUSH half
+> (`push_records` / `apply_push_result` / `_settle` / `_fail`) reported `[]` while running
+> every cycle — the entry set is now the cycle itself (`_sync_loop` / `run_cycle` /
+> `_run_cycle_locked`), measured green-then-red; and the call-file docstring **claimed
+> function-level siting an assertion over `f"{module}.py"` does not have** — corrected to
+> claim only the file, deliberately, because WS-26i-bulk done-when 1 moves the call to
+> `apply_record_patch` inside `records.py` and a function-level assertion would turn that
+> sanctioned change red. Eleven helper mutants now measured red (six of them new).
+> ⚠️ **What stays blind, split by the ONE question that decides whether a hole is a REGRESSION against the substring scan this replaced — is the gate's own name written immediately before a `(`?** **(A) Name never written before a `(`, so the old scan was blind too — NOT regressions:** dispatch through a value (`_MOVE = apply_status_transition` then `_MOVE(…)`, `partial`, a cross-package callback); a registry or object holding the gate under ANOTHER name (`_REGISTRY["move"](…)`, `Registry.move(…)`); and `getattr(pipeline, "apply_status_transition")(…)` — **measured green on the old scan too**, because `")("` intervenes and the literal never appears. **(B) Name IS written before a `(`, so the old scan went RED — residual REGRESSIONS, exactly two, both left open deliberately:** a call qualified by something the graph cannot tie to a package module — `importlib.import_module("…pipeline").apply_status_transition(…)` and `_GATES.apply_status_transition(…)` where `_GATES` is a local object or class. ⚠️ **The reason recorded in repair round 1 for leaving them was FALSE and is corrected here:** it claimed closing them meant resolving unbound attributes against every top-level name, letting an innocent `db.close()` fabricate a chain — a reviewer disproved it by building the fix, and a narrow resolver reading only STRING CONSTANTS adds **no** edges to the real package, reddens both forms, and never looks at `db.close()`. **The real reason is reach, not risk:** `importlib.import_module` appears **once** in all of `apps/` + `packages/` (`orchestrator/declarative.py:100`, a plugin loader) and **zero** times in the gateway. Neither shape is the plausible refactor this fence targets; both are deliberate evasion, and a fence cannot be built against someone willing to edit the fence file. **(C)** An indirect route beginning at module level (module-level code is a call SITE but not an entry POINT). **(D)** Anything outside `routes/crm/*.py`. **Not deployed, not merged.**
 > WS-26i (data management): 🟡 SPEC-THIN, audit-narrow before dispatch — **except
 > WS-26i-export, below.**
 > · **WS-26i-export (the filtered-list CSV export): 🟢 BUILT + REPAIRED 2026-08-11** (branch
@@ -209,7 +334,11 @@
 > at exactly the cap could return exactly the cap after a concurrent insert (READ COMMITTED)
 > and ship a partial file; it binds `cap + 1` and refuses on the rendered count.
 > **(4)** `X-Export-Rows` was unreachable through the proxy; both proxies forward it.
-> **Not deployed, not merged.** The other four WS-26i items stay 🔴 NO-GO.
+> ⚠️ **Corrected 2026-08-11 (same repair round, same defect class): WS-26i-export MERGED
+> in PR #426** — `7255344`, `git branch -a --contains 7255344` lists
+> `remotes/origin/main`. **Deploy NOT independently verified** — and note the Projects
+> BOM fix rides this merge, so `/projects/export/tasks.csv` is repaired in the tree, not
+> demonstrably in production. The other four WS-26i items stay 🔴 NO-GO.
 > **DEMO CRITICAL PATH (owner-directed 2026-08-07, §9.0): ~~dispatch D1 f~~ (∥ ~~D2 d-email~~) →
 > ~~D3 g~~ → ~~D4 d-write~~ → D5 d-autolead; h/i/e deferred past the demo. Full chain and all
 > gates intact — the order re-sequences, it does not thin.**
@@ -959,6 +1088,51 @@ WS-2 (the standing "rotate Zoho token" P0 becomes "revoke", strictly better).
   payload is unchanged and the browser is the caller's own. If the owner would rather have
   richer chat answers, the thing to change is this line, not the payload — and the room
   clearance filter is the mechanism that would have to carry it instead.
+
+- **D-CRM-13 — `DECISION (agent-proposed, owner DELEGATED the call 2026-08-11)`: entry
+  requirements gate the stage a caller CHOSE, never the stage the server DEFAULTED to.**
+  WS-26h shipped with CREATE ungated and recorded the gap; the 2026-08-11 audit found
+  that closing it naively inverts the feature. Measured, not argued: `QuickCreateModal`
+  sends no `status_id` at all and `ConvertDeal` has no `status_id` field
+  (`_create_deal` always calls `load_default_status`), so **every deal the product
+  creates lands in the default stage.** The recorded hole is therefore reachable by
+  direct API call only — not by any UI, and not by the CRM agent, which POSTs only
+  `/crm/leads` and `/convert`. Meanwhile a gate on the defaulted path would 422
+  quick-create and *every* lead conversion the moment an owner puts `required_fields`
+  on the default lane, which `admin.py` permits with no restriction. Worse:
+  `organization_id` is requirable and **neither surface can supply it** —
+  `ConvertModal.tsx:126` renders "This lead names no company, so no organization is
+  created" and offers no picker — so a default lane requiring it would make those
+  leads permanently unconvertible.
+
+  **The principle, so this is a rule rather than a workaround: entry requirements
+  exist to prove a deal EARNED its way into a stage, and a deal in the default lane
+  has claimed nothing yet.** The default lane is where deals start, not somewhere they
+  advance to; demanding proof of progress to enter it is a category error. Creating
+  straight into a late stage by API *is* a claim worth checking, and that is precisely
+  the case this gates.
+
+  This does **not** overturn `records._resolve_status`'s recorded doctrine — *"the gate
+  belongs to the status, not to the verb that reached it."* That comment governs the
+  **lost-reason** rule, which is a property of a TERMINAL status: a deal is lost or it
+  is not, however it got there. Entry requirements are a property of an ENTRY lane. Same
+  word, two different questions; the doctrine is scoped to the terminal case and stays
+  there. Anyone reading the two side by side should read this paragraph, not re-derive
+  the tension.
+
+  **Direction of travel, deliberately chosen:** this is the permissive reading, and
+  tightening later is cheap — delete the "caller supplied `status_id`" condition and
+  the strict rule falls out. The strict reading is not cheaply reversible: it ships an
+  organization picker, tells users conversion can be refused, and makes the ~1,516
+  imported leads a judgement call nobody can automate. Same expand-then-contract logic
+  R6 applies to schema, applied to product behaviour.
+
+  ⚠️ **Rider — NOT built under this decision, owed back to the owner.** `admin.py`
+  currently allows `required_fields` on the default status, which under D-CRM-13 is
+  configuration that silently does nothing. Refusing it there would make the rule
+  self-evident at the point of use instead of documented three files away. It is banked
+  rather than assumed because it changes an existing settings surface and could reject
+  configuration already saved.
 
 **Build-time decisions, recorded post-hoc (WS-26a implementer, 2026-08-05 — owner may
 overrule any of them):**
@@ -2293,11 +2467,15 @@ silently dropping unmatched names (e), `trim()` off the owner predicate (f), the
 upper bound (g), the leaderboard's upper bound alone (h), and `moveDeal` reverted to its
 hard-coded board fetch (i, three vitest cases).
 
-### WS-26h — Stage discipline: entry requirements + rot · ✅ BUILT 2026-08-11 · 🟢 AGENT-SAFE · after f2
+### WS-26h — Stage discipline: entry requirements + rot · ✅ BUILT 2026-08-11 · 🟢 AGENT-SAFE · after f2 · fence converted 2026-08-11 (WS-26h-fence)
 *(Built on branch `claude/crm-command-center-tasks-i8l7n4`, migration 169, no owner gate
 touched. The ticket below is left as written — it is what was built against; the status
 header's WS-26h paragraph records what shipped, what was measured, and the one gap left
 open on purpose.)*
+*(**WS-26h-fence, 2026-08-11** — this ticket's siting fence was a literal substring scan
+and is now an AST call-graph fence sharing WS-26h2's helpers, keyed on
+`_MOVE_GATE = ("pipeline", "apply_status_transition")`. Test + docs only; no `routes/crm/`
+change. See the status header's WS-26h-fence paragraph for the mutant table.)*
 *(§5.1 system 3. The mechanism exists in miniature: lost-type moves already demand a
 reason — `needsLostReason` in `board.ts`, enforced server-side. Generalize exactly that,
 change nothing about it.)*
@@ -2327,7 +2505,192 @@ columns.
 **Tests:** extend `tests/unit/test_crm_pipeline.py`; vitest `board.test.ts` (rot,
 move-plan).
 
-### WS-26i — Data management: merge, bulk, import/export, saved views · 🔴 AUDITED NO-GO 2026-08-11 — doc remediation is the next ticket
+### WS-26h2 — Entry requirements on the CHOSEN create stage · ✅ BUILT 2026-08-11 · 🟢 AGENT-SAFE · no migration
+*(Built on branch `claude/crm-command-center-tasks-i8l7n4`, no migration, no owner gate
+touched — the gate landed in `records._resolve_status` and nowhere else, which is the
+condition the label below is stated against. The ticket is left as written; the status
+header's WS-26h2 paragraph records what shipped and what was measured.)*
+*(Minted 2026-08-11 from the WS-26h CREATE-gap audit. Contract authored by the
+spec-auditor, not by the implementer. Closes the create half of the gap **for the case a
+caller actually chose the stage**, and leaves the defaulted case deliberately open per
+**D-CRM-13** — which is where WS-26h's rationale actually bites.
+`records._resolve_status` already distinguishes the two: `values.get("status_id")` is
+the caller's choice, `load_default_status` is the server's.)*
+
+> ⚠️ **The audit corrected a miscount that both this spec and `pipeline.py`'s docstring
+> carried: there are THREE ungated create paths, not two.** The third is
+> `import_zoho.apply_record` → `core.upsert_by_zoho_id`, reached by the backfill route
+> **and by `sync_zoho.pull_phase` — the enabled 600s production loop.** It builds its own
+> `INSERT … ON CONFLICT (zoho_id) DO UPDATE` and calls neither `core.insert_row` nor
+> `records.create_record`. **It must stay ungated.** An implementer told there are two
+> paths will find the third and gate it, and the next sync cycle will start refusing rows
+> from the live upstream tenant. Both stale sentences are corrected in this ticket's PR
+> under R4.
+
+- Server: in `records._resolve_status` (`records.py:139`), beside the existing
+  lost-reason create refusal, apply `pipeline._require_entry_fields` **only when the
+  caller supplied `status_id`.** Never when the status came from `load_default_status`.
+- `_require_entry_fields` must accept "no existing row" as a first-class shape rather
+  than being handed `None` and relying on `getattr(None, field, None)` (`pipeline.py:168`).
+- The gate must be **importable into `records.py` and reachable from nowhere else.** It
+  must not be placed in `core.insert_row`, `core.upsert_by_zoho_id`,
+  `import_zoho.apply_record` or `apply_module`. `core.insert_row` keyed on
+  `table == "crm_deals"` is the tempting "one seam" and misses the pull today **only
+  because `upsert_by_zoho_id` duplicates the statement rather than delegating** — do not
+  build on that accident.
+- No migration, no UI change, no change to `core.STAGE_REQUIREABLE_FIELDS` or
+  `board.ts::REQUIREABLE_FIELDS`.
+
+**Done-when** (each measured red first, per R7):
+1. `POST /crm/deals` with an explicit `status_id` naming a stage whose `required_fields`
+   the body does not satisfy → **422 naming exactly the missing fields**, and no
+   `crm_deals` row is written.
+2. The same POST carrying the missing fields in the same body → **201**, one row,
+   `status_id` as sent.
+3. `POST /crm/deals` with **no** `status_id`, against a default stage carrying
+   `required_fields = {amount}` and a body with no amount → **201**. The defaulted path
+   is not gated (D-CRM-13).
+4. `POST /crm/leads/{id}/convert`, default stage carrying
+   `required_fields = {organization_id}`, on a lead naming no company → **200 and a deal
+   created.** Conversion is never refusable by a settings-grid edit.
+5. `required_fields = {owner_email}` on an explicitly-chosen stage with no `owner_email`
+   in the body → **201**: `create_record` defaults an absent owner from the acting user
+   before the status is resolved, so it is never absent. An explicit `"owner_email": null`
+   → 422.
+6. The create path shares `_is_blank` with the move path, asserted **on** the create
+   path rather than assumed to carry: `0` for a required `amount` is a **value** (201),
+   and `""` / `"   "` on a required text field are **absent** (422).
+   ⚠️ **Corrected 2026-08-11 (repair round 1): this criterion originally also demanded
+   `Decimal("0.00")` → 201 through `POST /crm/deals`, which is unsatisfiable.** `DealIn.amount`
+   is `float | None` and `patch` on the create path is always `clean_payload(DealIn)`, so a
+   `Decimal` provably cannot reach the gate that way — measured:
+   `DealIn(name='x', amount=Decimal('0.00')).amount` → `0.0 <class 'float'>`. The `Decimal`
+   half belongs to the **move** path, where WS-26h measured it against a real `NUMERIC`
+   column; on the create path it is asserted at the gate itself
+   (`_require_entry_fields(status, NO_EXISTING_RECORD, {"amount": Decimal("0.00")})`), which
+   is what the shared `_is_blank` actually earns. The test is kept and relabelled, not
+   deleted — mutating `_is_blank` to plain falsiness turns it red.
+7. Creating a **lead** into a lead status is never gated — asserted explicitly, not left
+   to the absence of the column (`169_crm_stage_discipline.sql` is deal-only, and
+   `auto_lead.py:862` reaches `create_record` for leads).
+8. **Structural fence (R7), the load-bearing one.** A sibling of
+   `test_crm_pipeline.py::test_the_zoho_pull_never_enters_the_stage_gate` (which ~~greps the
+   literal `apply_status_transition(`~~ — **corrected 2026-08-11 by WS-26h-fence: it is now
+   an AST fence on the same helpers, keyed on `_MOVE_GATE`** — and still would **not** fire
+   on this ticket's change, because it protects the move gate only), asserting that no
+   `routes/crm/` code outside
+   `pipeline.py` + `records.py` can reach `_require_entry_fields`. `import_zoho.py` /
+   `sync_zoho.py` / `core.py` reaching it means the **enabled production sync loop**
+   (600s, §6 WS-26 (a)) starts refusing rows from the live upstream tenant on the next
+   cycle after any settings-grid save. Assert structurally, not by example — the plausible
+   refactor ("make the importer use the shared create seam") is exactly the one no example
+   test would be watching.
+   ⚠️ **Corrected 2026-08-11 (repair round 1): the shape this criterion originally
+   prescribed — "the set of files CONTAINING the literal `_require_entry_fields(`" — is a
+   text match, and it could not back the reachability claim its own docstring made.** Three
+   holes, all measured: `import_zoho.apply_record` calling `records._resolve_status` stays
+   GREEN (no new call site, yet the gate lands on the pull — and `apply_record` already sets
+   `values["status_id"]` server-side, so `chosen` would be truthy for every pulled deal);
+   an aliased import stays GREEN; and a **comment** in `import_zoho.py` recording why the
+   path must stay ungated turns it RED, making deletion of that comment the cheapest way
+   back to green. What ships instead is **two AST fences over `routes/crm/*.py`**:
+   `test_the_entry_gate_is_called_from_exactly_two_files` (real call nodes, aliases and
+   module-attribute forms resolved, comments and docstrings ignored) and
+   `test_no_zoho_pull_path_can_reach_the_entry_gate` (transitive static call graph from
+   ~~`sync_zoho.pull_phase`~~ **`sync_zoho._sync_loop` / `run_cycle` / `_run_cycle_locked` —
+   widened 2026-08-11, repair round 1** — and `import_zoho.apply_module`, reporting the chain
+   it found). Entering at `pull_phase` fenced only the pull half: a cycle also PUSHES
+   (`push_records` / `push_activities` / `push_tombstones`, and below them
+   `apply_push_result` / `_settle` / `_fail`), and a gate reached from the push half ran
+   against the live tenant every cycle while both reachability fences reported `[]`. Measured
+   green at `pull_phase`, red at `_run_cycle_locked`.
+   **Stated limit, so the claim does not outrun the mechanism:** the graph is STATIC and
+   scoped to `routes/crm/*.py` — it does not see dispatch through a variable, a registry
+   dict or a callback handed across the package boundary, and nothing in the package
+   reaches the gate that way today.
+   ⚠️ **This limit statement was itself an overclaim until 2026-08-11 (WS-26h-fence repair
+   round 1) — the same defect one layer up.** It listed three blind spots and had **six
+   more**, every one of them a shape the deleted substring scan CAUGHT: relative imports at
+   any level (`from .pipeline import …`, `from . import pipeline`, `from ..crm.pipeline import
+   …`), star imports, a symbol re-exported through the package `__init__`, a name bound to the
+   package itself (`from .. import crm` → `crm.pipeline.f()`), and calls written at module
+   level outside any `def`. All six are now READ and each has a synthetic case.    ⚠️ **What stays blind, split by the ONE question that decides whether a hole is a REGRESSION against the substring scan this replaced — is the gate's own name written immediately before a `(`?** **(A) Name never written before a `(`, so the old scan was blind too — NOT regressions:** dispatch through a value (`_MOVE = apply_status_transition` then `_MOVE(…)`, `partial`, a cross-package callback); a registry or object holding the gate under ANOTHER name (`_REGISTRY["move"](…)`, `Registry.move(…)`); and `getattr(pipeline, "apply_status_transition")(…)` — **measured green on the old scan too**, because `")("` intervenes and the literal never appears. **(B) Name IS written before a `(`, so the old scan went RED — residual REGRESSIONS, exactly two, both left open deliberately:** a call qualified by something the graph cannot tie to a package module — `importlib.import_module("…pipeline").apply_status_transition(…)` and `_GATES.apply_status_transition(…)` where `_GATES` is a local object or class. ⚠️ **The reason recorded in repair round 1 for leaving them was FALSE and is corrected here:** it claimed closing them meant resolving unbound attributes against every top-level name, letting an innocent `db.close()` fabricate a chain — a reviewer disproved it by building the fix, and a narrow resolver reading only STRING CONSTANTS adds **no** edges to the real package, reddens both forms, and never looks at `db.close()`. **The real reason is reach, not risk:** `importlib.import_module` appears **once** in all of `apps/` + `packages/` (`orchestrator/declarative.py:100`, a plugin loader) and **zero** times in the gateway. Neither shape is the plausible refactor this fence targets; both are deliberate evasion, and a fence cannot be built against someone willing to edit the fence file. **(C)** An indirect route beginning at module level (module-level code is a call SITE but not an entry POINT). **(D)** Anything outside `routes/crm/*.py`. Eight shapes were pinned against synthetic packages
+   (`test_the_siting_fences_see_the_shapes_they_claim_to_see`) so "the fence went blind" is
+   a red test, and all six were re-measured against the real package — eight being what h2
+   shipped. *(**2026-08-11, WS-26h-fence and its two repair rounds:** it is now a
+   **25-case synthetic self-test** and asserts **both** gates on every one of them — seven
+   cases added for the move gate, nine for the import spellings the first AST cut could not
+   read, one for `_merge_names`' union. ⚠️ **That number is itself pinned now**:
+   `test_the_spec_quotes_the_real_number_of_fence_cases` reads every
+   "N-case synthetic self-test" out of THIS file and asserts it equals `len(_FENCE_CASES)`,
+   because two consecutive repair rounds found a stale count here and nothing failed.)*
+   ⚠️ **Repair round 2:** `_crm_imports` reads the WHOLE tree so a **function-body import**
+   counts, and nothing made that capability fail if it regressed — mutating it to
+   `tree.body` left the synthetic suite 8 green and the whole file 84 green. It is not a
+   nicety: **`core.py` cannot import `pipeline` at top level at all** — measured,
+   `ImportError: cannot import name 'CLOSING_TYPES' from partially initialized module
+   'gateway.routes.crm.core'` — so the "one seam" mis-siting this fence names as the one to
+   watch can ONLY ever be written as a function-body import, and `core.insert_row` is not
+   reachable from the pull entry points, so the reachability half does not cover it either.
+   The `core.py` fixture used a top-level import, i.e. it modelled a siting that cannot
+   exist. Moving that import inside the function closed both halves at once: the fixture is
+   now realistic and the `tree.body` mutant goes red.
+9. `test_crm_zoho_import.py` and `test_crm_zoho_sync.py` pass **unchanged** — no edit to
+   either file is permitted in this PR. An edit there is the signal the gate was mis-sited.
+
+**Tests:** extend `tests/unit/test_crm_pipeline.py` and `tests/unit/test_crm_routes.py`;
+`tests/unit/test_crm_convert.py` for done-when 4.
+
+**Gate label: 🟢 AGENT-SAFE — conditional, and the condition is done-whens 8 and 9.**
+Stated so a reviewer can check it rather than trust it: the slice touches no Zoho code,
+needs no migration, flips no flag, and writes nothing to the live tenant beyond what any
+native create already does (a created deal is born `zoho_dirty` and pushes within one
+cycle — unchanged here). **It becomes OWNER-GATE the moment the check is placed anywhere
+`sync_zoho.pull_phase` traverses**, because §6 WS-26 (a) governs changes to a *running*
+loop. The gate label is a property of the implementation SITE, not of the ticket.
+
+**R8 does not bind this slice** — it introduces no SQL, no migration and no predicate.
+
+✅ **CLOSED 2026-08-11 by WS-26h-fence** — the item banked below was built on the same
+branch, test + docs only. `_GATE` became an **argument**, so `_gate_call_files` and
+`_gate_reached_from` now answer for `_MOVE_GATE` and `_ENTRY_GATE` through one mechanism;
+WS-26h gained the reachability half it never had. Both riders below are discharged: the
+transitive coverage no longer has to be relied on (the move gate has its own reachability
+fence, so removing or relocating the `apply_status_transition` → `_require_entry_fields`
+call can no longer silently open the pull to the move gate), and the ~10-line follow-up was
+taken as soon as the helpers reached `main` at `a06fa6a`. Measured old-vs-new on the real
+package: aliased import **green → red**, indirect route **green → red**, comment naming the
+call **red → green**. The record below is left as written.
+
+⚠️ **Banked as a board item, deliberately NOT built here (2026-08-11, repair round 2):
+WS-26h's own fence `test_the_zoho_pull_never_enters_the_stage_gate` has the same defect
+this ticket fixed in its own** — it greps the literal `apply_status_transition(` in file
+text, so it is blind to an aliased call and red on a comment, while its docstring claims a
+structural property. It is a **correctness wart, not an exposure**, and the reason is worth
+stating rather than re-deriving: its live-system property is **already covered
+transitively** by `test_no_zoho_pull_path_can_reach_the_entry_gate`, because
+`apply_status_transition` calls `_require_entry_fields` unconditionally — so any static
+path from the pull to the MOVE gate is also a path to the ENTRY gate and fails there.
+Measured: the direct and aliased forms go red on the new fence while WS-26h's stays green.
+The residual is an aliased call from a file the loop cannot reach (`broker_handlers.py`,
+`auto_lead.py` — and `CRM_AUTO_LEAD` is still OFF).
+**Two riders, because both change what the follow-up is worth:**
+- The transitive coverage **depends on `apply_status_transition` continuing to call
+  `_require_entry_fields`**, and evaporates *silently* the day that call is removed or
+  relocated. Nothing asserts the dependency today.
+- `_crm_imports` / `_crm_call_graph` / `_gate_reached_from` back **both** fences, so
+  whichever ticket converts WS-26h's fence fixes both at once — a ~10-line change once
+  these helpers are on `main`, which is an argument for merging this branch rather than
+  growing it.
+The `TEXT[]` round-trip it depends on was verified against a real Postgres 16 by WS-26h
+and is unchanged. Say so in the PR rather than leaving a reviewer to ask.
+
+### WS-26i — Data management: merge, bulk, import/export, saved views · 🔴 AUDITED NO-GO 2026-08-11 · doc remediation DONE 2026-08-11 for two of the five
+
+*(Remediation status, 2026-08-11: **i-export** specced and BUILT; **i-bulk** specced below
+(`WS-26i-bulk`) with its four recorded drifts corrected in the audit bullet. **Merge, CSV
+import and saved views stay 🔴 NO-GO** and still fail §1 contract point 3 — no implementer
+may be dispatched from their bullets.)*
 *(§5.1 system 4. Deliberately thin — the WS-26d lesson: four things behind one done-when
 is how a ticket goes undispatchable. Each item below gets its own spec-auditor narrowing
 before any build.)*
@@ -2355,14 +2718,55 @@ before any build.)*
 > - **Bulk actions — NO-GO on point 3; sequence it SECOND even once specced.** Two findings
 >   the precedent hides: (a) **the reuse seam Projects had does not exist here** —
 >   Projects' bulk reuses `automation.apply_task_patch(db, …)`, but CRM's
->   `records.patch_record` OWNS its own session, so it cannot be called inside a bulk
->   transaction; the ticket must first extract a `db`-taking patch seam or it grows a second
->   CRM writer (the defect CLAUDE.md §4 names). (b) **WS-26h collision, larger than
->   "bulk status change"** — `pipeline._require_entry_fields` raises a raw `HTTPException(422)`,
->   while Projects' per-record catch is on a typed `TaskPatchError`, so that catch does not
->   transfer; a bulk `{"status_id": X}` mass-refuses every deal missing X's `required_fields`,
->   and each accepted move writes both a `crm_status_changes` and a `crm_activities` row
->   (~1,500 inserts for a 500-row lane move).
+>   `records.patch_record` (`records.py:235`) OWNS its own session — `async with
+>   _tenant_session() as db:` at **`records.py:247`** — so it cannot be called once per
+>   record inside a bulk request; the ticket must first extract a `db`-taking patch seam or
+>   it grows a second CRM writer (the defect CLAUDE.md §4 names).
+>   ⚠️ **Two corrections to this finding, 2026-08-11 (WS-26h-fence doc pass). The
+>   precondition survives both; only its anchor and its reason were wrong.**
+>   **(i) Anchors, re-verified at `a06fa6a`:** `patch_record` is at `records.py:235` and its
+>   session at `:247`. This bullet previously cited neither, and any citation predating
+>   WS-26h2 is **~29 lines low** — that landing moved the seam. Re-open the file rather than
+>   trusting a number.
+>   **(ii) The reason is NOT "bulk needs one transaction".** Projects' bulk is deliberately
+>   **not** atomic: `routes/projects/bulk.py::bulk_edit` returns per-task
+>   `applied`/`skipped`/`failed` (`bulk.py:337-339`, response at `:393-394`) and a single
+>   record's refusal never rolls the batch back. What `patch_record`'s shape actually forbids
+>   is **N records without N sessions**: one `_tenant_session()` per record in a loop, while
+>   the request already holds one, is the pool hazard `auto_lead.py:78-79` documents in prose
+>   and `tests/unit/test_crm_auto_lead.py:1311` pins as a test — "the step opens a SECOND
+>   session per lead … so a pool that runs out fails several candidates at once". Projects
+>   opens **one** session for the whole batch (`bulk.py:344-384`) and hands `db` down; CRM
+>   cannot, until the seam is extracted. Bulk should copy Projects' per-record outcome
+>   reporting, not invent atomicity Projects does not have.
+>   ~~(b) **WS-26h collision** — `pipeline._require_entry_fields` raises a raw
+>   `HTTPException(422)`, while Projects' per-record catch is on a typed `TaskPatchError`, so
+>   that catch does not transfer.~~ **STRUCK as a blocker 2026-08-11: it is a design note,
+>   not a second precondition, and reading it as one over-states the ticket's cost.** A
+>   per-record `except HTTPException as exc:` narrowed to `exc.status_code in (404, 422)` —
+>   re-raising everything else so a 401/403/500 still fails the request — turns both the
+>   `require_row` 404 and the `_require_entry_fields` 422 into a per-record `failed` entry
+>   **with no change to WS-26h/h2 code or tests** (`core.require_row`'s 404 is
+>   `core.py:859`). Projects already catches a bare
+>   `HTTPException` for its not-found arm (`bulk.py:349-350`) beside its typed one, so the
+>   shape has precedent in the very file being copied. What remains true and load-bearing is
+>   the **volume**: a bulk `{"status_id": X}` refuses every deal missing X's
+>   `required_fields`, and each ACCEPTED move writes both a `crm_status_changes` and a
+>   `crm_activities` row — ~1,500 inserts for a 500-row lane move.
+>   ⚠️ **(c) A third precondition, undocumented anywhere until now and worth a repair round
+>   if missed:** `tests/unit/test_crm_pipeline.py` pins the move gate's **seam location** to
+>   `records.py`. Extract `patch_record`'s body into a new module and
+>   `test_the_move_gate_is_called_from_exactly_two_files` goes red on the changed call-file
+>   set. **As of 2026-08-11 (WS-26h-fence) that constraint is expressed STRUCTURALLY — an
+>   AST call-graph fence keyed on `_MOVE_GATE = ("pipeline", "apply_status_transition")` —
+>   and no longer by text match**, so it now also fires on an aliased call and no longer
+>   fires on a comment. **`WS-26i-bulk` below decides the question: the seam STAYS in
+>   `records.py`, so that fence passes with zero edits** — measured, a seam relocated to a
+>   new module reports `['bulk_seam.py', 'pipeline.py']` and goes red, with `records.py`
+>   dropping out of the set. `test_the_zoho_pull_never_enters_the_stage_gate` beside it is
+>   the reachability half and stays green either way, provided the new home is not reachable
+>   from the sync cycle (`sync_zoho._sync_loop` / `run_cycle` / `_run_cycle_locked`, which
+>   covers the push half too) or from `import_zoho.apply_module`.
 > - **CSV import — NO-GO, no precedent.** Neither `import_tasks.py` (local mirror) nor
 >   `import_clickup.py` (API) is CSV. Inherits two hazards: every created row is born
 >   `zoho_dirty` and mass-creates upstream, and §6 WS-26 (b) records that a `UNIQUE` index on
@@ -2406,7 +2810,8 @@ before any build.)*
 - **Bulk actions** on the lists: multi-select → owner/status change, delete. Per-record
   endpoints vs a bulk endpoint is an audit-time call (~~3.4k~~ **3,993** records as
   measured at the backfill, 2026-08-06 — corrected 2026-08-11; it is the number this
-  endpoint-shape decision rests on).
+  endpoint-shape decision rests on). **Now specced as `WS-26i-bulk` below (2026-08-11) —
+  the endpoint shape is decided there; dispatch from that section, not from this bullet.**
 - **CSV import/export**: export = current list filter, server-streamed; import = the Zoho
   importer's dedup discipline generalized (match-by-email first).
 - **Saved views**: the URL grammar IS the view (`urlState.ts`); a saved view is a named
@@ -2416,11 +2821,92 @@ before any build.)*
   `localStorage` at all. The DB direction is doc-blocked on the `crm_*` `organization_id`
   naming call — see the audit record above.
 
+### WS-26i-bulk — Bulk edit on the CRM lists · 🟢 AGENT-SAFE (backend) · no migration
+*(Supersedes the "bulk needs a `db`-taking patch seam first" clause in the 2026-08-11 audit record above. That clause was right that the seam is needed and wrong about why: Projects' bulk is deliberately NOT atomic, so what `records.patch_record`'s shape forbids is N records without N SESSIONS — the pool hazard `auto_lead.py:79` already records — not a single transaction. The `HTTPException(422)` "collision" recorded there is **not** a second precondition; see done-when 6.)*
+
+> **Provenance:** contract **authored by the spec-auditor, 2026-08-11**, and pasted here
+> verbatim apart from the two dated correction notes below (done-when 1 and done-when 4),
+> which exist because the fence those criteria are keyed on was converted in the **same PR**
+> that recorded this contract (WS-26h-fence). **It still wants a spec-auditor pass before
+> dispatch** — authored-by-auditor is not audited-as-written, and the conversion changed what
+> done-when 1 has to say. Anchor precision re-measured at `a06fa6a` while pasting: the
+> `auto_lead` pool-hazard sentence spans **`auto_lead.py:78-79`** (the auditor cites `:79`,
+> the second of its two lines), and the seam being split is `records.patch_record` at
+> **`records.py:235`** with its session at **`:247`**.
+
+**Scope.** One endpoint, `POST /crm/{leads,deals,contacts,organizations}/bulk`, plus the `db`-taking patch seam it is built on. **Non-goals, stated so they are not drifted into:** the CREATE path (`records.create_record`, `_resolve_status`, WS-26h2's gate) is untouched; `_require_entry_fields`' exception type is untouched; bulk DELETE is not in this ticket (it is the destructive verb and rides with duplicate-merge); the multi-select **UI is a separate ticket** — `src/app/crm/` has no selection affordance at all today, and Projects' `selection.ts` + `BulkBar.tsx` live under `src/app/projects/` and would need promotion, not copying.
+
+**Gate label: AGENT-SAFE, and the reasoning is a property of the SITE.** The seam extraction reaches no Zoho path: `import_zoho`, `sync_zoho` and `broker_handlers` import `records` not at all, write through `core.upsert_by_zoho_id` / `core.update_row(touch=False)`, and sit on the unbound `_get_db` seam rather than `_tenant_session` (`core.py:53-57`). `mark_dirty_on_update` is inside `core.update_row` (`core.py:1041`), i.e. BELOW the seam, so this refactor cannot change when a row is marked dirty. §6 WS-26 (a) therefore does not bind.
+⚠️ **Volume warning, not a gate:** each bulk request leaves up to `MAX_BULK` rows `zoho_dirty`, and `sync_zoho.PUSH_BATCH_LIMIT = 500` means a full 500-deal lane move fills one whole Deals push batch — 500 live upstream updates in one 600s cycle. D-CRM-9 already ruled that native writes push like human ones, so this is intended. Say it out loud in the endpoint's docstring.
+
+**Done when:**
+1. `records.patch_record`'s body is split: a `db`-taking seam `apply_record_patch(db, entity, record_id, values, *, actor_email) -> dict` holding everything from `require_row` to `update_row`, and `patch_record` reduced to `clean_payload` / `validate_source` / `async with _tenant_session()` / one call. ⚠️ **The seam stays IN `records.py`.** `tests/unit/test_crm_pipeline.py:1098` (`test_the_zoho_pull_never_enters_the_stage_gate`) asserts the files containing `apply_status_transition(` are exactly `["pipeline.py", "records.py"]`; a new module goes red. That test passes with **zero edits**.
+   > ⚠️ **Correction, 2026-08-11 — the criterion survives, the anchor and the test name do
+   > not.** WS-26h-fence converted that fence in the same PR that recorded this contract, so
+   > as of `ce314e8`: **the call-file assertion now lives in
+   > `test_the_move_gate_is_called_from_exactly_two_files` (`test_crm_pipeline.py:1273`)**,
+   > keyed on `_MOVE_GATE = ("pipeline", "apply_status_transition")`, and
+   > `test_the_zoho_pull_never_enters_the_stage_gate` (`:1301`) is now the **reachability**
+   > half. `:1098` no longer names either.
+   > **The constraint is unchanged in force and stronger in kind — measured, not assumed.**
+   > Extracting `patch_record`'s call to `apply_status_transition` into a new
+   > `routes/crm/bulk_seam.py` was simulated against a copy of the real package: the call-file
+   > fence goes **RED** reporting `['bulk_seam.py', 'pipeline.py']` — note `records.py` drops
+   > out of the set entirely, so the failure names the relocation rather than merely adding to
+   > the list — while `test_the_zoho_pull_never_enters_the_stage_gate` stays **GREEN**, because
+   > the new module is not reachable from the sync cycle (`sync_zoho._sync_loop` / `run_cycle` /
+   > `_run_cycle_locked`, which covers the push half too) or from
+   > `import_zoho.apply_module`.
+   > So the "zero edits" clause splits: the **reachability** test passes unedited either way,
+   > and it is the **call-file** test that must be left green by keeping the seam in
+   > `records.py`. It is now an **AST call-graph** check rather than a text match, which means
+   > it also catches an aliased call and no longer trips on a comment naming the function —
+   > the seam may not be hidden behind `from …pipeline import apply_status_transition as _move`.
+2. `patch_record`'s signature is unchanged — `(entity, record_id, payload, user)` — asserted by `inspect.signature`. **No existing test file is edited**; the ~42 existing `crm_records.patch_record(` call sites across `test_crm_pipeline.py`, `test_crm_routes.py` and `test_crm_zoho_sync.py:1799` pass as they stand.
+3. Two calls to the seam inside ONE bound session commit once: bind `_crm_fakes.bind_db`, open `records._tenant_session()`, call the seam twice, assert `fake.committed == 1` and both rows updated. (`bind_db` at `_crm_fakes.py:1038-1069` yields the fake and commits on clean exit, so `committed` is the observable — this is the property the seam exists for and it is not observable without a second caller.)
+4. **Structural fence, and what it proves stated precisely:** `_tenant_session_functions()` (the existing AST helper at `tests/unit/test_db_engine_seam.py:515`) over `records.py` reports `patch_record` in the set and `apply_record_patch` **not** in it. ⚠️ **This proves the seam's own function body opens no session. It does not prove no callee opens one** — that is a reachability claim and this is not the mechanism for it. If reachability is wanted, parameterise `_GATE` (currently a module-level constant at `test_crm_pipeline.py:1153`) into an argument of `_gate_reached_from` and reuse `_crm_call_graph`. **Do not mint a third mechanism.**
+   > ⚠️ **Correction, 2026-08-11: the parameterisation this criterion asks for is ALREADY
+   > DONE** — WS-26h-fence, same PR. `_GATE` no longer exists; there are two named targets
+   > (`_MOVE_GATE` at `test_crm_pipeline.py:1139`, `_ENTRY_GATE` at `:1142`) and the gate is an
+   > **argument**: `_gate_call_files(package, gate)` (`:1236`) and
+   > `_gate_reached_from(package, entries, gate)` (`:1249`), both over the shared
+   > `_crm_call_graph` (`:1204`). So if the reachability claim is wanted here, it costs a third
+   > **constant** and one call — not a change to the helpers. **Do not mint a third mechanism
+   > and do not fork the helpers to add a target**; that instruction is now load-bearing in the
+   > other direction, because the seam is easy to copy. Everything else in this criterion
+   > stands unchanged, including the limit it states: `_tenant_session_functions()` answers for
+   > the seam's own body only.
+5. `POST /crm/<entity>/bulk` takes `{ids: [...], patch: {...}}`, caps at `MAX_BULK = 500` (422 above it, naming the count — Projects' shape, `projects/bulk.py:62,318`), refuses a no-op patch with 422, and returns `{requested, applied, results, skipped, failed}`. The patch dict is validated by constructing the entity's existing pydantic model (`LeadIn`/`DealIn`/`ContactIn`/`OrganizationIn`) and passing it through `clean_payload` — `exclude_unset` (`core.py:1306-1313`) makes a caller-supplied dict behave exactly like a PATCH body, so bulk inherits the single-record validation rather than growing a second opinion.
+6. **Per-record refusals are collected, everything else aborts the batch.** The loop catches `HTTPException` **narrowed to `status_code in (404, 422)`** and re-raises anything else. Every per-record refusal on this path is one of those two — `require_row` 404, `validate_source` 422, the lost-reason 422 (`pipeline.py:121-128`), the entry-fields 422 (`pipeline.py:288-294`). Tested both directions: a mixed batch reports `failed` per id and still applies the rest; an injected 403 propagates and applies nothing.
+7. ⚠️ **Per-record continuation is safe only for PRE-WRITE refusals, and the ticket says so.** `_require_entry_fields` runs at `pipeline.py:129`, before the two INSERTs at `:138`/`:147`, so a refused record has issued no SQL. A genuine driver error (IntegrityError) poisons the transaction and MUST abort the batch — that is what done-when 6's re-raise arm buys.
+8. A bulk of N records leaves **exactly N** rows `zoho_dirty = true` — no more, no fewer — asserted against the fake. This is the fence on the only production-visible consequence.
+9. `tests/unit/test_crm_zoho_import.py` and `tests/unit/test_crm_zoho_sync.py` pass with **zero edits** — the evidence that nothing landed on the enabled 600s loop.
+
+**Tests:** `tests/unit/test_crm_bulk.py` (new), run with the shared-fake block in §10.
+
+⚠️ **Anchors re-measured at `a06fa6a` while pasting, since a stale one costs a repair round.**
+Confirmed exactly as written: `core.py:53-57` (the `_get_db` leaves — `sync_zoho`, `auto_lead`,
+`broker_handlers`), `core.py:1041` (`mark_dirty_on_update` inside `update_row`),
+`sync_zoho.PUSH_BATCH_LIMIT = 500`, `projects/bulk.py:62` (`MAX_BULK = 500`) and `:318` (the
+422), `pipeline.py:121-128` / `:129` / `:138` / `:147` / `:288-294`, `_crm_fakes.py:1038-1069`,
+`test_db_engine_seam.py:515`, `test_crm_zoho_sync.py:1799`, and that none of `import_zoho.py` /
+`sync_zoho.py` / `broker_handlers.py` imports `records`. **One count made exact — and corrected once, 2026-08-11
+(repair round 1), because the first attempt mixed the two conventions in the very sentence
+announcing it had removed the ambiguity.** ⚠️ **Count qualified call sites, not bare text.**
+Measured: **41** `crm_records.patch_record(` call sites across `tests/unit/` — **32** in
+`test_crm_pipeline.py` (not 34), 8 in `test_crm_routes.py`, 1 in `test_crm_zoho_sync.py:1799`.
+The **34** first recorded here was `grep -c "patch_record("` over `test_crm_pipeline.py`, which
+counts prose and fixture strings as well as calls; that number has since moved to **37** purely
+because this ticket's own fence fixtures added more `patch_record(` text, which is the argument
+for the qualified convention rather than a matter of taste. Done-when 2's "~42" is the total
+(41) and the §10 block's "~33" is `test_crm_pipeline.py`'s share (32); both are the right
+quantity approximated, and **32 / 41 are the numbers to check against.**
+
 ### WS-26i-export — The filtered-list CSV export · 🟢 BUILT + REPAIRED 2026-08-11 · no migration
 *(Built on branch `claude/crm-command-center-tasks-i8l7n4`; as-built record in this file's
 status header. Both traps hit and fenced. **The first cut did NOT meet done-when 5 end to
 end and claimed it did** — see the repair note below. All seven met after repair round 1.
-Not deployed, not merged.)*
+MERGED in PR #426 (`7255344`, on `origin/main`); deploy not independently verified.)*
 
 ⚠️ **Repair round 1, 2026-08-11 — four defects, one of them decisive.** An independent
 verifier and an adversarial reviewer converged on the same byte-level finding, and it is
@@ -2529,6 +3015,39 @@ PR (R4).
                   tests/unit/test_org_access_control.py \
                   tests/unit/test_org_access_enforcement.py -q
 
+    # WS-26h + WS-26h2 + WS-26h-fence — the two stage gates and where each may be
+    # called from. Four fences over ONE AST mechanism (call sites + reachability,
+    # per gate), the 25-case synthetic self-test that keeps them honest, and the
+    # fence on THIS number (it reads the count back out of this file):
+    uv run pytest tests/unit/test_crm_pipeline.py -q \
+                  -k "move_gate or entry_gate or zoho_pull_never or siting_fences \
+                      or spec_quotes"
+
+    # WS-26i-bulk — the db-taking patch seam and the bulk endpoint.
+    # ⚠️ Every CRM route test shares tests/unit/_crm_fakes.py, so the new file is
+    # NEVER run alone: a drifted fake shows up as a SIBLING failing.
+    # ⚠️ test_crm_pipeline.py is in this list twice over: it carries the ~33
+    # patch_record call sites that must pass UNEDITED (done-when 2) and the
+    # apply_status_transition siting fence that pins the seam to records.py
+    # (done-when 1). The two Zoho files are done-when 9's evidence.
+    # ⚠️ Correction 2026-08-11 (WS-26h-fence): that siting fence is now
+    # test_the_move_gate_is_called_from_exactly_two_files, an AST call-graph
+    # check — test_the_zoho_pull_never_enters_the_stage_gate beside it is the
+    # reachability half and stays green even if the seam moves. Measured: the
+    # patch_record body relocated to a new module reports
+    # ['bulk_seam.py', 'pipeline.py']. Measured call sites: 34 in this file,
+    # 41 across tests/unit/.
+    uv run pytest tests/unit/test_crm_bulk.py tests/unit/test_crm_pipeline.py \
+                  tests/unit/test_crm_routes.py tests/unit/test_crm_convert.py \
+                  tests/unit/test_crm_migration.py tests/unit/test_crm_export.py \
+                  tests/unit/test_crm_stage_metadata.py \
+                  tests/unit/test_crm_stage_discipline_parity.py \
+                  tests/unit/test_crm_reports.py tests/unit/test_crm_email_timeline.py \
+                  tests/unit/test_crm_zoho_import.py tests/unit/test_crm_zoho_sync.py \
+                  tests/unit/test_db_engine_seam.py -q
+    # No UI in this ticket — no tsc/vitest line. The multi-select surface is
+    # WS-26i-bulk-ui and carries its own.
+
     # WS-26i-export — the CSV export. ⚠️ Every CRM route test shares
     # tests/unit/_crm_fakes.py, so the new file is NEVER run alone: a fake that
     # drifts shows up as another suite failing, not as this one passing.
@@ -2537,6 +3056,25 @@ PR (R4).
                   tests/unit/test_crm_migration.py tests/unit/test_crm_reports.py \
                   tests/unit/test_crm_email_timeline.py \
                   tests/unit/test_crm_stage_metadata.py -q
+    cd workbench/control_plane && npx tsc --noEmit && npx vitest run
+
+    # WS-26h + WS-26h2 — stage discipline: the MOVE gate and the CREATE gate.
+    # WS-26h shipped with a Tests: line but was never given a §10 block; this
+    # covers both halves.
+    # ⚠️ Every CRM route test shares tests/unit/_crm_fakes.py, so no file here
+    # is ever run alone: a drifted fake shows up as a SIBLING failing, not as
+    # this one passing.
+    # ⚠️ The two Zoho files are in this list for a reason — they are the
+    # evidence that the create gate did NOT land on the enabled production sync
+    # loop, and they must pass with ZERO edits (WS-26h2 done-when 9).
+    uv run pytest tests/unit/test_crm_pipeline.py tests/unit/test_crm_routes.py \
+                  tests/unit/test_crm_convert.py tests/unit/test_crm_migration.py \
+                  tests/unit/test_crm_stage_metadata.py \
+                  tests/unit/test_crm_stage_discipline_parity.py \
+                  tests/unit/test_crm_zoho_import.py tests/unit/test_crm_zoho_sync.py \
+                  tests/unit/test_crm_reports.py tests/unit/test_crm_email_timeline.py \
+                  tests/unit/test_crm_export.py -q
+    # WS-26h's UI half only (rot badges, move plan) — WS-26h2 renders nothing:
     cd workbench/control_plane && npx tsc --noEmit && npx vitest run
 
     # WS-26d read half — the agent, the parse-only WhatsApp constant, AND the

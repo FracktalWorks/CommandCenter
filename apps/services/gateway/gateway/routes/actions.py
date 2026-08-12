@@ -13,13 +13,14 @@ Every endpoint is gated on ``require_internal_auth`` (the queue payloads carry
 outward-write bodies — CRM/email content — so it is never anonymous-reachable).
 Approve/reject go through ``action_broker.approve``/``reject``, which fail
 CLOSED: a missing or non-pending row is never run, and a handler error marks the
-row ``failed``, not ``applied``. Real handlers ARE registered (five sites as of
-2026-08-03 — ClickUp task writes, workflow resume, WhatsApp broadcast, two
-app-tool actions), so ``approve`` performs the real write for those actions.
-An action with no registered handler still gets a refusal ("no handler") and
-the row is marked ``failed`` — see FOUNDATION_BUILDOUT_CHECKLIST §BO-1a, where
-two gated ClickUp actions (``delete_task``/``archive_task``) hit exactly that
-branch today.
+row ``failed``, not ``applied``. Real handlers ARE registered (six sites as of
+2026-08-05 — ClickUp task writes, the three ``crm.zoho_*`` pushes, workflow
+resume, WhatsApp broadcast, two app-tool actions), so ``approve`` performs the
+real write for those actions. An action with no registered handler still gets a
+refusal ("no handler") and the row is marked ``failed``. ⚠️ That branch used to
+swallow the two ClickUp verbs ``delete_task``/``archive_task``; **BO-1a closed
+that on 2026-08-11** and a test derived from the gate call sites now fails if a
+gated ClickUp action loses its handler again.
 """
 from __future__ import annotations
 

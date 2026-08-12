@@ -1646,6 +1646,31 @@ function ProjectsWorkspace() {
           {center ? `${center} Center's slice` : "Every department you can see"}
         </span>
         <div className="ml-auto flex shrink-0 items-center gap-1">
+          {/* The app's other two surfaces (WS-27bj, WS-27bo). Reached from
+              HERE rather than from the sidebar, deliberately:
+              `registration.test.ts` pins Projects to ONE nav pane
+              (department_centers.md §1 rule 2 — a Center item is (app + scope)
+              and forking the app per department is the bloat failure mode).
+              That fence is about per-CENTER forking rather than per-surface
+              links, but widening it is a Center-doctrine call and not this
+              slice's to make. Promoting either to a pane is one entry and one
+              fence amendment, once somebody decides. */}
+          <Button
+            variant="ghost"
+            size="sm"
+            icon="ListTodo"
+            onClick={() => router.push("/projects/my-work")}
+          >
+            My work
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            icon="LayoutDashboard"
+            onClick={() => router.push("/projects/home")}
+          >
+            Control Center
+          </Button>
           <Button
             variant="ghost"
             size="sm"

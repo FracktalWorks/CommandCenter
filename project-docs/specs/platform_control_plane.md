@@ -1,7 +1,10 @@
 # Platform Control Plane — the subscription, seat and AI-metering engine (WS-31)
 
-**Status:** SPEC — nothing built · **Date:** 2026-08-12 · **verified against code
-2026-08-12** (repo-wide grep: zero hits for `usage_event`, `credit_ledger`,
+**Status:** ◐ **CP-1 BUILT 2026-08-12** (schema + service + 79 tests, 34 of them
+against a real Postgres 16 per R8) · CP-0 built the same day · CP-2…CP-8 spec
+only · **where it runs is an open owner decision —
+[`control_plane_infrastructure.md`](control_plane_infrastructure.md)** ·
+**Date:** 2026-08-12 · **verified against code 2026-08-12** (repo-wide grep: zero hits for `usage_event`, `credit_ledger`,
 `model_rate_card`, `usage_rollup`, `module_catalog`, `org_module_entitlement`
 — none of the commercial substrate exists; `llm_api_key`'s eight hits are all
 the *setting* `settings.llm_api_key`, not a table. Highest migration on disk:
@@ -389,7 +392,16 @@ fail the new test before the fix); the docstring names the mechanism actually in
 `npx tsc --noEmit && npx vitest run` green. **Registering any real IdP application is
 🔴 OWNER-GATE** — build against fixtures and hand it over.
 
-**CP-1 · The service skeleton and registry.** New deployable
+**CP-1 · The service skeleton and registry.** ✅ **BUILT 2026-08-12.**
+`infra/platform/001_control_plane.sql` (its OWN migration ladder — not
+`infra/postgres/`, which `apply_migrations.sh` replays into the *tenant*
+database and `gen_tenant_migration.py` scans to demand RLS; both would be wrong
+for a deliberately cross-tenant plane) · `002_seed_catalog.sql` (the D23/D24
+catalog as data, with `rnd`/`support` seeded INACTIVE because their Centers are
+not registered yet, and the rate card seeded UNPRICED so `rate_call` raises
+rather than billing a guess as free) · `apps/services/platform/` ·
+`tests/unit/test_platform_{seats,credits,keys,sql,api}.py`. The new engine site
+is declared in `test_db_engine_seam.py::_ALLOWED_SYNC` with its reason (R5(b)). New deployable
 `apps/services/platform/` following the existing service pattern (FastAPI, `uv`
 workspace member, `infra/docker-compose.yml` entry beside `gateway`). Its own
 database, no RLS (§0.9.2 — it reads across tenants by design). Tables from §3.2.

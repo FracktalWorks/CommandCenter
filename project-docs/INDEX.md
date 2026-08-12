@@ -34,6 +34,7 @@ limitations). Do not add product specs to `docs/`.
 | `../FOUNDATION_BUILDOUT_CHECKLIST.md` *(repo ROOT)* | WS-1 · WS-4 · WS-5 |
 | `specs/saas_multitenancy.md` (+ `_implementation`, `_handover`) | WS-29 — hand the **handover** to the executing agent |
 | `specs/platform_control_plane.md` | WS-31 — the central subscription/seat/AI-metering service (D32) |
+| `specs/control_plane_infrastructure.md` | WS-31 — **where** it runs; owner decision session (Supabase/Azure/VPS; Firebase disqualified in §3) |
 | `specs/subscription_console.md` | WS-30 |
 | `specs/future_modules_roadmap.md` | D21 roadmap (no rows until specced) |
 | `specs/crm_app.md` | WS-26 |

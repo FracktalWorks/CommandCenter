@@ -102,6 +102,11 @@ async def ops_summary(user: UserContext = Depends(get_current_user)) -> dict:
             # Distinct from `blocked`: a project can be blocked on a supplier or
             # on ourselves. This is the subset the CUSTOMER is holding, which is
             # the one management chases differently.
+            #
+            # ⚠️ NARROWER than the `/ops/list?state=awaiting` view, which also
+            # counts supplier and material. Two questions, two numbers, similar
+            # names — so both say which they are in their `basis`, and the tile
+            # is labelled "Awaiting client" rather than "Awaiting".
             "awaiting_client": int(row.awaiting_client),
             "basis": "Open work you can see — excludes delivered, cancelled and archived.",
         }
@@ -346,6 +351,15 @@ _STATES: dict[str, str] = {
 }
 
 
+#: How each view is sorted. See the note at the ORDER BY below.
+_ORDER: dict[str, str] = {
+    "blocked": "blocked_since NULLS LAST, t.title",
+    "awaiting": "blocked_since NULLS LAST, t.title",
+    "paused": "t.due_at NULLS LAST, t.title",
+    "active": "t.due_at NULLS LAST, t.title",
+}
+
+
 @router.get("/ops/list")
 async def ops_list(
     state: str = Query("blocked", pattern="^(blocked|awaiting|paused|active)$"),
@@ -377,7 +391,13 @@ async def ops_list(
                 "       (SELECT min(b.created_at) FROM pm_blockers b WHERE b.task_id = t.id "
                 "          AND b.resolved_at IS NULL) AS blocked_since "
                 f"{where} AND {_STATES[state]} "
-                "ORDER BY t.due_at NULLS LAST, t.title "
+                # State-aware order, because each view answers a different
+                # question. Blocked and Awaiting are read oldest-first — "how
+                # long have we been waiting" is the whole point of them, and a
+                # due-date sort buries the 26-day-old row under something due
+                # tomorrow. Paused and Active are read by due date, because
+                # there is no wait to age.
+                f"ORDER BY {_ORDER[state]} "
                 "LIMIT :lim"
             ),
             {**params, "lim": limit},
@@ -399,8 +419,10 @@ async def ops_list(
             "total": len(rows),
             "state": state,
             "basis": (
-                "Work stalled on someone outside the team (an open blocker of an "
-                "external kind), which is NOT the same as paused."
+                "Work stalled on someone outside the team — an open blocker of kind "
+                f"{', '.join(_EXTERNAL_KINDS)}. NOT the same as paused (that is our "
+                "choice), and WIDER than the Control Center's 'Awaiting client' tile, "
+                "which counts only the two client kinds."
                 if state == "awaiting"
                 else f"Open work whose lifecycle status is {state}."
             ),

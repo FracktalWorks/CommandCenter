@@ -24,7 +24,7 @@ import hmac
 import secrets
 from dataclasses import dataclass
 
-__all__ = ["MintedKey", "mint_key", "hash_secret", "verify_secret", "split_key"]
+__all__ = ["MintedKey", "hash_secret", "mint_key", "split_key", "verify_secret"]
 
 _ENV_LIVE = "live"
 _PREFIX_BYTES = 6   # 12 hex chars — enough to be unique, short enough to show

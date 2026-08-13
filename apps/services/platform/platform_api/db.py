@@ -37,7 +37,7 @@ from functools import lru_cache
 from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
 
-__all__ = ["get_engine", "control_plane_url"]
+__all__ = ["control_plane_url", "get_engine"]
 
 #: Deliberately its own variable, not `DATABASE_URL`. Sharing the tenant
 #: database's URL is precisely the mistake this module exists to prevent, and an

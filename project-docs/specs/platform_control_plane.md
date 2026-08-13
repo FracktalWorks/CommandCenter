@@ -162,6 +162,13 @@ llm_api_key(id UUID PK, organization_id UUID NOT NULL, prefix TEXT UNIQUE NOT NU
             key_hash TEXT NOT NULL, label TEXT, scopes TEXT[],
             created_by TEXT, created_at TIMESTAMPTZ, revoked_at TIMESTAMPTZ);
 
+-- CP-4. The Router's OWN provider accounts — deliberately not acb_llm's store,
+-- which reads the TENANT database (see the CP-4 ticket).
+provider_credential(id UUID PK, provider TEXT, organization_id UUID NULL,
+                    secret_enc TEXT, api_base TEXT, revoked_at TIMESTAMPTZ);
+                    -- organization_id NULL = the platform's account;
+                    -- non-NULL = a BYOK organization (§3.4)
+
 tier_binding(tier TEXT, model TEXT NOT NULL, effective_from TIMESTAMPTZ,
              PRIMARY KEY (tier, effective_from));   -- THE tier→model map, central
 
@@ -537,7 +544,8 @@ a rate card you change on customers.
 #   export CONTROL_PLANE_DATABASE_URL=postgresql+psycopg://cc:cc@127.0.0.1/cc_platform
 uv run pytest tests/unit/test_platform_seats.py tests/unit/test_platform_credits.py \
               tests/unit/test_platform_keys.py tests/unit/test_platform_sql.py \
-              tests/unit/test_platform_api.py tests/unit/test_platform_key_auth.py
+              tests/unit/test_platform_api.py tests/unit/test_platform_key_auth.py \
+              tests/unit/test_platform_router.py
 
 # The seam and tenancy ratchets this must not regress
 uv run pytest tests/unit/test_tenant_coverage.py tests/unit/test_db_engine_seam.py

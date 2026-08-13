@@ -21,11 +21,11 @@ from decimal import Decimal
 #: contract because a reader seeing ``sum(...)`` may reasonably wonder whether
 #: negatives are a data error; they are the design.
 __all__ = [
-    "SeatCounts",
-    "AssignmentDecision",
-    "seat_counts",
-    "decide_assignment",
     "CORE_PLAN_SLUG",
+    "AssignmentDecision",
+    "SeatCounts",
+    "decide_assignment",
+    "seat_counts",
 ]
 
 #: Membership IS the Core seat (D19.3): joining an organization consumes one.

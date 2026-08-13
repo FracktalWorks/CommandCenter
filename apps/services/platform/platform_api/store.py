@@ -22,18 +22,18 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
 __all__ = [
-    "ensure_organization",
+    "add_credit",
+    "credit_deltas",
     "ensure_identity",
+    "ensure_organization",
     "grant_seats",
+    "has_live_seat",
+    "plan_price",
+    "record_usage",
+    "release_seat",
+    "resolve_key",
     "seat_rows",
     "try_assign_seat",
-    "release_seat",
-    "has_live_seat",
-    "credit_deltas",
-    "add_credit",
-    "record_usage",
-    "resolve_key",
-    "plan_price",
 ]
 
 
@@ -276,11 +276,11 @@ def record_usage(conn: Connection, *, org_id: str, request_id: str,
             INSERT INTO usage_event
                 (organization_id, request_id, billed_credits, user_email,
                  agent, module_slug, model, tier, prompt_tokens,
-                 completion_tokens, cached_tokens, provider_cost_usd, run_id)
+                 completion_tokens, cached_tokens, provider_cost_usd, run_id, client_ref)
             VALUES
                 (:org, :request_id, :billed, :user_email, :agent, :module_slug,
                  :model, :tier, :prompt_tokens, :completion_tokens,
-                 :cached_tokens, :provider_cost_usd, :run_id)
+                 :cached_tokens, :provider_cost_usd, :run_id, :client_ref)
             ON CONFLICT (organization_id, request_id) DO NOTHING
             RETURNING id
             """
@@ -299,6 +299,7 @@ def record_usage(conn: Connection, *, org_id: str, request_id: str,
             "cached_tokens": fields.get("cached_tokens", 0),
             "provider_cost_usd": fields.get("provider_cost_usd"),
             "run_id": fields.get("run_id"),
+            "client_ref": fields.get("client_ref"),
         },
     ).first()
 

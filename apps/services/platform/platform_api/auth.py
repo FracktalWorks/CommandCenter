@@ -54,8 +54,15 @@ from platform_api import store
 from platform_api.db import get_engine
 from platform_api.keys import split_key, verify_secret
 
-__all__ = ["Caller", "require_operator", "require_internal",
-           "organization_from_key", "Operator", "Internal", "KeyCaller"]
+__all__ = [
+    "Caller",
+    "Internal",
+    "KeyCaller",
+    "Operator",
+    "organization_from_key",
+    "require_internal",
+    "require_operator",
+]
 
 
 @dataclass(frozen=True)

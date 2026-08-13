@@ -41,7 +41,8 @@ ENC_KEY = "test-encryption-key-not-a-real-one"
 _MIGRATIONS = ("infra/platform/001_control_plane.sql",
                "infra/platform/002_seed_catalog.sql",
                "infra/platform/003_metering_integrity.sql",
-               "infra/platform/004_provider_keys.sql")
+               "infra/platform/004_provider_keys.sql",
+               "infra/platform/005_metering_identity.sql")
 
 #: What the stub provider returns. Deliberately carries fields the Router has no
 #: opinion about, so "byte-identical" is a real assertion rather than a
@@ -189,17 +190,34 @@ class TestPassThrough:
         # ...and not the customer.
         assert "sk-provider-secret" not in r.text
 
-    def test_unrecognised_parameters_are_forwarded_not_rejected(
-            self, client, org_key, calls):
-        # The Router is a pass-through; a provider parameter it does not know
-        # about is not its business to reject.
+    def test_known_parameters_are_forwarded(self, client, org_key, calls):
         _, key = org_key
         client.post("/v1/chat/completions", headers=key, json={
             "model": "tier-balanced", "messages": [{"role": "user", "content": "hi"}],
-            "temperature": 0.2, "top_p": 0.9, "some_future_param": True})
+            "temperature": 0.2, "top_p": 0.9})
 
         assert calls[-1]["temperature"] == 0.2
-        assert calls[-1]["some_future_param"] is True
+        assert calls[-1]["top_p"] == 0.9
+
+    def test_an_UNKNOWN_parameter_is_rejected_not_forwarded(self, client, org_key):
+        """The reversal, and the reason for it.
+
+        This test previously asserted the opposite — "a provider parameter the
+        Router does not know about is not its business to reject" — which sounds
+        like reasonable pass-through humility and was in fact a live
+        credential-exfiltration hole: `api_base` is such a parameter, and
+        forwarding it sent our platform provider key to a host the caller chose.
+
+        A pass-through can be permissive about *content* and must not be
+        permissive about *routing and cost*. Since the two arrive in the same
+        JSON object, the only safe posture is an allowlist.
+        """
+        _, key = org_key
+        r = client.post("/v1/chat/completions", headers=key, json={
+            "model": "tier-balanced", "messages": [{"role": "user", "content": "hi"}],
+            "some_future_param": True})
+
+        assert r.status_code == 422
 
     def test_naming_a_raw_model_is_a_400_not_a_silent_coercion(self, client, org_key):
         # D32.7: silent coercion hides a misconfigured agent behind a bill.
@@ -225,7 +243,7 @@ class TestMetering:
         slug, key = org_key
         rid = f"r-{uuid.uuid4().hex}"
         client.post("/v1/chat/completions", headers=key, json={
-            "model": "tier-balanced", "request_id": rid,
+            "model": "tier-balanced", "client_ref": rid,
             "messages": [{"role": "user", "content": "hi"}]})
 
         with db.begin() as c:
@@ -233,7 +251,7 @@ class TestMetering:
                 "SELECT o.slug, u.tier, u.model, u.prompt_tokens, "
                 "       u.completion_tokens, u.cached_tokens, u.billed_credits "
                 "FROM usage_event u JOIN organization o "
-                "ON o.id = u.organization_id WHERE u.request_id = :r"
+                "ON o.id = u.organization_id WHERE u.client_ref = :r"
             ), {"r": rid}).first()
 
         assert row is not None
@@ -246,23 +264,32 @@ class TestMetering:
         # CP-4 is UNPRICED on purpose — CP-6 sets the card against this data.
         assert row[6] == Decimal("0.0000")
 
-    def test_a_retried_request_id_writes_one_row_not_two(self, client, org_key, db):
+    def test_a_customer_CANNOT_suppress_their_own_meter(self, client, org_key, db):
+        """The reversal. CP-4 keyed the meter on a caller-supplied id, so five
+        completions sent with one reused id produced ONE usage row while the
+        provider was called five times — the customer decided whether they were
+        billed. request_id is now server-generated; the caller's value is
+        `client_ref`, stored and trusted for nothing (migration 005)."""
         _, key = org_key
-        rid = f"r-{uuid.uuid4().hex}"
-        body = {"model": "tier-balanced", "request_id": rid,
+        ref = f"r-{uuid.uuid4().hex}"
+        body = {"model": "tier-balanced", "client_ref": ref,
                 "messages": [{"role": "user", "content": "hi"}]}
 
-        client.post("/v1/chat/completions", headers=key, json=body)
-        second = client.post("/v1/chat/completions", headers=key, json=body)
+        for _ in range(5):
+            assert client.post("/v1/chat/completions",
+                               headers=key, json=body).status_code == 200
 
-        # The retry still gets its completion — dropping the row must not drop
-        # the answer.
-        assert second.status_code == 200
         with db.begin() as c:
             n = c.execute(text(
-                "SELECT count(*) FROM usage_event WHERE request_id = :r"),
-                {"r": rid}).scalar_one()
-        assert n == 1
+                "SELECT count(*) FROM usage_event WHERE client_ref = :r"),
+                {"r": ref}).scalar_one()
+            distinct = c.execute(text(
+                "SELECT count(DISTINCT request_id) FROM usage_event "
+                "WHERE client_ref = :r"), {"r": ref}).scalar_one()
+
+        # Five provider calls, five metered rows, five distinct server ids.
+        assert n == 5
+        assert distinct == 5
 
     def test_attribution_headers_land_on_the_usage_row(self, client, org_key, db):
         _, key = org_key
@@ -271,13 +298,13 @@ class TestMetering:
                     headers={**key, "X-CC-Member": "alice@corp.com",
                              "X-CC-Agent": "email-assistant",
                              "X-CC-Module": "email", "X-CC-Run": "run-42"},
-                    json={"model": "tier-balanced", "request_id": rid,
+                    json={"model": "tier-balanced", "client_ref": rid,
                           "messages": [{"role": "user", "content": "hi"}]})
 
         with db.begin() as c:
             row = c.execute(text(
                 "SELECT user_email, agent, module_slug, run_id FROM usage_event "
-                "WHERE request_id = :r"), {"r": rid}).first()
+                "WHERE client_ref = :r"), {"r": rid}).first()
 
         assert row == ("alice@corp.com", "email-assistant", "email", "run-42")
 
@@ -394,3 +421,165 @@ class TestProviderCredentials:
 
         assert r.status_code == 503
         assert "nosuchprovider" in r.json()["detail"]
+
+
+# ── The holes independent verification found in CP-4 ────────────────────────
+
+class TestTheCustomerCannotRedirectOurCredential:
+    """F1, HIGH. CP-4 used `extra="allow"` and excluded two fields by name, so
+    `api_base` from the request body reached the provider call — and was only
+    overridden when the credential row carried one, which the platform's own
+    row does not. Verification measured a 200 with OUR key sent to
+    `https://attacker.example/v1`. One field, total compromise of the credential
+    `004_provider_keys.sql` exists to protect."""
+
+    def test_api_base_in_the_body_is_rejected_not_forwarded(self, client, org_key, calls):
+        _, key = org_key
+        r = client.post("/v1/chat/completions", headers=key, json={
+            "model": "tier-balanced", "messages": [{"role": "user", "content": "x"}],
+            "api_base": "https://attacker.example/v1"})
+
+        assert r.status_code == 422, r.text
+        assert calls == [] or calls[-1].get("api_base") != "https://attacker.example/v1"
+
+    @pytest.mark.parametrize("field", [
+        "api_base", "base_url", "api_key", "custom_llm_provider",
+        "extra_headers", "num_retries", "timeout", "mock_response",
+    ])
+    def test_no_routing_or_cost_parameter_can_be_set_by_a_caller(
+            self, client, org_key, field):
+        # An allowlist, so this is closed by construction rather than by having
+        # thought of each name — but the names are pinned because they are the
+        # ones that were measured to matter.
+        _, key = org_key
+        r = client.post("/v1/chat/completions", headers=key, json={
+            "model": "tier-balanced", "messages": [{"role": "user", "content": "x"}],
+            field: "anything"})
+        assert r.status_code == 422, f"{field} was accepted"
+
+    def test_the_router_pins_its_own_retry_and_timeout_ceilings(
+            self, client, org_key, calls):
+        _, key = org_key
+        client.post("/v1/chat/completions", headers=key, json={
+            "model": "tier-balanced", "messages": [{"role": "user", "content": "x"}]})
+
+        assert calls[-1]["num_retries"] == 1
+        assert calls[-1]["timeout"] == 120
+
+    def test_max_tokens_is_clamped_not_trusted(self, client, org_key, calls):
+        _, key = org_key
+        client.post("/v1/chat/completions", headers=key, json={
+            "model": "tier-balanced", "messages": [{"role": "user", "content": "x"}],
+            "max_tokens": 10_000_000})
+
+        assert calls[-1]["max_tokens"] == 32_000
+
+
+class TestStreaming:
+    """F3. CP-4 forwarded `stream` and handed litellm's CustomStreamWrapper to
+    FastAPI, which failed to serialise it: the client got a 500 AND a phantom
+    zero-token usage row was committed for a completion nobody received."""
+
+    def test_streaming_is_refused_explicitly_not_with_a_500(self, client, org_key):
+        _, key = org_key
+        r = client.post("/v1/chat/completions", headers=key, json={
+            "model": "tier-balanced", "stream": True,
+            "messages": [{"role": "user", "content": "x"}]})
+
+        assert r.status_code == 501
+        assert "CP-4b" in r.json()["detail"]
+
+    def test_a_refused_stream_writes_no_usage_row(self, client, org_key, db):
+        slug, key = org_key
+        before = TestMetering._count(db, slug)
+        client.post("/v1/chat/completions", headers=key, json={
+            "model": "tier-balanced", "stream": True,
+            "messages": [{"role": "user", "content": "x"}]})
+        assert TestMetering._count(db, slug) == before
+
+
+class TestFailureShapes:
+    def test_a_provider_error_becomes_502_not_500(self, client, org_key):
+        # F12: a provider 429 was indistinguishable from a Router bug, so no
+        # caller could tell retryable from fatal.
+        _, key = org_key
+
+        async def _boom(**kwargs):
+            raise RuntimeError("provider exploded")
+
+        router_mod.set_provider_call(_boom)
+        r = client.post("/v1/chat/completions", headers=key, json={
+            "model": "tier-balanced", "messages": [{"role": "user", "content": "x"}]})
+
+        assert r.status_code == 502
+        assert "provider exploded" not in r.text
+
+    def test_an_upstream_4xx_is_relayed_as_itself(self, client, org_key):
+        _, key = org_key
+
+        class Upstream(Exception):
+            status_code = 429
+
+        async def _boom(**kwargs):
+            raise Upstream("rate limited")
+
+        router_mod.set_provider_call(_boom)
+        r = client.post("/v1/chat/completions", headers=key, json={
+            "model": "tier-balanced", "messages": [{"role": "user", "content": "x"}]})
+
+        assert r.status_code == 429
+
+    def test_a_failed_provider_call_writes_no_usage_row(self, client, org_key, db):
+        slug, key = org_key
+
+        async def _boom(**kwargs):
+            raise RuntimeError("nope")
+
+        router_mod.set_provider_call(_boom)
+        before = TestMetering._count(db, slug)
+        client.post("/v1/chat/completions", headers=key, json={
+            "model": "tier-balanced", "messages": [{"role": "user", "content": "x"}]})
+
+        assert TestMetering._count(db, slug) == before
+
+    def test_a_broken_encryption_key_fails_CLOSED_with_503(
+            self, client, org_key, monkeypatch):
+        # F11: this raised from inside the request and surfaced as a 500, which
+        # reads as a bug rather than as "this deployment is misconfigured".
+        _, key = org_key
+        monkeypatch.setenv("CONTROL_PLANE_ENCRYPTION_KEY", "a-different-key")
+
+        r = client.post("/v1/chat/completions", headers=key, json={
+            "model": "tier-balanced", "messages": [{"role": "user", "content": "x"}]})
+
+        assert r.status_code == 503
+
+
+class TestTheProviderSecretNeverReachesALog:
+    """F8, an R7 violation: `004_provider_keys.sql` says "never logged" and
+    nothing tested it. CP-3's verification had already found a log fence that
+    passed while leaking through `extra={}` and `exc_info`, so this reads the
+    whole record."""
+
+    def test_no_log_record_carries_the_provider_secret(self, client, org_key, caplog):
+        import logging as _logging
+        _, key = org_key
+
+        async def _boom(**kwargs):
+            # The dangerous frame: `secret` and `call_kwargs` are live locals
+            # where the traceback is produced.
+            raise RuntimeError("upstream died")
+
+        router_mod.set_provider_call(_boom)
+        with caplog.at_level(_logging.DEBUG):
+            client.post("/v1/chat/completions", headers=key, json={
+                "model": "tier-balanced",
+                "messages": [{"role": "user", "content": "x"}]})
+
+        haystack = []
+        for rec in caplog.records:
+            haystack.append(rec.getMessage())
+            haystack.extend(str(v) for v in rec.__dict__.values())
+            if rec.exc_info:
+                haystack.append(str(rec.exc_info))
+        assert "sk-provider-secret" not in "\n".join(haystack)

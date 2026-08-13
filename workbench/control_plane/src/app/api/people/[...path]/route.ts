@@ -1,7 +1,7 @@
 /**
- * GET /api/people/[…path]
+ * GET/PATCH/POST /api/people/[…path]
  *
- * Proxies People Center reads to the FastAPI gateway's /people/* API. The
+ * Proxies People Center requests to the FastAPI gateway's /people/* API. The
  * browser talks to the Next server, which holds the session and forwards an
  * authenticated request (internal bearer + X-User-Email) upstream — the same
  * shape as the Projects and CRM proxies.
@@ -11,12 +11,15 @@
  * from `X-User-Email` only, so a page that fetched the gateway directly would
  * carry neither and 401. Nothing in this app may point the browser at api.* .
  *
- * **GET only, deliberately.** The People Center's directory is a read surface;
- * its writes (create/edit a person, upload a résumé) already exist on the
- * tasks API under `admin:members:manage` and go through `/api/tasks`. Adding
- * write verbs here that forward to endpoints the gateway does not serve would
- * mint a second, hollow write path — and the first person to find it would
- * reasonably assume it worked.
+ * **It was GET-only until WS-28g, and the reason it stopped being GET-only is
+ * the point.** The original rule was not "reads are safer" — it was that the
+ * gateway's `/people` router served no writes, so a verb added here would
+ * forward to an endpoint that does not exist and mint a second, hollow write
+ * path that the first person to find would reasonably assume worked. WS-28g
+ * built the endpoints (`PATCH /people/{id}` and `POST /people/{id}/resume`,
+ * the self-service door in `routes/people/profile.py`), so the forwarding is
+ * now real. Admin-only writes still go to `/api/tasks/people`, where they have
+ * always lived — see `people/lib/write.ts`.
  */
 import { NextRequest, NextResponse } from "next/server";
 import { GATEWAY_URL, gatewayHeaders, requireIdentity } from "@/lib/gateway";
@@ -29,32 +32,42 @@ function buildUpstreamUrl(path: string[], req: NextRequest): string {
   return qs ? `${base}?${qs}` : base;
 }
 
-export async function GET(
+async function forward(
+  method: "GET" | "POST" | "PATCH",
   req: NextRequest,
-  ctx: { params: Promise<{ path: string[] }> }
-) {
-  // Identity is resolved BEFORE forwarding. `gatewayHeaders()` throwing is what
-  // makes an unguarded call fail closed, but that throw lands in the catch
-  // below and answers 502 — telling a signed-out member the gateway is down
-  // when what they need is a sign-in. Pinned by `src/lib/gateway.test.ts`.
-  const me = await requireIdentity();
-  if (me instanceof NextResponse) return me;
-
-  const { path } = await ctx.params;
+  params: Promise<{ path: string[] }>
+): Promise<NextResponse> {
+  const { path } = await params;
   const upstream = buildUpstreamUrl(path, req);
   try {
+    const reqType = req.headers.get("content-type") ?? "";
+    // The CV upload is multipart and must pass through byte-exact with its
+    // boundary — rebuilding it as JSON would silently strip the file.
+    const isMultipart = reqType.startsWith("multipart/form-data");
     const init: RequestInit = {
-      method: "GET",
-      headers: await gatewayHeaders(),
+      method,
+      headers: {
+        ...(await gatewayHeaders()),
+        ...(method === "GET"
+          ? {}
+          : { "Content-Type": isMultipart ? reqType : "application/json" }),
+      },
       signal: AbortSignal.timeout(30_000),
     };
+    if (method !== "GET") {
+      init.body = isMultipart
+        ? Buffer.from(await req.arrayBuffer())
+        : JSON.stringify(await req.json().catch(() => ({})));
+    }
     // A pooled keep-alive socket can be closed by the gateway just as we reuse
-    // it (undici vs uvicorn's short keep-alive). Reads are idempotent, so a
-    // spurious network failure gets one retry.
+    // it (undici vs uvicorn's short keep-alive). **Only reads are retried**: a
+    // PATCH replayed after an ambiguous failure is a second write, and the one
+    // thing worse than a save that failed is a save that happened twice.
     let res: Response;
     try {
       res = await fetch(upstream, init);
-    } catch {
+    } catch (err) {
+      if (method !== "GET") throw err;
       res = await fetch(upstream, { ...init, signal: AbortSignal.timeout(30_000) });
     }
     const text = await res.text();
@@ -69,4 +82,35 @@ export async function GET(
       { status: 502 }
     );
   }
+}
+
+export async function GET(
+  req: NextRequest,
+  ctx: { params: Promise<{ path: string[] }> }
+) {
+  // Identity is resolved BEFORE forwarding. `gatewayHeaders()` throwing is what
+  // makes an unguarded call fail closed, but that throw lands in the catch
+  // below and answers 502 — telling a signed-out member the gateway is down
+  // when what they need is a sign-in. Pinned by `src/lib/gateway.test.ts`.
+  const me = await requireIdentity();
+  if (me instanceof NextResponse) return me;
+  return forward("GET", req, ctx.params);
+}
+
+export async function PATCH(
+  req: NextRequest,
+  ctx: { params: Promise<{ path: string[] }> }
+) {
+  const me = await requireIdentity();
+  if (me instanceof NextResponse) return me;
+  return forward("PATCH", req, ctx.params);
+}
+
+export async function POST(
+  req: NextRequest,
+  ctx: { params: Promise<{ path: string[] }> }
+) {
+  const me = await requireIdentity();
+  if (me instanceof NextResponse) return me;
+  return forward("POST", req, ctx.params);
 }

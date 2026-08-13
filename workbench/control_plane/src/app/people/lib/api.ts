@@ -1,15 +1,45 @@
 /**
  * People Center · the browser's client for /api/people/*.
  *
- * Read-only, matching the proxy. Writes live on the tasks API under
- * `admin:members:manage` and go through `./write.ts`, not through here.
+ * Reads, plus the **self-service** write door WS-28g added (`PATCH /people/{id}`
+ * and the CV upload). The ADMIN write path is unchanged and still goes through
+ * `./write.ts` to `/api/tasks/people` — see that file's header for why the two
+ * doors exist and why there is still only one write implementation behind them.
  *
- * The reads do carry `can_manage` — whether the caller MAY write is a fact
- * about the viewer that only the gateway can answer, and the editor has to
- * know it before it draws rather than discover it on the click.
+ * The reads carry `can_manage`, `is_self` and `editable_fields`. Whether the
+ * caller may write, and *which fields*, is a fact only the gateway can answer,
+ * and the editor has to know it before it draws rather than discover it from a
+ * 403 after the click (D-PC-4).
  */
 
-export interface PersonRow {
+/** The §3.1 half of a person that every `feature:people` holder may read. */
+export interface PersonProfileFields {
+  preferred_name?: string | null;
+  pronouns?: string | null;
+  location?: string | null;
+  timezone?: string | null;
+  working_hours?: Record<string, unknown> | null;
+  bio?: string | null;
+  links?: Record<string, string> | null;
+  languages?: string[];
+  /** HR tier (§3.2) — null-projected without `admin:members:read` or self. */
+  employee_id?: string | null;
+  employment_type?: string | null;
+  start_date?: string | null;
+  end_date?: string | null;
+  seniority?: string | null;
+  cost_center?: string | null;
+  interests?: string[];
+  max_concurrent_tasks?: number | null;
+  /** Private tier (§3.5) — self or `admin:members:manage` only (D-PC-3). */
+  phone?: string | null;
+  emergency_contact?: Record<string, string> | null;
+  personal_email?: string | null;
+  /** `MM-DD`. Never a date of birth (D-PC-9). */
+  birthday?: string | null;
+}
+
+export interface PersonRow extends PersonProfileFields {
   id: string;
   name: string;
   email?: string | null;
@@ -37,6 +67,14 @@ export interface PersonDetail extends PersonRow {
   provider_user_id?: string | null;
   hr_visible: boolean;
   can_manage: boolean;
+  /** True when this row is the caller's own (D-PC-1). */
+  is_self?: boolean;
+  /**
+   * Which fields THIS caller may write on THIS row — the server's answer, and
+   * the only one the UI is allowed to have. An empty array means read-only,
+   * and read-only means the controls are ABSENT, never disabled.
+   */
+  editable_fields?: string[];
   load?: {
     open_tasks: number;
     estimated_hours: number;
@@ -92,6 +130,8 @@ export const peopleApi = {
       total: number;
       hr_visible: boolean;
       can_manage: boolean;
+      /** Which row is the caller's, if any — the link target for "my profile". */
+      self_person_id?: string | null;
     }>(`${query ? `?${query}` : ""}`);
   },
 
@@ -103,6 +143,74 @@ export const peopleApi = {
     }>("facets"),
 
   person: (id: string) => call<PersonDetail>(id),
+
+  /**
+   * The caller's own row — or WHY there isn't one (§5.3).
+   *
+   * Three states, kept apart deliberately: `no_directory_row` (nobody carries
+   * your address; an admin can fix it) and `no_identity` (you are signed in
+   * without an address) are different problems with different fixes, and an
+   * empty form would report neither.
+   */
+  me: () =>
+    call<{
+      state: "resolved" | "no_directory_row" | "no_identity";
+      email?: string | null;
+      person?: PersonDetail | null;
+      detail?: string | null;
+    }>("me"),
+
+  /**
+   * Save a person through the SELF-SERVICE door.
+   *
+   * Sends only the keys the caller changed. The gateway answers 403 naming any
+   * field outside their write classes and applies NOTHING (D-PC-5) — so a
+   * partial save is impossible, and the message is shown verbatim because it is
+   * the only form of it anyone can act on.
+   */
+  update: async (id: string, body: Record<string, unknown>) => {
+    const res = await fetch(`/api/people/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const text = await res.text();
+    const parsed = text ? JSON.parse(text) : null;
+    if (!res.ok) {
+      throw new PeopleApiError(
+        parsed?.detail ?? `Request failed (${res.status})`,
+        res.status
+      );
+    }
+    return parsed as PersonDetail;
+  },
+
+  /**
+   * Upload one's own CV. No `Content-Type` header — the browser sets it so the
+   * multipart boundary matches the body it generated, and the proxy forwards
+   * both unchanged.
+   */
+  uploadResume: async (id: string, file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    const res = await fetch(`/api/people/${id}/resume`, {
+      method: "POST",
+      body: form,
+    });
+    const text = await res.text();
+    const parsed = text ? JSON.parse(text) : null;
+    if (!res.ok) {
+      throw new PeopleApiError(
+        parsed?.detail ?? `Upload failed (${res.status})`,
+        res.status
+      );
+    }
+    return parsed as {
+      resume_id: string;
+      added_skills: string[];
+      person: PersonDetail;
+    };
+  },
 
   work: (id: string) =>
     call<{ rows: WorkRow[]; total: number; available: boolean }>(`${id}/work`),

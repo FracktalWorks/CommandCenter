@@ -6,7 +6,14 @@ from agent-project-manager's agent-data via scripts/import_hr_people.py.
 
 This is what makes Clarify capability-aware: the delegation/assignee pickers
 and the proposal heuristic see WHO can do WHAT and who has hours free, not
-just names. Personal phone numbers are never stored or served.
+just names.
+
+⚠️ **"Personal phone numbers are never stored or served" is no longer true**,
+and the sentence is retired here rather than left standing. WS-28g added the
+§3.5 private half of the record on the owner's 2026-08-13 directive; what
+replaces the absolute is a *tier* — :data:`PRIVATE_FIELDS` is projected away
+unless the caller holds ``admin:members:manage`` or is the subject (D-PC-3),
+and the HR importer still populates none of it.
 
 Access (colleague_onboarding.md §4 N4, owner-answered 2026-08-04 — "directory
 open, HR fields restricted"): the roster is org data, so the *directory* stays
@@ -21,6 +28,7 @@ see its docstring.
 from __future__ import annotations
 
 import json
+from datetime import date
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -35,6 +43,7 @@ from gateway.routes.tasks.core import (
     can_read_hr_fields,
     require_people_write,
     router,
+    validate_person_vocabularies,
 )
 from gateway.routes.tasks.resume_parse import parse_resume
 from pydantic import BaseModel
@@ -68,12 +77,47 @@ class OrgPersonModel(BaseModel):
     available_hours_per_week: int | None = None
     provider_user_id: str | None = None   # ClickUp user id (assignment target)
 
+    # ── The profile (WS-28g / P-3, spec §3) ─────────────────────────────────
+    # Grouped by the spec's sections rather than by type, because the section
+    # is what decides the read tier and the write class — see
+    # `routes/people/fields.py`, which is the authority for both.
+    #
+    # §3.1 · the self-describing directory half (read: directory)
+    preferred_name: str | None = None
+    pronouns: str | None = None
+    location: str | None = None
+    timezone: str | None = None
+    working_hours: dict[str, Any] | None = None
+    bio: str | None = None
+    links: dict[str, Any] | None = None
+    languages: list[str] = []
+    # §3.2 · employment (read: HR)
+    employee_id: str | None = None
+    employment_type: str | None = None
+    start_date: str | None = None
+    end_date: str | None = None
+    seniority: str | None = None
+    cost_center: str | None = None
+    # §3.3/§3.4 · what they want to work on, and their own stated ceiling on
+    # parallel work (read: HR — both are planning inputs, not directory facts)
+    interests: list[str] = []
+    max_concurrent_tasks: int | None = None
+    # §3.5 · private (read: `admin:members:manage` or self — NOT
+    # `admin:members:read`; D-PC-3)
+    phone: str | None = None
+    emergency_contact: dict[str, Any] | None = None
+    personal_email: str | None = None
+    birthday: str | None = None          # MM-DD, never a date of birth (D-PC-9)
+
 
 #: The HR-sensitive half of a person record — everything the owner's N4
 #: answer restricts to `admin:members:read`. The rest of `OrgPersonModel`
 #: (name, email, role, title, department, team, reports_to/manager_id,
-#: status, domain, provider_user_id) is the basic directory and stays visible
-#: to every holder of `feature:tasks`.
+#: status, domain, provider_user_id and §3.1's self-described directory half)
+#: is the basic directory and stays visible to every holder of `feature:tasks`.
+#:
+#: WS-28g adds the §3.2 employment half plus the two planning inputs to the
+#: same tier, and adds a *narrower* tier above it — :data:`PRIVATE_FIELDS`.
 HR_FIELDS: tuple[str, ...] = (
     "skills",
     "skills_source",
@@ -82,6 +126,27 @@ HR_FIELDS: tuple[str, ...] = (
     "capacity_hours_per_week",
     "current_load_hours_per_week",
     "available_hours_per_week",
+    "employee_id",
+    "employment_type",
+    "start_date",
+    "end_date",
+    "seniority",
+    "cost_center",
+    "interests",
+    "max_concurrent_tasks",
+)
+
+#: The private tier (spec §3.5, D-PC-3): self, or an `admin:members:manage`
+#: holder, and nobody else. Deliberately keyed to the WRITE grant rather than
+#: to `admin:members:read` — a manager seeing skills and capacity is the point
+#: of the HR tier, and a manager seeing a colleague's emergency contact is not.
+#: The tuple is re-exported by `routes/people/fields.py` so there is one list,
+#: not two that agree today.
+PRIVATE_FIELDS: tuple[str, ...] = (
+    "phone",
+    "emergency_contact",
+    "personal_email",
+    "birthday",
 )
 
 
@@ -90,24 +155,61 @@ def _blank_hr() -> dict[str, Any]:
 
     Fresh containers, not a module-level dict: a shared `[]`/`{}` would be
     aliased into every projected model on every request.
+
+    Built from :data:`HR_FIELDS` rather than typed out, so a field added to the
+    tuple cannot be forgotten here — the failure mode being that the field
+    stays *visible* to a caller the tuple says may not see it, which is the
+    silent direction.
     """
-    return {
-        "skills": [],
-        "skills_source": {},
-        "resume_summary": None,
-        "years_experience": None,
-        "capacity_hours_per_week": None,
-        "current_load_hours_per_week": None,
-        "available_hours_per_week": None,
-    }
+    empty: dict[str, Any] = {"skills": [], "skills_source": {}, "interests": []}
+    return {name: empty.get(name) for name in HR_FIELDS}
 
 
-def _row_to_person(row: Any, *, include_hr: bool) -> OrgPersonModel:
+def _blank_private() -> dict[str, Any]:
+    """The projected-away form of :data:`PRIVATE_FIELDS` — every one is None."""
+    return dict.fromkeys(PRIVATE_FIELDS)
+
+
+def _jsonb(value: Any) -> dict[str, Any] | None:
+    """A ``JSONB`` column as the driver hands it back.
+
+    Raw ``text()`` declares no column type, so asyncpg returns jsonb as a
+    **string** and a model field typed ``dict`` would reject it. Same rule and
+    same reason as ``routes/projects/core.from_jsonb`` and ``routes/crm/core``
+    — per-package, because each package owns its own row mapper.
+    """
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except ValueError:
+            return None
+        return parsed if isinstance(parsed, dict) else None
+    return value if isinstance(value, dict) else None
+
+
+def _iso(value: Any) -> str | None:
+    """A ``DATE`` column as a wire string. asyncpg hands back ``datetime.date``."""
+    if value is None:
+        return None
+    iso = getattr(value, "isoformat", None)
+    return iso() if callable(iso) else str(value)
+
+
+def _row_to_person(row: Any, *, include_hr: bool,
+                   include_private: bool = False) -> OrgPersonModel:
     """Row → model, with the HR half carried or projected away.
 
     ``include_hr`` is keyword-only and has **no default**: every call site has
     to state which audience it is serving, so a route added later cannot
     inherit the permissive answer by omission.
+
+    ``include_private`` does have one — ``False`` — and the asymmetry is
+    deliberate rather than sloppy. It was added after every existing call site
+    was written, and defaulting it to False means each of those keeps its
+    behaviour exactly: the narrower tier is opt-in, so a call site that has
+    never heard of §3.5 cannot start serving phone numbers by inheriting a
+    permissive default. The two routes that mean to serve it pass it
+    explicitly.
 
     The projection is at the SERIALIZATION layer, never in the SQL, for two
     reasons. (1) ``fetch_people_for_clarify`` runs its own query and must keep
@@ -136,10 +238,42 @@ def _row_to_person(row: Any, *, include_hr: bool) -> OrgPersonModel:
         current_load_hours_per_week=row.current_load_hours_per_week,
         available_hours_per_week=row.available_hours_per_week,
         provider_user_id=row.clickup_user_id,
+        # §3.1 — self-described, directory-visible.
+        preferred_name=getattr(row, "preferred_name", None),
+        pronouns=getattr(row, "pronouns", None),
+        location=getattr(row, "location", None),
+        timezone=getattr(row, "timezone", None),
+        working_hours=_jsonb(getattr(row, "working_hours", None)),
+        bio=getattr(row, "bio", None),
+        links=_jsonb(getattr(row, "links", None)),
+        languages=list(getattr(row, "languages", None) or []),
+        # §3.2 — employment, HR tier.
+        employee_id=getattr(row, "employee_id", None),
+        employment_type=getattr(row, "employment_type", None),
+        start_date=_iso(getattr(row, "start_date", None)),
+        end_date=_iso(getattr(row, "end_date", None)),
+        seniority=getattr(row, "seniority", None),
+        cost_center=getattr(row, "cost_center", None),
+        interests=list(getattr(row, "interests", None) or []),
+        max_concurrent_tasks=getattr(row, "max_concurrent_tasks", None),
+        # §3.5 — private tier.
+        phone=getattr(row, "phone", None),
+        emergency_contact=_jsonb(getattr(row, "emergency_contact", None)),
+        personal_email=getattr(row, "personal_email", None),
+        birthday=getattr(row, "birthday", None),
     )
-    if include_hr:
-        return person
-    return person.model_copy(update=_blank_hr())
+    # `getattr` with a default throughout, and not `row.x`: the migration
+    # applies BEFORE services restart (R6), but the reverse window exists too —
+    # a hermetic row double, or a service that came up against a database the
+    # ladder has not reached yet, has no such column. A mapper that raises
+    # there turns a missing column into a 500 on the directory rather than a
+    # blank field.
+    projected: dict[str, Any] = {}
+    if not include_hr:
+        projected.update(_blank_hr())
+    if not include_private:
+        projected.update(_blank_private())
+    return person.model_copy(update=projected) if projected else person
 
 
 @router.get("/people", response_model=list[OrgPersonModel])
@@ -230,7 +364,16 @@ async def fetch_people_for_clarify(db: Any) -> list[dict[str, Any]]:
 
 
 class PersonWrite(BaseModel):
-    """Create/update payload. All optional on PATCH; `name` required on create."""
+    """Create/update payload. All optional on PATCH; `name` required on create.
+
+    **This model's field set IS the writable surface**, and
+    ``routes/people/fields.WRITABLE_FIELDS`` classifies exactly the same names —
+    pinned by ``test_people_profile.py``. A field the payload accepts and the
+    class map has never heard of is a field with no owner and therefore no gate;
+    a field in the map that the payload cannot carry is a permission granted for
+    something nobody can do. Both directions are failures, so the test compares
+    the two sets rather than one containment.
+    """
     name: str | None = None
     email: str | None = None
     role: str | None = None
@@ -247,6 +390,73 @@ class PersonWrite(BaseModel):
     capacity_hours_per_week: int | None = None
     current_load_hours_per_week: int | None = None
     clickup_user_id: str | None = None
+    # ── The profile (WS-28g / P-3) ──────────────────────────────────────────
+    # §3.1 (self class)
+    preferred_name: str | None = None
+    pronouns: str | None = None
+    location: str | None = None
+    timezone: str | None = None
+    working_hours: dict[str, Any] | None = None
+    bio: str | None = None
+    links: dict[str, Any] | None = None
+    languages: list[str] | None = None
+    interests: list[str] | None = None
+    max_concurrent_tasks: int | None = None
+    # §3.2 (admin class)
+    employee_id: str | None = None
+    employment_type: str | None = None
+    start_date: str | None = None        # ISO 'YYYY-MM-DD'
+    end_date: str | None = None
+    seniority: str | None = None
+    cost_center: str | None = None
+    personal_email: str | None = None
+    # §3.5 (self class, private read tier)
+    phone: str | None = None
+    emergency_contact: dict[str, Any] | None = None
+    birthday: str | None = None          # 'MM-DD' — D-PC-9
+
+
+#: Columns the update builder passes straight through: no cast, no shaping.
+_PLAIN_UPDATE_COLUMNS: tuple[str, ...] = (
+    "name", "email", "role", "title", "department", "team", "reports_to",
+    "status", "domain", "resume_summary", "years_experience",
+    "clickup_user_id",
+    "preferred_name", "pronouns", "location", "timezone", "bio",
+    "employee_id", "employment_type", "seniority", "cost_center",
+    "personal_email", "phone", "birthday", "max_concurrent_tasks",
+)
+
+#: JSONB columns. `text()` declares no column type, so asyncpg needs both the
+#: cast and a JSON *string* — a bare dict has no codec (the defect
+#: `tests/live/live_ws27l.py` exists to pin).
+_JSONB_UPDATE_COLUMNS: tuple[str, ...] = (
+    "working_hours", "links", "emergency_contact",
+)
+
+#: `TEXT[]` columns. Bound as a Python list — never json-encoded, which would
+#: store the literal string '["a"]' in a text array.
+_ARRAY_UPDATE_COLUMNS: tuple[str, ...] = ("languages", "interests")
+
+#: `DATE` columns. Parsed into `datetime.date` and bound plainly rather than
+#: written as `CAST(:x AS date)` over a string — asyncpg refuses that shape,
+#: which is the WS-27k defect recorded in `tests/live/README.md`.
+_DATE_UPDATE_COLUMNS: tuple[str, ...] = ("start_date", "end_date")
+
+#: The WS-28g columns — the ones `create_person`'s INSERT (written in 2026-07)
+#: does not carry, and which it therefore applies through the shared builder
+#: immediately after. Derived from the payload model rather than listed twice,
+#: so a column added to `PersonWrite` cannot be silently dropped on create:
+#: it is "everything writable that the create INSERT does not name".
+_CREATE_INSERT_COLUMNS: frozenset[str] = frozenset({
+    "name", "email", "role", "title", "department", "team", "reports_to",
+    "manager_id", "status", "skills", "domain", "resume_summary",
+    "years_experience", "capacity_hours_per_week",
+    "current_load_hours_per_week", "clickup_user_id",
+})
+
+_PROFILE_ONLY_COLUMNS: frozenset[str] = (
+    frozenset(PersonWrite.model_fields) - _CREATE_INSERT_COLUMNS
+)
 
 
 def _available(capacity: int | None, load: int | None) -> int | None:
@@ -254,6 +464,96 @@ def _available(capacity: int | None, load: int | None) -> int | None:
     if capacity is None:
         return None
     return max(0, capacity - (load or 0))
+
+
+def _as_date(column: str, value: Any) -> Any:
+    """``'2026-08-13'`` → :class:`datetime.date`, or 400 naming the column.
+
+    Bound as a real date rather than written as ``CAST(:x AS date)`` over a
+    string: asyncpg refuses that shape, and it refuses it at request time with
+    a driver error the caller cannot act on. That exact defect is what
+    ``tests/live/live_ws27k.py`` exists to pin, and this is the same fix
+    ``routes/projects/core.coerce_write_values`` applies package-side.
+    """
+    if value is None or value == "":
+        return None
+    if isinstance(value, date):
+        return value
+    try:
+        return date.fromisoformat(str(value))
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"'{column}' is not a valid ISO date (YYYY-MM-DD): {value!r}.",
+        ) from exc
+
+
+def build_person_update(
+    fields: dict[str, Any], row: Any, *, actor: str,
+) -> tuple[list[str], dict[str, Any]]:
+    """``SET`` clauses + binds for a person update. **One builder, two doors.**
+
+    Both write doors run through here: ``PATCH /tasks/people/{id}`` (admin
+    only, unchanged since WS-28b-write) and ``PATCH /people/{id}`` (admin *or*
+    the subject, WS-28g). They differ in *who may call them and with which
+    fields* — which is the field-class authority's job, applied in front of
+    this — and not at all in how a column reaches the database. Two builders
+    would be two places for a JSONB cast to be forgotten, and the one that
+    forgot it would fail at Postgres rather than in a test.
+
+    ``fields`` is already ``exclude_unset``, so *absent* and *set to null* stay
+    distinguishable: a PATCH that never mentions ``phone`` must not erase it.
+    """
+    set_parts: list[str] = ["updated_at = now()", "updated_by = :updated_by"]
+    params: dict[str, Any] = {"updated_by": actor}
+
+    for col in _PLAIN_UPDATE_COLUMNS:
+        if col in fields:
+            set_parts.append(f"{col} = :{col}")
+            params[col] = fields[col]
+    for col in _JSONB_UPDATE_COLUMNS:
+        if col in fields:
+            set_parts.append(f"{col} = CAST(:{col} AS JSONB)")
+            value = fields[col]
+            params[col] = None if value is None else json.dumps(value)
+    for col in _ARRAY_UPDATE_COLUMNS:
+        if col in fields:
+            set_parts.append(f"{col} = :{col}")
+            params[col] = [
+                str(v).strip() for v in (fields[col] or []) if str(v).strip()
+            ]
+    for col in _DATE_UPDATE_COLUMNS:
+        if col in fields:
+            set_parts.append(f"{col} = :{col}")
+            params[col] = _as_date(col, fields[col])
+
+    if "manager_id" in fields:
+        set_parts.append("manager_id = CAST(:manager_id AS UUID)")
+        params["manager_id"] = fields["manager_id"] or None
+    if "skills" in fields:
+        skills = [s.strip() for s in (fields["skills"] or []) if s and s.strip()]
+        prior = dict(getattr(row, "skills_source", None) or {})
+        src = {s: prior.get(s, "manual") for s in skills}
+        set_parts.append("skills = :skills")
+        set_parts.append("skills_source = CAST(:skills_source AS JSONB)")
+        params["skills"] = skills
+        params["skills_source"] = json.dumps(src)
+
+    # Recompute free hours whenever capacity or load moves.
+    cap = fields.get("capacity_hours_per_week",
+                     getattr(row, "capacity_hours_per_week", None))
+    load = fields.get("current_load_hours_per_week",
+                      getattr(row, "current_load_hours_per_week", None))
+    if "capacity_hours_per_week" in fields:
+        set_parts.append("capacity_hours_per_week = :capacity")
+        params["capacity"] = fields["capacity_hours_per_week"]
+    if "current_load_hours_per_week" in fields:
+        set_parts.append("current_load_hours_per_week = :load")
+        params["load"] = fields["current_load_hours_per_week"]
+    if "capacity_hours_per_week" in fields or "current_load_hours_per_week" in fields:
+        set_parts.append("available_hours_per_week = :available")
+        params["available"] = _available(cap, load)
+    return set_parts, params
 
 
 async def _get_person_row(db: Any, person_id: str) -> Any:
@@ -333,6 +633,11 @@ async def create_person(
     if not name:
         raise HTTPException(status_code=400, detail="name is required")
     _validate_status(body.status)
+    # The vocabularies migration 171 deliberately did NOT put in a CHECK
+    # (D-PC-8/P-6): enforced in the route against ONE tuple, the same shape
+    # `_validate_status` takes for 148's CHECK, so a bad value is a 400 that
+    # lists the legal words rather than a 500 naming a constraint.
+    validate_person_vocabularies(body.model_dump(exclude_unset=True))
     skills = [s.strip() for s in (body.skills or []) if s and s.strip()]
     skills_source = {s: "manual" for s in skills}
     available = _available(body.capacity_hours_per_week, body.current_load_hours_per_week)
@@ -373,6 +678,21 @@ async def create_person(
              "capacity": body.capacity_hours_per_week,
              "load": body.current_load_hours_per_week, "available": available,
              "clickup_user_id": body.clickup_user_id, "updated_by": _uid(user)})
+        # The INSERT above carries the columns that existed before WS-28g. The
+        # profile columns are applied by the shared builder in the SAME
+        # transaction rather than by extending the INSERT — one place decides
+        # how a JSONB, an array or a date reaches Postgres, and a create that
+        # accepted `timezone` in its payload and dropped it on the floor is
+        # precisely the silent-discard D-PC-5 refuses.
+        extra = {k: v for k, v in body.model_dump(exclude_unset=True).items()
+                 if k in _PROFILE_ONLY_COLUMNS}
+        if extra:
+            set_parts, params = build_person_update(
+                extra, await _get_person_row(db, pid), actor=_uid(user))
+            params["id"] = pid
+            await db.execute(
+                text(f"UPDATE gtd_people SET {', '.join(set_parts)} WHERE id = :id"),
+                params)
         person = await _get_person_row(db, pid)
     # The insert is committed above; the capability re-embed runs AFTER it in
     # its own transaction (best-effort — an embedding hiccup never fails the
@@ -380,7 +700,9 @@ async def create_person(
     async with _tenant_session() as db:
         await _reembed_capability(db, pid)
     # include_hr: the route gate already proved this caller is an admin.
-    return _row_to_person(person, include_hr=True)
+    # The route gate already proved this caller holds
+    # `admin:members:manage`, which is the private tier's key (D-PC-3).
+    return _row_to_person(person, include_hr=True, include_private=True)
 
 
 @router.patch("/people/{person_id}", response_model=OrgPersonModel,
@@ -397,6 +719,7 @@ async def update_person(
     fields = body.model_dump(exclude_unset=True)
     if "status" in fields:
         _validate_status(fields["status"])
+    validate_person_vocabularies(fields)
     if "email" in fields:
         fields["email"] = _clean_email(fields["email"])
     async with _tenant_session() as db:
@@ -410,39 +733,8 @@ async def update_person(
                 raise HTTPException(
                     status_code=409,
                     detail=f"{fields['email']} already belongs to {holder}.")
-        set_parts: list[str] = ["updated_at = now()", "updated_by = :updated_by"]
-        params: dict[str, Any] = {"id": person_id, "updated_by": _uid(user)}
-        # Plain columns (name/email/role/title/…): pass straight through.
-        for col in ("name", "email", "role", "title", "department", "team",
-                    "reports_to", "status", "domain", "resume_summary",
-                    "years_experience", "clickup_user_id"):
-            if col in fields:
-                set_parts.append(f"{col} = :{col}")
-                params[col] = fields[col]
-        if "manager_id" in fields:
-            set_parts.append("manager_id = CAST(:manager_id AS UUID)")
-            params["manager_id"] = fields["manager_id"] or None
-        if "skills" in fields:
-            skills = [s.strip() for s in (fields["skills"] or []) if s and s.strip()]
-            prior = dict(row.skills_source or {})
-            src = {s: prior.get(s, "manual") for s in skills}
-            set_parts.append("skills = :skills")
-            set_parts.append("skills_source = CAST(:skills_source AS JSONB)")
-            params["skills"] = skills
-            params["skills_source"] = json.dumps(src)
-        # Recompute free hours whenever capacity or load moves.
-        cap = fields.get("capacity_hours_per_week", row.capacity_hours_per_week)
-        load = fields.get("current_load_hours_per_week",
-                          row.current_load_hours_per_week)
-        if "capacity_hours_per_week" in fields:
-            set_parts.append("capacity_hours_per_week = :capacity")
-            params["capacity"] = fields["capacity_hours_per_week"]
-        if "current_load_hours_per_week" in fields:
-            set_parts.append("current_load_hours_per_week = :load")
-            params["load"] = fields["current_load_hours_per_week"]
-        if "capacity_hours_per_week" in fields or "current_load_hours_per_week" in fields:
-            set_parts.append("available_hours_per_week = :available")
-            params["available"] = _available(cap, load)
+        set_parts, params = build_person_update(fields, row, actor=_uid(user))
+        params["id"] = person_id
         await db.execute(
             text(f"UPDATE gtd_people SET {', '.join(set_parts)} WHERE id = :id"),
             params)
@@ -451,7 +743,9 @@ async def update_person(
     # own transaction (best-effort; H2 restructure).
     async with _tenant_session() as db:
         await _reembed_capability(db, person_id)
-    return _row_to_person(person, include_hr=True)
+    # The route gate already proved this caller holds
+    # `admin:members:manage`, which is the private tier's key (D-PC-3).
+    return _row_to_person(person, include_hr=True, include_private=True)
 
 
 class ResumeIngestResult(BaseModel):
@@ -544,7 +838,7 @@ async def ingest_resume(
         await _reembed_capability(db, person_id)
     return ResumeIngestResult(
         resume_id=rid, added_skills=added, extracted=extracted,
-        person=_row_to_person(person, include_hr=True))
+        person=_row_to_person(person, include_hr=True, include_private=True))
 
 
 async def _reembed_capability(db: Any, person_id: str) -> None:

@@ -65,12 +65,27 @@ describe("the People Center's directory sub-app", () => {
     // A Center item is (app + scope). Forking the app per department is the
     // bloat failure mode `department_centers.md` §1 rule 2 says to refuse in
     // review — the same rule the Projects entries follow.
+    //
+    // `/people/me` is on the allow-list because it is a ROW selector, not a
+    // scope: it renders the same app and the same panels for whichever row
+    // carries the caller's address (§5.3). `/people/sales` would be the fork
+    // this test exists to catch, and it still fails.
+    const OWN_ROUTES = new Set([PEOPLE_HREF, `${PEOPLE_HREF}/me`]);
     for (const center of CENTERS) {
       for (const app of center.apps) {
         if (!app.href?.startsWith(PEOPLE_HREF)) continue;
         const path = app.href.split("?")[0];
-        expect(path).toBe(PEOPLE_HREF);
+        expect(OWN_ROUTES.has(path), `${path} forks the People app`).toBe(true);
       }
     }
+  });
+
+  it("offers the self-service profile as its own entry", () => {
+    // Discoverability is the whole point: a person who does not know
+    // `/people/me` exists will never edit their own record, and the Center
+    // landing page is where they look.
+    const entry = peopleCenter?.apps.find((a) => a.href === `${PEOPLE_HREF}/me`);
+    expect(entry, "the People Center has no 'my profile' entry").toBeTruthy();
+    expect(entry?.status).toBe("live");
   });
 });

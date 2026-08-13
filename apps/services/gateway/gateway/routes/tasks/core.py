@@ -126,6 +126,76 @@ def require_people_write() -> Any:
 #: the route at request time.
 PEOPLE_STATUSES: tuple[str, ...] = ("active", "contractor", "alumni", "invited")
 
+#: The two vocabularies WS-28g's migration (171) deliberately shipped WITHOUT a
+#: database CHECK — see `people_center_app.md` D-PC-8 / P-6. R6 keeps a
+#: constraint over live data out of the expand half, so the enforcement is
+#: here, and a vocabulary enforced nowhere is a vocabulary that is already
+#: wrong.
+#:
+#: Defined in this module for the same reason `PEOPLE_STATUSES` is, and it is
+#: the *import direction* that forces it: `routes/people/*` imports from
+#: `routes/tasks/*` and never the other way. A validator living in the People
+#: package and imported from here would close an import cycle through
+#: `routes/people/__init__`, which imports `directory`, which imports this
+#: package's `people` module. `routes/people/fields.py` re-exports these three
+#: names, so the People Center still reads them from its own authority.
+EMPLOYMENT_TYPES: tuple[str, ...] = (
+    "employee", "contractor", "intern", "vendor", "agent",
+)
+
+#: Coarse on purpose: it feeds "should this person own it or review it", never
+#: a pay band (`people_center_app.md` §3.6).
+SENIORITY_LEVELS: tuple[str, ...] = (
+    "junior", "mid", "senior", "lead", "principal",
+)
+
+
+def validate_person_vocabularies(fields: dict[str, Any]) -> None:
+    """Refuse a value the product's vocabulary does not contain, naming it.
+
+    The same shape ``_validate_status`` takes for 148's CHECK: a 400 listing the
+    legal words instead of a 500 naming a constraint — except that here there is
+    no constraint to name yet, so without this the bad value would simply be
+    stored and read back as truth.
+    """
+    for key, vocabulary in (
+        ("employment_type", EMPLOYMENT_TYPES),
+        ("seniority", SENIORITY_LEVELS),
+    ):
+        if key in fields and fields[key] not in (None, "") \
+                and fields[key] not in vocabulary:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unknown {key} '{fields[key]}'. One of: {list(vocabulary)}.",
+            )
+    if ("birthday" in fields and fields["birthday"] not in (None, "")
+            and not is_month_day(str(fields["birthday"]))):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "birthday must be MM-DD (no year — People Center D-PC-9). "
+                f"Got '{fields['birthday']}'."
+            ),
+        )
+
+
+def is_month_day(value: str) -> bool:
+    """``MM-DD``, and a real one — ``02-30`` is not a birthday.
+
+    Validated here rather than by a ``DATE`` column because the column
+    deliberately is not a date (D-PC-9): storing the year is exactly what is
+    being refused, and a TEXT column with no validator collects whatever people
+    type. 29 February IS a birthday, so the day table is the permissive one.
+    """
+    parts = value.split("-")
+    if len(parts) != 2 or not all(p.isdigit() and len(p) == 2 for p in parts):
+        return False
+    month, day = int(parts[0]), int(parts[1])
+    if not 1 <= month <= 12:
+        return False
+    days_in_month = (31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31)
+    return 1 <= day <= days_in_month[month - 1]
+
 
 # ── Models (snake_case — the frontend maps to camelCase) ─────────────────────
 

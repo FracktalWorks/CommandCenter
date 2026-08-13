@@ -54,11 +54,19 @@ promised by `NotEntitled.upgrade_url`, `saas_multitenancy_implementation.md` §4
 its gateway endpoints; seat assign/unassign writes under the D19.3 rules; a
 change-request flow that lands in the operator's inbox.
 
-**Non-goals:** the payment *provider* integration itself (Razorpay SDK wiring, MT-4) — SC-4 specifies the customer-facing flow over it. ⚠️ **Invoicing and tax are NOT a non-goal** — that was a wrong assumption, corrected by D38: we are the supplier of record under GST and the tax invoice is ours to issue (SC-5) · the Operator Console (MT-4) · the
-entitlement tables and enforcement seam themselves (MT-2) · metering and the rate
-card (MT-3) · dunning, invoicing, tax (the processor's job, §4.3) · any surface a
-non-admin member sees (members get the `ModuleGate` upsell fallbacks, not this
-console).
+**Non-goals:** the payment *provider* integration itself (Razorpay SDK wiring,
+MT-4) — SC-4 specifies the customer-facing flow over it · the Operator Console,
+which is a **separate deployable** (D35) · the entitlement tables and enforcement
+seam (MT-2) · the rate card itself (WS-31 CP-6) · **dunning** (the processor's
+collection retries) · any surface a non-admin member sees, who get the
+`ModuleGate` upsell fallbacks rather than this console — with the single
+exception of SC-4d's "your organization is out of credits" message, which carries
+no figures.
+
+> ⚠️ **"Invoicing and tax" used to appear in this list as "the processor's job".
+> That was wrong and is corrected by D38.** Razorpay collects money and issues a
+> payment receipt; under GST the **tax invoice is the supplier's obligation**,
+> and the supplier is us. Issuing it is **SC-5**, firmly in scope.
 
 ## 2. The surfaces (each is an acceptance unit)
 

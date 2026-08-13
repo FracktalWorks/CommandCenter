@@ -820,7 +820,9 @@ consistently rather than only where it was first noticed.
 | `sort_key` (mig 58) | `pm_view_task_positions` ✅ | D-PM-5: order is per view, not a column on the task. |
 | `project_id` → `gtd_projects` | `pm_tasks.project_id` | `LOCAL` rows land in the owner's personal project (§3.11). |
 | `workflow_stage` (mig 57) | `pm_tasks.status_id` | Free text → a real status row. The status→stage map already exists; the **colour** already agrees via `src/lib/statusAccent.ts`. |
-| **`important`, `leveraged`, `kept_mine`, `urgent_window_hours`** (mig 68) | **`pm_task_personal`** — 🔴 **NEW columns** | The founder priority matrix. Ana may rate a shared task important and Ben may not; it is a judgement, not a property of the work. Per-member by the test above. |
+| ~~**`important`**~~ | 🔴 **OVERRULED 2026-08-13 → NO new column at all (D-PM-28)** | The owner ruled importance is a property of the work, not a per-member judgement — so it is shared. And it **already exists**: `pm_tasks.importance` is a *four-level* scale, strictly richer than this boolean. Adding a boolean beside it would be the CLAUDE.md §5 defect. `/tasks` adopts the four-level control (D-PM-29 rule 4); `importance = 3` is relabelled "Urgent" → "Critical" so it stops making a time claim once urgency is derived. The argument this row used to carry — *"Ana may rate a shared task important and Ben may not"* — is kept struck rather than deleted, because it is the reasoning that was overruled, not a mistake nobody made. |
+| **`leveraged`, `kept_mine`** (mig 68) | **`pm_task_personal`** — 🔴 **NEW columns** | The part of the founder matrix that stays personal (D-PM-28): a rare asymmetric upside is my read of a shared task, and `kept_mine` dismisses a suggestion shown only to me. |
+| **`urgent_window_hours`** (mig 68) | **Org-level setting** — 🔴 not per-user, not per-task | Urgency is DERIVED and shared (D-PM-28), so a per-user window would have Ana and Ben seeing different urgency on the same task — the exact divergence the decision removes. |
 | **`scheduled_start`, `scheduled_end`** (76), **`flexible`** (79), **`actual_start`, `actual_end`** (80) | **`pm_task_personal`** — 🔴 **NEW columns** | Timeboxing. *When I plan to do it* and *when I actually did* are mine; two people on one task book their own calendars. Note `pm_tasks.start_date` is a **different** fact (when the work starts, shared) and must not be conflated. |
 | **`deep_work`** (mig 96) | **`pm_task_personal`** — 🔴 **NEW column** | A sibling of `energy`, which is already per-member. My concentration classification, not the task's. |
 | `is_hard_date` | **`pm_tasks`** — 🔴 **NEW column** | The one calendar-shaped flag that is *not* personal: a deadline is either immovable or it is not, and that is true for everyone. |
@@ -1349,6 +1351,76 @@ map is unreachable from `resolveHue`.
 
 ⚠️ **Hue is never the only channel.** Each state also carries a glyph through `<Icon name>`: a
 dense tree, read at a glance or read by a colour-blind user, must not depend on colour alone.
+
+**D-PM-28 — the three priority axes: importance is SHARED and already exists, urgency is
+DERIVED, only `leveraged` is personal.** `DECISION (2026-08-13, owner-ruled: "important and
+urgent can be systems that are shared between personal tasks as well as project management
+tasks. Only leveraged is an additional thing that appears in the personal task manager.")`
+
+| Axis | Question it answers | Where it lives |
+|---|---|---|
+| **importance** | how much does this matter? | **`pm_tasks.importance`** (0–3) — shared, **already shipped** |
+| **urgent** | how soon? | **derived from `due_at`**, never stored |
+| **leveraged** | rare, asymmetric upside? | **`pm_task_personal.leveraged`** — personal, 🔴 new |
+
+🔴 **This overrides §7.5.1's row for `important`**, which sent it to `pm_task_personal` on the
+argument that *"Ana may rate a shared task important and Ben may not."* The owner ruled the
+other way: importance is a property of the work. The override is recorded here rather than
+edited quietly into that table, because a spec row that changes owner without a trace is how a
+later reader concludes the table was always wrong.
+
+**No boolean `important` column is added, and that is the point.** `pm_tasks.importance` is
+already a *four-level* scale — strictly richer than `gtd_items.important`'s boolean — so adding
+the boolean beside it would be the CLAUDE.md §5 defect (a second way to ask an existing
+question) in the very decision meant to prevent it. The existing scale **is** this axis. So the
+owner's ruling costs **one** new column, not three.
+
+🔴 **`importance = 3` is relabelled "Urgent" → "Critical", and it is not cosmetic.**
+`IMPORTANCE_OPTIONS` (`app/projects/lib/table.ts:164`) currently reads
+`3 Urgent · 2 High · 1 Normal · 0 Low`. The moment urgency is derived from `due_at`, a
+hand-set "Urgent" pill can sit on a card whose due date is months away — **two things called
+urgent on one card, one manual and one derived, disagreeing.** One word, one meaning:
+importance says how much, urgency says how soon.
+
+**`/tasks` adopts the four-level control; its boolean toggle is retired** (D-PM-29, and the
+owner's standing "Projects is canonical, Tasks conforms"). Mapping a boolean onto a 4-level
+scale is lossy in the write direction — toggling "Important" off has no single correct level to
+return to — so the conforming surface takes the richer control rather than inventing a mapping.
+
+⚠️ **`urgent_window_hours` must be shared, not per-user.** `gtd_settings` holds it per person
+today. If urgency is a shared axis and the window is personal, Ana and Ben see different
+urgency on the same task, which is precisely the divergence this decision removes. It becomes
+an org-level setting; where exactly is an implementation call, that it is not per-user is not.
+
+**D-PM-29 — Projects is the MASTER schema; `/tasks` reproduces it and may only ADD.**
+`DECISION (2026-08-13, owner-ruled: "We want to have the project management settings as the
+master and this is just reproduced in the personal apps… Apart from those few additional data
+points and fields, it should be exactly the same as the product management field so as to
+prevent confusion. Any changes made on the personal tasks should also reflect on the product
+management task.")`
+
+This is D-PM-6 ("one row, and the personal view is a lens over it") stated as a **schema**
+rule rather than a storage one, and it settles a class of question that keeps recurring:
+
+1. **A field's default home is `pm_tasks`.** Personal placement is the exception and must earn
+   itself against §7.5.1's own test — *can Ana's and Ben's answers on the same task
+   legitimately differ?*
+2. **`/tasks` may add fields Projects does not have** (`leveraged`, and the GTD overlay
+   `pm_task_personal` already carries: disposition, next action, context, energy, two-minute,
+   defer). It may **not** hold a different version of a field Projects has.
+3. **A write from the personal app is a write to the same row.** No mirror, no reconciliation,
+   no "which one wins" — the property is already true by construction since 2026-08-06 and this
+   decision is what stops a future ticket re-introducing a sync.
+4. Where the two disagree on presentation, **Tasks conforms** — including retiring its own
+   control when Projects has a richer one for the same fact.
+
+⚠️ **What this does NOT overturn.** Timeboxing (`scheduled_start`/`scheduled_end`/`flexible`)
+stays personal on §7.5.1's reasoning, which rule 1 does not defeat: two people on one task book
+their own calendars, so their answers legitimately differ. `deep_work` likewise, as a sibling of
+`energy`. **`actual_start`/`actual_end` are the genuinely arguable pair** — "how long did this
+take" is a question a PM tool must answer at the task level, while "when did *I* work on it" is
+mine — and they are flagged here as an owner question rather than resolved by an agent reading
+a rule.
 
 ---
 
@@ -3443,6 +3515,70 @@ otherwise author three times over.
 Per-project state **history** (who paused it, when, why) — `pm_activities` is project-less today
 (§3.8 is a task timeline), so a project-level audit trail is its own ticket, not a side effect of
 this one. Also out: any change to `DELETE /nodes/{id}`'s semantics beyond its ranking in the UI.
+
+---
+
+### 9.9 WS-27bh — the four facts the card already knows and never says (minted 2026-08-13)
+
+**WS-27bh — draw what is already stored.** 🟢 AGENT-SAFE. **No migration, no new column, no
+API shape change.** Owner-selected 2026-08-13 from the card audit, all four items.
+
+#### 9.9.1 The audit that minted it
+
+Every `pm_tasks` fact, against where it actually renders. Measured at `5fb38a5`:
+
+| Fact | Table | Card chip | Panel | |
+|---|---|---|---|---|
+| status · title · due_at · tags · assignees · importance · estimate · subtasks · blocked · custom fields | ✓ | ✓ | ✓ | fine |
+| **`type_id`** → `pm_task_types` (name · **icon** · **colour** · `is_epic`) | ✗ | ✗ | ✗ | **never drawn** |
+| **`recurrence_id`** | ✗ | ✗ | editor only | **never drawn** |
+| **`source`** (`manual`/`import`/`email`/`agent`/`automation`) | ✗ | ✗ | ✗ | **never drawn** |
+| **urgency** (derivable from `due_at`) | ✗ | ✗ | ✗ | **no such concept** |
+| `start_date` | ✓ | ✗ | ✓ | table only |
+| watchers | ✗ | ✗ | ✓ | panel only |
+| `completed_at` · `updated_at` | ✗ | ✗ | — | no column |
+
+🔴 **`pm_task_types` is the fourth instance of one failure.** It is seeded per root project with
+a name, an **icon** and a **colour** (`Task`/circle-check, `Bug`/bug, `Epic`/layers), it gained
+`is_epic` at WS-27ae — and `type_id` reaches the frontend only as a **board grouping key**
+(`lib/board.ts:236`). **A bug and a feature render identically on every surface in the app.**
+The three prior instances: `pm_task_statuses.color` (stored since 146, drawn nowhere, every lane
+grey), `estimate_mins` (dropped by `taskFacts` behind a comment claiming the column did not
+exist), `pm_projects.status` (validated on two endpoints, drawn zero times — WS-27bg). ⚠️ The
+pattern is worth naming because it is not carelessness: each was *stored correctly and reachable
+by the API*, so every test passed and the only symptom was a UI that looked plainer than the
+data underneath it.
+
+#### 9.9.2 Done when
+
+> * **Task type** draws on the card and the list, using the registry's own `icon` and `color`
+>   through `statusAccent` — **not** a fifth palette (rule 4). An Epic is distinguishable from a
+>   Task at a glance. `type` joins `FIELD_KEYS`/`FIELD_LABELS` and `CHIP_FIELD`, and the
+>   gateway's `SHOWN_FIELDS` gains it in the same change — `shownFields.ts`'s own header warns
+>   that a key added on one side only is *"a preference the server silently strips on the next
+>   save."*
+> * **Urgency** is derived from `due_at` — never stored — with a step between silent and
+>   overdue, so a task due in three hours stops rendering identically to one due in three
+>   months. ⚠️ **`importance = 3` is relabelled "Urgent" → "Critical" in the same slice**
+>   (D-PM-28): shipping derived urgency while a hand-set pill still says "Urgent" puts two
+>   disagreeing urgencies on one card. The window is a shared constant in this slice; its
+>   org-level setting is D-PM-28's follow-up, not this ticket.
+> * **A recurring task is visible as one** on the card. It matters more since WS-27bg: recurrence
+>   now stops in a paused project, and a series that has silently stopped is exactly the thing a
+>   card should be able to say.
+> * **Source** draws for the origins that are not `manual`. `/tasks` already ships `SourceBadge`
+>   in six components — ⚠️ **read it before building, and promote rather than author a second
+>   one** if it fits; this is the WS-27bd(5) ContextMenu situation, and the audit that minted
+>   this ticket exists to stop the app growing a fourth of something.
+> * Every new chip obeys the existing `shown_fields` gate — a fact a view has hidden earns no
+>   chip, per `card.visibleChips`.
+> * **D-PM-21:** a Playwright case drives the new chips under Fluent → Material → Graphite.
+
+#### 9.9.3 Not in this ticket
+
+`start_date` as a chip, a watcher count, and `completed_at`/`updated_at` columns are real gaps
+from the same audit and were **not** selected by the owner. Recorded here so the next reader
+knows they were seen and skipped, not missed.
 
 ---
 

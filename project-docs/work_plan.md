@@ -275,7 +275,48 @@ worth knowing before it is). Hermetic: 17 new tests incl. the mirror test that *
 out of the migration**, plus 5999 passed on the broad suite. 🔴 **Owed and NOT fakeable from
 here**: the count of `status='archived'` rows on prod is **owner-gated reach (§6) and is asked of
 the owner at review** — the migration is correct at any population, but an agent claiming "this
-affects no rows" would be reporting a guess as a measurement. (2026-08-13) |
+affects no rows" would be reporting a guess as a measurement.
+🆕 **THE TASK-CARD DATA AUDIT, 2026-08-13 (owner-directed), and it minted WS-27bh + D-PM-28/29.**
+Owner framing: *"the Tasks app is a sort of an extension of the Projects app — the slice for a
+single user"*, plus a local GTD inbox. ✅ **That framing is already the recorded architecture and
+is more built than the board said**: D-PM-6 (one row, the personal view is a lens),
+`pm_projects.personal_owner` (mig 147 — a personal project is an ordinary project granted to one
+member) and **`pm_task_personal`**, which already carries disposition · next_action · context ·
+energy · time_estimate · two-minute · defer_until · clarified_at keyed `(task_id, member_email)`.
+🔴 **What the audit found is a RENDERING gap, not a data gap**: `pm_task_types` is seeded per
+project with a name, an **icon** and a **colour**, gained `is_epic` at WS-27ae, and reaches the
+frontend **only as a board grouping key** — *a bug and a feature render identically on every
+surface*. Same for `recurrence_id` (a repeating task is indistinguishable from a one-off outside
+its own editor) and `source` (`/tasks` ships `SourceBadge` in six components; Projects has
+nothing, though "assignment IS dispatch" means agent-created tasks exist). **This is the FOURTH
+instance of one failure** — after `pm_task_statuses.color`, `estimate_mins` and WS-27bg's
+`pm_projects.status` — and the pattern is that each was stored correctly and reachable by the
+API, so every test passed and the only symptom was a UI plainer than its data. 🔴 **And Projects
+has no concept of urgency at all**: only binary overdue, so a task due in three hours renders
+exactly like one due in three months, which is the single biggest reason `/tasks` cards read
+richer. ✅ **D-PM-28 (owner-ruled) — importance is SHARED and ALREADY EXISTS, urgency is DERIVED,
+only `leveraged` is personal.** This **overrides §7.5.1's row** sending `important` to
+`pm_task_personal` (recorded as an override, not edited quietly). **No boolean `important` is
+added**: `pm_tasks.importance` is a four-level scale, strictly richer than the boolean, so adding
+one beside it would be the §5 defect inside the decision meant to prevent it — the ruling costs
+**one** new column (`leveraged`), not three. 🔴 **A live conflict this surfaced**:
+`importance = 3` is labelled **"Urgent"** today, so shipping derived urgency beside it puts two
+disagreeing urgencies on one card; it is relabelled **"Critical"** in the same slice.
+`/tasks` adopts the four-level control (a boolean is lossy in the write direction) and
+`urgent_window_hours` becomes **org-level, not per-user** — a personal window would have two
+people see different urgency on one task. ✅ **D-PM-29 — Projects is the MASTER schema; `/tasks`
+reproduces it and may only ADD** (owner: *"exactly the same as the product management field so as
+to prevent confusion. Any changes made on the personal tasks should also reflect on the product
+management task"*). A field's default home is `pm_tasks`; personal placement is the exception and
+must earn itself against §7.5.1's Ana-and-Ben test; a write from the personal app is a write to
+the same row (already true by construction — the decision is what stops a future ticket
+re-introducing a sync). ⚠️ Timeboxing and `deep_work` stay personal on that same test;
+**`actual_start`/`actual_end` are flagged as a genuine owner question**, not resolved by an agent
+reading a rule. 🆕 **WS-27bh minted (spec §9.9)** — draw the four facts the card already knows:
+task type · derived urgency (+ the Critical relabel) · recurring indicator · source badge. **No
+migration, no new column, no API shape change.** ⚠️ Its brief carries the promote-don't-author
+warning by name: `/tasks`' `SourceBadge` must be read first, or this ticket authors the fourth
+copy of something — the WS-27bd(5) ContextMenu situation. (2026-08-13) |
 | WS-28 | **People Center — directory, org chart, assignment seam** *(minted 2026-08-06)* | ✅ a+b+b-write | `specs/people_center_app.md` · board record 2026-08-09 | a (key shape, mig 148 + quarantine table) · b (directory + person page, mig 149, five-place registration) · b-write (create/edit UI restored; found three ways mig 148 had broken the write routes) — built 2026-08-06/07; **closes WS-13's directory item**. 🟢 c org chart · d capability search (**ranking EVAL-LOCKED**) · e Projects seams; 🔴 f seats/roles writes (§6 WS-24 (d) analogue). ⚠️ `schema.generated.sql` regeneration is **due**: stale since ~migration 113, and 148 reached prod ~2026-08-07 (after the #384 cast fix). (2026-08-07) |
 ---
 

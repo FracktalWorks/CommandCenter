@@ -460,9 +460,22 @@ fires once, not per call.
 
 **CP-8 · Operator Console and reconciliation.** The §4.1a read surfaces (per company:
 plan and MRR, seats purchased vs assigned, credit balance and burn, trial expiry,
-last-login/actives) plus the nightly drift job. **Done when:** the console renders
-from the Control Plane alone with no per-deployment round trip on the request path;
-the reconciler alerts on a seeded drift between seat counts and subscription items.
+last-login/actives) plus the nightly drift job.
+
+**Shape fixed by D35:** a **separate Next.js app** in this monorepo at its own
+hostname — not a gated route tree inside the workbench — so "shares tables, never
+routes" is enforced by the deployment boundary rather than by a guard. It pins
+**our own Entra directory** (staff-only; D33.1's multi-directory rule binds the
+*customer* product and this is its inverse), and it is **exempt from the theming
+engine** (`workbench/control_plane/AGENTS.md`) because "one product, one look"
+exists for surfaces customers see. Both exemptions are recorded in D35.3/D35.4
+precisely because a later agent would otherwise read them as defects and "fix"
+them.
+
+**Done when:** the console renders from the Control Plane alone with no
+per-deployment round trip on the request path; the reconciler alerts on a seeded
+drift between seat counts and subscription items; no route of the customer
+workbench can reach a cross-org read.
 
 **CP-2a · Signup and provisioning.** *(Added by D33 — §4 finding 4: no signup route
 exists anywhere in the app tree; the only way in is `ensure_owner_bootstrap()` promoting

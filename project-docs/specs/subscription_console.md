@@ -17,7 +17,11 @@ customer-facing.
 > `invoice`) now live in the **central Control Plane service**, not in each
 > CommandCenter deployment: **`specs/platform_control_plane.md` (WS-31)**. This
 > console becomes a **client** of that service rather than a reader of CC-local
-> tables. **Nothing about its scope, its surfaces or its access rules changes** —
+> tables. **D35 (2026-08-12) confirms the split and fixes the other half:** this
+> console stays **inside CommandCenter** at `/settings/billing`, while the
+> Operator Console becomes a **separate deployable app** — so §1's "the two share
+> tables and must never share routes" is enforced by the deployment boundary
+> rather than by a guard inside one application. **Nothing about its scope, its surfaces or its access rules changes** —
 > SC-1/SC-2/SC-3 read exactly as written, and D19.3's hard cap, D23's Center
 > framing and D24's customer framing are all carried unchanged. Update the data
 > source, not the design. The seat vocabulary it renders (purchased / assigned /

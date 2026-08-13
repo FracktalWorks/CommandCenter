@@ -223,14 +223,52 @@ owning specs are the archive; this file owns ordering, gates and states only.
 | WS-28 | **People Center — directory, org chart, assignment seam** *(minted 2026-08-06)* | ✅ a+b+b-write | `specs/people_center_app.md` · board record 2026-08-09 | a (key shape, mig 148 + quarantine table) · b (directory + person page, mig 149, five-place registration) · b-write (create/edit UI restored; found three ways mig 148 had broken the write routes) — built 2026-08-06/07; **closes WS-13's directory item**. 🟢 c org chart · d capability search (**ranking EVAL-LOCKED**) · e Projects seams; 🔴 f seats/roles writes (§6 WS-24 (d) analogue). ⚠️ `schema.generated.sql` regeneration is **due**: stale since ~migration 113, and 148 reached prod ~2026-08-07 (after the #384 cast fix). (2026-08-07) |
 ---
 
-## 3. Decisions recorded (D1–D14: 2026-07-31→08-04 · D15/D16: 2026-08-08 · D17–D21: 2026-08-09 · D22–D30: 2026-08-10 · D31: 2026-08-11 · D32: 2026-08-12)
+## 3. Decisions recorded (D1–D14: 2026-07-31→08-04 · D15/D16: 2026-08-08 · D17–D21: 2026-08-09 · D22–D30: 2026-08-10 · D31: 2026-08-11 · D32–D35: 2026-08-12)
 
 Resolutions for the cross-doc conflicts the audit surfaced. D1–D8, **D13**, **D14**,
 **D16** and **D17** are **proposed defaults, adopted unless the owner objects**
 (`agent-proposed, owner may overrule`); D9, D10, D11, D12, D15, **D18** and **D32**
-are owner calls, taken and dated. ⚠️ Two entries below are superseded and kept as
-records: **D11** (re-taken by D15) and **D10 part 1's planning premise** (re-scoped
+are owner calls, taken and dated; **D34 and D35** are owner calls of 2026-08-12 (D35
+agent-recommended, owner-accepted). ⚠️ Two entries below are superseded and kept
+as records: **D11** (re-taken by D15) and **D10 part 1's planning premise** (re-scoped
 by D15/D16) — read their banners before citing either.
+
+- **D35 — Two consoles, two deployables: the customer's inside the product, ours
+  outside it.** *(owner-accepted 2026-08-12 — agent-recommended in session, owner
+  replied "everything looks good"; sub-parts 3 and 4 are the ones a future agent
+  would otherwise "fix". Owning specs: `subscription_console.md` (WS-30) and
+  `saas_multitenancy.md` §4.1a.)*
+  1. **Subscription Console — inside CommandCenter**, at `/settings/billing` in
+     the workbench, admin-gated, one org, tenant-scoped. Unchanged from
+     `subscription_console.md`; restated here so both halves sit in one place.
+  2. **Operator Console — a SEPARATE Next.js app** in this monorepo, deployed at
+     its own hostname. Chosen over a gated route tree inside the existing
+     workbench because *"they share tables and must never share routes"* is then
+     enforced **structurally** — the surfaces are different applications — rather
+     than by a guard that is one misconfiguration away from serving cross-customer
+     data into a tenant's UI. **R7: the fence is the deployment boundary itself,
+     not a test.**
+  3. ⚠️ **The Operator Console SHOULD pin one Microsoft Entra directory — ours.**
+     This is the exact assumption D33.1 recorded as fatal, and it is **correct
+     here**: the console is staff-only, and every user of it *is* in our
+     directory. **Do not "fix" this to multi-directory** — that would widen a
+     cross-customer surface to identities we do not control. D33.1 binds the
+     *customer* product; this is its inverse and the distinction is the point.
+  4. ⚠️ **The Operator Console is EXEMPT from the theming engine**
+     (`workbench/control_plane/AGENTS.md`'s eight rules and its conformance
+     suite). "One product, one look" exists for surfaces **customers** see; this
+     is an internal tool for a handful of staff. Exempt structurally — it is a
+     different app, so the conformance suite does not scan it — which is why the
+     exemption must be *written down* rather than merely observed.
+  5. **Neither console is on the critical path to customer #1.** Provisioning,
+     seat assignment, credit grants and balance reads all work through the
+     Control Plane API today (CP-1). The console makes that pleasant; it does not
+     make it possible — which is why it is CP-8 and deliberately last. **Revenue
+     order is enforcement, then checkout:** CP-3 → CP-4 → CP-6 makes credits real
+     and sellable against a hand-issued invoice (D19.4's manage-only launch
+     posture), and CP-8's self-serve checkout follows once manual invoicing is
+     the bottleneck rather than the plan. Shipping checkout before enforcement
+     would mean taking money for something we cannot yet limit.
 
 - **D34 — Supabase is the Control Plane's database AND its authenticator.**
   *(owner call, 2026-08-12: "Let's use Supabase for auth configuration." Owning

@@ -6091,6 +6091,107 @@ in the gateway's own words (`search.py:68-71`): "returning half the workspace."
 it. What it cannot prove is that a real scroller fires at the right moment; there is no DOM and
 no e2e here, and that stays review-only until the surface half lands.
 
+### 11.35 WS-27bg slice 1 — the run-state axis, archive, and three automations that would have corrupted data (built 2026-08-13)
+
+**Migration 171** (`171_projects_run_state.sql`, number taken at build time per R1 —
+**re-check at merge**). Frontend untouched; slices 2 and 3 carry the indicator and the
+dated surfaces.
+
+#### What shipped
+
+* **`pm_projects.status` widens to the union** `queued · active · on_hold · stopped · done ·
+  archived` — the expand half of R6. `archived` is *retained in the CHECK* so the pre-restart
+  gateway keeps validating through the deploy window, and its removal is a named later release
+  rather than folklore. **`core.RUN_STATES`** is the axis proper (five values); **the write
+  path validates against RUN_STATES, not PROJECT_STATUSES**, so a caller cannot PATCH a project
+  to `status='archived'` without stamping `archived_at` and so recreate the very defect D-PM-25
+  removes.
+* **`archived_root_id`**, and it is the reason archive is reversible. `POST /nodes/{id}/archive`
+  stamps the project's whole subtree with the id of the project the user actually archived;
+  `POST /nodes/{id}/unarchive` clears exactly the rows carrying that id. A subproject somebody
+  had **already** archived on its own keeps its own origin and therefore *survives* the parent's
+  restore. Unarchiving a project that an ancestor swept in is **refused with the ancestor named**
+  — the `_refuse_lifecycle_on_child` move, keeping the incoherent state (a visible subtree inside
+  a filed one) unreachable rather than documented.
+* **The read path derives, and costs no task write.** `filters.build_task_filters` gains
+  `EXISTS (… pm_projects p WHERE p.id = t.project_id AND p.archived_at IS NULL)` under the
+  **existing** `include_archived` flag rather than a second one.
+* **One predicate, three call sites** — `core.is_runnable` / `runnable_project_clause`,
+  consulted by the lifecycle sweep, the recurrence spawn and the agent dispatch.
+
+#### 🔴 The finding: the lifecycle sweeper would have cancelled paused work
+
+`run_lifecycle_sweep` walked every root with a policy and moved stale OPEN tasks into the
+closing lane with **no project-status predicate at all**. Harmless only while `status` meant
+nothing — which is exactly how long it had been. The moment `on_hold` becomes real, a project
+paused for a quarter under a three-month close policy has its whole backlog moved to
+`cancelled` by `system:workflow:<id>`, **through `apply_status_transition`**, so `completed_at`
+is stamped, the `status_change` activity is written and recurrence fires. It is
+indistinguishable from a person having done it, which is why nobody would find it for months.
+
+Two smaller ones of the same family: recurrence would keep minting occurrences into a paused
+project, and `pm.task.assigned` would keep putting agents to work in one.
+
+⚠️ **One subtlety the recurrence guard gets right and an obvious implementation gets wrong:**
+the skip does **not** stamp `recurrence_spawned_at`. The ended-series path *does* stamp it, and
+copying that would silently kill the series at the moment somebody paused the project. A pause
+is not an end. Fenced live: *"the series is NOT stamped dead by the pause"*.
+
+#### Verification
+
+**R8 — a real Postgres 16, ladder replayed 01→171 into a throwaway database.**
+
+* `tests/live/live_ws27bg.py` — **27 checks, all green**, driving the real endpoint functions
+  (`archive_node`, `unarchive_node`, `list_tasks`, `run_lifecycle_sweep`, `spawn_successor`,
+  `agent_dispatch.on_event`).
+* **Every automation check is run TWICE** — once `on_hold` (must not fire) and once `active`
+  (must fire). A guard that refuses everything passes a one-sided test, and three of these are
+  one-line `continue`s.
+* **Mutation-measured, five mutants, each caught:** remove the sweep guard → the paused check
+  goes red while the active one stays green · remove the recurrence guard → three red · remove
+  the dispatch guard → two red · drop the `EXISTS` from the read → the archived task reappears ·
+  **replace the subtree CTE with `id = :pid` → four red**, which is the check that a
+  quietly-non-recursive walk cannot pass.
+* **The backfill was verified on rows that actually exist**, not asserted empty: a database
+  built to 170, seeded with two `status='archived'` projects — one with a prior `archived_at`,
+  one without — then migrated. Both moved to `on_hold` + self-stamped origin; the one with a
+  real 2024 filing date **kept it** (the `coalesce`, doing its job) rather than having it
+  overwritten with `now()`. A second replay changed nothing.
+* **Plan (R8):** the new `EXISTS` plans as a Hash Join / Nested Loop over
+  `idx_pm_tasks_project_id`, **never a per-row `SubPlan`**, which is what the live check
+  asserts. ⚠️ Deliberately a claim about SHAPE, not duration — a timing taken on a handful of
+  rows is not a measurement (WS-27be's lesson).
+* **Under FORCE ROW LEVEL SECURITY too.** The generated phase-4 policy set was applied and all
+  27 checks re-run green; all 21 `pm_*` tables verified carrying `organization_id` + RLS +
+  FORCE + a policy. Not required by the current board state (phase 4 is not enabled), and worth
+  knowing before it is.
+* Hermetic: `tests/unit/test_projects_run_state.py`, **17 tests**, including the mirror test
+  that **reads the CHECK out of the migration** rather than restating it — the lesson
+  `ACTIVITY_TYPES` records in its own docstring, after a hand-mirrored vocabulary 422'd every
+  file upload while 25 tests stayed green. Mutation-measured: a value added to the tuple but
+  not the CHECK goes red; `archived` smuggled back into `RUN_STATES` goes red.
+* Full suite: **5999 passed, 51 skipped** (`-k "not memory_integration and not calendar"`).
+
+#### ⚠️ Owed, and not fakeable from here
+
+* **The backfill population.** Reading the live database is owner-gated reach (§6), so the
+  count of `status='archived'` rows on prod is **asked of the owner at review**. The migration
+  is correct at zero rows and at ten thousand; what cannot be produced from here is the number.
+* **The contraction** that drops `'archived'` from the CHECK and from `PROJECT_STATUSES` — a
+  later release, trigger named in the migration header.
+* Slice 2 (indicator, picker, the project control surface that does not exist yet) and slice 3
+  (overdue across four predicates, My Work, calendar/timeline honest overflow).
+
+#### 📌 A process note worth keeping
+
+`git checkout` was used to revert a *mutation* in `tree.py` and reverted **the whole file**,
+because that file — unlike the other four — had no backup taken first. Caught immediately by
+`git diff --stat` (the file had vanished from the change list) and re-applied. The lesson is
+the cheap one: when mutation-testing, back up every file you are about to mutate, and diff the
+tree afterwards rather than trusting that the revert did what it looked like.
+
+---
+
 ## Board record (2026-08-09) — moved from work_plan.md §2
 
 > Moved here in the 2026-08-09 consolidation (work_plan.md D18): board rows now

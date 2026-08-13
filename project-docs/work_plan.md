@@ -247,7 +247,35 @@ the ticket authors the §5 defect three times. Sliced §9.8.3 (axis + endpoints 
 migration and an **R8** obligation) · §9.8.4 (indicator + the control surface that does not exist
 yet) · §9.8.5 (overdue suppression across **four** predicates — three TS + one SQL, unified only
 one wave ago — My Work, and calendar/timeline **honest overflow** per WS-27ac rather than silent
-drops). (2026-08-13) |
+drops). ✅ **SLICE 1 BUILT 2026-08-13 on `claude/projects-app-development-01lepg`, NOT merged and
+NOT deployed** (as-built §11.35) — **migration 171** widens the CHECK to the union (R6 expand;
+`archived` retained for the deploy window, its removal a named later release) and adds
+**`archived_root_id`**, which is what makes archive reversible: archiving stamps the subtree with
+the id of the project the user actually archived, unarchiving clears exactly those rows, so a
+subproject archived on its own **survives** its parent's restore, and restoring a swept-in child
+is refused with the ancestor named. The write path validates against **RUN_STATES**, not
+`PROJECT_STATUSES`, so nobody can PATCH `status='archived'` and recreate the defect D-PM-25
+removes. 🔴 **The predicted sweeper bug was real and is fixed**: `run_lifecycle_sweep` had no
+project-status predicate, so a paused project under a close policy would have had its backlog
+cancelled by `system:workflow:<id>` through the ordinary transition — indistinguishable from a
+person. Recurrence and agent dispatch had the same hole; all three now consult ONE
+`is_runnable`. ⚠️ The recurrence skip deliberately does **not** stamp `recurrence_spawned_at` —
+copying the ended-series path would kill the series at the moment somebody paused the project.
+**R8 satisfied**: ladder replayed 01→171 into a throwaway Postgres 16, `tests/live/live_ws27bg.py`
+**27 checks green** driving the real endpoint functions, **every automation check run twice**
+(paused must not fire, active must) because a guard that refuses everything passes a one-sided
+test, and **five mutants each caught** — including replacing the subtree CTE with `id = :pid`,
+which turns four checks red and is the only thing that catches a quietly-non-recursive walk. The
+backfill was verified **on rows that actually exist** (a database built to 170, seeded with two
+`archived` projects) rather than asserted empty: both moved, and the one with a real 2024 filing
+date kept it instead of being overwritten by `now()`. The new read `EXISTS` plans as a **join,
+never a per-row SubPlan** — a claim about shape, not duration, per WS-27be. Also re-run green
+**under FORCE ROW LEVEL SECURITY** with the generated phase-4 set applied (not required today;
+worth knowing before it is). Hermetic: 17 new tests incl. the mirror test that **reads the CHECK
+out of the migration**, plus 5999 passed on the broad suite. 🔴 **Owed and NOT fakeable from
+here**: the count of `status='archived'` rows on prod is **owner-gated reach (§6) and is asked of
+the owner at review** — the migration is correct at any population, but an agent claiming "this
+affects no rows" would be reporting a guess as a measurement. (2026-08-13) |
 | WS-28 | **People Center — directory, org chart, assignment seam** *(minted 2026-08-06)* | ✅ a+b+b-write | `specs/people_center_app.md` · board record 2026-08-09 | a (key shape, mig 148 + quarantine table) · b (directory + person page, mig 149, five-place registration) · b-write (create/edit UI restored; found three ways mig 148 had broken the write routes) — built 2026-08-06/07; **closes WS-13's directory item**. 🟢 c org chart · d capability search (**ranking EVAL-LOCKED**) · e Projects seams; 🔴 f seats/roles writes (§6 WS-24 (d) analogue). ⚠️ `schema.generated.sql` regeneration is **due**: stale since ~migration 113, and 148 reached prod ~2026-08-07 (after the #384 cast fix). (2026-08-07) |
 ---
 

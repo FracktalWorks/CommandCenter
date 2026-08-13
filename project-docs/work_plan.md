@@ -316,7 +316,33 @@ reading a rule. 🆕 **WS-27bh minted (spec §9.9)** — draw the four facts the
 task type · derived urgency (+ the Critical relabel) · recurring indicator · source badge. **No
 migration, no new column, no API shape change.** ⚠️ Its brief carries the promote-don't-author
 warning by name: `/tasks`' `SourceBadge` must be read first, or this ticket authors the fourth
-copy of something — the WS-27bd(5) ContextMenu situation. (2026-08-13) |
+copy of something — the WS-27bd(5) ContextMenu situation.
+✅ **WS-27bg SLICE 2 BUILT 2026-08-13** (as-built §11.36) — frontend only, no migration, no API
+change. `PROJECT_STATES` lands in `src/lib/statusAccent.ts` as the closed lookup D-PM-27
+requires; `effectiveState` derives a node's state from its ancestors **on the way down the
+render and writes nothing** (D-PM-26); the indicator draws **in front of every project row**,
+replacing the folder glyph that carried no information in a tree where every row is a project,
+with inherited states at half emphasis. A right-click menu on the tree (the promoted
+`ContextMenu`) gives the run-state picker and Archive/Unarchive on the promise-bound toast —
+**the first project-editing control this app has ever had**. 🔴 **Narrowed with reasons, not
+silently**: Delete is deliberately NOT added (it is an unrecoverable cascade that has never had
+a control, so "archive is the default affordance and delete is harder to reach" is satisfied
+most strongly by leaving it unreachable); the bulk-close-on-Stop offer is deferred to its own
+slice because a modal + bulk call + a count shown before agreement is not a menu item; **rename
+is still owed** — a project still cannot be renamed. ✅ `tsc` 0 · `next build` 0 · vitest **89
+files / 2007 tests** (baseline 1983) · conformance green with **no new baseline entries**.
+🔴 **THE FOUR-THEME SWEEP IS NOW A TEST, NOT A PROMISE** — `e2e/project-state.spec.ts`, **10
+cases green**, drives a routed tree in real Chromium under **Fluent + Material + Graphite** and
+asserts five states resolve to five DISTINCT COMPUTED COLOURS, none transparent, inherited at
+reduced opacity, and five distinct **glyph paths** so the state survives a reader who cannot
+separate the hues. Every slice since WS-27am owed this pass and several skipped it; this is the
+first Projects surface where it is fenced. **Mutation-measured, four mutants each caught** —
+routing the map through `resolveHue` (the D-PM-27 trap), a shared glyph, dropping the
+inheritance derivation, and **making `on_hold` green, which turns the browser spec red in all
+three themes** and is what proves the sweep discriminates rather than merely passes. ⚠️ The unit
+tests assert a hue NAME; only the browser proves two names paint differently — which is exactly
+the failure `statusAccent`'s own header records, a colour stored correctly for months while
+every lane drew the same grey. (2026-08-13) |
 | WS-28 | **People Center — directory, org chart, assignment seam** *(minted 2026-08-06)* | ✅ a+b+b-write | `specs/people_center_app.md` · board record 2026-08-09 | a (key shape, mig 148 + quarantine table) · b (directory + person page, mig 149, five-place registration) · b-write (create/edit UI restored; found three ways mig 148 had broken the write routes) — built 2026-08-06/07; **closes WS-13's directory item**. 🟢 c org chart · d capability search (**ranking EVAL-LOCKED**) · e Projects seams; 🔴 f seats/roles writes (§6 WS-24 (d) analogue). ⚠️ `schema.generated.sql` regeneration is **due**: stale since ~migration 113, and 148 reached prod ~2026-08-07 (after the #384 cast fix). (2026-08-07) |
 ---
 

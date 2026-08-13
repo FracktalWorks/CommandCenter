@@ -6328,6 +6328,72 @@ tree afterwards rather than trusting that the revert did what it looked like.
 
 ---
 
+### 11.36 WS-27bg slice 2 — the indicator, and the control surface that did not exist (built 2026-08-13)
+
+Frontend only — **no migration, no API change**; slice 1's endpoints are the ones consumed.
+
+#### What shipped
+
+* **`PROJECT_STATES` in `src/lib/statusAccent.ts`** (D-PM-27) — label, hue and glyph per run
+  state, a **closed lookup** that never falls through `resolveHue`. `active` → green,
+  `on_hold` → amber, `stopped` → red, `queued` → gray, `done` → blue, labelled *Ongoing* and
+  *Paused* over their stored values (D-PM-25).
+* **`effectiveState` in `app/projects/lib/tree.ts`** — a node's state is its own, or the more
+  restrictive thing an ancestor says, computed **on the way down the render** and written
+  nowhere (D-PM-26). It returns `{state, inherited}` rather than one value, which is what lets
+  the tree draw a pause somebody set *here* differently from one it merely inherits.
+* **The indicator, in front of every project row**, replacing the generic folder glyph — in a
+  tree where every row is a project, "this is a project" was carrying no information and the
+  state is worth the slot. Inherited states draw at half emphasis and say so in their label.
+* **`app/projects/lib/projectMenu.ts` + a right-click menu on the tree** — the run-state picker
+  and Archive/Unarchive, on the promoted `ContextMenu` (WS-27bd). Pure builder, `themedIcon()`
+  conversion at the surface, matching `taskMenu.ts`'s split exactly.
+* **The actions run on the promise-bound toast** (WS-27ak slice 3's form) and re-read the tree
+  rather than patching rows optimistically — archiving stamps a whole subtree server-side and a
+  state change alters what every descendant *effectively* is, so the set of rows a write touches
+  is not knowable from the row that was clicked. The archive toast reports `open_tasks`, which
+  is the warning D-PM-26 asks for.
+
+#### 🔴 Narrowed, with the reason stated rather than the item dropped
+
+* **Delete is deliberately NOT added to the menu.** §9.8.4 asked that "archive is the default
+  affordance and delete is deliberately harder to reach". `DELETE /nodes/{id}` is an
+  unrecoverable cascade over the subtree, every task and every grant, and it has **never had a
+  control in the UI** — so that criterion is satisfied most strongly by adding the reversible
+  action and leaving the irreversible one exactly as unreachable as it was. Putting both into a
+  menu people are still learning is how somebody loses a department.
+* **The bulk close on Stop is deferred.** D-PM-26 says stopping should *offer* to close open
+  tasks. That is a modal, a bulk call and a count shown before agreement — a slice, not a menu
+  item, and smuggling it in as a side effect of a state change is the exact shape D-PM-26
+  forbids.
+* **Rename is still owed.** A project still cannot be renamed in this app. It was not in
+  §9.8.4's done-when and is not built here; recorded so it does not read as done.
+
+#### Verification
+
+* `tsc` **0** · `next build` **0** · vitest **89 files / 2007 tests**, up from the 1983 baseline
+  (+24: 9 `projectMenu`, 7 `statusAccent`, 8 `tree`) · conformance suite green, **no new
+  baseline entries**.
+* 🔴 **The four-theme sweep is FENCED for this surface, not promised.**
+  `e2e/project-state.spec.ts` — **10 cases, all green** — drives a routed tree fixture in real
+  Chromium under **Fluent, Material and Graphite** and asserts *five states resolve to five
+  distinct computed colours*, that none is transparent, that an inherited state renders at
+  reduced opacity, and that the five **glyph paths** differ so the state survives a reader who
+  cannot separate the hues. Every slice since WS-27am owed this pass and several skipped it;
+  this is the first Projects surface where it is a test rather than an intention.
+* **Mutation-measured, four mutants, each caught:** route the project map through `resolveHue`
+  → the D-PM-27 fence goes red (2 tests) · give two states the same glyph → red · stop deriving
+  the inherited state → red (2 tests) · **make `on_hold` green in the vocabulary → the browser
+  spec goes red in all three themes**, which is the one that proves the sweep discriminates
+  rather than merely passing.
+
+⚠️ **The unit tests assert a hue NAME; only the browser spec proves two names paint
+differently.** That distinction is the whole reason the Playwright case exists: `statusAccent`'s
+own header records a colour column that was stored correctly for months while every lane drew
+the same grey, and no unit test could have seen it.
+
+---
+
 ## Board record (2026-08-09) — moved from work_plan.md §2
 
 > Moved here in the 2026-08-09 consolidation (work_plan.md D18): board rows now

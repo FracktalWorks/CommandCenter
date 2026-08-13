@@ -35,10 +35,15 @@ credit burn, and request changes. It is the customer-side complement of the
 share tables and must never share routes: the Operator Console is staff-only and
 cross-org; this console is one org, admin-gated, tenant-scoped.
 
-**Launch posture (D19.4): manage-only.** View + assign within purchased caps +
-request changes fulfilled manually (Phase-2 "invoice by hand" per
-`saas_multitenancy.md` §5). Online checkout, card/UPI payment and credit top-up
-arrive with MT-4 and are **SC-4**, deliberately last.
+**Launch posture (D19.4): manage-only for SEATS.** View + assign within purchased
+caps + request changes fulfilled manually (Phase-2 "invoice by hand"). **⚠️ AI
+CREDITS are the exception, and D37 (2026-08-13) makes SC-4 a real spec rather
+than a placeholder.** Seats can wait on a human because they change monthly;
+credits cannot, because an organization runs dry mid-workflow at 2am and a
+top-up that waits for an invoice is an outage. SC-4 is still sequenced last, but
+it is now specified — including the parts that were missing entirely: the
+purchase itself, alert *delivery* (as opposed to alert rendering), the runway
+figure, adjustments, and the usage statement.
 
 ---
 
@@ -49,7 +54,7 @@ promised by `NotEntitled.upgrade_url`, `saas_multitenancy_implementation.md` §4
 its gateway endpoints; seat assign/unassign writes under the D19.3 rules; a
 change-request flow that lands in the operator's inbox.
 
-**Non-goals:** payment processing (MT-4/SC-4) · the Operator Console (MT-4) · the
+**Non-goals:** the payment *provider* integration itself (Razorpay SDK wiring, MT-4) — SC-4 specifies the customer-facing flow over it · the Operator Console (MT-4) · the
 entitlement tables and enforcement seam themselves (MT-2) · metering and the rate
 card (MT-3) · dunning, invoicing, tax (the processor's job, §4.3) · any surface a
 non-admin member sees (members get the `ModuleGate` upsell fallbacks, not this
@@ -110,9 +115,86 @@ during the silo phase, exactly like every live entitlement change. **Done when:*
 a request round-trips to visible status; nothing in the request path mutates
 entitlements directly.
 
-### SC-4 — Checkout + top-up *(with MT-4; not before)*
-Razorpay-only (D19.5) behind the `payment_provider` seam. Not specced further
-here until MT-4's ticket contract is written.
+### SC-4 — Buying credits, and running out *(specced 2026-08-13, D37)*
+
+Razorpay-only (D19.5) behind the `payment_provider` seam. The mechanics of the
+ledger are `platform_control_plane.md` §3.4; this is the part a customer touches.
+
+**SC-4a · Fixed packs, self-serve (D37.1).** A short ladder of pre-priced packs
+rather than a free-text amount. Three reasons, in order of importance:
+**(1)** every pack is priced **under ₹15,000**, so a repeat purchase clears the
+RBI e-mandate AFA threshold and never demands an OTP from a customer who is
+already out of credits mid-workflow (`saas_operations_doctrine.md` §3.2);
+**(2)** a ladder makes price-per-credit legible, where an arbitrary amount makes
+the customer do arithmetic to know if they are getting a good deal; **(3)** it is
+the smallest thing that can be built correctly. Custom amounts are a later
+question, and only if a customer asks.
+**Done when:** buying a pack moves the balance by exactly the pack's credits and
+lands **one** `credit_ledger` row referencing the provider payment id; a
+duplicate webhook for the same payment credits **once** (the ledger is
+append-only, so idempotency is on the reference, not on a mutable balance); a
+failed payment credits nothing and says so.
+
+**SC-4b · Auto-top-up (off by default at launch).** §3.3 makes it the default
+for paid plans; **D37.1 defers that**, because an auto-charge above the AFA cap
+fails precisely when the customer is dry, and a top-up that silently fails is
+worse than one that never existed. Ships **opt-in**, with the pack and the
+trigger threshold both chosen by the admin, and both bounded by the cap.
+**Done when:** a failed auto-top-up notifies (SC-4d) and degrades to the §3.3
+soft-block rather than a hard stop; the feature is off unless explicitly enabled.
+
+**SC-4c · The runway figure.** Balance answers "how much"; the number that
+prompts a purchase is **"about N days left at your current rate"**, computed from
+`usage_rollup` over a trailing window. Shown beside the balance, not buried in a
+chart. **Done when:** an org with no usage shows no runway rather than a
+division-by-zero or a misleading "∞"; the window is named in the UI so a spike
+does not read as a permanent trend.
+
+**SC-4d · Who is told, and how (D37.2).** An alert nobody receives is a colour,
+not an alert — the 80% state was previously specced only as something the
+console *renders*, which requires the admin to already be looking.
+- **Email the billing admins** at 80%, at zero, and on a failed auto-top-up. The
+  only channel that reaches someone not currently signed in, which is exactly
+  the case that matters.
+- **In-app banner** for holders of the billing capability, persistent while the
+  condition holds.
+- **The affected member sees why their own call was refused**, and who to ask.
+  A member staring at a generic failure files a bug; a member told "your
+  organization is out of AI credits — contact <admin>" does not.
+  ⚠️ This deliberately exposes *that* the org is out of credits to non-admins —
+  never the balance, never the spend, never the invoice.
+**Done when:** each threshold notifies **once per cycle**, not per call (a
+per-call alert on the 402 path is a mail storm); crossing back above 80% re-arms
+it; the member-facing message carries no figures.
+*(Operator-side alerting was considered and deliberately not taken: CP-8's
+console surfaces burn across all customers already, so this would be a push
+channel for something already visible.)*
+
+**SC-4e · Adjustments and goodwill credits.** The case that will actually happen:
+an agent loops, burns credits on nothing, and the customer asks for them back.
+A negative-or-positive `credit_ledger` row with `reason='adjustment'` and a
+mandatory human-readable note, **never** an edit of history and never
+indistinguishable from a purchase — a refunded credit and a bought credit must
+be tellable apart on the ledger a year later. 🔴 **OWNER-GATE to execute against
+a live org.** **Done when:** an adjustment is visibly distinct from a purchase in
+the ledger view; it lands an audit row naming the operator; the balance is still
+`SUM(delta)` with no compensating update anywhere.
+
+**SC-4f · The usage statement.** A monthly per-member, per-app breakdown the
+customer can export — needed for their own accounting, and in India it feeds
+their input-credit claim. Read from `usage_rollup`, not raw events, so it stays
+correct after the 90-day raw retention window. **Done when:** the statement
+totals equal the period's ledger consumption; an org with BYOK sees consumption
+labelled "not billed — your key" (§3.4).
+
+> 🔴 **UNRESOLVED, and not an engineering call: GST treatment of prepaid
+> credits.** Credits bought up front are plausibly a **voucher** under GST, and
+> the time-of-supply rules for vouchers differ from ordinary services — tax may
+> fall at purchase or at redemption depending on whether the credits are
+> single-purpose. This determines what the credit invoice says and when the
+> liability arises, so getting it wrong makes **every** credit invoice wrong.
+> **This needs a CA, not a specification.** Until it is answered, SC-4a can be
+> built and tested but must not issue a tax invoice.
 
 ## 3. Access
 

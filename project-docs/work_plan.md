@@ -223,7 +223,7 @@ owning specs are the archive; this file owns ordering, gates and states only.
 | WS-28 | **People Center — directory, org chart, assignment seam** *(minted 2026-08-06)* | ✅ a+b+b-write | `specs/people_center_app.md` · board record 2026-08-09 | a (key shape, mig 148 + quarantine table) · b (directory + person page, mig 149, five-place registration) · b-write (create/edit UI restored; found three ways mig 148 had broken the write routes) — built 2026-08-06/07; **closes WS-13's directory item**. 🟢 c org chart · d capability search (**ranking EVAL-LOCKED**) · e Projects seams; 🔴 f seats/roles writes (§6 WS-24 (d) analogue). ⚠️ `schema.generated.sql` regeneration is **due**: stale since ~migration 113, and 148 reached prod ~2026-08-07 (after the #384 cast fix). (2026-08-07) |
 ---
 
-## 3. Decisions recorded (D1–D14: 2026-07-31→08-04 · D15/D16: 2026-08-08 · D17–D21: 2026-08-09 · D22–D30: 2026-08-10 · D31: 2026-08-11 · D32–D35: 2026-08-12 · D36: 2026-08-13)
+## 3. Decisions recorded (D1–D14: 2026-07-31→08-04 · D15/D16: 2026-08-08 · D17–D21: 2026-08-09 · D22–D30: 2026-08-10 · D31: 2026-08-11 · D32–D35: 2026-08-12 · D36–D37: 2026-08-13)
 
 Resolutions for the cross-doc conflicts the audit surfaced. D1–D8, **D13**, **D14**,
 **D16** and **D17** are **proposed defaults, adopted unless the owner objects**
@@ -232,6 +232,38 @@ are owner calls, taken and dated; **D34 and D35** are owner calls of 2026-08-12 
 agent-recommended, owner-accepted). ⚠️ Two entries below are superseded and kept
 as records: **D11** (re-taken by D15) and **D10 part 1's planning premise** (re-scoped
 by D15/D16) — read their banners before citing either.
+
+- **D37 — The AI-credit product: how customers buy, and how they find out.**
+  *(owner-answered 2026-08-13 in session; owning spec `subscription_console.md`
+  SC-4, which was previously a one-sentence placeholder. The credit ENGINE was
+  well specced — ledger, rating, rollover, gate, member caps; the credit
+  PRODUCT was not, and this closes that.)*
+  1. **Fixed packs, self-serve** via Razorpay — not a free-text amount. Every
+     pack is priced **under ₹15,000** so a repeat purchase never trips the RBI
+     e-mandate AFA threshold, which would otherwise demand an OTP from a
+     customer who is already dry mid-workflow (D33.4b). **Auto-top-up ships OFF**
+     and opt-in, reversing §3.3's "default for paid plans": an auto-charge that
+     silently fails at the cap is worse than one that never existed.
+  2. **Alerts are delivered, not merely rendered.** Email to billing admins at
+     80% / zero / failed top-up, an in-app banner while the condition holds, and
+     **the affected member is told why their own call was refused and who to
+     ask** — without figures. The 80% state was previously specced only as
+     something the console draws, which requires the admin to already be
+     looking. Once per cycle, not per call. *Operator-side push was considered
+     and declined: CP-8's console already shows burn across all customers.*
+  3. **Runway, not just balance.** "About N days left at your current rate" is
+     the number that prompts a purchase; a balance alone is not.
+  4. **Adjustments are ledger rows, distinguishable forever.** Goodwill credits
+     after a runaway agent get `reason='adjustment'` plus a mandatory note —
+     never an edit, and never indistinguishable from a purchase. 🔴 OWNER-GATE
+     against a live org.
+  5. **A monthly usage statement** the customer can export, read from
+     `usage_rollup` so it survives the 90-day raw retention.
+  6. 🔴 **UNRESOLVED and not an engineering call: GST on prepaid credits.**
+     Credits may be a **voucher** under GST, whose time-of-supply rules differ
+     from ordinary services — tax at purchase or at redemption. It decides what
+     every credit invoice says and when liability arises. **Needs a CA.** SC-4a
+     may be built and tested but must not issue a tax invoice until answered.
 
 - **D36 — Fracktal Works is customer zero, and gets no special path.**
   *(owner-directed 2026-08-13: "Fracktal Works itself becomes another

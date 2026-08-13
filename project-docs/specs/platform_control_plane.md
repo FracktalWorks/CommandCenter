@@ -1,9 +1,9 @@
 # Platform Control Plane — the subscription, seat and AI-metering engine (WS-31)
 
-**Status:** ◐ **CP-0 · CP-1 · CP-3 · CP-4 BUILT 2026-08-12** — 132 platform
-tests, **87 of them DB-gated** against a real Postgres 16 per R8 · CP-3 was
+**Status:** ◐ **CP-0 · CP-1 · CP-2a · CP-3 · CP-4 BUILT** (2026-08-12/13) — 172
+platform tests against a real Postgres 16 per R8 · CP-3 was
 **rejected by independent verification once** and rebuilt (see its ticket) ·
-CP-2 · CP-2a · CP-5…CP-8 spec only · **where it runs is an open owner decision —
+CP-2a ✅ · CP-2 · CP-5…CP-8 spec only · **where it runs is an open owner decision —
 [`control_plane_infrastructure.md`](control_plane_infrastructure.md)** ·
 **Date:** 2026-08-12 · **verified against code 2026-08-12** (repo-wide grep: zero hits for `usage_event`, `credit_ledger`,
 `model_rate_card`, `usage_rollup`, `module_catalog`, `org_module_entitlement`
@@ -519,7 +519,7 @@ per-deployment round trip on the request path; the reconciler alerts on a seeded
 drift between seat counts and subscription items; no route of the customer
 workbench can reach a cross-org read.
 
-**CP-2a · Signup and provisioning.** *(Added by D33 — §4 finding 4: no signup route
+**CP-2a · Signup and provisioning.** ✅ **BUILT 2026-08-13** — lifecycle state machine (`platform_api/lifecycle.py`), `POST /orgs/lifecycle` (transitions only, never free-form status writes), trial subscription + resumable `provisioning_run` at provision, and lifecycle enforcement on sign-in, seat writes and the AI path. ⚠️ **Fracktal signs up through this same flow (D36)** — there is no first-party bypass, because a bypass makes the customer path the one nobody tests. Still open: the self-serve signup *form* (this is the API beneath it) and certified deletion. *(Added by D33 — §4 finding 4: no signup route
 exists anywhere in the app tree; the only way in is `ensure_owner_bootstrap()` promoting
 an `EXECUTIVE_EMAILS` address.)* Self-serve signup creating the org, its first owner, its
 placement and its trial, plus **GST fields captured at signup** (GSTIN + registered
@@ -545,7 +545,7 @@ a rate card you change on customers.
 uv run pytest tests/unit/test_platform_seats.py tests/unit/test_platform_credits.py \
               tests/unit/test_platform_keys.py tests/unit/test_platform_sql.py \
               tests/unit/test_platform_api.py tests/unit/test_platform_key_auth.py \
-              tests/unit/test_platform_router.py
+              tests/unit/test_platform_router.py tests/unit/test_platform_lifecycle.py
 
 # The seam and tenancy ratchets this must not regress
 uv run pytest tests/unit/test_tenant_coverage.py tests/unit/test_db_engine_seam.py

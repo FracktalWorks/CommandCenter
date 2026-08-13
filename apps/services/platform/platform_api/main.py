@@ -57,6 +57,11 @@ from platform_api.credits import (
 )
 from platform_api.db import get_engine
 from platform_api.keys import mint_key
+from platform_api.lifecycle import (
+    TransitionRefused,
+    assert_transition,
+    capabilities_of,
+)
 from platform_api.router import (
     TierUnknown,
     call_provider,
@@ -90,6 +95,15 @@ class ProvisionRequest(BaseModel):
     billing_state: str | None = None
     owner_email: str
     core_seats: int = Field(default=1, ge=1)
+
+
+class LifecycleRequest(BaseModel):
+    org_slug: str
+    target: str
+    reason: str | None = None
+    #: Days of export window when moving to `cancelled`. Named here so the
+    #: window is an explicit act rather than an implicit default nobody chose.
+    export_window_days: int = Field(default=30, ge=1)
 
 
 class ResolveRequest(BaseModel):
@@ -291,9 +305,99 @@ def provision(req: ProvisionRequest, _: Operator) -> dict[str, Any]:
             conn, org_id=org_id, plan_slug=CORE_PLAN_SLUG,
             identity_id=identity_id, source="core",
         )
+        # The trial subscription. Without this row an org has seats and no
+        # commercial state at all, and every billing surface has to invent a
+        # default — which is how two surfaces come to disagree about whether a
+        # customer is in trial.
+        conn.execute(
+            text(
+                """
+                INSERT INTO org_subscription (organization_id, status,
+                                              trial_ends_at)
+                VALUES (:org, 'trial', now() + interval '14 days')
+                ON CONFLICT (organization_id) DO NOTHING
+                """
+            ),
+            {"org": org_id},
+        )
+
+        # Resumability, recorded rather than assumed. Provisioning is a
+        # multi-step distributed action that WILL fail halfway; this row is what
+        # lets a re-run tell "already done" from "never started" instead of
+        # guessing from whichever side effect it happens to find first.
+        conn.execute(
+            text(
+                """
+                INSERT INTO provisioning_run
+                    (idempotency_key, organization_id, steps_done, status)
+                VALUES (:key, :org,
+                        ARRAY['org','identity','seats','membership','subscription'],
+                        'complete')
+                ON CONFLICT (idempotency_key) DO UPDATE
+                    SET organization_id = EXCLUDED.organization_id,
+                        steps_done = EXCLUDED.steps_done,
+                        status = 'complete',
+                        updated_at = now()
+                """
+            ),
+            {"key": f"provision:{req.slug}", "org": org_id},
+        )
         _audit(conn, org_id, "org.provision", {"slug": req.slug})
 
     return {"organization_id": org_id, "slug": req.slug}
+
+
+@app.post("/orgs/lifecycle")
+def set_lifecycle(req: LifecycleRequest, _: Operator) -> dict[str, Any]:
+    """Move an organization through the lifecycle. Transitions only, never sets.
+
+    A free-form status write would let an operator move a customer straight from
+    `past_due` to `deleted`, destroying their data without the export window
+    §2.1 requires. The graph in :mod:`platform_api.lifecycle` makes that
+    unreachable rather than merely discouraged.
+    """
+    with get_engine().begin() as conn:
+        org_id = _org_id(conn, req.org_slug)
+        current = conn.execute(
+            text("SELECT status FROM organization WHERE id = :i"), {"i": org_id}
+        ).scalar_one()
+
+        try:
+            assert_transition(current, req.target)
+        except TransitionRefused as exc:
+            raise HTTPException(status_code=409, detail=str(exc))
+
+        # Entering `cancelled` opens the export window. Recorded as a date on
+        # the row, so "how long do they have" is answerable by anyone rather
+        # than living in whoever ran the cancellation's memory.
+        export_until = (
+            f"now() + interval '{int(req.export_window_days)} days'"
+            if req.target == "cancelled" else "NULL"
+        )
+        conn.execute(
+            text(
+                f"UPDATE organization SET status = :s, updated_at = now(), "
+                f"       export_until = {export_until} "
+                f"WHERE id = :i"
+            ),
+            {"s": req.target, "i": org_id},
+        )
+        conn.execute(
+            text("UPDATE org_subscription SET status = :s, updated_at = now() "
+                 "WHERE organization_id = :i AND :s <> 'deleted'"),
+            {"s": req.target, "i": org_id},
+        )
+        _audit(conn, org_id, "org.lifecycle",
+               {"from": current, "to": req.target, "reason": req.reason})
+
+        caps = capabilities_of(req.target)
+
+    return {
+        "slug": req.org_slug, "from": current, "to": req.target,
+        "can_sign_in": caps.can_sign_in, "can_use_ai": caps.can_use_ai,
+        "can_write_seats": caps.can_write_seats,
+        "data_retained": caps.data_retained,
+    }
 
 
 @app.post("/registry/resolve")
@@ -309,6 +413,17 @@ def resolve(req: ResolveRequest, _: Operator) -> dict[str, Any]:
     """
     with get_engine().begin() as conn:
         org_id = _org_id(conn, req.org_slug)
+        state = conn.execute(
+            text("SELECT status FROM organization WHERE id = :i"), {"i": org_id}
+        ).scalar_one()
+        caps = capabilities_of(state)
+        if not caps.can_sign_in:
+            # Only `deleted` lands here. `suspended` and `cancelled` sign in
+            # deliberately: a customer who cannot log in cannot pay you, cannot
+            # update a card and cannot export.
+            raise HTTPException(
+                status_code=403, detail=f"organization is {state}")
+
         identity_id = store.ensure_identity(
             conn, email=req.email, display_name=req.display_name
         )
@@ -400,6 +515,14 @@ def assign_seat(req: SeatWriteRequest, _: Operator) -> dict[str, Any]:
     """Assign a seat on a plan. 409 at the cap, with a buy-more payload."""
     with get_engine().begin() as conn:
         org_id = _org_id(conn, req.org_slug)
+        state = conn.execute(
+            text("SELECT status FROM organization WHERE id = :i"), {"i": org_id}
+        ).scalar_one()
+        if not capabilities_of(state).can_write_seats:
+            raise HTTPException(
+                status_code=403,
+                detail=f"organization is {state}; seats are locked")
+
         identity_id = store.ensure_identity(conn, email=req.email)
         held = store.has_live_seat(
             conn, org_id=org_id, plan_slug=req.plan_slug, identity_id=identity_id

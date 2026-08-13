@@ -53,6 +53,7 @@ from fastapi import Depends, Header, HTTPException
 from platform_api import store
 from platform_api.db import get_engine
 from platform_api.keys import split_key, verify_secret
+from platform_api.lifecycle import capabilities_of
 
 __all__ = [
     "Caller",
@@ -121,11 +122,10 @@ def require_internal(
         raise HTTPException(status_code=401, detail="Unauthorized")
 
 
-#: Organization states that may transact. `past_due` deliberately CAN: §4.1d's
-#: lifecycle keeps a late payer working through a grace window, because a
-#: customer cut off at the first missed payment does not pay, they churn.
-#: `suspended` and `cancelled` cannot.
-_ACTIVE_ORG_STATES = frozenset({"trial", "active", "past_due"})
+# Which states may spend AI is decided by ONE state machine, in
+# `platform_api.lifecycle`, read by every surface. This used to be a local
+# frozenset here — a second copy of the answer, and the copy that drifts
+# permissively is the one that gives away product.
 
 
 def organization_from_key(
@@ -181,7 +181,7 @@ def organization_from_key(
     # (F4 — verification found a `cancelled` org metering happily). 403, not
     # 401: the credential is valid and the caller should be told the account is
     # the problem, not sent to re-authenticate in a loop.
-    if org_status not in _ACTIVE_ORG_STATES:
+    if not capabilities_of(org_status).can_use_ai:
         raise HTTPException(
             status_code=403,
             detail=f"organization is {org_status}",

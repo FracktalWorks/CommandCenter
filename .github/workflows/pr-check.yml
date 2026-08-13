@@ -153,7 +153,7 @@ jobs:
         run: |
           uv run python -m pytest tests/unit/test_platform_sql.py \
             tests/unit/test_platform_key_auth.py tests/unit/test_platform_api.py \
-            tests/unit/test_platform_router.py \
+            tests/unit/test_platform_router.py tests/unit/test_platform_lifecycle.py \
             -q -rs 2>&1 | tee /tmp/platform.txt
           if grep -q "CONTROL_PLANE_DATABASE_URL unset" /tmp/platform.txt; then
             echo "::error::Platform suites skipped — R8 gate is disarmed."

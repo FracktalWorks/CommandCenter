@@ -2,16 +2,22 @@
 
 WS-31 CP-1/CP-3 · spec ``project-docs/specs/platform_control_plane.md`` §6.
 
-**Two authentication schemes, and which one an endpoint takes is a design
+**Three authentication schemes, and which one an endpoint takes is a design
 statement** (see :mod:`platform_api.auth`):
 
   * ``Operator`` — a staff token, for cross-organization surfaces: provisioning,
     seat writes, credit grants, key issuance.
-  * ``KeyCaller`` — the customer's own ``cc_live_…`` key, for their metering
-    surface. **The key resolves the organization**; no endpoint takes an
-    organization from a request body under key auth, because that would make the
-    caller the authority on which customer they are
-    (``user_management_contract.md`` R11).
+  * ``Internal`` — the Router's token, for writing the meter.
+  * ``KeyCaller`` — the customer's own ``cc_live_…`` key. **Read-only**, and it
+    reaches exactly one endpoint (``/me``). **The key resolves the
+    organization**; nothing under key auth takes an organization from request
+    input, because that would make the caller the authority on which customer
+    they are (``user_management_contract.md`` R11).
+
+⚠️ The customer key deliberately cannot write the meter. It briefly could, and
+verification found that let a negative ``billed_credits`` mint credits — and,
+more fundamentally, made the metered party the reporter of its own usage. See
+:mod:`platform_api.auth` for the full note.
 
 Both fail **closed**: the operator token has no default and an unconfigured
 deployment 503s rather than admitting anyone. That is CP-0's lesson applied from
@@ -35,7 +41,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import text
 
 from platform_api import store
-from platform_api.auth import KeyCaller, Operator
+from platform_api.auth import Internal, KeyCaller, Operator
 from platform_api.credits import (
     OverdraftPolicy,
     balance_of,
@@ -100,25 +106,37 @@ class RevokeKeyRequest(BaseModel):
 
 
 class UsageRequest(BaseModel):
-    """⚠️ **No ``org_slug`` field, deliberately (CP-3).**
+    """Written by the **Router**, which holds the internal token — never by the
+    customer whose usage it describes.
 
-    It used to have one, and that was the defect: a body field naming the tenant
-    makes the caller the authority on which customer they are, which is exactly
-    what `user_management_contract.md` R11 forbids. The organization now comes
-    from the API key and from nowhere else. Adding an org field back here —
-    "for convenience", "to override in tests" — reopens cross-tenant billing.
+    ``organization_id`` is named explicitly here and that is correct: the caller
+    is trusted infrastructure serving every customer, so naming the subject is
+    its job, exactly as it is for the operator surfaces. R11's prohibition is on
+    letting an *untrusted* caller name its own tenant, which is what the
+    organization-key version of this endpoint did and why it was withdrawn.
+
+    ⚠️ Every quantity is floored at zero. Without ``ge=0`` a negative
+    ``billed_credits`` became a *positive* ledger delta — verification minted
+    100,000 credits through this endpoint on a live database. The schema carries
+    the matching CHECK constraints (migration 003) so the floor survives a
+    future caller that bypasses this model.
     """
 
+    organization_id: str
     request_id: str
-    billed_credits: Decimal = Decimal(0)
+    billed_credits: Decimal = Field(default=Decimal(0), ge=0)
     user_email: str | None = None
     agent: str | None = None
     module_slug: str | None = None
     model: str | None = None
     tier: str | None = None
-    prompt_tokens: int = 0
-    completion_tokens: int = 0
-    cached_tokens: int = 0
+    #: D1's attribution four-tuple is (run, member, agent, instance). Without
+    #: the run id a completion cannot be rolled up per agent run, which is the
+    #: unit an operator actually debugs.
+    run_id: str | None = None
+    prompt_tokens: int = Field(default=0, ge=0)
+    completion_tokens: int = Field(default=0, ge=0)
+    cached_tokens: int = Field(default=0, ge=0)
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
@@ -420,35 +438,64 @@ def list_keys(org_slug: str, _: Operator) -> dict[str, Any]:
         return {"keys": store.list_keys(conn, org_id=org_id)}
 
 
+@app.get("/me")
+def whoami(caller: KeyCaller) -> dict[str, Any]:
+    """Who this key belongs to, and what it has left. **Read-only.**
+
+    This is the whole of the organization key's surface on the Control Plane.
+    It resolves the tenant from the credential (CP-3's actual point) and reports
+    the balance the caller needs to render an out-of-credits state — without
+    handing the metered party any way to move its own ledger.
+    """
+    org_id = caller.organization_id
+    with get_engine().begin() as conn:
+        balance = balance_of(store.credit_deltas(conn, org_id=org_id))
+        status = conn.execute(
+            text("SELECT slug, status FROM organization WHERE id = :i"),
+            {"i": org_id},
+        ).first()
+
+    return {
+        "organization_id": org_id,
+        "slug": status[0],
+        "status": status[1],
+        "credit_balance": str(balance),
+        "key_prefix": caller.key_prefix,
+    }
+
+
 @app.post("/usage/record")
-def record_usage(req: UsageRequest, caller: KeyCaller) -> dict[str, Any]:
-    """Record one metered call. Idempotent on ``request_id``.
+def record_usage(req: UsageRequest, _: Internal) -> dict[str, Any]:
+    """Record one metered call. Idempotent on ``(organization_id, request_id)``.
 
-    **Authenticated by the organization's own key, not the operator token**, and
-    the organization comes from that key (CP-3). Attribution headers refine
-    *within* it: a forged ``X-CC-Member`` can mislabel who inside the customer
-    spent the credits, but cannot bill a different customer.
+    **Internal token only.** This endpoint briefly accepted the customer's own
+    organization key, which was wrong twice over: it let a negative
+    ``billed_credits`` mint credits, and more fundamentally it made the metered
+    party the reporter of its own usage — the thing §4.1 says is "not a meter,
+    it is a suggestion". The Router counts the tokens it proxied and writes this
+    row; the customer's key is read-only (:func:`whoami`).
 
-    ``user_email`` is taken from the header when present and falls back to the
-    body, because the body is written by the same caller and so carries no less
-    trust — but neither is ever allowed to select the organization.
+    Idempotency is scoped **per organization** (migration 003). Globally-unique
+    request ids let one tenant's id silently suppress another's charge and
+    turned ``recorded:false`` into a cross-tenant existence oracle.
 
     Returns ``recorded: false`` for a replay. Callers should treat that as
     success, not as an error to retry, or a reconnect storm becomes a retry
     storm.
     """
-    org_id = caller.organization_id
+    org_id = req.organization_id
     with get_engine().begin() as conn:
         recorded = store.record_usage(
             conn,
             org_id=org_id,
             request_id=req.request_id,
             billed_credits=req.billed_credits,
-            user_email=caller.member or req.user_email,
-            agent=caller.agent or req.agent,
-            module_slug=caller.module_slug or req.module_slug,
+            user_email=req.user_email,
+            agent=req.agent,
+            module_slug=req.module_slug,
             model=req.model,
             tier=req.tier,
+            run_id=req.run_id,
             prompt_tokens=req.prompt_tokens,
             completion_tokens=req.completion_tokens,
             cached_tokens=req.cached_tokens,

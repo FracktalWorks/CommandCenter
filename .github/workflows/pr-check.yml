@@ -93,6 +93,29 @@ jobs:
     name: "Unit tests"
     runs-on: ubuntu-latest
     needs: lint
+    # WS-31 CP-3. The Control Plane's suites are R8-gated: they skip themselves
+    # unless CONTROL_PLANE_DATABASE_URL points at a real Postgres, because
+    # hermetic fakes agree with whatever SQL they are handed. Independent
+    # verification found this job running WITHOUT that variable, so all 53
+    # DB-gated platform tests — including every CP-3 cross-tenant fence — were
+    # skipping here while reporting green. A skip is not a pass, and an
+    # acceptance criterion that skips in CI gates nothing at merge.
+    services:
+      platform-postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: cc
+          POSTGRES_PASSWORD: cc
+          POSTGRES_DB: cc_platform
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U cc"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      CONTROL_PLANE_DATABASE_URL: postgresql+psycopg://cc:cc@127.0.0.1:5433/cc_platform
     steps:
       - uses: actions/checkout@v5
 
@@ -107,8 +130,34 @@ jobs:
       - name: Sync deps
         run: uv sync
 
+      # Proves the variable actually reaches a live server before the suite
+      # runs. Without this the job would go back to silently skipping the moment
+      # the service container failed to come up — the same failure mode, one
+      # layer down.
+      - name: Assert the Control Plane database is reachable
+        run: |
+          uv run python - <<'PY'
+          import os
+          from sqlalchemy import create_engine, text
+          url = os.environ["CONTROL_PLANE_DATABASE_URL"]
+          with create_engine(url).begin() as c:
+              print("control plane db:", c.execute(text("select version()")).scalar_one())
+          PY
+
       - name: Run unit tests
         run: uv run python -m pytest tests/unit/ -x -v
+
+      # A guard against the R8 gate quietly disarming again: if the platform
+      # suites report themselves as skipped, fail the job.
+      - name: Assert the R8-gated platform suites actually ran
+        run: |
+          uv run python -m pytest tests/unit/test_platform_sql.py \
+            tests/unit/test_platform_key_auth.py tests/unit/test_platform_api.py \
+            -q -rs 2>&1 | tee /tmp/platform.txt
+          if grep -q "CONTROL_PLANE_DATABASE_URL unset" /tmp/platform.txt; then
+            echo "::error::Platform suites skipped — R8 gate is disarmed."
+            exit 1
+          fi
 
   # BO-23. The backup and restore scripts shipped on 2026-08-03 and had never
   # been executed anywhere — they reached Postgres only through

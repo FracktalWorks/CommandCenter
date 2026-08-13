@@ -44,7 +44,8 @@ pytestmark = pytest.mark.skipif(
 )
 
 _MIGRATIONS = ("infra/platform/001_control_plane.sql",
-               "infra/platform/002_seed_catalog.sql")
+               "infra/platform/002_seed_catalog.sql",
+               "infra/platform/003_metering_integrity.sql")
 
 
 @pytest.fixture(scope="module")
@@ -279,8 +280,11 @@ class TestKeys:
         resolved = store.resolve_key(conn, prefix=k.prefix)
 
         assert resolved is not None
-        org_id, key_hash = resolved
+        # Three-tuple since CP-3: the owning org's lifecycle status rides along
+        # so a caller can refuse a cancelled customer without a second query.
+        org_id, key_hash, org_status = resolved
         assert org_id == org
+        assert org_status == "trial"
         assert verify_secret(k.token.split("_", 3)[3], key_hash) is True
 
     def test_a_revoked_key_resolves_to_nothing(self, conn, org):

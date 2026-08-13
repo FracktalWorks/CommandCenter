@@ -252,8 +252,14 @@ def record_usage(conn: Connection, *, org_id: str, request_id: str,
                  billed_credits: Decimal, **fields: Any) -> bool:
     """Write one usage event and its ledger draw. Idempotent on ``request_id``.
 
-    Returns True when this call was newly recorded, False when ``request_id``
-    had already been seen.
+    Returns True when this call was newly recorded, False when this
+    ``(organization_id, request_id)`` pair had already been seen.
+
+    **Idempotency is scoped per organization** (migration 003). It was globally
+    unique on ``request_id`` alone, and verification demonstrated the
+    consequence: org B posting an id org A had already used got
+    ``recorded:false`` and its 500-credit charge silently vanished, while the
+    boolean itself leaked whether another tenant had used that id.
 
     **The ledger write is conditional on the usage insert winning**, which is
     the whole point: a retried request that re-inserts nothing must also
@@ -270,12 +276,12 @@ def record_usage(conn: Connection, *, org_id: str, request_id: str,
             INSERT INTO usage_event
                 (organization_id, request_id, billed_credits, user_email,
                  agent, module_slug, model, tier, prompt_tokens,
-                 completion_tokens, cached_tokens, provider_cost_usd)
+                 completion_tokens, cached_tokens, provider_cost_usd, run_id)
             VALUES
                 (:org, :request_id, :billed, :user_email, :agent, :module_slug,
                  :model, :tier, :prompt_tokens, :completion_tokens,
-                 :cached_tokens, :provider_cost_usd)
-            ON CONFLICT (request_id) DO NOTHING
+                 :cached_tokens, :provider_cost_usd, :run_id)
+            ON CONFLICT (organization_id, request_id) DO NOTHING
             RETURNING id
             """
         ),
@@ -292,6 +298,7 @@ def record_usage(conn: Connection, *, org_id: str, request_id: str,
             "completion_tokens": fields.get("completion_tokens", 0),
             "cached_tokens": fields.get("cached_tokens", 0),
             "provider_cost_usd": fields.get("provider_cost_usd"),
+            "run_id": fields.get("run_id"),
         },
     ).first()
 
@@ -364,21 +371,31 @@ def list_keys(conn: Connection, *, org_id: str) -> list[dict[str, Any]]:
     ]
 
 
-def resolve_key(conn: Connection, *, prefix: str) -> tuple[str, str] | None:
-    """Look up a live key by prefix. Returns ``(organization_id, key_hash)``.
+def resolve_key(conn: Connection, *, prefix: str
+                ) -> tuple[str, str, str] | None:
+    """Look up a live key. Returns ``(organization_id, key_hash, org_status)``.
 
     Indexed lookup on the prefix, then a constant-time hash comparison by the
-    caller. A revoked key resolves to nothing — checked in SQL rather than by
-    the caller, because "did you also check revoked_at" is exactly the sort of
-    step a second call site forgets.
+    caller. Two conditions are resolved in SQL rather than left to callers,
+    because "did you also check…" is exactly the step a second call site
+    forgets:
+
+    * ``revoked_at IS NULL`` — a revoked key resolves to nothing.
+    * the owning organization's ``status`` is returned, so the caller can
+      refuse a cancelled or suspended customer. Verification found a cancelled
+      organization still metering happily against a live key (F4); returning
+      the status here is what lets that be a one-line check rather than a
+      second query every caller must remember.
     """
     row = conn.execute(
         text(
             """
-            SELECT organization_id, key_hash FROM llm_api_key
-            WHERE prefix = :prefix AND revoked_at IS NULL
+            SELECT k.organization_id, k.key_hash, o.status
+            FROM llm_api_key k
+            JOIN organization o ON o.id = k.organization_id
+            WHERE k.prefix = :prefix AND k.revoked_at IS NULL
             """
         ),
         {"prefix": prefix},
     ).first()
-    return (str(row[0]), row[1]) if row else None
+    return (str(row[0]), row[1], row[2]) if row else None

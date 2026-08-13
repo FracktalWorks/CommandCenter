@@ -1,8 +1,9 @@
 # Platform Control Plane — the subscription, seat and AI-metering engine (WS-31)
 
-**Status:** ◐ **CP-1 BUILT 2026-08-12** (schema + service + 79 tests, 34 of them
-against a real Postgres 16 per R8) · CP-0 built the same day · CP-2…CP-8 spec
-only · **where it runs is an open owner decision —
+**Status:** ◐ **CP-0 · CP-1 · CP-3 BUILT 2026-08-12** — 110 platform tests, **65
+of them DB-gated** against a real Postgres 16 per R8 · CP-3 was **rejected by
+independent verification once** and rebuilt (see its ticket) · CP-2 · CP-2a ·
+CP-4…CP-8 spec only · **where it runs is an open owner decision —
 [`control_plane_infrastructure.md`](control_plane_infrastructure.md)** ·
 **Date:** 2026-08-12 · **verified against code 2026-08-12** (repo-wide grep: zero hits for `usage_event`, `credit_ledger`,
 `model_rate_card`, `usage_rollup`, `module_catalog`, `org_module_entitlement`
@@ -422,8 +423,22 @@ audit row. **R8: run against a real Postgres** — the partial-unique and the
 as-of-now `seat_grant` sum are exactly the kind of SQL a hermetic fake agrees with
 and a real database rejects.
 
-**CP-3 · Per-organization keys and attribution.** §4.3. `llm_api_key` with
-prefix-match + hash-verify. **Done when:** a request bearing org A's key and a forged
+**CP-3 · Per-organization keys and attribution.** ✅ **BUILT 2026-08-12, after
+one FAILED verification.** §4.3. `llm_api_key` with prefix-match + hash-verify.
+
+⚠️ **What the first attempt got wrong, recorded because the mistake is
+instructive.** It put `/usage/record` under *organization-key* auth. Two
+consequences, both measured on a live database by the verifier: a negative
+`billed_credits` became a **positive** ledger delta (a customer-reachable
+credit-minting endpoint — 989 credits became 100,989), and more fundamentally it
+made **the metered party the reporter of its own usage**, contradicting §4.1's
+*"trusting a client's self-report… is not a meter, it is a suggestion"* — the
+argument D32.1 rests on. Now: three schemes (operator / **internal** / org key),
+the org key is **read-only** (`/me`), the Router's internal token writes the
+meter, every quantity is floored at zero in both the API model and a CHECK
+constraint, and idempotency is scoped `(organization_id, request_id)` because a
+globally-unique `request_id` let one tenant suppress another's charge and turned
+`recorded:false` into a cross-tenant existence oracle (migration 003). **Done when:** a request bearing org A's key and a forged
 `X-CC-Member`/`X-CC-Org` header for org B writes its `usage_event` under **org A**;
 a revoked key 401s; the key secret is never logged (assert over the log record, not
 by reading the code).
@@ -497,9 +512,12 @@ a rate card you change on customers.
 ## 7. Verification
 
 ```bash
-# Control Plane (per slice; created with the slice)
-uv run pytest tests/unit/test_platform_registry.py tests/unit/test_platform_seats.py \
-              tests/unit/test_platform_metering.py
+# Control Plane. ⚠️ These need a REAL Postgres or they SKIP THEMSELVES (R8) —
+# a skipped R8 test proves nothing:
+#   export CONTROL_PLANE_DATABASE_URL=postgresql+psycopg://cc:cc@127.0.0.1/cc_platform
+uv run pytest tests/unit/test_platform_seats.py tests/unit/test_platform_credits.py \
+              tests/unit/test_platform_keys.py tests/unit/test_platform_sql.py \
+              tests/unit/test_platform_api.py tests/unit/test_platform_key_auth.py
 
 # The seam and tenancy ratchets this must not regress
 uv run pytest tests/unit/test_tenant_coverage.py tests/unit/test_db_engine_seam.py

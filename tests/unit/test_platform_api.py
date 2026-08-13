@@ -29,7 +29,9 @@ pytestmark = pytest.mark.skipif(
 )
 
 TOKEN = "test-operator-token"
+INTERNAL = "test-internal-token"
 AUTH = {"Authorization": f"Bearer {TOKEN}"}
+INT = {"Authorization": f"Bearer {INTERNAL}"}
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -38,7 +40,8 @@ def _schema():
     eng = create_engine(_URL, future=True)
     with eng.begin() as conn:
         for rel in ("infra/platform/001_control_plane.sql",
-                    "infra/platform/002_seed_catalog.sql"):
+                    "infra/platform/002_seed_catalog.sql",
+                    "infra/platform/003_metering_integrity.sql"):
             with open(os.path.join(root, rel), encoding="utf-8") as fh:
                 conn.exec_driver_sql(fh.read())
 
@@ -46,6 +49,7 @@ def _schema():
 @pytest.fixture
 def client(monkeypatch):
     monkeypatch.setenv("CONTROL_PLANE_OPERATOR_TOKEN", TOKEN)
+    monkeypatch.setenv("CONTROL_PLANE_INTERNAL_TOKEN", INTERNAL)
     from platform_api.main import app
     return TestClient(app)
 
@@ -175,22 +179,23 @@ class TestCreditsOverHttp:
         client.post("/credits/grant", headers=AUTH,
                     json={"org_slug": org, "credits": "100"})
 
-        # CP-3: usage is authenticated by the ORGANIZATION's key, and the org
-        # comes from that key — there is no org field in the body any more.
-        # Cross-org rejection is pinned in test_platform_key_auth.py.
-        token = client.post("/keys", headers=AUTH,
-                            json={"org_slug": org}).json()["token"]
-        key_auth = {"Authorization": f"Bearer {token}"}
+        # CP-3 (as revised after verification): the METER is written by the
+        # Router's internal token, never by the customer's own key — the metered
+        # party must not be the reporter of its own usage. Cross-org and
+        # negative-value rejection are pinned in test_platform_key_auth.py.
+        org_id = client.post("/orgs/provision", headers=AUTH, json={
+            "slug": org, "name": "Acme Pumps",
+            "owner_email": f"owner@{org}.com"}).json()["organization_id"]
 
         rid = f"req-{uuid.uuid4().hex}"
-        body = {"request_id": rid, "billed_credits": "12.5",
-                "model": "m", "tier": "tier-balanced"}
+        body = {"organization_id": org_id, "request_id": rid,
+                "billed_credits": "12.5", "model": "m", "tier": "tier-balanced"}
 
-        first = client.post("/usage/record", headers=key_auth, json=body).json()
+        first = client.post("/usage/record", headers=INT, json=body).json()
         assert first["recorded"] is True
         assert Decimal(first["balance"]) == Decimal("87.5")
 
-        replay = client.post("/usage/record", headers=key_auth, json=body).json()
+        replay = client.post("/usage/record", headers=INT, json=body).json()
         assert replay["recorded"] is False
         assert Decimal(replay["balance"]) == Decimal("87.5")
 

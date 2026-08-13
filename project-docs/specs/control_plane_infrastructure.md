@@ -1,6 +1,10 @@
 # Where the Control Plane runs — the infrastructure decision (owner session)
 
-**Status:** DECISION-READY — nothing chosen, nothing built on any vendor ·
+**Status:** ✅ **DECIDED 2026-08-12 — Supabase** (owner, recorded as **D34** in
+`work_plan.md` §3): managed Postgres in Mumbai **plus** Supabase Auth as the
+authenticator, consumed as one provider inside NextAuth rather than replacing
+it. §3's disqualification of Firebase and §4's reasoning stand as the record of
+why. **Items 1, 2 and 3 of §5 are answered; items 4 and 5 remain open.** ·
 **Date:** 2026-08-12 · **Owner:** vjvarada (this is an owner call) ·
 **Companion:** `platform_control_plane.md` (WS-31 — what runs), this document
 (**where** it runs) · **Blocks:** nothing. CP-1 is built and tested against

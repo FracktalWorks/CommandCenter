@@ -232,6 +232,35 @@ are owner calls, taken and dated. ⚠️ Two entries below are superseded and ke
 records: **D11** (re-taken by D15) and **D10 part 1's planning premise** (re-scoped
 by D15/D16) — read their banners before citing either.
 
+- **D34 — Supabase is the Control Plane's database AND its authenticator.**
+  *(owner call, 2026-08-12: "Let's use Supabase for auth configuration." Owning
+  spec: **`specs/control_plane_infrastructure.md`**, whose §4 recommended exactly
+  this and whose §3 disqualified Firebase on technical grounds.)*
+  1. **Managed Postgres, Mumbai (`ap-south-1`)** for DPDP residency (§2 R-f).
+     CP-1's migrations apply **unchanged** — Supabase *is* Postgres, which is
+     why this decision was safe to take late and stays reversible by `pg_dump`.
+  2. **Supabase Auth is the authenticator** — Google, Microsoft and email/OTP for
+     customers on no directory at all. This is the half of CP-0 that was never
+     code: the providers are wired, but *operating* per-customer SSO is work we
+     now buy instead of build.
+  3. **NextAuth keeps issuing the CommandCenter session; Supabase Auth becomes
+     one upstream provider inside it** — *not* a replacement. Chosen over
+     swapping NextAuth out because it (a) preserves **D32.4 exactly** (the
+     Control Plane owns the registry, CC issues sessions), (b) keeps CP-0's
+     conditional-provider wiring and its 16 fences rather than discarding them,
+     and (c) does not cut the **live auth path** of a running system in the same
+     quarter as everything else here.
+  4. **Supabase Auth authenticates; it never decides entitlement.** Seats,
+     membership and credits stay the Control Plane's authority. A signed-in
+     person with no seat is still refused at `/registry/resolve` — sign-in and
+     *admission* are two questions and Supabase answers only the first.
+  5. ⚠️ **Do NOT adopt Supabase's client-direct + RLS idiom.** That is the
+     *tenant* plane's model and explicitly wrong for this plane, which is
+     cross-tenant by design (§0.9.2). Our FastAPI service stays in front; no
+     browser talks to Supabase directly.
+  6. 🔴 **OWNER-GATE:** creating the project, configuring providers, and holding
+     the keys. Everything above is buildable against fixtures without them.
+
 - **D33 — The personal-brain assumptions that do not survive, and the two nobody had
   found.** *(owner-directed 2026-08-12 — "we might have made a lot of decisions
   initially that are not scalable anymore… create documentation to overwrite some of

@@ -268,14 +268,36 @@ field set is deliberately the IRN field set, so the change is registering with
 the IRP and adding the QR, not re-modelling invoices. **Done when:** the invoice
 model carries every IRN-required field even while unused.
 
-> 🔴 **UNRESOLVED, and not an engineering call: GST treatment of prepaid
-> credits.** Credits bought up front are plausibly a **voucher** under GST, and
-> the time-of-supply rules for vouchers differ from ordinary services — tax may
-> fall at purchase or at redemption depending on whether the credits are
-> single-purpose. This determines what the credit invoice says and when the
-> liability arises, so getting it wrong makes **every** credit invoice wrong.
-> **This needs a CA, not a specification.** Until it is answered, SC-4a can be
-> built and tested but must not issue a tax invoice.
+> ### GST on prepaid credits — working assumption: **taxed at purchase** (owner, 2026-08-13)
+>
+> **Assumption adopted:** credits are a **single-purpose voucher**, so GST at 18%
+> applies **when the pack is bought**, not when the credits are consumed.
+>
+> **Why that reading fits.** A voucher is single-purpose when the supply it will
+> be redeemed against is identifiable at issue. Ours is: one supplier (us), one
+> service (AI usage), one SAC, one rate. Nothing about how the customer later
+> spends the credits changes the tax treatment — which is precisely the condition
+> that makes the tax point the issue date rather than the redemption date.
+>
+> **Two consequences that must be built in, not discovered:**
+> 1. **Consumption is NOT a taxable event.** SC-4f's monthly usage statement is
+>    therefore an **informational statement, not a tax invoice** — it must not
+>    carry an invoice serial, must not show a tax line, and must say so on its
+>    face. Invoicing usage as well would tax the same supply twice.
+> 2. **Unused and expiring credits need no adjustment.** Tax was discharged at
+>    purchase, and D32.6 already makes credits non-refundable in cash — so
+>    expiry is not a credit-note event. That consistency is a point in favour of
+>    the reading, not a coincidence.
+>
+> ⚠️ **Still confirm with a CA before the first tax invoice goes out** — but the
+> build is **no longer blocked**: SC-4a may now issue a tax invoice under this
+> assumption. The design is deliberately robust if the answer turns out to be
+> redemption-based: the tax point is recorded **per document** (`invoice.tax_point`
+> = `purchase | redemption`) rather than assumed in code, so a change is a policy
+> flip plus credit notes over the affected period — not a re-model of invoicing.
+>
+> **Do not treat "probably" as settled** in customer-facing copy. Invoices say
+> what was charged; they do not explain the reasoning.
 
 ## 3. Access
 

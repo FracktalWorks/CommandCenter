@@ -294,11 +294,24 @@ by D15/D16) — read their banners before citing either.
      against a live org.
   5. **A monthly usage statement** the customer can export, read from
      `usage_rollup` so it survives the 90-day raw retention.
-  6. 🔴 **UNRESOLVED and not an engineering call: GST on prepaid credits.**
-     Credits may be a **voucher** under GST, whose time-of-supply rules differ
-     from ordinary services — tax at purchase or at redemption. It decides what
-     every credit invoice says and when liability arises. **Needs a CA.** SC-4a
-     may be built and tested but must not issue a tax invoice until answered.
+  6. **GST on prepaid credits — working assumption: TAXED AT PURCHASE**
+     *(owner, 2026-08-13: "GST will probably apply".)* Credits are read as a
+     **single-purpose voucher**: the supply is identifiable at issue — one
+     supplier, one service, one SAC, one rate — which is the condition that puts
+     the tax point at issue rather than redemption. **This unblocks SC-4a**,
+     which may now issue a tax invoice.
+     Two consequences built in rather than discovered: **(a) consumption is not
+     a taxable event**, so SC-4f's usage statement is *informational* — no
+     serial, no tax line, and it says so on its face, or the same supply is
+     taxed twice; **(b) expiring or unused credits need no adjustment**, since
+     tax was discharged at purchase and D32.6 already makes credits
+     non-refundable in cash. That the two rules agree is a point in favour of
+     the reading.
+     ⚠️ **Still confirm with a CA before the first invoice goes out.** The design
+     is robust either way: `invoice.tax_point` (`purchase | redemption`) is
+     recorded **per document** rather than assumed in code, so a reversal is a
+     policy flip plus credit notes — not a re-model. **"Probably" is not
+     settled, and never appears in customer-facing copy.**
 
 - **D36 — Fracktal Works is customer zero, and gets no special path.**
   *(owner-directed 2026-08-13: "Fracktal Works itself becomes another

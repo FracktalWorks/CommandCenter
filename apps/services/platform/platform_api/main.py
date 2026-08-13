@@ -793,6 +793,63 @@ def chat_completions(req: CompletionRequest, caller: KeyCaller) -> Any:
     return response
 
 
+@app.get("/me/billing")
+def my_billing(caller: KeyCaller) -> dict[str, Any]:
+    """The calling organization's OWN billing summary. Read-only.
+
+    Exists because the customer's billing page needs this data and the
+    workbench must **not** hold the operator token — a tenant deployment
+    holding a cross-organization credential is the whole thing D32/D35 are
+    arranged to avoid. So the deployment presents its own key, and the key
+    resolves the organization (CP-3). It can read its own billing and nothing
+    else, by construction rather than by a `WHERE` clause somebody has to
+    remember.
+
+    Balance is `SUM(credit_ledger)` computed here, once. The browser renders it
+    and never recomputes it.
+    """
+    org_id = caller.organization_id
+    with get_engine().begin() as conn:
+        balance = balance_of(store.credit_deltas(conn, org_id=org_id))
+
+        # Burn over a NAMED window, so the UI can say what it is measuring.
+        # A figure whose window is unstated reads as authoritative and is not.
+        window_days = 30
+        burn = conn.execute(
+            text(
+                "SELECT COALESCE(SUM(billed_credits), 0) FROM usage_event "
+                "WHERE organization_id = :o "
+                "  AND created_at >= now() - make_interval(days => :d)"
+            ),
+            {"o": org_id, "d": window_days},
+        ).scalar_one()
+
+        # BYOK: metered, never charged for tokens (§3.4). Presence of the org's
+        # own provider credential is what makes it true — not a flag somebody
+        # sets separately and forgets to clear.
+        is_byok = bool(conn.execute(
+            text("SELECT 1 FROM provider_credential "
+                 "WHERE organization_id = :o AND revoked_at IS NULL LIMIT 1"),
+            {"o": org_id},
+        ).first())
+
+    return {
+        "credits": {
+            "balanceCredits": float(balance),
+            "burnThisCycle": float(burn),
+            "windowDays": window_days,
+            "isByok": is_byok,
+        },
+        # SC-5 issues real documents; until an invoice exists there is nothing
+        # to list, and an empty list is the honest answer rather than a stub.
+        "invoices": [],
+        # Self-serve checkout is SC-4a and deliberately sequenced after
+        # metering (D37.1). The page renders a contact prompt, not a dead
+        # button, while this is false.
+        "purchaseEnabled": False,
+    }
+
+
 @app.post("/usage/record")
 def record_usage(req: UsageRequest, _: Internal) -> dict[str, Any]:
     """Record one metered call. Idempotent on ``(organization_id, request_id)``.

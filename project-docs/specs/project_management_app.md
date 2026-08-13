@@ -1258,6 +1258,98 @@ buried — that is the behaviour we want. But the *decision* to change acceptanc
 reviewer/owner call, and it is being recorded here rather than left inside an as-built,
 because acceptance that a builder can silently edit is not acceptance.
 
+**D-PM-25 — a project's RUN STATE and whether it is ARCHIVED are two axes, not one column.**
+`DECISION (2026-08-13, owner-directed.)` Migration 146 shipped
+`pm_projects.status CHECK (status IN ('active','on_hold','done','archived'))` **and**
+`archived_at TIMESTAMPTZ` in the same table, so `archived` is stored twice in two shapes —
+and the enum conflates two independent questions: *is work flowing?* and *do you want to see
+this?* A project can be done-and-visible (just finished, still on the board) or
+paused-and-filed (shelved indefinitely). One column cannot say both. Therefore:
+
+* **`status` is the RUN STATE only** — `queued` · `active` · `on_hold` · `stopped` · `done`.
+  Two values are added; **`archived` leaves the axis.**
+* **Archive is `archived_at IS NOT NULL`, and nothing else.** That is the shipped task idiom
+  (`pm_tasks.archived_at`, excluded at `filters.py:260`), so this extends the existing seam
+  rather than minting a second one (CLAUDE.md §5).
+
+⚠️ **`active` and `on_hold` are NOT renamed.** The UI labels them **Ongoing** and **Paused**;
+the stored values stand. R6 forbids renaming in place, `active` is the DEFAULT on every
+existing row, and display-label-over-stored-value is already how `pm_task_statuses` works
+(`name` free, `category` machine-readable). A rename touches every call site and buys a word.
+
+**The expand/contract path (R6 — we cannot roll back).** Widen the CHECK to the union of old
+and new values → backfill each `status='archived'` row by stamping `archived_at` and setting a
+run state → drop `'archived'` from the CHECK in a **later** release. ⚠️ The backfill population
+must be **measured on the live box, not assumed empty**: no UI writes this column, but the API
+has accepted it on create and PATCH since 146.
+
+**D-PM-26 — project state DERIVES onto its tasks; it never writes them.**
+`DECISION (2026-08-13, owner-ruled.)` Pausing, stopping or archiving a project changes **no
+`pm_tasks` row**. Effective state is resolved at read time from the task's project and its
+ancestors — a task is paused *because its project is*, exactly as a `pm_project_grants` row on
+a root covers the subtree without being denormalised onto children (§3.2).
+
+This is **D-PM-12's ruling applied to a second surface**: an arrow warns, it never reschedules;
+a pause derives, it never writes. The five costs a cascade would carry, each of them
+measurable rather than aesthetic:
+
+1. **Reversibility.** Resume must restore each task's *prior* status — a stash column or a
+   timeline reconstruction, i.e. new state whose only purpose is undoing a write we did not
+   need to make.
+2. **The timeline.** `pm_activities` is the single spine (§3.8). Four hundred tasks through one
+   pause/resume cycle is eight hundred rows nobody will read.
+3. **Notifications.** WS-27j fires off task change; a cascade tells every assignee that nothing
+   happened.
+4. **Delta-sync.** Migration 168's feed keys on `updated_at`, so a cascade bumps every row in
+   the subtree and every delta client re-pulls the whole project.
+5. **Concurrency.** D-PM-20 is still owed, so writes are last-write-wins; a mass write is the
+   worst possible interaction with agents writing beside humans.
+
+**The one write that IS correct is the user's act, not the state change's:** stopping a project
+**offers** to close its open tasks — *"12 tasks are still open. Close them as cancelled?"* —
+executed through the shipped bulk endpoint (WS-27n) as ordinary audited transitions. Declining
+leaves them open. An offer is not a cascade.
+
+**Pause governs attention, not permission** (owner-ruled the same day): a paused project still
+accepts comments, re-planning and grooming, because re-planning is usually *why* it was paused.
+Archived is read-only.
+
+⚠️ **R8 binds the read side.** Deriving means task reads consult the project, so the plan must
+be `EXPLAIN`ed against a real Postgres at realistic row counts before any performance claim is
+made. WS-27be is the precedent: an index that *looked* like it covered the case was unusable
+for twenty-four migrations and no unit test could have said so.
+
+**D-PM-27 — the project-state hue map, and why it must not route through `keywordHue`.**
+`DECISION (2026-08-13, owner-ruled — the owner was shown the collision and its cost and chose
+this mapping.)`
+
+| Run state | Label | Hue |
+|---|---|---|
+| `active` | Ongoing | **green** |
+| `on_hold` | Paused | **amber** |
+| `stopped` | Stopped | **red** |
+| `queued` | Queued | **gray** |
+| `done` | Done | **blue** |
+
+⚠️ **This deliberately diverges from the task-status vocabulary on two hues, and the divergence
+is recorded so it is not "fixed" later.** `CATEGORY_HUES` maps `in_progress → blue` and
+`done → green`; a project tree and a task board sit on the same screen, so green will mean
+"running" in one and "finished" in the other. The owner was given that cost and ruled for the
+mapping above. **An agent finding this inconsistent should cite this decision and stop, not
+repaint it.**
+
+🔴 **The implementation constraint that makes it work.** `PROJECT_STATE_HUES` is a **closed
+lookup consulted directly**. It must NOT fall through `resolveHue`'s name-keyword step, because
+`keywordHue` maps the literal word **`active` → blue** (`/(progress|doing|active|working|review)/`)
+and `done` → green — so routing a project state through the generic resolver produces the
+**opposite** of this decision on two of the five states. The map lives in
+`src/lib/statusAccent.ts` (rule 4 — extend the shared module, never mint a project-local
+palette) and is fenced by a test asserting each state resolves to its ruled hue *and* that the
+map is unreachable from `resolveHue`.
+
+⚠️ **Hue is never the only channel.** Each state also carries a glyph through `<Icon name>`: a
+dense tree, read at a glance or read by a colour-blind user, must not depend on colour alone.
+
 ---
 
 ## 9. Tickets
@@ -3224,6 +3316,133 @@ cover both) · **WS-27ar**'s single generic `(user, entity_type, entity_id)` pin
 **WS-27ap**/**WS-27ba**'s stored filter grammar (the saved-view corpus only grows). The
 recommendation carried to the owner was to take D-PM-20 and WS-27ar's table shape alongside
 Wave 1; ap/ba wait until after Wave 3.
+
+---
+
+### 9.8 WS-27bg — project run state, the indicator, and archive (minted 2026-08-13)
+
+**WS-27bg — the project lifecycle axis made real.** 🟢 AGENT-SAFE. Owner-directed
+2026-08-13: *"each project should show one colored indicator in front of it — green for
+ongoing, red for stopped, orange for paused"*, plus **queued**, plus *"the ability to archive
+an entire project and its tasks."* Decisions **D-PM-25** (two axes), **D-PM-26** (derive, never
+cascade) and **D-PM-27** (the hue map) were taken before minting and are not re-opened here.
+
+#### 9.8.1 The measurement — this feature is half-built and entirely invisible
+
+Measured against `efd843a`, 2026-08-13:
+
+| Anchor | Finding |
+|---|---|
+| `pm_projects.status` | Shipped **since migration 146** — `CHECK (status IN ('active','on_hold','done','archived'))`, `DEFAULT 'active'`, indexed (`146_projects.sql:60-61`). |
+| API write path | **Already validated** on create (`tree.py:246`) and PATCH (`tree.py:304`) against `core.py:68`'s `PROJECT_STATUSES`. |
+| API read path | **Already returned** — `status` is in `tree.py:64`'s column list. |
+| Frontend type | **Already declared** — `app/projects/lib/tree.ts:15`, `status?: string \| null`. |
+| `ProjectTree.tsx` | Contains the string `status` **zero times**. Nothing renders it, nothing filters on it, no control writes it. |
+| `pm_projects.archived_at` | Exists since 146. **Never written by anything.** |
+| Project archive endpoint | **Does not exist.** The only removal path is `DELETE /nodes/{project_id}` (`tree.py:389`) — an unrecoverable cascade over subtree + tasks + grants. |
+| Project-editing UI | **Does not exist.** `patchProject` has one call site (`LifecyclePolicy.tsx:47`), `createProject` one (`page.tsx:1052`). A project cannot be renamed in this app. |
+
+⚠️ **This is the second instance of a failure this repo has already recorded once.**
+`src/lib/statusAccent.ts`'s own header documents `pm_task_statuses.color` as *"stored since
+migration 146, exposed on the API as `StatusRow.color`, and rendered nowhere"* — so every
+Projects board column drew the same grey for months. Same table, sibling column, same shape.
+The lesson worth carrying: **a validated column with no consumer is not "partly done", it is a
+claim the API makes and the product does not honour.**
+
+#### 9.8.2 🔴 Three automation paths corrupt data the day `on_hold` starts meaning something
+
+None of these is visible from a UI mock. Each writes real rows.
+
+1. **The lifecycle sweeper closes a paused project's backlog.** `run_lifecycle_sweep`
+   (`automation.py:298`) walks every root project with a policy enabled and moves open tasks
+   untouched beyond `close_after_months` into the closing lane — **with no project-status
+   predicate anywhere in the query.** Pause a project for a quarter with a three-month policy
+   and the sweeper cancels its backlog for the crime of being paused, writing as
+   `system:workflow:<id>` through `apply_status_transition`, so `completed_at`, the
+   `status_change` activity and recurrence all behave *exactly as if a person had done it*.
+2. **Recurrence keeps spawning.** A series advances when a task closes (`recurrence.py`, §11.13);
+   a paused project that closes anything keeps minting new work into itself.
+3. **Agent dispatch keeps dispatching.** `pm.task.assigned` → `agent_dispatch` (WS-27aa) puts an
+   agent to work inside a project nobody is working.
+
+**All three take ONE predicate, defined once and consulted by each — not three guards.** A
+second copy of "is this project runnable" is the CLAUDE.md §5 defect that this ticket would
+otherwise author three times over.
+
+#### 9.8.3 Slice 1 — the axis, the endpoints, the automation guard 🟢
+
+> **Done when:**
+> * A migration widens `pm_projects.status`'s CHECK to `('active','on_hold','done','archived','queued','stopped')`
+>   — the **union**, per R6 expand-then-contract — and `PROJECT_STATUSES` (`core.py:68`) carries
+>   the same six. The contraction that drops `'archived'` is a **later** release and is named in
+>   the migration's own header, not left implicit.
+> * A backfill stamps `archived_at = now()` on every surviving `status='archived'` row and moves
+>   it to a run state. ⚠️ **It must be correct for ANY population, because the population cannot
+>   be measured from here** — reading the live database is owner-gated reach (§6), so an agent
+>   that "confirms it is empty" is reporting a guess. The backfill is therefore set-based and
+>   idempotent, correct at zero rows and at ten thousand, and the **owner is asked for the count
+>   at review** so the deploy is verified by evidence rather than by a green job.
+> * `POST /projects/nodes/{id}/archive` and `.../unarchive` stamp and clear
+>   `pm_projects.archived_at`, emit `pm.project.archived` / `pm.project.unarchived`, and return
+>   the same honest `cascaded` counts `delete_node` returns — **read before the write**, for the
+>   reason `tree.py:396` already gives. Archiving warns on open work; it never blocks.
+> * **No `pm_tasks` row is written by any of it** (D-PM-26). A test asserts `pm_tasks.updated_at`
+>   is byte-identical across a pause, a stop, an archive and an unarchive of a project holding
+>   tasks — this is the fence that makes the decision real rather than documented.
+> * One predicate — `is_runnable(project)` — defined once and consulted by the lifecycle sweep,
+>   the recurrence spawn and the agent dispatch. Each of the three has a test that goes **red**
+>   when the guard is removed, i.e. mutation-measured, not merely present.
+> * Default task reads exclude tasks whose project is archived, honouring the existing
+>   `include_archived` flag rather than minting a second one.
+> * **R8:** the derived read path is `EXPLAIN`ed against a real Postgres at realistic row counts,
+>   and the plan is recorded in the as-built. A hermetic fake agrees with whatever SQL it is
+>   handed; five live bugs have shipped green that way.
+
+#### 9.8.4 Slice 2 — the indicator and the control surface 🟢
+
+> **Done when:**
+> * `PROJECT_STATE_HUES` lands in `src/lib/statusAccent.ts` per **D-PM-27**, as a closed lookup
+>   with a test proving it is **unreachable from `resolveHue`** (the `keywordHue` trap: `active`
+>   → blue, `done` → green, i.e. the opposite of the ruling on two of five states).
+> * Every project row in `ProjectTree.tsx` draws its state as **hue + glyph** — `<Icon name>`,
+>   never colour alone — with the effective (inherited) state drawn recessive against a node's
+>   own state. Status is writable at **any** depth; the effective state is the most restrictive
+>   ancestor. ⚠️ This deliberately differs from the lifecycle policy, which is root-only and
+>   422s on a child (migration 166's header): a policy is *configuration*, a run state is a fact
+>   about a unit of work, and a subproject is a unit of work.
+> * A project control surface exists at all — the status picker and Archive live on the promoted
+>   `src/components/ContextMenu.tsx` (WS-27bd) and `src/components/ui/Modal.tsx` (WS-27ak); no
+>   new dialog is hand-rolled and no `fixed inset-0` is added.
+> * **Archive is the default affordance and Delete is deliberately harder to reach.** Today
+>   `DELETE` is the only path and it is unrecoverable; shipping archive without re-ranking them
+>   leaves the destructive action as the obvious one.
+> * Stopping a project offers the bulk close (D-PM-26) and takes "leave them as-is" for an
+>   answer.
+> * **D-PM-21:** the theme sweep is a Playwright case, not a promise — the indicator renders
+>   under Fluent, Material and Graphite, in both modes.
+
+#### 9.8.5 Slice 3 — the honest surfaces 🟢
+
+> **Done when:**
+> * **Nothing in a queued, paused or stopped project is ever overdue.** ⚠️ There are **four**
+>   predicates and they were unified only one wave ago — `src/lib/taskCard.ts:190`,
+>   `app/projects/lib/mywork.ts:64`, the deliberately-different `app/tasks/lib/waiting.ts:68`
+>   under its own contract, and the SQL at `filters.py:182`. Landing this in three of four
+>   re-forks the vocabulary WS-27al spent a slice merging. **D-PM-22 is untouched**: this changes
+>   *which tasks are eligible to be overdue*, never `<` versus `<=`.
+> * Tasks in a non-running project leave **My Work** and the assignee counts. My Work answers
+>   "what should I do now"; for a paused project the answer is nothing.
+> * **Calendar and timeline de-emphasise; they do not silently drop.** The day cell collapses
+>   non-running tasks out of the visible stack and carries an expandable `+3 paused` — the
+>   **honest-overflow** pattern WS-27ac already shipped (§11.24), not a new one. A timeline bar
+>   keeps its position, renders muted, and never draws an overdue edge.
+> * Due-date notifications are suppressed for non-running projects.
+
+#### 9.8.6 Deliberately out of scope, recorded so it does not read as forgotten
+
+Per-project state **history** (who paused it, when, why) — `pm_activities` is project-less today
+(§3.8 is a task timeline), so a project-level audit trail is its own ticket, not a side effect of
+this one. Also out: any change to `DELETE /nodes/{id}`'s semantics beyond its ranking in the UI.
 
 ---
 

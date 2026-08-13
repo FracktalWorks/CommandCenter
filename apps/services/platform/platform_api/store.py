@@ -308,6 +308,62 @@ def record_usage(conn: Connection, *, org_id: str, request_id: str,
 
 # ── Keys ────────────────────────────────────────────────────────────────────
 
+def issue_key(conn: Connection, *, org_id: str, prefix: str, key_hash: str,
+              label: str | None = None, created_by: str | None = None) -> str:
+    """Store a freshly minted key. The secret is never passed here — only its hash."""
+    row = conn.execute(
+        text(
+            """
+            INSERT INTO llm_api_key
+                (organization_id, prefix, key_hash, label, created_by)
+            VALUES (:org, :prefix, :hash, :label, :by)
+            RETURNING id
+            """
+        ),
+        {"org": org_id, "prefix": prefix, "hash": key_hash,
+         "label": label, "by": created_by},
+    ).first()
+    assert row is not None
+    return str(row[0])
+
+
+def revoke_key(conn: Connection, *, org_id: str, prefix: str) -> bool:
+    """Revoke a key. Scoped to the owning org so one customer's admin surface
+    can never revoke another's key by guessing a prefix."""
+    row = conn.execute(
+        text(
+            """
+            UPDATE llm_api_key SET revoked_at = now()
+            WHERE prefix = :prefix AND organization_id = :org
+              AND revoked_at IS NULL
+            RETURNING id
+            """
+        ),
+        {"prefix": prefix, "org": org_id},
+    ).first()
+    return row is not None
+
+
+def list_keys(conn: Connection, *, org_id: str) -> list[dict[str, Any]]:
+    """Keys for one org. Returns prefixes and metadata — **never** ``key_hash``.
+
+    The hash is excluded at the SQL level rather than filtered afterwards: a
+    column that is never selected cannot be leaked by a later caller that
+    forgets to strip it before serialising.
+    """
+    return [
+        {"prefix": r[0], "label": r[1], "created_at": r[2].isoformat(),
+         "revoked": r[3] is not None}
+        for r in conn.execute(
+            text(
+                "SELECT prefix, label, created_at, revoked_at FROM llm_api_key "
+                "WHERE organization_id = :org ORDER BY created_at DESC"
+            ),
+            {"org": org_id},
+        )
+    ]
+
+
 def resolve_key(conn: Connection, *, prefix: str) -> tuple[str, str] | None:
     """Look up a live key by prefix. Returns ``(organization_id, key_hash)``.
 

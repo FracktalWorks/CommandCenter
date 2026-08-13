@@ -1,42 +1,48 @@
 """The Control Plane HTTP surface.
 
-WS-31 CP-1/CP-2 · spec ``project-docs/specs/platform_control_plane.md`` §6.
+WS-31 CP-1/CP-3 · spec ``project-docs/specs/platform_control_plane.md`` §6.
 
-**Scaffolding, deliberately.** The endpoints below are the ones the rest of the
-plan depends on existing — provisioning, seat resolution, seat writes, credit
-grant and balance, usage recording. They are wired to real SQL and covered by
-real tests. What they are NOT yet is *authenticated*: operator authentication is
-CP-8 and customer-admin authentication is WS-30's, and both need the CP-0 auth
-work to land underneath them first.
+**Two authentication schemes, and which one an endpoint takes is a design
+statement** (see :mod:`platform_api.auth`):
 
-That gap is enforced rather than commented. :func:`require_operator` refuses
-every request unless ``CONTROL_PLANE_OPERATOR_TOKEN`` is set, so this service
-cannot be exposed by accident — the same fail-closed posture CP-0 established in
-the workbench, applied here from the first line rather than retrofitted. Do not
-"temporarily" relax it; that is precisely how the workbench came to serve every
-route to anyone.
+  * ``Operator`` — a staff token, for cross-organization surfaces: provisioning,
+    seat writes, credit grants, key issuance.
+  * ``KeyCaller`` — the customer's own ``cc_live_…`` key, for their metering
+    surface. **The key resolves the organization**; no endpoint takes an
+    organization from a request body under key auth, because that would make the
+    caller the authority on which customer they are
+    (``user_management_contract.md`` R11).
+
+Both fail **closed**: the operator token has no default and an unconfigured
+deployment 503s rather than admitting anyone. That is CP-0's lesson applied from
+the first line rather than retrofitted — do not "temporarily" relax it, which is
+precisely how the workbench came to serve every route to anyone (D33.1).
+
+Still to come: the customer-admin surface is WS-30's, and the operator console is
+CP-8 — a separate deployable app (D35), never a route tree in here.
 
 Endpoints are ``def`` rather than ``async def`` so FastAPI runs them in its
 threadpool alongside the sync engine (see :mod:`platform_api.db`).
 """
 from __future__ import annotations
 
-import os
-import secrets
+import json
 from decimal import Decimal
-from typing import Annotated, Any
+from typing import Any
 
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
 from platform_api import store
+from platform_api.auth import KeyCaller, Operator
 from platform_api.credits import (
     OverdraftPolicy,
     balance_of,
     decide_spend,
 )
 from platform_api.db import get_engine
+from platform_api.keys import mint_key
 from platform_api.seats import CORE_PLAN_SLUG, decide_assignment, seat_counts
 
 app = FastAPI(
@@ -47,34 +53,6 @@ app = FastAPI(
     ),
     version="0.1.0",
 )
-
-
-# ── Auth ────────────────────────────────────────────────────────────────────
-
-def require_operator(
-    authorization: Annotated[str | None, Header()] = None,
-) -> None:
-    """Refuse anything that is not the operator.
-
-    Fails **closed** when unconfigured. Every other posture — allow-when-unset,
-    warn-and-continue — is the defect D33.1 recorded in the workbench, where
-    "no credentials configured" was read as "run wide open" and a production box
-    that lost its auth env served everything to anyone.
-    """
-    expected = os.environ.get("CONTROL_PLANE_OPERATOR_TOKEN", "").strip()
-    if not expected:
-        raise HTTPException(
-            status_code=503,
-            detail="CONTROL_PLANE_OPERATOR_TOKEN is not configured",
-        )
-    presented = ""
-    if authorization and authorization.startswith("Bearer "):
-        presented = authorization.removeprefix("Bearer ").strip()
-    if not presented or not secrets.compare_digest(presented, expected):
-        raise HTTPException(status_code=401, detail="Unauthorized")
-
-
-Operator = Annotated[None, Depends(require_operator)]
 
 
 # ── Schemas ─────────────────────────────────────────────────────────────────
@@ -111,8 +89,26 @@ class CreditGrantRequest(BaseModel):
     ref: str | None = None
 
 
-class UsageRequest(BaseModel):
+class IssueKeyRequest(BaseModel):
     org_slug: str
+    label: str | None = None
+
+
+class RevokeKeyRequest(BaseModel):
+    org_slug: str
+    prefix: str
+
+
+class UsageRequest(BaseModel):
+    """⚠️ **No ``org_slug`` field, deliberately (CP-3).**
+
+    It used to have one, and that was the defect: a body field naming the tenant
+    makes the caller the authority on which customer they are, which is exactly
+    what `user_management_contract.md` R11 forbids. The organization now comes
+    from the API key and from nowhere else. Adding an org field back here —
+    "for convenience", "to override in tests" — reopens cross-tenant billing.
+    """
+
     request_id: str
     billed_credits: Decimal = Decimal(0)
     user_email: str | None = None
@@ -143,7 +139,7 @@ def _audit(conn, org_id: str | None, action: str, detail: dict[str, Any]) -> Non
             "VALUES (:org, :actor, :action, CAST(:detail AS jsonb))"
         ),
         {"org": org_id, "actor": "operator", "action": action,
-         "detail": __import__("json").dumps(detail)},
+         "detail": json.dumps(detail)},
     )
 
 
@@ -384,24 +380,73 @@ def credit_balance(org_slug: str, _: Operator) -> dict[str, Any]:
     }
 
 
-@app.post("/usage/record")
-def record_usage(req: UsageRequest, _: Operator) -> dict[str, Any]:
-    """Record one metered call. Idempotent on ``request_id``.
+@app.post("/keys")
+def issue_key(req: IssueKeyRequest, _: Operator) -> dict[str, Any]:
+    """Mint an organization key. **The token is returned exactly once.**
 
-    Returns ``recorded: false`` for a replay — the caller should treat that as
-    success, not as an error to retry, or a reconnect storm turns into a
-    retry storm.
+    Only the hash is stored, so this response is the only moment the secret
+    exists anywhere. It is not recoverable — a lost key is replaced, not looked
+    up, and that is the property that makes a database disclosure survivable.
     """
+    minted = mint_key()
     with get_engine().begin() as conn:
         org_id = _org_id(conn, req.org_slug)
+        store.issue_key(
+            conn, org_id=org_id, prefix=minted.prefix,
+            key_hash=minted.key_hash, label=req.label, created_by="operator",
+        )
+        # The audit row records the PREFIX, never the token.
+        _audit(conn, org_id, "key.issue",
+               {"prefix": minted.prefix, "label": req.label})
+
+    return {"prefix": minted.prefix, "token": minted.token}
+
+
+@app.post("/keys/revoke")
+def revoke_key(req: RevokeKeyRequest, _: Operator) -> dict[str, Any]:
+    with get_engine().begin() as conn:
+        org_id = _org_id(conn, req.org_slug)
+        revoked = store.revoke_key(conn, org_id=org_id, prefix=req.prefix)
+        _audit(conn, org_id, "key.revoke",
+               {"prefix": req.prefix, "revoked": revoked})
+    return {"revoked": revoked}
+
+
+@app.get("/keys")
+def list_keys(org_slug: str, _: Operator) -> dict[str, Any]:
+    """Key metadata for one org. Never returns a hash or a token."""
+    with get_engine().begin() as conn:
+        org_id = _org_id(conn, org_slug)
+        return {"keys": store.list_keys(conn, org_id=org_id)}
+
+
+@app.post("/usage/record")
+def record_usage(req: UsageRequest, caller: KeyCaller) -> dict[str, Any]:
+    """Record one metered call. Idempotent on ``request_id``.
+
+    **Authenticated by the organization's own key, not the operator token**, and
+    the organization comes from that key (CP-3). Attribution headers refine
+    *within* it: a forged ``X-CC-Member`` can mislabel who inside the customer
+    spent the credits, but cannot bill a different customer.
+
+    ``user_email`` is taken from the header when present and falls back to the
+    body, because the body is written by the same caller and so carries no less
+    trust — but neither is ever allowed to select the organization.
+
+    Returns ``recorded: false`` for a replay. Callers should treat that as
+    success, not as an error to retry, or a reconnect storm becomes a retry
+    storm.
+    """
+    org_id = caller.organization_id
+    with get_engine().begin() as conn:
         recorded = store.record_usage(
             conn,
             org_id=org_id,
             request_id=req.request_id,
             billed_credits=req.billed_credits,
-            user_email=req.user_email,
-            agent=req.agent,
-            module_slug=req.module_slug,
+            user_email=caller.member or req.user_email,
+            agent=caller.agent or req.agent,
+            module_slug=caller.module_slug or req.module_slug,
             model=req.model,
             tier=req.tier,
             prompt_tokens=req.prompt_tokens,

@@ -174,15 +174,23 @@ class TestCreditsOverHttp:
     def test_usage_draws_down_and_a_replay_does_not(self, client, org):
         client.post("/credits/grant", headers=AUTH,
                     json={"org_slug": org, "credits": "100"})
+
+        # CP-3: usage is authenticated by the ORGANIZATION's key, and the org
+        # comes from that key — there is no org field in the body any more.
+        # Cross-org rejection is pinned in test_platform_key_auth.py.
+        token = client.post("/keys", headers=AUTH,
+                            json={"org_slug": org}).json()["token"]
+        key_auth = {"Authorization": f"Bearer {token}"}
+
         rid = f"req-{uuid.uuid4().hex}"
-        body = {"org_slug": org, "request_id": rid, "billed_credits": "12.5",
+        body = {"request_id": rid, "billed_credits": "12.5",
                 "model": "m", "tier": "tier-balanced"}
 
-        first = client.post("/usage/record", headers=AUTH, json=body).json()
+        first = client.post("/usage/record", headers=key_auth, json=body).json()
         assert first["recorded"] is True
         assert Decimal(first["balance"]) == Decimal("87.5")
 
-        replay = client.post("/usage/record", headers=AUTH, json=body).json()
+        replay = client.post("/usage/record", headers=key_auth, json=body).json()
         assert replay["recorded"] is False
         assert Decimal(replay["balance"]) == Decimal("87.5")
 

@@ -7,6 +7,11 @@ dependencies = [
     "fastapi>=0.115",
     "sqlalchemy>=2.0",
     "psycopg[binary]>=3.1",
+    # The Router IS the provider gateway (CP-4), so litellm is a direct
+    # dependency here rather than reached through acb_llm — that package's key
+    # store reads the TENANT database, which is the wrong side of the boundary.
+    "litellm>=1.0",
+    "cryptography>=42",
 ]
 
 [build-system]

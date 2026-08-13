@@ -1,9 +1,9 @@
 # Platform Control Plane — the subscription, seat and AI-metering engine (WS-31)
 
-**Status:** ◐ **CP-0 · CP-1 · CP-3 BUILT 2026-08-12** — 110 platform tests, **65
-of them DB-gated** against a real Postgres 16 per R8 · CP-3 was **rejected by
-independent verification once** and rebuilt (see its ticket) · CP-2 · CP-2a ·
-CP-4…CP-8 spec only · **where it runs is an open owner decision —
+**Status:** ◐ **CP-0 · CP-1 · CP-3 · CP-4 BUILT 2026-08-12** — 132 platform
+tests, **87 of them DB-gated** against a real Postgres 16 per R8 · CP-3 was
+**rejected by independent verification once** and rebuilt (see its ticket) ·
+CP-2 · CP-2a · CP-5…CP-8 spec only · **where it runs is an open owner decision —
 [`control_plane_infrastructure.md`](control_plane_infrastructure.md)** ·
 **Date:** 2026-08-12 · **verified against code 2026-08-12** (repo-wide grep: zero hits for `usage_event`, `credit_ledger`,
 `model_rate_card`, `usage_rollup`, `module_catalog`, `org_module_entitlement`
@@ -443,8 +443,28 @@ globally-unique `request_id` let one tenant suppress another's charge and turned
 a revoked key 401s; the key secret is never logged (assert over the log record, not
 by reading the code).
 
-**CP-4 · The Router, pass-through only.** Forwards to the same providers using
-today's `acb_llm` machinery, writes `usage_event`, **no pricing and no gate**.
+**CP-4 · The Router, pass-through only.** ✅ **BUILT 2026-08-12.**
+`POST /v1/chat/completions` on the Control Plane, authenticated by the
+organization key: resolves the tier from `tier_binding`, calls the provider,
+returns the response **unchanged**, and writes one `usage_event` with
+`billed_credits = 0`.
+
+⚠️ **It does NOT reuse `acb_llm`, and that is deliberate.** This ticket said "using
+today's `acb_llm` machinery", but that package's key store imports `acb_common`
+and reads the **tenant** database — pointing the Router at it would put our
+provider credentials on a customer's box, the precise thing D32.1 moved metering
+here to avoid. So the Router carries its own encrypted `provider_credential`
+table (migration 004) and calls litellm directly. The seam this must not
+duplicate is the *tenant* one; it is not on that seam at all.
+
+**Deliberately unpriced.** `billed_credits` is zero and no balance is checked —
+CP-6 sets the rate card against the burn this slice measures. Metering is
+best-effort and never fails the completion: an unmetered call is a revenue
+problem, a failed call is a product problem, and the product problem is worse.
+
+The provider call sits behind `router.set_provider_call` so the pass-through is
+testable without a provider account — otherwise the only way to test it is to
+spend money at DeepSeek on every run, which means nobody does.
 Behind a flag, default **OFF** — CommandCenter can still call providers directly
 (CLAUDE.md §4, ship dark). **Done when:** with the flag ON, a completion through
 CC `/v1` is byte-identical for the client to one with it OFF (the streaming path

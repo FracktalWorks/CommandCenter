@@ -2280,14 +2280,18 @@ name = "platform-api"
 version = "0.0.1"
 source = { editable = "apps/services/platform" }
 dependencies = [
+    { name = "cryptography" },
     { name = "fastapi" },
+    { name = "litellm" },
     { name = "psycopg", extra = ["binary"] },
     { name = "sqlalchemy" },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "cryptography", specifier = ">=42" },
     { name = "fastapi", specifier = ">=0.115" },
+    { name = "litellm", specifier = ">=1.0" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.1" },
     { name = "sqlalchemy", specifier = ">=2.0" },
 ]

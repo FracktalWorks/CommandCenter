@@ -325,6 +325,19 @@ export const CENTERS: Center[] = [
         href: "/people",
       },
       {
+        label: "Workload dashboard",
+        note: "Who is behind, at risk, overloaded or idle — every person's projects, deadlines and committed hours against the week they actually have",
+        // `Gauge`, mapped in Fluent and Material both (the registry check on
+        // NAV icons is what catches an unmapped name before it ships as one
+        // entry drawn in the wrong style).
+        icon: "Gauge",
+        // WS-28j1. Needs `admin:members:read` on top of `feature:people`: it is
+        // skills, capacity and hours for everybody at once, so §4.2's oracle
+        // rule applies to the whole surface (people_center_app.md §5.7.5).
+        status: "live",
+        href: "/people/dashboard",
+      },
+      {
         label: "Working week",
         note: "Working days, hours per day and shifts — what everybody's contracted hours are derived from",
         icon: "CalendarDays",

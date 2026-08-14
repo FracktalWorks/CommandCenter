@@ -1,0 +1,438 @@
+"use client";
+
+/**
+ * People Center · the people-management dashboard (WS-28j1).
+ *
+ * Spec: `project-docs/specs/people_center_app.md` §5.7 · **D-PC-14**.
+ *
+ * Owner-directed 2026-08-13: *"the person looking at this dashboard should have
+ * all the intelligence and needs to be able to actually make those
+ * decisions."* So every figure a decision needs sits on the row — projects,
+ * open tasks, the next deadline, committed against contracted hours, the
+ * unestimated count, last activity — and the pill states its own reason rather
+ * than asking anyone to take it on trust.
+ *
+ * ⚠️ **A measurement surface, not a performance one.** Every number here is
+ * trivially gamed and trivially misread. Rows are ordered by the urgency of the
+ * WORK, never scored; there is no leaderboard and no per-person trend line
+ * presented as an evaluation. Ranking tasks by risk is the product; ranking
+ * people by output is not (D-PC-14, and `test_people_dashboard.py` greps this
+ * file for the words that would mean it had become one).
+ *
+ * ⚠️ **Nothing here writes.** Expanding a row reads `/people/{id}/work`; the
+ * pre-filled assign action the suggester ends in is WS-28j3's, and it is a
+ * human's click either way (D-PC-13).
+ */
+
+import Link from "next/link";
+import { useEffect, useMemo, useState } from "react";
+
+import Icon from "@/components/Icon";
+import Button from "@/components/ui/Button";
+import { accentForHue } from "@/lib/statusAccent";
+
+import { Avatar } from "../components/Avatar";
+import { type WorkRow, peopleApi } from "../lib/api";
+import {
+  type DashboardResponse,
+  type DashboardRow,
+  PILL_HUE,
+  PILL_LABEL,
+  type Pill,
+  capacityBar,
+  describeActivity,
+  describeDeadline,
+  describeScope,
+  groupByDepartment,
+  hours,
+  pillTotals,
+  sortRows,
+} from "../lib/dashboard";
+
+export default function WorkloadDashboardPage() {
+  const [data, setData] = useState<DashboardResponse | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [filter, setFilter] = useState<Pill | null>(null);
+  const [openId, setOpenId] = useState<string | null>(null);
+
+  // The read, inline with a `live` guard rather than a `useCallback` the effect
+  // then calls. Both shapes exist in this tree; only this one satisfies
+  // `react-hooks/set-state-in-effect`, which cannot see through the callback to
+  // tell that every setState there already follows an await. `loading` starts
+  // true, so nothing is set before the first one.
+  useEffect(() => {
+    let live = true;
+    (async () => {
+      try {
+        const res = await peopleApi.dashboard();
+        if (!live) return;
+        setData(res);
+        setError(null);
+      } catch (err) {
+        if (!live) return;
+        // The gateway refuses with the sentence naming the grant. Shown
+        // verbatim — a page that says "forbidden" teaches nobody what to ask
+        // for.
+        setError((err as Error).message);
+        setData(null);
+      }
+      if (live) setLoading(false);
+    })();
+    return () => {
+      live = false;
+    };
+  }, []);
+
+  const rows = useMemo(() => sortRows(data?.rows ?? []), [data]);
+  const totals = useMemo(() => pillTotals(rows), [rows]);
+  const shown = useMemo(
+    () => (filter ? rows.filter((r) => r.pill === filter) : rows),
+    [rows, filter]
+  );
+  const groups = useMemo(() => groupByDepartment(shown), [shown]);
+  const scope = data ? describeScope(data) : null;
+
+  return (
+    <main className="mx-auto flex w-full max-w-6xl flex-col gap-4 p-4">
+      <header className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="text-sm font-medium text-foreground">Workload</h1>
+          <p className="text-[11px] text-muted-foreground">
+            What everybody is holding, what is due, and where the week does not
+            fit. Every figure is about tasks and dates.
+          </p>
+        </div>
+        <div className="flex gap-2">
+          <Link href="/people">
+            <Button variant="secondary" size="sm" icon="Users">
+              Directory
+            </Button>
+          </Link>
+          <Link href="/people/schedule">
+            <Button variant="secondary" size="sm" icon="CalendarDays">
+              Working week
+            </Button>
+          </Link>
+        </div>
+      </header>
+
+      {error && (
+        <p className="text-xs text-destructive" role="alert">
+          {error}
+        </p>
+      )}
+
+      {scope && (
+        <p className="flex items-start gap-1.5 text-[11px] text-muted-foreground">
+          <Icon name="Info" className="mt-0.5 size-3 shrink-0" />
+          {scope}
+        </p>
+      )}
+
+      {data && (
+        <section
+          className="flex flex-wrap gap-1.5"
+          aria-label="Filter by signal"
+        >
+          {(Object.keys(PILL_LABEL) as Pill[]).map((pill) => {
+            const accent = accentForHue(PILL_HUE[pill]);
+            const on = filter === pill;
+            return (
+              <button
+                key={pill}
+                type="button"
+                onClick={() => setFilter(on ? null : pill)}
+                aria-pressed={on}
+                className={`cc-control flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] ${
+                  on
+                    ? "bg-primary/10 text-primary"
+                    : "text-muted-foreground hover:bg-muted/40"
+                }`}
+              >
+                <span className={`size-1.5 rounded-full ${accent.dot}`} />
+                {PILL_LABEL[pill]}
+                <span className="font-medium text-foreground">
+                  {totals[pill]}
+                </span>
+              </button>
+            );
+          })}
+          {filter && (
+            <Button variant="ghost" size="sm" onClick={() => setFilter(null)}>
+              Clear
+            </Button>
+          )}
+        </section>
+      )}
+
+      {loading && (
+        <p className="text-xs text-muted-foreground">Reading the roster…</p>
+      )}
+
+      {data && !loading && shown.length === 0 && (
+        <p className="text-xs text-muted-foreground">
+          {filter
+            ? `Nobody is ${PILL_LABEL[filter].toLowerCase()} right now.`
+            : "No people yet. Add somebody in the directory."}
+        </p>
+      )}
+
+      {groups.map((group) => (
+        <section key={group.department} className="flex flex-col gap-1.5">
+          <h2 className="text-[11px] font-medium text-muted-foreground">
+            {group.department}
+            <span className="ml-1.5 font-normal">{group.rows.length}</span>
+          </h2>
+          {group.rows.map((row) => (
+            <PersonCard
+              key={row.person_id ?? row.name}
+              row={row}
+              open={openId === (row.person_id ?? row.name)}
+              onToggle={() =>
+                setOpenId((id) =>
+                  id === (row.person_id ?? row.name)
+                    ? null
+                    : (row.person_id ?? row.name)
+                )
+              }
+            />
+          ))}
+        </section>
+      ))}
+    </main>
+  );
+}
+
+function PillBadge({ pill }: { pill: Pill }) {
+  const accent = accentForHue(PILL_HUE[pill]);
+  return (
+    <span
+      className={`rounded-full px-1.5 py-0.5 text-[10px] font-medium ${accent.chip}`}
+    >
+      {PILL_LABEL[pill]}
+    </span>
+  );
+}
+
+function PersonCard({
+  row,
+  open,
+  onToggle,
+}: {
+  row: DashboardRow;
+  open: boolean;
+  onToggle: () => void;
+}) {
+  const bar = capacityBar(row);
+  return (
+    <article className="rounded-xl border border-border">
+      <div className="flex flex-wrap items-center gap-3 p-3">
+        <Avatar name={row.name} avatar={row.avatar} className="size-8 text-xs" />
+
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-1.5">
+            {row.person_id ? (
+              <Link
+                href={`/people?person=${row.person_id}`}
+                className="truncate text-xs font-medium text-foreground hover:underline"
+              >
+                {row.name}
+              </Link>
+            ) : (
+              <span className="truncate text-xs font-medium text-foreground">
+                {row.name}
+              </span>
+            )}
+            {row.kind === "agent" && (
+              <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                Agent
+              </span>
+            )}
+            {/* An assignee with no directory row — somebody who left, or an
+                address nobody added. Invisible everywhere else in the product. */}
+            {row.kind === "person" && !row.person_id && (
+              <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                Not in the directory
+              </span>
+            )}
+            {row.pill && <PillBadge pill={row.pill} />}
+            {row.away && (
+              <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                {row.away.kind === "partial" ? "Part-day" : "Away"} until{" "}
+                {row.away.until}
+              </span>
+            )}
+          </div>
+          {/* The pill's own reason, always beside it. A pill without its reason
+              is a verdict, and this surface does not issue verdicts. */}
+          {row.reason && (
+            <p className="mt-0.5 text-[11px] text-muted-foreground">
+              {row.reason}
+            </p>
+          )}
+          {row.note && (
+            <p className="mt-0.5 text-[11px] text-muted-foreground">
+              {row.note}
+            </p>
+          )}
+        </div>
+
+        <dl className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px]">
+          <Figure label="Open" value={String(row.open_tasks)} />
+          <Figure
+            label="Projects"
+            value={
+              row.projects_total > 0
+                ? row.projects
+                    .map((p) => p.name)
+                    .join(", ")
+                    .concat(
+                      row.projects_total > row.projects.length
+                        ? ` +${row.projects_total - row.projects.length}`
+                        : ""
+                    )
+                : "—"
+            }
+          />
+          <Figure
+            label="Next"
+            value={describeDeadline(row.next_due_at)}
+          />
+          <Figure
+            label="Spare"
+            value={row.hours_basis ? hours(row.spare_hours_this_week) : "—"}
+          />
+          <Figure label="Activity" value={describeActivity(row.last_activity_at)} />
+        </dl>
+
+        <Button
+          variant="ghost"
+          size="sm"
+          icon={open ? "ChevronUp" : "ChevronDown"}
+          onClick={onToggle}
+          aria-expanded={open}
+        >
+          {open ? "Hide" : "Tasks"}
+        </Button>
+      </div>
+
+      <div className="px-3 pb-3">
+        <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+          {!bar.unknown && (
+            <div
+              className="h-full rounded-full bg-primary"
+              style={{ width: `${bar.percent}%` }}
+            />
+          )}
+        </div>
+        <p className="mt-1 text-[10px] text-muted-foreground">{bar.label}</p>
+      </div>
+
+      {row.at_risk.length > 0 && (
+        <ul className="border-t border-border px-3 py-2 text-[11px]">
+          {row.at_risk.map((task) => (
+            <li key={task.task_id} className="text-muted-foreground">
+              <span className="text-foreground">{task.title}</span>
+              {task.project_name ? ` · ${task.project_name}` : ""} · due{" "}
+              {task.due_on} · needs {hours(task.needed_hours)}, has{" "}
+              {hours(task.available_hours)}
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {open && <TaskList row={row} />}
+    </article>
+  );
+}
+
+function Figure({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex flex-col">
+      <dt className="text-[10px] text-muted-foreground">{label}</dt>
+      <dd className="max-w-[16rem] truncate text-foreground">{value}</dd>
+    </div>
+  );
+}
+
+/**
+ * The expanded row (§5.7.1) — read through `/people/{id}/work`, which already
+ * scopes a person's open tasks by the VIEWER's grants. A second task read here
+ * would be a second scoping rule to keep in step with the first.
+ *
+ * Sorted by urgency rather than by project: the question being asked is "what
+ * is at risk", not "what belongs where".
+ */
+function TaskList({ row }: { row: DashboardRow }) {
+  const [tasks, setTasks] = useState<WorkRow[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let live = true;
+    // Nothing to fetch, and nothing to set: the render below answers this case
+    // from `row.person_id` directly, before it ever consults `tasks`.
+    if (!row.person_id) return;
+    (async () => {
+      try {
+        const res = await peopleApi.work(row.person_id as string);
+        if (live) setTasks(res.rows);
+      } catch (err) {
+        if (live) setError((err as Error).message);
+      }
+    })();
+    return () => {
+      live = false;
+    };
+  }, [row.person_id]);
+
+  if (error) {
+    return (
+      <p className="border-t border-border px-3 py-2 text-[11px] text-destructive">
+        {error}
+      </p>
+    );
+  }
+  if (!row.person_id) {
+    return (
+      <p className="border-t border-border px-3 py-2 text-[11px] text-muted-foreground">
+        No directory record, so there is no person page to open. Add them in the
+        directory to see their tasks here.
+      </p>
+    );
+  }
+  if (!tasks) {
+    return (
+      <p className="border-t border-border px-3 py-2 text-[11px] text-muted-foreground">
+        Reading their tasks…
+      </p>
+    );
+  }
+  if (tasks.length === 0) {
+    return (
+      <p className="border-t border-border px-3 py-2 text-[11px] text-muted-foreground">
+        Nothing open in the projects you can see.
+      </p>
+    );
+  }
+  return (
+    <table className="w-full border-t border-border text-[11px]">
+      <tbody>
+        {tasks.map((task) => (
+          <tr key={task.id} className="border-b border-border/60 last:border-0">
+            <td className="px-3 py-1.5 text-foreground">{task.title}</td>
+            <td className="px-3 py-1.5 text-muted-foreground">
+              {task.project_name ?? "—"}
+            </td>
+            <td className="px-3 py-1.5 text-muted-foreground">
+              {task.status_name}
+            </td>
+            <td className="px-3 py-1.5 text-right text-muted-foreground">
+              {describeDeadline(task.due_at)}
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}

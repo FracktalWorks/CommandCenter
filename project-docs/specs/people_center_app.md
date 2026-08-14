@@ -1252,10 +1252,14 @@ structured rows and credentials instead of only merging words; and `_match_capab
 `fetch_people_for_clarify()` still pass unchanged — they read the array, and the array is
 still true.
 
-**WS-28j — the people-management dashboard (§5.7).** 🟡 dispatchable after **WS-28p**
-(the hours it reasons over) and best after **WS-28k** (absences make "at risk" honest).
-*Split it: j1 the person rows + classification, j2 the department rollup, j3 the
-rebalancing suggestions. Three narrowed slices, not one big one.*
+**WS-28j — the people-management dashboard (§5.7).** *Split into j1 the person rows +
+classification, j2 the department rollup, j3 the rebalancing suggestions. Three narrowed
+slices, not one big one.*
+
+**WS-28j1 — the person rows and the five pills.** ✅ **BUILT 2026-08-14**
+(`gateway/workload.py`, `routes/people/dashboard.py`, `app/people/dashboard/page.tsx` +
+`lib/dashboard.ts`; **no migration** — it is a read over the Projects tables; 48 hermetic
++ 30 vitest cases and 28 live checks).
 Done when:
 - Each person row carries their **projects**, open tasks with deadlines, committed vs
   contracted hours, unestimated count, next deadline and last activity — from
@@ -1263,15 +1267,66 @@ Done when:
 - The five pills are computed exactly as §5.7.2 defines them, each carries its reason, and
   **the hours-based pills are suppressed where nothing is estimated** rather than declaring
   somebody free on missing data.
-- The department rollup and the org total are projections of the same endpoint, not a
-  second count (§5.9).
-- Rebalancing suggestions rank helpers by skill × spare hours × availability, show all
-  three numbers, call the §5.5 ranker rather than a new one, and end in a **pre-filled
-  assign action a human confirms** — nothing in the diff writes an assignment.
 - Every figure is scoped by the viewer's Projects grants and **says when it is partial**.
 - Agents appear, and carry no pill.
 - **No ranking, score or leaderboard of people is rendered** (D-PC-14). Tasks are ranked by
   risk; people are not ranked at all.
+
+**Five things the build settled:**
+
+- **"At risk" is CUMULATIVE, and overdue work is carried into it** (D-PC-19). Three
+  twelve-hour tasks due Tuesday, with sixteen hours before Tuesday, is a week that does not
+  fit — and per-task arithmetic calls all three fine, because none of them alone exceeds
+  sixteen. Undated tasks are excluded: they carry no deadline to be late for, so counting
+  them would put a pill on somebody whose backlog is merely large.
+- **"Partial" says the viewer is scoped; the hidden delta is never computed** (D-PC-20).
+  Reporting "12 of 20 tasks" means running the query without the scope, which is the query
+  the scope exists to forbid. One integer per person is still a leak, and it is the one
+  somebody would probe with.
+- **One pill by precedence, with every flag travelling beside it** (D-PC-21). "Behind and
+  overloaded" is a different conversation from "behind", and a single word cannot say so.
+- **Four aggregates, not four per person.** Every figure comes from one of four statements
+  keyed by `lower(assignee)`, plus one absence query for the page — the shape `away_today`
+  already took for the directory. Built the obvious way, an eighty-person roster is three
+  hundred round trips.
+- **An assignee with no roster row still appears.** One mechanism covers agents (D-PM-4),
+  people who left, and addresses that were never in the directory. Work assigned to a
+  departed colleague is invisible everywhere else in the product.
+- **The grant closure is applied to the `data:org:read` caller too.** The tempting
+  shortcut is `if vis.unrestricted: return "true"` and letting row-level security carry
+  the tenant — which makes this endpoint's tenant boundary depend on an **enforcement flip
+  that is the owner's act**. `project_clause` already answers the tenant subquery for that
+  caller (what WS-29b changed it for) and it costs one cheap `IN`. Measured on the scratch
+  cluster, which has no FORCE RLS: with the shortcut, a second organization's task lands on
+  the row (3 → 4 open tasks, 86h → 185h). ⚠️ **`/people/{id}/work` still takes the
+  shortcut** — a finding for the board, not a pattern to copy.
+
+**Two fences were corrected rather than worked around** — the same lesson as WS-28k's, and
+both were self-inflicted by writing a fence over raw source:
+
+- The **no-ranking fence** grepped the files for `leaderboard`, `percentile` and their
+  cousins — and fired on the docstrings that name those words in order to explain why the
+  product refuses them. A fence that punishes the explanation makes deleting the reasoning
+  the cheapest way to go green. It now strips comments and docstrings first and matches
+  only what runs, and it **carries its own fence**: four plausible guilty lines that must
+  still trip it.
+- The **route-order fence** read the live `router`, which in a pytest process carries the
+  test session's import order rather than the application's; and its first working version
+  compared bare paths, so `PATCH /people/{person_id}` in front of `GET /people/dashboard`
+  read as a collision it is not. It now probes a fresh process and matches on path **and**
+  method — as a general rule over the package, so the next literal path inherits it.
+
+**WS-28j2 — the department rollup (§5.7.3).** 🟡 dispatchable after j1.
+Done when: per department and then for the org — headcount · Σ contracted vs Σ committed ·
+people in each pill · who is away · **the spread** · people with no open work; sorted by
+the department under most strain; and the whole thing is a **projection of j1's endpoint**,
+not a second count (§5.9).
+
+**WS-28j3 — the rebalancing suggestions (§5.7.4).** 🟡 dispatchable after j2.
+Done when: helpers are ranked by skill × spare hours × availability, all three numbers are
+shown, the **§5.5 capability search is the ranker** rather than a new one, and every
+suggestion ends in a **pre-filled assign action a human confirms** — nothing in the diff
+writes an assignment (D-PC-13).
 
 **WS-28k — availability & absences (P-5, §5.8).** ✅ **BUILT 2026-08-13**
 (migration `173_people_absences.sql`, `routes/people/absences.py`, the availability
@@ -1361,6 +1416,8 @@ diff sends anything**.
 ```bash
 uv run pytest tests/unit/test_people_directory.py tests/unit/test_people_write.py \
               tests/unit/test_people_key_shape.py tests/unit/test_people_profile.py \
+              tests/unit/test_people_schedule.py tests/unit/test_people_avatar.py \
+              tests/unit/test_people_absences.py tests/unit/test_people_dashboard.py \
               tests/unit/test_tasks_people_scoping.py \
               tests/unit/test_org_access_control.py tests/unit/test_org_access_enforcement.py \
               tests/unit/test_tenant_coverage.py
@@ -1410,8 +1467,11 @@ decisions live in `work_plan.md` §3 and are never re-litigated here.
 | **D-PC-14** | The activity surface renders **workload signals, never a ranking of people**. Ranking TASKS by risk is the product | Every figure here is trivially gamed and trivially misread. §3.6 refuses to store a performance rating; this is the same decision on the read side. The distinction is what lets the dashboard be genuinely useful without becoming an evaluation |
 | **D-PC-15** | **The directory is gated; your own row is not.** `/people/me` and a self-targeted write need only a signed-in identity | `feature:people` is `is_default false`, so gating the self surface made it unreachable for exactly the people it is for — the same argument that made `/access` the one ungated pane. Cross-row reads stay gated, and the self predicate is the whole control, so the fence is the negative test |
 | **D-PC-16** | `working_hours` (People) and `gtd_settings.day_start_hour…` (Calendar) are **different questions**, and the direction is People → Calendar, **seeded once, never mirrored** | Contracted hours are a fact about the engagement; the plannable day window is a private preference. A seeded default that later diverges is somebody changing their mind; a mirror that diverges is a bug. Recorded because WS-28g added `working_hours` without noticing migrations 77/97 already existed |
-| **D-PC-17** | The stored avatar is **the server's re-encode** — 256×256 WebP — never the uploaded bytes; the client's cropper is a courtesy and the square is enforced server-side | One decision removes size drift, weight, the crop bypass and the whole polyglot/SVG-script class at once. A validator that inspects and admits the original leaves every one of them open |
+| **D-PC-17** | The stored avatar is **the server's re-encode** — 256×256 JPEG — never the uploaded bytes; the client's cropper is a courtesy and the square is enforced server-side. *(Corrected 2026-08-14: this row said WebP, which the build did not ship. The property that matters is the re-encode, not the container — PyMuPDF is already a gateway dependency and cannot write WebP, and adding Pillow to the deploy path to save ~10 KB per person is the worse trade. The commit and migration 172 recorded it; this row did not, and a decision row that disagrees with the code is worse than none.)* | One decision removes size drift, weight, the crop bypass and the whole polyglot/SVG-script class at once. A validator that inspects and admits the original leaves every one of them open |
 | **D-PC-18** | `contracted_hours_per_week` is **derived** from the effective schedule; the typed `capacity_hours_per_week` stays as an override and is flagged when it disagrees | The same lesson WS-28b applied to load, applied to the denominator it was compared against. R6 forbids rewriting the column the importer writes |
+| **D-PC-19** | *At risk* measures the **cumulative** estimate before a date — earlier deadlines and **overdue work included**, undated tasks excluded | Per-task arithmetic calls three twelve-hour tasks due Tuesday fine when there are sixteen hours before it, because none alone exceeds sixteen. Overdue work still has to be done, and dropping it makes every later deadline look reachable. An undated task carries no deadline to be late for, so counting it would pill somebody whose backlog is merely large |
+| **D-PC-20** | **"Partial" names the viewer's scope; the hidden count is never computed** | Reporting "12 of 20" means running the query without the scope — the query the scope exists to forbid. One integer per person is still a leak and it is the probe somebody would use. §5.7.5 already prefers "partial" to a truncated total presented as whole |
+| **D-PC-21** | **One pill by precedence** (behind → at risk → overloaded → idle → on track), with **every applicable flag travelling beside it** | The order is what has to be acted on today: a missed date is already true, a named deadline is a specific conversation, a full week is a general one. "Behind and overloaded" is a different conversation from "behind" and one word cannot say so — so the row wears the pill and knows the flags |
 
 ---
 

@@ -299,6 +299,16 @@ export const peopleApi = {
     }
   },
 
+  /**
+   * The people-management dashboard rows (§5.7).
+   *
+   * 403 without `admin:members:read` — it is skills, capacity and hours for
+   * everybody at once, so the gate is on the whole surface rather than on a
+   * clause. The caller renders the refusal's own sentence: there is no useful
+   * half of this page to draw for somebody who may not see the HR tier.
+   */
+  dashboard: () => call<import("./dashboard").DashboardResponse>("dashboard"),
+
   facets: () =>
     call<{
       departments: Array<{ department: string; total: number }>;

@@ -12,6 +12,7 @@ Spec: ``project-docs/specs/people_center_app.md`` §3, §6 · ticket WS-28b.
     GET   /people/{id}/absences   → when they are away (HR tier)
     GET   /people/schedule        → the company's working week
     PUT   /people/schedule        → edit it (admin:members:manage)
+    GET   /people/dashboard       → the people-management dashboard rows
     PATCH /people/{id}            → a class-checked write (admin OR the subject)
     POST  /people/{id}/resume     → the CV, same rule
 
@@ -39,10 +40,11 @@ exists and must not be re-implemented here").
 # `/people/{person_id}` — which happily matches the literal path `/people/me`.
 # So:
 #
-#   1. WITHIN this package, `profile.py` and `schedule.py` are imported before
-#      `directory.py` — `/people/schedule` is a literal path and would
-#      otherwise be swallowed by `/people/{person_id}` too
-#      (neither imports the other; their shared read seam lives in `core.py`,
+#   1. WITHIN this package, `profile.py`, `schedule.py` and `dashboard.py` are
+#      imported before `directory.py` — `/people/schedule` and
+#      `/people/dashboard` are literal paths and would otherwise be swallowed
+#      by `/people/{person_id}` too
+#      (none imports another; their shared read seam lives in `core.py`,
 #      which is what makes this order hold at runtime rather than being undone
 #      by a transitive import).
 #   2. ACROSS routers, `main.py` includes `self_router` BEFORE `router`. The
@@ -51,12 +53,17 @@ exists and must not be re-implemented here").
 #      be refused at their own profile by the directory's gate — which is the
 #      exact defect WS-28g-2 exists to fix, reintroduced by an include order.
 #
-# `test_people_profile.py` asserts both rather than trusting this comment,
-# because the second one fails as a 403 that looks like a permissions problem.
+# `test_people_profile.py` asserts the second rather than trusting this
+# comment, because it fails as a 403 that looks like a permissions problem; and
+# `test_people_dashboard.py` asserts the first by building the router in a
+# FRESH process and checking that no literal `/people/<word>` route shares a
+# method with an earlier `/people/{person_id}` one — the general rule, so the
+# next literal path added here inherits the fence.
 from gateway.routes.people import selfservice as _selfservice  # noqa: F401
 from gateway.routes.people import profile as _profile  # noqa: F401
 from gateway.routes.people import schedule as _schedule  # noqa: F401
 from gateway.routes.people import absences as _absences  # noqa: F401
+from gateway.routes.people import dashboard as _dashboard  # noqa: F401
 from gateway.routes.people import directory as _directory  # noqa: F401
 from gateway.routes.people.core import router
 from gateway.routes.people.selfservice import router as self_router

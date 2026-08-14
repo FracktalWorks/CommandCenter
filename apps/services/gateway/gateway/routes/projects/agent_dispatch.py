@@ -53,7 +53,10 @@ from acb_common import get_logger
 # passes the organization the EVENT carried, and there is no path through this
 # module that opens a session without one.
 from gateway.db import tenant_session as _tenant_session
-from gateway.routes.projects.core import is_runnable, record_activity
+from gateway.routes.projects.core import (
+    is_runnable_with_ancestors,
+    record_activity,
+)
 from sqlalchemy import text
 
 _log = get_logger("projects.agent_dispatch")
@@ -172,19 +175,17 @@ async def on_event(source: str, event_type: str, payload: dict[str, Any]) -> Non
         # refusal above is: this is a sink, and the decision belongs in the log
         # where an operator looks, not in the activity feed of a project nobody
         # is reading.
-        project = (await db.execute(
-            text(
-                "SELECT status, archived_at FROM pm_projects "
-                "WHERE id = CAST(:pid AS uuid)"
-            ),
-            {"pid": str(getattr(task, "project_id", "") or "")},
-        )).fetchone()
-        if not is_runnable(project):
+        # Ancestor-aware: an agent must not be put to work inside an active
+        # subproject of a PAUSED department. Reading the immediate project
+        # alone was the slice-1 defect (see `is_runnable_with_ancestors`).
+        if not await is_runnable_with_ancestors(
+            db, getattr(task, "project_id", None)
+        ):
             _log.warning(
                 "projects.agent_dispatch_skipped", task_id=task_id,
                 agents=agents,
-                status=str(getattr(project, "status", "") or "unknown"),
-                reason="the task's project is not running (WS-27bg)",
+                reason="the task's project (or one above it) is not running "
+                       "(WS-27bg)",
             )
             return
 

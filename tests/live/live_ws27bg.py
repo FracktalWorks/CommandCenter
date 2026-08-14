@@ -426,6 +426,124 @@ async def dispatch_checks():
         agent_dispatch._run_and_record = original
 
 
+async def ancestor_checks():
+    """🔴 The slice-1 defect: the three guards disagreed about WHICH project.
+
+    Measured 2026-08-13 on this database: the lifecycle sweep read the ROOT,
+    while recurrence and dispatch read the task's IMMEDIATE project. A task in
+    an ACTIVE subproject beneath a PAUSED root was skipped by the sweep and
+    still spawned successors and still dispatched agents — while the tree drew
+    that subproject as "Paused — inherited from a parent project". The product
+    said paused and the automation ran.
+
+    Both directions are checked, because the two halves failed in opposite
+    ways: one guard read too HIGH (the root), two read too LOW (the immediate
+    project), and the subtree in between was governed by nobody.
+    """
+    # ── Direction 1: paused ROOT, active descendant ─────────────────────────
+    #
+    # ⚠️ The fixtures MUST be moved into GRAND first. On the first version of
+    # this check they sat directly in ROOT, so pausing ROOT paused their own
+    # immediate project and the ancestor walk was never exercised at all — the
+    # checks passed with the recursion deleted. A mutation found it; nothing
+    # else would have. A fence that cannot fail is worse than no fence,
+    # because it reads as coverage.
+    db = await get_db()
+    try:
+        await db.execute(text(
+            "UPDATE pm_tasks SET project_id = CAST(:g AS uuid) "
+            "WHERE id = ANY(CAST(:ids AS uuid[]))"),
+            {"g": GRAND, "ids": [T_REPEAT, T_AGENT]})
+        # The series must be re-armed: `sweep_checks`/`recurrence_checks` left
+        # it stamped, and a stamped task returns None for a reason that has
+        # nothing to do with the project chain.
+        await db.execute(text(
+            "UPDATE pm_tasks SET recurrence_spawned_at = NULL "
+            "WHERE id = CAST(:t AS uuid)"), {"t": T_REPEAT})
+        await db.commit()
+    finally:
+        await db.close()
+
+    await set_status(ROOT, "on_hold")
+    await set_status(CHILD, "active")
+    await set_status(GRAND, "active")
+
+    db = await get_db()
+    try:
+        spawned = await rec_mod.spawn_successor(
+            db, (await db.execute(text(
+                "SELECT * FROM pm_tasks WHERE id = CAST(:t AS uuid)"),
+                {"t": T_REPEAT})).fetchone(), actor_id=OWNER)
+        await db.commit()
+    finally:
+        await db.close()
+    check("a task under a PAUSED ROOT spawns nothing, even in an active child",
+          spawned, None)
+
+    calls: list[str] = []
+
+    async def fake_run(agent, message, task_id, organization_id):
+        calls.append(agent)
+
+    original = agent_dispatch._run_and_record
+    agent_dispatch._run_and_record = fake_run
+    try:
+        await agent_dispatch.on_event("projects", "pm.task.assigned", {
+            "task_id": T_AGENT, "assignees": ["agent:researcher"],
+            "organization_id": ORG,
+        })
+        check("...and dispatches no agent either", calls, [])
+    finally:
+        agent_dispatch._run_and_record = original
+
+    # ── Direction 2: active ROOT, paused SUBPROJECT ─────────────────────────
+    # The sweep iterates roots and acts on `root_project_id`, i.e. the whole
+    # subtree — so before the chain predicate it closed a paused subproject's
+    # stale work anyway.
+    await set_status(ROOT, "active")
+    await set_status(GRAND, "on_hold")
+
+    db = await get_db()
+    try:
+        # ⚠️ Reset it to OPEN first. `sweep_checks` already closed this task,
+        # so without this the assertion below reads a five-minute-old closure
+        # as proof the new predicate failed — which is exactly what it did on
+        # the first run. A fixture reused across checks must be returned to a
+        # known state, or the second check measures the first one's leftovers.
+        await db.execute(text(
+            "UPDATE pm_tasks SET project_id = CAST(:g AS uuid), "
+            "status_id = CAST(:todo AS uuid), completed_at = NULL, "
+            "updated_at = now() - interval '5 years' "
+            "WHERE id = CAST(:t AS uuid)"),
+            {"g": GRAND, "t": T_STALE, "todo": TODO})
+        await db.commit()
+        await run_lifecycle_sweep(db, organization_id=ORG, actor="system:test")
+        await db.commit()
+    finally:
+        await db.close()
+
+    closed = bool(await scalar(
+        "SELECT s.category = 'done' FROM pm_tasks t "
+        "JOIN pm_task_statuses s ON s.id = t.status_id "
+        "WHERE t.id = CAST(:t AS uuid)", t=T_STALE))
+    check("a stale task in a PAUSED SUBPROJECT is not swept by an active root",
+          closed, False)
+
+    # And the control: move it back under the active root and it IS swept.
+    await set_status(GRAND, "active")
+    db = await get_db()
+    try:
+        await run_lifecycle_sweep(db, organization_id=ORG, actor="system:test")
+        await db.commit()
+    finally:
+        await db.close()
+    check("...and the SAME task IS swept once its own project is running",
+          bool(await scalar(
+              "SELECT s.category = 'done' FROM pm_tasks t "
+              "JOIN pm_task_statuses s ON s.id = t.status_id "
+              "WHERE t.id = CAST(:t AS uuid)", t=T_STALE)), True)
+
+
 async def plan_check():
     """R8 — what the planner does with the new EXISTS on the default read."""
     db = await get_db()
@@ -458,6 +576,7 @@ async def main():
     await sweep_checks()
     await recurrence_checks()
     await dispatch_checks()
+    await ancestor_checks()
     await plan_check()
 
     print()

@@ -342,7 +342,35 @@ inheritance derivation, and **making `on_hold` green, which turns the browser sp
 three themes** and is what proves the sweep discriminates rather than merely passes. ⚠️ The unit
 tests assert a hue NAME; only the browser proves two names paint differently — which is exactly
 the failure `statusAccent`'s own header records, a colour stored correctly for months while
-every lane drew the same grey. (2026-08-13) |
+every lane drew the same grey.
+✅ **PR #437 MERGED to `main` 2026-08-13** (`a0af10f`) — slices 1+2, migration **171**, all six
+checks green including **Migration ladder replay**. Owner-directed merge; branch restarted from
+the new head. **NOT deployed** — and the `status='archived'` row count on prod is still owed
+(§6 owner-gated reach).
+🔴 **A DEFECT IN THE MERGED CODE, found by re-reading slice 1 before starting slice 3, fixed
+2026-08-13** (as-built §11.37): **the three guards each consulted a DIFFERENT ROW.** The sweep
+read the **root** then acted on the whole subtree by `root_project_id`; recurrence and dispatch
+read the task's **immediate** project. The subtree in between was governed by nobody, and it
+failed **both** ways — a task in an *active subproject* under a *paused root* still spawned
+successors and still dispatched agents **while the tree drew that subproject as "Paused —
+inherited"** (the product said paused and the automation ran), and a stale task in a *paused
+subproject* under an *active root* was swept and closed anyway. Reproduced on a real database
+before a fix was written. Fixed by `core.is_runnable_with_ancestors` — one `WITH RECURSIVE` walk
+reduced by `bool_and`, the server's copy of the `effectiveState` rule slice 2's UI already used —
+consumed by both guards, with the same predicate as a `NOT EXISTS` on the sweep's candidate query
+so **every task earns its own verdict from its own chain**. Still derives, still writes nothing.
+🔴 **AND THE NEW FENCE WAS DEAD ON ITS FIRST VERSION — only a mutation found it.** All four
+checks passed *with the recursion deleted*, because the fixtures sat directly in the root, so
+pausing the root paused their own immediate project and the walk was never exercised. Moved into
+the grandchild (and the series re-armed), the mutation now turns both checks red. **Second time
+in this workstream a fence looked like coverage and was not** — the Toast slice's keyed-re-fire
+assertion was the first, and both were found by breaking the code on purpose. ⚠️ A smaller test
+defect the same run: a fixture reused across checks was read before being reset, so one
+assertion measured an earlier check's leftovers. ✅ `live_ws27bg.py` now **31 checks green**;
+`tests/unit` **5999 passed**. ⚠️ The hermetic fake was taught the chain query explicitly —
+falling through would have answered `None` → False → *"nothing is ever runnable"*, silently
+disabling recurrence and dispatch across the whole suite while every assertion still read as a
+real refusal. (2026-08-13) |
 | WS-28 | **People Center — directory, org chart, assignment seam** *(minted 2026-08-06)* | ✅ a+b+b-write | `specs/people_center_app.md` · board record 2026-08-09 | a (key shape, mig 148 + quarantine table) · b (directory + person page, mig 149, five-place registration) · b-write (create/edit UI restored; found three ways mig 148 had broken the write routes) — built 2026-08-06/07; **closes WS-13's directory item**. 🟢 c org chart · d capability search (**ranking EVAL-LOCKED**) · e Projects seams; 🔴 f seats/roles writes (§6 WS-24 (d) analogue). ⚠️ `schema.generated.sql` regeneration is **due**: stale since ~migration 113, and 148 reached prod ~2026-08-07 (after the #384 cast fix). (2026-08-07) |
 ---
 

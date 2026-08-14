@@ -281,16 +281,36 @@ async def _sweep_candidates(
     Membership is a POSITIVE ``ANY`` list on purpose — the caller hands in
     exactly the lanes a pass may touch, so triage exemption and the archive
     guard hold by construction rather than by a NOT somebody could drop.
+
+    🔴 **The chain predicate is the other half of the slice-1 defect.** The
+    caller checks the ROOT is runnable and then sweeps by ``root_project_id``,
+    i.e. the WHOLE subtree — so a *paused subproject* beneath an *active* root
+    had its stale work closed anyway. That is the same disagreement the
+    recurrence and dispatch guards had, mirrored: one guard read too high, two
+    read too low, and the subtree in between was governed by nobody. Every task
+    now earns its own verdict from its own project's chain.
     """
     if not status_ids:
         return []
     return (await db.execute(
         text(
-            "SELECT * FROM pm_tasks "
-            "WHERE root_project_id = CAST(:root AS uuid) "
-            "AND archived_at IS NULL "
-            "AND status_id = ANY(CAST(:sids AS uuid[])) "
-            "AND updated_at < :cutoff"
+            "SELECT t.* FROM pm_tasks t "
+            "WHERE t.root_project_id = CAST(:root AS uuid) "
+            "AND t.archived_at IS NULL "
+            "AND t.status_id = ANY(CAST(:sids AS uuid[])) "
+            "AND t.updated_at < :cutoff "
+            # Every ancestor of the task's OWN project must be runnable, not
+            # merely the root the sweep is iterating.
+            "AND NOT EXISTS ("
+            "  WITH RECURSIVE chain AS ("
+            "    SELECT id, parent_project_id, status, archived_at"
+            "      FROM pm_projects WHERE id = t.project_id"
+            "    UNION ALL"
+            "    SELECT p.id, p.parent_project_id, p.status, p.archived_at"
+            "      FROM pm_projects p JOIN chain c ON p.id = c.parent_project_id"
+            "  )"
+            "  SELECT 1 FROM chain"
+            "  WHERE status <> 'active' OR archived_at IS NOT NULL)"
         ),
         {"root": root_id, "sids": status_ids, "cutoff": cutoff},
     )).fetchall()

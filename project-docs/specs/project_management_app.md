@@ -6394,6 +6394,73 @@ the same grey, and no unit test could have seen it.
 
 ---
 
+### 11.37 WS-27bg repair — the three guards disagreed about WHICH project (found and fixed 2026-08-13, after #437 merged)
+
+**A defect in merged code, found by re-reading slice 1 before building slice 3.** No migration.
+
+#### What was wrong
+
+Slice 1 gave the three automation paths one predicate — and then handed each of them a
+*different row*:
+
+| Path | Read | Effect |
+|---|---|---|
+| `run_lifecycle_sweep` | the **ROOT** project, then acted on the whole subtree by `root_project_id` | read too **high** |
+| `spawn_successor` | the task's **immediate** project | read too **low** |
+| `agent_dispatch.on_event` | the task's **immediate** project | read too **low** |
+
+So the subtree in between was governed by nobody, and it failed in **both** directions:
+
+* a task in an **active subproject** beneath a **paused root** was correctly skipped by the
+  sweep and **still spawned successors and still dispatched agents** — while `ProjectTree`
+  drew that very subproject as *"Paused — inherited from a parent project"*. **The product
+  said paused and the automation ran.**
+* a stale task in a **paused subproject** beneath an **active root** was **swept and closed
+  anyway**, because the sweep's candidate query selects by `root_project_id`.
+
+Reproduced on a real database before any fix was written, rather than argued from the code.
+
+#### The fix
+
+`core.is_runnable_with_ancestors(db, project_id)` — one `WITH RECURSIVE` walk up the parent
+chain reduced by `bool_and`, i.e. *"the most restrictive ancestor wins"* as SQL. It is the
+server's copy of `app/projects/lib/tree.ts::effectiveState`, which slice 2's UI already used.
+Consumed by both guards; the sweep's candidate query gains the same predicate as a `NOT EXISTS`
+so **every task earns its own verdict from its own project's chain** rather than inheriting the
+root's. Still derives, still writes nothing (D-PM-26). `is_runnable` survives for the
+single-row case and now says in its docstring that it knows nothing about ancestors.
+
+#### 🔴 The fence was DEAD on its first version, and only a mutation found it
+
+The four new live checks passed **with the recursion deleted**. The fixtures (`T_REPEAT`,
+`T_AGENT`) sat directly in `ROOT`, so pausing `ROOT` paused their own *immediate* project and
+the ancestor walk was never exercised at all. Moving them into the grandchild — and re-arming
+the series, which an earlier check had stamped — makes the mutation turn both checks red.
+
+This is the second time in this workstream that a fence looked like coverage and was not (the
+Toast slice's keyed-re-fire assertion was the first). Both were found the same way: **by
+breaking the code on purpose and checking the test noticed.** A test written after the fix,
+never run against the bug, asserts that today's behaviour is today's behaviour.
+
+⚠️ A second, smaller test defect the same run: direction 2 initially read `T_STALE`'s closure
+from **an earlier check's sweep** rather than its own. A fixture reused across checks must be
+returned to a known state, or the later check measures the earlier one's leftovers.
+
+#### Verification
+
+* `tests/live/live_ws27bg.py` — now **31 checks green** (27 + 4), against real Postgres.
+* Both directions asserted, each with its paired positive control (*"and the SAME task IS
+  swept once its own project is running"*), because a guard that refuses everything passes a
+  one-sided test.
+* **Mutation-measured twice**: deleting the recursion left the first version green (fence dead),
+  and turns the repaired version **red on both checks**.
+* Hermetic: the fake was taught the chain query explicitly rather than left to fall through.
+  ⚠️ Falling through would have answered `None` → `False` → *"nothing is ever runnable"*,
+  silently disabling recurrence and dispatch across the whole suite while every assertion still
+  read as a real refusal. `tests/unit` 5999 passed / 51 skipped.
+
+---
+
 ## Board record (2026-08-09) — moved from work_plan.md §2
 
 > Moved here in the 2026-08-09 consolidation (work_plan.md D18): board rows now

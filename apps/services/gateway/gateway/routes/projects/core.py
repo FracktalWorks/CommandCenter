@@ -127,11 +127,63 @@ def is_runnable(project: Any) -> bool:
     """The Python half of :func:`runnable_project_clause`, same two axes.
 
     Takes a row or a mapping so it serves both a fetched record and a payload.
+
+    ⚠️ **This judges ONE row and knows nothing about its ancestors.** For any
+    decision about whether a task's work is live, use
+    :func:`is_runnable_with_ancestors` — see the defect note there.
     """
     if project is None:
         return False
     get = project.get if isinstance(project, dict) else lambda k: getattr(project, k, None)
     return get("status") in RUNNABLE_STATUSES and get("archived_at") is None
+
+
+#: One project's ancestor chain, itself included, reduced to a single verdict.
+#:
+#: `bool_and` over the chain: the whole chain must be runnable for the answer to
+#: be true, which is "the most restrictive ancestor wins" expressed as SQL.
+#: NULL-safe — `bool_and` of an empty chain is NULL, which :func:`
+#: is_runnable_with_ancestors` reads as False, so a project id that resolves to
+#: nothing fails closed rather than running work in a project nobody can find.
+_ANCESTOR_RUNNABLE_SQL = """
+WITH RECURSIVE chain AS (
+    SELECT id, parent_project_id, status, archived_at
+      FROM pm_projects WHERE id = CAST(:pid AS uuid)
+    UNION ALL
+    SELECT p.id, p.parent_project_id, p.status, p.archived_at
+      FROM pm_projects p JOIN chain c ON p.id = c.parent_project_id
+)
+SELECT bool_and(status = 'active' AND archived_at IS NULL) FROM chain
+"""
+
+
+async def is_runnable_with_ancestors(db: Any, project_id: Any) -> bool:
+    """Is this project runnable, **and every project above it**?
+
+    🔴 **This exists because the WS-27bg slice-1 guards were inconsistent with
+    each other, and with the UI.** Measured 2026-08-13 on a real database: the
+    lifecycle sweep reads the ROOT project's state, while the recurrence spawn
+    and the agent dispatch each read the task's IMMEDIATE project. So a task in
+    an *active* subproject beneath a *paused* root was skipped by the sweep and
+    **still spawned successors and still dispatched agents** — while
+    `ProjectTree` drew that very subproject as "Paused — inherited from a parent
+    project". The product said paused and the automation ran.
+
+    A project's state governs its whole subtree, exactly as a
+    `pm_project_grants` row on a root does (§3.2), and
+    `app/projects/lib/tree.ts::effectiveState` is the same rule on the client.
+    Three places computing "is this work live" from three different rows is the
+    CLAUDE.md §5 defect; this is the one answer.
+
+    ⚠️ Still derives, still writes nothing (D-PM-26). The walk is bounded by the
+    tree's real depth, which the cycle check keeps finite.
+    """
+    if not project_id:
+        return False
+    row = (await db.execute(
+        text(_ANCESTOR_RUNNABLE_SQL), {"pid": str(project_id)},
+    )).scalar()
+    return bool(row)
 
 #: `pm_task_statuses.category` — the machine-readable half of a status. Name and
 #: colour are the owner's; this is what completion, the personal mirror (§6.1)

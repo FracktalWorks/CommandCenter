@@ -1166,6 +1166,35 @@ class FakeProjectsDB:
         return _Result([SimpleNamespace(**r) for r in matched])
 
     def _select(self, statement: str, table: str, args: dict) -> _Result:
+        # `WITH RECURSIVE chain AS (…) SELECT bool_and(…)` — WS-27bg's
+        # ancestor-runnable verdict (`core.is_runnable_with_ancestors`).
+        #
+        # Answered explicitly rather than left to fall through, because the
+        # fall-through answer is `None` → False → "nothing is ever runnable",
+        # which silently disables recurrence and agent dispatch across the whole
+        # suite while every assertion still reads as a real refusal. That is the
+        # hermetic-fake failure mode this file keeps re-learning: a fake that
+        # cannot answer a query must not answer it *plausibly*.
+        if re.match(r"^\s*WITH\s+RECURSIVE\s+chain\b", statement, re.I):
+            pid = str(args.get("pid") or "")
+            verdict: bool | None = None
+            seen: set[str] = set()
+            while pid and pid not in seen:
+                seen.add(pid)
+                row = next(
+                    (r for r in self.rows("pm_projects") if str(r["id"]) == pid),
+                    None,
+                )
+                if row is None:
+                    break
+                ok = (
+                    str(row.get("status") or "active") == "active"
+                    and row.get("archived_at") is None
+                )
+                verdict = ok if verdict is None else (verdict and ok)
+                pid = str(row.get("parent_project_id") or "")
+            return _Result([], scalar=verdict)
+
         # `WITH RECURSIVE sub AS (…) SELECT count(*) FROM sub` — the subtree
         # size, asked by the project delete before it destroys anything. It does
         # not start with SELECT, so the generic count path never sees it and the

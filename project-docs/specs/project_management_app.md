@@ -1420,7 +1420,37 @@ their own calendars, so their answers legitimately differ. `deep_work` likewise,
 `energy`. **`actual_start`/`actual_end` are the genuinely arguable pair** — "how long did this
 take" is a question a PM tool must answer at the task level, while "when did *I* work on it" is
 mine — and they are flagged here as an owner question rather than resolved by an agent reading
-a rule.
+a rule. ✅ **ANSWERED — D-PM-30, shared.**
+
+**D-PM-30 — `actual_start` / `actual_end` are SHARED, on `pm_tasks`.**
+`DECISION (2026-08-13, owner-ruled.)` 🔴 **This overrides §7.5.1's row**, which sent them to
+`pm_task_personal` alongside timeboxing on the argument that two people on one task book their
+own calendars.
+
+The override follows D-PM-29's own rule rather than contradicting it: a field's default home is
+`pm_tasks`, personal placement is the exception and must earn itself, and *"how long did this
+task take"* is a property of the **work**, not of a person. Projects has `estimate_mins` and
+**no actuals at all** today, which means it cannot answer *"did this take as long as we said?"*
+— the question a PM tool exists to answer, and one that a per-member column can never answer at
+the task level.
+
+⚠️ **What this does NOT decide.** Per-person time tracking ("Ana logged 3h, Ben logged 1h") is
+a **timesheet**, a separate concern with its own rows, and nothing here forecloses it. The two
+are not alternatives: a shared actual is when the work started and stopped; a timesheet is who
+spent what on it. Timeboxing (`scheduled_start`/`scheduled_end`/`flexible`) and `deep_work`
+stay personal, unmoved — those genuinely differ between two people on one task.
+
+**D-PM-31 — the task search minimum is 3 characters, not 2.**
+`DECISION (2026-08-13, owner-ruled.)` WS-27be left this open and the open state was the worst
+of the three available: `MIN_QUERY = 2` **accepts** a two-character query that the `pg_trgm`
+index physically **cannot serve** (a trigram is three characters), so the shortest query the
+product allows is the longest one it has to answer with a sequential scan — 127 ms, measured
+at 60k rows.
+
+Raising it to 3 makes every accepted search index-served. The cost is stated rather than
+buried: typing two characters now returns `{"rows": []}` rather than a slow result, on both
+`/projects/search` and the list endpoint's `?q=` (WS-27be moved `MIN_QUERY` to `filters.py` so
+one constant governs both — that is what makes this a one-line change rather than two).
 
 ---
 

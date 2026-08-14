@@ -67,6 +67,14 @@ export async function PUT(req: NextRequest): Promise<NextResponse> {
   // Bound the read before parsing. Without this an unbounded body is buffered
   // into memory only to be rejected downstream, which is a cheap way to make a
   // Next.js server unwell from an authenticated account.
+  //
+  // ⚠️ `content-length` alone does NOT do this, and an earlier version of this
+  // route claimed it did. A chunked-transfer-encoding request carries no
+  // `content-length`, so the header check saw 0, passed, and `req.json()`
+  // buffered the whole thing anyway — the header is a claim by the caller, and
+  // the attack is a caller who declines to make it. The header check is kept as
+  // a cheap early exit for honest clients; the STREAM is what actually bounds
+  // it.
   const declared = Number(req.headers.get("content-length") ?? 0);
   if (declared > MAX_BODY_BYTES) {
     return NextResponse.json(
@@ -75,9 +83,14 @@ export async function PUT(req: NextRequest): Promise<NextResponse> {
     );
   }
 
+  const text = await readBounded(req, MAX_BODY_BYTES);
+  if (text === null) {
+    return NextResponse.json({ detail: "That image is too large." }, { status: 413 });
+  }
+
   let body: unknown;
   try {
-    body = await req.json();
+    body = JSON.parse(text);
   } catch {
     return NextResponse.json({ detail: "Body must be JSON" }, { status: 400 });
   }
@@ -100,6 +113,41 @@ export async function DELETE(): Promise<NextResponse> {
   const me = await requireIdentity();
   if (me instanceof NextResponse) return me;
   return forward("DELETE");
+}
+
+/**
+ * Read the body, giving up the moment it exceeds `limit`.
+ *
+ * Returns `null` when the cap is passed. The point is that it stops PULLING —
+ * the reader is cancelled, so the bytes after the limit are never accepted,
+ * whether or not the caller declared a length. Anything that reads to
+ * completion first and measures afterwards has already paid the cost it was
+ * trying to avoid.
+ */
+async function readBounded(req: NextRequest, limit: number): Promise<string | null> {
+  const reader = req.body?.getReader();
+  if (!reader) return "";
+
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > limit) {
+      await reader.cancel();
+      return null;
+    }
+    chunks.push(value);
+  }
+
+  const joined = new Uint8Array(total);
+  let at = 0;
+  for (const c of chunks) {
+    joined.set(c, at);
+    at += c.byteLength;
+  }
+  return new TextDecoder().decode(joined);
 }
 
 async function forward(method: "PUT" | "DELETE", body?: string): Promise<NextResponse> {

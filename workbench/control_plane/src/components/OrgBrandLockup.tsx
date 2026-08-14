@@ -23,6 +23,8 @@ import {
   type OrgBranding,
   lockup,
   logoBoxWidth,
+  readCachedBranding,
+  writeCachedBranding,
 } from "@/lib/orgBranding";
 
 // ── One fetch per page load, shared by both shells ─────────────────────────
@@ -46,10 +48,18 @@ async function fetchBranding(): Promise<OrgBranding> {
 export function invalidateOrgBranding(next?: OrgBranding): void {
   cached = next ?? null;
   inFlight = null;
+  // Persist immediately: an admin who uploads a logo and reloads must not be
+  // shown the old one back from a stale cache.
+  writeCachedBranding(storage(), cached);
   for (const listener of listeners) listener(cached);
 }
 
 const listeners = new Set<(b: OrgBranding | null) => void>();
+
+/** `undefined` on the server — every storage helper is written to accept that. */
+function storage(): Storage | undefined {
+  return typeof window === "undefined" ? undefined : window.localStorage;
+}
 
 export function useOrgBranding(): OrgBranding | null {
   const [branding, setBranding] = useState<OrgBranding | null>(cached);
@@ -58,20 +68,39 @@ export function useOrgBranding(): OrgBranding | null {
     let alive = true;
     listeners.add(setBranding);
 
+    // Read from storage BEFORE the network (OI-3a). Deliberately inside the
+    // effect rather than in a `useState` initialiser: the server-rendered HTML
+    // carries the fallback, so seeding initial state from storage would be a
+    // hydration mismatch — React would discard the client tree and warn. One
+    // frame after hydration is the correct place for a client-only value.
     if (cached === null) {
-      inFlight ??= fetchBranding().catch(() => ({
-        // A failed read renders our own mark, which is also what an org with no
-        // logo gets. There is nothing here for a member to act on, so it is not
-        // surfaced as an error state.
-        logo: null,
-        updatedBy: "",
-        updatedAt: "",
-      }));
-      void inFlight.then((b) => {
-        cached = b;
-        if (alive) setBranding(b);
-      });
+      const stored = readCachedBranding(storage());
+      if (stored) {
+        cached = stored;
+        setBranding(stored);
+      }
     }
+
+    // Revalidate regardless of a cache hit — stale-while-revalidate. A logo
+    // changed on another device, or removed by another admin, has to land here
+    // without the member clearing anything.
+    inFlight ??= fetchBranding()
+      .then((b) => {
+        writeCachedBranding(storage(), b);
+        return b;
+      })
+      .catch(() => {
+        // A failed read renders whatever we already had, falling back to our own
+        // mark — which is also what an org with no logo gets. There is nothing
+        // here for a member to act on, so it is not surfaced as an error state.
+        // The cache is NOT cleared: an outage must not blank a customer's brand.
+        return cached ?? { logo: null, updatedBy: "", updatedAt: "" };
+      });
+
+    void inFlight.then((b) => {
+      cached = b;
+      if (alive) setBranding(b);
+    });
 
     return () => {
       alive = false;

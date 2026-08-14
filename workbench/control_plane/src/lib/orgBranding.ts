@@ -128,6 +128,66 @@ export function lockup(
  * the edge. Scaling by the true aspect ratio keeps a square mark from being
  * allotted a wordmark's width and floating in the gap.
  */
+// ── The first-paint cache (OI-3a) ──────────────────────────────────────────
+//
+// Without this the shell renders OUR mark on every page load and swaps to the
+// customer's ~900ms later once `/api/settings/branding` answers — measured in
+// Chromium against a mocked API, so a real deployment is worse. That inverts
+// the feature: the customer's own members see our branding first, every time.
+//
+// The theming engine already solved exactly this. `theme/storage.ts` caches the
+// org's theme so a member "gets the company look on first paint instead of a
+// flash of the built-in default". Same problem, same answer: read from storage
+// first, revalidate over the network behind it.
+//
+// ⚠️ **This does NOT make the SERVER-rendered HTML carry the logo** — that is
+// OI-3b and needs the root layout to fetch branding server-side. What it
+// removes is the network round-trip: the swap becomes one frame after
+// hydration rather than a visible flash.
+
+/** Versioned, so a shape change invalidates rather than half-parses. */
+const BRANDING_CACHE_KEY = "cc-org-branding-v1";
+
+/**
+ * ⚠️ **`localStorage` is not a trust boundary.** Anything that has ever run on
+ * this origin can write it, so a value read back out is untrusted input in
+ * exactly the way a network response is — and this one becomes an `<img src>`.
+ * The server sniffs magic bytes to decide the MIME type; the least this side
+ * can do is refuse a URI that is not a `data:image/`.
+ */
+export function isRenderableLogoUri(uri: unknown): uri is string {
+  return typeof uri === "string" && /^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(uri);
+}
+
+export function readCachedBranding(store: Pick<Storage, "getItem"> | undefined): OrgBranding | null {
+  try {
+    const raw = store?.getItem(BRANDING_CACHE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as OrgBranding;
+    // A cached "no logo" is a legitimate, useful answer — it means render our
+    // mark immediately rather than waiting to find out.
+    if (parsed?.logo == null) return { logo: null, updatedBy: "", updatedAt: "" };
+    if (!isRenderableLogoUri(parsed.logo.dataUri)) return null;
+    return parsed;
+  } catch {
+    // Corrupt JSON, blocked storage, private mode: fall back to the network.
+    return null;
+  }
+}
+
+export function writeCachedBranding(
+  store: Pick<Storage, "setItem" | "removeItem"> | undefined,
+  branding: OrgBranding | null,
+): void {
+  try {
+    if (!branding) store?.removeItem(BRANDING_CACHE_KEY);
+    else store?.setItem(BRANDING_CACHE_KEY, JSON.stringify(branding));
+  } catch {
+    // Quota exceeded or storage unavailable — the feature still works, it just
+    // costs a round-trip. Never let a cache write break a render.
+  }
+}
+
 export function logoBoxWidth(logo: OrgLogo, maxHeight: number, maxWidth: number): number {
   if (logo.width <= 0 || logo.height <= 0) return maxWidth;
   const scaled = Math.round((logo.width / logo.height) * maxHeight);

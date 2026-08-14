@@ -16,6 +16,10 @@ import {
   lockup,
   logoBoxWidth,
   precheckLogoFile,
+  isRenderableLogoUri,
+  readCachedBranding,
+  writeCachedBranding,
+  type OrgBranding,
   type OrgLogo,
 } from "./orgBranding";
 
@@ -120,5 +124,87 @@ describe("logoBoxWidth", () => {
 
   it("degrades to the full box on nonsense dimensions rather than dividing by zero", () => {
     expect(logoBoxWidth(logo({ width: 0, height: 0 }), 28, 160)).toBe(160);
+  });
+});
+
+describe("the first-paint cache (OI-3a)", () => {
+  const fakeStore = (initial: Record<string, string> = {}) => {
+    const map = new Map(Object.entries(initial));
+    return {
+      getItem: (k: string) => map.get(k) ?? null,
+      setItem: (k: string, v: string) => void map.set(k, v),
+      removeItem: (k: string) => void map.delete(k),
+      dump: () => Object.fromEntries(map),
+    };
+  };
+  const KEY = "cc-org-branding-v1";
+  const good: OrgBranding = {
+    logo: logo({ dataUri: "data:image/png;base64,AAAA" }),
+    updatedBy: "a@b.c",
+    updatedAt: "2026-08-14",
+  };
+
+  it("round-trips a logo so the next load paints it without a fetch", () => {
+    const s = fakeStore();
+    writeCachedBranding(s, good);
+    expect(readCachedBranding(s)?.logo?.dataUri).toBe("data:image/png;base64,AAAA");
+  });
+
+  it("treats a cached 'no logo' as a real answer, not a miss", () => {
+    // Otherwise every org WITHOUT a logo pays the round-trip forever, which is
+    // the majority of orgs.
+    const s = fakeStore();
+    writeCachedBranding(s, { logo: null, updatedBy: "", updatedAt: "" });
+    expect(readCachedBranding(s)).toEqual({ logo: null, updatedBy: "", updatedAt: "" });
+  });
+
+  it("refuses a stored URI that is not a data:image — localStorage is not a trust boundary", () => {
+    // Anything that ever ran on this origin can write this key, and the value
+    // becomes an <img src>. A cache hit must be validated like a network body.
+    for (const hostile of [
+      "javascript:alert(1)",
+      "data:text/html;base64,PHNjcmlwdD4=",
+      "data:image/svg+xml;base64,PHN2Zz4=",
+      "https://attacker.example/logo.png",
+      "",
+    ]) {
+      const s = fakeStore({ [KEY]: JSON.stringify({ logo: { ...logo(), dataUri: hostile } }) });
+      expect(readCachedBranding(s), hostile).toBeNull();
+    }
+  });
+
+  it("accepts only the three raster types the server can produce", () => {
+    for (const mime of ["png", "jpeg", "webp"]) {
+      expect(isRenderableLogoUri(`data:image/${mime};base64,AAAA`)).toBe(true);
+    }
+    expect(isRenderableLogoUri("data:image/gif;base64,AAAA")).toBe(false);
+  });
+
+  it("survives corrupt JSON rather than throwing during render", () => {
+    expect(readCachedBranding(fakeStore({ [KEY]: "{not json" }))).toBeNull();
+  });
+
+  it("survives storage being unavailable in both directions", () => {
+    // Private mode and blocked storage throw on access. A cache is a nicety;
+    // it must never be able to break the shell.
+    const throwing = {
+      getItem: () => { throw new Error("blocked"); },
+      setItem: () => { throw new Error("blocked"); },
+      removeItem: () => { throw new Error("blocked"); },
+    };
+    expect(readCachedBranding(throwing)).toBeNull();
+    expect(() => writeCachedBranding(throwing, good)).not.toThrow();
+  });
+
+  it("is a no-op on the server, where there is no storage at all", () => {
+    expect(readCachedBranding(undefined)).toBeNull();
+    expect(() => writeCachedBranding(undefined, good)).not.toThrow();
+  });
+
+  it("clears the key when branding is removed", () => {
+    const s = fakeStore();
+    writeCachedBranding(s, good);
+    writeCachedBranding(s, null);
+    expect(readCachedBranding(s)).toBeNull();
   });
 });

@@ -27,7 +27,8 @@ lives.** It is one surface (Settings → Organization), admin-gated, tenant-owne
 |---|---|---|---|
 | **OI-1** | **Logo upload + the shell lockup.** Admin uploads a raster logo; it replaces our mark top-left in every member's shell, above "powered by CommandCenter". | 🟢 AGENT-SAFE | ◐ built, unmerged |
 | **OI-2** | **Tenant-scope the store.** `org_settings` must carry `organization_id`, widen its PK, and bind through the seam before a second customer shares a database. | 🔴 **BLOCKED on MT-1b** | 🔴 |
-| **OI-3** | **First-paint branding.** The customer's mark must render on first paint, not after a fetch. | 🟢 AGENT-SAFE | 🔴 |
+| **OI-3a** | **No network wait.** The customer's mark renders from a local cache, revalidated behind it. | 🟢 AGENT-SAFE | ✅ built 2026-08-14 |
+| **OI-3b** | **True SSR branding.** The server-rendered HTML itself carries the mark. | 🟢 AGENT-SAFE | 🔴 |
 | **OI-4** | **Organization display name** — shown beside/instead of the logo, in the operator console, and on invoices (D38). | 🟢 AGENT-SAFE | 🔴 |
 | **OI-5** | **Logo on billing documents** — the customer's mark on their own tax invoice. | 🔴 depends on D38's invoice renderer | 🔴 |
 
@@ -135,11 +136,29 @@ on the server.
 **two-org live-Postgres test** proves org A cannot read or overwrite org B's
 branding row (R8 — a hermetic fake cannot show this).
 
-**OI-3 — done when:** the server-rendered HTML for a member of an org with a
-logo contains that logo, and does not contain the fallback caption. The pattern
-already exists: `src/lib/theme/storage.ts`'s `STORAGE_KEYS.orgTheme` is cached
-so a member "gets the company look on first paint instead of a flash of the
-built-in default", and `boot.ts` reads it pre-paint.
+**OI-3a — done when:** a returning member's logo paints without waiting for
+`/api/settings/branding`. ✅ **Measured 2026-08-14** in Chromium with the
+endpoint deliberately held at 3 s: the cold visit correctly waits (nothing
+cached yet), the warm reload paints in **582 ms** — dev hydration cost, not the
+network — and the cache survives the outage path rather than blanking the
+customer's brand.
+
+The cached value is read back through `isRenderableLogoUri`, because
+**`localStorage` is not a trust boundary**: anything that has ever run on this
+origin can write that key, and it becomes an `<img src>`. A cache hit is
+validated exactly like a network body.
+
+**OI-3b — done when:** the server-rendered HTML for a member of an org with a
+logo contains that logo and not the fallback caption.
+
+> ⚠️ **OI-3a does NOT achieve this, and the split is the honest record of that.**
+> The original single criterion said "SSR HTML contains the logo". What shipped
+> removes the network round-trip and leaves a one-frame swap at hydration.
+> Closing OI-3b means the root layout fetching branding server-side and
+> threading it into the shell — bigger than it sounds, because both shells are
+> client components. The theme engine's answer (`STORAGE_KEYS.orgTheme` plus a
+> pre-paint `boot.ts`) works for CSS variables and does not transfer to an
+> `<img>` that React owns.
 
 ---
 

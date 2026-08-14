@@ -424,12 +424,16 @@ def test_a_member_with_no_directory_row_gets_404_not_a_silent_no_op(
 
 
 def test_the_self_router_still_addresses_only_me() -> None:
-    """The avatar routes must not have introduced a path parameter on the
-    ungated router — that is the whole of D-PC-15's structural guarantee."""
+    """The avatar routes must not have introduced a way to name a PERSON on the
+    ungated router — that is D-PC-15's structural guarantee, and the avatar
+    endpoints take a file, not an id."""
+    import re
+
     from gateway.routes.people import self_router
 
     for route in self_router.routes:
-        assert "{" not in route.path, route.path
+        for param in re.findall(r"\{([a-z_]+)\}", route.path):
+            assert "person" not in param, route.path
 
 
 def test_both_doors_share_one_normaliser() -> None:

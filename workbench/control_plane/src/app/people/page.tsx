@@ -18,6 +18,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import Button from "@/components/ui/Button";
 
+import { AwayBadge } from "./components/AbsencePanel";
 import { Avatar } from "./components/Avatar";
 import { PersonEditor } from "./components/PersonEditor";
 import { PersonPanel } from "./components/PersonPanel";
@@ -196,7 +197,10 @@ export default function PeoplePage() {
                   >
                     <Avatar name={p.name} avatar={p.avatar} />
                     <span className="min-w-0 flex-1">
-                      <span className="block truncate text-sm text-foreground">{p.name}</span>
+                      <span className="flex items-center gap-1.5 truncate text-sm text-foreground">
+                        {p.name}
+                        <AwayBadge away={p.away} />
+                      </span>
                       <span className="block truncate text-xs text-muted-foreground">
                         {[p.title || p.role, p.team].filter(Boolean).join(" · ") || "—"}
                       </span>

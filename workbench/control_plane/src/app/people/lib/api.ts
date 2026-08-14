@@ -42,8 +42,26 @@ export interface PersonProfileFields {
   birthday?: string | null;
 }
 
+export interface Absence {
+  id: string;
+  starts_on: string;
+  ends_on: string;
+  /** `away` | `holiday` | `partial` — three words, and no fourth (D-PC-7). */
+  kind: string;
+  hours_per_day?: number | null;
+  note?: string | null;
+  created_by?: string;
+}
+
 export interface PersonRow extends PersonProfileFields {
   id: string;
+  /**
+   * WS-28k, directory tier. Present on the LIST too — resolved in one query
+   * for the page, because "do not chase them, they are away" is the most
+   * useful thing on a directory row and an N+1 would make it the most
+   * expensive.
+   */
+  away?: { kind: string; until: string } | null;
   name: string;
   email?: string | null;
   role?: string | null;
@@ -72,6 +90,14 @@ export interface PersonDetail extends PersonRow {
   can_manage: boolean;
   /** True when this row is the caller's own (D-PC-1). */
   is_self?: boolean;
+  /**
+   * WS-28k. `away` is DIRECTORY tier — "do not expect a reply this week" is the
+   * one thing a colleague most needs before chasing somebody — while the SPANS
+   * and the hours are HR tier, because when and why somebody is off is capacity
+   * information.
+   */
+  absences?: Absence[];
+  hours_available_this_week?: number | null;
   /**
    * The effective work schedule (WS-28p) — org policy with this person's
    * override applied, `source` naming which layer decided each field. Computed
@@ -235,6 +261,42 @@ export const peopleApi = {
       );
     }
     return parsed as PersonDetail;
+  },
+
+  /**
+   * Record when you are away. Self-writable — requiring an admin to type it is
+   * how the data ends up missing, and then every capacity figure that reads it
+   * is quietly wrong (§5.8).
+   */
+  addAbsence: async (target: string, body: Omit<Absence, "id">) => {
+    const res = await fetch(`/api/people/${target}/absences`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const text = await res.text();
+    const parsed = text ? JSON.parse(text) : null;
+    if (!res.ok) {
+      throw new PeopleApiError(
+        parsed?.detail ?? `Request failed (${res.status})`,
+        res.status
+      );
+    }
+    return parsed as Absence;
+  },
+
+  removeAbsence: async (target: string, absenceId: string) => {
+    const res = await fetch(`/api/people/${target}/absences/${absenceId}`, {
+      method: "DELETE",
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      const parsed = text ? JSON.parse(text) : null;
+      throw new PeopleApiError(
+        parsed?.detail ?? `Request failed (${res.status})`,
+        res.status
+      );
+    }
   },
 
   facets: () =>

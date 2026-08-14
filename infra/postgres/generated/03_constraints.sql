@@ -6,7 +6,7 @@
 --
 -- SET NOT NULL + FK + index. ⚠️ THIS IS THE ACCESS EXCLUSIVE PHASE — it scans each table. Apply in a window, table by table if necessary, and never behind a long-running transaction (see the generator docstring: that is the exact shape of the 14h44m outage).
 --
--- Tables in this phase: 137
+-- Tables in this phase: 138
 --
 -- ⚠️ NOT COVERED BY THIS FILE — `organization_id` already means something
 -- else on these tables, so scoping them by that name would corrupt a
@@ -802,6 +802,18 @@ ALTER TABLE gtd_people ALTER COLUMN organization_id SET NOT NULL;
 ALTER TABLE gtd_people ADD CONSTRAINT gtd_people_org_fk
     FOREIGN KEY (organization_id) REFERENCES organization(id) ON DELETE CASCADE;
 CREATE INDEX IF NOT EXISTS gtd_people_org_idx ON gtd_people (organization_id);
+
+-- gtd_person_absences
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM gtd_person_absences WHERE organization_id IS NULL) THEN
+        RAISE EXCEPTION 'MT-1b: gtd_person_absences still has unowned rows — run phase 2 (backfill) to completion first';
+    END IF;
+END $$;
+ALTER TABLE gtd_person_absences ALTER COLUMN organization_id SET NOT NULL;
+ALTER TABLE gtd_person_absences ADD CONSTRAINT gtd_person_absences_org_fk
+    FOREIGN KEY (organization_id) REFERENCES organization(id) ON DELETE CASCADE;
+CREATE INDEX IF NOT EXISTS gtd_person_absences_org_idx ON gtd_person_absences (organization_id);
 
 -- gtd_person_resumes
 DO $$

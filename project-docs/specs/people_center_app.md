@@ -1273,11 +1273,51 @@ Done when:
 - **No ranking, score or leaderboard of people is rendered** (D-PC-14). Tasks are ranked by
   risk; people are not ranked at all.
 
-**WS-28k — availability & absences (P-5, §5.8).** 🟢 AGENT-SAFE.
+**WS-28k — availability & absences (P-5, §5.8).** ✅ **BUILT 2026-08-13**
+(migration `173_people_absences.sql`, `routes/people/absences.py`, the availability
+arithmetic in `gateway/work_schedule.py`, `components/AbsencePanel.tsx`; 41 hermetic
++ 11 vitest cases and 15 live checks).
 Done when: absences are self- and admin-writable; the capacity bar, the picker and the
 capability search all read them through one function; and there is **no approval step,
 balance or accrual anywhere in the diff** — if the ticket grows one, it has become
 `leave management` and needs §10's decision first.
+
+**Four things the build settled:**
+
+- **`working_hours_between(schedule, from, to, absences)` is the function "at risk" will
+  call.** The dashboard's question is not "is the deadline far away" but "do they have the
+  hours before it", and a week of holiday is exactly the difference. Fractional, because a
+  `partial` reduces a day rather than removing it.
+- **The scope has a structural fence**, not a promise: a test greps the migration for
+  `approv`, `balance`, `accrual`, `entitlement`, `status`, `requested`, `rejected`. This
+  becomes leave management one reasonable-looking column at a time — `approved_by` first,
+  because somebody will want to know who said yes.
+- **Absences are self-writable.** Requiring an admin to type them is how the data ends up
+  missing, and then every capacity figure that reads it is quietly wrong. The delete is
+  scoped `AND person_id = …`, so an id belonging to a colleague is a 404 rather than a
+  deletion — that clause is the control, not belt-and-braces.
+- **Two read tiers on one feature.** The bare *"away until the 20th"* is **directory**
+  tier — it is the thing a colleague most needs before chasing somebody, and it is
+  resolved for the whole directory page in **one query**, not one per row. The spans, the
+  notes and the hours-left figure are **HR** tier, because when and why somebody is off is
+  capacity information.
+
+⚠️ **The tenancy ratchet caught this table and was right to.** A new table declares
+`organization_id REFERENCES organization` on day one (R5a) — backfilling one onto live
+rows costs orders of magnitude more. It defaults from the session GUC
+`acb_common.db.tenant_session` binds, so no call site passes it and an insert outside a
+bound session fails the NOT NULL: fail closed, verified against a real database. One
+non-obvious constraint: **`REFERENCES` must come before `DEFAULT`** in the column
+definition, because `test_tenancy_boundary` matches the two with no comma between them and
+every form of `current_setting('app.tenant_id', true)` contains one — written the other way
+round, a table that *is* scoped reads as unscoped to the ratchet.
+
+⚠️ **D-PC-15's fence was refined, not worked around.** It forbade *any* path parameter on
+the ungated router — a good enough proxy until a route needed to address a child row.
+`/me/absences/{absence_id}` names a **span**, not a person, so the fence now asserts the
+invariant itself (no path parameter names a person) plus the stronger half it was standing
+in for: **every ungated endpoint resolves the person through the self predicate**. Same
+correction the Center-fork check needed.
 
 **WS-28l — People dashboard (§5.9).** 🟢 AGENT-SAFE, after WS-28j and WS-28k.
 Done when: every figure is a projection of an existing endpoint (no second arithmetic), and

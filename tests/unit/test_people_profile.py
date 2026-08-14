@@ -522,11 +522,20 @@ def test_the_directory_router_still_carries_its_gate() -> None:
 
 
 def test_no_self_route_can_address_another_person() -> None:
-    """The structural guarantee (§4.5): every ungated path is the literal
-    `/me`. There is no id to supply, so the property cannot be lost by a later
-    refactor dropping a validation — there is no validation to drop."""
+    """The structural guarantee (§4.5): **the person never comes from the
+    request**. No ungated path names a person, and every ungated endpoint
+    resolves the row through the self predicate — so there is no id to validate
+    and nothing a later refactor can forget.
+
+    ⚠️ This asserted "no path parameter at all" until WS-28k, which needed
+    `/me/absences/{absence_id}` — a SPAN, not a person. The invariant is what
+    is asserted now; `test_org_access_enforcement.UNGATED_ROUTERS` owns the
+    stronger half and applies it to every ungated router, not just this one.
+    """
     for route in people_self_router.routes:
-        assert "{" not in route.path, route.path
+        for param in re.findall(r"\{([a-z_]+)\}", route.path):
+            assert "person" not in param, route.path
+        assert "/me" in route.path, route.path
 
 
 def test_a_member_with_no_grants_may_edit_their_own_row(monkeypatch) -> None:

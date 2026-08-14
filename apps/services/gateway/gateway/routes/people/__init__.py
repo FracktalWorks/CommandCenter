@@ -9,6 +9,7 @@ Spec: ``project-docs/specs/people_center_app.md`` §3, §6 · ticket WS-28b.
     GET   /people/{id}            → one person, with the login badge
     GET   /people/{id}/work       → their open tasks, scoped by the VIEWER
     GET   /people/{id}/editable   → what THIS caller may write on that row
+    GET   /people/{id}/absences   → when they are away (HR tier)
     GET   /people/schedule        → the company's working week
     PUT   /people/schedule        → edit it (admin:members:manage)
     PATCH /people/{id}            → a class-checked write (admin OR the subject)
@@ -55,6 +56,7 @@ exists and must not be re-implemented here").
 from gateway.routes.people import selfservice as _selfservice  # noqa: F401
 from gateway.routes.people import profile as _profile  # noqa: F401
 from gateway.routes.people import schedule as _schedule  # noqa: F401
+from gateway.routes.people import absences as _absences  # noqa: F401
 from gateway.routes.people import directory as _directory  # noqa: F401
 from gateway.routes.people.core import router
 from gateway.routes.people.selfservice import router as self_router

@@ -6,6 +6,11 @@ Spec: ``project-docs/specs/people_center_app.md`` §3.4a · **D-PC-16**, **D-PC-
     layer 2  person override gtd_people.working_hours       — their exceptions
     layer 3  effective       computed here, stored nowhere
 
+WS-28k adds the fourth thing on top of the three layers: **absences**, which do
+not change the schedule but do subtract from it. `working_days_between` and
+`working_hours_between` are what "at risk" is built on — the question is not
+"is the deadline far away" but "do they have the hours before it".
+
 **A leaf module, deliberately outside both route packages.** Two consumers need
 it and they sit on opposite sides of an import direction that must not close:
 ``routes/people/*`` (the surfaces that read and edit it) and
@@ -318,6 +323,99 @@ def capacity_disagreement(
     derived = contracted_hours_per_week(schedule)
     delta = round(float(typed) - derived, 2)
     return delta if abs(delta) > tolerance else None
+
+
+def working_days_between(schedule: dict[str, Any], start: Any, end: Any,
+                         absences: list[dict[str, Any]] | None = None) -> float:
+    """How many WORKING days this person has between two dates, inclusive.
+
+    Fractional, because a ``partial`` absence reduces a day rather than removing
+    it — a half day is half a day, and rounding it either way makes a week's
+    arithmetic wrong by more than the half day.
+
+    Non-working days, holidays and `away` spans count as zero. **This is the
+    function "at risk" is built on** (§5.7.2): the question is not "is the
+    deadline far away" but "do they have the hours before it", and a week of
+    holiday is exactly the difference between those two answers.
+    """
+    from datetime import date, timedelta
+
+    if not isinstance(start, date) or not isinstance(end, date) or end < start:
+        return 0.0
+    days = set(schedule.get("days") or [])
+    fraction = schedule.get("fraction")
+    fraction = 1.0 if fraction is None else float(fraction)
+    spans = _absence_spans(absences)
+
+    total = 0.0
+    day = start
+    while day <= end:
+        if day.isoweekday() in days:
+            total += fraction * _day_fraction(day, spans)
+        day += timedelta(days=1)
+    return round(total, 4)
+
+
+def working_hours_between(schedule: dict[str, Any], start: Any, end: Any,
+                          absences: list[dict[str, Any]] | None = None) -> float:
+    """The same span in hours — days x hours/day, absences applied."""
+    hours = float(schedule.get("hours_per_day") or 0)
+    return round(working_days_between(schedule, start, end, absences) * hours, 2)
+
+
+def absent_on(day: Any, absences: list[dict[str, Any]] | None) -> dict[str, Any] | None:
+    """The absence covering ``day``, or None.
+
+    Full absences win over partial ones: somebody who is both on holiday and
+    "half a day" is on holiday, and answering "partial" would put them on a
+    picker as available.
+    """
+    covering = [s for s in _absence_spans(absences) if s["starts_on"] <= day <= s["ends_on"]]
+    if not covering:
+        return None
+    full = [s for s in covering if s["kind"] != "partial"]
+    return (full or covering)[0]
+
+
+def _day_fraction(day: Any, spans: list[dict[str, Any]]) -> float:
+    """How much of this day is workable: 0 when away, a fraction when partial."""
+    covering = [s for s in spans if s["starts_on"] <= day <= s["ends_on"]]
+    if not covering:
+        return 1.0
+    if any(s["kind"] != "partial" for s in covering):
+        return 0.0
+    # Overlapping partials: the SMALLEST wins. Two claims on the same day are
+    # two reasons to be less available, not an average of them.
+    return min(float(s.get("fraction") or 0.5) for s in covering)
+
+
+def _absence_spans(absences: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    """Rows or dicts → the shape the arithmetic reads, dropping what it cannot use.
+
+    Tolerant on the way in for the same reason :func:`normalise_policy` is: an
+    unparseable row should cost its own span, never the whole calculation.
+    """
+    from datetime import date
+
+    spans: list[dict[str, Any]] = []
+    for raw in absences or []:
+        get = raw.get if isinstance(raw, dict) else lambda k, r=raw: getattr(r, k, None)
+        starts, ends = get("starts_on"), get("ends_on")
+        if not isinstance(starts, date) or not isinstance(ends, date):
+            continue
+        if ends < starts:
+            continue
+        hours = get("hours_per_day")
+        kind = str(get("kind") or "away")
+        spans.append({
+            "starts_on": starts, "ends_on": ends, "kind": kind,
+            # A `partial` with no figure is half a day: the commonest case by
+            # far, and better than treating it as a full absence (which would
+            # make somebody who took an afternoon off look unavailable all week)
+            # or as no absence at all (which would make the note pointless).
+            "fraction": (float(hours) if isinstance(hours, int | float) else None),
+        })
+    return spans
 
 
 def calendar_seed(schedule: dict[str, Any]) -> dict[str, int]:

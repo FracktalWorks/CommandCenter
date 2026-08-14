@@ -26,6 +26,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Icon from "@/components/Icon";
 import Button from "@/components/ui/Button";
 
+import { AbsencePanel, AwayBadge } from "../components/AbsencePanel";
 import { AvatarPicker } from "../components/AvatarPicker";
 import { ProfilePanels } from "../components/ProfilePanels";
 import { type PersonDetail, peopleApi } from "../lib/api";
@@ -163,6 +164,7 @@ export default function MyProfilePage() {
               <span className="text-sm text-foreground">
                 {state.person.preferred_name || state.person.name}
               </span>
+              <AwayBadge away={state.person.away} />
               {state.person.pronouns && (
                 <span className="text-[11px] text-muted-foreground">
                   {state.person.pronouns}
@@ -210,6 +212,16 @@ export default function MyProfilePage() {
               )}
             </div>
           </section>
+
+          <AbsencePanel
+            target="me"
+            absences={state.person.absences ?? []}
+            hoursThisWeek={state.person.hours_available_this_week}
+            canEdit={(state.person.editable_fields ?? []).includes(
+              "working_hours"
+            )}
+            onChanged={() => void load()}
+          />
 
           <ProfilePanels
             person={state.person}

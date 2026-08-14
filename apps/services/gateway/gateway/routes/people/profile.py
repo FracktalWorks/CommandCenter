@@ -2,9 +2,14 @@
 
 Spec: ``project-docs/specs/people_center_app.md`` §4, §5.3 · D-PC-1…D-PC-5.
 
-    GET   /people/me                → the caller's own row, or WHY there isn't one
     PATCH /people/{id}              → a class-checked write (admin OR the subject)
     POST  /people/{id}/resume       → the same rule, for the CV
+    GET   /people/{id}/editable     → what THIS caller may write on that row
+
+⚠️ **The `/people/me` routes are NOT here** — they live in ``selfservice.py``
+on a router with no feature gate (WS-28g-2 / D-PC-15). These three are the
+id-bearing doors: they address *any* person, so they stay behind
+``feature:people`` and behind the field-class check both.
 
 **Why a second write door exists, when WS-28b deliberately kept this app
 read-only.** The original decision was right for what it decided: the writes
@@ -28,73 +33,20 @@ in that if the writers are countable).
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any
 
 from acb_auth import UserContext, get_current_user
 from fastapi import Depends, HTTPException, UploadFile
 from gateway.routes.people.core import (
     _tenant_session,
     can_manage_people,
-    find_self_row,
     is_self,
     person_payload,
     router,
 )
 from gateway.routes.people.fields import authorize_write, editable_fields
 from gateway.routes.tasks import people as tasks_people
-from pydantic import BaseModel
 from sqlalchemy import text
-
-
-class MeResponse(BaseModel):
-    """The three honest answers to "which row is mine" (§5.3).
-
-    Collapsing them would be the defect. A 404 cannot distinguish *"the
-    directory has no row for your address"* — an admin has to add one — from
-    *"you are signed in without an address"*, which is an identity problem and
-    is not fixed anywhere in this app. And returning an empty person object for
-    either would render a form that silently saves nothing.
-    """
-    state: Literal["resolved", "no_directory_row", "no_identity"]
-    #: The address the lookup used, echoed so the person can see WHICH address
-    #: failed to match — usually the whole explanation (work vs personal).
-    email: str | None = None
-    person: dict[str, Any] | None = None
-    #: What a caller can do about it, in the product's own words. Carried by the
-    #: response rather than written into the page, because the page cannot know
-    #: whether an admin exists to ask.
-    detail: str | None = None
-
-
-@router.get("/me", response_model=MeResponse)
-async def get_me(user: UserContext = Depends(get_current_user)) -> MeResponse:
-    """The caller's own person record (§5.3).
-
-    ⚠️ **Route order matters and is not obvious.** ``/people/{person_id}`` is
-    registered by ``directory.py`` and would happily match the literal string
-    ``me`` and then fail casting it to a UUID. FastAPI matches in registration
-    order, so ``routes/people/__init__`` imports this module FIRST — and
-    ``test_people_profile.py`` asserts that order rather than trusting it,
-    because the failure mode is a 500 on a route that looks registered.
-    """
-    email = (user.email or "").strip() or None
-    if not email:
-        return MeResponse(
-            state="no_identity", email=None,
-            detail="You are signed in without an email address, so no directory "
-                   "row can be matched to you.",
-        )
-    async with _tenant_session() as db:
-        row = await find_self_row(db, user)
-        if row is None:
-            return MeResponse(
-                state="no_directory_row", email=email,
-                detail=f"No person in the directory carries {email}. An "
-                       "administrator can add you, or correct the address on "
-                       "your existing row.",
-            )
-        return MeResponse(state="resolved", email=email,
-                          person=await person_payload(db, row, user))
 
 
 async def _authorized_row(db: Any, person_id: str, user: Any,

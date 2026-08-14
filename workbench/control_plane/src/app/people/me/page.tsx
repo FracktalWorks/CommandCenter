@@ -67,7 +67,8 @@ export default function MyProfilePage() {
     setUploading(true);
     setUploadNote(null);
     try {
-      const res = await peopleApi.uploadResume(state.person.id, file);
+      // Always the self door here — this page only ever shows your own row.
+      const res = await peopleApi.uploadResume("me", file);
       setState({ kind: "resolved", person: res.person });
       setUploadNote(
         res.added_skills.length

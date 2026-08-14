@@ -232,7 +232,14 @@ export function ProfilePanels({
     setError(null);
     setNotice(null);
     try {
-      const saved = await peopleApi.update(person.id, pending);
+      // Your own row goes through the UNGATED `/people/me` door; somebody
+      // else's through the id-bearing one behind `feature:people`. A colleague
+      // holding no grant can save their own profile only via the first
+      // (D-PC-15), so this is not a cosmetic choice of URL.
+      const saved = await peopleApi.update(
+        person.is_self ? "me" : person.id,
+        pending,
+      );
       setDraft({});
       setNotice("Saved.");
       onSaved?.(saved);

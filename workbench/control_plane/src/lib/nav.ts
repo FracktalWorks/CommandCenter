@@ -102,6 +102,18 @@ export const NAV_SECTIONS: NavSection[] = [
       // this" would stay an unanswerable sentence. In Personal Center rather
       // than Admin because it is a fact about YOU, and because a plain member
       // must be able to reach it without an Admin heading appearing for them.
+      // Deliberately UNGATED, for the same reason "Your access" below is
+      // (WS-28g-2 / people_center_app.md D-PC-15). `feature:people` gates the
+      // DIRECTORY — other people — and is `is_default false`; your own record
+      // is not the directory. Gating this hid the one surface whose entire
+      // purpose is "every person maintains their own profile" from everybody
+      // who had not been granted the org roster.
+      {
+        href: "/people/me",
+        label: "My profile",
+        icon: "User",
+        note: "Your skills, CV, working hours — what the assignment AI reads",
+      },
       {
         href: "/access",
         label: "Your access",

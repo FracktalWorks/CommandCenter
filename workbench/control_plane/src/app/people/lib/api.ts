@@ -167,9 +167,15 @@ export const peopleApi = {
    * field outside their write classes and applies NOTHING (D-PC-5) — so a
    * partial save is impossible, and the message is shown verbatim because it is
    * the only form of it anyone can act on.
+   *
+   * `target` is the literal string `"me"` for your own row, or a person id for
+   * somebody else's. They are DIFFERENT endpoints, not a convenience alias:
+   * `/people/me` is served by a router with no feature gate, because the
+   * directory is gated and your own row is not (D-PC-15). Callers pick by
+   * `is_self`, so a colleague with no `feature:people` still saves.
    */
-  update: async (id: string, body: Record<string, unknown>) => {
-    const res = await fetch(`/api/people/${id}`, {
+  update: async (target: string, body: Record<string, unknown>) => {
+    const res = await fetch(`/api/people/${target}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -190,10 +196,10 @@ export const peopleApi = {
    * multipart boundary matches the body it generated, and the proxy forwards
    * both unchanged.
    */
-  uploadResume: async (id: string, file: File) => {
+  uploadResume: async (target: string, file: File) => {
     const form = new FormData();
     form.append("file", file);
-    const res = await fetch(`/api/people/${id}/resume`, {
+    const res = await fetch(`/api/people/${target}/resume`, {
       method: "POST",
       body: form,
     });

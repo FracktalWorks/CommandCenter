@@ -50,6 +50,8 @@ from gateway.routes.people import core as people_core
 from gateway.routes.people import fields as people_fields
 from gateway.routes.people import profile as people_profile
 from gateway.routes.people import router as people_router
+from gateway.routes.people import self_router as people_self_router
+from gateway.routes.people import selfservice as people_self
 from gateway.routes.tasks import people as tasks_people
 
 REPO = Path(__file__).resolve().parents[2]
@@ -150,7 +152,8 @@ def bind(monkeypatch, database: FakeDB, *modules) -> None:
         yield database
         await database.commit()
 
-    for module in modules or (people_core, people_profile, tasks_people):
+    for module in modules or (people_core, people_profile, people_self,
+                              tasks_people):
         monkeypatch.setattr(module, "_tenant_session", _tenant_session,
                             raising=False)
 
@@ -449,7 +452,7 @@ def test_the_directory_tells_the_caller_which_row_is_theirs(monkeypatch) -> None
 def test_me_resolves_the_callers_own_row(monkeypatch) -> None:
     db = FakeDB()
     bind(monkeypatch, db)
-    res = run(people_profile.get_me(user=SUBJECT))
+    res = run(people_self.get_me(user=SUBJECT))
     assert res.state == "resolved"
     assert res.person["is_self"] is True
     assert res.person["phone"] == "+91 99999 99999"
@@ -460,7 +463,7 @@ def test_me_says_when_no_row_carries_the_address(monkeypatch) -> None:
     the worst of the three answers."""
     db = FakeDB(row=None)
     bind(monkeypatch, db)
-    res = run(people_profile.get_me(user=STRANGER))
+    res = run(people_self.get_me(user=STRANGER))
     assert res.state == "no_directory_row"
     assert res.person is None
     assert "someone@fracktal.in" in res.detail
@@ -471,17 +474,118 @@ def test_me_distinguishes_having_no_address_at_all(monkeypatch) -> None:
     it, so it must not be reported as "the directory has no row for you"."""
     db = FakeDB()
     bind(monkeypatch, db)
-    res = run(people_profile.get_me(user=_user(None, "feature:people")))
+    res = run(people_self.get_me(user=_user(None, "feature:people")))
     assert res.state == "no_identity"
     assert not db.statements, "no lookup should run without an address"
 
 
+# ══════════════════════════════════════════════════════════════════════════
+# 5b. WS-28g-2 — your own row is not behind the directory's gate (D-PC-15)
+# ══════════════════════════════════════════════════════════════════════════
+
+MEMBER = _user("colleague@fracktal.in")   # signed in, holds NOTHING
+
+
+def test_the_self_router_carries_no_feature_gate() -> None:
+    """The omission IS the ticket. `feature:people` is `is_default false`, so
+    gating the self surface on it made an ordinary colleague unable to open
+    their own profile — the one thing that surface exists for."""
+    deps = getattr(people_self_router, "dependencies", [])
+    names = [getattr(getattr(d, "dependency", None), "__qualname__", "")
+             for d in deps]
+    assert not any(n.startswith("require_feature_router") for n in names)
+
+
+def test_the_directory_router_still_carries_its_gate() -> None:
+    """The other half of D-PC-15, and the one that would be a leak: opening the
+    self surface must not have opened the roster."""
+    deps = getattr(people_router, "dependencies", [])
+    names = [getattr(getattr(d, "dependency", None), "__qualname__", "")
+             for d in deps]
+    assert any(n.startswith("require_feature_router") for n in names)
+
+
+def test_no_self_route_can_address_another_person() -> None:
+    """The structural guarantee (§4.5): every ungated path is the literal
+    `/me`. There is no id to supply, so the property cannot be lost by a later
+    refactor dropping a validation — there is no validation to drop."""
+    for route in people_self_router.routes:
+        assert "{" not in route.path, route.path
+
+
+def test_a_member_with_no_grants_may_edit_their_own_row(monkeypatch) -> None:
+    db = FakeDB()
+    bind(monkeypatch, db)
+    calls: list[Any] = []
+
+    async def _update(person_id, payload, actor):
+        calls.append(person_id)
+        return tasks_people._row_to_person(PERSON, include_hr=True,
+                                           include_private=True)
+
+    monkeypatch.setattr(tasks_people, "update_person", _update)
+    out = run(people_self.update_me(
+        tasks_people.PersonWrite(timezone="Europe/Berlin"), user=SUBJECT))
+    assert calls == [PERSON.id]
+    assert out["is_self"] is True
+
+
+def test_the_self_door_still_refuses_an_admin_field(monkeypatch) -> None:
+    """Ungated is not unchecked: the field classes apply exactly as before."""
+    db = FakeDB()
+    bind(monkeypatch, db)
+    with pytest.raises(HTTPException) as exc:
+        run(people_self.update_me(
+            tasks_people.PersonWrite(status="alumni"), user=SUBJECT))
+    assert exc.value.status_code == 403
+    assert "status" in exc.value.detail
+
+
+def test_an_admin_editing_their_OWN_row_keeps_the_admin_class(monkeypatch) -> None:
+    """Otherwise the ungated door would be the NARROWER one for exactly the
+    people who hold the grant, and an admin would have to find another URL to
+    fix their own department."""
+    db = FakeDB(person_row(email="admin@fracktal.in"))
+    bind(monkeypatch, db)
+
+    async def _update(person_id, payload, actor):
+        return tasks_people._row_to_person(PERSON, include_hr=True,
+                                           include_private=True)
+
+    monkeypatch.setattr(tasks_people, "update_person", _update)
+    run(people_self.update_me(
+        tasks_people.PersonWrite(title="Principal"), user=ADMIN))
+
+
+def test_a_member_with_no_row_is_404_not_a_silent_no_op(monkeypatch) -> None:
+    db = FakeDB(row=None)
+    bind(monkeypatch, db)
+    with pytest.raises(HTTPException) as exc:
+        run(people_self.update_me(
+            tasks_people.PersonWrite(timezone="UTC"), user=MEMBER))
+    assert exc.value.status_code == 404
+
+
 def test_me_is_registered_before_the_person_id_pattern() -> None:
-    """FastAPI matches in REGISTRATION order. Registered the other way round,
-    `/people/me` is matched as a person id and 500s casting "me" to a UUID —
-    on a route that looks perfectly registered in the OpenAPI schema."""
-    paths = [r.path for r in people_router.routes]
-    assert paths.index("/people/me") < paths.index("/people/{person_id}")
+    """FastAPI matches in REGISTRATION order, ACROSS routers. Included the
+    other way round, `/people/me` is matched by the gated router's
+    `/people/{person_id}` — and an ungranted member is refused at their own
+    profile by the directory's gate, which is the exact defect WS-28g-2 fixed,
+    reintroduced by an include order.
+
+    Asserted against `main.py`'s source because building the whole gateway app
+    in a unit test needs an environment this suite deliberately does not have —
+    and the include order is a source fact, so a source assertion is not a
+    weaker claim about it, just a cheaper one.
+    """
+    main = (REPO / "apps" / "services" / "gateway" / "gateway"
+            / "main.py").read_text(encoding="utf-8")
+    self_at = main.index("app.include_router(_people_self_router)")
+    gated_at = main.index("app.include_router(_people_router)")
+    assert self_at < gated_at, (
+        "main.py includes the gated people router before the ungated self "
+        "router — /people/me is now behind feature:people again"
+    )
 
 
 # ══════════════════════════════════════════════════════════════════════════

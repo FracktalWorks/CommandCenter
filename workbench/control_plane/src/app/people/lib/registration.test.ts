@@ -36,6 +36,26 @@ describe("the People app is reachable", () => {
     expect(featureForPath(PEOPLE_HREF)).toBe(PEOPLE_FEATURE);
   });
 
+  it("puts MY profile in the Personal Center, ungated", () => {
+    // WS-28g-2 / D-PC-15. `feature:people` gates the DIRECTORY and is
+    // `is_default false`; a person's own record is not the directory, and
+    // gating it hid the surface from everyone it was built for.
+    const items = NAV_SECTIONS.flatMap((s) => s.items);
+    const mine = items.find((i) => i.href === "/people/me");
+
+    expect(mine, "/people/me has no nav entry — nobody would find it").toBeTruthy();
+    expect(mine?.feature, "my own profile must not need a feature grant")
+      .toBeUndefined();
+  });
+
+  it("keeps it out of the directory's gate on the client too", () => {
+    // The gateway serves it from a router with no feature dependency; this is
+    // the same answer client-side, and it needs the explicit rule because
+    // `featureForPath` matches by PREFIX and would otherwise inherit `people`.
+    expect(featureForPath("/people/me")).toBeNull();
+    expect(featureForPath(PEOPLE_HREF)).toBe(PEOPLE_FEATURE);
+  });
+
   it("does NOT ride the tasks feature", () => {
     // The whole reason `people` exists as its own slug: a manager who needs the
     // org chart and the assignee picker should not have to be handed the

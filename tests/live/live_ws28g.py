@@ -43,6 +43,7 @@ from acb_common.db import bind_tenant, release_tenant
 from gateway.db import get_db
 from gateway.routes.people import core as people_core
 from gateway.routes.people import profile as people_profile
+from gateway.routes.people import selfservice as people_self
 from gateway.routes.tasks import people as tasks_people
 from sqlalchemy import text
 
@@ -224,7 +225,39 @@ async def main() -> None:
             await db.rollback()
             check("two rows cannot share an address", "refused", "refused")
 
-        # ── 6. An empty PATCH changes nothing ──────────────────────────────
+        # ── 6. WS-28g-2: the UNGATED self door, against a real row ─────────
+        # A colleague holding NO feature grant at all. Before WS-28g-2 this
+        # principal could not open their own profile.
+        member = user(SUBJECT_EMAIL)                      # no grants whatsoever
+        me = await people_self.get_me(member)
+        check("an ungranted member resolves their own row", me.state, "resolved")
+        check("…and reads their own private half",
+              me.person["phone"], "+91 99999 99999")
+
+        saved = await people_self.update_me(
+            tasks_people.PersonWrite(location="Bengaluru"), member)
+        check("…and may save a self-class field", saved["location"], "Bengaluru")
+
+        try:
+            await people_self.update_me(
+                tasks_people.PersonWrite(department="Sales"), member)
+            check("…and may NOT change their department", "allowed", "403")
+        except Exception as exc:
+            check("…and may NOT change their department",
+                  getattr(exc, "status_code", None), 403)
+
+        stranger_row = (await db.execute(
+            text("SELECT department FROM gtd_people WHERE id = CAST(:id AS uuid)"),
+            {"id": pid})).fetchone()
+        check("…and the row really is untouched",
+              stranger_row.department, "Engineering")
+
+        # Somebody signed in with an address no row carries.
+        ghost = await people_self.get_me(user("ghost@ws28g.invalid"))
+        check("a member with no directory row is told so, not 500'd",
+              ghost.state, "no_directory_row")
+
+        # ── 7. An empty PATCH changes nothing ──────────────────────────────
         try:
             await people_profile.update_profile(
                 pid, tasks_people.PersonWrite(), ADMIN)

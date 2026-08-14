@@ -104,8 +104,15 @@ const HREF_FEATURES: ReadonlyArray<[string, string]> = [
   ["/build/apps", "build.apps"],
 ];
 
-/** The feature slug guarding a route, or null when the route is unguarded. */
+/**
+ * The feature slug guarding a route, or null when the route is unguarded.
+ *
+ * An always-allowed route answers `null` even when a shorter prefix would
+ * match it: `/people/me` sits under `/people`, and the whole point of D-PC-15
+ * is that the directory's grant does not reach a person's own row.
+ */
 export function featureForPath(pathname: string): string | null {
+  if (isAlwaysAllowed(pathname)) return null;
   let best: string | null = null;
   let bestLength = 0;
   for (const [prefix, slug] of HREF_FEATURES) {
@@ -135,6 +142,12 @@ const ALWAYS_ALLOWED = [
   // reachable by exactly the person who cannot reach things, so gating it on a
   // feature would make it useless in the only situation it exists for.
   "/access",
+  // "My profile". `featureForPath` matches by PREFIX, so /people/me would
+  // otherwise inherit the directory's `people` slug — which is
+  // `is_default false`, and is what made an ordinary colleague unable to open
+  // their own record (WS-28g-2 / D-PC-15). The gateway serves it from a router
+  // with no feature dependency; this is the same answer on the client side.
+  "/people/me",
 ];
 
 export function isAlwaysAllowed(pathname: string): boolean {

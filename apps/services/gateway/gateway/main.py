@@ -1044,8 +1044,20 @@ try:
     # WS-28 — the People Center's directory (spec:
     # project-docs/specs/people_center_app.md). Its own feature gate, but
     # the HR projection is imported from routes/tasks, never re-implemented.
+    #
+    # ⚠️ TWO routers, and the ORDER IS LOAD-BEARING (WS-28g-2 / D-PC-15).
+    # `self_router` serves `/people/me` with **no feature gate** — the
+    # directory is gated, your own row is not — while `_people_router` serves
+    # everything id-bearing behind `feature:people`. FastAPI matches in
+    # registration order, and the gated router's `/people/{person_id}` pattern
+    # matches the literal path `/people/me`. Included the other way round, a
+    # member without the grant is refused at their own profile by the
+    # directory's gate: exactly the defect this ticket fixed, reintroduced by
+    # an include order. Fenced by `tests/unit/test_people_profile.py`.
     from gateway.routes.people import router as _people_router
+    from gateway.routes.people import self_router as _people_self_router
 
+    app.include_router(_people_self_router)
     app.include_router(_people_router)
 except Exception:  # pragma: no cover
     pass

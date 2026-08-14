@@ -144,7 +144,50 @@ written by no form at all.
 | `working_hours` | `{days: [1..5], start: "09:00", end: "17:00"}` — when a chase is rude and when a due date is unreachable | D | **S** | 🔲 P-3 |
 | `bio` | One paragraph, theirs. What the directory reads like to a new colleague | D | **S** | 🔲 P-3 |
 | `links` | `{github, linkedin, portfolio, …}` — professional, public-facing | D | **S** | 🔲 P-3 |
+| `avatar` | The display image. **Stored as the server's re-encode, never the upload** — see §3.1a | D | **S** | 🔲 P-8 |
+| `avatar_updated_at` | Cache-busting for the image URL | D | ⚙ | 🔲 P-8 |
 | `has_login` | Whether an `app_user` row exists | D | ⚙ | ✅ b |
+
+#### 3.1a The display image, and why the policy is strict
+
+Owner-directed 2026-08-13: *"they should be able to put their display image …
+ensure that there is a strict policy on the size of the image so that random image
+sizes are not uploaded … there should also be an ability to crop the image."*
+
+**The rule that makes every other rule unnecessary: what is stored is what the server
+produced, never what the browser sent.** Every upload is decoded, centre-cropped to a
+square, resized to exactly **256×256**, re-encoded to **WebP**, and *that* is the row.
+The uploaded bytes are discarded.
+
+That one decision answers four problems at once, which is why it is the design rather
+than a validation step bolted onto one:
+
+- **Size drift** — "random image sizes" cannot exist, because the stored dimensions are a
+  constant. A 4000×3000 phone photo and a 64×64 icon both leave as 256×256.
+- **Weight** — a 256×256 WebP is 8–20 KB whatever arrived. The upload cap (**2 MB**) is
+  only there to stop somebody streaming a video into the decoder; it is not the thing
+  keeping the table small.
+- **Crop** — the client offers a square cropper and sends the crop rectangle, but the
+  server **centre-crops anything it is given** before resizing. A client that skips the
+  cropper, or a caller hitting the API directly, still cannot produce a non-square avatar.
+  The cropper is a courtesy; the square is enforced (**D-PC-17**).
+- **Content type** — only `image/jpeg`, `image/png` and `image/webp` are decoded, and the
+  decode is what proves the claim. **SVG is refused outright**: it is a document that can
+  carry script and external references, and an avatar is displayed on every page in the
+  product. EXIF, colour profiles and trailing payloads do not survive a re-encode, so the
+  polyglot-file class of problem is gone rather than filtered for.
+
+**Where it lives:** a column on `gtd_people`, as a data URI — the shape
+`agent_avatars.sprite` already uses (migration 64), for the same reason. The roster is
+dozens of rows and 20 KB each, so the whole avatar set is smaller than one résumé; and the
+deploy's `git reset --hard` wipes untracked runtime files, which is a recorded hazard for
+anything written into the attachments directory. The database survives deploys; a file in
+the work tree does not.
+
+**No fallback fetches anything external.** A person with no avatar renders initials — the
+`initials()` helper the directory already uses. Gravatar and its cousins are refused: they
+would send a hash of every colleague's email address to a third party on every page load,
+which is not a trade this product gets to make on somebody's behalf.
 
 ### 3.2 Employment — "what is their relationship to the company"
 
@@ -208,6 +251,70 @@ route test that asserts the array equals the table's contents after every write 
 | *derived* open-task load + `unestimated` | What the bar actually draws (§6.2) | H | ⚙ | ✅ b |
 | **`gtd_person_absences`** | Away from when to when, and roughly why. See §5.8 | H | S | 🔲 P-5 |
 | `max_concurrent_tasks` | A person's own stated ceiling on parallel work — the number a suggester should respect before an hours figure it half-invented | H | **S** | 🔲 P-3 |
+| `working_hours` | This person's **override** of the org work schedule (§3.4a) | D | S | ✅ P-3 |
+| *derived* `contracted_hours_per_week` | Days × hours from the **effective** schedule — the denominator every load figure needs | H | ⚙ | 🔲 P-7 |
+
+### 3.4a The work schedule — one model, three layers, one direction
+
+Owner-directed 2026-08-13: *"somewhere we need to have in the people centre the number
+of hours setting that people are actually supposed to work … number of days the company
+works, number of hours they're supposed to work in a day, number of shifts … so
+accordingly even the calendar of the personal centre can set itself up."*
+
+**Layer 1 — the org policy.** `org_settings['work_schedule']` (migration 151's existing
+key→JSON store; **no new table**):
+
+```jsonc
+{
+  "working_days":   [1,2,3,4,5],        // ISO 1=Mon … 7=Sun
+  "hours_per_day":  8,
+  "week_start":     1,
+  "default_timezone": "Asia/Kolkata",
+  "shifts": [ {"name":"general","start":"09:30","end":"18:30","days":[1,2,3,4,5]},
+              {"name":"night","start":"22:00","end":"06:00","days":[1,2,3,4,5]} ],
+  "holidays": ["2026-08-15", "2026-10-02"]
+}
+```
+
+**Layer 2 — the person's override**, in the `working_hours` column §3.1 already ships.
+Any subset: `days`, `start`, `end`, `hours_per_day`, `shift` (a name from layer 1),
+`fraction` (0.5 for a half-timer). Everything unset falls through to the policy.
+
+**Layer 3 — the effective schedule**, computed by **one function** from the two above and
+used by every consumer. Nothing stores it.
+
+**Why this layering and not a column per knob:** an org that works Monday–Saturday, a
+half-timer, and a night-shift technician are three different answers to the same question,
+and only the third is well modelled by a shift list. Layer 2 exists so the exceptions do
+not force the policy to grow a field per exception.
+
+⚠️ **A seam collision this spec has to settle, and it is one this spec's own author
+created.** WS-28g added `gtd_people.working_hours` without checking migrations **77** and
+**97**, which had already given `gtd_settings` a per-user `day_start_hour`,
+`day_end_hour`, `daily_capacity_mins`, `buffer_mins`, lunch window and energy windows —
+owned by the calendar (`calendar_timeboxing.md` §5). Two places to say "when do I work" is
+exactly the drift `CLAUDE.md` §4 forbids. The resolution is that they answer **different
+questions**, and the boundary is stated once here (**D-PC-16**):
+
+| | Owner | Question | Consumers |
+|---|---|---|---|
+| `work_schedule` + `gtd_people.working_hours` | **People Center** | *When is this person **contracted** to work?* A fact about the engagement, visible to colleagues | capacity, the dashboard's hours, the picker's warnings, "do not chase at 11pm" |
+| `gtd_settings.day_start_hour…` | **Calendar** (`calendar_timeboxing.md`) | *When may the planner **place blocks** in my day?* A private preference | the day grid, the AI planner |
+
+**The direction is People → Calendar and never back.** A person who has never touched
+their calendar preferences gets them **seeded** from the effective schedule — which is
+precisely the owner's "the calendar of the personal centre can set itself up" — and from
+that moment the calendar's copy is *their* preference, not a mirror to keep in sync. A
+seeded default that diverges is a person changing their mind; a mirror that diverges is a
+bug. Only one of those is worth building.
+
+**`capacity_hours_per_week` becomes derived too.** WS-28b already made *load* a computed
+figure because "a number somebody typed once is stale the moment anyone assigns
+anything". The denominator has exactly the same defect and kept it: the ceiling has been a
+typed integer this whole time. P-7 computes `contracted_hours_per_week` from the effective
+schedule; the typed column **stays** (R6 — no rename, and the importer writes it) and
+becomes an explicit override that the data-quality panel (§5.10) flags when it disagrees
+with the schedule by more than a rounding error.
 
 ### 3.5 Personal — "the things only they and HR should see"
 
@@ -328,7 +435,36 @@ click) (**D-PC-4**).
 a silent drop: a save that reports success and discards half the form is worse than a
 refusal, because the person believes the change landed (**D-PC-5**).
 
-### 4.5 What is deliberately not in the model
+### 4.5 Your own row is not behind the directory's gate
+
+**A defect in what WS-28g shipped, found in the 2026-08-13 review, and the fix is a
+decision rather than a patch.** `feature:people` is `is_default false` (§8), and
+`access.ts` matches routes by prefix — so `/people/me` inherits the directory's gate, and
+**an ordinary colleague could not reach their own profile at all**. The one surface whose
+entire purpose is "every person maintains their own record" was reachable only by people
+who had been granted the org directory.
+
+The rule (**D-PC-15**): **the directory is gated; your own row is not.**
+
+- `GET /people/me`, `PATCH` and the CV upload **when the target is yourself** need no
+  feature grant — only a signed-in identity. They read and write exactly one row, the
+  caller's, and the self predicate is what proves it.
+- Everything about *other* people — the directory, the person page, the org chart, search,
+  the dashboard — stays behind `feature:people` exactly as before.
+
+This is the same argument `/access` already won: it is deliberately the one ungated pane
+in the sidebar, because it is *the page that explains why a pane is missing*, and gating
+it would hide it from exactly the person who needs it. A profile you cannot open is the
+same shape of mistake.
+
+**Engineering consequence:** the self routes cannot ride the router that carries
+`require_feature_router("people")`. They move to a second router with no feature
+dependency, mounted at the same prefix and registered **first** (§5.3's ordering note
+applies unchanged), and it joins `test_org_access_enforcement.GATED_ROUTERS` as an
+explicitly-listed exemption — *"unchecked"* and *"deliberately open"* must be
+distinguishable in that registry, or the next person to read it learns the wrong lesson.
+
+### 4.6 What is deliberately not in the model
 
 - **A manager tier.** "My reports' records" is a real future ask, and it needs machinery
   that does not exist: `manager_id` is a directory fact, not a grant, and D14 already
@@ -346,10 +482,17 @@ refusal, because the person believes the change landed (**D-PC-5**).
 
 ## 5. The surfaces
 
-Route: **`/people`**, gated on its own feature slug `people` (§8). The People Center's
-landing page (`/centers/people`) links to it, and it is one app, not one per Center — the
-same (app + scope) rule the Projects app follows. Every sub-app below is a view **inside
-that one app**, not a second registration.
+Route: **`/people`**, gated on its own feature slug `people` (§8) — **except `/people/me`,
+which is ungated per §4.5**. The People Center's landing page (`/centers/people`) links
+here, and it is one app, not one per Center — the same (app + scope) rule the Projects app
+follows. Every sub-app below is a view **inside that one app**, not a second registration.
+
+**Two front doors, and they are for two different people.** The People Center's landing
+page is where somebody goes to look at *the organisation*. The **Personal Center** is where
+somebody goes to look at *themselves* — so `/people/me` is a Personal Center nav item,
+beside "Your access", and not only a card on a Center page a colleague may not be able to
+open. Owner-directed: *"people from their personal center should be able to modify their
+profile."* It appears in both places; it is one page either way.
 
 ### 5.1 Directory — the default view ✅ BUILT
 
@@ -464,32 +607,122 @@ acted on; the join is `lower(email)` on both sides, so the action is well-define
 belongs beside the seats matrix (both are membership acts), and it is an **invite**, which
 §6 (d) gates. Propose-only, like the rest of this surface.
 
-### 5.7 Workload & activity — "what is everybody actually doing" 🟢 WS-28j
+### 5.7 The people-management dashboard 🟢 WS-28j — *the surface this whole spec serves*
 
-The surface the directive's *"give reports on what people are actually doing"* asks for,
-and it is a **read over the Projects app's tables**, never a second store.
+Owner-directed 2026-08-13, and worth quoting because it sets the bar:
 
-- **Per person:** open tasks by status category, overdue count, tasks completed in the
-  last 7/30 days, median cycle time, last activity timestamp, and the derived load bar.
-  Sources: `pm_tasks`, `pm_task_assignees` (assignee is a plain string — an email or
-  `agent:<name>`, D-PM-4), `pm_activities.created_by`.
-- **Per team / Center:** the same figures rolled up, plus the two distributions that
-  actually drive a conversation — **load spread** (who is at 150% next to who is at 20%)
-  and **stale work** (assigned, open, no activity in N days).
+> *"a dashboard that visualises the workload each person has … what projects are assigned
+> to each person, what their workload is in hours per week … what tasks each person
+> currently has and what the deadlines are, whether they are behind, on schedule, or idle
+> … a roll-up of everybody, department-wise … suggestions about what else can be assigned
+> depending on capability, or what people who are idle can help people who are behind
+> with. The person looking at this dashboard should have all the intelligence and needs to
+> be able to actually make those decisions."*
+
+It is a **read over the Projects app's tables** — `pm_tasks`, `pm_task_assignees`
+(assignee is a plain string, an email or `agent:<name>`, D-PM-4), `pm_task_statuses.category`,
+`pm_projects`, `pm_activities.created_by` — joined to the People Center's own record.
+**No new store, and no second arithmetic**: §5.9's Center rollup is a projection of these
+same endpoints.
+
+#### 5.7.1 The person row
+
+One row per person, with everything a decision needs on it:
+
+| Column | Where it comes from |
+|---|---|
+| Who | avatar + name + department + team, and their **status pill** (§5.7.2) |
+| **Projects** | the distinct `pm_projects` reachable from their open tasks — *"what projects are assigned to this person"*, which the task list alone does not answer |
+| **Open tasks** | count by status category, and the list itself when the row is expanded |
+| **Next deadline** | the earliest `due_at` among their open tasks, and how far away it is |
+| **Committed vs contracted** | Σ `estimate_mins` of open tasks ÷ 60, against `contracted_hours_per_week` from the **effective schedule** (§3.4a) — the two halves of "their workload in hours per week", and *both* now derived rather than typed |
+| Unestimated | how many of those tasks carry no estimate. Carried on every hours figure for the reason WS-28b already recorded: a bar built from the estimate sum alone shows somebody holding thirty un-estimated tasks as completely free |
+| Last activity | most recent `pm_activities.created_at` by them — the difference between "quiet because nothing is due" and "quiet because nothing is happening" |
+
+Expanding a row lists the tasks: title, project, due date, status, and **days early or
+late**, sorted by urgency rather than by project — the question being asked is "what is at
+risk", not "what belongs where".
+
+#### 5.7.2 Behind · at risk · on track · idle · overloaded
+
+The classification is the dashboard's whole value, so it is defined as **arithmetic over
+tasks and dates**, never as a judgement, and every pill states its own reason on hover:
+
+| Pill | Definition |
+|---|---|
+| **Behind** | holds ≥1 open task whose `due_at` is in the past |
+| **At risk** | holds ≥1 open task due within the horizon whose remaining estimate exceeds the **working hours they actually have left before that date** — computed from the effective schedule minus absences, which is exactly why §3.4a has to exist before this ticket does |
+| **Overloaded** | committed hours > contracted hours for the week |
+| **Idle** | no open assigned task, **or** committed hours below the idle threshold of contracted |
+| **On track** | none of the above |
+
+Three properties that are not negotiable:
+
+- **A pill is a statement about tasks, not about a person.** "Three tasks are past their
+  due date" is a fact. "Priya is underperforming" is a conclusion the product does not get
+  to draw, and the difference is not cosmetic — the first is actionable and checkable, the
+  second is neither.
+- **"Idle" must be readable as a planning signal, not an accusation.** The row's action is
+  *"here is what they could pick up"* (§5.7.4), because somebody with nothing assigned is
+  usually a scheduling failure, not a personal one.
+- **Unestimated work suppresses the hours-based pills.** Where nothing is estimated, the
+  row says so and falls back to task counts rather than declaring somebody free on the
+  strength of missing data.
+
+#### 5.7.3 The department rollup
+
+Per department, and then for the org: headcount · Σ contracted vs Σ committed hours ·
+people in each pill · who is away this week · **the spread** (the gap between the most and
+least loaded person, which is the number that actually starts a conversation) · people
+with no open work at all.
+
+Sorted by the department under most strain, not alphabetically. A rollup nobody can act
+on is a table.
+
+#### 5.7.4 The rebalancing suggestions
+
+The part the directive is really asking for, and the part that has to be built as a
+**suggester** (D-PC-13):
+
+- **For a person who is behind or at risk** — candidate helpers for each at-risk task,
+  ranked by *skill overlap with that task* × *spare hours this week* × *availability*
+  (not away, timezone overlap, engagement not ending first). Each candidate shows all
+  three numbers and the matched skill, because a ranking whose reasoning is hidden cannot
+  be argued with, and the person reading it knows things the record does not.
+- **For a person who is idle** — what they could pick up: unassigned tasks in projects the
+  viewer can see that match their skills, plus the at-risk tasks above where they are a
+  credible helper. *"Some people who are idle can help people who are behind"* is a join
+  between those two lists, and it is the one thing this surface can compute that no
+  individual could.
+- **The ranking is the §5.5 capability search**, called with a task instead of a typed
+  query. A second ranker would be a second answer to "who is good at this", which is the
+  drift §5.5 exists to prevent.
+- **Every suggestion ends in a pre-filled assign action a human confirms.** Nothing here
+  writes an assignment (D-PC-13), and the AI's follow-up half is drafted and queued, never
+  sent (§6.7 — the outbound gate).
+
+#### 5.7.5 What the viewer may see
+
 - **Every figure is scoped by the VIEWER's grants**, through the Projects grant closure —
   the same rule §6.3's work panel already follows. A rollup is not a licence to see work
   you could not open. Where the viewer's scope hides rows, the surface says the count is
-  partial rather than reporting a smaller number as if it were the whole.
+  **partial** rather than reporting a smaller number as though it were the whole; a
+  silently-truncated total is worse than no total, because it looks authoritative.
+- **The dashboard needs `admin:members:read`** on top of `feature:people`: it is skills,
+  capacity and hours for everybody, and the oracle rule (§4.2) applies to a whole surface
+  here rather than to a clause.
 - **Agents appear beside people**, because they hold tasks the same way (D-PM-4). An
   activity report that silently omits half the workforce is wrong in the direction that
-  matters.
+  matters. Agents are never given a pill: "idle" and "behind" are statements about
+  capacity and commitment that do not mean anything about a process.
 
-⚠️ **This is a measurement surface, not a performance surface.** "Completed in the last 30
-days" is a number about *tasks*, and every one of these figures is trivially gamed and
-trivially misread. The surface renders them as **workload signals for planning** and never
-ranks people against each other — no leaderboard, no score, no per-person trend line
-presented as an evaluation. §3.6 refuses to *store* a performance rating; this is the same
-decision on the read side (**D-PC-14**).
+⚠️ **This is a measurement surface, not a performance surface.** Every figure here is
+trivially gamed and trivially misread. The surface renders **workload signals for
+planning** and never ranks people against one another — no leaderboard, no score, no
+per-person trend line presented as an evaluation. §3.6 refuses to *store* a performance
+rating; this is the same decision on the read side (**D-PC-14**). The distinction that
+makes the owner's ask and this constraint compatible: **ranking TASKS by risk is the
+product; ranking PEOPLE by output is not.**
 
 ### 5.8 Availability & absences — not leave management 🟢 WS-28k
 
@@ -532,7 +765,24 @@ The `email_conflict` and un-validated-CHECK rows are **listed here by design** �
 148 deliberately quarantined rather than failed the deploy, and this panel is where that
 decision gets paid off. A quarantine nobody surfaces is a data-loss with a delay.
 
-### 5.11 Onboarding and hiring — later, and §10 says where
+### 5.11 Work-schedule settings 🟢 WS-28p
+
+Where the org policy of §3.4a is edited: working days, hours per day, week start, the
+shift list, the default timezone, and the holiday calendar. **Admin-gated**
+(`admin:members:manage`) — it is the definition of the working week for everybody, and it
+moves every capacity figure in the product at once.
+
+Rendered inside the People Center rather than in `/settings`, because it is a fact about
+*how the company works* and its consumers are all here. A person's own override sits on
+their profile (§5.3), where the effective schedule is shown beside it — *"you work
+Mon–Fri, 9:30–18:30, 40h/week; your override changes Friday"* — so nobody has to compute
+the layering in their head.
+
+Changing the policy shows **what it will move before it moves it**: how many people's
+contracted hours change, and by how much. A settings page that silently re-baselines every
+load bar in the org is a settings page nobody trusts twice.
+
+### 5.12 Onboarding and hiring — later, and §10 says where
 
 Both stay planned in `centers.ts`. Onboarding binds to `colleague_onboarding.md`'s runbook
 and would create tasks in the Projects app rather than a new store; hiring is structurally
@@ -651,6 +901,8 @@ new table is tenant-scoped by construction (R5(a): discovered by
 | **P-4** | 🔲 `gtd_person_skills` (structured skills) + `gtd_person_credentials` (education, certifications, prior roles) | WS-28h |
 | **P-5** | 🔲 `gtd_person_absences` | WS-28k |
 | **P-6** | 🔲 The tightening half: narrow `employment_type` / `seniority` CHECKs once real data is in, and validate 148's status CHECK where the quarantine panel (§5.10) has been cleared | later release, R6 contract half |
+| **P-7** | 🔲 The work schedule — **no migration at all**: the org policy is a row in `org_settings` (151's existing key→JSON store) and the person override is the `working_hours` column P-3 already shipped. `contracted_hours_per_week` is computed, never stored | WS-28p |
+| **P-8** | 🔲 `gtd_people.avatar` (data URI of the server's 256×256 WebP re-encode) + `avatar_updated_at` | WS-28q |
 
 **Every P-3 column is nullable with no NOT NULL and no rewrite of an existing column**
 (R6). The deploy applies migrations *before* restarting services, so the currently-running
@@ -883,6 +1135,60 @@ one migration deeper. It needs a live database with the ladder applied
 build replayed all 170 numbered migrations plus 171 into a scratch Postgres 16 to run the
 live harness, and 171 is idempotent under a re-run (every `ADD COLUMN` NOTICEs and skips).
 
+**WS-28g-2 — your own profile is not behind the directory's gate (§4.5).** ✅ **BUILT
+2026-08-13** (`routes/people/selfservice.py`, `main.py` include order, nav + `access.ts`;
+144 hermetic cases and 36 live checks).
+*A defect in WS-28g, found in the same day's review — every other ticket here assumes
+people can maintain their own record.*
+Done when: `GET /people/me`, and a `PATCH`/résumé upload **whose target is the caller**,
+succeed for a signed-in member holding **no** `feature:people`; the directory, the person
+page and every cross-row read still refuse them; `/people/me` renders in the **Personal
+Center** nav beside "Your access"; `access.ts` no longer maps `/people/me` onto the
+directory's slug; and the ungated router is listed in
+`test_org_access_enforcement.GATED_ROUTERS` as an explicit exemption rather than being
+absent from it — *unchecked* and *deliberately open* must not look the same.
+**What the build changed about the design, and it is the better answer:** the ungated
+routes take **no person id at all** — `GET/PATCH /people/me` and `POST /people/me/resume`,
+with the row resolved server-side from the authenticated identity. The original plan was
+"exempt the self case from the gate and check the id belongs to you"; a check is something
+a later refactor can drop silently, whereas *there is no id to supply* cannot be weakened
+by anything short of adding a parameter — which
+`test_org_access_enforcement.UNGATED_ROUTERS` now fails on. Ungated is not unchecked: the
+field classes apply unchanged, so an ordinary member may set their timezone and may not
+set their department, and an admin editing their **own** row through this door keeps the
+admin class (otherwise the ungated door would be the narrower one for exactly the people
+holding the grant).
+
+⚠️ **A second ordering trap, one level up from §5.3's.** `/people/me` and
+`/people/{person_id}` now live on *different routers*, and FastAPI matches in registration
+order across the whole app — so `main.py` must include the self router first. Included the
+other way round the defect returns exactly as it was, except now it presents as a 403 from
+the directory's gate, which reads like a permissions problem rather than a routing one.
+Fenced by a source assertion on `main.py`.
+
+**WS-28p — the work schedule (P-7, §3.4a, §5.11).** 🟢 AGENT-SAFE. *Build before WS-28j:
+the dashboard's "at risk" is arithmetic over working hours, and without this it has none.*
+Done when: the org policy round-trips through `org_settings['work_schedule']` under
+`admin:members:manage`; one function computes the **effective** schedule from policy +
+person override and is the only place the layering happens; `contracted_hours_per_week` is
+derived from it and travels on every person read; the typed `capacity_hours_per_week` is
+**not** rewritten (R6) but is flagged by §5.10 when it disagrees; the calendar's
+`gtd_settings` day window is **seeded** from the effective schedule for a person who has
+never set it and is never written again afterwards (D-PC-16); and a test proves People→
+Calendar is the only direction — nothing in the diff writes `gtd_people.working_hours`
+from a calendar preference.
+
+**WS-28q — the display image (P-8, §3.1a).** 🟢 AGENT-SAFE.
+Done when: an upload is decoded, centre-cropped square, resized to exactly 256×256 and
+re-encoded to WebP, and **the stored bytes are the server's output** — proven by a test
+that uploads a 1000×400 JPEG and asserts the stored image is 256×256 WebP; `image/svg+xml`
+and anything that fails to decode are refused with a sentence; the upload cap is enforced
+before the decoder is handed the bytes; the crop rectangle from the client is honoured
+when present and **ignored safely when absent or nonsense** (the server still squares it);
+the avatar is self-writable and directory-readable; a person with none renders initials
+with no external request; and `avatar_updated_at` busts the cache so a new photo appears
+without a hard reload.
+
 **WS-28h — structured skills and credentials (P-4).** 🟢 AGENT-SAFE.
 Done when: `gtd_person_skills` carries level, years, last-used and evidence; **every write
 path rewrites `gtd_people.skills`/`skills_source` in the same transaction** and a test
@@ -891,11 +1197,26 @@ structured rows and credentials instead of only merging words; and `_match_capab
 `fetch_people_for_clarify()` still pass unchanged — they read the array, and the array is
 still true.
 
-**WS-28j — workload & activity (§5.7).** 🟢 AGENT-SAFE.
-Done when: per-person and per-team figures come from `pm_tasks`/`pm_task_assignees`/
-`pm_activities`; every figure is scoped by the viewer's Projects grants and says so when
-partial; agents appear beside people; and **no ranking, score or leaderboard is rendered**
-(D-PC-14).
+**WS-28j — the people-management dashboard (§5.7).** 🟡 dispatchable after **WS-28p**
+(the hours it reasons over) and best after **WS-28k** (absences make "at risk" honest).
+*Split it: j1 the person rows + classification, j2 the department rollup, j3 the
+rebalancing suggestions. Three narrowed slices, not one big one.*
+Done when:
+- Each person row carries their **projects**, open tasks with deadlines, committed vs
+  contracted hours, unestimated count, next deadline and last activity — from
+  `pm_tasks`/`pm_task_assignees`/`pm_projects`/`pm_activities`, joined to the People record.
+- The five pills are computed exactly as §5.7.2 defines them, each carries its reason, and
+  **the hours-based pills are suppressed where nothing is estimated** rather than declaring
+  somebody free on missing data.
+- The department rollup and the org total are projections of the same endpoint, not a
+  second count (§5.9).
+- Rebalancing suggestions rank helpers by skill × spare hours × availability, show all
+  three numbers, call the §5.5 ranker rather than a new one, and end in a **pre-filled
+  assign action a human confirms** — nothing in the diff writes an assignment.
+- Every figure is scoped by the viewer's Projects grants and **says when it is partial**.
+- Agents appear, and carry no pill.
+- **No ranking, score or leaderboard of people is rendered** (D-PC-14). Tasks are ranked by
+  risk; people are not ranked at all.
 
 **WS-28k — availability & absences (P-5, §5.8).** 🟢 AGENT-SAFE.
 Done when: absences are self- and admin-writable; the capacity bar, the picker and the
@@ -991,7 +1312,11 @@ decisions live in `work_plan.md` §3 and are never re-litigated here.
 | **D-PC-11** | **No manager write tier** in v1 | `manager_id` is a directory fact, not an enforced grant, and D14 records that the `manager` role's "org-wide visibility" is a name. A permission that looks enforced and is not is worse than an absent one |
 | **D-PC-12** | A **directory-only person has no self** | No login, no caller, nothing to match. Their record is admin-maintained — the contractor case working as designed |
 | **D-PC-13** | The AI **suggests and never assigns**; it may write a proposal into the broker path a human releases | Auto-assigning work is a management decision the system is not entitled to make. Same rule as D-PM-10 |
-| **D-PC-14** | The activity surface renders **workload signals, never a ranking** | Every figure here is trivially gamed and trivially misread. §3.6 refuses to store a performance rating; this is the same decision on the read side |
+| **D-PC-14** | The activity surface renders **workload signals, never a ranking of people**. Ranking TASKS by risk is the product | Every figure here is trivially gamed and trivially misread. §3.6 refuses to store a performance rating; this is the same decision on the read side. The distinction is what lets the dashboard be genuinely useful without becoming an evaluation |
+| **D-PC-15** | **The directory is gated; your own row is not.** `/people/me` and a self-targeted write need only a signed-in identity | `feature:people` is `is_default false`, so gating the self surface made it unreachable for exactly the people it is for — the same argument that made `/access` the one ungated pane. Cross-row reads stay gated, and the self predicate is the whole control, so the fence is the negative test |
+| **D-PC-16** | `working_hours` (People) and `gtd_settings.day_start_hour…` (Calendar) are **different questions**, and the direction is People → Calendar, **seeded once, never mirrored** | Contracted hours are a fact about the engagement; the plannable day window is a private preference. A seeded default that later diverges is somebody changing their mind; a mirror that diverges is a bug. Recorded because WS-28g added `working_hours` without noticing migrations 77/97 already existed |
+| **D-PC-17** | The stored avatar is **the server's re-encode** — 256×256 WebP — never the uploaded bytes; the client's cropper is a courtesy and the square is enforced server-side | One decision removes size drift, weight, the crop bypass and the whole polyglot/SVG-script class at once. A validator that inspects and admits the original leaves every one of them open |
+| **D-PC-18** | `contracted_hours_per_week` is **derived** from the effective schedule; the typed `capacity_hours_per_week` stays as an override and is flagged when it disagrees | The same lesson WS-28b applied to load, applied to the denominator it was compared against. R6 forbids rewriting the column the importer writes |
 
 ---
 

@@ -34,6 +34,12 @@ from gateway.routes.tasks.core import (
     can_read_hr_fields,
 )
 from gateway.routes.tasks.people import _row_to_person
+from gateway.work_schedule import (
+    capacity_disagreement,
+    contracted_hours_per_week,
+    load_policy,
+    person_schedule,
+)
 from sqlalchemy import text
 
 _log = get_logger("gateway.people")
@@ -163,6 +169,24 @@ async def person_payload(db: Any, row: Any, user: Any) -> dict:
     person["load"] = (
         await compute_load(db, getattr(row, "email", None)) if hr else None
     )
+    # WS-28p — the schedule layering, resolved in ONE place (D-PC-16).
+    #
+    # `schedule` is DIRECTORY tier: when a colleague works is what stops a
+    # 9am call being rude, and §3.1 already put `working_hours` there.
+    # `contracted_hours_per_week` is HR tier: it is a capacity figure, and
+    # capacity has been behind `admin:members:read` since WS-24 N4.
+    policy = await load_policy(db)
+    schedule = person_schedule(policy, row)
+    person["schedule"] = schedule
+    person["contracted_hours_per_week"] = (
+        contracted_hours_per_week(schedule) if hr else None)
+    # The typed column is NOT rewritten (R6 — the importer writes it), and the
+    # disagreement is surfaced rather than resolved: quietly preferring one is
+    # how two numbers start disagreeing where nobody can see them (D-PC-18).
+    person["capacity_conflict"] = (
+        capacity_disagreement(
+            schedule, getattr(row, "capacity_hours_per_week", None))
+        if hr else None)
     person["hr_visible"] = hr
     # Independent of `hr_visible` on purpose. The two permissions are separate
     # grants, and an admin who may edit a record but not read its HR half is a

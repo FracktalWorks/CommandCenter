@@ -9,6 +9,8 @@ Spec: ``project-docs/specs/people_center_app.md`` §3, §6 · ticket WS-28b.
     GET   /people/{id}            → one person, with the login badge
     GET   /people/{id}/work       → their open tasks, scoped by the VIEWER
     GET   /people/{id}/editable   → what THIS caller may write on that row
+    GET   /people/schedule        → the company's working week
+    PUT   /people/schedule        → edit it (admin:members:manage)
     PATCH /people/{id}            → a class-checked write (admin OR the subject)
     POST  /people/{id}/resume     → the CV, same rule
 
@@ -36,7 +38,9 @@ exists and must not be re-implemented here").
 # `/people/{person_id}` — which happily matches the literal path `/people/me`.
 # So:
 #
-#   1. WITHIN this package, `profile.py` is imported before `directory.py`
+#   1. WITHIN this package, `profile.py` and `schedule.py` are imported before
+#      `directory.py` — `/people/schedule` is a literal path and would
+#      otherwise be swallowed by `/people/{person_id}` too
 #      (neither imports the other; their shared read seam lives in `core.py`,
 #      which is what makes this order hold at runtime rather than being undone
 #      by a transitive import).
@@ -50,6 +54,7 @@ exists and must not be re-implemented here").
 # because the second one fails as a 403 that looks like a permissions problem.
 from gateway.routes.people import selfservice as _selfservice  # noqa: F401
 from gateway.routes.people import profile as _profile  # noqa: F401
+from gateway.routes.people import schedule as _schedule  # noqa: F401
 from gateway.routes.people import directory as _directory  # noqa: F401
 from gateway.routes.people.core import router
 from gateway.routes.people.selfservice import router as self_router

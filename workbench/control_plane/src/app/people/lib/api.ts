@@ -70,6 +70,16 @@ export interface PersonDetail extends PersonRow {
   /** True when this row is the caller's own (D-PC-1). */
   is_self?: boolean;
   /**
+   * The effective work schedule (WS-28p) — org policy with this person's
+   * override applied, `source` naming which layer decided each field. Computed
+   * by the server; the client never recombines the two halves.
+   */
+  schedule?: import("./schedule").EffectiveSchedule | null;
+  /** Derived from that schedule (D-PC-18). Null without the HR tier. */
+  contracted_hours_per_week?: number | null;
+  /** Set when the hand-typed capacity disagrees with the derived figure. */
+  capacity_conflict?: number | null;
+  /**
    * Which fields THIS caller may write on THIS row — the server's answer, and
    * the only one the UI is allowed to have. An empty array means read-only,
    * and read-only means the controls are ABSENT, never disabled.
@@ -133,6 +143,46 @@ export const peopleApi = {
       /** Which row is the caller's, if any — the link target for "my profile". */
       self_person_id?: string | null;
     }>(`${query ? `?${query}` : ""}`);
+  },
+
+  /** The company's working week, plus whether this caller may edit it. */
+  schedule: () =>
+    call<{
+      policy: import("./schedule").WorkPolicy;
+      defaults: import("./schedule").WorkPolicy;
+      contracted_hours_per_week: number;
+      can_manage: boolean;
+      updated_by?: string | null;
+      updated_at?: string | null;
+    }>("schedule"),
+
+  /**
+   * Save the policy — or, with `dryRun`, ask what it WOULD move and write
+   * nothing. The settings page previews before it applies, because this figure
+   * is the denominator of every load bar in the org.
+   */
+  saveSchedule: async (
+    policy: import("./schedule").WorkPolicy,
+    dryRun: boolean
+  ) => {
+    const res = await fetch("/api/people/schedule", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ policy, dry_run: dryRun }),
+    });
+    const text = await res.text();
+    const parsed = text ? JSON.parse(text) : null;
+    if (!res.ok) {
+      throw new PeopleApiError(
+        parsed?.detail ?? `Request failed (${res.status})`,
+        res.status
+      );
+    }
+    return parsed as {
+      policy: import("./schedule").WorkPolicy;
+      impact: import("./schedule").PolicyImpact;
+      saved: boolean;
+    };
   },
 
   facets: () =>

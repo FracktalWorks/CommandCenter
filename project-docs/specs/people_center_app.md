@@ -1166,8 +1166,10 @@ other way round the defect returns exactly as it was, except now it presents as 
 the directory's gate, which reads like a permissions problem rather than a routing one.
 Fenced by a source assertion on `main.py`.
 
-**WS-28p — the work schedule (P-7, §3.4a, §5.11).** 🟢 AGENT-SAFE. *Build before WS-28j:
-the dashboard's "at risk" is arithmetic over working hours, and without this it has none.*
+**WS-28p — the work schedule (P-7, §3.4a, §5.11).** ✅ **BUILT 2026-08-13**
+(`gateway/work_schedule.py`, `routes/people/schedule.py`, `src/app/people/schedule/`;
+**no migration** — the policy is a row in `org_settings` and the override is the column
+P-3 already shipped; 60 hermetic + 25 vitest cases and **24 live checks**).
 Done when: the org policy round-trips through `org_settings['work_schedule']` under
 `admin:members:manage`; one function computes the **effective** schedule from policy +
 person override and is the only place the layering happens; `contracted_hours_per_week` is
@@ -1177,6 +1179,34 @@ derived from it and travels on every person read; the typed `capacity_hours_per_
 never set it and is never written again afterwards (D-PC-16); and a test proves People→
 Calendar is the only direction — nothing in the diff writes `gtd_people.working_hours`
 from a calendar preference.
+
+**Three things the build settled, and one it found:**
+
+- **The policy is read through the caller's session, not through
+  `acb_common.org_settings`.** That helper serves the appearance blob and opens its own
+  synchronous psycopg connection per call — fine for a value nothing reads on a hot path,
+  wrong for one read on **every person read**. Using the session the caller already holds
+  adds no connection site (R5b) and, unlike the psycopg helper, carries the bound tenant.
+- **The seed is a read-time default, not a write.** `routes/tasks/settings._load` derives
+  the day window only when the person has **no `gtd_settings` row at all** — the one
+  unambiguous "never expressed a preference", since the columns carry SQL defaults and a
+  row created for an unrelated setting cannot be told apart from a deliberate 07:00. It
+  writes nothing, so a schedule change still follows anybody who has not customised, and
+  the instant they save one setting it stops applying forever. "Seeded once" with no sync
+  to maintain. The limit is stated in the code rather than papered over.
+- **The direction has a structural fence**, not a paragraph: a test sweeps the whole tasks
+  package for a write to `gtd_people.working_hours` and fails on one. Prose about a
+  direction binds nobody — the next agent has not read it — and the failure mode is two
+  numbers drifting where nobody looks.
+
+⚠️ **The live run found a gap the hermetic suite could not.** Working hours existed only
+*inside shifts*, so a person who had named no shift had no start or end at all, and the
+calendar seed silently fell back to migration 77's 07:00–22:00. Every hermetic fixture
+happened to name a shift. The policy now carries the company's **standard day**
+(`start`/`end`) with shifts as named alternatives — which is also the simpler model: a
+company with one working pattern should not have to express it as a shift and then put
+every employee on it. A second defect the tests caught: a `fraction` of `0.0` is falsy, so
+`or 1.0` quietly restored a full 40-hour week on the denominator every load bar divides by.
 
 **WS-28q — the display image (P-8, §3.1a).** 🟢 AGENT-SAFE.
 Done when: an upload is decoded, centre-cropped square, resized to exactly 256×256 and

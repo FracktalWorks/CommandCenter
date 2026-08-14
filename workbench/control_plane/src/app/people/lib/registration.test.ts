@@ -86,18 +86,31 @@ describe("the People Center's directory sub-app", () => {
     // bloat failure mode `department_centers.md` §1 rule 2 says to refuse in
     // review — the same rule the Projects entries follow.
     //
-    // `/people/me` is on the allow-list because it is a ROW selector, not a
-    // scope: it renders the same app and the same panels for whichever row
-    // carries the caller's address (§5.3). `/people/sales` would be the fork
-    // this test exists to catch, and it still fails.
-    const OWN_ROUTES = new Set([PEOPLE_HREF, `${PEOPLE_HREF}/me`]);
+    // Sub-routes of the app are fine — `/people/me` is a ROW selector and
+    // `/people/schedule` is a VIEW; both render the same app under the same
+    // gate. What this catches is a path SCOPED BY CENTER (`/people/sales`),
+    // which is the bloat failure mode, and it is asserted against the real
+    // Center slugs rather than an allow-list somebody has to extend on every
+    // ticket — a fence that needs editing to stay green stops being a fence.
+    const CENTER_SLUGS = new Set(CENTERS.map((c) => c.slug));
     for (const center of CENTERS) {
       for (const app of center.apps) {
         if (!app.href?.startsWith(PEOPLE_HREF)) continue;
-        const path = app.href.split("?")[0];
-        expect(OWN_ROUTES.has(path), `${path} forks the People app`).toBe(true);
+        const [, , sub] = app.href.split("?")[0].split("/");
+        expect(
+          sub === undefined || !CENTER_SLUGS.has(sub),
+          `${app.href} scopes the People app by Center`
+        ).toBe(true);
       }
     }
+  });
+
+  it("offers the working week as its own entry", () => {
+    const entry = peopleCenter?.apps.find(
+      (a) => a.href === `${PEOPLE_HREF}/schedule`
+    );
+    expect(entry, "the People Center has no 'working week' entry").toBeTruthy();
+    expect(entry?.status).toBe("live");
   });
 
   it("offers the self-service profile as its own entry", () => {

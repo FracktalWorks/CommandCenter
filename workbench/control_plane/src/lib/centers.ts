@@ -325,6 +325,15 @@ export const CENTERS: Center[] = [
         href: "/people",
       },
       {
+        label: "Who can help?",
+        note: "Capability search — stated skills, résumé evidence and related work, each match showing its reasoning. Suggests, never assigns",
+        icon: "Search",
+        // WS-28d. Needs `admin:members:read`: a skills query by definition
+        // (people_center_app.md §5.5, §4.2's oracle rule).
+        status: "live",
+        href: "/people/search",
+      },
+      {
         label: "Workload dashboard",
         note: "Who is behind, at risk, overloaded or idle — every person's projects, deadlines and committed hours against the week they actually have",
         // `Gauge`, mapped in Fluent and Material both (the registry check on

@@ -701,6 +701,13 @@ async def create_person(
             await db.execute(
                 text(f"UPDATE gtd_people SET {', '.join(set_parts)} WHERE id = :id"),
                 params)
+        if skills:
+            # WS-28h / D-PC-6: the child table is the source, the array the
+            # projection — so a create that carries skills seeds the table in
+            # the SAME transaction, or the very first save would already
+            # disagree with it.
+            from gateway.person_skills import sync_from_array
+            await sync_from_array(db, pid, skills, _uid(user))
         person = await _get_person_row(db, pid)
     # The insert is committed above; the capability re-embed runs AFTER it in
     # its own transaction (best-effort — an embedding hiccup never fails the
@@ -746,6 +753,15 @@ async def update_person(
         await db.execute(
             text(f"UPDATE gtd_people SET {', '.join(set_parts)} WHERE id = :id"),
             params)
+        if "skills" in fields:
+            # WS-28h / D-PC-6: reconcile the structured table to the flat list
+            # in the SAME transaction. Retained skills keep their level/years —
+            # a flat save through this older door must never strip what the
+            # structured editor set — and the projection re-derives the array,
+            # so it cannot be observed disagreeing with the table.
+            from gateway.person_skills import sync_from_array
+            await sync_from_array(db, person_id, fields["skills"] or [],
+                                  _uid(user))
         person = await _get_person_row(db, person_id)
     # The edit is committed above; the capability re-embed runs AFTER it in its
     # own transaction (best-effort; H2 restructure).
@@ -787,20 +803,14 @@ async def ingest_resume(
         raise HTTPException(status_code=413, detail="Résumé too large (max 15 MB).")
 
     async with _tenant_session() as db:
-        row = await _get_person_row(db, person_id)
+        # Existence check only — the merge itself reads the TABLE now (WS-28h),
+        # not this row's array.
+        await _get_person_row(db, person_id)
         # Vocabulary = every skill the org already knows (broadens keyword hits).
         vocab_rows = (await db.execute(text(
             "SELECT DISTINCT unnest(skills) AS s FROM gtd_people"))).fetchall()
         known = [r.s for r in vocab_rows if r.s]
         parsed = await parse_resume(content, fname, file.content_type, known)
-
-        current = list(row.skills or [])
-        cur_lower = {s.lower() for s in current}
-        added = [s for s in parsed["skills"] if s.lower() not in cur_lower]
-        merged = current + added
-        prior_src = dict(row.skills_source or {})
-        for s in added:
-            prior_src[s] = "resume"
 
         # Store the file next to task attachments (owner-checked dir).
         rid = str(uuid4())
@@ -809,6 +819,7 @@ async def ingest_resume(
 
         extracted = {
             "skills": parsed["skills"],
+            "credentials": parsed.get("credentials", []),
             "experience_summary": parsed.get("experience_summary"),
             "years_experience": parsed.get("years_experience"),
             "domain": parsed.get("domain"),
@@ -824,18 +835,25 @@ async def ingest_resume(
              "path": str(dest), "ptext": parsed.get("text", "")[:200000],
              "extracted": json.dumps(extracted), "by": _uid(user)})
 
-        # Merge skills + fill summary/years/domain only when currently empty.
+        # WS-28h / D-PC-6: the parse writes STRUCTURED rows — skills as
+        # evidence='resume' child rows, credentials deduplicated — and the
+        # array is re-projected from the table in the same transaction, not
+        # merged by hand here. Add-only: a résumé is evidence for what it
+        # contains and silent about everything else, so nothing a human put in
+        # is removed, and a skill already present keeps its level untouched.
+        from gateway.person_skills import merge_from_resume
+        added = await merge_from_resume(
+            db, person_id, parsed["skills"], parsed.get("credentials", []),
+            _uid(user))
+        # Fill summary/years/domain only when currently empty.
         await db.execute(text(
             """UPDATE gtd_people SET
-                 skills = :skills,
-                 skills_source = CAST(:src AS JSONB),
                  resume_summary = COALESCE(resume_summary, :summary),
                  years_experience = COALESCE(years_experience, :years),
                  domain = COALESCE(domain, :domain),
                  updated_by = :by, updated_at = now()
                WHERE id = :id"""),
-            {"skills": merged, "src": json.dumps(prior_src),
-             "summary": parsed.get("experience_summary"),
+            {"summary": parsed.get("experience_summary"),
              "years": parsed.get("years_experience"),
              "domain": parsed.get("domain"), "by": _uid(user), "id": person_id})
         person = await _get_person_row(db, person_id)

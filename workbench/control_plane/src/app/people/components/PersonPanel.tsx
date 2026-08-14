@@ -20,6 +20,7 @@ import Button from "@/components/ui/Button";
 
 import { type PersonDetail, type WorkRow, peopleApi } from "../lib/api";
 import { initials, loadBar, skillOrigin, statusTone } from "../lib/directory";
+import { describeSkill } from "../lib/skills";
 import { AbsencePanel, AwayBadge } from "./AbsencePanel";
 import { Avatar } from "./Avatar";
 import { ProfilePanels } from "./ProfilePanels";
@@ -168,10 +169,23 @@ export function PersonPanel({ personId, reloadKey = 0, onClose, onEdit }: Props)
           <div className="flex flex-wrap gap-1">
             {(person.skills ?? []).map((skill) => {
               const origin = skillOrigin(skill, person.skills_source);
+              // WS-28h: the structured row, when one exists, enriches the
+              // chip — the level and recency ARE the assignment questions.
+              const detail = (person.skills_detail ?? []).find(
+                (r) => r.skill === skill
+              );
+              const assessment = detail ? describeSkill(detail) : "";
               return (
                 <span
                   key={skill}
-                  title={origin === "stated" ? "Stated by a person" : "Extracted from a résumé"}
+                  title={[
+                    origin === "stated"
+                      ? "Stated by a person"
+                      : "Extracted from a résumé",
+                    assessment,
+                  ]
+                    .filter(Boolean)
+                    .join(" · ")}
                   className={`rounded-md px-2 py-1 text-xs ${
                     origin === "stated"
                       ? "bg-muted text-foreground"
@@ -179,6 +193,11 @@ export function PersonPanel({ personId, reloadKey = 0, onClose, onEdit }: Props)
                   }`}
                 >
                   {skill}
+                  {assessment && (
+                    <span className="ml-1 text-[10px] text-muted-foreground">
+                      {assessment}
+                    </span>
+                  )}
                 </span>
               );
             })}

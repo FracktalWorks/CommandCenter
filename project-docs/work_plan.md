@@ -424,7 +424,24 @@ taste**: `pm_tasks.tags` stores tag **display text**, not a key, so an org-wide 
 root-local `bug` are the *same tag* on every task while being two rows with two colours —
 **most specific wins**, fenced by a test. **R6 expand-only** (old writers unaffected, old
 readers simply do not see org-wide rows); **ship dark on the create affordance, not the read
-union**. (2026-08-14) |
+union**. ✅ **WS-27bi BUILT 2026-08-14** — `core.parse_precondition` /
+`core.require_precondition` (one seam, not inline) wired into `PATCH /projects/tasks/{id}` via
+`If-Match`, checked **after** the visibility load so an unreadable task still answers 404 and
+never leaks its existence through a 412 (R5). **Both measured traps are fenced and
+mutation-proved**: assuming UTC for a naive token turns 2 checks red, string comparison turns 2
+red, never enforcing turns 7 red. ⚠️ The string-comparison mutant still passed **12 of 16** —
+including the ordinary-microsecond match — which is exactly why the measurement was required:
+that mutant is invisible to any test someone would think to write. A third fence asserts
+`touch=False` appears **twice, both in `recurrence.py`**, so a future third site has to come and
+argue itself against both consumers. 🔴 **Two process findings.** (1) `Header(None, ...)` is
+resolved by FastAPI **only through the HTTP layer**, so the package's many direct endpoint calls
+receive the sentinel object rather than `None` — the first wiring turned **18 existing tests into
+400s**, and the guard is `isinstance(str)`, now regression-tested. (2) **`ruff check --fix`
+deleted `core.py`'s `_tenant_session` re-export** — unused *within* the module, imported by name
+from every sibling — and took **25 test modules** down with it. The repo's own CI comment warns
+that a blanket `--fix` is destructive here and CI runs it report-only; the line now carries a
+comment saying so. ✅ `tests/unit` **6015 passed** (baseline 5999), blocking lint clean.
+(2026-08-14) |
 | WS-28 | **People Center — directory, org chart, assignment seam** *(minted 2026-08-06)* | ✅ a+b+b-write | `specs/people_center_app.md` · board record 2026-08-09 | a (key shape, mig 148 + quarantine table) · b (directory + person page, mig 149, five-place registration) · b-write (create/edit UI restored; found three ways mig 148 had broken the write routes) — built 2026-08-06/07; **closes WS-13's directory item**. 🟢 c org chart · d capability search (**ranking EVAL-LOCKED**) · e Projects seams; 🔴 f seats/roles writes (§6 WS-24 (d) analogue). ⚠️ `schema.generated.sql` regeneration is **due**: stale since ~migration 113, and 148 reached prod ~2026-08-07 (after the #384 cast fix). (2026-08-07) |
 ---
 

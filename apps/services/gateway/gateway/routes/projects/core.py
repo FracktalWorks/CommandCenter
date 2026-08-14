@@ -52,6 +52,8 @@ from fastapi import APIRouter, HTTPException, Query
 # comes from the request context — bound once in `_with_resolved_access` —
 # so no call site passes one (H2). A call outside a bound request raises
 # `TenantUnbound` rather than defaulting: fail closed, never "the usual org".
+# ⚠️ It reads as UNUSED inside this module — it is a re-export. `ruff --fix`
+# deletes it and takes 25 test modules with it; do not let a linter "tidy" it.
 from gateway.db import tenant_session as _tenant_session
 from pydantic import BaseModel
 from sqlalchemy import text
@@ -1052,6 +1054,77 @@ async def require_row(db: Any, table: str, record_id: str, what: str) -> Any:
     if row is None:
         raise HTTPException(status_code=404, detail=f"{what} not found")
     return row
+
+
+# ── The write precondition — D-PM-20 / WS-27bi ───────────────────────────────
+#
+# ``If-Match: <updated_at>``. No ``version`` column: ``update_row`` already moves
+# ``updated_at`` on every write that matters, and a second monotonic fact about
+# one row is the CLAUDE.md §5 defect.
+#
+# ⚠️ The two rules below are not stylistic — both were MEASURED against a real
+# database (spec §9.10.1), and both are cases where the obvious implementation
+# reports a safety it does not have:
+#
+#   1. A NAIVE (offset-stripped) token must be REFUSED, not accepted. asyncpg
+#      reinterprets a tz-less datetime in the session zone, so on a UTC box a
+#      stripped offset silently compares EQUAL. It would pass every test and
+#      begin mis-comparing the moment the session TZ moved.
+#   2. The token is never rendered by pg's ``::text`` and never string-compared.
+#      Postgres trims trailing zeros (``.1``) where the JSON encoder does not
+#      (``.100000``): equal as instants, different as strings. Comparing the
+#      parsed ``datetime`` objects is exact, and comparing the strings passes
+#      every test written against ordinary microseconds.
+
+
+def parse_precondition(token: str) -> datetime:
+    """Parse an ``If-Match`` token, refusing anything that cannot compare safely."""
+    raw = token.strip()
+    if raw.startswith('"') and raw.endswith('"') and len(raw) > 1:
+        raw = raw[1:-1]          # tolerate the quoted ETag spelling
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail="If-Match must be an ISO-8601 timestamp with a UTC offset, "
+                   "as returned in the row's 'updated_at'.",
+        ) from None
+    if parsed.tzinfo is None:
+        # Rule 1. This is the whole point of the header being measured.
+        raise HTTPException(
+            status_code=400,
+            detail="If-Match must carry a UTC offset. A timestamp without one "
+                   "is ambiguous and would compare against the wrong instant.",
+        )
+    return parsed
+
+
+def require_precondition(row: Any, if_match: str | None, current: dict) -> None:
+    """Enforce ``If-Match`` against ``row.updated_at``.
+
+    An ABSENT header still succeeds (D-PM-20): advisory now, mandatory in a later
+    release. Made compulsory on day one it would break every existing caller at
+    once, which is the failure this decision exists to prevent — R6's
+    expand-then-tighten discipline applied to an API rather than a schema.
+    """
+    # Absent means absent. ⚠️ Not merely ``is None``: FastAPI only resolves a
+    # ``Header(...)`` default through the HTTP layer, so an endpoint called
+    # DIRECTLY -- which most of this package's tests do -- receives the sentinel
+    # object itself. Treating that as a supplied token turned 18 existing tests
+    # into 400s the first time this was wired.
+    if not isinstance(if_match, str):
+        return
+    expected = parse_precondition(if_match)
+    if row.updated_at != expected:          # rule 2: instants, never strings
+        raise HTTPException(
+            status_code=412,
+            detail={
+                "error": "precondition_failed",
+                "message": "This row changed since you loaded it.",
+                "current": current,
+            },
+        )
 
 
 async def count_where(db: Any, table: str, column: str, value: str) -> int:

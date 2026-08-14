@@ -114,6 +114,15 @@ export interface PersonDetail extends PersonRow {
    * and read-only means the controls are ABSENT, never disabled.
    */
   editable_fields?: string[];
+  /**
+   * WS-28h — the structured capability half (§3.3), HR tier. `skills_detail`
+   * enriches the flat chips with level/years/recency; `credentials` is the
+   * "is this person actually qualified to sign this off" history. Both empty
+   * for a caller outside the tier — and `hr_visible` already says which
+   * emptiness this is.
+   */
+  skills_detail?: import("./skills").SkillDetail[];
+  credentials?: import("./skills").Credential[];
   load?: {
     open_tasks: number;
     estimated_hours: number;
@@ -317,6 +326,73 @@ export const peopleApi = {
     }>("facets"),
 
   person: (id: string) => call<PersonDetail>(id),
+
+  /**
+   * The structured capability payload: rows + credentials + the VOCABULARIES
+   * (levels, kinds), so the editor renders its selects without a client-side
+   * copy that could drift — the D-PC-4 shape, applied to a word list.
+   * `target` is `"me"` or a person id: different doors, one implementation.
+   */
+  skills: (target: string) =>
+    call<{
+      skills: import("./skills").SkillDetail[];
+      credentials: import("./skills").Credential[];
+      levels: string[];
+      evidence: string[];
+      credential_kinds: string[];
+    }>(`${target}/skills`),
+
+  /**
+   * Replace the skills, whole. The server refuses a bad row BY NAME and
+   * applies nothing (D-PC-5); the sentence is shown verbatim. Every save
+   * rewrites the flat `skills[]` projection in the same transaction (D-PC-6),
+   * so the chips everywhere else update with it.
+   */
+  saveSkills: async (
+    target: string,
+    rows: import("./skills").SkillDetail[]
+  ) => {
+    const res = await fetch(`/api/people/${target}/skills`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ rows }),
+    });
+    const text = await res.text();
+    const parsed = text ? JSON.parse(text) : null;
+    if (!res.ok) {
+      throw new PeopleApiError(
+        parsed?.detail ?? `Request failed (${res.status})`,
+        res.status
+      );
+    }
+    return parsed as {
+      skills: import("./skills").SkillDetail[];
+      credentials: import("./skills").Credential[];
+    };
+  },
+
+  saveCredentials: async (
+    target: string,
+    rows: import("./skills").Credential[]
+  ) => {
+    const res = await fetch(`/api/people/${target}/credentials`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ rows }),
+    });
+    const text = await res.text();
+    const parsed = text ? JSON.parse(text) : null;
+    if (!res.ok) {
+      throw new PeopleApiError(
+        parsed?.detail ?? `Request failed (${res.status})`,
+        res.status
+      );
+    }
+    return parsed as {
+      skills: import("./skills").SkillDetail[];
+      credentials: import("./skills").Credential[];
+    };
+  },
 
   /**
    * The caller's own row — or WHY there isn't one (§5.3).

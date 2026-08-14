@@ -6,7 +6,7 @@
 --
 -- SET NOT NULL + FK + index. ⚠️ THIS IS THE ACCESS EXCLUSIVE PHASE — it scans each table. Apply in a window, table by table if necessary, and never behind a long-running transaction (see the generator docstring: that is the exact shape of the 14h44m outage).
 --
--- Tables in this phase: 138
+-- Tables in this phase: 140
 --
 -- ⚠️ NOT COVERED BY THIS FILE — `organization_id` already means something
 -- else on these tables, so scoping them by that name would corrupt a
@@ -815,6 +815,18 @@ ALTER TABLE gtd_person_absences ADD CONSTRAINT gtd_person_absences_org_fk
     FOREIGN KEY (organization_id) REFERENCES organization(id) ON DELETE CASCADE;
 CREATE INDEX IF NOT EXISTS gtd_person_absences_org_idx ON gtd_person_absences (organization_id);
 
+-- gtd_person_credentials
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM gtd_person_credentials WHERE organization_id IS NULL) THEN
+        RAISE EXCEPTION 'MT-1b: gtd_person_credentials still has unowned rows — run phase 2 (backfill) to completion first';
+    END IF;
+END $$;
+ALTER TABLE gtd_person_credentials ALTER COLUMN organization_id SET NOT NULL;
+ALTER TABLE gtd_person_credentials ADD CONSTRAINT gtd_person_credentials_org_fk
+    FOREIGN KEY (organization_id) REFERENCES organization(id) ON DELETE CASCADE;
+CREATE INDEX IF NOT EXISTS gtd_person_credentials_org_idx ON gtd_person_credentials (organization_id);
+
 -- gtd_person_resumes
 DO $$
 BEGIN
@@ -826,6 +838,18 @@ ALTER TABLE gtd_person_resumes ALTER COLUMN organization_id SET NOT NULL;
 ALTER TABLE gtd_person_resumes ADD CONSTRAINT gtd_person_resumes_org_fk
     FOREIGN KEY (organization_id) REFERENCES organization(id) ON DELETE CASCADE;
 CREATE INDEX IF NOT EXISTS gtd_person_resumes_org_idx ON gtd_person_resumes (organization_id);
+
+-- gtd_person_skills
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM gtd_person_skills WHERE organization_id IS NULL) THEN
+        RAISE EXCEPTION 'MT-1b: gtd_person_skills still has unowned rows — run phase 2 (backfill) to completion first';
+    END IF;
+END $$;
+ALTER TABLE gtd_person_skills ALTER COLUMN organization_id SET NOT NULL;
+ALTER TABLE gtd_person_skills ADD CONSTRAINT gtd_person_skills_org_fk
+    FOREIGN KEY (organization_id) REFERENCES organization(id) ON DELETE CASCADE;
+CREATE INDEX IF NOT EXISTS gtd_person_skills_org_idx ON gtd_person_skills (organization_id);
 
 -- gtd_projects
 DO $$

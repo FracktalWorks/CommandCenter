@@ -64,8 +64,19 @@ describe("skillsState", () => {
 });
 
 describe("skillOrigin", () => {
-  it("reads a stated skill as stated", () => {
+  it("reads the backend's own word for a typed skill as stated", () => {
+    // ⚠️ `manual` is what create_person and every PATCH actually write.
+    // The first version of this suite pinned only the literal "stated" —
+    // which no write path has ever produced — so every hand-typed skill in
+    // the product rendered as "extracted from a résumé". A fence that pins
+    // the wrong vocabulary holds the defect in place.
+    expect(skillOrigin("Firmware", { Firmware: "manual" })).toBe("stated");
     expect(skillOrigin("Firmware", { Firmware: "stated" })).toBe("stated");
+  });
+
+  it("reads observed work as a claim about work, not a parser guess", () => {
+    // WS-28h's third evidence word: derived from shipped tasks.
+    expect(skillOrigin("Firmware", { Firmware: "observed" })).toBe("stated");
   });
 
   it("defaults UNKNOWN provenance to resume, not stated", () => {
@@ -73,6 +84,7 @@ describe("skillOrigin", () => {
     // stated and a parser inferred must not look like a claim they made.
     expect(skillOrigin("Firmware", {})).toBe("resume");
     expect(skillOrigin("Firmware", undefined)).toBe("resume");
+    expect(skillOrigin("Firmware", { Firmware: "resume" })).toBe("resume");
   });
 });
 

@@ -50,20 +50,20 @@ def extract_text(content: bytes, filename: str, mime: str | None) -> str:
             return _docx_text(content)
         if suffix in (".txt", ".md", ".rtf") or m.startswith("text/"):
             return content.decode("utf-8", errors="replace")
-    except Exception:  # noqa: BLE001 — parsing is best-effort, never fatal
+    except Exception:
         return ""
     # Unknown type — last-ditch utf-8 (covers mislabelled text résumés).
     try:
         return content.decode("utf-8", errors="replace")
-    except Exception:  # noqa: BLE001
+    except Exception:
         return ""
 
 
 def _pdf_text(content: bytes) -> str:
     try:
-        import pymupdf  # noqa: PLC0415
-    except Exception:  # noqa: BLE001 — older wheels expose the module as `fitz`
-        import fitz as pymupdf  # noqa: PLC0415
+        import pymupdf
+    except Exception:
+        import fitz as pymupdf
     parts: list[str] = []
     with pymupdf.open(stream=content, filetype="pdf") as doc:
         for page in doc:
@@ -72,9 +72,9 @@ def _pdf_text(content: bytes) -> str:
 
 
 def _docx_text(content: bytes) -> str:
-    import io  # noqa: PLC0415
+    import io
 
-    import docx  # noqa: PLC0415 — the python-docx package
+    import docx
     d = docx.Document(io.BytesIO(content))
     return "\n".join(p.text for p in d.paragraphs)
 
@@ -91,27 +91,35 @@ def extract_skills(text: str, known_skills: list[str] | None = None) -> list[str
     for skill in vocab:
         # Boundaries = start/end or a non-(alnum/+/#/./ ) char, so 'c++',
         # 'node.js', 'ci/cd' still match while 'c' won't match inside 'cad'.
-        pat = r"(?<![a-z0-9+#./]){}(?![a-z0-9+#./])".format(re.escape(skill))
+        pat = rf"(?<![a-z0-9+#./]){re.escape(skill)}(?![a-z0-9+#./])"
         if re.search(pat, hay):
             found.append(skill)
     return sorted(set(found))
 
 
 async def llm_extract_profile(text: str) -> dict[str, Any]:
-    """LLM pass: pull {skills[], experience_summary, years_experience, domain}
-    from résumé text. Returns {} on any failure (caller keeps the keyword hits)."""
+    """LLM pass: pull {skills[], credentials[], experience_summary,
+    years_experience, domain} from résumé text. Returns {} on any failure
+    (caller keeps the keyword hits)."""
     snippet = (text or "")[:12000]
     if not snippet.strip():
         return {}
     try:
-        from acb_llm.context import acompletion_with_fallback  # noqa: PLC0415
+        from acb_llm.context import acompletion_with_fallback
         system = (
             "You extract a structured profile from résumé text. Return ONLY JSON: "
             '{"skills": [str], "experience_summary": str, '
-            '"years_experience": int|null, "domain": str}. '
+            '"years_experience": int|null, "domain": str, '
+            '"credentials": [{"kind": "education"|"certification"|"prior_role", '
+            '"title": str, "issuer": str|null, "year_from": int|null, '
+            '"year_to": int|null}]}. '
             "skills = concrete technical/professional competencies (lowercase, "
             "deduplicated). experience_summary = one sentence. domain = the "
-            "person's primary field (e.g. 'firmware', 'web', 'mechanical', 'sales')."
+            "person's primary field (e.g. 'firmware', 'web', 'mechanical', 'sales'). "
+            "credentials = degrees (kind=education, issuer=institution), "
+            "certifications (issuer=certifying body), and previous jobs "
+            "(kind=prior_role, title=the role, issuer=the employer). Only what "
+            "the text actually states — never infer a credential."
         )
         resp, _used = await acompletion_with_fallback(
             model="tier-balanced",
@@ -125,7 +133,7 @@ async def llm_extract_profile(text: str) -> dict[str, Any]:
         raw = resp.choices[0].message.content or ""
         start, end = raw.find("{"), raw.rfind("}")
         data = json.loads(raw[start:end + 1])
-    except Exception:  # noqa: BLE001 — degrade to keyword-only
+    except Exception:
         return {}
     out: dict[str, Any] = {}
     if isinstance(data.get("skills"), list):
@@ -137,6 +145,34 @@ async def llm_extract_profile(text: str) -> dict[str, Any]:
         out["years_experience"] = int(yrs)
     if data.get("domain"):
         out["domain"] = str(data["domain"]).strip()[:80]
+    if isinstance(data.get("credentials"), list):
+        out["credentials"] = _clean_credentials(data["credentials"])
+    return out
+
+
+def _clean_credentials(raw: list[Any]) -> list[dict[str, Any]]:
+    """Coerce the model's credential rows to the store's shape, dropping what
+    cannot be used. Tolerant on the way in for the same reason the whole
+    pipeline is: a hallucinated year should cost its own row, never the parse.
+    The store validates again (`person_skills.validate_credentials`) — this
+    pass only makes rows well-typed enough to reach it."""
+    out: list[dict[str, Any]] = []
+    for item in raw[:50]:
+        if not isinstance(item, dict):
+            continue
+        kind = str(item.get("kind") or "").strip()
+        title = str(item.get("title") or "").strip()
+        if kind not in ("education", "certification", "prior_role") or not title:
+            continue
+        years: dict[str, int | None] = {}
+        for field in ("year_from", "year_to"):
+            value = item.get(field)
+            years[field] = int(value) if isinstance(value, (int, float)) else None
+        out.append({
+            "kind": kind, "title": title[:200],
+            "issuer": (str(item.get("issuer") or "").strip()[:200] or None),
+            **years,
+        })
     return out
 
 
@@ -154,6 +190,10 @@ async def parse_resume(
     return {
         "text": text,
         "skills": skills,
+        # LLM-only: the keyword pass has no way to know a degree from a job
+        # title, and an empty list on LLM failure degrades exactly like the
+        # rest of the profile half.
+        "credentials": llm.get("credentials", []),
         "experience_summary": llm.get("experience_summary"),
         "years_experience": llm.get("years_experience"),
         "domain": llm.get("domain"),

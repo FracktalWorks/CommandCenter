@@ -64,6 +64,7 @@ from gateway.routes.people import profile as _profile  # noqa: F401
 from gateway.routes.people import schedule as _schedule  # noqa: F401
 from gateway.routes.people import absences as _absences  # noqa: F401
 from gateway.routes.people import dashboard as _dashboard  # noqa: F401
+from gateway.routes.people import skills as _skills  # noqa: F401
 from gateway.routes.people import directory as _directory  # noqa: F401
 from gateway.routes.people.core import router
 from gateway.routes.people.selfservice import router as self_router

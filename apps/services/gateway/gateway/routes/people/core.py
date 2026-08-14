@@ -196,6 +196,20 @@ async def person_payload(db: Any, row: Any, user: Any) -> dict:
     # information, and a reason is nobody else's business.
     availability = await person_availability(db, str(row.id), schedule, hr=hr)
     person.update(availability)
+    # WS-28h — the structured capability half (§3.3): level, years, recency,
+    # evidence, and the credential history. HR tier like the flat skills they
+    # project into. Best-effort for the same reason the absences are: a
+    # database one deploy behind migration 175 answers "none recorded" rather
+    # than failing the person page.
+    person["skills_detail"] = []
+    person["credentials"] = []
+    if hr:
+        try:
+            from gateway.person_skills import fetch_credentials, fetch_skills
+            person["skills_detail"] = await fetch_skills(db, str(row.id))
+            person["credentials"] = await fetch_credentials(db, str(row.id))
+        except Exception:
+            pass
     person["hr_visible"] = hr
     # Independent of `hr_visible` on purpose. The two permissions are separate
     # grants, and an admin who may edit a record but not read its HR half is a

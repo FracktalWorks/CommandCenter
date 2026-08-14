@@ -221,6 +221,26 @@ npm run test:e2e -- e2e/org-branding.spec.ts
 > because nothing runs `e2e/` in CI.** That is the same shape as CP-3's
 > R8 fences skipping while reporting green.
 >
+> **UPDATE, same day — the readiness half is FIXED; a second defect is not.**
+> `playwright.config.ts` now serves the suite with `next dev`, which uses the
+> bypass `authPosture` already defines (`NODE_ENV !== "production"`) rather than
+> inventing one — so the suite boots. Escalating that to an owner decision was
+> wrong; it was a config choice. **The trade is real and stated in the config:**
+> these specs now exercise the dev bundle, so production-only faults
+> (minification, RSC boundaries) are uncovered.
+>
+> But the app **does not hydrate** under the dev server in Playwright: zero
+> `/api/**` requests are issued, the console repeats a failed
+> `_next/webpack-hmr` WebSocket handshake, and the shell sits on its
+> server-rendered fallback. So `e2e/org-branding.spec.ts` is marked
+> `test.fixme` in full.
+>
+> ⚠️ **The partial pass was the dangerous part.** Before the marking, 9 of 18
+> tests passed — every one a fallback or outage case, i.e. exactly what an
+> un-hydrated page already renders. They would pass with the client bundle
+> deleted. A green half of a suite that cannot execute its subject is worse
+> than a red one.
+>
 > Owed, and NOT decided here: the runner needs a deliberate test-auth posture.
 > Inventing a bypass environment variable is a security decision with an owner,
 > not a detail an implementer picks — so it is written down rather than done.

@@ -92,23 +92,33 @@ const THEMES = ["rapidtool", "fluent", "material", "graphite"] as const;
 const MODES = ["dark", "light"] as const;
 
 /**
- * Stub the shell's API surface.
+ * Stub the shell's API surface with ONE handler that switches on the path.
  *
- * ⚠️ **Registration order is load-bearing and is the opposite of what it
- * reads like.** Playwright `unshift`es handlers, so the LAST registered wins.
- * The catch-all therefore has to go FIRST — getting this backwards silently
- * made every "with a logo" case render the fallback and still report green.
+ * ⚠️ **Deliberately not several overlapping `page.route` patterns.** Whether a
+ * broad `**` pattern or a specific one wins is a function of registration order
+ * *and* the direction Playwright walks its handler list — and getting it
+ * backwards fails in the worst possible way: the catch-all answers `[]`, the
+ * component reads that as "this org has no logo", the fallback renders, and the
+ * assertions that matter never run while the suite reports green. That happened
+ * twice — once in the standalone script this file replaces, and once here after
+ * the ordering was supposedly fixed.
+ *
+ * A single router has no ordering semantics to get wrong. `branding` is served
+ * by an explicit branch; anything unmatched gets the empty list.
  */
-async function stubApi(page: Page, branding: unknown) {
-  await page.route("**/api/**", (r) =>
-    r.fulfill({ status: 200, contentType: "application/json", body: "[]" }),
-  );
-  await page.route("**/api/auth/me", (r) =>
-    r.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(ADMIN) }),
-  );
-  await page.route("**/api/settings/branding", (r) =>
-    r.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(branding) }),
-  );
+async function stubApi(page: Page, branding: unknown, onBranding?: () => Promise<void>) {
+  await page.route("**/api/**", async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    const json = (body: unknown) =>
+      route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
+
+    if (path === "/api/settings/branding") {
+      if (onBranding) await onBranding();
+      return json(branding);
+    }
+    if (path === "/api/auth/me") return json(ADMIN);
+    return route.fulfill({ status: 200, contentType: "application/json", body: "[]" });
+  });
 }
 
 async function loadWithTheme(page: Page, theme: string, mode: string, path = "/settings/organization") {
@@ -155,6 +165,43 @@ async function measureLockup(page: Page) {
   });
 }
 
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ⚠️ EVERY TEST IN THIS FILE IS `fixme` — AUTHORED, NOT RUNNING, AND HERE IS WHY
+//
+// Measured 2026-08-14 against the dev webServer this config now uses: the page
+// **never hydrates** under Playwright. Zero `/api/**` requests are issued — not
+// even `/api/auth/me` — while the browser console repeats
+//   WebSocket connection to 'ws://127.0.0.1:3101/_next/webpack-hmr' failed
+// So React effects never run, the branding fetch never happens, and the shell
+// sits on the server-rendered fallback for ever.
+//
+// ⚠️ **THE PARTIAL PASS WAS THE DANGEROUS PART.** On the run that produced this
+// note, 9 of 18 tests passed — and every one of them was a fallback or outage
+// case, which asserts precisely what the un-hydrated page already renders.
+// They would pass against an app whose client bundle was deleted. A green half
+// of a suite that cannot execute its subject is worse than a red one, so the
+// whole file is marked rather than left to report a number that means nothing.
+//
+// What IS fixed and is worth keeping: the suite now BOOTS. Under the previous
+// `next start` webServer it could not, because CP-0's fail-closed auth answers
+// 503 without auth config and the readiness probe never went green — see
+// `playwright.config.ts`. That was true for every spec in this directory, not
+// just this one.
+//
+// NEXT STEP for whoever picks this up: determine whether hydration fails
+// because of Playwright's request interception, the dev overlay, or the HMR
+// socket, by loading the dev server with NO routes registered and checking
+// whether `/api/auth/me` is requested. That single measurement splits the
+// remaining hypotheses; do not guess between them, which is how this note came
+// to be written twice.
+// ─────────────────────────────────────────────────────────────────────────────
+
+test.fixme(
+  true,
+  "the app does not hydrate under the dev webServer — see the banner above",
+);
+
 // ── The lockup, under every theme ──────────────────────────────────────────
 
 for (const theme of THEMES) {
@@ -162,7 +209,7 @@ for (const theme of THEMES) {
     test(`brand lockup renders a customer logo under ${theme}/${mode}`, async ({ page }) => {
       await stubApi(page, BRANDING_WITH_LOGO);
       await loadWithTheme(page, theme, mode);
-      await page.waitForSelector("aside img", { timeout: 15_000 });
+      await page.waitForSelector("aside img", { timeout: 30_000 });
 
       const m = await measureLockup(page);
 
@@ -187,7 +234,7 @@ for (const theme of THEMES) {
     test(`brand lockup falls back to our mark under ${theme}/${mode}`, async ({ page }) => {
       await stubApi(page, NO_BRANDING);
       await loadWithTheme(page, theme, mode);
-      await page.waitForSelector("aside a[href='/']", { timeout: 15_000 });
+      await page.waitForSelector("aside a[href='/']", { timeout: 30_000 });
 
       const m = await measureLockup(page);
 
@@ -210,16 +257,9 @@ test("a returning member's logo paints without waiting for the branding call", a
   const SLOW_MS = 3_000;
   let calls = 0;
 
-  await page.route("**/api/**", (r) =>
-    r.fulfill({ status: 200, contentType: "application/json", body: "[]" }),
-  );
-  await page.route("**/api/auth/me", (r) =>
-    r.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(ADMIN) }),
-  );
-  await page.route("**/api/settings/branding", async (r) => {
+  await stubApi(page, BRANDING_WITH_LOGO, async () => {
     calls++;
     await new Promise((res) => setTimeout(res, SLOW_MS));
-    await r.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(BRANDING_WITH_LOGO) });
   });
 
   // First visit: nothing cached, so waiting IS correct here.
@@ -242,16 +282,17 @@ test("a returning member's logo paints without waiting for the branding call", a
 test("a branding outage leaves the shell rendering, not broken", async ({ page }) => {
   // There is nothing a member can do about this, so it must degrade to our own
   // mark silently rather than surface an error in the app shell.
-  await page.route("**/api/**", (r) =>
-    r.fulfill({ status: 200, contentType: "application/json", body: "[]" }),
-  );
-  await page.route("**/api/auth/me", (r) =>
-    r.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(ADMIN) }),
-  );
-  await page.route("**/api/settings/branding", (r) => r.fulfill({ status: 503, body: "{}" }));
+  await page.route("**/api/**", (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path === "/api/settings/branding") return route.fulfill({ status: 503, body: "{}" });
+    if (path === "/api/auth/me") {
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(ADMIN) });
+    }
+    return route.fulfill({ status: 200, contentType: "application/json", body: "[]" });
+  });
 
   await loadWithTheme(page, "rapidtool", "dark");
-  await page.waitForSelector("aside a[href='/']", { timeout: 15_000 });
+  await page.waitForSelector("aside a[href='/']", { timeout: 30_000 });
 
   const m = await measureLockup(page);
   expect(m.text).toContain("CommandCenter");

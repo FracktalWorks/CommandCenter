@@ -31,9 +31,40 @@ export default defineConfig({
     },
   ],
   webServer: {
-    command: "npx next start -p 3101",
+    // ── `next dev`, not `next start`, and the reason is CP-0 ────────────────
+    //
+    // `next start` sets NODE_ENV=production, and `authPosture` grants its dev
+    // bypass only when NODE_ENV is NOT production. So under `next start` with
+    // no auth environment, the proxy answers every page with 503 (correctly —
+    // that is CP-0's fail-closed posture), this readiness probe never goes
+    // green, and EVERY spec in e2e/ times out before a single test runs.
+    //
+    // That was measured on 2026-08-14, and it had been true since `8f6eb79`
+    // ("auth fails closed"). Before that commit auth failed OPEN when
+    // unconfigured, so a production build with no auth env served pages and
+    // the suite booted. Nothing noticed for the same reason the breakage
+    // survived: nothing runs e2e/ in CI.
+    //
+    // Dev mode is not a bypass invented for tests. It is the affordance
+    // `authPosture` already defines, deliberately keyed on NODE_ENV rather
+    // than on an opt-in flag "that defaults to open", precisely so that the
+    // real deployment path (`next build && next start`) cannot reach it.
+    //
+    // ⚠️ THE TRADE, STATED: these specs now exercise the DEV bundle. Faults
+    // that appear only in a production build — minification, RSC boundary
+    // differences, dead-code elimination — are not covered by this suite. The
+    // `npm run build` in `test:e2e` still fails the run if the production
+    // build breaks; it is simply no longer the thing the browser drives.
+    // Restoring production coverage needs a real test-auth posture, which is
+    // an owner decision (WS-32 spec §7), not a config tweak.
+    command: "npx next dev -p 3101",
+    // A page that renders for a signed-in member. Under the dev bypass that is
+    // any page; the probe stays on an app route rather than a health endpoint
+    // so it fails when the SHELL is broken, not merely when the process is up.
     url: "http://127.0.0.1:3101/chat",
     reuseExistingServer: false,
-    timeout: 120_000,
+    // Dev compiles the route on first request, which is slower than serving a
+    // prebuilt one — this is a cold Next.js compile, not a hang.
+    timeout: 180_000,
   },
 });

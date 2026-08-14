@@ -65,6 +65,10 @@ from gateway.routes.people.core import (
     store_avatar,
 )
 from gateway.routes.people.fields import authorize_write
+
+# The request models only — the handlers defer the store imports, and skills.py
+# does not import this module, so there is no cycle to mind.
+from gateway.routes.people.skills import CredentialsWrite, SkillsWrite
 from gateway.routes.tasks import people as tasks_people
 from pydantic import BaseModel
 from sqlalchemy import text
@@ -309,3 +313,60 @@ async def remove_my_absence(
         if not await delete_absence(db, str(row.id), absence_id):
             raise HTTPException(status_code=404, detail="No such absence")
     return {"deleted": absence_id}
+
+
+# ── WS-28h: your own structured skills & credentials ─────────────────────────
+#
+# The same two-door shape as absences: one implementation (skills.py → the
+# `gateway.person_skills` leaf, which owns the D-PC-6 projection), and this
+# door resolves the person through the self predicate with no id in the path.
+
+@router.get("/me/skills")
+async def get_my_skills(
+    user: UserContext = Depends(get_current_user),
+) -> dict:
+    from gateway.routes.people.skills import capability_payload
+
+    async with _tenant_session() as db:
+        row = await _my_row(db, user)
+        return await capability_payload(db, str(row.id))
+
+
+@router.put("/me/skills")
+async def put_my_skills(
+    body: SkillsWrite, user: UserContext = Depends(get_current_user),
+) -> dict:
+    """Your own skills, structured — the owner's original ask ("their CV, their
+    skill sets, etc. can be edited and seen over here"), now with the level,
+    years and recency the assignment questions actually turn on (§3.3).
+
+    Authorized as a write of ``skills`` — the same field class, the same
+    authority, as the flat list this table now projects."""
+    from gateway.person_skills import replace_skills
+    from gateway.routes.people.skills import capability_payload
+
+    async with _tenant_session() as db:
+        row = await _my_row(db, user)
+        authorize_write(["skills"], is_admin=can_manage_people(user),
+                        is_self=True)
+        await replace_skills(db, str(row.id),
+                             [r.model_dump() for r in body.rows],
+                             getattr(user, "email", None) or "anonymous")
+        return await capability_payload(db, str(row.id))
+
+
+@router.put("/me/credentials")
+async def put_my_credentials(
+    body: CredentialsWrite, user: UserContext = Depends(get_current_user),
+) -> dict:
+    from gateway.person_skills import replace_credentials
+    from gateway.routes.people.skills import capability_payload
+
+    async with _tenant_session() as db:
+        row = await _my_row(db, user)
+        authorize_write(["skills"], is_admin=can_manage_people(user),
+                        is_self=True)
+        await replace_credentials(db, str(row.id),
+                                  [r.model_dump() for r in body.rows],
+                                  getattr(user, "email", None) or "anonymous")
+        return await capability_payload(db, str(row.id))

@@ -30,6 +30,7 @@ import { Input, Select, Textarea } from "@/components/ui/Input";
 
 import { type PersonDetail, peopleApi } from "../lib/api";
 import { describeSchedule, formatHours, overriddenFields } from "../lib/schedule";
+import { SkillsPanel } from "./SkillsPanel";
 import {
   type FieldSpec,
   type RenderedField,
@@ -355,6 +356,11 @@ export function ProfilePanels({
           </dl>
         </section>
       ))}
+
+      {/* WS-28h — structured skills & credentials. Its own saves, its own
+          endpoint: a skills row is a child record, not a field on the person,
+          so it does not ride the PATCH above. */}
+      <SkillsPanel person={person} onSaved={() => onSaved?.(person)} />
 
       {error && (
         <p className="text-xs text-destructive" role="alert">

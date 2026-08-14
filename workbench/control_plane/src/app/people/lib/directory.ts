@@ -65,7 +65,16 @@ export function skillOrigin(
   skill: string,
   source: Record<string, string> | undefined
 ): "stated" | "resume" {
-  return (source ?? {})[skill] === "stated" ? "stated" : "resume";
+  // ⚠️ The backend's word for "a person typed it" is `manual` — written by
+  // create_person and every PATCH since WS-24 — and `observed` (derived from
+  // shipped work, WS-28h's vocabulary) is likewise not a parser inference.
+  // The first version of this matched only the literal "stated", which no
+  // write path has ever produced, so every hand-typed skill in the product
+  // rendered as "extracted from a résumé" — over-claiming in the OTHER
+  // direction from the one the docstring above worries about. Found while
+  // WS-28h made evidence a real column; `directory.test.ts` pins each word.
+  const evidence = (source ?? {})[skill];
+  return evidence === "resume" || evidence === undefined ? "resume" : "stated";
 }
 
 export interface LoadBar {

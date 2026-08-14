@@ -218,10 +218,10 @@ This is the half the assignment AI actually reasons over.
 |---|---|---|---|---|
 | `skills[]` | The flat list every existing consumer reads (GIN-indexed, `_match_capability`, clarify) | H | S | ✅ 49 |
 | `skills_source` | Per-skill provenance — `stated` vs `résumé`, so an inferred skill never looks like a claim the person made | H | S | ✅ 74 |
-| **`gtd_person_skills`** | The **structured** skill: level, years, last used, evidence. See below | H | S | 🔲 P-4 |
+| **`gtd_person_skills`** | The **structured** skill: level, years, last used, evidence. See below | H | S | ✅ 175 |
 | `resume_summary`, `years_experience`, `domain` | Résumé depth, for seniority weighting | H | S | ✅ 49 |
 | `gtd_person_resumes` | The CV itself + its parse | H | S | ✅ 74 |
-| **`gtd_person_credentials`** | Education, certifications, and prior roles, extracted from the CV or typed — "is this person actually qualified to sign this off" | H | S | 🔲 P-4 |
+| **`gtd_person_credentials`** | Education, certifications, and prior roles, extracted from the CV or typed — "is this person actually qualified to sign this off" | H | S | ✅ 175 |
 | `languages[]` | Which customer can they talk to | D | S | 🔲 P-3 |
 | `interests[]` | What they *want* to work on. An assigner who only optimises for fit assigns the same person the same work forever | H | S | 🔲 P-3 |
 | `capability_embedding`, `capability_text_hash` | Semantic match (1536-dim, migration 75) | — | ⚙ | ✅ 75 |
@@ -898,7 +898,7 @@ new table is tenant-scoped by construction (R5(a): discovered by
 | **P-1** | ✅ Key shape: `UNIQUE(name)` dropped, partial unique on `lower(email)`, `source_key`, status CHECK, `email_conflict` quarantine | WS-28a (migration 148) |
 | **P-2** | ✅ Status vocabulary + `has_login` derived, never a column | WS-28a |
 | **P-3** | ✅ Profile columns on `gtd_people` — §3.1's self half, §3.2's employment half, §3.4's `max_concurrent_tasks`, §3.5's private half | WS-28g |
-| **P-4** | 🔲 `gtd_person_skills` (structured skills) + `gtd_person_credentials` (education, certifications, prior roles) | WS-28h |
+| **P-4** | ✅ `gtd_person_skills` (structured skills) + `gtd_person_credentials` (education, certifications, prior roles) — migration 176 | WS-28h |
 | **P-5** | 🔲 `gtd_person_absences` | WS-28k |
 | **P-6** | 🔲 The tightening half: narrow `employment_type` / `seniority` CHECKs once real data is in, and validate 148's status CHECK where the quarantine panel (§5.10) has been cleared | later release, R6 contract half |
 | **P-7** | 🔲 The work schedule — **no migration at all**: the org policy is a row in `org_settings` (151's existing key→JSON store) and the person override is the `working_hours` column P-3 already shipped. `contracted_hours_per_week` is computed, never stored | WS-28p |
@@ -1049,12 +1049,27 @@ re-parent that would create a cycle is refused before the request; the Center ov
 department/group mismatches rather than hiding them; and re-parenting is gated on the
 **admin** write class (§4.3), not on the caller merely being signed in.
 
-**WS-28d — capability search.** 🟢 AGENT-SAFE to build; the ranking prompt is
-**EVAL-LOCKED**.
+**WS-28d — capability search.** ✅ **BUILT 2026-08-14**
+(`routes/people/search.py`, `/people/search` page, "Who can help?" Center tile;
+18 hermetic + 10 vitest cases and 12 live checks).
 Done when: all three signals are queried; each result names which matched, shows load and
 shows availability (§5.8); the surface never writes an assignment; and a caller without
 `admin:members:read` cannot reach it at all — it is a skills query by definition, and the
 oracle rule (§4.2) applies to a whole surface here rather than to a clause.
+
+**How the build stays outside the eval lock:** there is **no LLM ranking prompt** —
+ranking is arithmetic over named constants (`LEVEL_WEIGHT` · recency decay ·
+`DOMAIN_BONUS` · `RESUME_BONUS` · `SEMANTIC_SCALE`), and every signal arrives on the
+result with its own points, so the ranking can be recomputed by hand from what the page
+shows. A fence greps the module for model calls so an LLM ranker cannot arrive quietly;
+if one ever comes, it goes through the eval first. Two more fences: the module contains no
+INSERT/UPDATE/DELETE (D-PC-13, structurally — a suggester with an UPDATE has become an
+assigner), and the client's `search.ts` contains no `.sort(` — the server's order IS the
+ranking, and a client-side re-sort would be a second ranker. Unknown recency is NOT
+decayed: most rows predate the column, and punishing missing data would rank people by
+form-filling. The résumé signal quotes the matching LINE of the newest CV
+(`DISTINCT ON (person_id) … ORDER BY uploaded_at DESC`, verified live), because a claim
+with its evidence beside it can be argued with.
 
 **WS-28e — the Projects seams.** 🟢 AGENT-SAFE.
 Done when: the assignee picker is directory-backed and lists agents and directory-only
@@ -1244,13 +1259,47 @@ without a hard reload.
   the clip onto the target box exactly, which is the difference between "about 256" and the
   constant the whole design rests on.
 
-**WS-28h — structured skills and credentials (P-4).** 🟢 AGENT-SAFE.
+**WS-28h — structured skills and credentials (P-4).** ✅ **BUILT 2026-08-14**
+(migration `176_people_skills.sql`, the `gateway/person_skills.py` leaf — outside both
+route packages, because the People routes and the tasks-side résumé ingest both write it —
+`routes/people/skills.py` + three `/people/me/*` twins, `SkillsPanel.tsx`; 28 hermetic +
+14 vitest cases and 21 live checks).
 Done when: `gtd_person_skills` carries level, years, last-used and evidence; **every write
 path rewrites `gtd_people.skills`/`skills_source` in the same transaction** and a test
 proves the array equals the table after each one (D-PC-6); the résumé parser writes
 structured rows and credentials instead of only merging words; and `_match_capability()` and
 `fetch_people_for_clarify()` still pass unchanged — they read the array, and the array is
 still true.
+
+**Four things the build settled:**
+
+- **The projection is the function `person_skills.project()`, called last by every
+  writer** — the structured replace, the flat `PATCH {skills}` (which now *reconciles* the
+  table: retained skills keep their level, new ones arrive as bare `manual` rows, removed
+  ones go), and the résumé merge (add-only: a CV is evidence for what it contains and
+  silent about everything else, so a re-parse never removes a skill or overwrites a
+  human's level). The live harness reads array and table back from Postgres after each
+  real path and compares.
+- **Evidence keeps the existing vocabulary** — `manual` / `resume`, plus `observed`
+  admitted by the CHECK for the day shipped-work stamping arrives. Choosing `stated` as a
+  prettier synonym would have split one fact across two spellings, which is how the next
+  defect (below) happened in the other direction.
+- **Projection order is deterministic, not insertion order** — measured: rows inserted in
+  one transaction share `now()` as `created_at`, so a batch orders alphabetically. The
+  array's order was never load-bearing (every consumer is set-semantic); what matters is
+  that the same table always projects the same array.
+- **The parser's boundary rule eats a trailing period** — `solidworks.` does not match,
+  by the same lookahead that keeps `c` out of `cad` and protects `node.js`. Pre-existing,
+  found when the live harness's CV text ended in one; recorded here so the next person
+  greps this paragraph instead of the regex.
+
+**Found and fixed on the way: every hand-typed skill rendered as parser-inferred.** The
+backend has always written provenance as `manual`; the UI's `skillOrigin` tested for the
+literal `stated`, which no write path ever produced — so the "stated by a person" style
+was dead code and every skill drew as "extracted from a résumé". Over-claiming in the
+OTHER direction from the one the function's docstring worried about. The fence had pinned
+the wrong vocabulary (`skillOrigin("x", {x: "stated"})`), which held the defect in place —
+`directory.test.ts` now pins each real word.
 
 **WS-28j — the people-management dashboard (§5.7).** *Split into j1 the person rows +
 classification, j2 the department rollup, j3 the rebalancing suggestions. Three narrowed

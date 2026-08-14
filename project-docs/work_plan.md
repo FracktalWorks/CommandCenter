@@ -219,7 +219,7 @@ owning specs are the archive; this file owns ordering, gates and states only.
 🔴 **The record below is KEPT because what it warned about was right.** Three agents were dispatched in parallel on 2026-08-11, all three died on the same API-limit error, none finished, none self-verified; two left real work, opened as DRAFT PRs precisely so nobody would mistake them for GO. **Both drafts were independently verified on 2026-08-12 before merge, and verification found real defects in one of them** — which is the argument for the draft convention, not against it.
 - **`ws-27ak-toast`** → PR #430, **MERGED after repair**. `tsc` 0 · `vitest` **88 files / 1983 tests** · `next build` 0 · **`e2e/toast.spec.ts` 6/6** with `e2e/modal.spec.ts` 10/10 as the control. 🔴 **Two of the six browser tests were red and BOTH were the test's fault, not the component's**: `[role="alert"]` counted Next's route announcer (`#__next-route-announcer__`, in a **shadow root** — Playwright pierces open shadow roots, `document.querySelectorAll` does not, so every count was off by one), and `getByRole` cannot see a high-priority toast's controls (`priority: "high"` is what makes an error assertive AND what makes Base UI stamp `aria-hidden="true"` on the visible toast until the viewport is focused, `ToastRoot.mjs:418`; F6 is the reader's way in). ⚠️ **And a THIRD defect the tests did not report: the keyed-re-fire fence was DEAD** — it fired the second toast from `Retry`, whose handler closes the toast before re-running the closure, so with `toastIdFor` stubbed to `undefined` it still passed. Re-pointed at a second press of "Mark all read"; under the same mutation that is 2 toasts mid-flight, 2 settled, test red. Recorded in `specs/project_management_app.md` §11.32.
 - **`ws-27be-trgm-search-index`** → PR #431, **MERGED**. ✅ **R8 satisfied — the check the dying agent never ran was run on 2026-08-12**: ladder replayed 01→169 into a throwaway DB, 60k seeded rows, **23 checks green, exit 0** — `Filter:` → `Index Cond:`, ~302 ms → 0.41 ms, tenant isolation holds through the new index path, migration idempotent, `idx_pm_tasks_fts` retained per R6. **R1 re-checked at merge: 170 was still the next free number.** ⚠️ Still owed, unchanged: the `idx_pm_tasks_fts` drop, and the product call on raising `MIN_QUERY` to 3 (a trigram index cannot serve a 2-character pattern, so the shortest ACCEPTED query is the longest UNSERVABLE one).
-- **`ws-27bf-theme-sweep`** — died before writing a single file. Zero salvage; **still fully owed**, and it is the highest-leverage item in this queue because `CLAUDE.md` calls the four-theme sweep "the real gate" and every slice since WS-27am has owed it. No branch, no PR.
+- ~~**`ws-27bf-theme-sweep`** — died before writing a single file. Zero salvage; **still fully owed**, and it is the highest-leverage item in this queue.~~ 🔴 **WS-27bf IS STRUCK 2026-08-13 (owner-ruled) — it was never a ticket.** It appears nowhere in the owning spec: two lines of board prose and no §1 contract, no "Done when", no acceptance. The work it named is already specced as **WS-27at** (the living design-system gallery, §9.4.2), so it was a duplicate mint under a Wave-2 name, and a board row naming a ticket with no spec entry is not dispatchable — the same verdict WS-27bc drew on its documentation. **WS-27at is the ticket; use that name.** ⚠️ The gap it pointed at is also partly closed now: WS-27bg slice 2 landed `e2e/project-state.spec.ts`, so the Fluent → Material → Graphite sweep is a real test for the Projects tree rather than a manual step every slice owed and several skipped.
 ⚠️ **Environment traps that cost real time on 2026-08-12, both worth knowing before the next dispatch**: (1) `playwright.config.ts` runs `next start`, which serves a **prebuilt** `.next` — a stale one 404s every route and fails all 10 modal tests for reasons that have nothing to do with the diff, so `npx next build` comes first and a known-green spec is the control. (2) The `mt-scratch` Docker DB on :5433 is **NOT current** (no `pm_projects.organization_id`, empty ledger); an R8 run needs the ladder replayed into a throwaway database inside `acb-postgres`.
 ➡️ **Next, in order**: (1) **build the theme sweep from scratch** (WS-27bf — nothing exists, and it gates the visual pass every slice here owes), (2) then whichever of Tooltip/Skeleton — acceptance criteria are written for both in spec §9.4.2 — paired with the DOM-test-substrate question, since every rendering done-when in Wave 2 is review-only without it. ⚠️ **Owed and NOT closed by the merges**: the four-theme visual pass (Fluent → Material → Graphite) on `/projects` and a neighbour, on live `main`. Modal and Toast shipped **un-flagged** — they replace existing surfaces rather than adding new behaviour, so there is no flag to flip back if a theme looks wrong. (2026-08-12) ⚠️ **Live bug found and fixed 2026-08-11 by the WS-26i-export repair (MERGED in PR #426, `7255344`; deploy not independently verified):** `src/app/api/projects/[...path]/route.ts` did `await res.text()` — a UTF-8 decode, which strips a leading BOM — so **`GET /projects/export/tasks.csv` has shipped BOM-less since WS-27ae** and Excel on Windows renders a task titled "Café" as "CafÃ©". Measured on node v22 through the real handler: `EF BB BF 4E 61 6D` in, `4E 61 6D 65` out. The proxy now reads `res.arrayBuffer()` and also forwards `X-Export-Rows` (set since WS-27ae, unreachable until now). Fence: `src/lib/export.test.ts` RUNS both proxies over a BOM'd body and compares bytes — it previously asserted `toContain("await res.text()")` and pinned the defect. `specs/project_management_app.md` §11.26 carries the correction.
 🆕 **WS-27bg MINTED 2026-08-13 (owner-directed) and it PREEMPTS the queue above** — project run
@@ -345,7 +345,151 @@ inheritance derivation, and **making `on_hold` green, which turns the browser sp
 three themes** and is what proves the sweep discriminates rather than merely passes. ⚠️ The unit
 tests assert a hue NAME; only the browser proves two names paint differently — which is exactly
 the failure `statusAccent`'s own header records, a colour stored correctly for months while
-every lane drew the same grey. (2026-08-13) |
+every lane drew the same grey.
+✅ **PR #437 MERGED to `main` 2026-08-13** (`a0af10f`) — slices 1+2, migration **171**, all six
+checks green including **Migration ladder replay**. Owner-directed merge; branch restarted from
+the new head. **NOT deployed** — and the `status='archived'` row count on prod is still owed
+(§6 owner-gated reach).
+🔴 **A DEFECT IN THE MERGED CODE, found by re-reading slice 1 before starting slice 3, fixed
+2026-08-13** (as-built §11.37): **the three guards each consulted a DIFFERENT ROW.** The sweep
+read the **root** then acted on the whole subtree by `root_project_id`; recurrence and dispatch
+read the task's **immediate** project. The subtree in between was governed by nobody, and it
+failed **both** ways — a task in an *active subproject* under a *paused root* still spawned
+successors and still dispatched agents **while the tree drew that subproject as "Paused —
+inherited"** (the product said paused and the automation ran), and a stale task in a *paused
+subproject* under an *active root* was swept and closed anyway. Reproduced on a real database
+before a fix was written. Fixed by `core.is_runnable_with_ancestors` — one `WITH RECURSIVE` walk
+reduced by `bool_and`, the server's copy of the `effectiveState` rule slice 2's UI already used —
+consumed by both guards, with the same predicate as a `NOT EXISTS` on the sweep's candidate query
+so **every task earns its own verdict from its own chain**. Still derives, still writes nothing.
+🔴 **AND THE NEW FENCE WAS DEAD ON ITS FIRST VERSION — only a mutation found it.** All four
+checks passed *with the recursion deleted*, because the fixtures sat directly in the root, so
+pausing the root paused their own immediate project and the walk was never exercised. Moved into
+the grandchild (and the series re-armed), the mutation now turns both checks red. **Second time
+in this workstream a fence looked like coverage and was not** — the Toast slice's keyed-re-fire
+assertion was the first, and both were found by breaking the code on purpose. ⚠️ A smaller test
+defect the same run: a fixture reused across checks was read before being reset, so one
+assertion measured an earlier check's leftovers. ✅ `live_ws27bg.py` now **31 checks green**;
+`tests/unit` **5999 passed**. ⚠️ The hermetic fake was taught the chain query explicitly —
+falling through would have answered `None` → False → *"nothing is ever runnable"*, silently
+disabling recurrence and dispatch across the whole suite while every assertion still read as a
+real refusal.
+✅ **TWO OWNER DECISIONS TAKEN 2026-08-13, recorded so neither is re-asked.** **D-PM-30 —
+`actual_start`/`actual_end` are SHARED on `pm_tasks`**, which **overrides §7.5.1's row** sending
+them to `pm_task_personal`. It follows D-PM-29 rather than contradicting it: the default home is
+`pm_tasks` and *"how long did this task take"* is a property of the work. Projects has
+`estimate_mins` and **no actuals at all**, so it cannot answer "did this take as long as we
+said?" — the question a PM tool exists for. ⚠️ Per-person time tracking is a **timesheet**, a
+separate concern this does not foreclose; timeboxing and `deep_work` stay personal, unmoved.
+**D-PM-31 — the search minimum is 3, not 2.** The open state was the worst of the three: a
+2-character query is ACCEPTED and physically **unservable** by a trigram index, so the shortest
+query allowed was the longest one answered by a sequential scan (127 ms at 60k rows, measured).
+One constant governs both endpoints since WS-27be moved it to `filters.py`. 🔜 **Queued by owner
+selection the same day**: D-PM-20 (the `updated_at` PATCH precondition), WS-27ar (one generic
+pins table), and **D-PM-16** (org-wide vocabularies — the expensive one, framed for a ruling
+below rather than built). (2026-08-13)
+✅ **WS-27bi MINTED 2026-08-13 and its R8 GATE MEASURED 2026-08-14** (spec §9.10, §9.10.1).
+D-PM-20 answered: `If-Match: <updated_at>` → **412 with the current row**; **no `version`
+column** (a second monotonic fact about one row is the §5 defect); **an absent header still
+succeeds** — advisory now, mandatory later, R6's expand/contract applied to an API. The worry
+that stalled this ("168's `updated_at` also serves the delta cursor, so one semantic must cover
+both") **dissolves on audit**: there are exactly **two** `touch=False` sites, both stamping
+`recurrence_spawned_at`, and they are right for *both* consumers at once — a bookkeeping stamp
+should neither wake a delta client nor invalidate a human's pending edit. **Measured, not
+assumed**: parse-then-bind compares exactly for ordinary, trailing-zero and zero microseconds.
+Two fences moved by the measurement — **a naive (offset-stripped) token silently compares
+`True`** (asyncpg reinterprets it in the session zone; it only *looks* right on a UTC box, so it
+must be rejected with 400), and **`::text` disagrees with the JSON encoder** on trailing zeros
+(`.1` vs `.100000`), so the token is never rendered by `::text` and never string-compared.
+🔴 **FINDING FOR THE BOARD, NOT THIS TICKET — `updated_at = now()` CAN MOVE BACKWARDS.**
+Reproduced on a real database: `now()` is the **transaction-start** timestamp, so a transaction
+opening 201 ms earlier and committing *later* overwrote a newer row with an **earlier** stamp.
+**Harmless to the precondition** — an exact comparison still differs, so the client still gets
+its 412 — which is precisely why it does not expand WS-27bi. **It is a real gap in migration
+168's keyset cursor**: a delta client whose cursor has passed the newer value is never handed
+the row stamped behind it, and that change leaves the stream silently. Pre-existing and
+already-merged, so per CLAUDE.md §5 it is recorded, not refactored; the fix (`clock_timestamp()`
+or a sequence) changes the delta feed's contract and **owes its own row and its own decision**.
+✅ **D-PM-16 RULED BY OWNER 2026-08-14 — adopt the nullable project scope** (spec §2457), and
+**WS-27bj minted** for it (§9.11). `project_id` becomes nullable on `pm_task_types`,
+`pm_custom_fields` and `pm_tags`; `NULL` means org-wide, with paired partial uniques replacing
+each table's whole-table `UNIQUE`. This was the section's most expensive item precisely because
+the cost is asymmetric: dropping NOT NULL later is trivial, **merging the duplicate "Bug" /
+"urgent" / "Client" rows twelve root projects will each have accumulated is a judgement-call
+migration nobody can automate**, so the ruling's value is that it stops that merge ever becoming
+necessary. ✅ **No R5 gap, and it is what makes the ruling cheap** — all three tables already
+carry `organization_id NOT NULL` from **migration 161**, so a `project_id IS NULL` row is
+org-wide **within one tenant, never global**. Had tenancy been reached only through
+`project_id → pm_projects`, nulling it would have produced untenanted rows readable by every
+tenant. ⚠️ All three are **ROOT**-scoped already (their own headers say so), so the new axis is
+root-local vs org-wide — there is no third level. 🔴 **Shadowing had to be ruled, not left to
+taste**: `pm_tasks.tags` stores tag **display text**, not a key, so an org-wide `bug` and a
+root-local `bug` are the *same tag* on every task while being two rows with two colours —
+**most specific wins**, fenced by a test. **R6 expand-only** (old writers unaffected, old
+readers simply do not see org-wide rows); **ship dark on the create affordance, not the read
+union**. ✅ **WS-27bi BUILT 2026-08-14** — `core.parse_precondition` /
+`core.require_precondition` (one seam, not inline) wired into `PATCH /projects/tasks/{id}` via
+`If-Match`, checked **after** the visibility load so an unreadable task still answers 404 and
+never leaks its existence through a 412 (R5). **Both measured traps are fenced and
+mutation-proved**: assuming UTC for a naive token turns 2 checks red, string comparison turns 2
+red, never enforcing turns 7 red. ⚠️ The string-comparison mutant still passed **12 of 16** —
+including the ordinary-microsecond match — which is exactly why the measurement was required:
+that mutant is invisible to any test someone would think to write. A third fence asserts
+`touch=False` appears **twice, both in `recurrence.py`**, so a future third site has to come and
+argue itself against both consumers. 🔴 **Two process findings.** (1) `Header(None, ...)` is
+resolved by FastAPI **only through the HTTP layer**, so the package's many direct endpoint calls
+receive the sentinel object rather than `None` — the first wiring turned **18 existing tests into
+400s**, and the guard is `isinstance(str)`, now regression-tested. (2) **`ruff check --fix`
+deleted `core.py`'s `_tenant_session` re-export** — unused *within* the module, imported by name
+from every sibling — and took **25 test modules** down with it. The repo's own CI comment warns
+that a blanket `--fix` is destructive here and CI runs it report-only; the line now carries a
+comment saying so. ✅ `tests/unit` **6015 passed** (baseline 5999), blocking lint clean.
+✅ **WS-27bj SLICE 1 (the schema) BUILT 2026-08-14 — migration `172_projects_org_vocabularies.sql`**
+(number taken at build time, **re-check at merge, R1**). `project_id` is nullable on all three
+vocabulary tables; each table's whole-table `UNIQUE` is replaced by a **pair** of partial uniques
+— `(project_id, <identity>) WHERE project_id IS NOT NULL` and `(organization_id, <identity>)
+WHERE project_id IS NULL` — on each table's **existing** identity (`lower(name)` for tags,
+`field_key` for custom fields, `name` for types), inventing no new normalisation. ✅ **R8 — all
+four cases proved on a real database, and the migration applied twice to prove idempotency**:
+two org-wide duplicates rejected (`uq_pm_tags_org_name`, catching `R8DUP` vs `r8dup`), two
+root-local duplicates rejected, **org-wide + root-local of the same name ACCEPTED** (the
+shadowing case D-PM-16 requires — a whole-table unique left in place would have forbidden it),
+and the same name under a second tenant accepted. ⚠️ **The first run of that check was a false
+pass and the output is why it was caught**: a bad seed (`organization` has `display_name`, not
+`name`) made every case fail on a **foreign key**, so cases 1 and 2 "errored" exactly as intended
+for entirely the wrong reason. A pass/fail count would have read green. 🔴 **Slice 1 is
+schema-only and is safe to merge alone** — nothing yet writes a `project_id IS NULL` row and
+nothing yet reads one, which is "ship dark" landing as a schema rather than a flag. **Still
+owed: the read path** — `org-wide ∪ root-local` with **root-local shadowing** (a correctness
+rule for tags, since `pm_tasks.tags` stores display text, so two registry rows describe one tag
+and the union must yield one colour), plus the flagged create affordance. `tests/unit` **6029
+passed** (baseline 6015). (2026-08-14)<br>✅ **WS-27bj SLICE 2 (the read path) BUILT 2026-08-14 —
+spec §9.11.1.** One seam in `core.py` (`vocabulary_scope` · `shadowed` · `org_wide_exists` ·
+`refuse_org_wide_write` · `org_vocabularies_enabled`) and three readers on it. The union lands on
+`load_definitions` rather than the list endpoint because that seam has **four** callers — list,
+create's duplicate check, export columns, and `apply_values`' validation — and a field that
+listed but whose values were refused as an unknown key would be the worst of both. Create is
+gated on the flag (`PROJECTS_ORG_VOCABULARIES`, default OFF, read at call time) **and**
+`admin:settings:manage`: an org-wide row lands in every project in the organization, including
+ones the writer cannot see. ✅ **R8 on a real database, with the probe GENERATED from the live
+clause builders** (retyping the SQL would prove the retyping): union correct, B's project cannot
+see A's org-wide rows, the usage count reads 2 (A's tasks) rather than 3 or 0, `org_wide_exists`
+is cross-tenant-false and case-insensitive, and an unknown `:root` returns nothing — fails
+closed. 🔴 **Two of fourteen mutants survived the first pass, and both were the hermetic-fake
+blindness R8 exists for**: reverting the usage-count correlation to `g.project_id` — which
+reports every org-wide tag as used by **0 tasks** — kept all 57 tests green because the mirror
+computed the count itself; and dropping the explicit tenant from an org-wide INSERT kept them
+green because the fake filled it from its own default, where 161's trigger "does NOT invent a
+tenant" and `NOT NULL` would refuse. Both mirrors were fixed to read the statement, then both
+mutants died. ⚠️ The live probe had already shown the right behaviour in both cases — what was
+missing was a test that goes **red** when someone undoes it, which is the difference between
+verified and fenced. 🔴 **Board finding: `TagRow` is declared TWICE on the frontend**
+(`projects/lib/tags.ts` and `projects/lib/api.ts`, with `page.tsx` passing rows between them);
+both were widened to keep them assignable, but collapsing two public wire types is its own change
+(CLAUDE.md §5). Also noted: the tag/field caps now count the **effective** set. Still owed: the
+admin surface for managing org-wide vocabularies — which is also what would let one be edited or
+retired. `tests/unit` **6090 passed** (baseline 6029); frontend `tsc` clean, **2007** vitest
+passed. (2026-08-14) |
 | WS-28 | **People Center — directory, org chart, assignment seam** *(minted 2026-08-06)* | ✅ a+b+b-write+g+g-2+p+q+k+j1+j2 | `specs/people_center_app.md` · board record 2026-08-09 | a (key shape, mig 148 + quarantine table) · b (directory + person page, mig 149, five-place registration) · b-write (create/edit UI restored; found three ways mig 148 had broken the write routes) — built 2026-08-06/07; **closes WS-13's directory item**. 🟢 c org chart · d capability search (**ranking EVAL-LOCKED**) · e Projects seams; 🔴 f seats/roles writes (§6 WS-24 (d) analogue). **SCOPE WIDENED 2026-08-13** (owner directive — the person record, self-service editing, the remaining sub-apps, and what the AI may read/do): spec rewritten to v2 with §3 the field inventory, §4 the access model (three read tiers · three write classes · one self predicate `lower(email)`, safe only because 148 made that unique), §5 the sub-app roster and §12 D-PC-1…14. ✅ **g BUILT 2026-08-13** (mig `172_people_profile.sql` — 20 nullable columns, expand-half only, no CHECK over live data; `routes/people/fields.py` the ONE field-class authority with a **structural fence** that discovers every `gtd_people` column from the migrations and fails an unclassified one; `GET /people/me` with three distinct states; `PATCH /people/{id}` authorized by class and refusing **by name**; self-service CV upload; `/people/me` + `ProfilePanels` rendering from the server's `editable_fields`; 137 hermetic + 20 vitest + **29 live checks on a real Postgres 16 with the full ladder applied**). Found on the way: `create_person` silently dropped every profile field it accepted, and the self door was about to return the admin projection. **REVIEWED 2026-08-13 against the owner's PM-perspective checklist** — five gaps closed in the spec and one **defect fixed**: ✅ **g-2 BUILT** — `/people/me` was behind `feature:people` (`is_default false`), so an ordinary colleague **could not open their own profile**, the one surface it exists for. Now an ungated `routes/people/selfservice.py` whose paths carry **no person id at all** (structural, not a check), the directory still gated, `UNGATED_ROUTERS` minted in the enforcement registry so *deliberately open* and *unchecked* stop looking alike, and "My profile" added to the **Personal Center** nav. Spec gains: §3.1a the **display image** (server re-encodes to 256×256 WebP, upload bytes discarded — kills size drift, crop bypass and the SVG/polyglot class at once, D-PC-17) · §3.4a the **work schedule** (org policy in `org_settings` + person override + one effective-schedule function; **D-PC-16 settles a seam collision WS-28g created** — `gtd_people.working_hours` vs the calendar's `gtd_settings.day_start_hour` from migrations 77/97: different questions, People→Calendar seeded once, never mirrored) · **D-PC-18** contracted hours become derived · §5.7 rewritten as the **people-management dashboard** (projects per person, tasks with deadlines, behind/at-risk/overloaded/idle/on-track as arithmetic over dates, department rollup, and idle↔behind rebalancing suggestions that propose and never assign). ✅ **p BUILT 2026-08-13** — the work schedule, **no migration**: org policy in `org_settings`, person override in the column P-3 shipped, ONE `gateway/work_schedule.py` computing the effective schedule; `contracted_hours_per_week` now DERIVED (D-PC-18) and the typed capacity flagged rather than corrected; the calendar SEEDS its day window from it as a **read-time default** and a structural fence sweeps the tasks package for any write back (D-PC-16); admin-gated policy editor that **previews whose hours move before saving**. The live run found what the hermetic suite could not: hours existed only inside shifts, so anyone on no shift had none and the seed silently fell back to migration 77's defaults. ✅ **q BUILT 2026-08-13** — the display image (mig 173): every upload is decoded, cropped square, resized to exactly 256x256 and **re-encoded**, and the stored value is the server's output — so "no random image sizes" is a shape the data cannot take rather than a rule to enforce (D-PC-17). Three things measured rather than assumed: **MuPDF renders SVG**, so the bytes are sniffed before the decoder sees them; the crop must be **fractional**, because a 1000x400 pixel image opens as a 750x300 *point* page; and `Matrix(scale,scale)` rounds outward, so `Rect.torect` is what makes 256 exact. JPEG not WebP — the same guarantee without adding Pillow to the gateway's deploy path. New tickets 🟡 **j** the dashboard, split j1/j2/j3 — ✅ **j1 BUILT 2026-08-14**, **no migration**: it is a READ over the Projects tables (`pm_tasks`/`pm_task_assignees`/`pm_projects`/`pm_activities`) joined to the People record on `lower(email)`, with the classification in ONE pure module (`gateway/workload.py`) so j2, j3 and §5.9 project it instead of counting again. Four aggregates keyed by `lower(assignee)` plus one absence query serve the whole page — built the obvious way an eighty-person roster is three hundred round trips. **D-PC-19** at-risk is CUMULATIVE and carries overdue work (per-task arithmetic calls three 12h tasks due Tuesday fine when there are 16h before it) · **D-PC-20** partial names the viewer's scope and the hidden delta is NEVER computed, because computing it means running the query without the scope · **D-PC-21** one pill by precedence with every flag beside it. Gated on `admin:members:read` on top of `feature:people` (§4.2's oracle rule over a whole surface); an assignee with no roster row still appears, which covers agents, alumni and unknown addresses with one mechanism. ⚠️ **Two fences were corrected, both self-inflicted by writing a fence over raw source**: the no-ranking grep fired on the docstrings explaining the refusal (it now strips prose and carries its own fence of four guilty lines), and the route-order check read a router whose order, inside pytest, is the test session's rather than the app's — it now probes a fresh process and matches on path AND method, since `PATCH /people/{person_id}` in front of `GET /people/dashboard` is not a collision. ⚠️ **The grant closure is applied to the `data:org:read` caller too**, not short-circuited to `TRUE`: `project_clause` answers the TENANT subquery for that caller (WS-29b) and the shortcut would make this endpoint's tenant boundary depend on a FORCE-RLS enforcement flip that is the owner's act. Measured on the scratch cluster (which has no FORCE RLS): with the shortcut a second organization's task lands on the row — 3→4 open tasks, 86h→185h. **`/people/{id}/work` still takes that shortcut** — a finding, not a pattern to copy. 48 hermetic + 30 vitest cases and 28 live checks (`live_ws28j.py`), whose scoped-viewer assertion first passed for the wrong reason — a viewer with no `app_user` row binds `vis_org = NULL` and sees nothing at all. ✅ **j2 BUILT 2026-08-14** — the department rollup, **no new query**: `gateway.workload.rollup` is handed `[r.model_dump() for r in rows]`, the exact payload the client receives, so the §5.9 guarantee is a mechanism rather than a promise — it cannot disagree with the table beneath it and cannot read a field the caller does not have. The fence asserts IDENTITY (`org['contracted_hours'] == sum(rows)`) and a second one greps the module for `db.execute`/`SELECT`/`await`, since the cheapest way to introduce a second count is a convenience `db` parameter. **Strain is a SHARE** (three behind out of four is not three out of forty); the **spread names both people and is stated in HOURS**, because a bare percentage gap is a score with two names attached, and it is computed only over rows whose hours mean something or a person with nothing estimated arrives at the bottom of it as free; agents are excluded from headcount and the exclusion is REPORTED (`org.agents`), a silent one being how a total quietly stops adding up. 16 hermetic + 8 vitest cases and 8 more live checks. 🟡 j3 suggestions · 🟢 **h** structured skills/credentials (P-4) · **j** workload & activity · ✅ **k BUILT 2026-08-13** — availability (mig 174): `working_hours_between(schedule, from, to, absences)` is the function the dashboard's "at risk" calls, and a **structural fence** greps the migration for `approv`/`balance`/`accrual`/`entitlement` so this cannot drift into leave management one reasonable-looking column at a time (D-PC-7). Self-writable, delete scoped `AND person_id` (the control, not belt-and-braces), two read tiers — the bare "away until" is DIRECTORY tier and resolved for the whole page in ONE query, the spans and hours are HR. The tenancy ratchet caught the new table and was right to: `organization_id` declared on day one, defaulting from the session GUC and failing closed when unbound (verified live). ⚠️ `REFERENCES` must precede `DEFAULT` — the ratchet matches the two with no comma between, and `current_setting('app.tenant_id', true)` has one. D-PC-15's fence refined to the invariant it protects rather than worked around · **l** People dashboard · **m** skills coverage & data quality; 🟡 **n** the AI seams (ranking EVAL-LOCKED, **sending is the §6 outbound-nudge OWNER-GATE — this row may not flip it**). ⚠️ `schema.generated.sql` regeneration is **due**: stale since ~migration 113, and 148 reached prod ~2026-08-07 (after the #384 cast fix). (2026-08-13) |
 ---
 

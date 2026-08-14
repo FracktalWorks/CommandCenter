@@ -47,7 +47,8 @@ export const FIELD_TYPE_LABELS: Record<FieldType, string> = {
 
 export interface FieldDef {
   id: string;
-  project_id: string;
+  /** `null` means ORG-WIDE — see `TagRow.project_id` (WS-27bj / D-PM-16). */
+  project_id: string | null;
   field_key: string;
   name: string;
   description?: string | null;

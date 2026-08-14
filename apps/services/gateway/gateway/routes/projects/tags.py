@@ -40,11 +40,17 @@ from gateway.routes.projects.core import (
     actor,
     clean_payload,
     load_visible_project,
+    org_wide_exists,
+    refuse_org_wide_write,
+    require_known_tenant,
+    require_org_vocabulary_write,
     require_row,
     resolve_visibility,
     root_project_id,
     router,
+    shadowed,
     update_row,
+    vocabulary_scope,
 )
 from pydantic import BaseModel
 from sqlalchemy import text
@@ -179,23 +185,54 @@ class TagIn(BaseModel):
     name: str | None = None
     color: str | None = None
     description: str | None = None
+    #: WS-27bj. ``"org"`` mints an org-wide tag; anything else, including the
+    #: default, keeps today's per-project behaviour verbatim. A field rather than
+    #: a second endpoint so there stays ONE create path — a parallel one is how
+    #: the two drift on the next validation somebody adds.
+    scope: str | None = None
 
 
 class MergeIn(BaseModel):
     into_tag_id: str
 
 
-async def load_registry(db: Any, root: str) -> dict[str, str]:
-    """``lower(name)`` → display form, for one root project."""
+async def load_registry_rows(db: Any, root: str) -> list[Any]:
+    """This project's EFFECTIVE tag rows: org-wide ∪ root-local (WS-27bj).
+
+    ⚠️ **The shadowing here is a correctness rule, not a preference.**
+    ``pm_tasks.tags`` stores display TEXT rather than a foreign key (migration
+    156), so an org-wide "bug" and a root-local "bug" are the *same tag on every
+    task* while being two registry rows with two colours. Returning both would
+    make "what colour is this tag" depend on which row a renderer reached first.
+    """
     rows = (await db.execute(
-        text("SELECT name FROM pm_tags WHERE project_id = CAST(:root AS uuid)"),
+        text(f"SELECT * FROM pm_tags WHERE {vocabulary_scope()}"),
         {"root": root},
     )).fetchall()
-    return {r.name.lower(): r.name for r in rows}
+    return shadowed(rows, lambda r: r.name.lower())
 
 
-async def register(db: Any, root: str, names: list[str], *, by: str) -> int:
+async def load_registry(db: Any, root: str) -> dict[str, str]:
+    """``lower(name)`` → the display form a task's array should store.
+
+    Org-wide tags are IN here, and that is the point of putting the union on the
+    write path too: without it, the first task in every project to type "bug"
+    would auto-register a root-local duplicate and shadow the organization's own
+    tag — the registry would fill up with exactly the near-duplicates it exists
+    to prevent, one project at a time.
+    """
+    return {r.name.lower(): r.name for r in await load_registry_rows(db, root)}
+
+
+async def register(
+    db: Any, root: str, names: list[str], *, by: str,
+    organization_id: str | None = None,
+) -> int:
     """Insert tags this project has not seen. Returns how many were created.
+
+    ``organization_id`` set means register these **org-wide** (WS-27bj) rather
+    than on ``root``: migration 161's trigger fills the tenant from the parent
+    project, so a row with no project must carry it explicitly.
 
     ``ON CONFLICT DO NOTHING`` against the case-insensitive unique index, so two
     requests racing to first-use the same tag both succeed and neither 500s —
@@ -204,8 +241,11 @@ async def register(db: Any, root: str, names: list[str], *, by: str) -> int:
     """
     if not names:
         return 0
+    # The cap counts the EFFECTIVE set. A picker showing 500 tags is unusable
+    # whether the organization or the project contributed them, and counting only
+    # the local half would let the real number reach 1000.
     existing = int((await db.execute(
-        text("SELECT count(*) FROM pm_tags WHERE project_id = CAST(:root AS uuid)"),
+        text(f"SELECT count(*) FROM pm_tags WHERE {vocabulary_scope()}"),
         {"root": root},
     )).scalar() or 0)
     if existing + len(names) > MAX_TAGS_PER_PROJECT:
@@ -218,11 +258,16 @@ async def register(db: Any, root: str, names: list[str], *, by: str) -> int:
     for name in names:
         created += (await db.execute(
             text(
-                "INSERT INTO pm_tags (project_id, name, created_by) "
-                "VALUES (CAST(:root AS uuid), :name, :by) "
+                "INSERT INTO pm_tags (project_id, organization_id, name, "
+                "                     created_by) "
+                "VALUES (CAST(:root AS uuid), CAST(:org AS uuid), :name, :by) "
                 "ON CONFLICT DO NOTHING"
             ),
-            {"root": root, "name": name, "by": by},
+            {
+                "root": None if organization_id else root,
+                "org": organization_id,
+                "name": name, "by": by,
+            },
         )).rowcount or 0
     return created
 
@@ -250,7 +295,9 @@ async def _root_for(db: Any, vis: Any, project_id: str) -> str:
 def _row(row: Any, count: int | None = None) -> dict[str, Any]:
     out = {
         "id": str(row.id),
-        "project_id": str(row.project_id),
+        # ``None``, never the string ``"None"``: this is org-wide (WS-27bj), and
+        # a client reads it to know whether the row is editable here.
+        "project_id": None if row.project_id is None else str(row.project_id),
         "name": row.name,
         "color": row.color,
         "description": row.description,
@@ -269,24 +316,33 @@ async def list_tags(
     The count is the whole reason anybody opens this screen: it is what tells
     you which of two near-duplicate tags to merge into the other, and computing
     it per row in the browser would mean shipping every task to get it.
+
+    Org-wide ∪ root-local, root-local shadowing (WS-27bj).
     """
     async with _tenant_session() as db:
         vis = await resolve_visibility(db, user)
         root = await _root_for(db, vis, project_id)
         rows = (await db.execute(
             text(
+                # ⚠️ The count is scoped to `:root`, NOT to `g.project_id`. For a
+                # root-local row the two are the same value — the WHERE pins it —
+                # but an org-wide row has no `project_id`, and correlating on it
+                # would silently report every org-wide tag as used by 0 tasks.
+                # A wrong number here is worse than a missing one: it is the
+                # number people merge on.
                 "SELECT g.*, ("
                 "  SELECT count(*) FROM pm_tasks t "
-                "   WHERE t.root_project_id = g.project_id "
+                "   WHERE t.root_project_id = CAST(:root AS uuid) "
                 "     AND t.archived_at IS NULL "
                 "     AND g.name = ANY(t.tags)"
                 ") AS task_count "
                 "  FROM pm_tags g "
-                " WHERE g.project_id = CAST(:root AS uuid) "
+                f" WHERE {vocabulary_scope('g')} "
                 " ORDER BY g.name"
             ),
             {"root": root},
         )).fetchall()
+        rows = shadowed(rows, lambda r: r.name.lower())
         return {
             "rows": [_row(r, int(r.task_count or 0)) for r in rows],
             "total": len(rows),
@@ -302,23 +358,55 @@ async def create_tag(
     name = normalise_tag(values.get("name"))
     if name is None:
         raise HTTPException(status_code=422, detail="A tag needs a name.")
+    org_wide = values.get("scope") == "org"
+    if org_wide:
+        require_org_vocabulary_write(user)
     async with _tenant_session() as db:
         vis = await resolve_visibility(db, user)
         root = await _root_for(db, vis, project_id)
-        registry = await load_registry(db, root)
-        if name.lower() in registry:
-            # 409 naming the spelling that already exists, rather than letting
-            # the unique index fire: "already exists" is useless without saying
-            # what it looks like, since the difference is only capitalisation.
-            raise HTTPException(
-                status_code=409,
-                detail=f"'{registry[name.lower()]}' already exists here.",
+        if org_wide:
+            require_known_tenant(vis, "tag")
+            # A shadowed org-wide row is absent from the effective registry by
+            # design, so the org-wide arm has to ask the table directly or its
+            # INSERT would collide with a row it could not see.
+            if await org_wide_exists(db, "pm_tags", root, name):
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"An organization-wide tag '{name}' already exists.",
+                )
+        else:
+            # ⚠️ Only a ROOT-LOCAL clash is refused. A project registering its
+            # own "bug" while the organization also has one is the shadowing
+            # D-PM-16 permits, not a duplicate — and `shadowed` has already made
+            # the root-local row the winner, so a non-NULL `project_id` is what
+            # separates the two cases.
+            clash = next(
+                (r for r in await load_registry_rows(db, root)
+                 if r.name.lower() == name.lower() and r.project_id is not None),
+                None,
             )
-        await register(db, root, [name], by=actor(user))
+            if clash is not None:
+                # 409 naming the spelling that already exists, rather than
+                # letting the unique index fire: "already exists" is useless
+                # without saying what it looks like, since the difference is only
+                # capitalisation.
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"'{clash.name}' already exists here.",
+                )
+        await register(
+            db, root, [name], by=actor(user),
+            organization_id=vis.organization_id if org_wide else None,
+        )
         row = (await db.execute(
             text(
-                "SELECT * FROM pm_tags WHERE project_id = CAST(:root AS uuid) "
-                "  AND lower(name) = :key"
+                "SELECT * FROM pm_tags "
+                " WHERE lower(name) = :key "
+                + ("   AND project_id IS NULL AND organization_id = ("
+                   "         SELECT p.organization_id FROM pm_projects p"
+                   "          WHERE p.id = CAST(:root AS uuid))"
+                   if org_wide else
+                   "   AND project_id = CAST(:root AS uuid)")
             ),
             {"root": root, "key": name.lower()},
         )).fetchone()
@@ -342,12 +430,14 @@ async def patch_tag(
     the kind of surprise that makes people stop using a rename button.
     """
     values = clean_payload(payload)
+    values.pop("scope", None)     # WS-27bj: selects where a NEW row lands only
     new_name = normalise_tag(values.get("name")) if "name" in values else None
     if "name" in values and new_name is None:
         raise HTTPException(status_code=422, detail="A tag needs a name.")
 
     async with _tenant_session() as db:
         existing = await require_row(db, "pm_tags", tag_id, "Tag")
+        refuse_org_wide_write(existing, "tag")
         vis = await resolve_visibility(db, user)
         await load_visible_project(db, vis, str(existing.project_id))
         root = str(existing.project_id)
@@ -386,6 +476,11 @@ async def merge_tag(
     async with _tenant_session() as db:
         source = await require_row(db, "pm_tags", tag_id, "Tag")
         target = await require_row(db, "pm_tags", payload.into_tag_id, "Tag")
+        # Both ends: merging INTO an org-wide tag would rewrite tasks across one
+        # project only while claiming an organization-wide result, and merging
+        # one AWAY would delete a row every other project is still using.
+        refuse_org_wide_write(source, "tag")
+        refuse_org_wide_write(target, "tag")
         vis = await resolve_visibility(db, user)
         await load_visible_project(db, vis, str(source.project_id))
         if str(source.project_id) != str(target.project_id):
@@ -424,6 +519,7 @@ async def delete_tag(
     """
     async with _tenant_session() as db:
         existing = await require_row(db, "pm_tags", tag_id, "Tag")
+        refuse_org_wide_write(existing, "tag")
         vis = await resolve_visibility(db, user)
         await load_visible_project(db, vis, str(existing.project_id))
         stripped = (await db.execute(
@@ -475,6 +571,7 @@ __all__ = [
     "apply_task_tags",
     "canonicalise",
     "load_registry",
+    "load_registry_rows",
     "merged_tags",
     "normalise_tag",
     "register",

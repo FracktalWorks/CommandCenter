@@ -639,7 +639,7 @@ async def create_person(
     if not name:
         raise HTTPException(status_code=400, detail="name is required")
     _validate_status(body.status)
-    # The vocabularies migration 172 deliberately did NOT put in a CHECK
+    # The vocabularies migration 175 deliberately did NOT put in a CHECK
     # (D-PC-8/P-6): enforced in the route against ONE tuple, the same shape
     # `_validate_status` takes for 148's CHECK, so a bad value is a 400 that
     # lists the legal words rather than a 500 naming a constraint.

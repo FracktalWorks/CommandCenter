@@ -13,6 +13,8 @@
  */
 import Icon from "@/components/Icon";
 import Button from "@/components/ui/Button";
+import { useToast } from "@/components/ui/Toast";
+import { PROJECT_STATES } from "@/lib/statusAccent";
 import { LayoutBoundary } from "@/components/LayoutBoundary";
 import { useMobileDrawer } from "@/components/AppShell";
 import { useViewMode } from "@/components/ViewModeProvider";
@@ -38,6 +40,7 @@ import { ImportClickUp } from "./components/ImportClickUp";
 import { MyWork } from "./components/MyWork";
 import { NotificationBell } from "./components/NotificationBell";
 import { ProjectTree } from "./components/ProjectTree";
+import type { ProjectMenuHandlers } from "./lib/projectMenu";
 import { CalendarView } from "./components/CalendarView";
 import { SearchPalette } from "./components/SearchPalette";
 import { TimelineView } from "./components/TimelineView";
@@ -166,6 +169,7 @@ function ProjectNav({
   onAddChild,
   onImport,
   onPicked,
+  actions,
 }: {
   roots: ProjectRow[];
   selectedId: string | null;
@@ -176,6 +180,8 @@ function ProjectNav({
   onImport: () => void;
   /** Called after any navigation, so the phone's drawer can close. */
   onPicked?: () => void;
+  /** WS-27bg — the run-state / archive menu. */
+  actions?: ProjectMenuHandlers;
 }) {
   return (
     <>
@@ -210,6 +216,7 @@ function ProjectNav({
           onAddChild(parent);
           onPicked?.();
         }}
+        actions={actions}
       />
     </>
   );
@@ -320,6 +327,7 @@ function ProjectsWorkspace() {
   const [newName, setNewName] = useState("");
   const [newTask, setNewTask] = useState("");
   const [treeKey, setTreeKey] = useState(0);
+  const toast = useToast();
   const [importing, setImporting] = useState(false);
 
   // WS-27k — filters go to the server, grouping is applied here. `activeView`
@@ -435,6 +443,83 @@ function ProjectsWorkspace() {
     };
   }, [treeKey]);
 
+  /**
+   * WS-27bg — the project run-state and archive actions.
+   *
+   * Every one of them re-reads the tree (`treeKey`) rather than patching
+   * `roots` in place. Optimism would be wrong here for a reason specific to
+   * this feature: archiving stamps a whole SUBTREE server-side, and a state
+   * change alters what every DESCENDANT effectively is — so the set of rows a
+   * write touches is not knowable from the row that was clicked.
+   *
+   * The archive toast reports `open_tasks`. That count is the warning D-PM-26
+   * asks for and the reason the endpoint returns it: filing a project with
+   * unfinished work in it is allowed, and the user should know they did it.
+   */
+  const projectMenuActions: ProjectMenuHandlers = useMemo(
+    () => ({
+      onSetState: (project, state) => {
+        // Re-selecting the state you are already in writes nothing and raises
+        // no toast: the menu keeps the current state visible (so the list does
+        // not jump between openings), which means clicking it is a normal
+        // gesture rather than a mistake worth reporting.
+        if ((project.status ?? "active") === state) return;
+        void toast.promise(
+          projectsApi
+            .patchProject(project.id, { status: state })
+            .then((res) => {
+              setTreeKey((k) => k + 1);
+              return res;
+            }),
+          {
+            key: `project-state:${project.id}`,
+            loading: `Updating ${project.name}…`,
+            success: () =>
+              `${project.name} is now ${
+                PROJECT_STATES[state]?.label ?? state
+              }`,
+            error: "Couldn't change the project state",
+          }
+        );
+      },
+      onArchive: (project) => {
+        void toast.promise(
+          projectsApi.archiveProject(project.id).then((res) => {
+            setTreeKey((k) => k + 1);
+            return res;
+          }),
+          {
+            key: `project-archive:${project.id}`,
+            loading: `Archiving ${project.name}…`,
+            // `open_tasks` is the warning D-PM-26 asks for and the reason the
+            // endpoint reports it: filing a project with unfinished work in it
+            // is ALLOWED, and the person who just did it should know.
+            success: (res) =>
+              res.open_tasks > 0
+                ? `Archived ${project.name} — ${res.open_tasks} task(s) still open`
+                : `Archived ${project.name}`,
+            error: "Couldn't archive the project",
+          }
+        );
+      },
+      onUnarchive: (project) => {
+        void toast.promise(
+          projectsApi.unarchiveProject(project.id).then((res) => {
+            setTreeKey((k) => k + 1);
+            return res;
+          }),
+          {
+            key: `project-archive:${project.id}`,
+            loading: `Restoring ${project.name}…`,
+            success: () => `Restored ${project.name}`,
+            error: "Couldn't restore the project",
+          }
+        );
+      },
+    }),
+    [toast]
+  );
+
   const visibleRoots = useMemo(
     () => filterByCenter(roots, grants, center),
     [roots, grants, center]
@@ -504,6 +589,7 @@ function ProjectsWorkspace() {
             }}
             onImport={() => setImporting(true)}
             onPicked={() => setSheet(null)}
+            actions={projectMenuActions}
           />
         ) : (
           <ModeSwitch
@@ -1695,6 +1781,7 @@ function ProjectsWorkspace() {
                 setNewName("");
               }}
               onImport={() => setImporting(true)}
+              actions={projectMenuActions}
             />
           </nav>
         ) : null}

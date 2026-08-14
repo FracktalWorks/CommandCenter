@@ -10,8 +10,11 @@ import { describe, expect, it } from "vitest";
 import {
   type ProjectNode,
   canMoveUnder,
+  effectiveState,
   filterByCenter,
   flatten,
+  moreRestrictive,
+  ownState,
   pathTo,
   subtreeIds,
 } from "./tree";
@@ -111,5 +114,72 @@ describe("canMoveUnder", () => {
     // The server refuses this too; checking here stops the UI optimistically
     // rendering a tree that cannot exist and then snapping back on the 422.
     expect(canMoveUnder(FOREST, "sales", "lp")).toBe(false);
+  });
+});
+
+/* ── Effective run state (WS-27bg / D-PM-26) ──────────────────────────────── */
+
+describe("effective run state", () => {
+  const node = (status?: string | null) => ({ id: "x", name: "n", status });
+
+  it("is a node's own state when nothing above it is more restrictive", () => {
+    expect(effectiveState(node("active"), "active")).toEqual({
+      state: "active",
+      inherited: false,
+    });
+  });
+
+  it("defaults a missing state to active rather than blank", () => {
+    // Every existing row has `active` as its column DEFAULT; a null here is an
+    // older row or a partial payload, not a project in limbo.
+    expect(ownState(node(null))).toBe("active");
+    expect(ownState(node("  "))).toBe("active");
+  });
+
+  it("takes the ancestor's state when the ancestor is more restrictive", () => {
+    // The whole D-PM-26 property: the child's own column still says `active`
+    // and NOTHING was written to it.
+    expect(effectiveState(node("active"), "on_hold")).toEqual({
+      state: "on_hold",
+      inherited: true,
+    });
+  });
+
+  it("keeps a child's own state when the child is the more restrictive one", () => {
+    // A firmware sub-project may stop while its department keeps running.
+    expect(effectiveState(node("stopped"), "active")).toEqual({
+      state: "stopped",
+      inherited: false,
+    });
+  });
+
+  it("reports inherited=false when both agree, so the tooltip does not lie", () => {
+    // Same word, but the reason is the node's own — a reader must not be sent
+    // hunting up the tree for a pause that is right here.
+    expect(effectiveState(node("on_hold"), "on_hold")).toEqual({
+      state: "on_hold",
+      inherited: false,
+    });
+  });
+
+  it("ranks stopped above on_hold above queued above done above active", () => {
+    expect(moreRestrictive("on_hold", "stopped")).toBe("stopped");
+    expect(moreRestrictive("queued", "on_hold")).toBe("on_hold");
+    expect(moreRestrictive("done", "queued")).toBe("queued");
+    expect(moreRestrictive("active", "done")).toBe("done");
+  });
+
+  it("treats an UNKNOWN state as active, never as maximally restrictive", () => {
+    // A client that has not learned a newer state must not grey out a subtree
+    // it does not understand.
+    expect(moreRestrictive("active", "some-future-state")).toBe("active");
+    expect(effectiveState(node("active"), "some-future-state").state).toBe("active");
+  });
+
+  it("is case- and whitespace-insensitive on both sides", () => {
+    expect(effectiveState(node(" ACTIVE "), "ON_HOLD")).toEqual({
+      state: "on_hold",
+      inherited: true,
+    });
   });
 });

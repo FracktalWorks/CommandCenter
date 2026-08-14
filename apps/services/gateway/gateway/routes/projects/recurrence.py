@@ -35,6 +35,7 @@ from gateway.routes.projects.core import (
     actor,
     clean_payload,
     insert_row,
+    is_runnable,
     load_default_status,
     load_visible_task,
     next_task_number,
@@ -306,6 +307,22 @@ async def spawn_successor(db: Any, task: Any, *, actor_id: str) -> str | None:
     if getattr(task, "recurrence_id", None) is None:
         return None
     if getattr(task, "recurrence_spawned_at", None) is not None:
+        return None
+
+    # WS-27bg. A series does not advance into a project that is not running:
+    # spawning a fresh weekly report into a paused, stopped or archived project
+    # is inventing work nobody asked for, in a place nobody is looking.
+    #
+    # ⚠️ Deliberately NOT stamped `recurrence_spawned_at` on this path — unlike
+    # the ended-series case below. This is a pause, not an end: the occurrence
+    # is skipped while the project sleeps, and closing a task again after the
+    # project resumes must still be able to produce a successor. Stamping here
+    # would silently kill the series at the moment somebody paused the project.
+    project = (await db.execute(
+        text("SELECT status, archived_at FROM pm_projects WHERE id = CAST(:pid AS uuid)"),
+        {"pid": str(getattr(task, "project_id", "") or "")},
+    )).fetchone()
+    if not is_runnable(project):
         return None
 
     row = (await db.execute(

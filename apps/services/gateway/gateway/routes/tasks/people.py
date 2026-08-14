@@ -639,8 +639,10 @@ async def create_person(
     if not name:
         raise HTTPException(status_code=400, detail="name is required")
     _validate_status(body.status)
-    # The vocabularies migration 175 deliberately did NOT put in a CHECK
-    # (D-PC-8/P-6): enforced in the route against ONE tuple, the same shape
+    # The vocabularies migration 172 deliberately did NOT put in a CHECK
+    # (D-PC-8/P-6) — that is `172_people_profile.sql`, PEOPLE's vocabularies
+    # (`employment_type`, `seniority`), NOT the Projects ones in 175, which
+    # never touches `gtd_people`: enforced in the route against ONE tuple, the same shape
     # `_validate_status` takes for 148's CHECK, so a bad value is a 400 that
     # lists the legal words rather than a 500 naming a constraint.
     validate_person_vocabularies(body.model_dump(exclude_unset=True))

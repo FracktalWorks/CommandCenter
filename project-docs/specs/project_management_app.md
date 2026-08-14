@@ -3225,13 +3225,53 @@ at the tool layer**, not a sentence in a system prompt — and the UI contract a
 a library (WS-27av). Shapes the Action Broker and agent dispatch together, which is why it is a
 decision and not a ticket.
 
-**D-PM-20 (owed) — optimistic concurrency on `pm_tasks`.** Neither reference has any: no
-version column, no etag, read-modify-write throughout. **With agents writing concurrently with
-humans — which is the entire point of our product — last-write-wins is a data-loss design**,
-and a revert affordance (WS-27az) makes it worse by replaying stale values. An `updated_at`
-precondition on PATCH is nearly free *now* and breaks every client at once if added later.
-⚠️ It interacts with the delta feed: migration 168's `updated_at` serves both, so one semantic
-has to be chosen for both.
+~~**D-PM-20 (owed)**~~ ✅ **D-PM-20 — ANSWERED 2026-08-13: an `updated_at` precondition on
+PATCH, and NO version column.** Neither reference has any concurrency control: no version
+column, no etag, read-modify-write throughout. **With agents writing concurrently with humans —
+which is the entire point of our product — last-write-wins is a data-loss design**, and a
+revert affordance (WS-27az) makes it worse by replaying stale values. The precondition is
+nearly free *now* and breaks every client at once if added later.
+
+`DECISION (2026-08-13, owner-selected as the next item; the shape below is the agent's, taken
+after the audit that follows.)`
+
+**The audit that made this decidable** (measured against `e294ce7`):
+
+| Question | Answer |
+|---|---|
+| Any concurrency control today? | **None.** The eight 409s in the package are constraint conflicts (a status in use, a duplicate field key), not preconditions. |
+| Does `updated_at` move on every write? | **Yes by default** — `core.update_row` appends `updated_at = now()` unless `touch=False`. |
+| How many opt out? | **Exactly two**, both stamping `recurrence_spawned_at`. |
+| Task write endpoints needing it | **8** across `tasks.py`, `bulk.py`, `relations.py`. |
+
+🔴 **The "one semantic must cover both" worry resolves cleanly, and that is the finding.** The
+two `touch=False` sites are correct for **both** consumers at once: a recurrence bookkeeping
+stamp should not make a delta client re-pull, *and* it should not invalidate a human's pending
+edit either. So one `updated_at` genuinely serves the feed's keyset cursor and the write
+precondition — there is no conflict to arbitrate, which is what makes this buildable rather
+than a redesign.
+
+**The shape:**
+
+* **`If-Match: <updated_at>`** on the task PATCH — the value the client last read, echoed back.
+  A mismatch is **412 Precondition Failed** carrying the current row, so the client can show
+  *"someone changed this while you were editing"* with the actual values rather than a bare
+  refusal.
+* **No new column.** `updated_at` already exists, already moves on every write that matters, and
+  already serves the delta cursor. A `version INT` would be a second monotonic fact about one
+  row — the CLAUDE.md §5 defect, and one that would then need its own migration and its own
+  backfill.
+* **Absent header = no precondition**, deliberately. Making it mandatory on day one breaks every
+  existing caller at once, which is the exact failure this decision exists to avoid. It is
+  advisory first and tightened in a later release (R6's discipline applied to an API rather than
+  a schema).
+* ⚠️ **Timestamp granularity is the trap to measure, not assume.** `updated_at` is
+  `timestamptz`; two writes inside the same microsecond would be indistinguishable. R8: prove
+  the round-trip preserves enough precision through asyncpg **and** through the JSON encoder
+  before claiming the precondition is exact.
+
+**Not in scope:** bulk edit's semantics (what a partial precondition failure means across
+thirty tasks is its own question), and WS-27az's revert.
 
 #### 9.5.4 Added to the refusal list, with reasons
 
@@ -3545,6 +3585,34 @@ otherwise author three times over.
 Per-project state **history** (who paused it, when, why) — `pm_activities` is project-less today
 (§3.8 is a task timeline), so a project-level audit trail is its own ticket, not a side effect of
 this one. Also out: any change to `DELETE /nodes/{id}`'s semantics beyond its ranking in the UI.
+
+---
+
+### 9.10 WS-27bi — the PATCH precondition (minted 2026-08-13, D-PM-20)
+
+**WS-27bi — `If-Match` on the task PATCH.** 🟢 AGENT-SAFE. **No migration, no new column.**
+D-PM-20 is answered; the audit behind it is in that decision and is not repeated here.
+
+> **Done when:**
+> * `PATCH /projects/tasks/{id}` honours **`If-Match: <updated_at>`** — matching proceeds,
+>   mismatching answers **412** with the current row in the body so a client can show what
+>   changed rather than only that something did.
+> * **An absent header still succeeds.** Advisory first; mandatory is a later release. A
+>   precondition made compulsory on day one breaks every existing caller at once, which is the
+>   failure this whole decision exists to prevent.
+> * **No `version` column is added.** `updated_at` already moves on every write that matters
+>   (`core.update_row`, `touch=True` by default) and already serves migration 168's keyset
+>   cursor. A second monotonic fact about one row is the CLAUDE.md §5 defect.
+> * The two `touch=False` sites stay untouched and a test says why: a `recurrence_spawned_at`
+>   stamp must neither wake a delta client nor invalidate a human's pending edit.
+> * ⚠️ **R8 — measure the granularity, do not assume it.** `updated_at` is `timestamptz`; prove
+>   a round-trip through asyncpg **and** the JSON encoder preserves enough precision that two
+>   writes cannot collide into one token. A precondition that silently compares truncated values
+>   is worse than none, because it reports safety it does not have.
+> * The delta feed's cursor behaviour is unchanged, asserted rather than assumed.
+>
+> **Not in scope:** bulk edit (what a partial precondition failure means across thirty tasks is
+> its own question) and WS-27az's revert.
 
 ---
 

@@ -175,7 +175,7 @@ logo contains that logo and not the fallback caption.
 | `workbench/control_plane/src/app/settings/organization/page.tsx` | the surface |
 | `workbench/control_plane/src/app/api/settings/branding/route.ts` | BFF |
 | `tests/unit/test_settings_branding.py` | probe + route tests |
-| `workbench/control_plane/scripts/theme-check.mjs` | ⚠️ advisory theme harness — see §7 |
+| `workbench/control_plane/e2e/org-branding.spec.ts` | ⚠️ theme + lockup e2e — authored, **unverified**, see §7 |
 
 ---
 
@@ -190,9 +190,8 @@ npx tsc --noEmit
 npx vitest run src/lib/orgBranding.test.ts
 npx vitest run src/lib/theme/                                  # 8 conformance rules
 
-# The theme pass (advisory — §7). Needs a dev server on :3001.
-npm run dev &
-node scripts/theme-check.mjs
+# The theme + lockup pass (§7 — currently CANNOT BOOT, see the warning there).
+npm run test:e2e -- e2e/org-branding.spec.ts
 ```
 
 ---
@@ -204,7 +203,31 @@ node scripts/theme-check.mjs
   promotion lands, and not before.
 - **OI-5 — 🔴** until D38's invoice renderer exists.
 
-> ⚠️ **`scripts/theme-check.mjs` is ADVISORY and must not be described as
+> ### ⚠️ The e2e suite cannot boot in a container without auth config — and CP-0 is why
+>
+> The two standalone theme scripts were folded into `e2e/org-branding.spec.ts`
+> on 2026-08-14, which removes the second Playwright seam and the hardcoded
+> POSIX browser path. **The spec has not been run.** `playwright.config.ts`
+> serves the suite with `next start`, i.e. `NODE_ENV=production`, and
+> `authPosture` grants its dev bypass only when `NODE_ENV !== "production"`. So
+> with no auth environment the proxy answers `/chat` with **503**, the
+> `webServer` readiness probe never goes green, and *every* spec in `e2e/`
+> times out before a single test runs — measured, not inferred.
+>
+> **This is a consequence of CP-0 (`8f6eb79`, "auth fails closed").** Before it,
+> auth failed OPEN when unconfigured, so a production build with no auth env
+> served pages and the suite booted. Failing closed is correct and stays; the
+> defect is that it silently took the e2e suite with it and **nothing noticed,
+> because nothing runs `e2e/` in CI.** That is the same shape as CP-3's
+> R8 fences skipping while reporting green.
+>
+> Owed, and NOT decided here: the runner needs a deliberate test-auth posture.
+> Inventing a bypass environment variable is a security decision with an owner,
+> not a detail an implementer picks — so it is written down rather than done.
+> Until then `e2e/org-branding.spec.ts` is **authored but unverified**, and must
+> not be counted as passing.
+
+> ⚠️ **The theme harness is ADVISORY and must not be described as
 > coverage.** Nothing runs it in CI; putting a browser in the PR job is an
 > owner decision. It also has two open defects of its own, recorded here rather
 > than in a commit message nobody re-reads: it is a **second Playwright seam**

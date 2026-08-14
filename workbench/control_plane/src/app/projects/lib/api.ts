@@ -7,6 +7,16 @@ import type { Rule as RecurrenceRule } from "./recurrence";
  * proxy is what carries the session identity the whole grant model scopes on.
  */
 
+/** What `POST /nodes/{id}/archive|unarchive` reports back. */
+export interface ArchiveResult {
+  project_id: string;
+  archived: boolean;
+  /** Projects actually stamped or cleared — 0 when already in that state. */
+  projects: number;
+  /** Open tasks in the subtree. Reported, never acted on (D-PM-26). */
+  open_tasks: number;
+}
+
 export interface ProjectRow {
   id: string;
   name: string;
@@ -23,6 +33,14 @@ export interface ProjectRow {
   archive_after_months?: number | null;
   close_after_months?: number | null;
   timezone?: string | null;
+  /**
+   * WS-27bg — the ARCHIVE axis, which is not a run state (D-PM-25). Set means
+   * filed out of the default surfaces; `archived_root_id` names which project's
+   * archive filed it, so a subproject archived on its own survives its parent's
+   * restore.
+   */
+  archived_at?: string | null;
+  archived_root_id?: string | null;
   children?: ProjectRow[];
 }
 
@@ -257,6 +275,17 @@ export const projectsApi = {
       method: "PATCH",
       body: JSON.stringify(payload),
     }),
+
+  /**
+   * WS-27bg — the archive axis. Both are idempotent and BOTH report what they
+   * touched (`projects`, `open_tasks`), because a route that changes what a
+   * caller can see owes them the number.
+   */
+  archiveProject: (projectId: string) =>
+    call<ArchiveResult>(`nodes/${projectId}/archive`, { method: "POST" }),
+
+  unarchiveProject: (projectId: string) =>
+    call<ArchiveResult>(`nodes/${projectId}/unarchive`, { method: "POST" }),
 
   createTask: (payload: Record<string, unknown>) =>
     call<TaskRow>("tasks", { method: "POST", body: JSON.stringify(payload) }),

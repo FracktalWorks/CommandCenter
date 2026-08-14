@@ -53,7 +53,7 @@ from acb_common import get_logger
 # passes the organization the EVENT carried, and there is no path through this
 # module that opens a session without one.
 from gateway.db import tenant_session as _tenant_session
-from gateway.routes.projects.core import record_activity
+from gateway.routes.projects.core import is_runnable, record_activity
 from sqlalchemy import text
 
 _log = get_logger("projects.agent_dispatch")
@@ -162,6 +162,32 @@ async def on_event(source: str, event_type: str, payload: dict[str, Any]) -> Non
         )).fetchone()
         if task is None:
             return
+
+        # WS-27bg. An agent is not put to work inside a project that is not
+        # running. Assignment in a paused project is planning ("this is yours
+        # when we restart"), and dispatching on it would have an agent burn
+        # budget on work the org has explicitly suspended.
+        #
+        # A WARNING rather than a timeline row, for the same reason the tenant
+        # refusal above is: this is a sink, and the decision belongs in the log
+        # where an operator looks, not in the activity feed of a project nobody
+        # is reading.
+        project = (await db.execute(
+            text(
+                "SELECT status, archived_at FROM pm_projects "
+                "WHERE id = CAST(:pid AS uuid)"
+            ),
+            {"pid": str(getattr(task, "project_id", "") or "")},
+        )).fetchone()
+        if not is_runnable(project):
+            _log.warning(
+                "projects.agent_dispatch_skipped", task_id=task_id,
+                agents=agents,
+                status=str(getattr(project, "status", "") or "unknown"),
+                reason="the task's project is not running (WS-27bg)",
+            )
+            return
+
         message = build_message(task)
         for name in agents:
             # The timeline entry is written and COMMITTED before the run

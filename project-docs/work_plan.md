@@ -441,7 +441,26 @@ deleted `core.py`'s `_tenant_session` re-export** — unused *within* the module
 from every sibling — and took **25 test modules** down with it. The repo's own CI comment warns
 that a blanket `--fix` is destructive here and CI runs it report-only; the line now carries a
 comment saying so. ✅ `tests/unit` **6015 passed** (baseline 5999), blocking lint clean.
-(2026-08-14) |
+✅ **WS-27bj SLICE 1 (the schema) BUILT 2026-08-14 — migration `172_projects_org_vocabularies.sql`**
+(number taken at build time, **re-check at merge, R1**). `project_id` is nullable on all three
+vocabulary tables; each table's whole-table `UNIQUE` is replaced by a **pair** of partial uniques
+— `(project_id, <identity>) WHERE project_id IS NOT NULL` and `(organization_id, <identity>)
+WHERE project_id IS NULL` — on each table's **existing** identity (`lower(name)` for tags,
+`field_key` for custom fields, `name` for types), inventing no new normalisation. ✅ **R8 — all
+four cases proved on a real database, and the migration applied twice to prove idempotency**:
+two org-wide duplicates rejected (`uq_pm_tags_org_name`, catching `R8DUP` vs `r8dup`), two
+root-local duplicates rejected, **org-wide + root-local of the same name ACCEPTED** (the
+shadowing case D-PM-16 requires — a whole-table unique left in place would have forbidden it),
+and the same name under a second tenant accepted. ⚠️ **The first run of that check was a false
+pass and the output is why it was caught**: a bad seed (`organization` has `display_name`, not
+`name`) made every case fail on a **foreign key**, so cases 1 and 2 "errored" exactly as intended
+for entirely the wrong reason. A pass/fail count would have read green. 🔴 **Slice 1 is
+schema-only and is safe to merge alone** — nothing yet writes a `project_id IS NULL` row and
+nothing yet reads one, which is "ship dark" landing as a schema rather than a flag. **Still
+owed: the read path** — `org-wide ∪ root-local` with **root-local shadowing** (a correctness
+rule for tags, since `pm_tasks.tags` stores display text, so two registry rows describe one tag
+and the union must yield one colour), plus the flagged create affordance. `tests/unit` **6029
+passed** (baseline 6015). (2026-08-14) |
 | WS-28 | **People Center — directory, org chart, assignment seam** *(minted 2026-08-06)* | ✅ a+b+b-write | `specs/people_center_app.md` · board record 2026-08-09 | a (key shape, mig 148 + quarantine table) · b (directory + person page, mig 149, five-place registration) · b-write (create/edit UI restored; found three ways mig 148 had broken the write routes) — built 2026-08-06/07; **closes WS-13's directory item**. 🟢 c org chart · d capability search (**ranking EVAL-LOCKED**) · e Projects seams; 🔴 f seats/roles writes (§6 WS-24 (d) analogue). ⚠️ `schema.generated.sql` regeneration is **due**: stale since ~migration 113, and 148 reached prod ~2026-08-07 (after the #384 cast fix). (2026-08-07) |
 ---
 

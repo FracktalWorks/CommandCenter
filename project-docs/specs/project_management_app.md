@@ -2454,15 +2454,52 @@ resolving icons through `<Icon name>`, using only semantic tokens; call sites im
 never the library's, or the library's defaults become a second design system. **R7:** the
 conformance suite gains a rule naming the import restriction, or it is advisory.
 
-**D-PM-16 (owed) — org-wide vocabularies.** Plane's tags, custom fields and task types
-carry a **nullable** project scope, so a vocabulary is either workspace-wide or
-project-local, with paired partial-unique constraints. Ours are all `project_id NOT NULL`.
-⚠️ **This is the most expensive item in this section if we get it wrong.** Dropping NOT
-NULL later is trivial; what is not trivial is merging the duplicate rows twelve projects
-will each have accumulated — their own "Bug", "urgent", "Client" — which is a
-judgement-call migration nobody can automate. **Even if the answer is "no, vocabularies
-stay per-project", record it as a decision now**, because the answer is what stops the
-merge ever becoming necessary.
+**D-PM-16 — org-wide vocabularies. ✅ OWNER-RULED 2026-08-14: adopt the nullable project
+scope.** Plane's tags, custom fields and task types carry a **nullable** project scope, so a
+vocabulary row is either org-wide or project-local, with paired partial-unique constraints.
+Ours were all `project_id NOT NULL`. ⚠️ This was the most expensive item in its section if
+got wrong: dropping NOT NULL later is trivial, but merging the duplicate rows twelve root
+projects will each have accumulated — their own "Bug", "urgent", "Client" — is a
+judgement-call migration nobody can automate. The ruling is what stops that merge ever
+becoming necessary.
+
+**`project_id IS NULL` means org-wide.** Three findings from the audit that set the shape:
+
+✅ **There is no R5 gap, and this is what makes the ruling cheap.** All three tables already
+carry `organization_id NOT NULL` from **migration 161** (`161_projects_tenancy.sql:109/120/121`,
+backfilled at 341/352/353, tightened at 368/379/380). So a row with `project_id IS NULL` is
+still tenant-anchored — it is org-wide *within one organization*, never global. Had the tenant
+anchor been reached only through `project_id → pm_projects`, nulling it would have produced
+untenanted rows visible to every tenant, and this ruling would have needed a migration to fix
+that first.
+
+⚠️ **These are ROOT-project scoped, not per-project.** `pm_custom_fields` and `pm_tags` both say
+so in their own headers ("configuration is root-scoped and the subtree inherits… so a task moved
+between subprojects keeps tags that still mean something"). So the duplication being prevented
+is per **root** project, and the new axis is root-local vs org-wide — there is no third level.
+
+🔴 **Shadowing must be ruled, because for tags one name is one string.** `pm_tasks.tags` stores
+the tag's **display text**, not a foreign key ("the exact text stored in every `pm_tasks.tags`
+entry for this tag"). An org-wide `bug` and a root-local `bug` are therefore *the same tag* on
+every task, while being two registry rows carrying two colours. The union must resolve to
+exactly one row per identity or the colour is ambiguous — the same class of failure the table's
+own comment warns about for `' bug'` versus `'bug'`. **Rule: most specific wins — a root-local
+row shadows an org-wide row of the same identity**, and it needs a test, not a convention.
+
+Constraint shape, paired per table, on each table's existing identity (`name` for task types,
+**`lower(name)`** for tags because tag identity is already case-insensitive, `field_key` for
+custom fields):
+
+```
+UNIQUE (project_id,      <identity>) WHERE project_id IS NOT NULL   -- root-local
+UNIQUE (organization_id, <identity>) WHERE project_id IS NULL       -- org-wide
+```
+
+**R6 — this is an expand, and it contracts nothing.** Dropping NOT NULL only widens what is
+accepted, so old code (which always writes a `project_id`) keeps working unchanged, and old
+readers filtering `WHERE project_id = :x` simply do not see org-wide rows — invisible, not
+broken. **Ship dark**: the read-path union is harmless, so the flag belongs on the affordance
+that *creates* an org-wide row, which is the irreversible half.
 
 **D-PM-17 (owed) — the i18n discipline (not i18n itself).** Plane's numbers are one
 forecast: 28 namespaces × 19 locales ≈ **5,181 keys per locale**, for a surface *smaller*
@@ -3677,6 +3714,44 @@ make it rare, not impossible.
 Per CLAUDE.md §5 this is recorded as a **finding for the board, not a refactor**: it predates
 this work, and fixing it (`clock_timestamp()`, or a sequence) is a change to the delta feed's
 contract that deserves its own row and its own decision.
+
+---
+
+### 9.11 WS-27bj — org-wide vocabularies (minted 2026-08-14, D-PM-16)
+
+**WS-27bj — nullable project scope on the three vocabularies.** 🟡 **Migration + read-path
+change.** D-PM-16 is ruled; its audit is recorded there and is not repeated here. Take the
+migration number at build time and re-check it at merge (**R1** — three collisions in two weeks).
+
+> **Done when:**
+> * `project_id` is **nullable** on `pm_task_types`, `pm_custom_fields` and `pm_tags`, with the
+>   paired partial-unique indexes from D-PM-16 replacing each table's current whole-table
+>   `UNIQUE`. `organization_id` stays `NOT NULL` on all three — **an org-wide row is org-wide
+>   within one tenant, never global**, and a test says so by trying to read another tenant's
+>   org-wide row and getting nothing.
+> * A project's effective vocabulary is **org-wide ∪ root-local**, and **root-local shadows
+>   org-wide on the same identity** (D-PM-16). ⚠️ For tags this is a correctness rule, not a
+>   preference: `pm_tasks.tags` stores display text, so both rows describe the *same* tag on
+>   every task and the union must yield exactly one colour. A test asserts the shadowed row is
+>   the one that renders.
+> * Identity matches each table's existing rule — `lower(name)` for tags (already
+>   case-insensitive), `name` for task types, `field_key` for custom fields. **Not** a new
+>   normalisation invented here.
+> * ⚠️ **R8 — verify the partial uniques against a real database.** Two partial indexes that
+>   between them permit a duplicate is exactly the bug a hermetic fake cannot see, because a
+>   fake agrees with whatever SQL it is handed. Prove all four cases: two org-wide duplicates
+>   rejected, two root-local duplicates rejected, org-wide + root-local of the same name
+>   **accepted** (that is the shadowing case, not a violation), and the same name under two
+>   different tenants accepted.
+> * **R6 — expand only.** Old writers always send a `project_id` and keep working; old readers
+>   filtering `project_id = :x` do not see org-wide rows. No contraction in this release, and
+>   the header names the later one if any.
+> * **Ship dark**: the flag gates the affordance that *creates* an org-wide row, not the read
+>   union. Creating one is the half that is hard to walk back.
+
+> **Not in scope:** migrating any existing per-project row up to org-wide (that is the
+> judgement call D-PM-16 exists to avoid ever needing, and it is the owner's, not an agent's),
+> and the admin UI for managing org-wide vocabularies — the seam lands first.
 
 ---
 

@@ -407,7 +407,24 @@ its 412 — which is precisely why it does not expand WS-27bi. **It is a real ga
 the row stamped behind it, and that change leaves the stream silently. Pre-existing and
 already-merged, so per CLAUDE.md §5 it is recorded, not refactored; the fix (`clock_timestamp()`
 or a sequence) changes the delta feed's contract and **owes its own row and its own decision**.
-(2026-08-14) |
+✅ **D-PM-16 RULED BY OWNER 2026-08-14 — adopt the nullable project scope** (spec §2457), and
+**WS-27bj minted** for it (§9.11). `project_id` becomes nullable on `pm_task_types`,
+`pm_custom_fields` and `pm_tags`; `NULL` means org-wide, with paired partial uniques replacing
+each table's whole-table `UNIQUE`. This was the section's most expensive item precisely because
+the cost is asymmetric: dropping NOT NULL later is trivial, **merging the duplicate "Bug" /
+"urgent" / "Client" rows twelve root projects will each have accumulated is a judgement-call
+migration nobody can automate**, so the ruling's value is that it stops that merge ever becoming
+necessary. ✅ **No R5 gap, and it is what makes the ruling cheap** — all three tables already
+carry `organization_id NOT NULL` from **migration 161**, so a `project_id IS NULL` row is
+org-wide **within one tenant, never global**. Had tenancy been reached only through
+`project_id → pm_projects`, nulling it would have produced untenanted rows readable by every
+tenant. ⚠️ All three are **ROOT**-scoped already (their own headers say so), so the new axis is
+root-local vs org-wide — there is no third level. 🔴 **Shadowing had to be ruled, not left to
+taste**: `pm_tasks.tags` stores tag **display text**, not a key, so an org-wide `bug` and a
+root-local `bug` are the *same tag* on every task while being two rows with two colours —
+**most specific wins**, fenced by a test. **R6 expand-only** (old writers unaffected, old
+readers simply do not see org-wide rows); **ship dark on the create affordance, not the read
+union**. (2026-08-14) |
 | WS-28 | **People Center — directory, org chart, assignment seam** *(minted 2026-08-06)* | ✅ a+b+b-write | `specs/people_center_app.md` · board record 2026-08-09 | a (key shape, mig 148 + quarantine table) · b (directory + person page, mig 149, five-place registration) · b-write (create/edit UI restored; found three ways mig 148 had broken the write routes) — built 2026-08-06/07; **closes WS-13's directory item**. 🟢 c org chart · d capability search (**ranking EVAL-LOCKED**) · e Projects seams; 🔴 f seats/roles writes (§6 WS-24 (d) analogue). ⚠️ `schema.generated.sql` regeneration is **due**: stale since ~migration 113, and 148 reached prod ~2026-08-07 (after the #384 cast fix). (2026-08-07) |
 ---
 

@@ -33,7 +33,7 @@ function buildUpstreamUrl(path: string[], req: NextRequest): string {
 }
 
 async function forward(
-  method: "GET" | "POST" | "PATCH" | "PUT",
+  method: "GET" | "POST" | "PATCH" | "PUT" | "DELETE",
   req: NextRequest,
   params: Promise<{ path: string[] }>
 ): Promise<NextResponse> {
@@ -48,13 +48,13 @@ async function forward(
       method,
       headers: {
         ...(await gatewayHeaders()),
-        ...(method === "GET"
+        ...(method === "GET" || method === "DELETE"
           ? {}
           : { "Content-Type": isMultipart ? reqType : "application/json" }),
       },
       signal: AbortSignal.timeout(30_000),
     };
-    if (method !== "GET") {
+    if (method !== "GET" && method !== "DELETE") {
       init.body = isMultipart
         ? Buffer.from(await req.arrayBuffer())
         : JSON.stringify(await req.json().catch(() => ({})));
@@ -123,4 +123,14 @@ export async function PUT(
   const me = await requireIdentity();
   if (me instanceof NextResponse) return me;
   return forward("PUT", req, ctx.params);
+}
+
+/** WS-28q: removing a display image. No body, so nothing is forwarded. */
+export async function DELETE(
+  req: NextRequest,
+  ctx: { params: Promise<{ path: string[] }> }
+) {
+  const me = await requireIdentity();
+  if (me instanceof NextResponse) return me;
+  return forward("DELETE", req, ctx.params);
 }

@@ -26,8 +26,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Icon from "@/components/Icon";
 import Button from "@/components/ui/Button";
 
+import { AvatarPicker } from "../components/AvatarPicker";
 import { ProfilePanels } from "../components/ProfilePanels";
 import { type PersonDetail, peopleApi } from "../lib/api";
+import { initials } from "../lib/directory";
 
 type State =
   | { kind: "loading" }
@@ -131,7 +133,33 @@ export default function MyProfilePage() {
       {state.kind === "resolved" && (
         <>
           <section className="rounded-xl border border-border p-3">
-            <div className="flex flex-wrap items-baseline gap-2">
+            {/*
+              The picker is rendered only when the server said this row is
+              editable — `editable_fields`, never a guess (D-PC-4). On your own
+              profile it always is; the check is here so the component is
+              reusable on somebody else's page unchanged.
+            */}
+            <AvatarPicker
+              avatar={state.person.avatar}
+              initials={initials(state.person.name)}
+              onUpload={
+                (state.person.editable_fields ?? []).includes("avatar")
+                  ? async (file, crop) => {
+                      const saved = await peopleApi.uploadAvatar("me", file, crop);
+                      setState({ kind: "resolved", person: saved });
+                    }
+                  : undefined
+              }
+              onRemove={
+                (state.person.editable_fields ?? []).includes("avatar")
+                  ? async () => {
+                      const saved = await peopleApi.removeAvatar("me");
+                      setState({ kind: "resolved", person: saved });
+                    }
+                  : undefined
+              }
+            />
+            <div className="mt-3 flex flex-wrap items-baseline gap-2">
               <span className="text-sm text-foreground">
                 {state.person.preferred_name || state.person.name}
               </span>

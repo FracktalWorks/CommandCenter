@@ -16,6 +16,9 @@
 export interface PersonProfileFields {
   preferred_name?: string | null;
   pronouns?: string | null;
+  /** A `data:image/jpeg` URI of the server's 256×256 re-encode (D-PC-17). */
+  avatar?: string | null;
+  avatar_updated_at?: string | null;
   location?: string | null;
   timezone?: string | null;
   working_hours?: Record<string, unknown> | null;
@@ -183,6 +186,55 @@ export const peopleApi = {
       impact: import("./schedule").PolicyImpact;
       saved: boolean;
     };
+  },
+
+  /**
+   * Set a display image. `target` is `"me"` or a person id — different
+   * endpoints, because the self door is ungated (D-PC-15).
+   *
+   * The crop is **fractions of the source**, and the server squares and
+   * resizes whatever it receives either way (D-PC-17), so this is a request
+   * about framing rather than a control over shape.
+   */
+  uploadAvatar: async (
+    target: string,
+    file: File,
+    crop: { x: number; y: number; size: number }
+  ) => {
+    const form = new FormData();
+    form.append("file", file);
+    form.append("crop_x", String(crop.x));
+    form.append("crop_y", String(crop.y));
+    form.append("crop_size", String(crop.size));
+    const res = await fetch(`/api/people/${target}/avatar`, {
+      method: "POST",
+      body: form,
+    });
+    const text = await res.text();
+    const parsed = text ? JSON.parse(text) : null;
+    if (!res.ok) {
+      // The gateway refuses a file with a sentence about that file — shown
+      // verbatim, because the person who chose it is the one who has to
+      // choose another.
+      throw new PeopleApiError(
+        parsed?.detail ?? `Upload failed (${res.status})`,
+        res.status
+      );
+    }
+    return parsed as PersonDetail;
+  },
+
+  removeAvatar: async (target: string) => {
+    const res = await fetch(`/api/people/${target}/avatar`, { method: "DELETE" });
+    const text = await res.text();
+    const parsed = text ? JSON.parse(text) : null;
+    if (!res.ok) {
+      throw new PeopleApiError(
+        parsed?.detail ?? `Request failed (${res.status})`,
+        res.status
+      );
+    }
+    return parsed as PersonDetail;
   },
 
   facets: () =>

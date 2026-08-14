@@ -1208,7 +1208,10 @@ company with one working pattern should not have to express it as a shift and th
 every employee on it. A second defect the tests caught: a `fraction` of `0.0` is falsy, so
 `or 1.0` quietly restored a full 40-hour week on the denominator every load bar divides by.
 
-**WS-28q — the display image (P-8, §3.1a).** 🟢 AGENT-SAFE.
+**WS-28q — the display image (P-8, §3.1a).** ✅ **BUILT 2026-08-13**
+(migration `172_people_avatar.sql`, `gateway/avatar.py`, the avatar routes on both
+doors, `components/{AvatarPicker,Avatar}.tsx`, `lib/crop.ts`; 45 hermetic + 17 vitest
+cases and 16 live checks).
 Done when: an upload is decoded, centre-cropped square, resized to exactly 256×256 and
 re-encoded to WebP, and **the stored bytes are the server's output** — proven by a test
 that uploads a 1000×400 JPEG and asserts the stored image is 256×256 WebP; `image/svg+xml`
@@ -1218,6 +1221,28 @@ when present and **ignored safely when absent or nonsense** (the server still sq
 the avatar is self-writable and directory-readable; a person with none renders initials
 with no external request; and `avatar_updated_at` busts the cache so a new photo appears
 without a hard reload.
+
+**Two amendments the build makes to this section, and one thing it caught:**
+
+- **JPEG, not WebP.** The property that matters is the re-encode, not the container. The
+  gateway already depends on PyMuPDF (the résumé parser), which decodes, crops and scales
+  but cannot *write* WebP; the only route to WebP was adding Pillow to the gateway — a new
+  wheel on the deploy path — to save ~10 KB per person across a roster of dozens. JPEG at
+  quality 82 through the library already present is the same guarantee for no new
+  dependency.
+- **The crop rectangle is FRACTIONAL, not in pixels.** A 1000×400 pixel image opens as a
+  750×300 *point* page, so a pixel rectangle from the browser crops the wrong region — the
+  first probe produced a 256×192 image from what should have been a square. Fractions
+  cancel the units and the client never needs the DPI.
+- ⚠️ **The decoder is not the type check.** MuPDF *renders SVG*: an SVG handed to
+  `fitz.open(filetype="image")` opens happily. Measured, not assumed. So the bytes are
+  sniffed before the decoder sees them, and the SVG refusal is by name — it is the file
+  somebody will most reasonably try, and it is a document that can carry script on a
+  surface displayed on every page.
+- One more measured trap: `Matrix(scale, scale)` is not exact — MuPDF rounds the
+  transformed rectangle outward, and a zoomed crop came back 257×257. `Rect.torect` maps
+  the clip onto the target box exactly, which is the difference between "about 256" and the
+  constant the whole design rests on.
 
 **WS-28h — structured skills and credentials (P-4).** 🟢 AGENT-SAFE.
 Done when: `gtd_person_skills` carries level, years, last-used and evidence; **every write

@@ -2,9 +2,11 @@
 
 Spec: ``project-docs/specs/people_center_app.md`` §4.5 · **D-PC-15**.
 
-    GET   /people/me           → the caller's own row, or WHY there isn't one
-    PATCH /people/me           → their own record, class-checked
-    POST  /people/me/resume    → their own CV
+    GET    /people/me           → the caller's own row, or WHY there isn't one
+    PATCH  /people/me           → their own record, class-checked
+    POST   /people/me/resume    → their own CV
+    POST   /people/me/avatar    → their own display image
+    DELETE /people/me/avatar    → remove it
 
 **This router carries no feature gate, and that is the ticket.** WS-28g put the
 self surface on the directory's router, which is gated on ``feature:people`` —
@@ -35,12 +37,15 @@ from typing import Any, Literal
 
 from acb_auth import UserContext, get_current_user
 from acb_common import get_logger
-from fastapi import APIRouter, Depends, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile
+from gateway.avatar import AvatarError
 from gateway.routes.people.core import (
     _tenant_session,
     can_manage_people,
+    clear_avatar,
     find_self_row,
     person_payload,
+    store_avatar,
 )
 from gateway.routes.people.fields import authorize_write
 from gateway.routes.tasks import people as tasks_people
@@ -190,3 +195,54 @@ async def upload_my_resume(
             "extracted": result.extracted,
             "person": await person_payload(db, saved, user),
         }
+
+
+@router.post("/me/avatar")
+async def upload_my_avatar(
+    file: UploadFile,
+    crop_x: float = Form(0.0),
+    crop_y: float = Form(0.0),
+    crop_size: float = Form(1.0),
+    user: UserContext = Depends(get_current_user),
+) -> dict:
+    """Set your own display image (§3.1a).
+
+    The crop rectangle is **fractional** — ``(x, y, side)`` in ``[0, 1]`` of the
+    source — so the client works in whatever it displays and never needs the
+    image's DPI. A 1000x400 pixel image opens as a 750x300 *point* page, and a
+    pixel rectangle from a browser would silently crop the wrong region; that
+    was measured, not guessed.
+
+    The three form fields default to a full-frame crop, so a caller that sends
+    only a file gets a centre crop rather than an error. **The server squares it
+    either way** (D-PC-17): the cropper is a courtesy, the square is a
+    guarantee.
+    """
+    async with _tenant_session() as db:
+        row = await _my_row(db, user)
+        authorize_write(["avatar"], is_admin=can_manage_people(user),
+                        is_self=True)
+        try:
+            await store_avatar(db, str(row.id), await file.read(),
+                               (crop_x, crop_y, crop_size),
+                               getattr(user, "email", None) or "anonymous")
+        except AvatarError as exc:
+            # The refusal is a sentence about the file the person just chose,
+            # because they are the one who has to choose a different one.
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        saved = await _my_row(db, user)
+        return await person_payload(db, saved, user)
+
+
+@router.delete("/me/avatar")
+async def delete_my_avatar(
+    user: UserContext = Depends(get_current_user),
+) -> dict:
+    """Remove your display image; the directory falls back to your initials."""
+    async with _tenant_session() as db:
+        row = await _my_row(db, user)
+        authorize_write(["avatar"], is_admin=can_manage_people(user),
+                        is_self=True)
+        await clear_avatar(db, str(row.id),
+                           getattr(user, "email", None) or "anonymous")
+        return await person_payload(db, await _my_row(db, user), user)

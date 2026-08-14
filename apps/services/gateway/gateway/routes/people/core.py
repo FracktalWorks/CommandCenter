@@ -243,3 +243,44 @@ async def compute_load(db: Any, email: str | None) -> dict[str, Any]:
         "estimated_hours": round(mins / MINUTES_PER_HOUR, 1),
         "unestimated": int(getattr(row, "unestimated", 0) or 0),
     }
+
+
+# ── The avatar write, shared by both doors ──────────────────────────────────
+
+async def store_avatar(db: Any, person_id: str, data: bytes,
+                       crop: tuple[float, float, float] | None,
+                       actor: str) -> str:
+    """Normalise the upload and store it. Returns the data URI.
+
+    One implementation, two doors — `/people/me/avatar` (ungated, self) and
+    `/people/{id}/avatar` (gated, admin). They differ in who may call them,
+    which is the field-class authority's job and runs in front of this; they do
+    not differ in what reaches the column, because a second normaliser would be
+    a second answer to "what shape is an avatar".
+
+    `avatar_updated_at` is stamped here rather than left to `updated_at`: once
+    anything else on the row moves, `updated_at` stops being able to answer
+    "when did this person last change their picture", which is what the client
+    caches against.
+    """
+    from gateway.avatar import normalise, to_data_uri
+
+    uri = to_data_uri(normalise(data, crop=crop))
+    await db.execute(
+        text("UPDATE gtd_people SET avatar = :avatar, avatar_updated_at = now(), "
+             "updated_by = :by, updated_at = now() "
+             "WHERE id = CAST(:id AS uuid)"),
+        {"avatar": uri, "by": actor, "id": person_id},
+    )
+    return uri
+
+
+async def clear_avatar(db: Any, person_id: str, actor: str) -> None:
+    """Remove it. `avatar_updated_at` is stamped, not cleared — "they took their
+    picture down just now" is a change the client still has to notice."""
+    await db.execute(
+        text("UPDATE gtd_people SET avatar = NULL, avatar_updated_at = now(), "
+             "updated_by = :by, updated_at = now() "
+             "WHERE id = CAST(:id AS uuid)"),
+        {"by": actor, "id": person_id},
+    )

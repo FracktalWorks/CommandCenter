@@ -20,6 +20,7 @@ import Button from "@/components/ui/Button";
 
 import { type PersonDetail, type WorkRow, peopleApi } from "../lib/api";
 import { initials, loadBar, skillOrigin, statusTone } from "../lib/directory";
+import { Avatar } from "./Avatar";
 import { ProfilePanels } from "./ProfilePanels";
 
 interface Props {
@@ -88,9 +89,8 @@ export function PersonPanel({ personId, reloadKey = 0, onClose, onEdit }: Props)
     <aside className="flex h-full w-full max-w-md flex-col overflow-y-auto border-l border-border bg-card">
       <header className="flex items-start justify-between gap-2 border-b border-border p-3">
         <div className="flex min-w-0 items-center gap-2">
-          <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-muted text-xs font-medium text-foreground">
-            {initials(person.name)}
-          </span>
+          <Avatar name={person.name} avatar={person.avatar}
+                  className="size-9 text-xs" />
           <div className="min-w-0">
             <h2 className="truncate text-sm font-medium text-foreground">{person.name}</h2>
             <p className="truncate text-xs text-muted-foreground">

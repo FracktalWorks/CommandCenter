@@ -3,6 +3,7 @@
 Spec: ``project-docs/specs/people_center_app.md`` §4, §5.3 · D-PC-1…D-PC-5.
 
     PATCH /people/{id}              → a class-checked write (admin OR the subject)
+    POST  /people/{id}/avatar       → their display image, same rule
     POST  /people/{id}/resume       → the same rule, for the CV
     GET   /people/{id}/editable     → what THIS caller may write on that row
 
@@ -36,13 +37,16 @@ from __future__ import annotations
 from typing import Any
 
 from acb_auth import UserContext, get_current_user
-from fastapi import Depends, HTTPException, UploadFile
+from fastapi import Depends, Form, HTTPException, UploadFile
+from gateway.avatar import AvatarError
 from gateway.routes.people.core import (
     _tenant_session,
     can_manage_people,
+    clear_avatar,
     is_self,
     person_payload,
     router,
+    store_avatar,
 )
 from gateway.routes.people.fields import authorize_write, editable_fields
 from gateway.routes.tasks import people as tasks_people
@@ -171,3 +175,47 @@ async def get_editable(
         "can_manage": admin,
         "editable_fields": editable_fields(is_admin=admin, is_self=mine),
     }
+
+
+@router.post("/{person_id}/avatar")
+async def upload_avatar(
+    person_id: str,
+    file: UploadFile,
+    crop_x: float = Form(0.0),
+    crop_y: float = Form(0.0),
+    crop_size: float = Form(1.0),
+    user: UserContext = Depends(get_current_user),
+) -> dict:
+    """Set somebody's display image — theirs, or an admin's on their behalf.
+
+    Authorized as a write of ``avatar``, which is the self class: the same
+    question the PATCH asks about a timezone, asked in the same place. The
+    normalisation is `core.store_avatar`, shared with the self door — a second
+    normaliser would be a second answer to what shape an avatar is.
+    """
+    async with _tenant_session() as db:
+        await _authorized_row(db, person_id, user, ["avatar"])
+        try:
+            await store_avatar(db, person_id, await file.read(),
+                               (crop_x, crop_y, crop_size),
+                               getattr(user, "email", None) or "anonymous")
+        except AvatarError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        row = (await db.execute(
+            text("SELECT * FROM gtd_people WHERE id = CAST(:id AS uuid)"),
+            {"id": person_id})).fetchone()
+        return await person_payload(db, row, user)
+
+
+@router.delete("/{person_id}/avatar")
+async def delete_avatar(
+    person_id: str, user: UserContext = Depends(get_current_user),
+) -> dict:
+    async with _tenant_session() as db:
+        await _authorized_row(db, person_id, user, ["avatar"])
+        await clear_avatar(db, person_id,
+                           getattr(user, "email", None) or "anonymous")
+        row = (await db.execute(
+            text("SELECT * FROM gtd_people WHERE id = CAST(:id AS uuid)"),
+            {"id": person_id})).fetchone()
+        return await person_payload(db, row, user)

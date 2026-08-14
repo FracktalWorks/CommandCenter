@@ -18,6 +18,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import Button from "@/components/ui/Button";
 
+import { Avatar } from "./components/Avatar";
 import { PersonEditor } from "./components/PersonEditor";
 import { PersonPanel } from "./components/PersonPanel";
 import { type PersonDetail, type PersonRow, peopleApi } from "./lib/api";
@@ -193,9 +194,7 @@ export default function PeoplePage() {
                     onClick={() => setOpenId(p.id)}
                     className="flex w-full items-center gap-2 border-b border-border px-1 py-2 text-left last:border-0 hover:bg-muted"
                   >
-                    <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-muted text-[10px] font-medium text-foreground">
-                      {initials(p.name)}
-                    </span>
+                    <Avatar name={p.name} avatar={p.avatar} />
                     <span className="min-w-0 flex-1">
                       <span className="block truncate text-sm text-foreground">{p.name}</span>
                       <span className="block truncate text-xs text-muted-foreground">

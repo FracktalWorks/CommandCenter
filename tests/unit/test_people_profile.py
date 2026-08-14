@@ -235,9 +235,25 @@ def test_the_write_classes_do_not_overlap() -> None:
 def test_the_payload_model_is_exactly_the_writable_set() -> None:
     """Both directions. A field the payload accepts that the map never heard of
     has no gate; a field in the map the payload cannot carry is a permission
-    granted for something nobody can do."""
-    assert set(tasks_people.PersonWrite.model_fields) == set(
-        people_fields.WRITABLE_FIELDS)
+    granted for something nobody can do.
+
+    **Less the upload-only ones** (WS-28q): `avatar` is in the self class — the
+    authorization question is identical to a timezone's — but it arrives as a
+    FILE through its own endpoint, so demanding the JSON payload carry a data
+    URI would be the wrong shape for the sake of a tidier assertion. The
+    subtraction is explicit rather than a containment check, so a field that
+    silently stops being carriable still fails here.
+    """
+    assert set(tasks_people.PersonWrite.model_fields) == (
+        set(people_fields.WRITABLE_FIELDS)
+        - set(people_fields.UPLOAD_ONLY_FIELDS))
+
+
+def test_an_upload_only_field_is_still_in_a_write_class() -> None:
+    """Otherwise "upload-only" would be a way to leave a field ungated: the
+    transport changed, the authorization question did not."""
+    for name in people_fields.UPLOAD_ONLY_FIELDS:
+        assert name in people_fields.WRITABLE_FIELDS
 
 
 def test_email_is_admin_only_because_the_self_predicate_is_the_email() -> None:

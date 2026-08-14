@@ -325,6 +325,16 @@ export const CENTERS: Center[] = [
         href: "/people",
       },
       {
+        label: "Working week",
+        note: "Working days, hours per day and shifts — what everybody's contracted hours are derived from",
+        icon: "CalendarDays",
+        // WS-28p. Readable by any holder (a person cannot understand their own
+        // schedule without the layer underneath it); editable with
+        // `admin:members:manage`.
+        status: "live",
+        href: "/people/schedule",
+      },
+      {
         label: "Onboarding",
         note: "Checklists that provision accounts, access, and first-week tasks",
         icon: "UserPlus",

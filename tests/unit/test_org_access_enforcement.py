@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import importlib
 import inspect
+import re
 
 import pytest
 from acb_auth import (
@@ -177,9 +178,20 @@ GATED_ROUTERS: dict[str, set[str]] = {
 #: somebody argued for, and the argument is next to it.
 #:
 #: Every route on an ungated router is asserted below to be **self-scoped**:
-#: no path parameters at all, so an unauthenticated-by-feature caller has no
-#: way to *address* another person's row. That is a structural guarantee rather
-#: than a validation somebody has to keep writing.
+#: the person is never taken from the request. Two halves, and the second is
+#: the one that matters —
+#:
+#:   1. no path parameter names a PERSON, and
+#:   2. every endpoint resolves the row through the self predicate
+#:      (`_my_row` / `find_self_row`).
+#:
+#: ⚠️ **Refined by WS-28k, deliberately.** This first forbade *any* path
+#: parameter, which was a proxy for the real invariant and a good enough one
+#: until a route needed to address a child row: `/me/absences/{absence_id}`
+#: names a SPAN, not a person, and forbidding it would have forced an awkward
+#: URL to satisfy a test rather than a rule. A fence should assert the property
+#: it protects — the same correction the People registration test's
+#: "Center-forked path" check needed.
 UNGATED_ROUTERS: dict[str, str] = {
     "gateway.routes.people.selfservice": (
         "WS-28g-2 / people_center_app.md D-PC-15 — `/people/me`. The directory "
@@ -198,18 +210,36 @@ def test_an_ungated_router_carries_a_reason(module: str) -> None:
 
 
 @pytest.mark.parametrize("module", sorted(UNGATED_ROUTERS))
-def test_an_ungated_router_is_self_scoped(module: str) -> None:
-    """No path parameters — the security property is that there is nothing to
-    address but yourself.
+def test_no_ungated_route_takes_a_person_from_the_request(module: str) -> None:
+    """A `{person_id}` here would turn "we check the id is yours" into the only
+    thing standing between an ungranted caller and the whole roster — and that
+    check is exactly the kind a later refactor drops silently."""
+    for route in _routes(module):
+        for param in re.findall(r"\{([a-z_]+)\}", route.path):
+            assert "person" not in param and param not in {"id", "email"}, (
+                f"{module} {route.path} takes a person from the path on an "
+                "UNGATED router."
+            )
 
-    A `{person_id}` appearing here would turn "we check the id is yours" into
-    the only thing standing between an ungranted caller and the whole roster,
-    and that check is exactly the kind a later refactor drops silently.
+
+@pytest.mark.parametrize("module", sorted(UNGATED_ROUTERS))
+def test_every_ungated_endpoint_resolves_the_person_from_the_identity(
+        module: str) -> None:
+    """**The half that actually protects the roster.**
+
+    Whatever else a route takes, the PERSON comes from the authenticated
+    identity — so there is no id to validate and nothing for a later change to
+    forget. A route that stopped calling the self resolver would be one that
+    got its person from somewhere else, which is the whole failure mode.
     """
     for route in _routes(module):
-        assert "{" not in route.path, (
-            f"{module} {route.path} takes a path parameter on an UNGATED "
-            "router — it can address a row that is not the caller's."
+        endpoint = getattr(route, "endpoint", None)
+        if endpoint is None:
+            continue
+        body = inspect.getsource(endpoint)
+        assert "_my_row(" in body or "find_self_row(" in body, (
+            f"{module} {route.path} does not resolve the person from the "
+            "caller's identity — see people_center_app.md D-PC-15."
         )
 
 

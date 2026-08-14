@@ -95,12 +95,27 @@ SELF_FIELDS: frozenset[str] = frozenset({
     "phone",
     "emergency_contact",
     "birthday",
+    # §3.1a the display image. Self-writable — but through the dedicated upload
+    # endpoint, never through the PATCH payload (see UPLOAD_ONLY_FIELDS).
+    "avatar",
 })
+
+#: Fields in a write class that the PATCH payload deliberately cannot carry,
+#: because they arrive as a FILE through their own endpoint.
+#:
+#: They stay in :data:`SELF_FIELDS` on purpose: the authorization question
+#: ("may this caller change this person's picture") is the same question the
+#: PATCH asks about a timezone, and answering it in a second place is how the
+#: two would drift. What differs is the transport, so `editable_fields` still
+#: names them — the UI has to know it may offer the control — while the payload
+#: fence excludes them rather than demanding a data-URI-shaped request body.
+UPLOAD_ONLY_FIELDS: frozenset[str] = frozenset({"avatar"})
 
 #: Computed, never posted. Present here so the partition fence can prove every
 #: column of ``gtd_people`` was classified rather than forgotten.
 DERIVED_FIELDS: frozenset[str] = frozenset({
     "id",
+    "avatar_updated_at",
     "created_at",
     "updated_at",
     "updated_by",
@@ -114,10 +129,12 @@ DERIVED_FIELDS: frozenset[str] = frozenset({
     "capability_text_hash",
 })
 
-#: Every field any caller may ever write. The write payload model
-#: (``routes/tasks/people.PersonWrite``) must expose exactly this set — pinned
-#: by a test, because a field the payload accepts and this map has never heard
-#: of is a field with no owner and therefore no gate.
+#: Every field any caller may ever write, by any transport. The write payload
+#: model (``routes/tasks/people.PersonWrite``) must expose exactly this set
+#: **less** :data:`UPLOAD_ONLY_FIELDS` — pinned by a test in both directions,
+#: because a field the payload accepts and this map has never heard of is a
+#: field with no owner and therefore no gate, and a field in the map that no
+#: transport can carry is a permission granted for something nobody can do.
 WRITABLE_FIELDS: frozenset[str] = ADMIN_FIELDS | SELF_FIELDS
 
 
@@ -175,6 +192,7 @@ __all__ = [
     "PRIVATE_FIELDS",
     "SELF_FIELDS",
     "SENIORITY_LEVELS",
+    "UPLOAD_ONLY_FIELDS",
     "WRITABLE_FIELDS",
     "authorize_write",
     "editable_fields",

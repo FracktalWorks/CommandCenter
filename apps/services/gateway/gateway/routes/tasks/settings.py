@@ -257,7 +257,25 @@ async def _load(db: Any, user_id: str) -> GtdSettingsModel:
         "SELECT * FROM gtd_settings WHERE user_id = :uid"),
         {"uid": user_id})).fetchone()
     if not row:
-        return GtdSettingsModel()
+        # ── WS-28p / D-PC-16: the calendar SEEDS itself from the People
+        # Center's work schedule, once, and never mirrors it.
+        #
+        # No row at all is the only unambiguous "this person has never
+        # expressed a calendar preference" — the columns carry SQL defaults, so
+        # a row created for an unrelated setting cannot be told apart from
+        # somebody who genuinely chose 07:00–22:00, and this does not try.
+        # Guessing which stored values were "really chosen" is the mirror
+        # problem wearing a disguise.
+        #
+        # Nothing is WRITTEN here. It is a read-time default, so a schedule
+        # change still follows a person who has not customised anything, and
+        # the instant they save one setting the row exists and this stops
+        # applying forever. That is "seeded once" with no sync to maintain.
+        #
+        # Direction is People → Calendar and only that way: nothing in this
+        # package writes `gtd_people.working_hours`, and a test asserts it.
+        return GtdSettingsModel(**await _seed_from_work_schedule(db, user_id))
+    
     return GtdSettingsModel(
         chat_model=row.chat_model or DEFAULT_GTD_MODELS["chat"],
         clarify_model=row.clarify_model or DEFAULT_GTD_MODELS["clarify"],
@@ -289,6 +307,34 @@ async def _load(db: Any, user_id: str) -> GtdSettingsModel:
         lunch_end_hour=_int_or_none(getattr(row, "lunch_end_hour", None)),
         day_templates=_day_templates(getattr(row, "day_templates", None)),
     )
+
+
+async def _seed_from_work_schedule(db: Any, user_id: str) -> dict[str, int]:
+    """Day-window defaults derived from this person's contracted schedule.
+
+    Best-effort by design: a person with no directory row, an unreachable
+    table, or a schedule with no times all answer ``{}`` and leave migration
+    77's own defaults in place. A calendar that fails to open because the HR
+    table is missing would be a worse product than one that opens at 07:00.
+    """
+    try:
+        from gateway.work_schedule import (
+            calendar_seed,
+            load_policy,
+            person_schedule,
+        )
+
+        row = (await db.execute(text(
+            "SELECT working_hours FROM gtd_people "
+            "WHERE lower(email) = :email LIMIT 1"),
+            {"email": (user_id or "").strip().lower()})).fetchone()
+        if row is None:
+            return {}
+        return calendar_seed(person_schedule(await load_policy(db), row))
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("tasks.settings.work_schedule_seed_failed",
+                     error=str(exc)[:160])
+        return {}
 
 
 def _day_templates(val: Any) -> list[dict]:

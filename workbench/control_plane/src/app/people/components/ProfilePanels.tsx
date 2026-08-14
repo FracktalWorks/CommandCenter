@@ -29,6 +29,7 @@ import Button from "@/components/ui/Button";
 import { Input, Select, Textarea } from "@/components/ui/Input";
 
 import { type PersonDetail, peopleApi } from "../lib/api";
+import { describeSchedule, formatHours, overriddenFields } from "../lib/schedule";
 import {
   type FieldSpec,
   type RenderedField,
@@ -267,6 +268,58 @@ export function ProfilePanels({
               </li>
             ))}
           </ul>
+        </section>
+      )}
+
+      {/*
+        WS-28p — the effective schedule, above the fields that override it.
+        The layering is the SERVER's answer; `source` is what lets this say
+        which half is the company's and which is yours, rather than showing
+        four numbers a person cannot account for (§3.4a).
+      */}
+      {person.schedule && (
+        <section className="rounded-xl border border-border p-3">
+          <div className="flex flex-wrap items-baseline justify-between gap-2">
+            <h3 className="text-xs font-medium text-foreground">
+              Your working week
+            </h3>
+            {person.contracted_hours_per_week !== null &&
+              person.contracted_hours_per_week !== undefined && (
+                <span className="text-[11px] text-muted-foreground">
+                  {formatHours(person.contracted_hours_per_week)} contracted
+                </span>
+              )}
+          </div>
+          <p className="mt-1 text-xs text-foreground">
+            {describeSchedule(person.schedule)}
+          </p>
+          <p className="mt-1 text-[11px] text-muted-foreground">
+            {overriddenFields(person.schedule).length === 0 ? (
+              <>
+                All from the company default —{" "}
+                <a href="/people/schedule" className="underline">
+                  see the working week
+                </a>
+                . Change any of it below.
+              </>
+            ) : (
+              `You override: ${overriddenFields(person.schedule).join(", ")}. Everything else follows the company default.`
+            )}
+          </p>
+          {/*
+            The typed capacity is NOT corrected here — surfaced, because
+            quietly preferring one number is how two start disagreeing where
+            nobody can see them (D-PC-18).
+          */}
+          {person.capacity_conflict ? (
+            <p className="mt-1 text-[11px] text-muted-foreground">
+              A capacity of{" "}
+              {formatHours(person.capacity_hours_per_week ?? null)} is recorded
+              separately, {formatHours(Math.abs(person.capacity_conflict))}{" "}
+              {person.capacity_conflict > 0 ? "above" : "below"} the schedule.
+              An administrator can reconcile them.
+            </p>
+          ) : null}
         </section>
       )}
 

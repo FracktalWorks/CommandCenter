@@ -14,6 +14,7 @@ from typing import Any
 
 from acb_auth import UserContext, get_current_user
 from fastapi import Depends, HTTPException
+from gateway.routes.people.absences import away_today
 from gateway.routes.people.core import (  # noqa: F401 — re-exports
     MINUTES_PER_HOUR,
     STATUSES,
@@ -170,6 +171,14 @@ async def list_directory(
         # never the place for phone numbers; the person page and `/people/me`
         # are, and they decide it per row.
         people = [_row_to_person(r, include_hr=hr).model_dump() for r in rows]
+        # WS-28k — who is away, in ONE query for the whole page rather than one
+        # per row. Directory tier: "do not chase them this week" is the single
+        # most useful thing on a directory row, and it is the same tier as the
+        # working hours already there. The SPANS stay HR tier on the person
+        # page; this is only the fact and its end date.
+        away = await away_today(db, [str(r.id) for r in rows])
+        for person, row in zip(people, rows, strict=True):
+            person["away"] = away.get(str(row.id))
         # Resolved by its own query rather than scanned out of `rows`: "which
         # row is me" must not depend on whether my row survived the caller's
         # search filter.

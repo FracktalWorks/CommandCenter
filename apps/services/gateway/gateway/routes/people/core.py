@@ -34,6 +34,14 @@ from gateway.routes.tasks.core import (
     can_read_hr_fields,
 )
 from gateway.routes.tasks.people import _row_to_person
+from gateway.work_schedule import (
+    absent_on,
+    capacity_disagreement,
+    contracted_hours_per_week,
+    load_policy,
+    person_schedule,
+    working_hours_between,
+)
 from sqlalchemy import text
 
 _log = get_logger("gateway.people")
@@ -163,6 +171,31 @@ async def person_payload(db: Any, row: Any, user: Any) -> dict:
     person["load"] = (
         await compute_load(db, getattr(row, "email", None)) if hr else None
     )
+    # WS-28p — the schedule layering, resolved in ONE place (D-PC-16).
+    #
+    # `schedule` is DIRECTORY tier: when a colleague works is what stops a
+    # 9am call being rude, and §3.1 already put `working_hours` there.
+    # `contracted_hours_per_week` is HR tier: it is a capacity figure, and
+    # capacity has been behind `admin:members:read` since WS-24 N4.
+    policy = await load_policy(db)
+    schedule = person_schedule(policy, row)
+    person["schedule"] = schedule
+    person["contracted_hours_per_week"] = (
+        contracted_hours_per_week(schedule) if hr else None)
+    # The typed column is NOT rewritten (R6 — the importer writes it), and the
+    # disagreement is surfaced rather than resolved: quietly preferring one is
+    # how two numbers start disagreeing where nobody can see them (D-PC-18).
+    person["capacity_conflict"] = (
+        capacity_disagreement(
+            schedule, getattr(row, "capacity_hours_per_week", None))
+        if hr else None)
+    # WS-28k — availability. `away` is DIRECTORY tier: "do not expect a reply
+    # this week" is the same kind of fact as "they work Mon-Fri", and it is the
+    # one thing a colleague most needs before they chase somebody. The SPANS
+    # themselves are HR tier — when and why somebody is off is capacity
+    # information, and a reason is nobody else's business.
+    availability = await person_availability(db, str(row.id), schedule, hr=hr)
+    person.update(availability)
     person["hr_visible"] = hr
     # Independent of `hr_visible` on purpose. The two permissions are separate
     # grants, and an admin who may edit a record but not read its HR half is a
@@ -219,3 +252,84 @@ async def compute_load(db: Any, email: str | None) -> dict[str, Any]:
         "estimated_hours": round(mins / MINUTES_PER_HOUR, 1),
         "unestimated": int(getattr(row, "unestimated", 0) or 0),
     }
+
+
+# ── The avatar write, shared by both doors ──────────────────────────────────
+
+async def store_avatar(db: Any, person_id: str, data: bytes,
+                       crop: tuple[float, float, float] | None,
+                       actor: str) -> str:
+    """Normalise the upload and store it. Returns the data URI.
+
+    One implementation, two doors — `/people/me/avatar` (ungated, self) and
+    `/people/{id}/avatar` (gated, admin). They differ in who may call them,
+    which is the field-class authority's job and runs in front of this; they do
+    not differ in what reaches the column, because a second normaliser would be
+    a second answer to "what shape is an avatar".
+
+    `avatar_updated_at` is stamped here rather than left to `updated_at`: once
+    anything else on the row moves, `updated_at` stops being able to answer
+    "when did this person last change their picture", which is what the client
+    caches against.
+    """
+    from gateway.avatar import normalise, to_data_uri
+
+    uri = to_data_uri(normalise(data, crop=crop))
+    await db.execute(
+        text("UPDATE gtd_people SET avatar = :avatar, avatar_updated_at = now(), "
+             "updated_by = :by, updated_at = now() "
+             "WHERE id = CAST(:id AS uuid)"),
+        {"avatar": uri, "by": actor, "id": person_id},
+    )
+    return uri
+
+
+async def clear_avatar(db: Any, person_id: str, actor: str) -> None:
+    """Remove it. `avatar_updated_at` is stamped, not cleared — "they took their
+    picture down just now" is a change the client still has to notice."""
+    await db.execute(
+        text("UPDATE gtd_people SET avatar = NULL, avatar_updated_at = now(), "
+             "updated_by = :by, updated_at = now() "
+             "WHERE id = CAST(:id AS uuid)"),
+        {"by": actor, "id": person_id},
+    )
+
+
+async def person_availability(db: Any, person_id: str, schedule: dict,
+                              *, hr: bool) -> dict:
+    """Away-now, the upcoming spans, and the hours left this week (§5.8).
+
+    Best-effort: a database without migration 173 answers "not away" rather
+    than failing the person page. A directory that 500s because a table is one
+    deploy behind is worse than one that shows a colleague as present.
+
+    ``hours_available_this_week`` is the figure "at risk" is built on — the
+    contracted week minus what absences take out of it — and it is HR tier
+    because it is a capacity number.
+    """
+    from datetime import date, timedelta
+
+    from gateway.routes.people.absences import fetch_absences, rows_for_availability
+
+    today = date.today()
+    try:
+        spans = await rows_for_availability(db, person_id)
+    except Exception:
+        return {"away": None, "absences": [], "hours_available_this_week": None}
+
+    away = absent_on(today, spans)
+    out: dict[str, Any] = {
+        # Directory tier: the FACT, and its shape — never the note.
+        "away": ({"kind": away["kind"],
+                  "until": away["ends_on"].isoformat()} if away else None),
+        "absences": [],
+        "hours_available_this_week": None,
+    }
+    if hr:
+        # Monday of this week through Sunday, so "this week" means the same
+        # thing to everybody looking at the same dashboard.
+        monday = today - timedelta(days=today.isoweekday() - 1)
+        out["hours_available_this_week"] = working_hours_between(
+            schedule, today, monday + timedelta(days=6), spans)
+        out["absences"] = await fetch_absences(db, person_id, since=today)
+    return out

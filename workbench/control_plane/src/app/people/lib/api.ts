@@ -16,6 +16,9 @@
 export interface PersonProfileFields {
   preferred_name?: string | null;
   pronouns?: string | null;
+  /** A `data:image/jpeg` URI of the server's 256×256 re-encode (D-PC-17). */
+  avatar?: string | null;
+  avatar_updated_at?: string | null;
   location?: string | null;
   timezone?: string | null;
   working_hours?: Record<string, unknown> | null;
@@ -39,8 +42,26 @@ export interface PersonProfileFields {
   birthday?: string | null;
 }
 
+export interface Absence {
+  id: string;
+  starts_on: string;
+  ends_on: string;
+  /** `away` | `holiday` | `partial` — three words, and no fourth (D-PC-7). */
+  kind: string;
+  hours_per_day?: number | null;
+  note?: string | null;
+  created_by?: string;
+}
+
 export interface PersonRow extends PersonProfileFields {
   id: string;
+  /**
+   * WS-28k, directory tier. Present on the LIST too — resolved in one query
+   * for the page, because "do not chase them, they are away" is the most
+   * useful thing on a directory row and an N+1 would make it the most
+   * expensive.
+   */
+  away?: { kind: string; until: string } | null;
   name: string;
   email?: string | null;
   role?: string | null;
@@ -69,6 +90,24 @@ export interface PersonDetail extends PersonRow {
   can_manage: boolean;
   /** True when this row is the caller's own (D-PC-1). */
   is_self?: boolean;
+  /**
+   * WS-28k. `away` is DIRECTORY tier — "do not expect a reply this week" is the
+   * one thing a colleague most needs before chasing somebody — while the SPANS
+   * and the hours are HR tier, because when and why somebody is off is capacity
+   * information.
+   */
+  absences?: Absence[];
+  hours_available_this_week?: number | null;
+  /**
+   * The effective work schedule (WS-28p) — org policy with this person's
+   * override applied, `source` naming which layer decided each field. Computed
+   * by the server; the client never recombines the two halves.
+   */
+  schedule?: import("./schedule").EffectiveSchedule | null;
+  /** Derived from that schedule (D-PC-18). Null without the HR tier. */
+  contracted_hours_per_week?: number | null;
+  /** Set when the hand-typed capacity disagrees with the derived figure. */
+  capacity_conflict?: number | null;
   /**
    * Which fields THIS caller may write on THIS row — the server's answer, and
    * the only one the UI is allowed to have. An empty array means read-only,
@@ -133,6 +172,131 @@ export const peopleApi = {
       /** Which row is the caller's, if any — the link target for "my profile". */
       self_person_id?: string | null;
     }>(`${query ? `?${query}` : ""}`);
+  },
+
+  /** The company's working week, plus whether this caller may edit it. */
+  schedule: () =>
+    call<{
+      policy: import("./schedule").WorkPolicy;
+      defaults: import("./schedule").WorkPolicy;
+      contracted_hours_per_week: number;
+      can_manage: boolean;
+      updated_by?: string | null;
+      updated_at?: string | null;
+    }>("schedule"),
+
+  /**
+   * Save the policy — or, with `dryRun`, ask what it WOULD move and write
+   * nothing. The settings page previews before it applies, because this figure
+   * is the denominator of every load bar in the org.
+   */
+  saveSchedule: async (
+    policy: import("./schedule").WorkPolicy,
+    dryRun: boolean
+  ) => {
+    const res = await fetch("/api/people/schedule", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ policy, dry_run: dryRun }),
+    });
+    const text = await res.text();
+    const parsed = text ? JSON.parse(text) : null;
+    if (!res.ok) {
+      throw new PeopleApiError(
+        parsed?.detail ?? `Request failed (${res.status})`,
+        res.status
+      );
+    }
+    return parsed as {
+      policy: import("./schedule").WorkPolicy;
+      impact: import("./schedule").PolicyImpact;
+      saved: boolean;
+    };
+  },
+
+  /**
+   * Set a display image. `target` is `"me"` or a person id — different
+   * endpoints, because the self door is ungated (D-PC-15).
+   *
+   * The crop is **fractions of the source**, and the server squares and
+   * resizes whatever it receives either way (D-PC-17), so this is a request
+   * about framing rather than a control over shape.
+   */
+  uploadAvatar: async (
+    target: string,
+    file: File,
+    crop: { x: number; y: number; size: number }
+  ) => {
+    const form = new FormData();
+    form.append("file", file);
+    form.append("crop_x", String(crop.x));
+    form.append("crop_y", String(crop.y));
+    form.append("crop_size", String(crop.size));
+    const res = await fetch(`/api/people/${target}/avatar`, {
+      method: "POST",
+      body: form,
+    });
+    const text = await res.text();
+    const parsed = text ? JSON.parse(text) : null;
+    if (!res.ok) {
+      // The gateway refuses a file with a sentence about that file — shown
+      // verbatim, because the person who chose it is the one who has to
+      // choose another.
+      throw new PeopleApiError(
+        parsed?.detail ?? `Upload failed (${res.status})`,
+        res.status
+      );
+    }
+    return parsed as PersonDetail;
+  },
+
+  removeAvatar: async (target: string) => {
+    const res = await fetch(`/api/people/${target}/avatar`, { method: "DELETE" });
+    const text = await res.text();
+    const parsed = text ? JSON.parse(text) : null;
+    if (!res.ok) {
+      throw new PeopleApiError(
+        parsed?.detail ?? `Request failed (${res.status})`,
+        res.status
+      );
+    }
+    return parsed as PersonDetail;
+  },
+
+  /**
+   * Record when you are away. Self-writable — requiring an admin to type it is
+   * how the data ends up missing, and then every capacity figure that reads it
+   * is quietly wrong (§5.8).
+   */
+  addAbsence: async (target: string, body: Omit<Absence, "id">) => {
+    const res = await fetch(`/api/people/${target}/absences`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const text = await res.text();
+    const parsed = text ? JSON.parse(text) : null;
+    if (!res.ok) {
+      throw new PeopleApiError(
+        parsed?.detail ?? `Request failed (${res.status})`,
+        res.status
+      );
+    }
+    return parsed as Absence;
+  },
+
+  removeAbsence: async (target: string, absenceId: string) => {
+    const res = await fetch(`/api/people/${target}/absences/${absenceId}`, {
+      method: "DELETE",
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      const parsed = text ? JSON.parse(text) : null;
+      throw new PeopleApiError(
+        parsed?.detail ?? `Request failed (${res.status})`,
+        res.status
+      );
+    }
   },
 
   facets: () =>

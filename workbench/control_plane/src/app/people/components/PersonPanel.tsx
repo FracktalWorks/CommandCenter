@@ -20,6 +20,8 @@ import Button from "@/components/ui/Button";
 
 import { type PersonDetail, type WorkRow, peopleApi } from "../lib/api";
 import { initials, loadBar, skillOrigin, statusTone } from "../lib/directory";
+import { AbsencePanel, AwayBadge } from "./AbsencePanel";
+import { Avatar } from "./Avatar";
 import { ProfilePanels } from "./ProfilePanels";
 
 interface Props {
@@ -88,11 +90,13 @@ export function PersonPanel({ personId, reloadKey = 0, onClose, onEdit }: Props)
     <aside className="flex h-full w-full max-w-md flex-col overflow-y-auto border-l border-border bg-card">
       <header className="flex items-start justify-between gap-2 border-b border-border p-3">
         <div className="flex min-w-0 items-center gap-2">
-          <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-muted text-xs font-medium text-foreground">
-            {initials(person.name)}
-          </span>
+          <Avatar name={person.name} avatar={person.avatar}
+                  className="size-9 text-xs" />
           <div className="min-w-0">
-            <h2 className="truncate text-sm font-medium text-foreground">{person.name}</h2>
+            <h2 className="flex items-center gap-2 truncate text-sm font-medium text-foreground">
+              {person.name}
+              <AwayBadge away={person.away} />
+            </h2>
             <p className="truncate text-xs text-muted-foreground">
               {person.title || person.role || "—"}
             </p>
@@ -249,6 +253,18 @@ export function PersonPanel({ personId, reloadKey = 0, onClose, onEdit }: Props)
         decision a second time — the drift D-PC-4 exists to prevent — and a
         person looking at their own page through this panel would lose it.
       */}
+      {person.hr_visible && (
+        <section className="p-3">
+          <AbsencePanel
+            target={person.is_self ? "me" : person.id}
+            absences={person.absences ?? []}
+            hoursThisWeek={person.hours_available_this_week}
+            canEdit={(person.editable_fields ?? []).includes("working_hours")}
+            onChanged={() => setPerson(null)}
+          />
+        </section>
+      )}
+
       <section className="p-3">
         <ProfilePanels
           person={person}

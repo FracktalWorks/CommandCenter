@@ -91,6 +91,10 @@ class OrgPersonModel(BaseModel):
     bio: str | None = None
     links: dict[str, Any] | None = None
     languages: list[str] = []
+    #: §3.1a — a `data:image/jpeg;base64` URI of the SERVER's 256x256 re-encode
+    #: (D-PC-17). Directory tier: a display image is what a directory IS.
+    avatar: str | None = None
+    avatar_updated_at: str | None = None
     # §3.2 · employment (read: HR)
     employee_id: str | None = None
     employment_type: str | None = None
@@ -247,6 +251,8 @@ def _row_to_person(row: Any, *, include_hr: bool,
         bio=getattr(row, "bio", None),
         links=_jsonb(getattr(row, "links", None)),
         languages=list(getattr(row, "languages", None) or []),
+        avatar=getattr(row, "avatar", None),
+        avatar_updated_at=_iso(getattr(row, "avatar_updated_at", None)),
         # §3.2 — employment, HR tier.
         employee_id=getattr(row, "employee_id", None),
         employment_type=getattr(row, "employment_type", None),

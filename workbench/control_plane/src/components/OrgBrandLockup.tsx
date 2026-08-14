@@ -102,7 +102,6 @@ export default function OrgBrandLockup({
   maxWidth = 152,
 }: Props) {
   const branding = useOrgBranding();
-  const mark = lockup(branding, fallbackCaption);
 
   return (
     <Link href={href} onClick={onNavigate} className="block min-w-0">

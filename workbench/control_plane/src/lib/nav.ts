@@ -267,15 +267,19 @@ export const NAV_SECTIONS: NavSection[] = [
         note: "Company logo · how your org appears to its members",
         adminOnly: true,
       },
-      {
-        // Reachable, at last. The billing console shipped without a nav entry,
-        // which made it a page you could only find by typing its URL.
-        href: "/settings/billing",
-        label: "Billing",
-        icon: "Receipt",
-        note: "AI credits · subscription · invoices",
-        adminOnly: true,
-      },
+      // NO BILLING ENTRY YET — deliberately. The billing console is built and
+      // reachable by URL, but the Control Plane it reads from is undeployed
+      // ("where it runs is an open owner decision", work_plan.md §2 WS-31), so
+      // the page fails closed with "Billing is not configured for this
+      // deployment (CONTROL_PLANE_URL / CONTROL_PLANE_ORG_KEY)". Promoting it
+      // into the sidebar hands every customer admin a menu item that always
+      // errors, in our internal environment-variable vocabulary.
+      //
+      // A previous version of this file added the entry with the note
+      // "reachable, at last" — reading URL-only as an oversight. It was not an
+      // oversight, it was CLAUDE.md §4's "ship dark": new behaviour lands
+      // behind a flag, default OFF, and flipping it is the owner's act. This
+      // entry goes in when the Control Plane has somewhere to run.
       {
         // Ungated on purpose: choosing your own theme is a personal
         // preference, not an admin capability. The org-wide default on the

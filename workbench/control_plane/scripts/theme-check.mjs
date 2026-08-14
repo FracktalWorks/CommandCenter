@@ -165,12 +165,19 @@ for (const theme of THEMES) {
           // makes clipping invisible to getBoundingClientRect, so it has to be
           // read off scrollWidth.
           clipped: (() => {
-            const spans = link ? [...link.querySelectorAll("span")] : [];
-            const cap = spans.find((e) =>
-              e.textContent?.trim().startsWith("powered by CommandCenter") ||
-              e.textContent?.trim() === "Control Plane" ||
-              e.textContent?.trim() === "Home",
-            );
+            // LEAF spans only. The first version of this searched every span and
+            // `startsWith` matched the OUTER flex container before the caption
+            // inside it — a container is never truncated, so the probe reported
+            // `clipped:false` for a caption that WAS clipped, in precisely the
+            // case this assertion was written for. Verified after the fix by
+            // forcing a truncation and watching it go red.
+            const leaves = link
+              ? [...link.querySelectorAll("span")].filter((e) => !e.querySelector("span"))
+              : [];
+            const cap = leaves.find((e) => {
+              const t = e.textContent?.trim() ?? "";
+              return t.startsWith("powered by CommandCenter") || t === "Control Plane" || t === "Home";
+            });
             return cap ? cap.scrollWidth > cap.clientWidth + 1 : null;
           })(),
           bodyScrollX: document.documentElement.scrollWidth > document.documentElement.clientWidth,

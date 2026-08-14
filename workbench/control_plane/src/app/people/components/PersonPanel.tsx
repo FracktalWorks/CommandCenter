@@ -1,10 +1,18 @@
 "use client";
 
 /**
- * People Center · the person page (§3.2) — four panels.
+ * People Center · the person page (§5.2) — six panels.
  *
- * Identity, skills, capacity, work. The panels are deliberately in that order:
- * who they are, what they can do, how loaded they are, what they are holding.
+ * Identity, skills, capacity, work — deliberately in that order: who they are,
+ * what they can do, how loaded they are, what they are holding — and then the
+ * two WS-28g added: the profile they wrote about themselves, and the
+ * employment record the organisation keeps.
+ *
+ * The last two are `ProfilePanels`, the SAME component `/people/me` renders.
+ * One component, two entry points, so a field added to one cannot be missing
+ * from the other — and the edit controls appear here for exactly the fields the
+ * server put in `editable_fields`, which on a colleague's page (for an admin)
+ * is a different set than on your own.
  */
 import { useEffect, useState } from "react";
 
@@ -12,6 +20,9 @@ import Button from "@/components/ui/Button";
 
 import { type PersonDetail, type WorkRow, peopleApi } from "../lib/api";
 import { initials, loadBar, skillOrigin, statusTone } from "../lib/directory";
+import { AbsencePanel, AwayBadge } from "./AbsencePanel";
+import { Avatar } from "./Avatar";
+import { ProfilePanels } from "./ProfilePanels";
 
 interface Props {
   personId: string;
@@ -79,11 +90,13 @@ export function PersonPanel({ personId, reloadKey = 0, onClose, onEdit }: Props)
     <aside className="flex h-full w-full max-w-md flex-col overflow-y-auto border-l border-border bg-card">
       <header className="flex items-start justify-between gap-2 border-b border-border p-3">
         <div className="flex min-w-0 items-center gap-2">
-          <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-muted text-xs font-medium text-foreground">
-            {initials(person.name)}
-          </span>
+          <Avatar name={person.name} avatar={person.avatar}
+                  className="size-9 text-xs" />
           <div className="min-w-0">
-            <h2 className="truncate text-sm font-medium text-foreground">{person.name}</h2>
+            <h2 className="flex items-center gap-2 truncate text-sm font-medium text-foreground">
+              {person.name}
+              <AwayBadge away={person.away} />
+            </h2>
             <p className="truncate text-xs text-muted-foreground">
               {person.title || person.role || "—"}
             </p>
@@ -229,6 +242,34 @@ export function PersonPanel({ personId, reloadKey = 0, onClose, onEdit }: Props)
             ))}
           </ul>
         )}
+      </section>
+
+      {/*
+        5 & 6 — the profile and the employment record.
+
+        `includePrivate` is left on: the server has ALREADY decided, and on a
+        colleague's page without `admin:members:manage` those fields came back
+        null. Hiding the panel here as well would mean the UI making the access
+        decision a second time — the drift D-PC-4 exists to prevent — and a
+        person looking at their own page through this panel would lose it.
+      */}
+      {person.hr_visible && (
+        <section className="p-3">
+          <AbsencePanel
+            target={person.is_self ? "me" : person.id}
+            absences={person.absences ?? []}
+            hoursThisWeek={person.hours_available_this_week}
+            canEdit={(person.editable_fields ?? []).includes("working_hours")}
+            onChanged={() => setPerson(null)}
+          />
+        </section>
+      )}
+
+      <section className="p-3">
+        <ProfilePanels
+          person={person}
+          onSaved={(saved) => setPerson(saved)}
+        />
       </section>
     </aside>
   );

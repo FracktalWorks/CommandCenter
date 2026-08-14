@@ -357,7 +357,7 @@ class StatusModel(BaseModel):
 
 class TypeModel(BaseModel):
     id: str
-    #: ``None`` is ORG-WIDE (WS-27bj, migration 172) — and it is on the wire
+    #: ``None`` is ORG-WIDE (WS-27bj, migration 175) — and it is on the wire
     #: because a client cannot otherwise tell a row it may edit from one that
     #: belongs to the whole organization, which is exactly the difference
     #: between an enabled pencil and a 409.
@@ -1142,7 +1142,7 @@ async def count_where(db: Any, table: str, column: str, value: str) -> int:
 
 # ── Org-wide vocabularies — WS-27bj / D-PM-16 ───────────────────────────────
 #
-# Migration 172 made ``project_id`` nullable on ``pm_task_types``,
+# Migration 175 made ``project_id`` nullable on ``pm_task_types``,
 # ``pm_custom_fields`` and ``pm_tags``. **NULL means org-wide**; a value keeps
 # meaning the root project it always meant. A project's EFFECTIVE vocabulary is
 # ``org-wide ∪ root-local``, and root-local **shadows** org-wide on the same
@@ -1161,9 +1161,9 @@ async def count_where(db: Any, table: str, column: str, value: str) -> int:
 
 #: Each vocabulary table → how a row's identity WITHIN one scope is written, over
 #: the **column** and over the **bound value**. Each mirrors the rule that table
-#: already had before 172 (`lower(name)` for tags, `name` for types, `field_key`
+#: already had before 175 (`lower(name)` for tags, `name` for types, `field_key`
 #: for fields) rather than inventing a new normalisation, and each is one half of
-#: migration 172's index pair.
+#: migration 175's index pair.
 #:
 #: ⚠️ The two halves are ONE entry so they cannot drift. Lowering the column but
 #: not the parameter matches nothing and reports "no such tag" — a silent wrong
@@ -1213,7 +1213,7 @@ async def org_wide_exists(db: Any, table: str, root: str, value: Any) -> bool:
     Needed because :func:`shadowed` deliberately hides the org-wide row when a
     root-local one covers it, so a create path that checked the effective list
     would not see the row its INSERT is about to collide with — and migration
-    172's ``uq_*_org_*`` index would answer that with an IntegrityError, i.e. a
+    175's ``uq_*_org_*`` index would answer that with an IntegrityError, i.e. a
     500 where a 409 naming the clash belongs.
 
     ``table`` indexes :data:`VOCABULARY_IDENTITY`, so the interpolated fragments

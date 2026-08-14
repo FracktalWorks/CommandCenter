@@ -80,8 +80,14 @@ export interface Identity {
 
 /**
  * The identity used when SSO is not configured at all, so the app still works
- * on a laptop. Gated on `isAuthEnabled`, which is false only when no Entra
- * client id is set — a deployment that has SSO configured can never reach it.
+ * on a laptop.
+ *
+ * Gated on `isAuthEnabled`, which since D33.1 is false **only** when there is no
+ * provider AND `NODE_ENV !== "production"`. The old gate was "no client id set",
+ * which meant a production deployment that lost its auth env handed this
+ * identity — a real, privileged member — to every anonymous caller. A
+ * misconfigured production box now gets `null` here (and a 503 at `proxy.ts`),
+ * so the failure is a refusal rather than a silent grant.
  */
 const DEV_IDENTITY: Identity = { email: "dev@fracktal.in", role: "employee" };
 

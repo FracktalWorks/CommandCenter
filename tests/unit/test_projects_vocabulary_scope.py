@@ -1,7 +1,7 @@
 """WS-27bj slice 2 / D-PM-16 — the effective-vocabulary READ path.
 
 Spec: ``project-docs/specs/project_management_app.md`` §9.11. Schema: migration
-172, whose written form ``test_projects_org_vocabularies.py`` pins and whose
+175, whose written form ``test_projects_org_vocabularies.py`` pins and whose
 BEHAVIOUR was proved against a real Postgres (R8) — a partial-unique pair is
 exactly the thing a hermetic fake agrees with whatever it is handed.
 
@@ -122,7 +122,7 @@ def test_incoming_order_is_preserved():
 
 
 def test_two_local_rows_cannot_both_survive():
-    """Migration 172's `uq_*_project_*` half makes this unreachable from the
+    """Migration 175's `uq_*_project_*` half makes this unreachable from the
     database, but the mirror must not be the thing that hides a regression in
     it: the first wins, not both."""
     rows = pm_core.shadowed(
@@ -174,7 +174,7 @@ def test_each_identity_lowers_the_same_number_of_sides():
 
 def test_the_identities_are_the_ones_the_tables_already_had():
     """Not a new normalisation invented here (§9.11), and each is one half of
-    migration 172's index pair."""
+    migration 175's index pair."""
     assert pm_core.VOCABULARY_IDENTITY["pm_tags"][0] == "lower(name)"
     assert pm_core.VOCABULARY_IDENTITY["pm_task_types"][0] == "name"
     assert pm_core.VOCABULARY_IDENTITY["pm_custom_fields"][0] == "field_key"
@@ -502,7 +502,7 @@ async def test_two_org_wide_tags_of_one_name_are_refused(
 ):
     """⚠️ Asked of the TABLE, not of the effective list: a shadowed org-wide row
     is absent from that list by design, so a check against it would miss the row
-    the INSERT is about to collide with — and migration 172's `uq_*_org_*` index
+    the INSERT is about to collide with — and migration 175's `uq_*_org_*` index
     would answer that with a 500 instead of a 409."""
     project = db.seed_project()
     db.seed("pm_tags", project_id=None, name="Shared", organization_id=ORG_A)
@@ -523,7 +523,7 @@ async def test_the_organization_may_adopt_a_name_a_project_already_uses(
     effective list — and the reason the distinction is not academic. Asking the
     registry "is 'shared' taken?" answers YES because the PROJECT has one, and
     an organization would then be unable to adopt any name any of its projects
-    had ever used. Migration 172's index pair permits this row (its R8 case 3);
+    had ever used. Migration 175's index pair permits this row (its R8 case 3);
     only a check at the right scope does too.
     """
     project = db.seed_project()

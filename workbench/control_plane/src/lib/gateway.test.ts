@@ -175,9 +175,20 @@ describe("the route surface", () => {
     //                the LiteLLM completions endpoint.
     //   githubToken  GitHub's own PAT, sent to api.github.com.
     //
-    // Allow-listed by name rather than matched loosely, so a THIRD inline
+    //   CONTROL_PLANE_ORG_KEY
+    //                this deployment's OWN `cc_live_…` organization key, sent
+    //                to the Control Plane (WS-31). It justifies itself on the
+    //                same ground as the other two — a different secret going to
+    //                a different service — and on one more that matters:
+    //                the alternative was holding the Control Plane's OPERATOR
+    //                token, which is cross-organization. A tenant deployment
+    //                carrying that could read every customer's billing. This
+    //                key can read only its own org, because the key IS the org
+    //                (CP-3), so the narrow credential is the safe one here.
+    //
+    // Allow-listed by name rather than matched loosely, so a FOURTH inline
     // bearer fails this test and has to justify itself.
-    const ALLOWED = /^(LITELLM_KEY|githubToken)$/;
+    const ALLOWED = /^(LITELLM_KEY|githubToken|CONTROL_PLANE_ORG_KEY)$/;
     const offenders: string[] = [];
     for (const r of ROUTES) {
       for (const [, name] of r.src.matchAll(/Authorization:\s*`Bearer \$\{(\w+)/g)) {

@@ -102,6 +102,18 @@ export const NAV_SECTIONS: NavSection[] = [
       // this" would stay an unanswerable sentence. In Personal Center rather
       // than Admin because it is a fact about YOU, and because a plain member
       // must be able to reach it without an Admin heading appearing for them.
+      // Deliberately UNGATED, for the same reason "Your access" below is
+      // (WS-28g-2 / people_center_app.md D-PC-15). `feature:people` gates the
+      // DIRECTORY — other people — and is `is_default false`; your own record
+      // is not the directory. Gating this hid the one surface whose entire
+      // purpose is "every person maintains their own profile" from everybody
+      // who had not been granted the org roster.
+      {
+        href: "/people/me",
+        label: "My profile",
+        icon: "User",
+        note: "Your skills, CV, working hours — what the assignment AI reads",
+      },
       {
         href: "/access",
         label: "Your access",
@@ -258,6 +270,28 @@ export const NAV_SECTIONS: NavSection[] = [
         note: "People · teams · roles · per-user access",
         adminOnly: true,
       },
+      {
+        // The company's own identity inside the product — the logo every
+        // member sees top-left. Admin-only: it changes everyone's shell.
+        href: "/settings/organization",
+        label: "Organization",
+        icon: "Building2",
+        note: "Company logo · how your org appears to its members",
+        adminOnly: true,
+      },
+      // NO BILLING ENTRY YET — deliberately. The billing console is built and
+      // reachable by URL, but the Control Plane it reads from is undeployed
+      // ("where it runs is an open owner decision", work_plan.md §2 WS-31), so
+      // the page fails closed with "Billing is not configured for this
+      // deployment (CONTROL_PLANE_URL / CONTROL_PLANE_ORG_KEY)". Promoting it
+      // into the sidebar hands every customer admin a menu item that always
+      // errors, in our internal environment-variable vocabulary.
+      //
+      // A previous version of this file added the entry with the note
+      // "reachable, at last" — reading URL-only as an oversight. It was not an
+      // oversight, it was CLAUDE.md §4's "ship dark": new behaviour lands
+      // behind a flag, default OFF, and flipping it is the owner's act. This
+      // entry goes in when the Control Plane has somewhere to run.
       {
         // Ungated on purpose: choosing your own theme is a personal
         // preference, not an admin capability. The org-wide default on the

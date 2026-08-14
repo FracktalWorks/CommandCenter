@@ -1,8 +1,8 @@
 """WS-27bj / D-PM-16 — org-wide vocabularies.
 
-Mirrors migration 172. The file is found by CONTENT, never by number: migration
+Mirrors migration 175. The file is found by CONTENT, never by number: migration
 numbers are taken at build time and re-checked at merge (R1, after three
-collisions in two weeks), so a test that hard-codes 172 goes red on a renumber
+collisions in two weeks), so a test that hard-codes 175 goes red on a renumber
 that changed nothing.
 
 ⚠️ These assert the SQL was WRITTEN correctly. That the constraints BEHAVE is a

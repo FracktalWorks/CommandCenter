@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import importlib
 import inspect
+import re
 
 import pytest
 from acb_auth import (
@@ -167,6 +168,100 @@ GATED_ROUTERS: dict[str, set[str]] = {
         "/workflows/hooks/{hook_token}",
     },
 }
+
+
+#: Routers that deliberately carry **no** feature gate, with the reason.
+#:
+#: The point of this second registry is that "unchecked" and "deliberately
+#: open" must not look the same. A router absent from `GATED_ROUTERS` is
+#: unchecked — nobody decided anything about it. A router named HERE is one
+#: somebody argued for, and the argument is next to it.
+#:
+#: Every route on an ungated router is asserted below to be **self-scoped**:
+#: the person is never taken from the request. Two halves, and the second is
+#: the one that matters —
+#:
+#:   1. no path parameter names a PERSON, and
+#:   2. every endpoint resolves the row through the self predicate
+#:      (`_my_row` / `find_self_row`).
+#:
+#: ⚠️ **Refined by WS-28k, deliberately.** This first forbade *any* path
+#: parameter, which was a proxy for the real invariant and a good enough one
+#: until a route needed to address a child row: `/me/absences/{absence_id}`
+#: names a SPAN, not a person, and forbidding it would have forced an awkward
+#: URL to satisfy a test rather than a rule. A fence should assert the property
+#: it protects — the same correction the People registration test's
+#: "Center-forked path" check needed.
+UNGATED_ROUTERS: dict[str, str] = {
+    "gateway.routes.people.selfservice": (
+        "WS-28g-2 / people_center_app.md D-PC-15 — `/people/me`. The directory "
+        "is gated on `feature:people`, which is `is_default false`; gating the "
+        "self surface on it meant an ordinary colleague could not open their "
+        "own profile, which is the one thing that surface exists for. Same "
+        "argument as the ungated `/access` pane. Every path here is the literal "
+        "`/me`, so there is no id to supply and no other row to reach."
+    ),
+}
+
+
+@pytest.mark.parametrize("module", sorted(UNGATED_ROUTERS))
+def test_an_ungated_router_carries_a_reason(module: str) -> None:
+    assert UNGATED_ROUTERS[module].strip(), f"{module} is ungated with no reason"
+
+
+@pytest.mark.parametrize("module", sorted(UNGATED_ROUTERS))
+def test_no_ungated_route_takes_a_person_from_the_request(module: str) -> None:
+    """A `{person_id}` here would turn "we check the id is yours" into the only
+    thing standing between an ungranted caller and the whole roster — and that
+    check is exactly the kind a later refactor drops silently."""
+    for route in _routes(module):
+        for param in re.findall(r"\{([a-z_]+)\}", route.path):
+            assert "person" not in param and param not in {"id", "email"}, (
+                f"{module} {route.path} takes a person from the path on an "
+                "UNGATED router."
+            )
+
+
+@pytest.mark.parametrize("module", sorted(UNGATED_ROUTERS))
+def test_every_ungated_endpoint_resolves_the_person_from_the_identity(
+        module: str) -> None:
+    """**The half that actually protects the roster.**
+
+    Whatever else a route takes, the PERSON comes from the authenticated
+    identity — so there is no id to validate and nothing for a later change to
+    forget. A route that stopped calling the self resolver would be one that
+    got its person from somewhere else, which is the whole failure mode.
+    """
+    for route in _routes(module):
+        endpoint = getattr(route, "endpoint", None)
+        if endpoint is None:
+            continue
+        body = inspect.getsource(endpoint)
+        assert "_my_row(" in body or "find_self_row(" in body, (
+            f"{module} {route.path} does not resolve the person from the "
+            "caller's identity — see people_center_app.md D-PC-15."
+        )
+
+
+@pytest.mark.parametrize("module", sorted(UNGATED_ROUTERS))
+def test_an_ungated_router_still_resolves_an_identity(module: str) -> None:
+    """Ungated is not unauthenticated. Every route still takes a UserContext —
+    without one there is no self to resolve, and the route would be answering
+    for nobody."""
+    for route in _routes(module):
+        endpoint = getattr(route, "endpoint", None)
+        if endpoint is None:
+            continue
+        params = inspect.signature(endpoint).parameters.values()
+        assert any("UserContext" in str(p.annotation) for p in params), (
+            f"{module} {route.path} is ungated AND takes no identity"
+        )
+
+
+def test_the_two_registries_do_not_overlap() -> None:
+    """A module cannot be both. If one grows routes of the other kind, it needs
+    splitting, not two entries."""
+    assert not set(GATED_ROUTERS) & set(UNGATED_ROUTERS)
 
 
 def _routes(module: str):

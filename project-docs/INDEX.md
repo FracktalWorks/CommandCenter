@@ -33,7 +33,10 @@ limitations). Do not add product specs to `docs/`.
 | `work_plan.md` | THE BOARD — §1 contract · §2 rows · §3 decisions · §4 owners · §6 gates |
 | `../FOUNDATION_BUILDOUT_CHECKLIST.md` *(repo ROOT)* | WS-1 · WS-4 · WS-5 |
 | `specs/saas_multitenancy.md` (+ `_implementation`, `_handover`) | WS-29 — hand the **handover** to the executing agent |
+| `specs/platform_control_plane.md` | WS-31 — the central subscription/seat/AI-metering service (D32) |
+| `specs/control_plane_infrastructure.md` | WS-31 — **where** it runs; owner decision session (Supabase/Azure/VPS; Firebase disqualified in §3) |
 | `specs/subscription_console.md` | WS-30 |
+| `specs/organization_identity.md` | WS-32 — the customer's own mark inside the product (logo · display name · branding on invoices) |
 | `specs/future_modules_roadmap.md` | D21 roadmap (no rows until specced) |
 | `specs/crm_app.md` | WS-26 |
 | `specs/project_management_app.md` | WS-27 |
@@ -59,6 +62,7 @@ limitations). Do not add product specs to `docs/`.
 
 | Spec | Role |
 |---|---|
+| **`specs/saas_operations_doctrine.md`** | **HOW a SaaS platform is run (D33): the eight capability domains · the Indian GST/RBI-e-mandate/DPDP layer that changes product design, not just paperwork · the twelve-finding audit of what CommandCenter assumed as a personal brain · the gap table. §4's verdicts and §6's ordering BIND; §2 is advisory.** |
 | **`specs/engineering_practice.md`** | **HOW we build (D28): environments, deploy≠release + rings, expand/contract migrations, what a test is worth when an agent wrote it, agent work-partitioning, security once users are not colleagues, definition of done. Its binding rules are R6/R7/R8 in `work_plan.md` §1 — read those first if you read nothing else.** |
 | `specs/user_management_contract.md` | The rules every app must follow (identity, lifecycle, permissions) |
 | `specs/org_access_control.md` | The access model of record |

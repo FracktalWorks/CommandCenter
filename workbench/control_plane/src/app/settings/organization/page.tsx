@@ -19,7 +19,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Icon from "@/components/Icon";
 import { useAccess } from "@/components/AccessProvider";
 import Button from "@/components/ui/Button";
-import { invalidateOrgBranding } from "@/components/OrgBrandLockup";
+import { BrandMark, invalidateOrgBranding } from "@/components/OrgBrandLockup";
 import {
   LOGO_ACCEPT,
   LOGO_RULES,
@@ -162,36 +162,21 @@ export default function OrganizationSettingsPage() {
               where it will actually live — a logo checked against the page
               background is how a dark wordmark ships onto a dark rail. */}
           <div className="mt-4 flex flex-wrap items-center gap-4">
-            <div className="flex h-20 min-w-[12rem] items-center rounded-lg border border-sidebar-border bg-sidebar px-4">
+            {/* Width-matched to the sidebar's own lockup slot (w-64 rail, less
+                px-4 padding and the collapse control), so the preview clips
+                where the real thing clips. A preview in a roomier box is how a
+                wordmark that truncates in the rail looks fine here. */}
+            <div className="flex h-20 w-[184px] items-center rounded-lg border border-sidebar-border bg-sidebar px-4">
               {loading ? (
                 <span className="text-xs text-muted-foreground">Loading…</span>
-              ) : logo ? (
-                <div className="flex items-center gap-2.5">
-                  {/* A `data:` URI from our own gateway; see OrgBrandLockup. */}
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img
-                    src={logo.dataUri}
-                    alt="Your organization's logo"
-                    className="h-7 w-auto max-w-[9.5rem] object-contain object-left"
-                  />
-                  <span className="text-[10px] leading-tight text-muted-foreground">
-                    {POWERED_BY}
-                  </span>
-                </div>
               ) : (
-                <div className="flex items-center gap-2.5">
-                  <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-primary text-primary-foreground">
-                    <Icon name="Command" size={15} strokeWidth={2.5} />
-                  </span>
-                  <div>
-                    <div className="text-sm font-semibold leading-tight tracking-tight text-sidebar-foreground">
-                      CommandCenter
-                    </div>
-                    <div className="text-[10px] leading-tight text-muted-foreground">
-                      No logo uploaded
-                    </div>
-                  </div>
-                </div>
+                // The shell's own component, not a copy of it. The copy that
+                // used to be here rendered the logo and the attribution side by
+                // side — which is not what the sidebar does.
+                <BrandMark
+                  branding={branding}
+                  fallbackCaption="No logo uploaded"
+                />
               )}
             </div>
 

@@ -105,48 +105,84 @@ export default function OrgBrandLockup({
   const mark = lockup(branding, fallbackCaption);
 
   return (
-    <Link
-      href={href}
-      onClick={onNavigate}
-      className="flex min-w-0 items-center gap-2.5"
-    >
-      {mark.kind === "org" ? (
-        // A `data:` URI from our own gateway, whose MIME type was derived from
-        // the file's magic bytes rather than from anything the uploader
-        // declared. `next/image` has nothing to optimise here and would only
-        // add a loader round-trip to bytes we already hold.
-        // eslint-disable-next-line @next/next/no-img-element
+    <Link href={href} onClick={onNavigate} className="block min-w-0">
+      <BrandMark branding={branding} fallbackCaption={fallbackCaption} height={height} maxWidth={maxWidth} />
+    </Link>
+  );
+}
+
+/**
+ * The mark itself, without the link.
+ *
+ * Separated so Settings → Organization can preview exactly what the shell will
+ * render, from the same code, instead of a copy that looks right on the day it
+ * is written. A preview you can click home from is also just a trap.
+ */
+export function BrandMark({
+  branding,
+  fallbackCaption,
+  height = 28,
+  maxWidth = 152,
+}: {
+  branding: OrgBranding | null | undefined;
+  fallbackCaption: string;
+  height?: number;
+  maxWidth?: number;
+}) {
+  const mark = lockup(branding, fallbackCaption);
+
+  // ── Two arrangements, and the difference is not cosmetic ─────────────────
+  //
+  // Ours is a 28px square badge, so the name sits BESIDE it and the pair fits
+  // the rail. A customer's mark is a wordmark — up to 152px of the ~184px the
+  // sidebar has between its padding and the collapse control — so putting the
+  // attribution beside it leaves ~69px for a ~118px string, and it renders as
+  // "powered by Co…". Measured in Chromium at 1280×900 across all four themes;
+  // the geometry check passed while the words were unreadable, which is why
+  // that check now asserts the caption is not clipped.
+  //
+  // Stacking is also simply the right lockup: the customer's mark, and our
+  // attribution underneath it.
+  if (mark.kind === "org") {
+    return (
+      <span className="flex min-w-0 flex-col items-start gap-1">
+        {/* A `data:` URI from our own gateway, whose MIME type was derived from
+            the file's magic bytes rather than from anything the uploader
+            declared. `next/image` has nothing to optimise here and would only
+            add a loader round-trip to bytes we already hold. */}
+        {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
           src={mark.logo.dataUri}
           alt={mark.alt}
-          style={{
-            height,
-            width: logoBoxWidth(mark.logo, height, maxWidth),
-          }}
+          style={{ height, width: logoBoxWidth(mark.logo, height, maxWidth) }}
           className="shrink-0 object-contain object-left"
         />
-      ) : (
-        <span
-          className="flex shrink-0 items-center justify-center rounded-lg bg-primary text-primary-foreground"
-          style={{ height, width: height }}
-        >
-          <Icon name="Command" size={Math.round(height * 0.54)} strokeWidth={2.5} />
-        </span>
-      )}
-
-      <div className="min-w-0">
-        {mark.kind === "default" ? (
-          <div className="truncate text-sm font-semibold leading-tight tracking-tight text-sidebar-foreground">
-            {mark.title}
-          </div>
-        ) : null}
-        {/* Ours sits under theirs, quietly. It is attribution, not branding —
-            at `text-[10px]` on muted it reads as a byline, which is the whole
+        {/* Ours sits under theirs, quietly. At `text-[10px]` on muted it reads
+            as a byline rather than as competing branding, which is the whole
             point of the arrangement. */}
-        <div className="truncate text-[10px] leading-tight text-muted-foreground">
+        <span className="block truncate text-[10px] leading-tight text-muted-foreground">
           {mark.caption}
-        </div>
-      </div>
-    </Link>
+        </span>
+      </span>
+    );
+  }
+
+  return (
+    <span className="flex min-w-0 items-center gap-2.5">
+      <span
+        className="flex shrink-0 items-center justify-center rounded-lg bg-primary text-primary-foreground"
+        style={{ height, width: height }}
+      >
+        <Icon name="Command" size={Math.round(height * 0.54)} strokeWidth={2.5} />
+      </span>
+      <span className="min-w-0">
+        <span className="block truncate text-sm font-semibold leading-tight tracking-tight text-sidebar-foreground">
+          {mark.title}
+        </span>
+        <span className="block truncate text-[10px] leading-tight text-muted-foreground">
+          {mark.caption}
+        </span>
+      </span>
+    </span>
   );
 }

@@ -3755,7 +3755,7 @@ migration number at build time and re-check it at merge (**R1** — three collis
 
 #### 9.11.1 As built — slice 2, the read path (2026-08-14)
 
-Slice 1 was migration `172_projects_org_vocabularies.sql`. Slice 2 is the Python half: one
+Slice 1 was migration `175_projects_org_vocabularies.sql`. Slice 2 is the Python half: one
 seam in `core.py` (`vocabulary_scope`, `shadowed`, `org_wide_exists`, `refuse_org_wide_write`,
 `org_vocabularies_enabled`) and three readers that use it — `admin.list_types`,
 `custom_fields.load_definitions`, `tags.load_registry_rows`/`list_tags`.

@@ -36,6 +36,7 @@ limitations). Do not add product specs to `docs/`.
 | `specs/platform_control_plane.md` | WS-31 — the central subscription/seat/AI-metering service (D32) |
 | `specs/control_plane_infrastructure.md` | WS-31 — **where** it runs; owner decision session (Supabase/Azure/VPS; Firebase disqualified in §3) |
 | `specs/subscription_console.md` | WS-30 |
+| `specs/organization_identity.md` | WS-32 — the customer's own mark inside the product (logo · display name · branding on invoices) |
 | `specs/future_modules_roadmap.md` | D21 roadmap (no rows until specced) |
 | `specs/crm_app.md` | WS-26 |
 | `specs/project_management_app.md` | WS-27 |

@@ -1,6 +1,17 @@
 # Subscription Console — the customer-facing billing surface (WS-30)
 
-**Status:** SPEC — nothing built · **Date:** 2026-08-09 · verified against code
+**Status:** ◐ **SC-5's billing view BUILT 2026-08-14** on
+`claude/multi-tenancy-ai-metering-nr8zbj`, unmerged and **not reachable from the
+nav** — the Control Plane it reads from is undeployed (WS-31: "where it runs is
+an open owner decision"), so the page fails closed with *"Billing is not
+configured for this deployment"*. It stays URL-only until the Control Plane has
+somewhere to run; promoting it into the sidebar would hand every customer admin
+a menu item that always errors, in our internal environment-variable
+vocabulary. That is CLAUDE.md §4's ship-dark, not an oversight — a previous
+commit added the nav entry reading it as one, and it was reverted.
+**Everything else here is still SPEC — nothing built.** ·
+**Date:** 2026-08-09 · status header corrected 2026-08-14 (R4: it still read
+"nothing built" after the console shipped) · verified against code
 2026-08-09 (repo-wide grep: zero hits for `module_catalog`, `org_module_entitlement`,
 `user_module_seat`, `ModuleGate`, `entitlement_mask` — MT-2's substrate does not
 exist yet, so nothing here is dispatchable before MT-2's tables land) ·

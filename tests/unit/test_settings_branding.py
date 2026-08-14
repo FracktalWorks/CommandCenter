@@ -264,3 +264,58 @@ def test_a_complete_blob_round_trips() -> None:
 
 def _coerced(raw: object) -> st.BrandingResponse:
     return st._coerce_branding(raw)
+
+
+# ── The gate ────────────────────────────────────────────────────────────────
+#
+# Every test above calls `st.put_branding(...)` DIRECTLY, which bypasses
+# FastAPI's dependency machinery entirely — so deleting
+# `dependencies=[require_permission("admin:settings:manage")]` from the route
+# leaves all thirty of them green while any member of the company gains the
+# power to replace the whole organisation's logo. That is exactly the shape R7
+# exists to forbid: an acceptance criterion with no test that fails when it is
+# broken.
+#
+# The idiom below is lifted from `test_settings_appearance.py`, which had
+# already solved this for the neighbouring route and was not reused the first
+# time round.
+
+
+def _required_permissions(route) -> set[str]:
+    """Permission strings a route's dependencies enforce.
+
+    `require_permission` closes over its arguments rather than exposing them,
+    so the only way to assert the gate from outside is to read the closure.
+    """
+    found: set[str] = set()
+    for dep in getattr(route, "dependencies", []):
+        fn = getattr(dep, "dependency", None)
+        for cell in getattr(fn, "__closure__", None) or ():
+            value = cell.cell_contents
+            if isinstance(value, tuple) and all(isinstance(v, str) for v in value):
+                found.update(value)
+    return found
+
+
+def _route(path: str, method: str):
+    for r in st.router.routes:
+        if getattr(r, "path", None) == path and method in getattr(r, "methods", ()):
+            return r
+    raise AssertionError(f"no route for {method} {path}")
+
+
+@pytest.mark.parametrize("method", ["PUT", "DELETE"])
+def test_writes_are_gated_on_admin_settings_manage(method: str) -> None:
+    """Changing the logo changes what every member of the company sees."""
+    assert "admin:settings:manage" in _required_permissions(
+        _route("/settings/branding", method)
+    )
+
+
+def test_reading_the_logo_is_open_to_every_member() -> None:
+    """Gating the READ would mean only admins saw their own company's branding.
+
+    Asserted as an empty set rather than "not admin-gated", so that adding any
+    permission to the read path is a deliberate act that fails here first.
+    """
+    assert _required_permissions(_route("/settings/branding", "GET")) == set()

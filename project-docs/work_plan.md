@@ -384,7 +384,30 @@ query allowed was the longest one answered by a sequential scan (127 ms at 60k r
 One constant governs both endpoints since WS-27be moved it to `filters.py`. 🔜 **Queued by owner
 selection the same day**: D-PM-20 (the `updated_at` PATCH precondition), WS-27ar (one generic
 pins table), and **D-PM-16** (org-wide vocabularies — the expensive one, framed for a ruling
-below rather than built). (2026-08-13) |
+below rather than built). (2026-08-13)
+✅ **WS-27bi MINTED 2026-08-13 and its R8 GATE MEASURED 2026-08-14** (spec §9.10, §9.10.1).
+D-PM-20 answered: `If-Match: <updated_at>` → **412 with the current row**; **no `version`
+column** (a second monotonic fact about one row is the §5 defect); **an absent header still
+succeeds** — advisory now, mandatory later, R6's expand/contract applied to an API. The worry
+that stalled this ("168's `updated_at` also serves the delta cursor, so one semantic must cover
+both") **dissolves on audit**: there are exactly **two** `touch=False` sites, both stamping
+`recurrence_spawned_at`, and they are right for *both* consumers at once — a bookkeeping stamp
+should neither wake a delta client nor invalidate a human's pending edit. **Measured, not
+assumed**: parse-then-bind compares exactly for ordinary, trailing-zero and zero microseconds.
+Two fences moved by the measurement — **a naive (offset-stripped) token silently compares
+`True`** (asyncpg reinterprets it in the session zone; it only *looks* right on a UTC box, so it
+must be rejected with 400), and **`::text` disagrees with the JSON encoder** on trailing zeros
+(`.1` vs `.100000`), so the token is never rendered by `::text` and never string-compared.
+🔴 **FINDING FOR THE BOARD, NOT THIS TICKET — `updated_at = now()` CAN MOVE BACKWARDS.**
+Reproduced on a real database: `now()` is the **transaction-start** timestamp, so a transaction
+opening 201 ms earlier and committing *later* overwrote a newer row with an **earlier** stamp.
+**Harmless to the precondition** — an exact comparison still differs, so the client still gets
+its 412 — which is precisely why it does not expand WS-27bi. **It is a real gap in migration
+168's keyset cursor**: a delta client whose cursor has passed the newer value is never handed
+the row stamped behind it, and that change leaves the stream silently. Pre-existing and
+already-merged, so per CLAUDE.md §5 it is recorded, not refactored; the fix (`clock_timestamp()`
+or a sequence) changes the delta feed's contract and **owes its own row and its own decision**.
+(2026-08-14) |
 | WS-28 | **People Center — directory, org chart, assignment seam** *(minted 2026-08-06)* | ✅ a+b+b-write | `specs/people_center_app.md` · board record 2026-08-09 | a (key shape, mig 148 + quarantine table) · b (directory + person page, mig 149, five-place registration) · b-write (create/edit UI restored; found three ways mig 148 had broken the write routes) — built 2026-08-06/07; **closes WS-13's directory item**. 🟢 c org chart · d capability search (**ranking EVAL-LOCKED**) · e Projects seams; 🔴 f seats/roles writes (§6 WS-24 (d) analogue). ⚠️ `schema.generated.sql` regeneration is **due**: stale since ~migration 113, and 148 reached prod ~2026-08-07 (after the #384 cast fix). (2026-08-07) |
 ---
 

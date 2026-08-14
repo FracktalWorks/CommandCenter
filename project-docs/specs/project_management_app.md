@@ -3614,6 +3614,70 @@ D-PM-20 is answered; the audit behind it is in that decision and is not repeated
 > **Not in scope:** bulk edit (what a partial precondition failure means across thirty tasks is
 > its own question) and WS-27az's revert.
 
+#### 9.10.1 The R8 measurement — done 2026-08-14, and it moved two fences
+
+Measured on a real Postgres 16 through asyncpg and `fastapi.encoders.jsonable_encoder`, not
+reasoned about. **Verdict: the precondition is implementable** — parse the token in Python, bind
+it as a `datetime`, let Postgres compare it as `timestamptz`. That round trip is exact for all
+three token shapes:
+
+| Case | Encoder token | Compares equal in pg |
+|---|---|---|
+| ordinary microseconds | `2026-08-14T09:21:49.448124+00:00` | ✅ |
+| trailing-zero microseconds | `2026-03-04T05:06:07.100000+00:00` | ✅ |
+| `microsecond == 0` | `2026-01-01T00:00:00+00:00` | ✅ |
+
+Three things the measurement found that reading the code would not have:
+
+🔴 **A naive (offset-stripped) token silently compares `True`.** asyncpg reinterprets a
+tz-less `datetime` in the session zone, which on a UTC box happens to match. A client that
+drops the offset therefore gets a precondition that *appears* to work and would start
+mis-comparing under any session-TZ change. This is precisely the "reports safety it does not
+have" failure the decision was written against. **Fence: reject a naive token with 400 — never
+accept it.** Test: a token with the offset stripped must not pass.
+
+🔴 **`::text` and the JSON encoder disagree.** Postgres renders the trailing-zero case as
+`2026-03-04 05:06:07.1+00` (5 fractional digits, zeros trimmed); the encoder renders
+`.100000`. As strings they differ; as `timestamptz` they are equal. **Fence: the token is
+never produced by `::text` and never string-compared** — compare in the database, or between
+parsed `datetime`s. A string comparison passes every test written against ordinary
+microseconds and fails ~1 row in 10 on a trailing zero.
+
+⚠️ **asyncpg refuses a `str` bound where a `timestamptz` is inferred** (`invalid input for
+query argument`). This is a helpful failure, not an obstacle: it makes the parse step
+mandatory rather than optional, so the string-comparison mistake above is hard to make by
+accident on this stack.
+
+#### 9.10.2 A finding for the board — `now()` can move backwards (NOT this ticket)
+
+While measuring, an overlapping-transaction case reproduced on the real database:
+
+```
+T1 txn now() = 09:22:18.560649      (starts first)
+T2 txn now() = 09:22:18.762134      (starts 201ms later, writes, commits FIRST)
+after T2 commit : 09:22:18.762134
+after T1 commit : 09:22:18.560649   <-- WENT BACKWARDS by 201ms
+```
+
+`now()` is the **transaction-start** timestamp, so a transaction that opens early and commits
+late stamps `updated_at` with a time earlier than a row already written by a newer,
+faster-committing transaction.
+
+**This does not harm the precondition** — and that is the reason it does not expand this
+ticket's scope. `If-Match` compares one exact value; a backwards stamp still differs from the
+client's token, so the client still gets its 412 and refetches. The precondition never reports
+"unchanged" when the row changed.
+
+**It is a real gap in migration 168's keyset cursor**, which is already-merged code: a delta
+client whose cursor has advanced past `.762` will never be handed the row later stamped
+`.560`, and that change is silently dropped from the stream. Reachable only when two write
+transactions to the same row overlap and the older commits last — short request transactions
+make it rare, not impossible.
+
+Per CLAUDE.md §5 this is recorded as a **finding for the board, not a refactor**: it predates
+this work, and fixing it (`clock_timestamp()`, or a sequence) is a change to the delta feed's
+contract that deserves its own row and its own decision.
+
 ---
 
 ### 9.9 WS-27bh — the four facts the card already knows and never says (minted 2026-08-13)

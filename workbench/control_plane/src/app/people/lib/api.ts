@@ -328,6 +328,16 @@ export const peopleApi = {
   person: (id: string) => call<PersonDetail>(id),
 
   /**
+   * "Who can help with…" (§5.5). The ranking is the server's — deterministic,
+   * every signal carrying its own points — and 403s without
+   * `admin:members:read`, whose sentence renders verbatim.
+   */
+  capabilitySearch: (q: string) =>
+    call<import("./search").CapabilityResponse>(
+      `search?q=${encodeURIComponent(q)}`
+    ),
+
+  /**
    * The structured capability payload: rows + credentials + the VOCABULARIES
    * (levels, kinds), so the editor renders its selects without a client-side
    * copy that could drift — the D-PC-4 shape, applied to a word list.

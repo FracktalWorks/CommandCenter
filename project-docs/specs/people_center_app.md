@@ -1049,12 +1049,27 @@ re-parent that would create a cycle is refused before the request; the Center ov
 department/group mismatches rather than hiding them; and re-parenting is gated on the
 **admin** write class (§4.3), not on the caller merely being signed in.
 
-**WS-28d — capability search.** 🟢 AGENT-SAFE to build; the ranking prompt is
-**EVAL-LOCKED**.
+**WS-28d — capability search.** ✅ **BUILT 2026-08-14**
+(`routes/people/search.py`, `/people/search` page, "Who can help?" Center tile;
+18 hermetic + 10 vitest cases and 12 live checks).
 Done when: all three signals are queried; each result names which matched, shows load and
 shows availability (§5.8); the surface never writes an assignment; and a caller without
 `admin:members:read` cannot reach it at all — it is a skills query by definition, and the
 oracle rule (§4.2) applies to a whole surface here rather than to a clause.
+
+**How the build stays outside the eval lock:** there is **no LLM ranking prompt** —
+ranking is arithmetic over named constants (`LEVEL_WEIGHT` · recency decay ·
+`DOMAIN_BONUS` · `RESUME_BONUS` · `SEMANTIC_SCALE`), and every signal arrives on the
+result with its own points, so the ranking can be recomputed by hand from what the page
+shows. A fence greps the module for model calls so an LLM ranker cannot arrive quietly;
+if one ever comes, it goes through the eval first. Two more fences: the module contains no
+INSERT/UPDATE/DELETE (D-PC-13, structurally — a suggester with an UPDATE has become an
+assigner), and the client's `search.ts` contains no `.sort(` — the server's order IS the
+ranking, and a client-side re-sort would be a second ranker. Unknown recency is NOT
+decayed: most rows predate the column, and punishing missing data would rank people by
+form-filling. The résumé signal quotes the matching LINE of the newest CV
+(`DISTINCT ON (person_id) … ORDER BY uploaded_at DESC`, verified live), because a claim
+with its evidence beside it can be argued with.
 
 **WS-28e — the Projects seams.** 🟢 AGENT-SAFE.
 Done when: the assignee picker is directory-backed and lists agents and directory-only

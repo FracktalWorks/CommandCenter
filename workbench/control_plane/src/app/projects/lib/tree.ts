@@ -106,3 +106,81 @@ export function canMoveUnder(
   if (!node) return true;
   return !subtreeIds(node).includes(newParentId);
 }
+
+/* ── Effective run state (WS-27bg / D-PM-26) ───────────────────────────────
+ *
+ * A project's run state governs its whole subtree, the same way a
+ * `pm_project_grants` row on a root covers everything below it. So a
+ * subproject of a paused department is *effectively paused* even though its own
+ * column still says `active` — and nothing is written to it to make that true,
+ * which is D-PM-26's whole point.
+ *
+ * ⚠️ Status is writable at ANY depth here, unlike the lifecycle policy, which
+ * is root-only and 422s on a child (migration 166). The distinction is real: a
+ * policy is *configuration* and one per root is the right shape, while a run
+ * state is a fact about a unit of work, and a subproject is a unit of work. A
+ * firmware sub-project can legitimately pause while its siblings ship.
+ */
+
+/**
+ * How restrictive each run state is. The effective state of a node is the MOST
+ * restrictive value on its ancestor chain, itself included.
+ *
+ * The ordering is a judgement and is written down rather than left implicit:
+ * `stopped` outranks `on_hold` because abandonment outranks a pause; both
+ * outrank `queued`, which outranks `done`, which outranks `active`. The two
+ * ends are the ones that matter and neither is arguable — `active` is the only
+ * state in which work flows, and `stopped` is the only one from which it does
+ * not return. The middle order only decides which *word* a nested node shows,
+ * never whether it runs.
+ */
+const RESTRICTION: Record<string, number> = {
+  active: 0,
+  done: 1,
+  queued: 2,
+  on_hold: 3,
+  stopped: 4,
+};
+
+function rank(state?: string | null): number {
+  const key = state?.trim().toLowerCase() ?? "";
+  // An unknown value ranks as `active` (0) rather than as maximally
+  // restrictive: a client that has not learned a newer state must not silently
+  // grey out a whole subtree it does not understand.
+  return RESTRICTION[key] ?? 0;
+}
+
+/** The more restrictive of two run states — `a` when they tie. */
+export function moreRestrictive(
+  a?: string | null,
+  b?: string | null
+): string {
+  const left = (a ?? "active").trim().toLowerCase() || "active";
+  const right = (b ?? "active").trim().toLowerCase() || "active";
+  return rank(right) > rank(left) ? right : left;
+}
+
+/** What a node's own state would be, defaulted. */
+export function ownState(node: Pick<ProjectNode, "status">): string {
+  const value = node.status?.trim().toLowerCase();
+  return value || "active";
+}
+
+/**
+ * The state a node actually behaves as, given the chain above it.
+ *
+ * `inherited` is the effective state of the PARENT (pass `null` at a root).
+ * Returning the pair rather than one value is what lets the tree draw an
+ * inherited state differently from a chosen one: a node showing "Paused"
+ * because somebody paused *it* and a node showing "Paused" because its
+ * department is paused are different facts, and a reader who cannot tell them
+ * apart will go looking for the pause on the wrong row.
+ */
+export function effectiveState(
+  node: Pick<ProjectNode, "status">,
+  inherited?: string | null
+): { state: string; inherited: boolean } {
+  const own = ownState(node);
+  const state = moreRestrictive(own, inherited);
+  return { state, inherited: state !== own };
+}

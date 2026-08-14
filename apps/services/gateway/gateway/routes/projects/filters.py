@@ -258,6 +258,25 @@ def build_task_filters(
 
     if not include_archived:
         clauses.append("t.archived_at IS NULL")
+        # WS-27bg. A task is also out of the default reads when the PROJECT
+        # holding it is filed — that is what "archive a project and its tasks"
+        # means, and D-PM-26 says it must cost no `pm_tasks` write to mean it.
+        #
+        # The task's own project, with no ancestor walk: `archive_node` stamps
+        # the whole subtree at write time precisely so this stays a plain
+        # indexed join rather than a recursive CTE on every list read.
+        #
+        # Deliberately governed by the SAME `include_archived` flag rather than
+        # a second one: "show me the archived things" is one question, and two
+        # flags would make a caller who set the obvious one still miss half the
+        # answer. ⚠️ Note this is the ARCHIVE axis only — a paused or stopped
+        # project's tasks are still listed, because pausing files nothing
+        # (D-PM-25's two axes). What paused changes is overdue, My Work and the
+        # dated views, which is slice 3.
+        clauses.append(
+            "EXISTS (SELECT 1 FROM pm_projects p "
+            "        WHERE p.id = t.project_id AND p.archived_at IS NULL)"
+        )
 
     return clauses, params
 

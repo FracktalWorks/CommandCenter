@@ -33,12 +33,18 @@ from gateway.routes.projects.core import (
     actor,
     clean_payload,
     load_visible_project,
+    org_wide_exists,
+    refuse_org_wide_write,
+    require_known_tenant,
+    require_org_vocabulary_write,
     require_row,
     resolve_visibility,
     root_project_id,
     router,
     row_to_dict,
+    shadowed,
     update_row,
+    vocabulary_scope,
 )
 from pydantic import BaseModel
 from sqlalchemy import text
@@ -314,31 +320,29 @@ class FieldIn(BaseModel):
     field_type: str | None = None
     options: list[str] | None = None
     position: int | None = None
+    #: WS-27bj. ``"org"`` mints an org-wide definition; anything else keeps
+    #: today's per-project behaviour verbatim.
+    scope: str | None = None
 
 
 async def load_definitions(db: Any, root: str) -> list[dict[str, Any]]:
-    """Every definition on a root project, ordered as the form renders them."""
+    """A project's EFFECTIVE definitions, ordered as the form renders them.
+
+    ``org-wide ∪ root-local``, root-local shadowing org-wide on ``field_key``
+    (WS-27bj). The union lands here rather than in the list endpoint because this
+    is the single seam all four readers share — the list, the duplicate check on
+    create, the export's column set, and ``apply_values``' validation of what a
+    task may store. An org-wide field that listed but whose values were then
+    refused as an unknown key would be the worst of both.
+    """
     rows = (await db.execute(
         text(
-            "SELECT * FROM pm_custom_fields WHERE project_id = CAST(:root AS uuid) "
+            f"SELECT * FROM pm_custom_fields WHERE {vocabulary_scope()} "
             "ORDER BY position, name"
         ),
         {"root": root},
     )).fetchall()
-    return [
-        {
-            "id": str(r.id),
-            "project_id": str(r.project_id),
-            "field_key": r.field_key,
-            "name": r.name,
-            "description": r.description,
-            "field_type": r.field_type,
-            "options": list(r.options or []),
-            "position": r.position,
-            "created_by": r.created_by,
-        }
-        for r in rows
-    ]
+    return [_definition_row(r) for r in shadowed(rows, lambda r: r.field_key)]
 
 
 async def _root_for(db: Any, vis: Any, project_id: str) -> str:
@@ -390,33 +394,65 @@ async def create_field(
         )
     key = validate_key(str(values.get("field_key") or slugify_key(name)))
     options = clean_options(field_type, values.get("options"))
+    org_wide = values.get("scope") == "org"
+    if org_wide:
+        require_org_vocabulary_write(user)
 
     async with _tenant_session() as db:
         vis = await resolve_visibility(db, user)
         root = await _root_for(db, vis, project_id)
+        if org_wide:
+            require_known_tenant(vis, "custom field")
         existing = await load_definitions(db, root)
         if len(existing) >= MAX_FIELDS:
+            # The cap counts the EFFECTIVE set, not the root-local one: forty
+            # columns render the same whether the organization or the project
+            # contributed them, and the cap exists to stop a board becoming
+            # unreadable.
             raise HTTPException(
                 status_code=409,
                 detail=f"This project already has {MAX_FIELDS} custom fields.",
             )
-        if any(d["field_key"] == key for d in existing):
+        # ⚠️ The clash to refuse is one at the SAME scope, never a shadowing one.
+        # A root-local field whose key matches an org-wide field is exactly what
+        # D-PM-16 permits — a project keeping its own "priority" after the
+        # organization gains one — and `shadowed` has already made the root-local
+        # row the winner, so `project_id is not None` distinguishes them without
+        # a second query. The org-wide arm cannot use that list at all: a
+        # shadowed org-wide row is absent from it by design.
+        clash = (
+            await org_wide_exists(db, "pm_custom_fields", root, key) if org_wide
+            else any(
+                d["field_key"] == key and d["project_id"] is not None
+                for d in existing
+            )
+        )
+        if clash:
             # 409 rather than letting the UNIQUE fire: the caller needs to know
             # the key is taken, which an IntegrityError does not tell them.
             raise HTTPException(
                 status_code=409,
-                detail=f"A custom field with key '{key}' already exists here.",
+                detail=(
+                    f"An organization-wide custom field with key '{key}' "
+                    f"already exists."
+                    if org_wide else
+                    f"A custom field with key '{key}' already exists here."
+                ),
             )
         row = (await db.execute(
             text(
                 "INSERT INTO pm_custom_fields "
-                "(project_id, field_key, name, description, field_type, "
-                " options, position, created_by) "
-                "VALUES (CAST(:root AS uuid), :key, :name, :description, :type, "
+                "(project_id, organization_id, field_key, name, description, "
+                " field_type, options, position, created_by) "
+                "VALUES (CAST(:root AS uuid), CAST(:org AS uuid), :key, :name, "
+                "        :description, :type, "
                 "        CAST(:options AS jsonb), :position, :by) RETURNING *"
             ),
             {
-                "root": root, "key": key, "name": name,
+                # See `admin.create_type` for why the tenant is explicit here.
+                "root": None if org_wide else root,
+                "org": vis.organization_id,
+                "key": key, "name": name,
                 "description": values.get("description"),
                 "type": field_type,
                 "options": _json(options),
@@ -444,6 +480,7 @@ async def patch_field(
       already written and would leave every task failing its own validation.
     """
     values = clean_payload(payload)
+    values.pop("scope", None)     # WS-27bj: selects where a NEW row lands only
     if "field_key" in values:
         raise HTTPException(
             status_code=422,
@@ -460,6 +497,7 @@ async def patch_field(
 
     async with _tenant_session() as db:
         existing = await require_row(db, "pm_custom_fields", field_id, "Custom field")
+        refuse_org_wide_write(existing, "custom field")
         vis = await resolve_visibility(db, user)
         await load_visible_project(db, vis, str(existing.project_id))
         if not values:
@@ -514,6 +552,7 @@ async def delete_field(
     """
     async with _tenant_session() as db:
         existing = await require_row(db, "pm_custom_fields", field_id, "Custom field")
+        refuse_org_wide_write(existing, "custom field")
         vis = await resolve_visibility(db, user)
         await load_visible_project(db, vis, str(existing.project_id))
         root = str(existing.project_id)
@@ -574,7 +613,9 @@ def _json(value: Any) -> str:
 def _definition_row(row: Any) -> dict[str, Any]:
     return {
         "id": str(row.id),
-        "project_id": str(row.project_id),
+        # ``None``, never the string ``"None"``: this is org-wide (WS-27bj), and
+        # a client reads it to know whether the row is editable here.
+        "project_id": None if row.project_id is None else str(row.project_id),
         "field_key": row.field_key,
         "name": row.name,
         "description": row.description,

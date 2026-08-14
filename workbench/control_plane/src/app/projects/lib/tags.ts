@@ -16,7 +16,14 @@ import { ACCENT_HUES, type AccentHue, statusAccent } from "@/lib/statusAccent";
 
 export interface TagRow {
   id: string;
-  project_id: string;
+  /**
+   * `null` means ORG-WIDE (WS-27bj / D-PM-16): the tag belongs to the whole
+   * organization rather than this project, and the list is `org-wide ∪
+   * root-local` with root-local shadowing. Widened because the gateway can send
+   * `null` today — a type that still said `string` would be a contract this
+   * side had already stopped honouring.
+   */
+  project_id: string | null;
   name: string;
   color: string;
   description?: string | null;

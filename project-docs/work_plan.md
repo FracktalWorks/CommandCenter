@@ -460,7 +460,33 @@ nothing yet reads one, which is "ship dark" landing as a schema rather than a fl
 owed: the read path** — `org-wide ∪ root-local` with **root-local shadowing** (a correctness
 rule for tags, since `pm_tasks.tags` stores display text, so two registry rows describe one tag
 and the union must yield one colour), plus the flagged create affordance. `tests/unit` **6029
-passed** (baseline 6015). (2026-08-14) |
+passed** (baseline 6015). (2026-08-14)<br>✅ **WS-27bj SLICE 2 (the read path) BUILT 2026-08-14 —
+spec §9.11.1.** One seam in `core.py` (`vocabulary_scope` · `shadowed` · `org_wide_exists` ·
+`refuse_org_wide_write` · `org_vocabularies_enabled`) and three readers on it. The union lands on
+`load_definitions` rather than the list endpoint because that seam has **four** callers — list,
+create's duplicate check, export columns, and `apply_values`' validation — and a field that
+listed but whose values were refused as an unknown key would be the worst of both. Create is
+gated on the flag (`PROJECTS_ORG_VOCABULARIES`, default OFF, read at call time) **and**
+`admin:settings:manage`: an org-wide row lands in every project in the organization, including
+ones the writer cannot see. ✅ **R8 on a real database, with the probe GENERATED from the live
+clause builders** (retyping the SQL would prove the retyping): union correct, B's project cannot
+see A's org-wide rows, the usage count reads 2 (A's tasks) rather than 3 or 0, `org_wide_exists`
+is cross-tenant-false and case-insensitive, and an unknown `:root` returns nothing — fails
+closed. 🔴 **Two of fourteen mutants survived the first pass, and both were the hermetic-fake
+blindness R8 exists for**: reverting the usage-count correlation to `g.project_id` — which
+reports every org-wide tag as used by **0 tasks** — kept all 57 tests green because the mirror
+computed the count itself; and dropping the explicit tenant from an org-wide INSERT kept them
+green because the fake filled it from its own default, where 161's trigger "does NOT invent a
+tenant" and `NOT NULL` would refuse. Both mirrors were fixed to read the statement, then both
+mutants died. ⚠️ The live probe had already shown the right behaviour in both cases — what was
+missing was a test that goes **red** when someone undoes it, which is the difference between
+verified and fenced. 🔴 **Board finding: `TagRow` is declared TWICE on the frontend**
+(`projects/lib/tags.ts` and `projects/lib/api.ts`, with `page.tsx` passing rows between them);
+both were widened to keep them assignable, but collapsing two public wire types is its own change
+(CLAUDE.md §5). Also noted: the tag/field caps now count the **effective** set. Still owed: the
+admin surface for managing org-wide vocabularies — which is also what would let one be edited or
+retired. `tests/unit` **6090 passed** (baseline 6029); frontend `tsc` clean, **2007** vitest
+passed. (2026-08-14) |
 | WS-28 | **People Center — directory, org chart, assignment seam** *(minted 2026-08-06)* | ✅ a+b+b-write | `specs/people_center_app.md` · board record 2026-08-09 | a (key shape, mig 148 + quarantine table) · b (directory + person page, mig 149, five-place registration) · b-write (create/edit UI restored; found three ways mig 148 had broken the write routes) — built 2026-08-06/07; **closes WS-13's directory item**. 🟢 c org chart · d capability search (**ranking EVAL-LOCKED**) · e Projects seams; 🔴 f seats/roles writes (§6 WS-24 (d) analogue). ⚠️ `schema.generated.sql` regeneration is **due**: stale since ~migration 113, and 148 reached prod ~2026-08-07 (after the #384 cast fix). (2026-08-07) |
 ---
 

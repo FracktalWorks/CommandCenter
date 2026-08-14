@@ -15,6 +15,7 @@
 
 import Button from "@/components/ui/Button";
 import AppIcon, { themedIcon, type ThemedIcon } from "@/components/Icon";
+import OrgBrandLockup from "@/components/OrgBrandLockup";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
@@ -185,16 +186,10 @@ function MobileBottomNavInner({
   const menuContent = (
     <>
       <div className="flex items-center justify-between border-b border-border px-4 py-3">
-        {/* Branding doubles as the way home — the mobile shell has no top bar. */}
-        <Link href="/" onClick={close} className="flex items-center gap-2.5">
-          <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-primary text-primary-foreground">
-            <AppIcon name="Command" size={14} strokeWidth={2.5} />
-          </span>
-          <div>
-            <div className="text-sm font-semibold text-foreground">CommandCenter</div>
-            <div className="text-[11px] text-muted-foreground">Home</div>
-          </div>
-        </Link>
+        {/* Branding doubles as the way home — the mobile shell has no top bar.
+            Same component as the desktop sidebar on purpose: a brand mark that
+            differs by window width is worse than no brand mark. */}
+        <OrgBrandLockup fallbackCaption="Home" onNavigate={close} maxWidth={180} />
         <button
           onClick={close}
           className="rounded-lg p-1.5 text-muted-foreground hover:bg-secondary"

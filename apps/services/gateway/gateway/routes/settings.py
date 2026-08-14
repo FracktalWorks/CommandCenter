@@ -1886,3 +1886,265 @@ async def put_appearance(
     return AppearanceResponse(
         org=body, updatedBy=user.email or "", updatedAt=updated_at
     )
+
+
+# ---------------------------------------------------------------------------
+# GET    /settings/branding — the organisation's logo, for the app shell
+# PUT    /settings/branding — replace it (admin only)
+# DELETE /settings/branding — remove it (admin only)
+#
+# A customer's own logo sits top-left with "powered by CommandCenter" beneath
+# it. That is the one place in the product where the tenant's identity, rather
+# than ours, is the primary mark, so the rules around what may be stored there
+# are worth stating in one place.
+#
+# WHY THE BYTES LIVE IN `org_settings` AND NOT IN OBJECT STORAGE
+# --------------------------------------------------------------
+# A logo is a single, small, org-wide document that changes perhaps twice in a
+# company's life and is read on every page load. That is the same shape as the
+# appearance blob directly above, and it is emphatically not the shape that
+# justifies an object store: introducing one would mean a bucket per tenant, a
+# signing path, a lifecycle policy and a second place a tenant's data can be
+# left behind at deletion — for one row. Tenancy comes free here, because
+# `org_settings` is a tenant table behind the same RLS as everything else
+# (R5), whereas a shared bucket would need a prefix convention that somebody
+# has to remember to get right.
+#
+# The cap below is what keeps that true. At 128 KiB a logo is a row, not a
+# file; without a cap it becomes a file in a column, which is the failure mode
+# this reasoning depends on avoiding.
+#
+# WHAT IS NOT TRUSTED
+# -------------------
+# The declared content type, the file name, and the dimensions the client
+# claims. All three come from the caller. The MIME type served back to
+# browsers is derived from the magic bytes by `probe_image`, and the data URI
+# is *rebuilt* here from that derived type rather than echoed from the request
+# — an echoed data URI is a stored-XSS sink wearing an image's clothes.
+# ---------------------------------------------------------------------------
+
+_BRANDING_KEY = "branding"
+
+#: Raw upload ceiling, before base64. A 3× PNG wordmark is typically 15–40 KiB,
+#: so this is generous; it exists to keep the row a row (see above) and to
+#: bound what every member downloads on load.
+_LOGO_MAX_BYTES = 128 * 1024
+
+#: Below this the file is a favicon or an accident, not a logo.
+_LOGO_MIN_EDGE = 32
+#: Above this it is a print asset. The shell renders it ~28px tall.
+_LOGO_MAX_EDGE = 2048
+
+#: The header slot is a short horizontal strip. A 1:20 sliver technically fits
+#: the size rules and renders as a 2px smear or shoves the nav off screen, so
+#: shape is constrained as well as size: from twice as tall as wide, through to
+#: eight times as wide as tall (which covers every real wordmark).
+_LOGO_MIN_ASPECT = 0.5
+_LOGO_MAX_ASPECT = 8.0
+
+
+class OrgLogo(BaseModel):
+    """A stored logo, as the shell needs it to render."""
+
+    dataUri: str
+    mime: str
+    width: int
+    height: int
+    byteSize: int
+
+
+class BrandingResponse(BaseModel):
+    #: `None` means "no logo uploaded" — the shell falls back to our own mark.
+    #: It is a distinct state from "the gateway is unreachable", which the BFF
+    #: reports separately, because the two want different UI.
+    logo: OrgLogo | None = None
+    updatedBy: str = ""
+    updatedAt: str = ""
+
+
+class BrandingUpload(BaseModel):
+    """The upload body: base64 of the raw file, and nothing else.
+
+    Deliberately not a multipart form and deliberately not a data URI. A data
+    URI carries a caller-declared MIME type, and every historical mistake in
+    this area starts with trusting one.
+    """
+
+    logoBase64: str
+
+
+def _coerce_branding(raw: Any) -> BrandingResponse:
+    """Normalise a stored blob, degrading one field at a time.
+
+    A row written by an older or newer build must not blank an organisation's
+    branding wholesale; a logo that fails to parse simply reads as "no logo".
+    """
+    blob = raw if isinstance(raw, dict) else {}
+    logo_raw = blob.get("logo")
+    logo: OrgLogo | None = None
+    if isinstance(logo_raw, dict):
+        try:
+            logo = OrgLogo(**logo_raw)
+        except (TypeError, ValueError):
+            logo = None
+    return BrandingResponse(
+        logo=logo,
+        updatedBy=str(blob.get("updatedBy") or ""),
+        updatedAt=str(blob.get("updatedAt") or ""),
+    )
+
+
+# `def`, not `async def`: `load_org_setting` is a synchronous DB call, so an
+# async handler would block the event loop for its duration. FastAPI runs a
+# sync handler in the threadpool, which is the correct shape for this seam.
+# (The appearance handlers above predate that rule; they are not a precedent.)
+@router.get("/branding", response_model=BrandingResponse)
+def get_branding(
+    _user: UserContext = Depends(get_current_user),
+) -> BrandingResponse:
+    """Return the org's logo. Readable by any signed-in member.
+
+    Not admin-gated: every member's shell renders this, so gating the read
+    would mean only admins saw their own company's branding.
+    """
+    from acb_common import load_org_setting  # noqa: PLC0415
+
+    return _coerce_branding(load_org_setting(_BRANDING_KEY, default={}))
+
+
+@router.put(
+    "/branding",
+    response_model=BrandingResponse,
+    dependencies=[require_permission("admin:settings:manage")],
+)
+def put_branding(
+    body: BrandingUpload,
+    user: UserContext = Depends(get_current_user),
+) -> BrandingResponse:
+    """Replace the org's logo. Admin-gated — this changes everyone's shell."""
+    import base64  # noqa: PLC0415
+    import binascii  # noqa: PLC0415
+    from datetime import datetime, timezone  # noqa: PLC0415
+
+    from acb_common import save_org_setting  # noqa: PLC0415
+
+    from gateway.image_probe import UnsupportedImage, probe_image  # noqa: PLC0415
+
+    payload = body.logoBase64.strip()
+    # Accept a data URI prefix so a caller that pasted one is not stuck, but
+    # discard it: only the bytes after the comma are ever looked at, and the
+    # MIME type it declared is not read at all.
+    if payload.startswith("data:"):
+        _, _, payload = payload.partition(",")
+
+    # Reject the encoded form before decoding, so a caller cannot make us
+    # allocate 10 MiB to find out we did not want it. 4/3 plus padding.
+    if len(payload) > (_LOGO_MAX_BYTES * 4 // 3) + 16:
+        raise HTTPException(
+            status_code=413,
+            detail=f"That image is larger than {_LOGO_MAX_BYTES // 1024} KB.",
+        )
+
+    try:
+        data = base64.b64decode(payload, validate=True)
+    except (binascii.Error, ValueError):
+        raise HTTPException(status_code=400, detail="The upload was not valid base64.") from None
+
+    if not data:
+        raise HTTPException(status_code=400, detail="The upload was empty.")
+    if len(data) > _LOGO_MAX_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"That image is {len(data) // 1024} KB; the limit is "
+            f"{_LOGO_MAX_BYTES // 1024} KB.",
+        )
+
+    try:
+        info = probe_image(data)
+    except UnsupportedImage as exc:
+        # `probe_image`'s messages are written for the person who picked the
+        # file, so they are relayed rather than replaced by a generic 400.
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+
+    if info.width <= 0 or info.height <= 0:
+        raise HTTPException(status_code=400, detail="That image looks damaged.")
+    if max(info.width, info.height) < _LOGO_MIN_EDGE:
+        raise HTTPException(
+            status_code=400,
+            detail=f"That image is only {info.width}×{info.height}. Logos need to "
+            f"be at least {_LOGO_MIN_EDGE}px on the longer side.",
+        )
+    if max(info.width, info.height) > _LOGO_MAX_EDGE:
+        raise HTTPException(
+            status_code=400,
+            detail=f"That image is {info.width}×{info.height}. The limit is "
+            f"{_LOGO_MAX_EDGE}px on the longer side.",
+        )
+
+    aspect = info.width / info.height
+    if aspect < _LOGO_MIN_ASPECT or aspect > _LOGO_MAX_ASPECT:
+        raise HTTPException(
+            status_code=400,
+            detail="That shape will not fit the header. Logos need to be between "
+            "twice as tall as they are wide and eight times as wide as they are "
+            "tall.",
+        )
+
+    # Rebuilt from the DERIVED type and the DECODED bytes. Nothing the caller
+    # sent is echoed into what browsers will later be handed.
+    data_uri = f"data:{info.mime};base64,{base64.b64encode(data).decode('ascii')}"
+
+    updated_at = datetime.now(timezone.utc).isoformat()
+    logo = OrgLogo(
+        dataUri=data_uri,
+        mime=info.mime,
+        width=info.width,
+        height=info.height,
+        byteSize=len(data),
+    )
+    save_org_setting(
+        _BRANDING_KEY,
+        {
+            "logo": logo.model_dump(),
+            "updatedBy": user.email or "",
+            "updatedAt": updated_at,
+        },
+        updated_by=user.email or "",
+    )
+    _log.info(
+        "settings.branding.updated",
+        mime=info.mime,
+        width=info.width,
+        height=info.height,
+        bytes=len(data),
+        by=user.email,
+    )
+    return BrandingResponse(
+        logo=logo, updatedBy=user.email or "", updatedAt=updated_at
+    )
+
+
+@router.delete(
+    "/branding",
+    response_model=BrandingResponse,
+    dependencies=[require_permission("admin:settings:manage")],
+)
+def delete_branding(
+    user: UserContext = Depends(get_current_user),
+) -> BrandingResponse:
+    """Remove the logo and fall back to our own mark. Admin-gated."""
+    from datetime import datetime, timezone  # noqa: PLC0415
+
+    from acb_common import save_org_setting  # noqa: PLC0415
+
+    updated_at = datetime.now(timezone.utc).isoformat()
+    # The row is overwritten rather than deleted, so `updatedBy` still answers
+    # "who removed our logo" — the same question the appearance blob keeps an
+    # author for, and the one asked first when a company's shell changes.
+    save_org_setting(
+        _BRANDING_KEY,
+        {"logo": None, "updatedBy": user.email or "", "updatedAt": updated_at},
+        updated_by=user.email or "",
+    )
+    _log.info("settings.branding.cleared", by=user.email)
+    return BrandingResponse(logo=None, updatedBy=user.email or "", updatedAt=updated_at)

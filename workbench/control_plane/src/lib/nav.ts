@@ -259,6 +259,24 @@ export const NAV_SECTIONS: NavSection[] = [
         adminOnly: true,
       },
       {
+        // The company's own identity inside the product — the logo every
+        // member sees top-left. Admin-only: it changes everyone's shell.
+        href: "/settings/organization",
+        label: "Organization",
+        icon: "Building2",
+        note: "Company logo · how your org appears to its members",
+        adminOnly: true,
+      },
+      {
+        // Reachable, at last. The billing console shipped without a nav entry,
+        // which made it a page you could only find by typing its URL.
+        href: "/settings/billing",
+        label: "Billing",
+        icon: "Receipt",
+        note: "AI credits · subscription · invoices",
+        adminOnly: true,
+      },
+      {
         // Ungated on purpose: choosing your own theme is a personal
         // preference, not an admin capability. The org-wide default on the
         // same page is authorized at the gateway.

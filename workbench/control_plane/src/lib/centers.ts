@@ -300,6 +300,21 @@ export const CENTERS: Center[] = [
         status: "planned",
       },
       {
+        label: "My profile",
+        note: "Your own record — skills, CV, working hours and the details the assignment suggester reads",
+        // `User`, not `UserCircle`: the icon registry maps a curated set onto
+        // Fluent and Material, an unmapped name silently falls back to Lucide,
+        // and `icon-registry.test.ts` fails a NAV icon that is not in every
+        // pack — which is how this was caught rather than shipped as one
+        // sidebar entry drawn in the wrong style.
+        icon: "User",
+        // WS-28g: the self-service half. Same app, same feature slug, same
+        // panels as the person page — what differs is which row, resolved from
+        // the caller's own address (people_center_app.md §5.3, D-PC-1).
+        status: "live",
+        href: "/people/me",
+      },
+      {
         label: "Directory & org chart",
         note: "Members and groups — the same org_group records that scope the Centers",
         icon: "Network",

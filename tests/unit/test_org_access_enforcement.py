@@ -169,6 +169,71 @@ GATED_ROUTERS: dict[str, set[str]] = {
 }
 
 
+#: Routers that deliberately carry **no** feature gate, with the reason.
+#:
+#: The point of this second registry is that "unchecked" and "deliberately
+#: open" must not look the same. A router absent from `GATED_ROUTERS` is
+#: unchecked — nobody decided anything about it. A router named HERE is one
+#: somebody argued for, and the argument is next to it.
+#:
+#: Every route on an ungated router is asserted below to be **self-scoped**:
+#: no path parameters at all, so an unauthenticated-by-feature caller has no
+#: way to *address* another person's row. That is a structural guarantee rather
+#: than a validation somebody has to keep writing.
+UNGATED_ROUTERS: dict[str, str] = {
+    "gateway.routes.people.selfservice": (
+        "WS-28g-2 / people_center_app.md D-PC-15 — `/people/me`. The directory "
+        "is gated on `feature:people`, which is `is_default false`; gating the "
+        "self surface on it meant an ordinary colleague could not open their "
+        "own profile, which is the one thing that surface exists for. Same "
+        "argument as the ungated `/access` pane. Every path here is the literal "
+        "`/me`, so there is no id to supply and no other row to reach."
+    ),
+}
+
+
+@pytest.mark.parametrize("module", sorted(UNGATED_ROUTERS))
+def test_an_ungated_router_carries_a_reason(module: str) -> None:
+    assert UNGATED_ROUTERS[module].strip(), f"{module} is ungated with no reason"
+
+
+@pytest.mark.parametrize("module", sorted(UNGATED_ROUTERS))
+def test_an_ungated_router_is_self_scoped(module: str) -> None:
+    """No path parameters — the security property is that there is nothing to
+    address but yourself.
+
+    A `{person_id}` appearing here would turn "we check the id is yours" into
+    the only thing standing between an ungranted caller and the whole roster,
+    and that check is exactly the kind a later refactor drops silently.
+    """
+    for route in _routes(module):
+        assert "{" not in route.path, (
+            f"{module} {route.path} takes a path parameter on an UNGATED "
+            "router — it can address a row that is not the caller's."
+        )
+
+
+@pytest.mark.parametrize("module", sorted(UNGATED_ROUTERS))
+def test_an_ungated_router_still_resolves_an_identity(module: str) -> None:
+    """Ungated is not unauthenticated. Every route still takes a UserContext —
+    without one there is no self to resolve, and the route would be answering
+    for nobody."""
+    for route in _routes(module):
+        endpoint = getattr(route, "endpoint", None)
+        if endpoint is None:
+            continue
+        params = inspect.signature(endpoint).parameters.values()
+        assert any("UserContext" in str(p.annotation) for p in params), (
+            f"{module} {route.path} is ungated AND takes no identity"
+        )
+
+
+def test_the_two_registries_do_not_overlap() -> None:
+    """A module cannot be both. If one grows routes of the other kind, it needs
+    splitting, not two entries."""
+    assert not set(GATED_ROUTERS) & set(UNGATED_ROUTERS)
+
+
 def _routes(module: str):
     return importlib.import_module(module).router.routes
 

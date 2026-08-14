@@ -14,22 +14,22 @@ from typing import Any
 
 from acb_auth import UserContext, get_current_user
 from fastapi import Depends, HTTPException
-from gateway.routes.people.core import (
+from gateway.routes.people.core import (  # noqa: F401 — re-exports
+    MINUTES_PER_HOUR,
     STATUSES,
     _tenant_session,
     can_manage_people,
     can_read_hr_fields,
+    compute_load,
+    find_self_row,
     has_login,
+    is_self,
+    person_payload,
     router,
 )
 from gateway.routes.tasks.people import _row_to_person
 from pydantic import BaseModel
 from sqlalchemy import text
-
-#: A working week, used to turn estimate minutes into the load bar's hours.
-#: A constant rather than a setting: the bar is a rough signal, and a tunable
-#: nobody tunes is a config surface pretending to be a feature.
-MINUTES_PER_HOUR = 60
 
 
 class DirectoryResponse(BaseModel):
@@ -47,6 +47,13 @@ class DirectoryResponse(BaseModel):
     #: click discover a 403 — which teaches people to hunt for permissions they
     #: may never get.
     can_manage: bool = False
+    #: Which row in this list is the caller, if any (spec §4.1, D-PC-1). One id
+    #: rather than a per-row flag: the answer is a property of the caller, and a
+    #: flag repeated on every row is a fact that can be wrong on some of them.
+    #: `None` means "no row carries your address" — which is exactly the state
+    #: `/people/me` explains, so the directory links there rather than
+    #: re-explaining it.
+    self_person_id: str | None = None
 
 
 class WorkResponse(BaseModel):
@@ -153,9 +160,24 @@ async def list_directory(
             ),
             params,
         )).fetchall()
+        # The HR half follows the caller's GRANT here, not the self door: a
+        # list is a cross-row read, and one row being yours cannot widen what
+        # comes back about the other forty. The same reasoning keeps the three
+        # HR filters dropped (§4.2) — a self door on one row must not license a
+        # query that runs across every row.
+        #
+        # `include_private` is likewise left False for everybody. A list is
+        # never the place for phone numbers; the person page and `/people/me`
+        # are, and they decide it per row.
         people = [_row_to_person(r, include_hr=hr).model_dump() for r in rows]
+        # Resolved by its own query rather than scanned out of `rows`: "which
+        # row is me" must not depend on whether my row survived the caller's
+        # search filter.
+        own = await find_self_row(db, user)
+        mine = str(own.id) if own is not None else None
     return DirectoryResponse(rows=people, total=len(people), hr_visible=hr,
-                             can_manage=can_manage_people(user))
+                             can_manage=can_manage_people(user),
+                             self_person_id=mine)
 
 
 @router.get("/facets")
@@ -192,13 +214,14 @@ async def list_facets(user: UserContext = Depends(get_current_user)) -> dict:
 async def get_person(
     person_id: str, user: UserContext = Depends(get_current_user),
 ) -> dict:
-    """One person (§3.2 panels 1-3).
+    """One person (§5.2's panels).
 
     404 for a person who does not exist. There is deliberately no 403 anywhere
-    in this app: the directory is open to feature holders, and what varies is
-    the *shape* of the answer, not whether one comes back.
+    in this READ app: the directory is open to feature holders, and what varies
+    is the *shape* of the answer, not whether one comes back. (The write route
+    in ``profile.py`` does answer 403 — refusing a change and refusing to
+    describe somebody are different acts.)
     """
-    hr = can_read_hr_fields(user)
     async with _tenant_session() as db:
         row = (await db.execute(
             text("SELECT * FROM gtd_people WHERE id = CAST(:id AS uuid)"),
@@ -206,70 +229,7 @@ async def get_person(
         )).fetchone()
         if row is None:
             raise HTTPException(status_code=404, detail="No such person")
-        person = _row_to_person(row, include_hr=hr).model_dump()
-        person["has_login"] = await has_login(db, getattr(row, "email", None))
-        # An address moved aside by migration 148 because another row claimed
-        # it. Surfaced rather than hidden: it means a human still has to decide
-        # which row is the real person.
-        person["email_conflict"] = getattr(row, "email_conflict", None)
-        person["manager"] = await _manager_name(db, getattr(row, "manager_id", None))
-        person["load"] = (
-            await compute_load(db, getattr(row, "email", None)) if hr else None
-        )
-    person["hr_visible"] = hr
-    # Independent of `hr_visible` on purpose. The two permissions are separate
-    # grants, and an admin who may edit a record but not read its HR half is a
-    # real principal — the editor has to open with the skills strip restricted
-    # and the save button present.
-    person["can_manage"] = can_manage_people(user)
-    return person
-
-
-async def _manager_name(db: Any, manager_id: Any) -> str | None:
-    if not manager_id:
-        return None
-    row = (await db.execute(
-        text("SELECT name FROM gtd_people WHERE id = CAST(:id AS uuid)"),
-        {"id": str(manager_id)},
-    )).fetchone()
-    return str(row.name) if row is not None else None
-
-
-async def compute_load(db: Any, email: str | None) -> dict[str, Any]:
-    """Load from OPEN ASSIGNED TASKS, not from the typed column (§5.2).
-
-    ``gtd_people.current_load_hours_per_week`` is a number somebody typed once;
-    it is stale the moment anyone assigns anything. This counts what the person
-    is actually holding.
-
-    The honest part is ``unestimated``: a task with no estimate contributes
-    nothing to the hours, so a bar built only from the sum would show somebody
-    with thirty un-estimated tasks as completely free. The count travels with
-    the number so the UI can say "plus 30 with no estimate" instead of lying.
-    """
-    if not (email or "").strip():
-        return {"open_tasks": 0, "estimated_hours": 0.0, "unestimated": 0}
-    row = (await db.execute(
-        text(
-            """SELECT count(*)                                   AS open_tasks,
-                      COALESCE(sum(t.estimate_mins), 0)           AS mins,
-                      count(*) FILTER (WHERE t.estimate_mins IS NULL)
-                                                                  AS unestimated
-                 FROM pm_tasks t
-                 JOIN pm_task_statuses s ON s.id = t.status_id
-                 JOIN pm_task_assignees a ON a.task_id = t.id
-                WHERE lower(a.assignee) = :who
-                  AND t.archived_at IS NULL
-                  AND s.category NOT IN ('done', 'cancelled')"""
-        ),
-        {"who": email.strip().lower()},
-    )).fetchone()
-    mins = int(getattr(row, "mins", 0) or 0)
-    return {
-        "open_tasks": int(getattr(row, "open_tasks", 0) or 0),
-        "estimated_hours": round(mins / MINUTES_PER_HOUR, 1),
-        "unestimated": int(getattr(row, "unestimated", 0) or 0),
-    }
+        return await person_payload(db, row, user)
 
 
 @router.get("/{person_id}/work", response_model=WorkResponse)

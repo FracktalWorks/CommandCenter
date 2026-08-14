@@ -11,7 +11,7 @@
 
 import type { Absence } from "./api";
 
-/** The three words, mirrored from the gateway's tuple and migration 173's CHECK. */
+/** The three words, mirrored from the gateway's tuple and migration 174's CHECK. */
 export const ABSENCE_KINDS = ["away", "holiday", "partial"] as const;
 
 /** Soonest first — the order somebody reads a list of upcoming absences in. */

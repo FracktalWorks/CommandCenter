@@ -1,4 +1,4 @@
--- 172_people_avatar.sql — the display image (People Center P-8 / WS-28q).
+-- 173_people_avatar.sql — the display image (People Center P-8 / WS-28q).
 --
 -- What: `gtd_people.avatar` (a data URI) and `avatar_updated_at`.
 -- Why:  owner-directed 2026-08-13 — "every user should have a unique image that

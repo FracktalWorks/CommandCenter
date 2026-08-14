@@ -56,7 +56,7 @@ from gateway.routes.tasks import people as tasks_people
 
 REPO = Path(__file__).resolve().parents[2]
 MIGRATIONS = REPO / "infra" / "postgres"
-PROFILE_MIGRATION = MIGRATIONS / "171_people_profile.sql"
+PROFILE_MIGRATION = MIGRATIONS / "172_people_profile.sql"
 
 PEOPLE_READ = "admin:members:read"
 PEOPLE_WRITE = "admin:members:manage"
@@ -80,7 +80,7 @@ class _Result:
 
 
 def person_row(**overrides: Any) -> SimpleNamespace:
-    """A row shaped like migration 171 leaves it. Every profile column present,
+    """A row shaped like migration 172 leaves it. Every profile column present,
     because the mapper's job is to carry them and a double missing half of them
     would let a dropped field pass."""
     row = dict(

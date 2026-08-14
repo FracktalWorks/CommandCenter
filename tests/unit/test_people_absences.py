@@ -34,7 +34,7 @@ from gateway.routes.people import core as people_core
 from gateway.routes.people import selfservice as people_self
 
 REPO = Path(__file__).resolve().parents[2]
-MIGRATION = REPO / "infra" / "postgres" / "173_people_absences.sql"
+MIGRATION = REPO / "infra" / "postgres" / "174_people_absences.sql"
 
 WEEK = ws.effective_schedule({}, None)          # Mon-Fri, 8h
 

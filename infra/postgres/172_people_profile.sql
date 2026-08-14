@@ -1,4 +1,4 @@
--- 171_people_profile.sql — the person record grows a profile (People Center P-3).
+-- 172_people_profile.sql — the person record grows a profile (People Center P-3).
 --
 -- What: the columns §3 of `project-docs/specs/people_center_app.md` names —
 --       the self-describing half (§3.1), the employment half (§3.2), one

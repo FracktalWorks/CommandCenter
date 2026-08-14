@@ -463,7 +463,7 @@ async def _absences_for(db: Any, person_ids: list[str]) -> dict[str, list[dict]]
 
     One statement rather than one per person, and best-effort for the same
     reason :func:`~gateway.routes.people.absences.away_today` is: a database one
-    deploy behind migration 173 should answer "nobody is away" rather than
+    deploy behind migration 174 should answer "nobody is away" rather than
     failing the whole dashboard.
     """
     if not person_ids:

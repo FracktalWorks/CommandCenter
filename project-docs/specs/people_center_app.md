@@ -1068,7 +1068,7 @@ writes are registered in `work_plan.md` §6 (d), and the "give this person a log
 propose-a-change path is agent-safe; applying a membership change is the owner's act.
 
 **WS-28g — the person profile + self-service editing (P-3).** ✅ **BUILT 2026-08-13**
-(migration `171_people_profile.sql`, `routes/people/{fields,profile}.py`,
+(migration `172_people_profile.sql`, `routes/people/{fields,profile}.py`,
 `src/app/people/me/`, `components/ProfilePanels.tsx`, `lib/profile.ts`;
 137 hermetic + 20 vitest cases, and **29 live checks against a real Postgres 16 with
 the full ladder applied** — `tests/live/live_ws28g.py`).
@@ -1132,8 +1132,8 @@ Done when:
 ⚠️ **`schema.generated.sql` is still NOT refreshed** — the same debt WS-28a recorded, now
 one migration deeper. It needs a live database with the ladder applied
 (`infra/postgres/README.md` step 3), and the ladder *does* apply cleanly end to end: this
-build replayed all 170 numbered migrations plus 171 into a scratch Postgres 16 to run the
-live harness, and 171 is idempotent under a re-run (every `ADD COLUMN` NOTICEs and skips).
+build replayed the full numbered ladder plus the profile migration into a scratch Postgres 16 to run the
+live harness, which is idempotent under a re-run (every `ADD COLUMN` NOTICEs and skips).
 
 **WS-28g-2 — your own profile is not behind the directory's gate (§4.5).** ✅ **BUILT
 2026-08-13** (`routes/people/selfservice.py`, `main.py` include order, nav + `access.ts`;
@@ -1209,7 +1209,7 @@ every employee on it. A second defect the tests caught: a `fraction` of `0.0` is
 `or 1.0` quietly restored a full 40-hour week on the denominator every load bar divides by.
 
 **WS-28q — the display image (P-8, §3.1a).** ✅ **BUILT 2026-08-13**
-(migration `172_people_avatar.sql`, `gateway/avatar.py`, the avatar routes on both
+(migration `173_people_avatar.sql`, `gateway/avatar.py`, the avatar routes on both
 doors, `components/{AvatarPicker,Avatar}.tsx`, `lib/crop.ts`; 45 hermetic + 17 vitest
 cases and 16 live checks).
 Done when: an upload is decoded, centre-cropped square, resized to exactly 256×256 and
@@ -1359,7 +1359,7 @@ suggestion ends in a **pre-filled assign action a human confirms** — nothing i
 writes an assignment (D-PC-13).
 
 **WS-28k — availability & absences (P-5, §5.8).** ✅ **BUILT 2026-08-13**
-(migration `173_people_absences.sql`, `routes/people/absences.py`, the availability
+(migration `174_people_absences.sql`, `routes/people/absences.py`, the availability
 arithmetic in `gateway/work_schedule.py`, `components/AbsencePanel.tsx`; 41 hermetic
 + 11 vitest cases and 15 live checks).
 Done when: absences are self- and admin-writable; the capacity bar, the picker and the
@@ -1497,7 +1497,7 @@ decisions live in `work_plan.md` §3 and are never re-litigated here.
 | **D-PC-14** | The activity surface renders **workload signals, never a ranking of people**. Ranking TASKS by risk is the product | Every figure here is trivially gamed and trivially misread. §3.6 refuses to store a performance rating; this is the same decision on the read side. The distinction is what lets the dashboard be genuinely useful without becoming an evaluation |
 | **D-PC-15** | **The directory is gated; your own row is not.** `/people/me` and a self-targeted write need only a signed-in identity | `feature:people` is `is_default false`, so gating the self surface made it unreachable for exactly the people it is for — the same argument that made `/access` the one ungated pane. Cross-row reads stay gated, and the self predicate is the whole control, so the fence is the negative test |
 | **D-PC-16** | `working_hours` (People) and `gtd_settings.day_start_hour…` (Calendar) are **different questions**, and the direction is People → Calendar, **seeded once, never mirrored** | Contracted hours are a fact about the engagement; the plannable day window is a private preference. A seeded default that later diverges is somebody changing their mind; a mirror that diverges is a bug. Recorded because WS-28g added `working_hours` without noticing migrations 77/97 already existed |
-| **D-PC-17** | The stored avatar is **the server's re-encode** — 256×256 JPEG — never the uploaded bytes; the client's cropper is a courtesy and the square is enforced server-side. *(Corrected 2026-08-14: this row said WebP, which the build did not ship. The property that matters is the re-encode, not the container — PyMuPDF is already a gateway dependency and cannot write WebP, and adding Pillow to the deploy path to save ~10 KB per person is the worse trade. The commit and migration 172 recorded it; this row did not, and a decision row that disagrees with the code is worse than none.)* | One decision removes size drift, weight, the crop bypass and the whole polyglot/SVG-script class at once. A validator that inspects and admits the original leaves every one of them open |
+| **D-PC-17** | The stored avatar is **the server's re-encode** — 256×256 JPEG — never the uploaded bytes; the client's cropper is a courtesy and the square is enforced server-side. *(Corrected 2026-08-14: this row said WebP, which the build did not ship. The property that matters is the re-encode, not the container — PyMuPDF is already a gateway dependency and cannot write WebP, and adding Pillow to the deploy path to save ~10 KB per person is the worse trade. The commit and the avatar migration recorded it; this row did not, and a decision row that disagrees with the code is worse than none.)* | One decision removes size drift, weight, the crop bypass and the whole polyglot/SVG-script class at once. A validator that inspects and admits the original leaves every one of them open |
 | **D-PC-18** | `contracted_hours_per_week` is **derived** from the effective schedule; the typed `capacity_hours_per_week` stays as an override and is flagged when it disagrees | The same lesson WS-28b applied to load, applied to the denominator it was compared against. R6 forbids rewriting the column the importer writes |
 | **D-PC-19** | *At risk* measures the **cumulative** estimate before a date — earlier deadlines and **overdue work included**, undated tasks excluded | Per-task arithmetic calls three twelve-hour tasks due Tuesday fine when there are sixteen hours before it, because none alone exceeds sixteen. Overdue work still has to be done, and dropping it makes every later deadline look reachable. An undated task carries no deadline to be late for, so counting it would pill somebody whose backlog is merely large |
 | **D-PC-20** | **"Partial" names the viewer's scope; the hidden count is never computed** | Reporting "12 of 20" means running the query without the scope — the query the scope exists to forbid. One integer per person is still a leak and it is the probe somebody would use. §5.7.5 already prefers "partial" to a truncated total presented as whole |

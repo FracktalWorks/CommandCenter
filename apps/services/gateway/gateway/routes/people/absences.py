@@ -39,7 +39,7 @@ from gateway.routes.people.fields import authorize_write
 from pydantic import BaseModel
 from sqlalchemy import text
 
-#: The three words, mirrored from migration 173's CHECK. ONE tuple, the same
+#: The three words, mirrored from migration 174's CHECK. ONE tuple, the same
 #: shape `PEOPLE_STATUSES` takes for 148's — a fourth kind accepted here and
 #: refused by Postgres would be a save that fails at 3am rather than at the
 #: route.
@@ -249,7 +249,7 @@ async def away_today(db: Any, person_ids: list[str]) -> dict[str, dict[str, Any]
     :func:`gateway.work_schedule.absent_on` prefers it — answering "partial"
     would put somebody on a picker as available.
 
-    Best-effort: a database one deploy behind migration 173 answers "nobody is
+    Best-effort: a database one deploy behind migration 174 answers "nobody is
     away" rather than failing the directory.
     """
     if not person_ids:

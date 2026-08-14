@@ -734,7 +734,7 @@ def test_an_away_person_says_so_on_the_row(monkeypatch) -> None:
     assert priya.hours_available_this_week < 40.0
 
 
-def test_a_database_without_migration_173_answers_present(monkeypatch) -> None:
+def test_a_database_without_migration_174_answers_present(monkeypatch) -> None:
     """Best-effort, the same call `away_today` makes: a dashboard that 500s
     because a table is one deploy behind is worse than one that shows everybody
     as present."""

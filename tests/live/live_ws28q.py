@@ -9,7 +9,7 @@ What it cannot answer is what happens when the result meets the database:
 * the write reaches the row through the real endpoint and comes back on the
   real read, at the **directory tier** — a display image is what a directory
   IS, so a colleague with no HR grant must still see it;
-* migration 172 applies on top of the full ladder, twice.
+* migration 173 applies on top of the full ladder, twice.
 
 Run it::
 
@@ -119,7 +119,7 @@ async def main() -> None:
             "WHERE table_name = 'gtd_people' "
             "AND column_name IN ('avatar', 'avatar_updated_at') "
             "ORDER BY column_name"))).fetchall()
-        check("migration 172 applied",
+        check("migration 173 applied",
               [(c.column_name, c.data_type) for c in cols],
               [("avatar", "text"),
                ("avatar_updated_at", "timestamp with time zone")])

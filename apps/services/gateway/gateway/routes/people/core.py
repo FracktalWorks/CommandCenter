@@ -299,7 +299,7 @@ async def person_availability(db: Any, person_id: str, schedule: dict,
                               *, hr: bool) -> dict:
     """Away-now, the upcoming spans, and the hours left this week (§5.8).
 
-    Best-effort: a database without migration 173 answers "not away" rather
+    Best-effort: a database without migration 174 answers "not away" rather
     than failing the person page. A directory that 500s because a table is one
     deploy behind is worse than one that shows a colleague as present.
 

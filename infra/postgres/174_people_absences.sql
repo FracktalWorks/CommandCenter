@@ -1,4 +1,4 @@
--- 173_people_absences.sql — who is away, and when (People Center P-5 / WS-28k).
+-- 174_people_absences.sql — who is away, and when (People Center P-5 / WS-28k).
 --
 -- What: `gtd_person_absences` — one row per span somebody is not working.
 -- Why:  an assigner needs to know Rahul is away next week, and the dashboard's

@@ -13,7 +13,7 @@ things only a database knows, and this ticket is full of them:
 * the round trip: what ``_row_to_person`` gets back is a jsonb **string**, a
   ``datetime.date`` and a real list — three different decode paths, none of
   which a fake exercises because a fake hands back whatever it was given;
-* that migration 171 actually applies on top of the real ladder, twice.
+* that migration 172 actually applies on top of the real ladder, twice.
 
 Run it::
 

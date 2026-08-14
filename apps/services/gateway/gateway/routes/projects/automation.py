@@ -51,6 +51,7 @@ from gateway.routes.projects.core import (
     apply_status_transition,
     coerce_write_values,
     diff_changes,
+    is_runnable,
     record_activity,
     record_field_change,
     require_row,
@@ -363,6 +364,21 @@ async def run_lifecycle_sweep(
 
     swept = archived = closed = 0
     for project in roots:
+        # 🔴 WS-27bg. Before this guard the sweep had NO project-status
+        # predicate anywhere, which was harmless only for as long as `status`
+        # meant nothing. The moment `on_hold` became real it turned into the
+        # worst failure in this file: a project paused for a quarter under a
+        # three-month close policy has its entire open backlog moved to the
+        # cancelled lane, written by `system:workflow:<id>` through
+        # `apply_status_transition` — so `completed_at` is stamped, the
+        # `status_change` activity is written and recurrence fires, exactly as
+        # if a person had done it. Nobody would find that for months.
+        #
+        # `is_runnable` is the ONE shared predicate (core.py), consulted here,
+        # by recurrence and by agent dispatch. Three copies of this rule is the
+        # CLAUDE.md §5 defect authored three times inside one ticket.
+        if not is_runnable(project):
+            continue
         archive_months = getattr(project, "archive_after_months", None)
         close_months = getattr(project, "close_after_months", None)
         if archive_months is None and close_months is None:

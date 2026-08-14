@@ -63,9 +63,75 @@ router = APIRouter(
     dependencies=[require_feature_router("projects")],
 )
 
-#: `pm_projects.status`, mirrored from the CHECK in migration 145. Kept here so
-#: a bad value is a 422 at the boundary rather than an IntegrityError 500.
-PROJECT_STATUSES: tuple[str, ...] = ("active", "on_hold", "done", "archived")
+#: `pm_projects.status` — the RUN STATE axis (D-PM-25), mirrored from the CHECK
+#: in migration 146 as widened by 171. Kept here so a bad value is a 422 at the
+#: boundary rather than an IntegrityError 500.
+#:
+#: ⚠️ The comment here used to say "migration 145". It was 146. Corrected while
+#: widening the tuple, because a mirror that names the wrong source is a mirror
+#: nobody can check.
+#:
+#: `archived` is RETAINED and is not a run state. It is the expand half of R6:
+#: the deploy applies migrations before restarting services, so the old gateway
+#: runs against the new schema for a window and must keep validating the value
+#: it still knows. Nothing writes it after 171's backfill, and it leaves both
+#: this tuple and the CHECK in a later release — see 171's header for the
+#: trigger. Use :data:`RUN_STATES` for anything that means "the lifecycle axis".
+PROJECT_STATUSES: tuple[str, ...] = (
+    "queued", "active", "on_hold", "stopped", "done", "archived",
+)
+
+#: The run-state axis proper, in lifecycle order, WITHOUT the retained
+#: `archived`. This is what a picker offers and what a hue map keys off; the
+#: UI labels `active` "Ongoing" and `on_hold` "Paused" (D-PM-25 — the stored
+#: values are not renamed, because R6 forbids renaming in place and `active` is
+#: the DEFAULT on every existing row).
+RUN_STATES: tuple[str, ...] = ("queued", "active", "on_hold", "stopped", "done")
+
+#: The ONE run state in which a project's automation may act on its own.
+#:
+#: 🔴 This is deliberately a single shared constant rather than three guards.
+#: Before it, three automation paths would each have corrupted data the moment
+#: `on_hold` started meaning anything (§9.8.2):
+#:
+#:   1. :func:`automation.run_lifecycle_sweep` walks every root with a policy and
+#:      moves stale OPEN tasks into the closing lane with **no project-status
+#:      predicate at all** — so a project paused for a quarter under a 3-month
+#:      policy has its backlog auto-cancelled as `system:workflow:<id>`, through
+#:      the ordinary transition, indistinguishable from a person doing it.
+#:   2. Recurrence advances a series when a task closes, minting new work into a
+#:      project nobody is working.
+#:   3. `pm.task.assigned` → agent dispatch puts an agent to work in one.
+#:
+#: Three copies of this rule is the CLAUDE.md §5 defect ("do not invent a second
+#: way to do an existing thing") authored three times in one ticket.
+#:
+#: `queued` is excluded on purpose: work that has not started is not work an
+#: automation should advance. `done`/`stopped` are excluded because closing the
+#: leftovers of a finished or abandoned project is exactly what D-PM-26's
+#: explicit **offer** covers — a user's act, audited, not a sweeper's.
+RUNNABLE_STATUSES: frozenset[str] = frozenset({"active"})
+
+#: SQL for :data:`RUNNABLE_STATUSES`, applied to a `pm_projects` alias.
+#:
+#: Both halves are required and they are different axes (D-PM-25): a project is
+#: runnable when it is `active` **and** not filed. An archived project is out of
+#: every default surface, so advancing its work would be automation acting on
+#: rows the product has stopped showing.
+def runnable_project_clause(alias: str = "p") -> str:
+    """A predicate restricting ``alias`` (a ``pm_projects`` row) to runnable."""
+    return f"{alias}.status = 'active' AND {alias}.archived_at IS NULL"
+
+
+def is_runnable(project: Any) -> bool:
+    """The Python half of :func:`runnable_project_clause`, same two axes.
+
+    Takes a row or a mapping so it serves both a fetched record and a payload.
+    """
+    if project is None:
+        return False
+    get = project.get if isinstance(project, dict) else lambda k: getattr(project, k, None)
+    return get("status") in RUNNABLE_STATUSES and get("archived_at") is None
 
 #: `pm_task_statuses.category` — the machine-readable half of a status. Name and
 #: colour are the owner's; this is what completion, the personal mirror (§6.1)
@@ -158,6 +224,10 @@ class ProjectModel(BaseModel):
     created_at: str | None = None
     updated_at: str | None = None
     archived_at: str | None = None
+    #: WS-27bg (migration 171) — which project's archive filed this row. Itself
+    #: when archived directly, an ancestor when swept in with its subtree. It is
+    #: what makes unarchive reversible; see the migration header.
+    archived_root_id: str | None = None
 
 
 class ProjectIn(BaseModel):

@@ -16,7 +16,11 @@ import { describe, expect, it } from "vitest";
 import {
   ACCENT_HUES,
   type AccentHue,
+  PROJECT_STATE_ORDER,
+  PROJECT_STATES,
   accentForHue,
+  projectState,
+  projectStateAccent,
   resolveHue,
   statusAccent,
 } from "./statusAccent";
@@ -226,5 +230,61 @@ describe("the accent shape", () => {
     expect(statusAccent({ color: "green" }).chip).toBe("bg-success/10 text-success");
     expect(statusAccent({ color: "blue" }).chip).toBe("bg-primary/10 text-primary");
     expect(statusAccent({ color: "violet" }).chip).toBe("bg-accent text-accent-foreground");
+  });
+});
+
+/* ── Project run state (WS-27bg / D-PM-27) ────────────────────────────────── */
+
+describe("the project run-state vocabulary", () => {
+  it("resolves each state to the hue the owner ruled", () => {
+    // D-PM-27, verbatim. If this table is edited, the decision was overruled —
+    // which is an owner's act, not a refactor.
+    expect(PROJECT_STATES.active.hue).toBe("green");
+    expect(PROJECT_STATES.on_hold.hue).toBe("amber");
+    expect(PROJECT_STATES.stopped.hue).toBe("red");
+    expect(PROJECT_STATES.queued.hue).toBe("gray");
+    expect(PROJECT_STATES.done.hue).toBe("blue");
+  });
+
+  it("is NOT reachable from resolveHue — the keywordHue trap", () => {
+    // 🔴 The fence D-PM-27 asks for by name. `keywordHue` maps the literal word
+    // "active" to blue and "done" to green, so a "simplification" that routed a
+    // run state through the generic resolver would silently produce the
+    // OPPOSITE of the decision on two of five states. Asserting the two
+    // DISAGREE is what catches that: if the project map ever delegates, these
+    // converge and this test goes red.
+    expect(resolveHue({ name: "active" })).toBe("blue");
+    expect(PROJECT_STATES.active.hue).toBe("green");
+    expect(resolveHue({ name: "done" })).toBe("green");
+    expect(PROJECT_STATES.done.hue).toBe("blue");
+  });
+
+  it("labels the stored values rather than showing them", () => {
+    // D-PM-25: `active`/`on_hold` are not renamed in the database (R6 forbids
+    // renaming in place), so the display name lives in the vocabulary.
+    expect(PROJECT_STATES.active.label).toBe("Ongoing");
+    expect(PROJECT_STATES.on_hold.label).toBe("Paused");
+  });
+
+  it("gives every state a distinct glyph, so hue is never the only channel", () => {
+    const icons = PROJECT_STATE_ORDER.map((s) => PROJECT_STATES[s].icon);
+    expect(new Set(icons).size).toBe(icons.length);
+  });
+
+  it("offers no `archived` state — that is the other axis", () => {
+    // D-PM-25. Offering it in a run-state picker is how the two-facts-one-column
+    // defect would come back through the UI.
+    expect(PROJECT_STATE_ORDER).not.toContain("archived");
+    expect(PROJECT_STATES.archived).toBeUndefined();
+  });
+
+  it("draws an unknown state grey instead of throwing or blanking", () => {
+    expect(projectState("something-new")).toBeNull();
+    expect(projectStateAccent("something-new")).toEqual(accentForHue("gray"));
+    expect(projectStateAccent(null)).toEqual(accentForHue("gray"));
+  });
+
+  it("accepts the stored spelling case-insensitively", () => {
+    expect(projectState("ON_HOLD")?.label).toBe("Paused");
   });
 });

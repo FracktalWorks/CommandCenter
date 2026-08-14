@@ -27,9 +27,10 @@ from typing import Any
 from acb_auth import UserContext, get_current_user
 from fastapi import Depends, HTTPException
 from gateway.routes.projects.core import (
+    CLOSING_CATEGORIES,
     LIFECYCLE_FIELDS,
     PROJECT_SOURCES,
-    PROJECT_STATUSES,
+    RUN_STATES,
     GrantModel,
     ProjectIn,
     ProjectModel,
@@ -243,7 +244,13 @@ async def create_node(
     name = str(values.get("name") or "").strip()
     if not name:
         raise HTTPException(status_code=422, detail="A project needs a name.")
-    validate_choice(values.get("status"), PROJECT_STATUSES, "project status")
+    # RUN_STATES, not PROJECT_STATUSES: the latter still carries the retained
+    # `archived` so the pre-restart gateway keeps validating through the deploy
+    # window (R6), but accepting it HERE would let a caller set the run state to
+    # 'archived' without stamping `archived_at` — reintroducing the two-facts-one-
+    # column defect D-PM-25 exists to remove. Filing a project is
+    # POST /nodes/{id}/archive.
+    validate_choice(values.get("status"), RUN_STATES, "project status")
     validate_choice(values.get("source"), PROJECT_SOURCES, "source")
     validate_lifecycle_settings(values)
     _refuse_lifecycle_on_child(values, values.get("parent_project_id"))
@@ -301,7 +308,13 @@ async def patch_node(
     user: UserContext = Depends(get_current_user),
 ) -> dict:
     values = clean_payload(payload)
-    validate_choice(values.get("status"), PROJECT_STATUSES, "project status")
+    # RUN_STATES, not PROJECT_STATUSES: the latter still carries the retained
+    # `archived` so the pre-restart gateway keeps validating through the deploy
+    # window (R6), but accepting it HERE would let a caller set the run state to
+    # 'archived' without stamping `archived_at` — reintroducing the two-facts-one-
+    # column defect D-PM-25 exists to remove. Filing a project is
+    # POST /nodes/{id}/archive.
+    validate_choice(values.get("status"), RUN_STATES, "project status")
     validate_choice(values.get("source"), PROJECT_SOURCES, "source")
     validate_lifecycle_settings(values)
     # Re-parenting is a MOVE, with its own cycle check and root re-stamping.
@@ -442,6 +455,177 @@ async def delete_node(
             "grants": int(grants),
         },
     )
+
+
+# ── Archive (WS-27bg) ───────────────────────────────────────────────────────
+#
+# The other axis (D-PM-25). `status` says whether work is flowing; this says
+# whether you want to see it. A project may be archived in any run state, and
+# archiving does not change the run state — a paused project that gets filed is
+# still paused when it comes back.
+
+#: One project's subtree, itself included. A named constant because this file
+#: had two inline copies of it inside `delete_node` and a third would be the
+#: point at which they start disagreeing. (Those two are left alone: they are
+#: existing code and CLAUDE.md §5 binds new work, not a conformance refactor.)
+_SUBTREE_SQL = """
+WITH RECURSIVE sub AS (
+    SELECT id FROM pm_projects WHERE id = CAST(:pid AS uuid)
+    UNION ALL
+    SELECT p.id FROM pm_projects p JOIN sub s ON p.parent_project_id = s.id
+) SELECT id FROM sub
+"""
+
+
+class ArchiveResponse(BaseModel):
+    """What the archive touched, per table — the same honesty `DeleteResponse`
+    owes, for the same reason: a route that changes what a caller can see says
+    how much.
+
+    ``open_tasks`` is a WARNING, never a refusal. Archiving is a filing
+    decision, not a claim that the work finished, so unfinished work is
+    something the caller should be told about and then allowed to do.
+    """
+
+    project_id: str
+    archived: bool
+    #: Projects whose `archived_at` this call actually stamped or cleared —
+    #: excludes any already in the target state, so a double-click reports 0.
+    projects: int
+    #: Open tasks in the subtree at the moment of archiving. Reported, not acted
+    #: on: **no `pm_tasks` row is written by this endpoint** (D-PM-26).
+    open_tasks: int
+
+
+async def _subtree_open_tasks(db: Any, project_id: str) -> int:
+    """Open (not closed-category) tasks anywhere under one project."""
+    return (await db.execute(
+        text(
+            f"SELECT count(*) FROM pm_tasks t "
+            f"WHERE t.project_id IN ({_SUBTREE_SQL}) "
+            f"  AND t.archived_at IS NULL "
+            f"  AND NOT EXISTS ("
+            f"    SELECT 1 FROM pm_task_statuses s "
+            f"    WHERE s.id = t.status_id AND s.category = ANY(:closed))"
+        ),
+        {"pid": project_id, "closed": list(CLOSING_CATEGORIES)},
+    )).scalar() or 0
+
+
+@router.post("/nodes/{project_id}/archive")
+async def archive_node(
+    project_id: str, user: UserContext = Depends(get_current_user),
+) -> ArchiveResponse:
+    """File a project and its subtree out of the default surfaces.
+
+    **The subtree is stamped at write time, and no task row is touched.** Both
+    halves are deliberate (migration 171's header carries the full argument):
+    stamping tens of project rows keeps every task read a plain indexed join
+    instead of a recursive ancestor walk, and D-PM-26 forbids the cascade onto
+    `pm_tasks` — thousands of rows, a timeline entry and a delta-sync bump each,
+    and a restore problem afterwards.
+
+    Idempotent. A project already archived reports ``projects: 0`` rather than
+    422, because a double-clicked Archive button is not an error to teach the
+    user about.
+    """
+    async with _tenant_session() as db:
+        vis = await resolve_visibility(db, user)
+        row = await load_visible_project(db, vis, project_id)
+
+        # Counted BEFORE the write, for `delete_node`'s reason: afterwards the
+        # honest number is unobtainable and a destructive-ish route ends up
+        # reporting zero.
+        open_tasks = await _subtree_open_tasks(db, project_id)
+
+        stamped = (await db.execute(
+            text(
+                f"UPDATE pm_projects SET archived_at = now(), "
+                f"    archived_root_id = CAST(:pid AS uuid) "
+                f"WHERE id IN ({_SUBTREE_SQL}) AND archived_at IS NULL"
+            ),
+            {"pid": project_id},
+        )).rowcount or 0
+
+        if stamped:
+            await record_activity(
+                db, activity_type="system", created_by=actor(user),
+                project_id=project_id,
+                body=f"Project '{row.name}' archived",
+            )
+        result = ArchiveResponse(
+            project_id=project_id, archived=True,
+            projects=int(stamped), open_tasks=int(open_tasks),
+        )
+
+    if stamped:
+        await emit("pm.project.archived", {"project_id": project_id})
+    return result
+
+
+@router.post("/nodes/{project_id}/unarchive")
+async def unarchive_node(
+    project_id: str, user: UserContext = Depends(get_current_user),
+) -> ArchiveResponse:
+    """Bring a project and everything its archive filed back.
+
+    Clears exactly the rows this project's archive stamped
+    (``archived_root_id = :pid``), which is what the column exists for: a
+    subproject somebody had ALREADY archived on its own carries its own id
+    there and survives, instead of being silently un-filed by an ancestor's
+    restore.
+
+    🔴 **A project swept in by an ancestor's archive is REFUSED, not
+    half-restored.** Lifting one child out of its parent's archive leaves a
+    visible subtree inside a filed one — an incoherent state that would then
+    need explaining forever. Refusing it and naming the ancestor is the same
+    move ``_refuse_lifecycle_on_child`` makes: keep the incoherent case
+    unreachable rather than merely documented.
+    """
+    async with _tenant_session() as db:
+        vis = await resolve_visibility(db, user)
+        row = await load_visible_project(db, vis, project_id)
+
+        if getattr(row, "archived_at", None) is None:
+            return ArchiveResponse(
+                project_id=project_id, archived=False, projects=0,
+                open_tasks=await _subtree_open_tasks(db, project_id),
+            )
+
+        origin = getattr(row, "archived_root_id", None)
+        if origin is not None and str(origin) != project_id:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"This project was filed as part of project {origin}'s "
+                    f"archive. Unarchive that project instead — restoring this "
+                    f"one alone would leave it visible inside an archived tree."
+                ),
+            )
+
+        cleared = (await db.execute(
+            text(
+                "UPDATE pm_projects SET archived_at = NULL, "
+                "    archived_root_id = NULL "
+                "WHERE archived_root_id = CAST(:pid AS uuid)"
+            ),
+            {"pid": project_id},
+        )).rowcount or 0
+
+        if cleared:
+            await record_activity(
+                db, activity_type="system", created_by=actor(user),
+                project_id=project_id,
+                body=f"Project '{row.name}' unarchived",
+            )
+        result = ArchiveResponse(
+            project_id=project_id, archived=False, projects=int(cleared),
+            open_tasks=await _subtree_open_tasks(db, project_id),
+        )
+
+    if cleared:
+        await emit("pm.project.unarchived", {"project_id": project_id})
+    return result
 
 
 # ── Grants ──────────────────────────────────────────────────────────────────

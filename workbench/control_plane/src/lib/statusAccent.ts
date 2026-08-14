@@ -263,3 +263,86 @@ export function statusAccent(input: AccentInput): StatusAccent {
 export function accentForHue(hue: AccentHue): StatusAccent {
   return ACCENTS[hue];
 }
+
+/* ── Project run state (WS-27bg / D-PM-27) ─────────────────────────────────
+ *
+ * A PROJECT's run state is a different axis from a TASK's status, and this is
+ * the one module either of them becomes a colour in (rule 4).
+ *
+ * 🔴 **This map deliberately disagrees with `CATEGORY_HUES` on two hues, and
+ * the disagreement is a recorded owner decision (D-PM-27), not a bug.** A task
+ * board says `in_progress` in blue and `done` in green; a project tree says
+ * *running* in green and *finished* in blue. The owner was shown that cost —
+ * the two sit on the same screen — and chose this mapping. **An agent finding
+ * it inconsistent should cite D-PM-27 and stop, not repaint it.**
+ *
+ * 🔴 **It is a CLOSED lookup and must never fall through `resolveHue`.**
+ * `keywordHue` maps the literal word `active` → **blue** and `done` → **green**
+ * — i.e. routing a run state through the generic resolver yields the exact
+ * OPPOSITE of the decision on two of the five states. `projectStateAccent`
+ * therefore indexes `ACCENTS` directly. `statusAccent.test.ts` pins the
+ * divergence so a future "simplification" into `resolveHue` goes red.
+ *
+ * **The stored value is not the label.** `active` shows as *Ongoing* and
+ * `on_hold` as *Paused* (D-PM-25): R6 forbids renaming a column in place, and
+ * `active` is the DEFAULT on every existing row, so the display name lives here
+ * — the same split `pm_task_statuses` already has between a free `name` and a
+ * machine-readable `category`.
+ *
+ * **Every state carries a GLYPH as well as a hue.** A dense tree read at a
+ * glance, or by somebody who cannot separate green from amber, must not depend
+ * on colour alone — so the icon is part of the vocabulary rather than a choice
+ * each call site makes.
+ */
+
+export interface ProjectStateVisual {
+  /** What a human sees. Never the stored value. */
+  label: string;
+  /** Resolved through this module's own palette — never a class string. */
+  hue: AccentHue;
+  /** Lucide name for `<Icon name=… />`; the active theme picks the pack. */
+  icon: string;
+}
+
+export const PROJECT_STATES: Record<string, ProjectStateVisual> = {
+  queued: { label: "Queued", hue: "gray", icon: "CircleDashed" },
+  active: { label: "Ongoing", hue: "green", icon: "CircleDot" },
+  on_hold: { label: "Paused", hue: "amber", icon: "CirclePause" },
+  stopped: { label: "Stopped", hue: "red", icon: "CircleStop" },
+  done: { label: "Done", hue: "blue", icon: "CircleCheck" },
+};
+
+/**
+ * The run states in lifecycle order — what a picker offers.
+ *
+ * ⚠️ Mirrors `routes/projects/core.RUN_STATES`. It deliberately does NOT carry
+ * `archived`: that is the other axis (D-PM-25), reached by the archive action,
+ * and offering it in a run-state picker is how the two-facts-one-column defect
+ * this decision removed would come back through the UI.
+ */
+export const PROJECT_STATE_ORDER = [
+  "queued",
+  "active",
+  "on_hold",
+  "stopped",
+  "done",
+] as const;
+
+/** How a run state draws, or `null` when the value is not one. */
+export function projectState(value?: string | null): ProjectStateVisual | null {
+  const key = value?.trim().toLowerCase();
+  return (key && PROJECT_STATES[key]) || null;
+}
+
+/**
+ * The accent for a project run state.
+ *
+ * Falls back to `gray` rather than throwing: a row carrying a value this client
+ * does not know (an older row, a newer server) should draw a neutral dot, not
+ * blank the tree — the same "unknown input never throws" rule `resolveHue`
+ * follows at the end of its chain.
+ */
+export function projectStateAccent(value?: string | null): StatusAccent {
+  const state = projectState(value);
+  return ACCENTS[state ? state.hue : "gray"];
+}

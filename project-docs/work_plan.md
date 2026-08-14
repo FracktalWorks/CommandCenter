@@ -218,7 +218,131 @@ owning specs are the archive; this file owns ordering, gates and states only.
 - **`ws-27be-trgm-search-index`** → PR #431, **MERGED**. ✅ **R8 satisfied — the check the dying agent never ran was run on 2026-08-12**: ladder replayed 01→169 into a throwaway DB, 60k seeded rows, **23 checks green, exit 0** — `Filter:` → `Index Cond:`, ~302 ms → 0.41 ms, tenant isolation holds through the new index path, migration idempotent, `idx_pm_tasks_fts` retained per R6. **R1 re-checked at merge: 170 was still the next free number.** ⚠️ Still owed, unchanged: the `idx_pm_tasks_fts` drop, and the product call on raising `MIN_QUERY` to 3 (a trigram index cannot serve a 2-character pattern, so the shortest ACCEPTED query is the longest UNSERVABLE one).
 - **`ws-27bf-theme-sweep`** — died before writing a single file. Zero salvage; **still fully owed**, and it is the highest-leverage item in this queue because `CLAUDE.md` calls the four-theme sweep "the real gate" and every slice since WS-27am has owed it. No branch, no PR.
 ⚠️ **Environment traps that cost real time on 2026-08-12, both worth knowing before the next dispatch**: (1) `playwright.config.ts` runs `next start`, which serves a **prebuilt** `.next` — a stale one 404s every route and fails all 10 modal tests for reasons that have nothing to do with the diff, so `npx next build` comes first and a known-green spec is the control. (2) The `mt-scratch` Docker DB on :5433 is **NOT current** (no `pm_projects.organization_id`, empty ledger); an R8 run needs the ladder replayed into a throwaway database inside `acb-postgres`.
-➡️ **Next, in order**: (1) **build the theme sweep from scratch** (WS-27bf — nothing exists, and it gates the visual pass every slice here owes), (2) then whichever of Tooltip/Skeleton — acceptance criteria are written for both in spec §9.4.2 — paired with the DOM-test-substrate question, since every rendering done-when in Wave 2 is review-only without it. ⚠️ **Owed and NOT closed by the merges**: the four-theme visual pass (Fluent → Material → Graphite) on `/projects` and a neighbour, on live `main`. Modal and Toast shipped **un-flagged** — they replace existing surfaces rather than adding new behaviour, so there is no flag to flip back if a theme looks wrong. (2026-08-12) ⚠️ **Live bug found and fixed 2026-08-11 by the WS-26i-export repair (MERGED in PR #426, `7255344`; deploy not independently verified):** `src/app/api/projects/[...path]/route.ts` did `await res.text()` — a UTF-8 decode, which strips a leading BOM — so **`GET /projects/export/tasks.csv` has shipped BOM-less since WS-27ae** and Excel on Windows renders a task titled "Café" as "CafÃ©". Measured on node v22 through the real handler: `EF BB BF 4E 61 6D` in, `4E 61 6D 65` out. The proxy now reads `res.arrayBuffer()` and also forwards `X-Export-Rows` (set since WS-27ae, unreachable until now). Fence: `src/lib/export.test.ts` RUNS both proxies over a BOM'd body and compares bytes — it previously asserted `toContain("await res.text()")` and pinned the defect. `specs/project_management_app.md` §11.26 carries the correction. |
+➡️ **Next, in order**: (1) **build the theme sweep from scratch** (WS-27bf — nothing exists, and it gates the visual pass every slice here owes), (2) then whichever of Tooltip/Skeleton — acceptance criteria are written for both in spec §9.4.2 — paired with the DOM-test-substrate question, since every rendering done-when in Wave 2 is review-only without it. ⚠️ **Owed and NOT closed by the merges**: the four-theme visual pass (Fluent → Material → Graphite) on `/projects` and a neighbour, on live `main`. Modal and Toast shipped **un-flagged** — they replace existing surfaces rather than adding new behaviour, so there is no flag to flip back if a theme looks wrong. (2026-08-12) ⚠️ **Live bug found and fixed 2026-08-11 by the WS-26i-export repair (MERGED in PR #426, `7255344`; deploy not independently verified):** `src/app/api/projects/[...path]/route.ts` did `await res.text()` — a UTF-8 decode, which strips a leading BOM — so **`GET /projects/export/tasks.csv` has shipped BOM-less since WS-27ae** and Excel on Windows renders a task titled "Café" as "CafÃ©". Measured on node v22 through the real handler: `EF BB BF 4E 61 6D` in, `4E 61 6D 65` out. The proxy now reads `res.arrayBuffer()` and also forwards `X-Export-Rows` (set since WS-27ae, unreachable until now). Fence: `src/lib/export.test.ts` RUNS both proxies over a BOM'd body and compares bytes — it previously asserted `toContain("await res.text()")` and pinned the defect. `specs/project_management_app.md` §11.26 carries the correction.
+🆕 **WS-27bg MINTED 2026-08-13 (owner-directed) and it PREEMPTS the queue above** — project run
+state, the coloured indicator, and archive: *"each project should show one colored indicator in
+front of it — green for ongoing, red for stopped, orange for paused"*, plus **queued**, plus
+*"the ability to archive an entire project and its tasks."* Spec **§9.8**; three decisions taken
+before minting so none is re-asked: **D-PM-25** (run state and archived are **two axes** — 146
+shipped `status` with an `'archived'` value **and** an `archived_at` column, storing one fact
+twice), **D-PM-26** (project state **derives** onto tasks and never cascades a write — D-PM-12's
+ruling applied to a second surface; the five costs are enumerated and measurable), **D-PM-27**
+(the hue map, **owner-ruled against the shipped vocabulary** — green means "running" on the tree
+and "finished" on the board beside it; the owner was shown that cost and chose it, so an agent
+finding it inconsistent cites the decision and stops). 🔴 **The audit's real finding is that the
+feature is half-built and entirely invisible**: `pm_projects.status` has been CHECKed, defaulted,
+indexed, API-validated on create AND patch, returned by the tree read and declared in the
+frontend type **since migration 146** — and `ProjectTree.tsx` contains the string `status` **zero
+times**. `archived_at` exists and is **never written**; there is no archive endpoint, and the only
+removal path is an unrecoverable `DELETE` cascade. There is **no project-editing UI at all** (one
+`patchProject` call site, one `createProject`; a project cannot be renamed). This is the **second
+instance** of the exact failure `statusAccent.ts`'s header records about `pm_task_statuses.color`
+— stored since 146, exposed on the API, rendered nowhere — same table, sibling column. 🔴 **Three
+automation paths corrupt data the day `on_hold` starts meaning something, none visible from a
+mock**: `run_lifecycle_sweep` (`automation.py:298`) has **no project-status predicate**, so a
+paused project with a `close_after_months` policy gets its backlog auto-cancelled as
+`system:workflow:<id>` through the ordinary transition — indistinguishable from a human doing it;
+recurrence keeps spawning; agent dispatch keeps dispatching. All three take **one** predicate, or
+the ticket authors the §5 defect three times. Sliced §9.8.3 (axis + endpoints + guard, carries the
+migration and an **R8** obligation) · §9.8.4 (indicator + the control surface that does not exist
+yet) · §9.8.5 (overdue suppression across **four** predicates — three TS + one SQL, unified only
+one wave ago — My Work, and calendar/timeline **honest overflow** per WS-27ac rather than silent
+drops). ✅ **SLICE 1 BUILT 2026-08-13 on `claude/projects-app-development-01lepg`, NOT merged and
+NOT deployed** (as-built §11.35) — **migration 171** widens the CHECK to the union (R6 expand;
+`archived` retained for the deploy window, its removal a named later release) and adds
+**`archived_root_id`**, which is what makes archive reversible: archiving stamps the subtree with
+the id of the project the user actually archived, unarchiving clears exactly those rows, so a
+subproject archived on its own **survives** its parent's restore, and restoring a swept-in child
+is refused with the ancestor named. The write path validates against **RUN_STATES**, not
+`PROJECT_STATUSES`, so nobody can PATCH `status='archived'` and recreate the defect D-PM-25
+removes. 🔴 **The predicted sweeper bug was real and is fixed**: `run_lifecycle_sweep` had no
+project-status predicate, so a paused project under a close policy would have had its backlog
+cancelled by `system:workflow:<id>` through the ordinary transition — indistinguishable from a
+person. Recurrence and agent dispatch had the same hole; all three now consult ONE
+`is_runnable`. ⚠️ The recurrence skip deliberately does **not** stamp `recurrence_spawned_at` —
+copying the ended-series path would kill the series at the moment somebody paused the project.
+**R8 satisfied**: ladder replayed 01→171 into a throwaway Postgres 16, `tests/live/live_ws27bg.py`
+**27 checks green** driving the real endpoint functions, **every automation check run twice**
+(paused must not fire, active must) because a guard that refuses everything passes a one-sided
+test, and **five mutants each caught** — including replacing the subtree CTE with `id = :pid`,
+which turns four checks red and is the only thing that catches a quietly-non-recursive walk. The
+backfill was verified **on rows that actually exist** (a database built to 170, seeded with two
+`archived` projects) rather than asserted empty: both moved, and the one with a real 2024 filing
+date kept it instead of being overwritten by `now()`. The new read `EXISTS` plans as a **join,
+never a per-row SubPlan** — a claim about shape, not duration, per WS-27be. Also re-run green
+**under FORCE ROW LEVEL SECURITY** with the generated phase-4 set applied (not required today;
+worth knowing before it is). Hermetic: 17 new tests incl. the mirror test that **reads the CHECK
+out of the migration**, plus 5999 passed on the broad suite. 🔴 **Owed and NOT fakeable from
+here**: the count of `status='archived'` rows on prod is **owner-gated reach (§6) and is asked of
+the owner at review** — the migration is correct at any population, but an agent claiming "this
+affects no rows" would be reporting a guess as a measurement.
+🆕 **THE TASK-CARD DATA AUDIT, 2026-08-13 (owner-directed), and it minted WS-27bh + D-PM-28/29.**
+Owner framing: *"the Tasks app is a sort of an extension of the Projects app — the slice for a
+single user"*, plus a local GTD inbox. ✅ **That framing is already the recorded architecture and
+is more built than the board said**: D-PM-6 (one row, the personal view is a lens),
+`pm_projects.personal_owner` (mig 147 — a personal project is an ordinary project granted to one
+member) and **`pm_task_personal`**, which already carries disposition · next_action · context ·
+energy · time_estimate · two-minute · defer_until · clarified_at keyed `(task_id, member_email)`.
+🔴 **What the audit found is a RENDERING gap, not a data gap**: `pm_task_types` is seeded per
+project with a name, an **icon** and a **colour**, gained `is_epic` at WS-27ae, and reaches the
+frontend **only as a board grouping key** — *a bug and a feature render identically on every
+surface*. Same for `recurrence_id` (a repeating task is indistinguishable from a one-off outside
+its own editor) and `source` (`/tasks` ships `SourceBadge` in six components; Projects has
+nothing, though "assignment IS dispatch" means agent-created tasks exist). **This is the FOURTH
+instance of one failure** — after `pm_task_statuses.color`, `estimate_mins` and WS-27bg's
+`pm_projects.status` — and the pattern is that each was stored correctly and reachable by the
+API, so every test passed and the only symptom was a UI plainer than its data. 🔴 **And Projects
+has no concept of urgency at all**: only binary overdue, so a task due in three hours renders
+exactly like one due in three months, which is the single biggest reason `/tasks` cards read
+richer. ✅ **D-PM-28 (owner-ruled) — importance is SHARED and ALREADY EXISTS, urgency is DERIVED,
+only `leveraged` is personal.** This **overrides §7.5.1's row** sending `important` to
+`pm_task_personal` (recorded as an override, not edited quietly). **No boolean `important` is
+added**: `pm_tasks.importance` is a four-level scale, strictly richer than the boolean, so adding
+one beside it would be the §5 defect inside the decision meant to prevent it — the ruling costs
+**one** new column (`leveraged`), not three. 🔴 **A live conflict this surfaced**:
+`importance = 3` is labelled **"Urgent"** today, so shipping derived urgency beside it puts two
+disagreeing urgencies on one card; it is relabelled **"Critical"** in the same slice.
+`/tasks` adopts the four-level control (a boolean is lossy in the write direction) and
+`urgent_window_hours` becomes **org-level, not per-user** — a personal window would have two
+people see different urgency on one task. ✅ **D-PM-29 — Projects is the MASTER schema; `/tasks`
+reproduces it and may only ADD** (owner: *"exactly the same as the product management field so as
+to prevent confusion. Any changes made on the personal tasks should also reflect on the product
+management task"*). A field's default home is `pm_tasks`; personal placement is the exception and
+must earn itself against §7.5.1's Ana-and-Ben test; a write from the personal app is a write to
+the same row (already true by construction — the decision is what stops a future ticket
+re-introducing a sync). ⚠️ Timeboxing and `deep_work` stay personal on that same test;
+**`actual_start`/`actual_end` are flagged as a genuine owner question**, not resolved by an agent
+reading a rule. 🆕 **WS-27bh minted (spec §9.9)** — draw the four facts the card already knows:
+task type · derived urgency (+ the Critical relabel) · recurring indicator · source badge. **No
+migration, no new column, no API shape change.** ⚠️ Its brief carries the promote-don't-author
+warning by name: `/tasks`' `SourceBadge` must be read first, or this ticket authors the fourth
+copy of something — the WS-27bd(5) ContextMenu situation.
+✅ **WS-27bg SLICE 2 BUILT 2026-08-13** (as-built §11.36) — frontend only, no migration, no API
+change. `PROJECT_STATES` lands in `src/lib/statusAccent.ts` as the closed lookup D-PM-27
+requires; `effectiveState` derives a node's state from its ancestors **on the way down the
+render and writes nothing** (D-PM-26); the indicator draws **in front of every project row**,
+replacing the folder glyph that carried no information in a tree where every row is a project,
+with inherited states at half emphasis. A right-click menu on the tree (the promoted
+`ContextMenu`) gives the run-state picker and Archive/Unarchive on the promise-bound toast —
+**the first project-editing control this app has ever had**. 🔴 **Narrowed with reasons, not
+silently**: Delete is deliberately NOT added (it is an unrecoverable cascade that has never had
+a control, so "archive is the default affordance and delete is harder to reach" is satisfied
+most strongly by leaving it unreachable); the bulk-close-on-Stop offer is deferred to its own
+slice because a modal + bulk call + a count shown before agreement is not a menu item; **rename
+is still owed** — a project still cannot be renamed. ✅ `tsc` 0 · `next build` 0 · vitest **89
+files / 2007 tests** (baseline 1983) · conformance green with **no new baseline entries**.
+🔴 **THE FOUR-THEME SWEEP IS NOW A TEST, NOT A PROMISE** — `e2e/project-state.spec.ts`, **10
+cases green**, drives a routed tree in real Chromium under **Fluent + Material + Graphite** and
+asserts five states resolve to five DISTINCT COMPUTED COLOURS, none transparent, inherited at
+reduced opacity, and five distinct **glyph paths** so the state survives a reader who cannot
+separate the hues. Every slice since WS-27am owed this pass and several skipped it; this is the
+first Projects surface where it is fenced. **Mutation-measured, four mutants each caught** —
+routing the map through `resolveHue` (the D-PM-27 trap), a shared glyph, dropping the
+inheritance derivation, and **making `on_hold` green, which turns the browser spec red in all
+three themes** and is what proves the sweep discriminates rather than merely passes. ⚠️ The unit
+tests assert a hue NAME; only the browser proves two names paint differently — which is exactly
+the failure `statusAccent`'s own header records, a colour stored correctly for months while
+every lane drew the same grey. (2026-08-13) |
 | WS-28 | **People Center — directory, org chart, assignment seam** *(minted 2026-08-06)* | ✅ a+b+b-write | `specs/people_center_app.md` · board record 2026-08-09 | a (key shape, mig 148 + quarantine table) · b (directory + person page, mig 149, five-place registration) · b-write (create/edit UI restored; found three ways mig 148 had broken the write routes) — built 2026-08-06/07; **closes WS-13's directory item**. 🟢 c org chart · d capability search (**ranking EVAL-LOCKED**) · e Projects seams; 🔴 f seats/roles writes (§6 WS-24 (d) analogue). ⚠️ `schema.generated.sql` regeneration is **due**: stale since ~migration 113, and 148 reached prod ~2026-08-07 (after the #384 cast fix). (2026-08-07) |
 ---
 

@@ -271,6 +271,164 @@ def test_no_open_tasks_is_idle_even_with_nothing_estimated() -> None:
 
 
 # ══════════════════════════════════════════════════════════════════════════
+# 2b. The department rollup (WS-28j2, §5.7.3)
+# ══════════════════════════════════════════════════════════════════════════
+
+def member(**over: Any) -> dict[str, Any]:
+    base = {"person_id": "p1", "name": "Priya", "department": "Engineering",
+            "kind": "person", "pill": "on_track", "open_tasks": 3,
+            "contracted_hours": 40.0, "committed_this_week": 20.0,
+            "hours_basis": True, "away_this_week": False}
+    base.update(over)
+    return base
+
+
+def test_the_rollup_is_arithmetic_over_the_rows_it_is_handed() -> None:
+    """The §5.9 guarantee, asserted as identity rather than trusted.
+
+    A rollup that ran its own query would be a second answer to "how many
+    people are behind", and the two would diverge the first time either
+    changed. This one sums the same array, so the assertion is that the totals
+    ARE the sum — not that they are close to it.
+    """
+    rows = [member(name="A", committed_this_week=10.0),
+            member(name="B", committed_this_week=30.0, department="Sales"),
+            member(name="C", committed_this_week=5.0, contracted_hours=20.0)]
+    out = workload.rollup(rows)
+    assert out["org"]["headcount"] == 3
+    assert out["org"]["committed_hours"] == sum(
+        r["committed_this_week"] for r in rows)
+    assert out["org"]["contracted_hours"] == sum(
+        r["contracted_hours"] for r in rows)
+    assert sum(d["headcount"] for d in out["departments"]) == 3
+
+
+def test_the_pill_counts_come_from_the_rows_pills() -> None:
+    out = workload.rollup([
+        member(name="A", pill="behind"), member(name="B", pill="behind"),
+        member(name="C", pill="idle"), member(name="D", pill="on_track"),
+    ])
+    assert out["org"]["pills"] == {"behind": 2, "at_risk": 0, "overloaded": 0,
+                                   "idle": 1, "on_track": 1}
+
+
+def test_departments_are_sorted_by_strain_not_alphabetically() -> None:
+    """"A rollup nobody can act on is a table" (§5.7.3). The order says where to
+    look first — and it is an ordering of WORK, computed from pill counts."""
+    rows = [
+        member(name="A", department="Alpha", pill="on_track"),
+        member(name="B", department="Alpha", pill="on_track"),
+        member(name="C", department="Zulu", pill="behind"),
+        member(name="D", department="Zulu", pill="on_track"),
+    ]
+    out = workload.rollup(rows)
+    assert [d["department"] for d in out["departments"]] == ["Zulu", "Alpha"]
+    assert out["departments"][0]["strain"] == 0.5
+
+
+def test_strain_is_a_SHARE_not_a_count() -> None:
+    """Three behind out of four is a different situation from three out of
+    forty, and an absolute count cannot tell them apart."""
+    small = workload.rollup(
+        [member(name=f"s{i}", department="Small",
+                pill="behind" if i < 3 else "on_track") for i in range(4)])
+    large = workload.rollup(
+        [member(name=f"l{i}", department="Large",
+                pill="behind" if i < 3 else "on_track") for i in range(40)])
+    assert small["departments"][0]["strain"] > large["departments"][0]["strain"]
+
+
+def test_people_nobody_placed_are_rolled_up_not_dropped() -> None:
+    out = workload.rollup([member(name="A", department=None),
+                           member(name="B", department="   ")])
+    assert [d["department"] for d in out["departments"]] == [workload.UNASSIGNED]
+    assert out["departments"][0]["headcount"] == 2
+
+
+def test_agents_are_excluded_and_the_exclusion_is_REPORTED() -> None:
+    """Headcount is people. An agent has no contract and no pill, so counting
+    it divides a department's strain by a denominator that is part process —
+    but a silent omission is how a total quietly stops adding up."""
+    out = workload.rollup([
+        member(name="Priya", pill="behind"),
+        member(name="agent:triage", kind="agent", pill=None,
+               contracted_hours=0.0, committed_this_week=99.0),
+    ])
+    assert out["org"]["headcount"] == 1
+    assert out["org"]["agents"] == 1
+    assert out["org"]["committed_hours"] == 20.0     # the agent's 99h is out
+    assert out["org"]["strain"] == 1.0
+
+
+def test_who_is_away_is_named_not_counted() -> None:
+    # "Two people are away" is true and useless when the question is whether to
+    # hand somebody a deadline.
+    out = workload.rollup([member(name="Priya", away_this_week=True),
+                           member(name="Ravi")])
+    assert out["org"]["away"] == ["Priya"]
+
+
+def test_people_with_no_open_work_at_all_are_named() -> None:
+    out = workload.rollup([member(name="Priya", open_tasks=0),
+                           member(name="Ravi", open_tasks=4)])
+    assert out["org"]["no_open_work"] == ["Priya"]
+
+
+def test_the_spread_is_the_gap_that_starts_the_conversation() -> None:
+    out = workload.rollup([
+        member(name="Loaded", committed_this_week=46.0),
+        member(name="Middle", committed_this_week=20.0),
+        member(name="Free", committed_this_week=6.0),
+    ])
+    spread = out["org"]["spread"]
+    assert spread["gap_hours"] == 40.0
+    assert spread["most"]["name"] == "Loaded"
+    assert spread["least"]["name"] == "Free"
+    # Stated in HOURS, with the percentage beside them and never instead: a
+    # bare percentage is the shape that reads as a score (D-PC-14).
+    assert spread["most"]["committed_hours"] == 46.0
+    assert spread["most"]["percent"] == 115
+
+
+def test_the_spread_ignores_a_row_whose_hours_mean_nothing() -> None:
+    """A row with nothing estimated would otherwise arrive at the bottom of the
+    spread as though it were free — the exact misreading `hours_basis` exists to
+    prevent."""
+    out = workload.rollup([
+        member(name="Loaded", committed_this_week=40.0),
+        member(name="Busy", committed_this_week=30.0),
+        member(name="Unknown", committed_this_week=0.0, hours_basis=False,
+               open_tasks=30),
+    ])
+    assert out["org"]["spread"]["least"]["name"] == "Busy"
+    assert out["org"]["spread"]["gap_hours"] == 10.0
+    # …and the row is still counted, as a caveat on the totals.
+    assert out["org"]["unestimated_people"] == 1
+
+
+def test_a_spread_over_one_person_is_not_a_spread() -> None:
+    # Rendering "0h" there would read as a balanced team.
+    assert workload.rollup([member(name="Alone")])["org"]["spread"] is None
+
+
+def test_an_empty_roster_does_not_divide_by_zero() -> None:
+    out = workload.rollup([])
+    assert out["departments"] == []
+    assert out["org"]["headcount"] == 0 and out["org"]["strain"] == 0.0
+
+
+@pytest.mark.parametrize("path", [
+    "apps/services/gateway/gateway/workload.py",
+])
+def test_the_rollup_runs_no_query(path: str) -> None:
+    """A second count is the failure mode §5.9 names, and the cheapest way to
+    introduce one is a convenience `db` parameter on this module."""
+    source = (REPO / path).read_text(encoding="utf-8")
+    for forbidden in ("db.execute", "SELECT ", "await "):
+        assert forbidden not in source, forbidden
+
+
+# ══════════════════════════════════════════════════════════════════════════
 # 3. The endpoint
 # ══════════════════════════════════════════════════════════════════════════
 
@@ -591,6 +749,48 @@ def test_a_database_without_migration_173_answers_present(monkeypatch) -> None:
     bind(monkeypatch, db)
     out = run(people_dashboard.get_dashboard(user=BOSS))
     assert all(r.away is None for r in out.rows)
+
+
+def test_the_rollup_arrives_beside_the_rows_and_agrees_with_them(
+        monkeypatch) -> None:
+    """WS-28j2 end to end. The endpoint computes it from `model_dump()` — the
+    exact payload the client receives — so "the rollup matches the table" is a
+    property of the code path rather than a claim about it."""
+    db = FakeDB(totals=[totals_row("priya@fracktal.in", open_tasks=6,
+                                   mins=1200, overdue=1)])
+    bind(monkeypatch, db)
+    out = run(people_dashboard.get_dashboard(user=BOSS))
+    assert [d["department"] for d in out.departments] == ["Engineering", "Sales"]
+    assert out.org["headcount"] == 2
+    assert out.org["pills"]["behind"] == 1
+    assert out.org["contracted_hours"] == sum(r.contracted_hours
+                                              for r in out.rows)
+
+
+def test_an_agent_row_is_kept_out_of_the_rollups_headcount(monkeypatch) -> None:
+    db = FakeDB(totals=[totals_row("agent:triage", open_tasks=9, mins=600)])
+    bind(monkeypatch, db)
+    out = run(people_dashboard.get_dashboard(user=BOSS))
+    assert len(out.rows) == 3            # Priya, Ravi, the agent
+    assert out.org["headcount"] == 2     # …and the agent is not one of them
+    assert out.org["agents"] == 1
+
+
+def test_away_this_week_is_a_wider_window_than_away_today(monkeypatch) -> None:
+    """Somebody back tomorrow and somebody leaving on Thursday are both answers
+    to "can I give them a deadline this week", and neither is "away now"."""
+    today = date.today()
+    sunday = today + timedelta(days=7 - today.isoweekday())
+    if sunday == today:                  # today IS Sunday; nothing later fits
+        pytest.skip("no future day inside this week to place the absence on")
+    db = FakeDB(absences=[SimpleNamespace(
+        person_id="id-priya", starts_on=sunday, ends_on=sunday,
+        kind="away", hours_per_day=None)])
+    bind(monkeypatch, db)
+    priya = next(r for r in run(
+        people_dashboard.get_dashboard(user=BOSS)).rows if r.name == "Priya")
+    assert priya.away is None            # not away right now
+    assert priya.away_this_week is True  # …but do not promise their Friday
 
 
 def test_can_manage_travels_so_the_ui_need_not_guess(monkeypatch) -> None:

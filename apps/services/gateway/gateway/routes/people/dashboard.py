@@ -39,6 +39,7 @@ from gateway.routes.people.core import (
     router,
 )
 from gateway.work_schedule import (
+    _absence_spans,
     contracted_hours_per_week,
     load_policy,
     person_schedule,
@@ -51,6 +52,7 @@ from gateway.workload import (
     at_risk_tasks,
     classify,
     hours_of,
+    rollup,
 )
 from pydantic import BaseModel
 from sqlalchemy import text
@@ -97,6 +99,12 @@ class DashboardRow(BaseModel):
     projects_total: int = 0
     at_risk: list[dict[str, Any]] = []
     away: dict[str, Any] | None = None
+    #: An absence covering any day between today and Sunday — what the rollup's
+    #: "who is away this week" reads. Distinct from ``away``, which is today
+    #: only: somebody back tomorrow and somebody leaving on Thursday are both
+    #: answers to "can I give them a deadline this week", and neither is
+    #: "away right now".
+    away_this_week: bool = False
 
     #: ``None`` for an agent, by design (§5.7.5).
     pill: str | None = None
@@ -124,6 +132,12 @@ class DashboardResponse(BaseModel):
     #: work" must not draw identically — the same call ``/people/{id}/work``
     #: already made.
     work_visible: bool = True
+    #: WS-28j2 (§5.7.3), computed by :func:`gateway.workload.rollup` **over the
+    #: serialized rows above** — so the rollup and the table it sits on cannot
+    #: disagree, and §5.9's Center landing projects this instead of counting
+    #: again.
+    departments: list[dict[str, Any]] = []
+    org: dict[str, Any] = {}
     can_manage: bool = False
     self_person_id: str | None = None
     horizon_days: int = HORIZON_DAYS
@@ -222,8 +236,15 @@ async def get_dashboard(
             today=today, monday=monday, sunday=sunday,
         ))
 
+    # WS-28j2. Computed from `model_dump()` — the exact payload the client
+    # receives — rather than from `rows` or from a second query. That is the
+    # §5.9 guarantee as a mechanism: the rollup is arithmetic over the same
+    # array, so it cannot disagree with the table under it, and it cannot read a
+    # field the caller does not have.
+    totals = rollup([r.model_dump() for r in rows])
     return DashboardResponse(
         rows=rows, total=len(rows), partial=partial, work_visible=work_visible,
+        departments=totals["departments"], org=totals["org"],
         can_manage=can_manage_people(user),
         self_person_id=str(own.id) if own is not None else None,
     )
@@ -290,6 +311,8 @@ def _row(*, person_id, name, email, department, team, avatar, kind, schedule,
         projects_total=len(projects),
         at_risk=([] if agent else risky),
         away=_away(today, spans),
+        away_this_week=any(s["starts_on"] <= sunday and s["ends_on"] >= today
+                           for s in _absence_spans(spans)),
         pill=(None if agent else verdict["pill"]),
         reason=(None if agent else verdict["reason"]),
         flags=([] if agent else verdict["flags"]),

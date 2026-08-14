@@ -254,6 +254,137 @@ def classify(metrics: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+# ── The department rollup (WS-28j2, §5.7.3) ─────────────────────────────────
+
+#: Where people nobody has placed land. They are rolled up rather than dropped:
+#: a rollup that quietly omits somebody is worse than one with an untidy last
+#: section, and "nobody owns these five people" is itself the finding.
+UNASSIGNED = "Unassigned"
+
+
+def rollup(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Per department, then for the org — **a projection, never a second count**.
+
+    ⚠️ It reads the SERIALIZED rows the client is about to receive, not the
+    database. That is the guarantee §5.9 asks for stated as a mechanism rather
+    than a promise: the rollup cannot disagree with the table underneath it,
+    because it is arithmetic over the same array, and it cannot read a field the
+    caller does not have. A rollup that ran its own query would be a second
+    answer to "how many people are behind" — and the two would diverge the first
+    time either changed.
+
+    **Agents are excluded and the exclusion is reported.** Headcount is people;
+    an agent has no contract and no pill (§5.7.5), so including it would divide
+    a department's strain by a denominator that is part process. The count
+    travels at org level so the omission is visible rather than silent.
+
+    ⚠️ **This is a rollup of WORK, not a ranking of people or of managers**
+    (D-PC-14). Departments are ordered by strain because *"a rollup nobody can
+    act on is a table"* (§5.7.3) — the order says where to look first, and every
+    figure behind it is a count of tasks and hours. The spread names two people
+    because that is what makes it actionable — *"Priya has 46h due, Ravi has
+    6h"* is the sentence that starts the conversation — and for the same reason
+    it is stated in HOURS, not as a score.
+    """
+    people = [r for r in rows if r.get("kind") != "agent"]
+    agents = len(rows) - len(people)
+
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for row in people:
+        key = (row.get("department") or "").strip() or UNASSIGNED
+        groups.setdefault(key, []).append(row)
+
+    departments = [_group(name, members) for name, members in groups.items()]
+    # Most strained first; then the bigger absolute problem; then by name so the
+    # quiet tail is stable and boring, which is the right treatment for rows
+    # nobody has to act on.
+    departments.sort(key=lambda d: (-d["strain"], -d["needs_attention"],
+                                    d["department"]))
+    org = _group("Everyone", people)
+    org["departments"] = len(departments)
+    org["agents"] = agents
+    return {"departments": departments, "org": org}
+
+
+def _group(name: str, members: list[dict[str, Any]]) -> dict[str, Any]:
+    counts = {pill: 0 for pill in PILLS}
+    for row in members:
+        pill = row.get("pill")
+        if pill in counts:
+            counts[pill] += 1
+
+    contracted = sum(float(r.get("contracted_hours") or 0) for r in members)
+    committed = sum(float(r.get("committed_this_week") or 0) for r in members)
+    needs = counts["behind"] + counts["at_risk"] + counts["overloaded"]
+
+    return {
+        "department": name,
+        "headcount": len(members),
+        "contracted_hours": round(contracted, 1),
+        "committed_hours": round(committed, 1),
+        "pills": counts,
+        # Who to not chase this week. Names rather than a count: "two people are
+        # away" is true and useless when the question is whether to hand
+        # somebody a deadline.
+        "away": [r.get("name") for r in members if r.get("away_this_week")],
+        "no_open_work": [r.get("name") for r in members
+                         if not int(r.get("open_tasks") or 0)],
+        # How many rows the hours figures above cannot speak for. Carried for
+        # the same reason `unestimated` is carried on a person row: a total
+        # summed over rows that are half unestimated is a confident number built
+        # on missing data.
+        "unestimated_people": sum(1 for r in members
+                                  if not r.get("hours_basis", True)),
+        "needs_attention": needs,
+        # The share of the group with something to act on. A SHARE, because
+        # three behind out of four is a different situation from three out of
+        # forty and an absolute count cannot tell them apart.
+        "strain": round(needs / len(members), 3) if members else 0.0,
+        "spread": _spread(members),
+    }
+
+
+def _spread(members: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """The gap between the most and least loaded person, in hours committed.
+
+    *"The number that actually starts a conversation"* (§5.7.3). Computed only
+    over people whose hours mean something — a row with nothing estimated would
+    otherwise arrive at the bottom of the spread as though it were free, which
+    is the exact misreading `hours_basis` exists to prevent.
+
+    ``None`` under two people with usable figures: a spread over one person is
+    not a spread, and rendering "0h" there would read as a balanced team.
+    """
+    usable = [r for r in members
+              if r.get("hours_basis", True)
+              and float(r.get("contracted_hours") or 0) > 0]
+    if len(usable) < 2:
+        return None
+    ranked = sorted(usable, key=lambda r: float(r.get("committed_this_week") or 0))
+    least, most = ranked[0], ranked[-1]
+    gap = (float(most.get("committed_this_week") or 0)
+           - float(least.get("committed_this_week") or 0))
+    return {
+        "gap_hours": round(gap, 1),
+        "most": _end(most),
+        "least": _end(least),
+    }
+
+
+def _end(row: dict[str, Any]) -> dict[str, Any]:
+    committed = float(row.get("committed_this_week") or 0)
+    contracted = float(row.get("contracted_hours") or 0)
+    return {
+        "person_id": row.get("person_id"),
+        "name": row.get("name"),
+        "committed_hours": round(committed, 1),
+        "contracted_hours": round(contracted, 1),
+        #: Shown beside the hours, never instead of them: a bare percentage is
+        #: the shape that reads as a score.
+        "percent": round(committed / contracted * 100) if contracted else None,
+    }
+
+
 def _tasks(n: int) -> str:
     return "task" if n == 1 else "tasks"
 

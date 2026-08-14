@@ -19,10 +19,13 @@ import {
   NO_DEPARTMENT,
   PILL_HUE,
   PILL_LABEL,
+  type Rollup,
   capacityBar,
   describeActivity,
   describeDeadline,
+  describeRollup,
   describeScope,
+  describeSpread,
   groupByDepartment,
   hours,
   pillTotals,
@@ -47,9 +50,27 @@ function row(over: Partial<DashboardRow> = {}): DashboardRow {
     projects: [],
     projects_total: 0,
     at_risk: [],
+    away_this_week: false,
     pill: "on_track",
     flags: [],
     hours_basis: true,
+    ...over,
+  };
+}
+
+function group(over: Partial<Rollup> = {}): Rollup {
+  return {
+    department: "Engineering",
+    headcount: 12,
+    contracted_hours: 480,
+    committed_hours: 300,
+    pills: { behind: 0, at_risk: 0, overloaded: 0, idle: 0, on_track: 12 },
+    away: [],
+    no_open_work: [],
+    unestimated_people: 0,
+    needs_attention: 0,
+    strain: 0,
+    spread: null,
     ...over,
   };
 }
@@ -264,6 +285,80 @@ describe("pillTotals", () => {
       idle: 1,
       on_track: 0,
     });
+  });
+});
+
+describe("describeRollup", () => {
+  it("leads with what to act on, not with headcount", () => {
+    // "12 people" is true and useless; "3 of 12 need attention" is where to
+    // look first.
+    const line = describeRollup(group({ needs_attention: 3 }));
+    expect(line.startsWith("3 of 12 need attention")).toBe(true);
+  });
+
+  it("says so plainly when nothing is overdue", () => {
+    expect(describeRollup(group())).toContain("12 people, nothing overdue");
+  });
+
+  it("carries the hours both ways round", () => {
+    expect(describeRollup(group())).toContain("300h due against 480h");
+  });
+
+  it("names who is away, and counts who has nothing", () => {
+    const line = describeRollup(
+      group({ away: ["Priya", "Ravi"], no_open_work: ["Sam"] })
+    );
+    expect(line).toContain("Priya, Ravi away this week");
+    expect(line).toContain("1 with no open work");
+  });
+
+  it("carries the unestimated caveat with the total", () => {
+    // A sum over rows that are half unestimated is a confident number built on
+    // missing data — the same reason a person row carries `unestimated`.
+    expect(describeRollup(group({ unestimated_people: 4 }))).toContain(
+      "4 with nothing estimated"
+    );
+  });
+
+  it("says person, not people, for one", () => {
+    expect(describeRollup(group({ headcount: 1 }))).toContain("1 person");
+  });
+});
+
+describe("describeSpread", () => {
+  it("is the sentence that starts the conversation", () => {
+    const line = describeSpread(
+      group({
+        spread: {
+          gap_hours: 40,
+          most: {
+            person_id: "a",
+            name: "Priya",
+            committed_hours: 46,
+            contracted_hours: 40,
+            percent: 115,
+          },
+          least: {
+            person_id: "b",
+            name: "Ravi",
+            committed_hours: 6,
+            contracted_hours: 40,
+            percent: 15,
+          },
+        },
+      })
+    );
+    // ⚠️ Both people named, both figures in HOURS. "Priya has 46h due, Ravi has
+    // 6h" is arguable and actionable; a bare percentage gap is a score with two
+    // names attached (D-PC-14).
+    expect(line).toContain("Priya has 46h due this week");
+    expect(line).toContain("Ravi has 6h");
+    expect(line).toContain("40h gap");
+  });
+
+  it("says nothing where a spread means nothing", () => {
+    // Rendering "0h" for a one-person department would read as a balanced team.
+    expect(describeSpread(group())).toBeNull();
   });
 });
 

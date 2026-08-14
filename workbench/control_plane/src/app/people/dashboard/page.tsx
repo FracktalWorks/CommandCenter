@@ -39,12 +39,16 @@ import {
   PILL_HUE,
   PILL_LABEL,
   type Pill,
+  type Rollup,
   capacityBar,
   describeActivity,
   describeDeadline,
+  describeRollup,
   describeScope,
+  describeSpread,
   groupByDepartment,
   hours,
+  NO_DEPARTMENT,
   pillTotals,
   sortRows,
 } from "../lib/dashboard";
@@ -54,6 +58,7 @@ export default function WorkloadDashboardPage() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<Pill | null>(null);
+  const [department, setDepartment] = useState<string | null>(null);
   const [openId, setOpenId] = useState<string | null>(null);
 
   // The read, inline with a `live` guard rather than a `useCallback` the effect
@@ -87,8 +92,16 @@ export default function WorkloadDashboardPage() {
   const rows = useMemo(() => sortRows(data?.rows ?? []), [data]);
   const totals = useMemo(() => pillTotals(rows), [rows]);
   const shown = useMemo(
-    () => (filter ? rows.filter((r) => r.pill === filter) : rows),
-    [rows, filter]
+    () =>
+      rows.filter(
+        (r) =>
+          (!filter || r.pill === filter) &&
+          // The rollup's own grouping key, so clicking a department row and
+          // reading its section can never select different people.
+          (!department ||
+            (r.department?.trim() || NO_DEPARTMENT) === department)
+      ),
+    [rows, filter, department]
   );
   const groups = useMemo(() => groupByDepartment(shown), [shown]);
   const scope = data ? describeScope(data) : null;
@@ -158,12 +171,28 @@ export default function WorkloadDashboardPage() {
               </button>
             );
           })}
-          {filter && (
-            <Button variant="ghost" size="sm" onClick={() => setFilter(null)}>
+          {(filter || department) && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                setFilter(null);
+                setDepartment(null);
+              }}
+            >
               Clear
             </Button>
           )}
         </section>
+      )}
+
+      {data && data.departments.length > 0 && (
+        <RollupPanel
+          org={data.org}
+          departments={data.departments}
+          filter={department}
+          onFilter={setDepartment}
+        />
       )}
 
       {loading && (
@@ -173,8 +202,12 @@ export default function WorkloadDashboardPage() {
       {data && !loading && shown.length === 0 && (
         <p className="text-xs text-muted-foreground">
           {filter
-            ? `Nobody is ${PILL_LABEL[filter].toLowerCase()} right now.`
-            : "No people yet. Add somebody in the directory."}
+            ? `Nobody${department ? ` in ${department}` : ""} is ${PILL_LABEL[
+                filter
+              ].toLowerCase()} right now.`
+            : department
+              ? `Nobody is in ${department}.`
+              : "No people yet. Add somebody in the directory."}
         </p>
       )}
 
@@ -201,6 +234,100 @@ export default function WorkloadDashboardPage() {
         </section>
       ))}
     </main>
+  );
+}
+
+/**
+ * The department rollup (WS-28j2, §5.7.3).
+ *
+ * ⚠️ Every figure here is the **server's**, computed from the same rows the
+ * table below renders. Nothing on this panel is summed in the browser — a
+ * rollup that recomputes a number the app already shows is how two numbers
+ * start disagreeing where nobody can see them (§5.9).
+ *
+ * Ordered by strain, because a rollup nobody can act on is a table. That is an
+ * ordering of *work*: the strip beside each row is a count of tasks and hours,
+ * and there is no score anywhere on it (D-PC-14).
+ */
+function RollupPanel({
+  org,
+  departments,
+  filter,
+  onFilter,
+}: {
+  org: Rollup;
+  departments: Rollup[];
+  filter: string | null;
+  onFilter: (department: string | null) => void;
+}) {
+  return (
+    <section className="rounded-xl border border-border">
+      <div className="flex flex-wrap items-baseline justify-between gap-2 border-b border-border p-3">
+        <h2 className="text-xs font-medium text-foreground">
+          Everyone
+          <span className="ml-1.5 font-normal text-muted-foreground">
+            {org.headcount} across {org.departments ?? departments.length}{" "}
+            departments
+            {org.agents ? ` · ${org.agents} agents, not counted here` : ""}
+          </span>
+        </h2>
+        <p className="text-[11px] text-muted-foreground">
+          {describeRollup(org)}
+        </p>
+      </div>
+
+      <ul>
+        {departments.map((group) => {
+          const on = filter === group.department;
+          const spread = describeSpread(group);
+          return (
+            <li
+              key={group.department}
+              className="border-b border-border/60 last:border-0"
+            >
+              <button
+                type="button"
+                onClick={() => onFilter(on ? null : group.department)}
+                aria-pressed={on}
+                className={`cc-control flex w-full flex-col items-start gap-0.5 p-3 text-left ${
+                  on ? "bg-primary/10" : "hover:bg-muted/40"
+                }`}
+              >
+                <span className="flex flex-wrap items-center gap-1.5">
+                  <span
+                    className={`text-xs font-medium ${
+                      on ? "text-primary" : "text-foreground"
+                    }`}
+                  >
+                    {group.department}
+                  </span>
+                  {(Object.keys(PILL_LABEL) as Pill[])
+                    .filter((pill) => group.pills[pill] > 0)
+                    .map((pill) => (
+                      <span
+                        key={pill}
+                        className={`rounded-full px-1.5 py-0.5 text-[10px] ${
+                          accentForHue(PILL_HUE[pill]).chip
+                        }`}
+                      >
+                        {group.pills[pill]} {PILL_LABEL[pill].toLowerCase()}
+                      </span>
+                    ))}
+                </span>
+                <span className="text-[11px] text-muted-foreground">
+                  {describeRollup(group)}
+                </span>
+                {spread && (
+                  <span className="text-[11px] text-muted-foreground">
+                    {spread}
+                  </span>
+                )}
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+    </section>
   );
 }
 

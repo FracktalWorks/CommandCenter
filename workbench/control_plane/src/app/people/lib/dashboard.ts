@@ -62,6 +62,9 @@ export interface DashboardRow {
   at_risk: AtRiskTask[];
   away?: { kind: string; until: string } | null;
 
+  /** An absence covering any day from today to Sunday — wider than `away`. */
+  away_this_week: boolean;
+
   /** `null` for an agent, by design — see §5.7.5. */
   pill: Pill | null;
   reason?: string | null;
@@ -70,11 +73,46 @@ export interface DashboardRow {
   note?: string | null;
 }
 
+/** One end of a department's spread — always hours, with the percent beside. */
+export interface SpreadEnd {
+  person_id: string | null;
+  name: string;
+  committed_hours: number;
+  contracted_hours: number;
+  percent: number | null;
+}
+
+export interface Rollup {
+  department: string;
+  headcount: number;
+  contracted_hours: number;
+  committed_hours: number;
+  pills: Record<Pill, number>;
+  /** Named, not counted — "two people are away" does not answer the question. */
+  away: string[];
+  no_open_work: string[];
+  unestimated_people: number;
+  needs_attention: number;
+  /** The share of the group with something to act on, 0–1. */
+  strain: number;
+  spread: {
+    gap_hours: number;
+    most: SpreadEnd;
+    least: SpreadEnd;
+  } | null;
+  /** Org row only. */
+  departments?: number;
+  agents?: number;
+}
+
 export interface DashboardResponse {
   rows: DashboardRow[];
   total: number;
   partial: boolean;
   work_visible: boolean;
+  /** WS-28j2 — the server's projection of `rows`, never a second count. */
+  departments: Rollup[];
+  org: Rollup;
   can_manage: boolean;
   self_person_id?: string | null;
   horizon_days: number;
@@ -284,6 +322,64 @@ export function pillTotals(rows: readonly DashboardRow[]): Record<Pill, number> 
     if (row.pill) totals[row.pill] += 1;
   }
   return totals;
+}
+
+/**
+ * The one line a department's row has to earn (§5.7.3).
+ *
+ * ⚠️ It leads with **what to act on**, not with headcount. "12 people" is true
+ * and useless; "3 of 12 need attention" is where to look. And it is a statement
+ * about work in every clause — the rollup orders departments by strain because
+ * a rollup nobody can act on is a table, not because departments are being
+ * graded (D-PC-14).
+ */
+export function describeRollup(group: Rollup): string {
+  const parts: string[] = [];
+  if (group.needs_attention > 0) {
+    parts.push(
+      `${group.needs_attention} of ${group.headcount} need attention`
+    );
+  } else {
+    parts.push(`${group.headcount} ${group.headcount === 1 ? "person" : "people"}, nothing overdue`);
+  }
+  parts.push(
+    `${hours(group.committed_hours)} due against ${hours(
+      group.contracted_hours
+    )}`
+  );
+  if (group.no_open_work.length > 0) {
+    parts.push(
+      `${group.no_open_work.length} with no open work`
+    );
+  }
+  if (group.away.length > 0) {
+    parts.push(`${group.away.join(", ")} away this week`);
+  }
+  if (group.unestimated_people > 0) {
+    // The caveat travels with the total for the same reason `unestimated`
+    // travels with a person's hours: a sum over rows that are half unestimated
+    // is a confident number built on missing data.
+    parts.push(
+      `${group.unestimated_people} with nothing estimated`
+    );
+  }
+  return parts.join(" · ");
+}
+
+/**
+ * The spread, as the sentence that starts the conversation (§5.7.3).
+ *
+ * ⚠️ Both people are named and both figures are in HOURS. That is the whole
+ * point — "Priya has 46h due, Ravi has 6h" is arguable and actionable, where a
+ * bare percentage gap is a score with two names attached. `null` where the
+ * spread means nothing rather than a reassuring "0h".
+ */
+export function describeSpread(group: Rollup): string | null {
+  if (!group.spread) return null;
+  const { most, least, gap_hours } = group.spread;
+  return `${most.name} has ${hours(most.committed_hours)} due this week, ${
+    least.name
+  } has ${hours(least.committed_hours)} — a ${hours(gap_hours)} gap`;
 }
 
 /**

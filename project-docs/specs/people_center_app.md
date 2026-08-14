@@ -1316,11 +1316,41 @@ both were self-inflicted by writing a fence over raw source:
   read as a collision it is not. It now probes a fresh process and matches on path **and**
   method — as a general rule over the package, so the next literal path inherits it.
 
-**WS-28j2 — the department rollup (§5.7.3).** 🟡 dispatchable after j1.
+**WS-28j2 — the department rollup (§5.7.3).** ✅ **BUILT 2026-08-14**
+(`gateway.workload.rollup`, `departments` + `org` on the same response,
+`RollupPanel` in `app/people/dashboard/page.tsx`; **no new query** — 16 hermetic + 8 vitest
+cases and 8 more live checks).
 Done when: per department and then for the org — headcount · Σ contracted vs Σ committed ·
 people in each pill · who is away · **the spread** · people with no open work; sorted by
 the department under most strain; and the whole thing is a **projection of j1's endpoint**,
 not a second count (§5.9).
+
+**Four things the build settled:**
+
+- **The projection is a mechanism, not a promise.** `rollup()` is handed
+  `[r.model_dump() for r in rows]` — the exact payload the client receives — so it cannot
+  disagree with the table beneath it and cannot read a field the caller does not have. The
+  fence asserts *identity* (`org["contracted_hours"] == sum(rows)`), not closeness, and a
+  second one greps the module for `db.execute` / `SELECT` / `await`, because the cheapest
+  way to introduce a second count is a convenience `db` parameter.
+- **Strain is a SHARE, not a count.** Three behind out of four is a different situation
+  from three out of forty, and an absolute count cannot tell them apart. Departments sort
+  by strain because *"a rollup nobody can act on is a table"* — and that is an ordering of
+  work, computed from pill counts, with no score anywhere on the panel (D-PC-14).
+- **The spread is stated in hours and names both people.** *"Priya has 46h due this week,
+  Ravi has 6h — a 40h gap"* is arguable and actionable; a bare percentage gap is a score
+  with two names attached. It is computed only over rows whose hours mean something, or a
+  person with nothing estimated arrives at the bottom of it as though they were free — the
+  exact misreading `hours_basis` exists to prevent. **`None` under two usable rows**: a
+  spread over one person is not a spread, and "0h" there reads as a balanced team.
+- **Agents are excluded and the exclusion is reported.** Headcount is people; an agent has
+  no contract and no pill, so counting one divides a department's strain by a denominator
+  that is part process. `org.agents` carries the omission, because a silent one is how a
+  total quietly stops adding up.
+
+`away_this_week` was added to the person row for this: it is a wider window than `away`
+(today), because somebody back tomorrow and somebody leaving on Thursday are both answers
+to *"can I give them a deadline this week"*, and neither is "away right now".
 
 **WS-28j3 — the rebalancing suggestions (§5.7.4).** 🟡 dispatchable after j2.
 Done when: helpers are ranked by skill × spare hours × availability, all three numbers are

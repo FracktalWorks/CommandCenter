@@ -266,6 +266,34 @@ async def main() -> None:
         check("last activity is read through the scoped COALESCE",
               priya.last_activity_at is not None, True)
 
+        # ── 8b. The rollup (WS-28j2) IS the rows, not a second count ───────
+        #
+        # A fake cannot make this claim interesting: it would agree with any
+        # arithmetic. Over real rows it is the §5.9 guarantee — the department
+        # figures and the table beneath them are the SAME array.
+        by_dept = {d["department"]: d for d in out.departments}
+        check("every department in the roster is rolled up",
+              sorted(by_dept), ["Engineering", "Sales"])
+        check("the org headcount excludes the agent", out.org["headcount"], 2)
+        check("…and reports the exclusion", out.org["agents"], 1)
+        check("the rollup's contracted total IS the rows' sum",
+              out.org["contracted_hours"],
+              round(sum(r.contracted_hours for r in out.rows
+                        if r.kind != "agent"), 1))
+        check("the rollup's committed total IS the rows' sum",
+              out.org["committed_hours"],
+              round(sum(r.committed_this_week for r in out.rows
+                        if r.kind != "agent"), 1))
+        check("the pill counts are the rows' pills",
+              by_dept["Engineering"]["pills"]["behind"], 1)
+        check("the strained department sorts first",
+              out.departments[0]["department"], "Engineering")
+        check("Ravi is named as having nothing estimated",
+              by_dept["Sales"]["unestimated_people"], 1)
+        # One person per department here, so a spread is not a spread.
+        check("a one-person department reports no spread",
+              by_dept["Sales"]["spread"], None)
+
         # ── 9. A SECOND ORGANIZATION does not leak into either viewer ──────
         #
         # The check the whole `_scope` change exists for, and the only one that

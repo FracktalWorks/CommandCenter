@@ -9,7 +9,7 @@ Three claims:
   forbids breaking them; the fence is these tests asserting array == table
   after each path — replace, flat sync, résumé merge — never a paragraph
   asking people to remember.
-* **The vocabularies mirror migration 175's CHECKs**, so a bad value is a 400
+* **The vocabularies mirror migration 176's CHECKs**, so a bad value is a 400
   naming the legal words rather than a constraint string at 3am.
 * **Two doors, one field class.** Structured skills are authorized as a write
   of `skills` — the same question the flat PATCH answers, asked of the same
@@ -35,7 +35,7 @@ from gateway.routes.people import skills as people_skills
 from gateway.routes.tasks import resume_parse
 
 REPO = Path(__file__).resolve().parents[2]
-MIGRATION = (REPO / "infra" / "postgres" / "175_people_skills.sql").read_text(
+MIGRATION = (REPO / "infra" / "postgres" / "176_people_skills.sql").read_text(
     encoding="utf-8")
 
 

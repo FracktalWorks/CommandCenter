@@ -199,7 +199,7 @@ async def person_payload(db: Any, row: Any, user: Any) -> dict:
     # WS-28h — the structured capability half (§3.3): level, years, recency,
     # evidence, and the credential history. HR tier like the flat skills they
     # project into. Best-effort for the same reason the absences are: a
-    # database one deploy behind migration 175 answers "none recorded" rather
+    # database one deploy behind migration 176 answers "none recorded" rather
     # than failing the person page.
     person["skills_detail"] = []
     person["credentials"] = []

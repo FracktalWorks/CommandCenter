@@ -898,7 +898,7 @@ new table is tenant-scoped by construction (R5(a): discovered by
 | **P-1** | ✅ Key shape: `UNIQUE(name)` dropped, partial unique on `lower(email)`, `source_key`, status CHECK, `email_conflict` quarantine | WS-28a (migration 148) |
 | **P-2** | ✅ Status vocabulary + `has_login` derived, never a column | WS-28a |
 | **P-3** | ✅ Profile columns on `gtd_people` — §3.1's self half, §3.2's employment half, §3.4's `max_concurrent_tasks`, §3.5's private half | WS-28g |
-| **P-4** | ✅ `gtd_person_skills` (structured skills) + `gtd_person_credentials` (education, certifications, prior roles) — migration 175 | WS-28h |
+| **P-4** | ✅ `gtd_person_skills` (structured skills) + `gtd_person_credentials` (education, certifications, prior roles) — migration 176 | WS-28h |
 | **P-5** | 🔲 `gtd_person_absences` | WS-28k |
 | **P-6** | 🔲 The tightening half: narrow `employment_type` / `seniority` CHECKs once real data is in, and validate 148's status CHECK where the quarantine panel (§5.10) has been cleared | later release, R6 contract half |
 | **P-7** | 🔲 The work schedule — **no migration at all**: the org policy is a row in `org_settings` (151's existing key→JSON store) and the person override is the `working_hours` column P-3 already shipped. `contracted_hours_per_week` is computed, never stored | WS-28p |
@@ -1260,7 +1260,7 @@ without a hard reload.
   constant the whole design rests on.
 
 **WS-28h — structured skills and credentials (P-4).** ✅ **BUILT 2026-08-14**
-(migration `175_people_skills.sql`, the `gateway/person_skills.py` leaf — outside both
+(migration `176_people_skills.sql`, the `gateway/person_skills.py` leaf — outside both
 route packages, because the People routes and the tasks-side résumé ingest both write it —
 `routes/people/skills.py` + three `/people/me/*` twins, `SkillsPanel.tsx`; 28 hermetic +
 14 vitest cases and 21 live checks).

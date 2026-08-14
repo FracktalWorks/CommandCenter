@@ -33,7 +33,7 @@ from fastapi import HTTPException
 from sqlalchemy import text
 
 #: How well. NULL on a row means "not assessed" — which is honest, and distinct
-#: from 'learning'. Mirrored from migration 175's CHECK; a fifth word accepted
+#: from 'learning'. Mirrored from migration 176's CHECK; a fifth word accepted
 #: here would be a save that fails at Postgres.
 SKILL_LEVELS: tuple[str, ...] = ("learning", "working", "proficient", "expert")
 

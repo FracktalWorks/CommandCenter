@@ -1,4 +1,4 @@
--- 175_people_skills.sql — structured skills and credentials (People Center P-4 / WS-28h).
+-- 176_people_skills.sql — structured skills and credentials (People Center P-4 / WS-28h).
 --
 -- Spec: project-docs/specs/people_center_app.md §3.3 · D-PC-6.
 --

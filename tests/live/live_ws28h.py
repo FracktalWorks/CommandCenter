@@ -4,7 +4,7 @@ The hermetic suite proves the sequencing and the refusals against a stateful
 fake — which, being a fake, agrees with whatever SQL it is handed. What only a
 database answers:
 
-* **migration 175 applies on the real ladder, twice** (idempotent re-run);
+* **migration 176 applies on the real ladder, twice** (idempotent re-run);
 * the **tenant key defaults from the session GUC and fails closed** unbound,
   on BOTH new tables;
 * the **UNIQUE index folds case for real** — 'Python' next to 'python' is

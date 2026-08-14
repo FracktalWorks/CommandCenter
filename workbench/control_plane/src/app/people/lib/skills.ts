@@ -72,7 +72,7 @@ export const CREDENTIAL_KIND_LABELS: Record<string, string> = {
 
 /**
  * Editor rows for a person who has flat skills but no structured rows yet —
- * a directory that predates migration 175, or a row nobody has enriched. The
+ * a directory that predates migration 176, or a row nobody has enriched. The
  * names seed the editor so "add your levels" starts from what exists instead
  * of an empty table that invites retyping everything.
  */

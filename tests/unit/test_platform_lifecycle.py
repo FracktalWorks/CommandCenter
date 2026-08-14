@@ -24,15 +24,12 @@ from fastapi.testclient import TestClient
 from platform_api import lifecycle
 from sqlalchemy import create_engine, text
 
+from tests.unit._platform_ladder import apply_ladder  # noqa: E402
+
 _URL = os.environ.get("CONTROL_PLANE_DATABASE_URL", "").strip()
 TOKEN = "test-operator-token"
 OP = {"Authorization": f"Bearer {TOKEN}"}
 
-_MIGRATIONS = ("infra/platform/001_control_plane.sql",
-               "infra/platform/002_seed_catalog.sql",
-               "infra/platform/003_metering_integrity.sql",
-               "infra/platform/004_provider_keys.sql",
-               "infra/platform/005_metering_identity.sql")
 
 
 # ── The state machine itself (pure — runs without a database) ───────────────
@@ -102,12 +99,9 @@ pytestmark_db = pytest.mark.skipif(
 def _schema():
     if not _URL:
         return
-    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     eng = create_engine(_URL, future=True)
     with eng.begin() as conn:
-        for rel in _MIGRATIONS:
-            with open(os.path.join(root, rel), encoding="utf-8") as fh:
-                conn.exec_driver_sql(fh.read())
+        apply_ladder(conn)
 
 
 @pytest.fixture

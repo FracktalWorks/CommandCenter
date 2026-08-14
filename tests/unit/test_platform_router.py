@@ -24,6 +24,8 @@ from fastapi.testclient import TestClient
 from platform_api import router as router_mod
 from sqlalchemy import create_engine, text
 
+from tests.unit._platform_ladder import apply_ladder  # noqa: E402
+
 _URL = os.environ.get("CONTROL_PLANE_DATABASE_URL", "").strip()
 
 pytestmark = pytest.mark.skipif(
@@ -38,11 +40,6 @@ TOKEN = "test-operator-token"
 OP = {"Authorization": f"Bearer {TOKEN}"}
 ENC_KEY = "test-encryption-key-not-a-real-one"
 
-_MIGRATIONS = ("infra/platform/001_control_plane.sql",
-               "infra/platform/002_seed_catalog.sql",
-               "infra/platform/003_metering_integrity.sql",
-               "infra/platform/004_provider_keys.sql",
-               "infra/platform/005_metering_identity.sql")
 
 #: What the stub provider returns. Deliberately carries fields the Router has no
 #: opinion about, so "byte-identical" is a real assertion rather than a
@@ -63,17 +60,11 @@ PROVIDER_RESPONSE = {
 }
 
 
-def _root() -> str:
-    return os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-
 @pytest.fixture(scope="module", autouse=True)
 def _schema():
     eng = create_engine(_URL, future=True)
     with eng.begin() as conn:
-        for rel in _MIGRATIONS:
-            with open(os.path.join(_root(), rel), encoding="utf-8") as fh:
-                conn.exec_driver_sql(fh.read())
+        apply_ladder(conn)
 
 
 @pytest.fixture

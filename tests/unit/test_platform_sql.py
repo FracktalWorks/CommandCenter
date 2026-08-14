@@ -28,6 +28,8 @@ import pytest
 pytest.importorskip("sqlalchemy")
 from sqlalchemy import create_engine, text  # noqa: E402
 
+from tests.unit._platform_ladder import apply_ladder  # noqa: E402
+
 from platform_api import store  # noqa: E402
 from platform_api.credits import balance_of  # noqa: E402
 from platform_api.keys import mint_key, verify_secret  # noqa: E402
@@ -43,19 +45,13 @@ pytestmark = pytest.mark.skipif(
     ),
 )
 
-_MIGRATIONS = ("infra/platform/001_control_plane.sql",
-               "infra/platform/002_seed_catalog.sql",
-               "infra/platform/003_metering_integrity.sql")
 
 
 @pytest.fixture(scope="module")
 def engine():
     eng = create_engine(_URL, future=True)
-    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     with eng.begin() as conn:
-        for rel in _MIGRATIONS:
-            with open(os.path.join(root, rel), encoding="utf-8") as fh:
-                conn.exec_driver_sql(fh.read())
+        apply_ladder(conn)
     return eng
 
 
@@ -84,11 +80,8 @@ class TestSchema:
     def test_the_ladder_replays_cleanly(self, engine):
         # The fixture already applied it once; doing it again proves idempotence
         # against a real server rather than against our reading of the DDL.
-        root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         with engine.begin() as c:
-            for rel in _MIGRATIONS:
-                with open(os.path.join(root, rel), encoding="utf-8") as fh:
-                    c.exec_driver_sql(fh.read())
+            apply_ladder(c)
 
     def test_the_catalog_matches_the_pricing_ladder_of_record(self, conn):
         # D23/D24: 600 · 1,200 · 1,800 · 2,400 · 3,000. Spot-check the anchors

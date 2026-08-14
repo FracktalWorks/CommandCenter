@@ -189,16 +189,19 @@ owning specs are the archive; this file owns ordering, gates and states only.
 | WS-14 | **Centers C — scoping deepens** | 🟢 with ⚠️ | `department_centers.md` §3 C1–C4 | D12 answered the blocker (a project belongs to a team by an explicit `group:<slug>` grant). **C1 tasks team slice: ⚠️ RE-AUDIT before dispatch (flag added 2026-08-09)** — WS-27e's owner-directed one-store revision (D-PM-6: `pm_tasks` is THE task table; WS-27h retires `gtd_items`) may moot D13's `gtd_*`-local grant table; whichever way it lands, the subject grammar must not fork (§4, D13). C2 shared mailboxes: doc-action only, ownerless in fact (§4) · C3 team-instanced agents: narrow, columns intentionally unread · ~~🔴 C4~~ **C4 ANSWERED 2026-08-10 (D25.3): Center leads approve, fallback org admins — the "add the requesting-Center column" ticket is dispatchable**. (2026-08-10) |
 | WS-14a | **Tenancy TV-1 — the three `org_group` slug-only joins** *(minted 2026-08-03)* | ✅ absorbed | `specs/tenancy_and_visibility.md` §2 → **WS-29 MT-1i** | **Absorbed by WS-29 as MT-1i (2026-08-08) — do not dispatch from this row.** Code shipped on the WS-29 branch. Severity re-framed: under D15 the three joins **leak across tenants**, not merely misbehave within one. The open criterion — the two-org DB-backed fixture run `passed`, never `skipped` (§2 done-when 3) — travels with MT-1i. (2026-08-09) |
 | WS-15 | **Centers D — dashboards + Company Center** | 🟡 WS-13 review | `department_centers.md` Phase D | Center dashboards, personal dashboard, weekly digest workflows (double as `workflows_app.md` G1 metric), D4 org-memory fix. Blocked only on WS-13's owner review now that WS-28b shipped the directory. ⚠️ D21/D22/D23 scope colour recorded in Phase D: configurable per-department, multiple leadership rollups, Center-grouped standalone app; Dashboards is a package-included base slice, never an upsell line (D23). |
-| WS-16 | **Centers E — AI budgets** | 🟡 WS-6 | `department_centers.md` Phase E | Per-member caps at the LLM choke points (D2, D8). The chain is real: needs WS-6's **durable** attribution, which is HELD at WS-6b — do not dispatch expecting Redis-only records to suffice. ⚠️ MT-3's credit gate (D18 pricing) lands on the same choke points — design once, serve both. |
+| WS-16 | **Centers E — AI budgets** | 🟡 WS-6 | `department_centers.md` Phase E | Per-member caps at the LLM choke points (D2, D8). The chain is real: needs WS-6's **durable** attribution, which is HELD at WS-6b — do not dispatch expecting Redis-only records to suffice. ⚠️ The credit gate lands on the same choke points — design once, serve both. **This is now WS-31 CP-7 (D32.8, 2026-08-12):** per-member caps are a policy against the org credit pool, not a sub-wallet; default on exhaustion is degrade-to-`tier-fast`. Build it there, not twice. |
 
 ### Multi-tenancy (SaaS) — `saas_multitenancy.md`
 
 | WS | Workstream | State | Owning spec · record | Gates · next (verified) |
 |---|---|---|---|---|
-| WS-29 | **Multi-tenancy — turning CommandCenter into a product sold to other companies** | ◐ H1 done · H2 next | **`specs/saas_multitenancy.md`** (architecture; §11 tickets) · ⭐ **`specs/saas_multitenancy_handover.md`** (H1→H8 runbook — hand THIS to the executing agent) · `specs/saas_multitenancy_implementation.md` (shapes) · board record 2026-08-09 in the parent spec | **Phase 0 ✅** (MT-0a · 0b · 0c-1 · 0d, pending review) · **H1 ✅ CLOSED**: scratch-verified 2026-08-09, **PR #404 merged and migrations 157/158/159 CONFIRMED on prod the same day** (ledger line "157 already recorded"; box self-applied via pull timer). · MT-1: 1a schema ✅ (identity cutover = H6, open) · 1b generated ✅ · 1c seam + ratchets ✅ — **561 call sites across 138 files unconverted = H2, the long pole** · 1e wrapper ✅ (~58 key sites unconverted = H5) · 1i ✅ (two-org DB fixture owed) · **MT-2/MT-3/MT-4 owner inputs ALL ANSWERED — final pricing shape D23/D24 2026-08-10 (§2.4b Center packages; ladder 600/1200/1800/2400/3000)** — MT-2's scope includes `center_package` + `plan_catalog` + seat `source` + the one-assignment act; spec detailing may start on all three; the customer console is WS-30 · 🔴 MT-0c-2 parked (D16; §6 first blockquote) · §5.1 cutover trigger **ADOPTED 2026-08-09** — owner checks monthly · ⚠️ **#399 (MERGED 2026-08-09) carried a second WS-29 thread** (`specs/multi_tenancy.md`, superseded for architecture — measured record only): migration **161** keys all 17 `pm_*` + a parent-consistency trigger, **162** makes `app_user` unique on `lower(email)`, S1-1 fixed a cross-tenant **write** into access control, S1-4 removed the process-global agent identity, plus a 14-finding leak audit. **It also found a defect in MT-1b:** the generator scoped `crm_contacts`/`crm_deals`/`crm_activities` by column name, but their `organization_id` references `crm_organizations` — phase 2 would have aborted mid-window. Gated at generation time now (`HOMONYM_BLOCKED`); those three tables carry **no isolation** pending a rename — 🔴 owner call. ◐ **H2 STARTED 2026-08-10**: central `bind_tenant` binding + `TenantScopeMiddleware` SHIPPED; `routes/projects` converted (84 sites; `agent_dispatch` H4-exempt by name); ratchets in `test_db_engine_seam.py` (projects=0, elsewhere frozen at 494, bank-your-progress rule). ⚠️ **The first live run found `tenant_session()` itself broken** — `SET LOCAL … = :param` is a Postgres syntax error (SET can't bind); fixed to `set_config(..., true)`, pinned + live-proven. See the handover's H2 box. **H2 ◐◐ NEARLY DONE same day (two waves of parallel slice-agents):** notes/whatsapp/email/tasks/workflows/apps/crm/people/admin all converted — baseline **494 → 111**, every remaining site classified in place (`# H4:` background / `# H4/H6:` service-identity, tenant source named), zero-remainder packages pinned parametrically, whatsapp/apps pinned at exact counts, live smokes per wave incl. a FORCE-RLS two-org isolation proof. ⚠️ **New gap, D31 (2026-08-11): there is no per-tenant restore, only a whole-cluster one (`saas_multitenancy.md` §6.6).** BO-23 restores the box, so serving one customer's recovery rolls every other customer back — a §6 cross-tenant defect from customer #2, *not* a customer-#1 gate. Not dispatchable yet: needs a ticket contract, and its filtered export must be driven by the same `discover_tables()` set the RLS policies use, i.e. after MT-1b promotion. **Next: H4 (explicit tenants for the 111 marked sites' jobs/consumers) and H5 (Redis), then H3.** (2026-08-11) |
+| WS-29 | **Multi-tenancy — turning CommandCenter into a product sold to other companies** | ◐ H1 done · H2 next | **`specs/saas_multitenancy.md`** (architecture; §11 tickets) · ⭐ **`specs/saas_multitenancy_handover.md`** (H1→H8 runbook — hand THIS to the executing agent) · `specs/saas_multitenancy_implementation.md` (shapes) · board record 2026-08-09 in the parent spec | **Phase 0 ✅** (MT-0a · 0b · 0c-1 · 0d, pending review) · **H1 ✅ CLOSED**: scratch-verified 2026-08-09, **PR #404 merged and migrations 157/158/159 CONFIRMED on prod the same day** (ledger line "157 already recorded"; box self-applied via pull timer). · MT-1: 1a schema ✅ (identity cutover = H6, open) · 1b generated ✅ · 1c seam + ratchets ✅ — **561 call sites across 138 files unconverted = H2, the long pole** · 1e wrapper ✅ (~58 key sites unconverted = H5) · 1i ✅ (two-org DB fixture owed) · ⚠️ **MT-3 ABSORBED by WS-31 (D32, 2026-08-12) — do not dispatch it from here;** MT-2/MT-4 are pulled forward into WS-31's scope too, and §3.1 is reversed (banner in the spec). **MT-1's tenancy retrofit (H2–H6) is unaffected and remains the long pole.** · **MT-2/MT-3/MT-4 owner inputs ALL ANSWERED — final pricing shape D23/D24 2026-08-10 (§2.4b Center packages; ladder 600/1200/1800/2400/3000)** — MT-2's scope includes `center_package` + `plan_catalog` + seat `source` + the one-assignment act; spec detailing may start on all three; the customer console is WS-30 · 🔴 MT-0c-2 parked (D16; §6 first blockquote) · §5.1 cutover trigger **ADOPTED 2026-08-09** — owner checks monthly · ⚠️ **#399 (MERGED 2026-08-09) carried a second WS-29 thread** (`specs/multi_tenancy.md`, superseded for architecture — measured record only): migration **161** keys all 17 `pm_*` + a parent-consistency trigger, **162** makes `app_user` unique on `lower(email)`, S1-1 fixed a cross-tenant **write** into access control, S1-4 removed the process-global agent identity, plus a 14-finding leak audit. **It also found a defect in MT-1b:** the generator scoped `crm_contacts`/`crm_deals`/`crm_activities` by column name, but their `organization_id` references `crm_organizations` — phase 2 would have aborted mid-window. Gated at generation time now (`HOMONYM_BLOCKED`); those three tables carry **no isolation** pending a rename — 🔴 owner call. ◐ **H2 STARTED 2026-08-10**: central `bind_tenant` binding + `TenantScopeMiddleware` SHIPPED; `routes/projects` converted (84 sites; `agent_dispatch` H4-exempt by name); ratchets in `test_db_engine_seam.py` (projects=0, elsewhere frozen at 494, bank-your-progress rule). ⚠️ **The first live run found `tenant_session()` itself broken** — `SET LOCAL … = :param` is a Postgres syntax error (SET can't bind); fixed to `set_config(..., true)`, pinned + live-proven. See the handover's H2 box. **H2 ◐◐ NEARLY DONE same day (two waves of parallel slice-agents):** notes/whatsapp/email/tasks/workflows/apps/crm/people/admin all converted — baseline **494 → 111**, every remaining site classified in place (`# H4:` background / `# H4/H6:` service-identity, tenant source named), zero-remainder packages pinned parametrically, whatsapp/apps pinned at exact counts, live smokes per wave incl. a FORCE-RLS two-org isolation proof. ⚠️ **New gap, D31 (2026-08-11): there is no per-tenant restore, only a whole-cluster one (`saas_multitenancy.md` §6.6).** BO-23 restores the box, so serving one customer's recovery rolls every other customer back — a §6 cross-tenant defect from customer #2, *not* a customer-#1 gate. Not dispatchable yet: needs a ticket contract, and its filtered export must be driven by the same `discover_tables()` set the RLS policies use, i.e. after MT-1b promotion. **Next: H4 (explicit tenants for the 111 marked sites' jobs/consumers) and H5 (Redis), then H3.** (2026-08-11) |
 
 | — | **Future modules roadmap** (KB · Marketing · Support · dashboards-colour · Builder/Workflows slicing rule) *(named 2026-08-09, D21)* | 🔴 not dispatchable | `specs/future_modules_roadmap.md` | No WS rows until each earns a §1-contract spec; Dashboards colour lands in WS-15's acceptance; the Builder/Workflows visibility-tier-at-creation rule binds reviews now (D12). |
-| WS-30 | **Subscription Console — customer-facing billing surface** *(minted 2026-08-09)* | 🔴 MT-2 first | **`specs/subscription_console.md`** | Manage-only at launch: **Centers & add-ons panel · users × Centers seat grid (D23)** · credit monitor · seat writes under D19.3's hard cap · role presets (D24.5) · change-request flow (fulfilment 🔴 OWNER-GATE during silo phase). Sequencing: MT-2 tables → SC-1 → SC-2/SC-3 → SC-4 with MT-4. Business inputs answered (D19 + D23 + **D24** — framing closed); blockers: MT-2's substrate and the MT-2/MT-3 ticket contracts. (2026-08-10) |
+| WS-30 | **Subscription Console — customer-facing billing surface** *(minted 2026-08-09)* | 🔴 MT-2 first · **SC-4/SC-5 specced 2026-08-13** | **`specs/subscription_console.md`** | Manage-only at launch: **Centers & add-ons panel · users × Centers seat grid (D23)** · credit monitor · seat writes under D19.3's hard cap · role presets (D24.5) · change-request flow (fulfilment 🔴 OWNER-GATE during silo phase). Sequencing: MT-2 tables → SC-1 → SC-2/SC-3 → SC-4 with MT-4. Business inputs answered (D19 + D23 + **D24** — framing closed); blockers: MT-2's substrate and the MT-2/MT-3 ticket contracts. (2026-08-10) |
+| WS-31 | **Platform Control Plane — the subscription, seat and AI-metering engine** *(minted 2026-08-12, D32)* | ◐ **CP-0 ✅ · CP-1 ✅ · CP-2a ✅ · CP-3 ✅ · CP-4 ✅ — MERGED in #442 (`4934eb8`) 2026-08-14** | **`specs/platform_control_plane.md`** | The central service `§0.9.2` always named, extracted from each deployment: org registry + placement · plan catalog/subscriptions/**seats purchased vs assigned vs available** · per-org `llm_api_key` · the **AI Router** (tier→model binding, rate card, `usage_event`, `credit_ledger`, balance gate) · Operator Console. **D32 reverses `saas_multitenancy.md` §3.1** (banner in place) on an argument §3.1 never weighed — under §5.1 silos, metering inside CC puts the rate card and the balance on the *customer's* box. **D15 untouched**: tenancy is still a ROW, deployment still a placement. **Absorbs MT-3 whole** and pulls MT-2/MT-4 forward of their §11.1 position — WS-30 becomes a *client* of this service, not a reader of CC-local tables; WS-16 Phase E is the same mechanism (per-member caps as a policy against the org pool). Model access reworked: **customers never see a model**, tiers are the only vocabulary, the picker leaves the product, a bare model id 400s instead of being coerced. Sequencing CP-1→CP-8; **CP-4 (Router pass-through, unpriced, flag OFF) before CP-6 sets a rate card** — price on measured burn, not estimates. 🔴 Gates: the `GATEWAY_INTERNAL_TOKEN`/`LITELLM_MASTER_KEY` split is a hard prerequisite for per-org keys and is the **owner's** redeploy; deploying the service, live Razorpay keys, real entitlement/credit edits and issuing a production `cc_live_` key are all OWNER-GATE. Open (commercial, non-blocking): AI-only SKU, trial credits, auto-top-up threshold (⚠️ **cap it below ₹15,000** — D33.4b). · ⚠️ **RE-ORDERED 2026-08-12 by D33** (`specs/saas_operations_doctrine.md`): **CP-0 runs first** — sign-in is pinned to one Microsoft Entra directory and auth **fails OPEN** when unconfigured (`workbench/control_plane/src/auth.ts`), so **today the product can onboard exactly one customer: us**, and a mis-provisioned box is open. Neither was covered by any existing ticket. **CP-2a** (signup + idempotent provisioning + GST fields at signup) added — no signup route exists in the app tree at all. Sequence is now CP-0 → CP-1 → CP-2 → CP-2a → CP-3 → CP-4 → CP-5 → CP-6 → CP-7 → CP-8. · ✅ **CP-0 BUILT 2026-08-12** (multi-directory providers + fail-closed posture in a pure `authPosture` module; 16 fences, **verified red-first** — restoring the old semantics fails exactly one test and only that one). · ✅ **CP-1 BUILT 2026-08-12**: `infra/platform/` is the Control Plane's **own** migration ladder (NOT `infra/postgres/`, which `apply_migrations.sh` replays into the tenant DB and `gen_tenant_migration.py` scans to demand RLS — both wrong for a deliberately cross-tenant plane), `apps/services/platform/`, **79 tests of which 34 run against a real Postgres 16 (R8)**. New engine site declared in `test_db_engine_seam.py::_ALLOWED_SYNC` with its reason (R5(b)) — the ratchet caught it, as designed. Service **fails closed** without `CONTROL_PLANE_OPERATOR_TOKEN`; its DSN has **no default** so it cannot silently reach the tenant database. Rate card seeded **UNPRICED** on purpose — CP-4's unpriced pass-through measures real burn before CP-6 sets prices. ✅ **CP-3 BUILT 2026-08-12 — but only after independent verification returned FAIL and it was rebuilt.** The first attempt put `/usage/record` under *organization-key* auth; the verifier measured, on a live database, that a negative `billed_credits` became a **positive** ledger delta (989 → 100,989 credits — a customer-reachable credit-minting endpoint) and that a globally-unique `request_id` let one tenant silently suppress another's charge while `recorded:false` leaked as a cross-tenant existence oracle. It also showed the log fence was satisfied by `getMessage()` alone and so missed both `extra={}` and `exc_info` leaks, and that **CI never set `CONTROL_PLANE_DATABASE_URL`, so every R8-gated fence was skipping while reporting green**. All fixed: three auth schemes (operator / internal / org key), the org key is **read-only**, the Router's internal token writes the meter, quantities floored in both the API model and CHECK constraints, idempotency scoped `(organization_id, request_id)` (migration 003), the log fence reads the whole record, and `pr-check.yml` now runs a Postgres service **plus a guard that fails the job if the platform suites skip**. ⚠️ **Standing lesson: a passing suite proved nothing here — the verifier is what found all of it.** · ✅ **CP-4 BUILT 2026-08-12** — the Router: `POST /v1/chat/completions`, org-key authenticated, tier resolved from `tier_binding` (a provider swap is one row, not a deploy to every customer), response returned **unchanged**, one `usage_event` per call, **unpriced on purpose** so CP-6 sets the card against measured burn. ⚠️ It does **not** reuse `acb_llm` as the ticket said: that package's key store reads the TENANT database, so reusing it would put our provider credentials on a customer's box — the Router carries its own encrypted `provider_credential` table (migration 004). Metering is best-effort and never fails the completion. 132 platform tests, 87 DB-gated. · ✅ **CP-2a BUILT 2026-08-13** — account management: the lifecycle is ONE state machine (`platform_api/lifecycle.py`) read by sign-in, the Router, seat writes and the console, because four copies drift and the permissive copy gives away product. **`suspended` keeps login working while locking features** (a customer who cannot log in cannot pay you) and **`deleted` is reachable only from `cancelled`**, so no operator action can destroy data without the export window — enforced by the transition graph, not by remembering. Provisioning now writes the trial `org_subscription` and a resumable `provisioning_run`. 172 platform tests. · 🔴 **Where it runs is an open owner decision — `specs/control_plane_infrastructure.md`** (Firebase disqualified on technical grounds in §3: no partial unique indexes, no server-side SUM; the schema depends on both). · 🔴 **A LADDER DEFECT THAT WAS GREEN LOCALLY AND RED ONLY ON REAL POSTGRES, found by opening #442 and fixed in it (`d8f52e9`)**: the five R8 suites each transcribed their own tuple of `infra/platform/00N_*.sql`, and three stopped at 003, so `test_platform_api.py` built a schema two migrations behind the code and answered `column "client_ref" of relation "usage_event" does not exist` — **inside an assertion about billing**, several steps from the missing migration, which is what makes a mirror worse than no list (CLAUDE.md §5). It had been wrong since 004 landed, and the suites carrying the stale copy were the ones that would have caught it. `tests/unit/_platform_ladder.py` now READS the directory, sorted on the leading integer (`010` precedes `002` lexically), refusing an empty ladder and duplicate numbers (R1). Fence: `test_no_platform_suite_transcribes_the_ladder_by_hand`, globbed not listed — its own first draft carried a five-name tuple, i.e. the same mirror one level up — and proved by mutation. (2026-08-14) |
+
+| WS-32 | **Organization Identity — the customer's own mark inside the product** *(minted 2026-08-14)* | ◐ **OI-1 ✅ · OI-3a ✅ — MERGED in #442 (`4934eb8`) 2026-08-14** · 🔴 **OI-2 BLOCKED (MT-1b)** · 🟡 OI-3b/OI-4/OI-5 open | **`specs/organization_identity.md`** | Settings → Organization: logo upload (OI-1) · tenant-scoping the store (OI-2) · first-paint branding (OI-3) · org display name (OI-4) · logo on invoices (OI-5, waits on D38's renderer). ⚠️ **Minted AFTER OI-1 was built, which is backwards and is recorded in the spec's banner.** The owner asked for the logo mid-session on the WS-31 branch; it shipped, and BOTH independent passes flagged that no ACTIVE spec owned it — so the verifier had no acceptance contract and had to check the implementer's own claims, the one thing that role exists to avoid. OI-1's acceptance criteria were written from shipped behaviour and are therefore weak evidence; the row stays ◐ until re-verified against §4. · 🔴 **OI-2 is a hard prerequisite for customer #2 and is BLOCKED on MT-1b** (not owner-gated — dispatchable the day promotion lands): `org_settings` has PK `key` alone, sits in `test_tenancy_boundary.py`'s BASELINE_UNSCOPED, and is written through a raw psycopg site allow-listed as "a binding site the RLS work must convert, not a permanent exemption". Before promotion tenant B's upload overwrites tenant A's logo; after promotion every org's logo silently vanishes. Inherited from the `appearance` neighbour, but branding is the first *content* in that table rather than a preference. · Format rules are magic-byte-sniffed, SVG refused by name (stored-XSS surface), 128 KiB / 32–2048px / aspect 0.5–8.0. · ✅ **The second Playwright seam is gone** — `scripts/theme-check*.mjs` (hardcoded POSIX browser path, outside `testDir`, invisible to the runner) folded into `e2e/org-branding.spec.ts`. Its first version's key assertion could not fail in the case it was written for and was reported as working — the R7 lesson, recorded in the spec §7. · 🔴 **THE FOLDED SPEC CANNOT RUN AND IS `test.fixme` IN FULL, 18 SKIPPED.** Two findings under it. (a) The e2e suite had not booted since CP-0 (`8f6eb79`): `next start` sets NODE_ENV=production, `authPosture` grants its dev bypass only when NODE_ENV is *not* production, so the proxy answered every page 503 and **every spec in `e2e/` timed out** — nothing noticed because nothing runs `e2e/` in CI. Fixed by serving the suite with `next dev`; ⚠️ these specs now exercise the DEV bundle, and restoring production coverage needs a considered test-auth posture (owner). (b) Under dev the app **does not hydrate** in Playwright — zero `/api/**` requests, a failing `webpack-hmr` handshake. ⚠️ **The partial pass was the dangerous part**: 9 of 18 reported green and every one was a fallback/outage case that an un-hydrated page renders anyway — they would pass with the client bundle deleted. NEXT STEP, written into the spec's own banner: load the dev server with **no routes registered** and check whether `/api/auth/me` is requested; that one measurement splits interception from the dev overlay from the HMR socket. (2026-08-14) |
 
 ### Apps
 
@@ -216,7 +219,7 @@ owning specs are the archive; this file owns ordering, gates and states only.
 🔴 **The record below is KEPT because what it warned about was right.** Three agents were dispatched in parallel on 2026-08-11, all three died on the same API-limit error, none finished, none self-verified; two left real work, opened as DRAFT PRs precisely so nobody would mistake them for GO. **Both drafts were independently verified on 2026-08-12 before merge, and verification found real defects in one of them** — which is the argument for the draft convention, not against it.
 - **`ws-27ak-toast`** → PR #430, **MERGED after repair**. `tsc` 0 · `vitest` **88 files / 1983 tests** · `next build` 0 · **`e2e/toast.spec.ts` 6/6** with `e2e/modal.spec.ts` 10/10 as the control. 🔴 **Two of the six browser tests were red and BOTH were the test's fault, not the component's**: `[role="alert"]` counted Next's route announcer (`#__next-route-announcer__`, in a **shadow root** — Playwright pierces open shadow roots, `document.querySelectorAll` does not, so every count was off by one), and `getByRole` cannot see a high-priority toast's controls (`priority: "high"` is what makes an error assertive AND what makes Base UI stamp `aria-hidden="true"` on the visible toast until the viewport is focused, `ToastRoot.mjs:418`; F6 is the reader's way in). ⚠️ **And a THIRD defect the tests did not report: the keyed-re-fire fence was DEAD** — it fired the second toast from `Retry`, whose handler closes the toast before re-running the closure, so with `toastIdFor` stubbed to `undefined` it still passed. Re-pointed at a second press of "Mark all read"; under the same mutation that is 2 toasts mid-flight, 2 settled, test red. Recorded in `specs/project_management_app.md` §11.32.
 - **`ws-27be-trgm-search-index`** → PR #431, **MERGED**. ✅ **R8 satisfied — the check the dying agent never ran was run on 2026-08-12**: ladder replayed 01→169 into a throwaway DB, 60k seeded rows, **23 checks green, exit 0** — `Filter:` → `Index Cond:`, ~302 ms → 0.41 ms, tenant isolation holds through the new index path, migration idempotent, `idx_pm_tasks_fts` retained per R6. **R1 re-checked at merge: 170 was still the next free number.** ⚠️ Still owed, unchanged: the `idx_pm_tasks_fts` drop, and the product call on raising `MIN_QUERY` to 3 (a trigram index cannot serve a 2-character pattern, so the shortest ACCEPTED query is the longest UNSERVABLE one).
-- **`ws-27bf-theme-sweep`** — died before writing a single file. Zero salvage; **still fully owed**, and it is the highest-leverage item in this queue because `CLAUDE.md` calls the four-theme sweep "the real gate" and every slice since WS-27am has owed it. No branch, no PR.
+- ~~**`ws-27bf-theme-sweep`** — died before writing a single file. Zero salvage; **still fully owed**, and it is the highest-leverage item in this queue.~~ 🔴 **WS-27bf IS STRUCK 2026-08-13 (owner-ruled) — it was never a ticket.** It appears nowhere in the owning spec: two lines of board prose and no §1 contract, no "Done when", no acceptance. The work it named is already specced as **WS-27at** (the living design-system gallery, §9.4.2), so it was a duplicate mint under a Wave-2 name, and a board row naming a ticket with no spec entry is not dispatchable — the same verdict WS-27bc drew on its documentation. **WS-27at is the ticket; use that name.** ⚠️ The gap it pointed at is also partly closed now: WS-27bg slice 2 landed `e2e/project-state.spec.ts`, so the Fluent → Material → Graphite sweep is a real test for the Projects tree rather than a manual step every slice owed and several skipped.
 ⚠️ **Environment traps that cost real time on 2026-08-12, both worth knowing before the next dispatch**: (1) `playwright.config.ts` runs `next start`, which serves a **prebuilt** `.next` — a stale one 404s every route and fails all 10 modal tests for reasons that have nothing to do with the diff, so `npx next build` comes first and a known-green spec is the control. (2) The `mt-scratch` Docker DB on :5433 is **NOT current** (no `pm_projects.organization_id`, empty ledger); an R8 run needs the ladder replayed into a throwaway database inside `acb-postgres`.
 ➡️ **Next, in order**: (1) **build the theme sweep from scratch** (WS-27bf — nothing exists, and it gates the visual pass every slice here owes), (2) then whichever of Tooltip/Skeleton — acceptance criteria are written for both in spec §9.4.2 — paired with the DOM-test-substrate question, since every rendering done-when in Wave 2 is review-only without it. ⚠️ **Owed and NOT closed by the merges**: the four-theme visual pass (Fluent → Material → Graphite) on `/projects` and a neighbour, on live `main`. Modal and Toast shipped **un-flagged** — they replace existing surfaces rather than adding new behaviour, so there is no flag to flip back if a theme looks wrong. (2026-08-12) ⚠️ **Live bug found and fixed 2026-08-11 by the WS-26i-export repair (MERGED in PR #426, `7255344`; deploy not independently verified):** `src/app/api/projects/[...path]/route.ts` did `await res.text()` — a UTF-8 decode, which strips a leading BOM — so **`GET /projects/export/tasks.csv` has shipped BOM-less since WS-27ae** and Excel on Windows renders a task titled "Café" as "CafÃ©". Measured on node v22 through the real handler: `EF BB BF 4E 61 6D` in, `4E 61 6D 65` out. The proxy now reads `res.arrayBuffer()` and also forwards `X-Export-Rows` (set since WS-27ae, unreachable until now). Fence: `src/lib/export.test.ts` RUNS both proxies over a BOM'd body and compares bytes — it previously asserted `toContain("await res.text()")` and pinned the defect. `specs/project_management_app.md` §11.26 carries the correction.
 🆕 **WS-27bg MINTED 2026-08-13 (owner-directed) and it PREEMPTS the queue above** — project run
@@ -342,18 +345,455 @@ inheritance derivation, and **making `on_hold` green, which turns the browser sp
 three themes** and is what proves the sweep discriminates rather than merely passes. ⚠️ The unit
 tests assert a hue NAME; only the browser proves two names paint differently — which is exactly
 the failure `statusAccent`'s own header records, a colour stored correctly for months while
-every lane drew the same grey. (2026-08-13) |
-| WS-28 | **People Center — directory, org chart, assignment seam** *(minted 2026-08-06)* | ✅ a+b+b-write+g+g-2+p+q+k+j1+j2+h+d | `specs/people_center_app.md` · board record 2026-08-09 | a (key shape, mig 148 + quarantine table) · b (directory + person page, mig 149, five-place registration) · b-write (create/edit UI restored; found three ways mig 148 had broken the write routes) — built 2026-08-06/07; **closes WS-13's directory item**. 🟢 c org chart · ✅ **d BUILT 2026-08-14** — capability search (`/people/search`): three signals (structured skills weighted by level x recency · the newest CV's matching line, quoted · cosine on the capability embedding, best-effort), each on the result with its own points. **Outside the eval lock by construction**: no LLM ranking prompt exists — arithmetic over named constants — and fences grep the module for model calls and writes (D-PC-13: no INSERT/UPDATE/DELETE) and the client for `.sort(` (the server's order IS the ranking). Gated whole-surface on `admin:members:read` (§4.2). 18 hermetic + 10 vitest, 12 live checks (`live_ws28d.py`) · e Projects seams; 🔴 f seats/roles writes (§6 WS-24 (d) analogue). **SCOPE WIDENED 2026-08-13** (owner directive — the person record, self-service editing, the remaining sub-apps, and what the AI may read/do): spec rewritten to v2 with §3 the field inventory, §4 the access model (three read tiers · three write classes · one self predicate `lower(email)`, safe only because 148 made that unique), §5 the sub-app roster and §12 D-PC-1…14. ✅ **g BUILT 2026-08-13** (mig `172_people_profile.sql` — 20 nullable columns, expand-half only, no CHECK over live data; `routes/people/fields.py` the ONE field-class authority with a **structural fence** that discovers every `gtd_people` column from the migrations and fails an unclassified one; `GET /people/me` with three distinct states; `PATCH /people/{id}` authorized by class and refusing **by name**; self-service CV upload; `/people/me` + `ProfilePanels` rendering from the server's `editable_fields`; 137 hermetic + 20 vitest + **29 live checks on a real Postgres 16 with the full ladder applied**). Found on the way: `create_person` silently dropped every profile field it accepted, and the self door was about to return the admin projection. **REVIEWED 2026-08-13 against the owner's PM-perspective checklist** — five gaps closed in the spec and one **defect fixed**: ✅ **g-2 BUILT** — `/people/me` was behind `feature:people` (`is_default false`), so an ordinary colleague **could not open their own profile**, the one surface it exists for. Now an ungated `routes/people/selfservice.py` whose paths carry **no person id at all** (structural, not a check), the directory still gated, `UNGATED_ROUTERS` minted in the enforcement registry so *deliberately open* and *unchecked* stop looking alike, and "My profile" added to the **Personal Center** nav. Spec gains: §3.1a the **display image** (server re-encodes to 256×256 WebP, upload bytes discarded — kills size drift, crop bypass and the SVG/polyglot class at once, D-PC-17) · §3.4a the **work schedule** (org policy in `org_settings` + person override + one effective-schedule function; **D-PC-16 settles a seam collision WS-28g created** — `gtd_people.working_hours` vs the calendar's `gtd_settings.day_start_hour` from migrations 77/97: different questions, People→Calendar seeded once, never mirrored) · **D-PC-18** contracted hours become derived · §5.7 rewritten as the **people-management dashboard** (projects per person, tasks with deadlines, behind/at-risk/overloaded/idle/on-track as arithmetic over dates, department rollup, and idle↔behind rebalancing suggestions that propose and never assign). ✅ **p BUILT 2026-08-13** — the work schedule, **no migration**: org policy in `org_settings`, person override in the column P-3 shipped, ONE `gateway/work_schedule.py` computing the effective schedule; `contracted_hours_per_week` now DERIVED (D-PC-18) and the typed capacity flagged rather than corrected; the calendar SEEDS its day window from it as a **read-time default** and a structural fence sweeps the tasks package for any write back (D-PC-16); admin-gated policy editor that **previews whose hours move before saving**. The live run found what the hermetic suite could not: hours existed only inside shifts, so anyone on no shift had none and the seed silently fell back to migration 77's defaults. ✅ **q BUILT 2026-08-13** — the display image (mig 173): every upload is decoded, cropped square, resized to exactly 256x256 and **re-encoded**, and the stored value is the server's output — so "no random image sizes" is a shape the data cannot take rather than a rule to enforce (D-PC-17). Three things measured rather than assumed: **MuPDF renders SVG**, so the bytes are sniffed before the decoder sees them; the crop must be **fractional**, because a 1000x400 pixel image opens as a 750x300 *point* page; and `Matrix(scale,scale)` rounds outward, so `Rect.torect` is what makes 256 exact. JPEG not WebP — the same guarantee without adding Pillow to the gateway's deploy path. New tickets 🟡 **j** the dashboard, split j1/j2/j3 — ✅ **j1 BUILT 2026-08-14**, **no migration**: it is a READ over the Projects tables (`pm_tasks`/`pm_task_assignees`/`pm_projects`/`pm_activities`) joined to the People record on `lower(email)`, with the classification in ONE pure module (`gateway/workload.py`) so j2, j3 and §5.9 project it instead of counting again. Four aggregates keyed by `lower(assignee)` plus one absence query serve the whole page — built the obvious way an eighty-person roster is three hundred round trips. **D-PC-19** at-risk is CUMULATIVE and carries overdue work (per-task arithmetic calls three 12h tasks due Tuesday fine when there are 16h before it) · **D-PC-20** partial names the viewer's scope and the hidden delta is NEVER computed, because computing it means running the query without the scope · **D-PC-21** one pill by precedence with every flag beside it. Gated on `admin:members:read` on top of `feature:people` (§4.2's oracle rule over a whole surface); an assignee with no roster row still appears, which covers agents, alumni and unknown addresses with one mechanism. ⚠️ **Two fences were corrected, both self-inflicted by writing a fence over raw source**: the no-ranking grep fired on the docstrings explaining the refusal (it now strips prose and carries its own fence of four guilty lines), and the route-order check read a router whose order, inside pytest, is the test session's rather than the app's — it now probes a fresh process and matches on path AND method, since `PATCH /people/{person_id}` in front of `GET /people/dashboard` is not a collision. ⚠️ **The grant closure is applied to the `data:org:read` caller too**, not short-circuited to `TRUE`: `project_clause` answers the TENANT subquery for that caller (WS-29b) and the shortcut would make this endpoint's tenant boundary depend on a FORCE-RLS enforcement flip that is the owner's act. Measured on the scratch cluster (which has no FORCE RLS): with the shortcut a second organization's task lands on the row — 3→4 open tasks, 86h→185h. **`/people/{id}/work` still takes that shortcut** — a finding, not a pattern to copy. 48 hermetic + 30 vitest cases and 28 live checks (`live_ws28j.py`), whose scoped-viewer assertion first passed for the wrong reason — a viewer with no `app_user` row binds `vis_org = NULL` and sees nothing at all. ✅ **j2 BUILT 2026-08-14** — the department rollup, **no new query**: `gateway.workload.rollup` is handed `[r.model_dump() for r in rows]`, the exact payload the client receives, so the §5.9 guarantee is a mechanism rather than a promise — it cannot disagree with the table beneath it and cannot read a field the caller does not have. The fence asserts IDENTITY (`org['contracted_hours'] == sum(rows)`) and a second one greps the module for `db.execute`/`SELECT`/`await`, since the cheapest way to introduce a second count is a convenience `db` parameter. **Strain is a SHARE** (three behind out of four is not three out of forty); the **spread names both people and is stated in HOURS**, because a bare percentage gap is a score with two names attached, and it is computed only over rows whose hours mean something or a person with nothing estimated arrives at the bottom of it as free; agents are excluded from headcount and the exclusion is REPORTED (`org.agents`), a silent one being how a total quietly stops adding up. 16 hermetic + 8 vitest cases and 8 more live checks. 🟡 j3 suggestions · ✅ **h BUILT 2026-08-14** — structured skills & credentials (mig 175): `gtd_person_skills` (level · years · last-used · evidence) + `gtd_person_credentials`, both tenant-scoped day one; **D-PC-6 as a mechanism** — `gateway/person_skills.py` is a leaf outside both route packages (People routes AND the tasks-side résumé ingest write it) and every writer ends in ONE `project()` that rewrites `skills[]`/`skills_source` in the same transaction, so the four live array consumers (GIN, `_match_capability`, clarify, directory filters) keep reading truth. The flat `PATCH {skills}` now RECONCILES the table — retained skills keep their level, so the older door cannot strip what the newer one set; the résumé merge is add-only and writes credentials (LLM half, degrades to none). Measured: batch inserts share `now()`, so projection order is deterministic-alphabetical, not insertion; the parser's boundary regex eats a trailing period (`solidworks.`). **Found+fixed: every hand-typed skill rendered as parser-inferred** — backend writes `manual`, the UI's `skillOrigin` tested the literal `stated` which nothing ever wrote, and its test had pinned the wrong word, holding the defect in place. 28 hermetic + 14 vitest cases, 21 live checks (`live_ws28h.py`) · **j** workload & activity · ✅ **k BUILT 2026-08-13** — availability (mig 174): `working_hours_between(schedule, from, to, absences)` is the function the dashboard's "at risk" calls, and a **structural fence** greps the migration for `approv`/`balance`/`accrual`/`entitlement` so this cannot drift into leave management one reasonable-looking column at a time (D-PC-7). Self-writable, delete scoped `AND person_id` (the control, not belt-and-braces), two read tiers — the bare "away until" is DIRECTORY tier and resolved for the whole page in ONE query, the spans and hours are HR. The tenancy ratchet caught the new table and was right to: `organization_id` declared on day one, defaulting from the session GUC and failing closed when unbound (verified live). ⚠️ `REFERENCES` must precede `DEFAULT` — the ratchet matches the two with no comma between, and `current_setting('app.tenant_id', true)` has one. D-PC-15's fence refined to the invariant it protects rather than worked around · **l** People dashboard · **m** skills coverage & data quality; 🟡 **n** the AI seams (ranking EVAL-LOCKED, **sending is the §6 outbound-nudge OWNER-GATE — this row may not flip it**). ⚠️ `schema.generated.sql` regeneration is **due**: stale since ~migration 113, and 148 reached prod ~2026-08-07 (after the #384 cast fix). (2026-08-13) |
+every lane drew the same grey.
+✅ **PR #437 MERGED to `main` 2026-08-13** (`a0af10f`) — slices 1+2, migration **171**, all six
+checks green including **Migration ladder replay**. Owner-directed merge; branch restarted from
+the new head. **NOT deployed** — and the `status='archived'` row count on prod is still owed
+(§6 owner-gated reach).
+🔴 **A DEFECT IN THE MERGED CODE, found by re-reading slice 1 before starting slice 3, fixed
+2026-08-13** (as-built §11.37): **the three guards each consulted a DIFFERENT ROW.** The sweep
+read the **root** then acted on the whole subtree by `root_project_id`; recurrence and dispatch
+read the task's **immediate** project. The subtree in between was governed by nobody, and it
+failed **both** ways — a task in an *active subproject* under a *paused root* still spawned
+successors and still dispatched agents **while the tree drew that subproject as "Paused —
+inherited"** (the product said paused and the automation ran), and a stale task in a *paused
+subproject* under an *active root* was swept and closed anyway. Reproduced on a real database
+before a fix was written. Fixed by `core.is_runnable_with_ancestors` — one `WITH RECURSIVE` walk
+reduced by `bool_and`, the server's copy of the `effectiveState` rule slice 2's UI already used —
+consumed by both guards, with the same predicate as a `NOT EXISTS` on the sweep's candidate query
+so **every task earns its own verdict from its own chain**. Still derives, still writes nothing.
+🔴 **AND THE NEW FENCE WAS DEAD ON ITS FIRST VERSION — only a mutation found it.** All four
+checks passed *with the recursion deleted*, because the fixtures sat directly in the root, so
+pausing the root paused their own immediate project and the walk was never exercised. Moved into
+the grandchild (and the series re-armed), the mutation now turns both checks red. **Second time
+in this workstream a fence looked like coverage and was not** — the Toast slice's keyed-re-fire
+assertion was the first, and both were found by breaking the code on purpose. ⚠️ A smaller test
+defect the same run: a fixture reused across checks was read before being reset, so one
+assertion measured an earlier check's leftovers. ✅ `live_ws27bg.py` now **31 checks green**;
+`tests/unit` **5999 passed**. ⚠️ The hermetic fake was taught the chain query explicitly —
+falling through would have answered `None` → False → *"nothing is ever runnable"*, silently
+disabling recurrence and dispatch across the whole suite while every assertion still read as a
+real refusal.
+✅ **TWO OWNER DECISIONS TAKEN 2026-08-13, recorded so neither is re-asked.** **D-PM-30 —
+`actual_start`/`actual_end` are SHARED on `pm_tasks`**, which **overrides §7.5.1's row** sending
+them to `pm_task_personal`. It follows D-PM-29 rather than contradicting it: the default home is
+`pm_tasks` and *"how long did this task take"* is a property of the work. Projects has
+`estimate_mins` and **no actuals at all**, so it cannot answer "did this take as long as we
+said?" — the question a PM tool exists for. ⚠️ Per-person time tracking is a **timesheet**, a
+separate concern this does not foreclose; timeboxing and `deep_work` stay personal, unmoved.
+**D-PM-31 — the search minimum is 3, not 2.** The open state was the worst of the three: a
+2-character query is ACCEPTED and physically **unservable** by a trigram index, so the shortest
+query allowed was the longest one answered by a sequential scan (127 ms at 60k rows, measured).
+One constant governs both endpoints since WS-27be moved it to `filters.py`. 🔜 **Queued by owner
+selection the same day**: D-PM-20 (the `updated_at` PATCH precondition), WS-27ar (one generic
+pins table), and **D-PM-16** (org-wide vocabularies — the expensive one, framed for a ruling
+below rather than built). (2026-08-13)
+✅ **WS-27bi MINTED 2026-08-13 and its R8 GATE MEASURED 2026-08-14** (spec §9.10, §9.10.1).
+D-PM-20 answered: `If-Match: <updated_at>` → **412 with the current row**; **no `version`
+column** (a second monotonic fact about one row is the §5 defect); **an absent header still
+succeeds** — advisory now, mandatory later, R6's expand/contract applied to an API. The worry
+that stalled this ("168's `updated_at` also serves the delta cursor, so one semantic must cover
+both") **dissolves on audit**: there are exactly **two** `touch=False` sites, both stamping
+`recurrence_spawned_at`, and they are right for *both* consumers at once — a bookkeeping stamp
+should neither wake a delta client nor invalidate a human's pending edit. **Measured, not
+assumed**: parse-then-bind compares exactly for ordinary, trailing-zero and zero microseconds.
+Two fences moved by the measurement — **a naive (offset-stripped) token silently compares
+`True`** (asyncpg reinterprets it in the session zone; it only *looks* right on a UTC box, so it
+must be rejected with 400), and **`::text` disagrees with the JSON encoder** on trailing zeros
+(`.1` vs `.100000`), so the token is never rendered by `::text` and never string-compared.
+🔴 **FINDING FOR THE BOARD, NOT THIS TICKET — `updated_at = now()` CAN MOVE BACKWARDS.**
+Reproduced on a real database: `now()` is the **transaction-start** timestamp, so a transaction
+opening 201 ms earlier and committing *later* overwrote a newer row with an **earlier** stamp.
+**Harmless to the precondition** — an exact comparison still differs, so the client still gets
+its 412 — which is precisely why it does not expand WS-27bi. **It is a real gap in migration
+168's keyset cursor**: a delta client whose cursor has passed the newer value is never handed
+the row stamped behind it, and that change leaves the stream silently. Pre-existing and
+already-merged, so per CLAUDE.md §5 it is recorded, not refactored; the fix (`clock_timestamp()`
+or a sequence) changes the delta feed's contract and **owes its own row and its own decision**.
+✅ **D-PM-16 RULED BY OWNER 2026-08-14 — adopt the nullable project scope** (spec §2457), and
+**WS-27bj minted** for it (§9.11). `project_id` becomes nullable on `pm_task_types`,
+`pm_custom_fields` and `pm_tags`; `NULL` means org-wide, with paired partial uniques replacing
+each table's whole-table `UNIQUE`. This was the section's most expensive item precisely because
+the cost is asymmetric: dropping NOT NULL later is trivial, **merging the duplicate "Bug" /
+"urgent" / "Client" rows twelve root projects will each have accumulated is a judgement-call
+migration nobody can automate**, so the ruling's value is that it stops that merge ever becoming
+necessary. ✅ **No R5 gap, and it is what makes the ruling cheap** — all three tables already
+carry `organization_id NOT NULL` from **migration 161**, so a `project_id IS NULL` row is
+org-wide **within one tenant, never global**. Had tenancy been reached only through
+`project_id → pm_projects`, nulling it would have produced untenanted rows readable by every
+tenant. ⚠️ All three are **ROOT**-scoped already (their own headers say so), so the new axis is
+root-local vs org-wide — there is no third level. 🔴 **Shadowing had to be ruled, not left to
+taste**: `pm_tasks.tags` stores tag **display text**, not a key, so an org-wide `bug` and a
+root-local `bug` are the *same tag* on every task while being two rows with two colours —
+**most specific wins**, fenced by a test. **R6 expand-only** (old writers unaffected, old
+readers simply do not see org-wide rows); **ship dark on the create affordance, not the read
+union**. ✅ **WS-27bi BUILT 2026-08-14** — `core.parse_precondition` /
+`core.require_precondition` (one seam, not inline) wired into `PATCH /projects/tasks/{id}` via
+`If-Match`, checked **after** the visibility load so an unreadable task still answers 404 and
+never leaks its existence through a 412 (R5). **Both measured traps are fenced and
+mutation-proved**: assuming UTC for a naive token turns 2 checks red, string comparison turns 2
+red, never enforcing turns 7 red. ⚠️ The string-comparison mutant still passed **12 of 16** —
+including the ordinary-microsecond match — which is exactly why the measurement was required:
+that mutant is invisible to any test someone would think to write. A third fence asserts
+`touch=False` appears **twice, both in `recurrence.py`**, so a future third site has to come and
+argue itself against both consumers. 🔴 **Two process findings.** (1) `Header(None, ...)` is
+resolved by FastAPI **only through the HTTP layer**, so the package's many direct endpoint calls
+receive the sentinel object rather than `None` — the first wiring turned **18 existing tests into
+400s**, and the guard is `isinstance(str)`, now regression-tested. (2) **`ruff check --fix`
+deleted `core.py`'s `_tenant_session` re-export** — unused *within* the module, imported by name
+from every sibling — and took **25 test modules** down with it. The repo's own CI comment warns
+that a blanket `--fix` is destructive here and CI runs it report-only; the line now carries a
+comment saying so. ✅ `tests/unit` **6015 passed** (baseline 5999), blocking lint clean.
+✅ **WS-27bj SLICE 1 (the schema) BUILT 2026-08-14 — migration `172_projects_org_vocabularies.sql`**
+(number taken at build time, **re-check at merge, R1**). `project_id` is nullable on all three
+vocabulary tables; each table's whole-table `UNIQUE` is replaced by a **pair** of partial uniques
+— `(project_id, <identity>) WHERE project_id IS NOT NULL` and `(organization_id, <identity>)
+WHERE project_id IS NULL` — on each table's **existing** identity (`lower(name)` for tags,
+`field_key` for custom fields, `name` for types), inventing no new normalisation. ✅ **R8 — all
+four cases proved on a real database, and the migration applied twice to prove idempotency**:
+two org-wide duplicates rejected (`uq_pm_tags_org_name`, catching `R8DUP` vs `r8dup`), two
+root-local duplicates rejected, **org-wide + root-local of the same name ACCEPTED** (the
+shadowing case D-PM-16 requires — a whole-table unique left in place would have forbidden it),
+and the same name under a second tenant accepted. ⚠️ **The first run of that check was a false
+pass and the output is why it was caught**: a bad seed (`organization` has `display_name`, not
+`name`) made every case fail on a **foreign key**, so cases 1 and 2 "errored" exactly as intended
+for entirely the wrong reason. A pass/fail count would have read green. 🔴 **Slice 1 is
+schema-only and is safe to merge alone** — nothing yet writes a `project_id IS NULL` row and
+nothing yet reads one, which is "ship dark" landing as a schema rather than a flag. **Still
+owed: the read path** — `org-wide ∪ root-local` with **root-local shadowing** (a correctness
+rule for tags, since `pm_tasks.tags` stores display text, so two registry rows describe one tag
+and the union must yield one colour), plus the flagged create affordance. `tests/unit` **6029
+passed** (baseline 6015). (2026-08-14)<br>✅ **WS-27bj SLICE 2 (the read path) BUILT 2026-08-14 —
+spec §9.11.1.** One seam in `core.py` (`vocabulary_scope` · `shadowed` · `org_wide_exists` ·
+`refuse_org_wide_write` · `org_vocabularies_enabled`) and three readers on it. The union lands on
+`load_definitions` rather than the list endpoint because that seam has **four** callers — list,
+create's duplicate check, export columns, and `apply_values`' validation — and a field that
+listed but whose values were refused as an unknown key would be the worst of both. Create is
+gated on the flag (`PROJECTS_ORG_VOCABULARIES`, default OFF, read at call time) **and**
+`admin:settings:manage`: an org-wide row lands in every project in the organization, including
+ones the writer cannot see. ✅ **R8 on a real database, with the probe GENERATED from the live
+clause builders** (retyping the SQL would prove the retyping): union correct, B's project cannot
+see A's org-wide rows, the usage count reads 2 (A's tasks) rather than 3 or 0, `org_wide_exists`
+is cross-tenant-false and case-insensitive, and an unknown `:root` returns nothing — fails
+closed. 🔴 **Two of fourteen mutants survived the first pass, and both were the hermetic-fake
+blindness R8 exists for**: reverting the usage-count correlation to `g.project_id` — which
+reports every org-wide tag as used by **0 tasks** — kept all 57 tests green because the mirror
+computed the count itself; and dropping the explicit tenant from an org-wide INSERT kept them
+green because the fake filled it from its own default, where 161's trigger "does NOT invent a
+tenant" and `NOT NULL` would refuse. Both mirrors were fixed to read the statement, then both
+mutants died. ⚠️ The live probe had already shown the right behaviour in both cases — what was
+missing was a test that goes **red** when someone undoes it, which is the difference between
+verified and fenced. 🔴 **Board finding: `TagRow` is declared TWICE on the frontend**
+(`projects/lib/tags.ts` and `projects/lib/api.ts`, with `page.tsx` passing rows between them);
+both were widened to keep them assignable, but collapsing two public wire types is its own change
+(CLAUDE.md §5). Also noted: the tag/field caps now count the **effective** set. Still owed: the
+admin surface for managing org-wide vocabularies — which is also what would let one be edited or
+retired. `tests/unit` **6090 passed** (baseline 6029); frontend `tsc` clean, **2007** vitest
+passed.
+✅ **MERGED to `main` 2026-08-14 as #439 (`aa0d7e3`)** — WS-27bg's guard unification, WS-27bi's If-Match precondition and WS-27bj's vocabularies, all six checks green (`tests/unit` **6540 passed**). **NOT deployed.**
+🔴 **AN R1 MIGRATION COLLISION THAT MERGED CLEAN — the third in this plan, and the first that git could not show anyone.** This branch's `172_projects_org_vocabularies.sql` and `main`'s `172_people_profile.sql` (via #438) both claimed **172**. Different filenames in different subtrees, so there is no textual conflict: the merge succeeded silently with two migrations at one number, and `sort -V` would then order them by filename. Renumbered to **175**, behind 172/173/174; CI's ladder replay is the check that proves it. ⚠️ **The finding is NOT that the R1 guard is blind — measured, it is not.** `test_migration_prefixes.py` globs the directory, and with both 172 files present it goes red (verified by putting the duplicate back). The gap is *when it runs*: `actions/checkout` on a `pull_request` event checks out `refs/pull/N/merge`, which GitHub **does not compute for a conflicted PR** — #439 sat `dirty` and reported `check_runs: 0`, no jobs at all. So the guard was never given a tree containing both files. **A conflicted PR runs NO checks, which means the window where a cross-branch collision is most likely is exactly the window where nothing is watching**, and the collision surfaces only once someone resolves the conflict — by which point they are hand-editing the tree that hides it. What DID hold is the vocabularies suite finding its migration by **content** (`"org-wide vocabularies"`) rather than by number, written that way on purpose so a renumber that changed nothing cannot turn it red — a pattern worth copying to every migration-mirroring suite. (2026-08-14) |
+| WS-28 | **People Center — directory, org chart, assignment seam** *(minted 2026-08-06)* | ✅ a+b+b-write+g+g-2+p+q+k+j1+j2+h+d | `specs/people_center_app.md` · board record 2026-08-09 | a (key shape, mig 148 + quarantine table) · b (directory + person page, mig 149, five-place registration) · b-write (create/edit UI restored; found three ways mig 148 had broken the write routes) — built 2026-08-06/07; **closes WS-13's directory item**. 🟢 c org chart · ✅ **d BUILT 2026-08-14** — capability search (`/people/search`): three signals (structured skills weighted by level x recency · the newest CV's matching line, quoted · cosine on the capability embedding, best-effort), each on the result with its own points. **Outside the eval lock by construction**: no LLM ranking prompt exists — arithmetic over named constants — and fences grep the module for model calls and writes (D-PC-13: no INSERT/UPDATE/DELETE) and the client for `.sort(` (the server's order IS the ranking). Gated whole-surface on `admin:members:read` (§4.2). 18 hermetic + 10 vitest, 12 live checks (`live_ws28d.py`) · e Projects seams; 🔴 f seats/roles writes (§6 WS-24 (d) analogue). **SCOPE WIDENED 2026-08-13** (owner directive — the person record, self-service editing, the remaining sub-apps, and what the AI may read/do): spec rewritten to v2 with §3 the field inventory, §4 the access model (three read tiers · three write classes · one self predicate `lower(email)`, safe only because 148 made that unique), §5 the sub-app roster and §12 D-PC-1…14. ✅ **g BUILT 2026-08-13** (mig `172_people_profile.sql` — 20 nullable columns, expand-half only, no CHECK over live data; `routes/people/fields.py` the ONE field-class authority with a **structural fence** that discovers every `gtd_people` column from the migrations and fails an unclassified one; `GET /people/me` with three distinct states; `PATCH /people/{id}` authorized by class and refusing **by name**; self-service CV upload; `/people/me` + `ProfilePanels` rendering from the server's `editable_fields`; 137 hermetic + 20 vitest + **29 live checks on a real Postgres 16 with the full ladder applied**). Found on the way: `create_person` silently dropped every profile field it accepted, and the self door was about to return the admin projection. **REVIEWED 2026-08-13 against the owner's PM-perspective checklist** — five gaps closed in the spec and one **defect fixed**: ✅ **g-2 BUILT** — `/people/me` was behind `feature:people` (`is_default false`), so an ordinary colleague **could not open their own profile**, the one surface it exists for. Now an ungated `routes/people/selfservice.py` whose paths carry **no person id at all** (structural, not a check), the directory still gated, `UNGATED_ROUTERS` minted in the enforcement registry so *deliberately open* and *unchecked* stop looking alike, and "My profile" added to the **Personal Center** nav. Spec gains: §3.1a the **display image** (server re-encodes to 256×256 WebP, upload bytes discarded — kills size drift, crop bypass and the SVG/polyglot class at once, D-PC-17) · §3.4a the **work schedule** (org policy in `org_settings` + person override + one effective-schedule function; **D-PC-16 settles a seam collision WS-28g created** — `gtd_people.working_hours` vs the calendar's `gtd_settings.day_start_hour` from migrations 77/97: different questions, People→Calendar seeded once, never mirrored) · **D-PC-18** contracted hours become derived · §5.7 rewritten as the **people-management dashboard** (projects per person, tasks with deadlines, behind/at-risk/overloaded/idle/on-track as arithmetic over dates, department rollup, and idle↔behind rebalancing suggestions that propose and never assign). ✅ **p BUILT 2026-08-13** — the work schedule, **no migration**: org policy in `org_settings`, person override in the column P-3 shipped, ONE `gateway/work_schedule.py` computing the effective schedule; `contracted_hours_per_week` now DERIVED (D-PC-18) and the typed capacity flagged rather than corrected; the calendar SEEDS its day window from it as a **read-time default** and a structural fence sweeps the tasks package for any write back (D-PC-16); admin-gated policy editor that **previews whose hours move before saving**. The live run found what the hermetic suite could not: hours existed only inside shifts, so anyone on no shift had none and the seed silently fell back to migration 77's defaults. ✅ **q BUILT 2026-08-13** — the display image (mig 173): every upload is decoded, cropped square, resized to exactly 256x256 and **re-encoded**, and the stored value is the server's output — so "no random image sizes" is a shape the data cannot take rather than a rule to enforce (D-PC-17). Three things measured rather than assumed: **MuPDF renders SVG**, so the bytes are sniffed before the decoder sees them; the crop must be **fractional**, because a 1000x400 pixel image opens as a 750x300 *point* page; and `Matrix(scale,scale)` rounds outward, so `Rect.torect` is what makes 256 exact. JPEG not WebP — the same guarantee without adding Pillow to the gateway's deploy path. New tickets 🟡 **j** the dashboard, split j1/j2/j3 — ✅ **j1 BUILT 2026-08-14**, **no migration**: it is a READ over the Projects tables (`pm_tasks`/`pm_task_assignees`/`pm_projects`/`pm_activities`) joined to the People record on `lower(email)`, with the classification in ONE pure module (`gateway/workload.py`) so j2, j3 and §5.9 project it instead of counting again. Four aggregates keyed by `lower(assignee)` plus one absence query serve the whole page — built the obvious way an eighty-person roster is three hundred round trips. **D-PC-19** at-risk is CUMULATIVE and carries overdue work (per-task arithmetic calls three 12h tasks due Tuesday fine when there are 16h before it) · **D-PC-20** partial names the viewer's scope and the hidden delta is NEVER computed, because computing it means running the query without the scope · **D-PC-21** one pill by precedence with every flag beside it. Gated on `admin:members:read` on top of `feature:people` (§4.2's oracle rule over a whole surface); an assignee with no roster row still appears, which covers agents, alumni and unknown addresses with one mechanism. ⚠️ **Two fences were corrected, both self-inflicted by writing a fence over raw source**: the no-ranking grep fired on the docstrings explaining the refusal (it now strips prose and carries its own fence of four guilty lines), and the route-order check read a router whose order, inside pytest, is the test session's rather than the app's — it now probes a fresh process and matches on path AND method, since `PATCH /people/{person_id}` in front of `GET /people/dashboard` is not a collision. ⚠️ **The grant closure is applied to the `data:org:read` caller too**, not short-circuited to `TRUE`: `project_clause` answers the TENANT subquery for that caller (WS-29b) and the shortcut would make this endpoint's tenant boundary depend on a FORCE-RLS enforcement flip that is the owner's act. Measured on the scratch cluster (which has no FORCE RLS): with the shortcut a second organization's task lands on the row — 3→4 open tasks, 86h→185h. **`/people/{id}/work` still takes that shortcut** — a finding, not a pattern to copy. 48 hermetic + 30 vitest cases and 28 live checks (`live_ws28j.py`), whose scoped-viewer assertion first passed for the wrong reason — a viewer with no `app_user` row binds `vis_org = NULL` and sees nothing at all. ✅ **j2 BUILT 2026-08-14** — the department rollup, **no new query**: `gateway.workload.rollup` is handed `[r.model_dump() for r in rows]`, the exact payload the client receives, so the §5.9 guarantee is a mechanism rather than a promise — it cannot disagree with the table beneath it and cannot read a field the caller does not have. The fence asserts IDENTITY (`org['contracted_hours'] == sum(rows)`) and a second one greps the module for `db.execute`/`SELECT`/`await`, since the cheapest way to introduce a second count is a convenience `db` parameter. **Strain is a SHARE** (three behind out of four is not three out of forty); the **spread names both people and is stated in HOURS**, because a bare percentage gap is a score with two names attached, and it is computed only over rows whose hours mean something or a person with nothing estimated arrives at the bottom of it as free; agents are excluded from headcount and the exclusion is REPORTED (`org.agents`), a silent one being how a total quietly stops adding up. 16 hermetic + 8 vitest cases and 8 more live checks. 🟡 j3 suggestions · ✅ **h BUILT 2026-08-14** — structured skills & credentials (mig 176): `gtd_person_skills` (level · years · last-used · evidence) + `gtd_person_credentials`, both tenant-scoped day one; **D-PC-6 as a mechanism** — `gateway/person_skills.py` is a leaf outside both route packages (People routes AND the tasks-side résumé ingest write it) and every writer ends in ONE `project()` that rewrites `skills[]`/`skills_source` in the same transaction, so the four live array consumers (GIN, `_match_capability`, clarify, directory filters) keep reading truth. The flat `PATCH {skills}` now RECONCILES the table — retained skills keep their level, so the older door cannot strip what the newer one set; the résumé merge is add-only and writes credentials (LLM half, degrades to none). Measured: batch inserts share `now()`, so projection order is deterministic-alphabetical, not insertion; the parser's boundary regex eats a trailing period (`solidworks.`). **Found+fixed: every hand-typed skill rendered as parser-inferred** — backend writes `manual`, the UI's `skillOrigin` tested the literal `stated` which nothing ever wrote, and its test had pinned the wrong word, holding the defect in place. 28 hermetic + 14 vitest cases, 21 live checks (`live_ws28h.py`) · **j** workload & activity · ✅ **k BUILT 2026-08-13** — availability (mig 174): `working_hours_between(schedule, from, to, absences)` is the function the dashboard's "at risk" calls, and a **structural fence** greps the migration for `approv`/`balance`/`accrual`/`entitlement` so this cannot drift into leave management one reasonable-looking column at a time (D-PC-7). Self-writable, delete scoped `AND person_id` (the control, not belt-and-braces), two read tiers — the bare "away until" is DIRECTORY tier and resolved for the whole page in ONE query, the spans and hours are HR. The tenancy ratchet caught the new table and was right to: `organization_id` declared on day one, defaulting from the session GUC and failing closed when unbound (verified live). ⚠️ `REFERENCES` must precede `DEFAULT` — the ratchet matches the two with no comma between, and `current_setting('app.tenant_id', true)` has one. D-PC-15's fence refined to the invariant it protects rather than worked around · **l** People dashboard · **m** skills coverage & data quality; 🟡 **n** the AI seams (ranking EVAL-LOCKED, **sending is the §6 outbound-nudge OWNER-GATE — this row may not flip it**). ⚠️ `schema.generated.sql` regeneration is **due**: stale since ~migration 113, and 148 reached prod ~2026-08-07 (after the #384 cast fix). (2026-08-13) |
 ---
 
-## 3. Decisions recorded (D1–D14: 2026-07-31→08-04 · D15/D16: 2026-08-08 · D17–D21: 2026-08-09 · D22–D30: 2026-08-10 · D31: 2026-08-11)
+## 3. Decisions recorded (D1–D14: 2026-07-31→08-04 · D15/D16: 2026-08-08 · D17–D21: 2026-08-09 · D22–D30: 2026-08-10 · D31: 2026-08-11 · D32–D35: 2026-08-12 · D36–D38: 2026-08-13)
 
 Resolutions for the cross-doc conflicts the audit surfaced. D1–D8, **D13**, **D14**,
 **D16** and **D17** are **proposed defaults, adopted unless the owner objects**
-(`agent-proposed, owner may overrule`); D9, D10, D11, D12, D15 and **D18** are owner
-calls, taken and dated. ⚠️ Two entries below are superseded and kept as records:
-**D11** (re-taken by D15) and **D10 part 1's planning premise** (re-scoped by
-D15/D16) — read their banners before citing either.
+(`agent-proposed, owner may overrule`); D9, D10, D11, D12, D15, **D18** and **D32**
+are owner calls, taken and dated; **D34 and D35** are owner calls of 2026-08-12 (D35
+agent-recommended, owner-accepted). ⚠️ Two entries below are superseded and kept
+as records: **D11** (re-taken by D15) and **D10 part 1's planning premise** (re-scoped
+by D15/D16) — read their banners before citing either.
+
+- **D38 — Billing is a surface we own, and the tax invoice is OURS to issue.**
+  *(owner-directed 2026-08-13: admins must be able to download bills for AI usage
+  AND subscriptions, monthly, see all of them, and manage their billing. Owning
+  spec `subscription_console.md` **SC-5**.)*
+  1. ⚠️ **Corrects a wrong assumption carried since WS-30 was written.** Its
+     non-goals called invoicing and tax *"the processor's job"*. **That does not
+     survive Indian GST:** Razorpay collects money and issues a *payment
+     receipt*; a **tax invoice** is the obligation of the **supplier of record**,
+     which is us. It must carry OUR GSTIN, our serial, the SAC code, the place of
+     supply and the CGST+SGST vs IGST split — none of which a processor can
+     assert on our behalf. Left as-is, a year of invoices turns out
+     non-compliant all at once.
+  2. **One billing home, two document types.** The admin sees one chronological
+     list; underneath, a seat subscription (recurring, monthly) and a credit pack
+     (discrete prepaid sale) are **separate documents**, because they are
+     separate taxable events. Merging them would mean delaying the credit invoice
+     to the cycle boundary or back-dating the subscription — both wrong.
+  3. **Three rules that are law, not preference, and all three constrain the
+     schema:** invoice serials are **gapless and sequential per financial year**
+     (April–March) and allocated at *issue* not at *attempt*, so a failed payment
+     consumes no number; **an issued invoice is never edited**; corrections are
+     **credit notes** referencing the original. SC-4e's ledger adjustment and a
+     credit note are two halves of one act.
+  4. **Download is the deliverable, not a list view.** Per-invoice PDF plus a
+     period export, all history, forever, with **no processor round-trip** —
+     which is also what keeps it working if we ever change processor.
+  5. **The billing profile is admin-editable**: legal name, GSTIN, billing
+     address and **state** (it decides the tax split, so it is not cosmetic),
+     a billing contact distinct from the login, and a PO/cost-centre reference
+     that mid-size finance teams require. A GSTIN edit is a tax-relevant act and
+     lands an audit row; a state change affects the NEXT invoice, never a past one.
+  6. **E-invoicing (IRN) is designed for, not built.** Mandatory above ₹5 crore
+     turnover; SC-5b's field set is deliberately the IRN field set, so compliance
+     later is registration plus a QR code rather than re-modelling invoices.
+
+- **D37 — The AI-credit product: how customers buy, and how they find out.**
+  *(owner-answered 2026-08-13 in session; owning spec `subscription_console.md`
+  SC-4, which was previously a one-sentence placeholder. The credit ENGINE was
+  well specced — ledger, rating, rollover, gate, member caps; the credit
+  PRODUCT was not, and this closes that.)*
+  1. **Fixed packs, self-serve** via Razorpay — not a free-text amount. Every
+     pack is priced **under ₹15,000** so a repeat purchase never trips the RBI
+     e-mandate AFA threshold, which would otherwise demand an OTP from a
+     customer who is already dry mid-workflow (D33.4b). **Auto-top-up ships OFF**
+     and opt-in, reversing §3.3's "default for paid plans": an auto-charge that
+     silently fails at the cap is worse than one that never existed.
+  2. **Alerts are delivered, not merely rendered.** Email to billing admins at
+     80% / zero / failed top-up, an in-app banner while the condition holds, and
+     **the affected member is told why their own call was refused and who to
+     ask** — without figures. The 80% state was previously specced only as
+     something the console draws, which requires the admin to already be
+     looking. Once per cycle, not per call. *Operator-side push was considered
+     and declined: CP-8's console already shows burn across all customers.*
+  3. **Runway, not just balance.** "About N days left at your current rate" is
+     the number that prompts a purchase; a balance alone is not.
+  4. **Adjustments are ledger rows, distinguishable forever.** Goodwill credits
+     after a runaway agent get `reason='adjustment'` plus a mandatory note —
+     never an edit, and never indistinguishable from a purchase. 🔴 OWNER-GATE
+     against a live org.
+  5. **A monthly usage statement** the customer can export, read from
+     `usage_rollup` so it survives the 90-day raw retention.
+  6. **GST on prepaid credits — working assumption: TAXED AT PURCHASE**
+     *(owner, 2026-08-13: "GST will probably apply".)* Credits are read as a
+     **single-purpose voucher**: the supply is identifiable at issue — one
+     supplier, one service, one SAC, one rate — which is the condition that puts
+     the tax point at issue rather than redemption. **This unblocks SC-4a**,
+     which may now issue a tax invoice.
+     Two consequences built in rather than discovered: **(a) consumption is not
+     a taxable event**, so SC-4f's usage statement is *informational* — no
+     serial, no tax line, and it says so on its face, or the same supply is
+     taxed twice; **(b) expiring or unused credits need no adjustment**, since
+     tax was discharged at purchase and D32.6 already makes credits
+     non-refundable in cash. That the two rules agree is a point in favour of
+     the reading.
+     ⚠️ **Still confirm with a CA before the first invoice goes out.** The design
+     is robust either way: `invoice.tax_point` (`purchase | redemption`) is
+     recorded **per document** rather than assumed in code, so a reversal is a
+     policy flip plus credit notes — not a re-model. **"Probably" is not
+     settled, and never appears in customer-facing copy.**
+
+- **D36 — Fracktal Works is customer zero, and gets no special path.**
+  *(owner-directed 2026-08-13: "Fracktal Works itself becomes another
+  organization that is signed up as a tenant.")*
+  1. **Fracktal signs up through the same provisioning flow as any customer** —
+     same `/orgs/provision`, same trial, same seat cap, same credit ledger, same
+     lifecycle. It is an `organization` row, not a hard-coded identity.
+  2. ⚠️ **Therefore: no first-party bypass, anywhere.** No `if org == 'fracktal'`,
+     no "internal" flag that skips the seat cap or the balance gate, no
+     `EXECUTIVE_EMAILS` shortcut into a customer-shaped surface. Every such
+     branch is a code path that only WE exercise, which means the path our
+     customers use is the one nobody tests. Recorded as a rule because the
+     temptation arrives disguised as convenience, usually at 6pm before a demo.
+  3. **The `default` bootstrap org stays** (`acb_auth/access.py`
+     `_BOOTSTRAP_ORG_SLUG`) as the first-run path for a **fresh box**, and is
+     not Fracktal's tenancy. D33.5's finding is unchanged: provisioning a
+     *customer* organization never routes through that constant.
+  4. **This is the dogfooding argument, and it is the point.** If seat
+     exhaustion, a suspended-state lockout or a credit soft-block is unpleasant,
+     we feel it first and on our own operations — which is the only reliable way
+     these get fixed before a customer meets them.
+  5. **Consequence for the test deployment:** the acceptance bar for "the
+     platform works" is *two* organizations provisioned through the same API,
+     with data isolation demonstrated between them — not one org that happens
+     to be us. MT-1i's two-org fixture is the tenant-side half of the same
+     proof.
+
+- **D35 — Two consoles, two deployables: the customer's inside the product, ours
+  outside it.** *(owner-accepted 2026-08-12 — agent-recommended in session, owner
+  replied "everything looks good"; sub-parts 3 and 4 are the ones a future agent
+  would otherwise "fix". Owning specs: `subscription_console.md` (WS-30) and
+  `saas_multitenancy.md` §4.1a.)*
+  1. **Subscription Console — inside CommandCenter**, at `/settings/billing` in
+     the workbench, admin-gated, one org, tenant-scoped. Unchanged from
+     `subscription_console.md`; restated here so both halves sit in one place.
+  2. **Operator Console — a SEPARATE Next.js app** in this monorepo, deployed at
+     its own hostname. Chosen over a gated route tree inside the existing
+     workbench because *"they share tables and must never share routes"* is then
+     enforced **structurally** — the surfaces are different applications — rather
+     than by a guard that is one misconfiguration away from serving cross-customer
+     data into a tenant's UI. **R7: the fence is the deployment boundary itself,
+     not a test.**
+  3. ⚠️ **The Operator Console SHOULD pin one Microsoft Entra directory — ours.**
+     This is the exact assumption D33.1 recorded as fatal, and it is **correct
+     here**: the console is staff-only, and every user of it *is* in our
+     directory. **Do not "fix" this to multi-directory** — that would widen a
+     cross-customer surface to identities we do not control. D33.1 binds the
+     *customer* product; this is its inverse and the distinction is the point.
+  4. ⚠️ **The Operator Console is EXEMPT from the theming engine**
+     (`workbench/control_plane/AGENTS.md`'s eight rules and its conformance
+     suite). "One product, one look" exists for surfaces **customers** see; this
+     is an internal tool for a handful of staff. Exempt structurally — it is a
+     different app, so the conformance suite does not scan it — which is why the
+     exemption must be *written down* rather than merely observed.
+  5. **Neither console is on the critical path to customer #1.** Provisioning,
+     seat assignment, credit grants and balance reads all work through the
+     Control Plane API today (CP-1). The console makes that pleasant; it does not
+     make it possible — which is why it is CP-8 and deliberately last. **Revenue
+     order is enforcement, then checkout:** CP-3 → CP-4 → CP-6 makes credits real
+     and sellable against a hand-issued invoice (D19.4's manage-only launch
+     posture), and CP-8's self-serve checkout follows once manual invoicing is
+     the bottleneck rather than the plan. Shipping checkout before enforcement
+     would mean taking money for something we cannot yet limit.
+
+- **D34 — Supabase is the Control Plane's database AND its authenticator.**
+  *(owner call, 2026-08-12: "Let's use Supabase for auth configuration." Owning
+  spec: **`specs/control_plane_infrastructure.md`**, whose §4 recommended exactly
+  this and whose §3 disqualified Firebase on technical grounds.)*
+  1. **Managed Postgres, Mumbai (`ap-south-1`)** for DPDP residency (§2 R-f).
+     CP-1's migrations apply **unchanged** — Supabase *is* Postgres, which is
+     why this decision was safe to take late and stays reversible by `pg_dump`.
+  2. **Supabase Auth is the authenticator** — Google, Microsoft and email/OTP for
+     customers on no directory at all. This is the half of CP-0 that was never
+     code: the providers are wired, but *operating* per-customer SSO is work we
+     now buy instead of build.
+  3. **NextAuth keeps issuing the CommandCenter session; Supabase Auth becomes
+     one upstream provider inside it** — *not* a replacement. Chosen over
+     swapping NextAuth out because it (a) preserves **D32.4 exactly** (the
+     Control Plane owns the registry, CC issues sessions), (b) keeps CP-0's
+     conditional-provider wiring and its 16 fences rather than discarding them,
+     and (c) does not cut the **live auth path** of a running system in the same
+     quarter as everything else here.
+  4. **Supabase Auth authenticates; it never decides entitlement.** Seats,
+     membership and credits stay the Control Plane's authority. A signed-in
+     person with no seat is still refused at `/registry/resolve` — sign-in and
+     *admission* are two questions and Supabase answers only the first.
+  5. ⚠️ **Do NOT adopt Supabase's client-direct + RLS idiom.** That is the
+     *tenant* plane's model and explicitly wrong for this plane, which is
+     cross-tenant by design (§0.9.2). Our FastAPI service stays in front; no
+     browser talks to Supabase directly.
+  6. 🔴 **OWNER-GATE:** creating the project, configuring providers, and holding
+     the keys. Everything above is buildable against fixtures without them.
+
+- **D33 — The personal-brain assumptions that do not survive, and the two nobody had
+  found.** *(owner-directed 2026-08-12 — "we might have made a lot of decisions
+  initially that are not scalable anymore… create documentation to overwrite some of
+  the initial architecture decisions"; audit `agent-taken` and measured against the
+  working tree the same day. Owning spec: **`specs/saas_operations_doctrine.md`** —
+  §2 the eight capability domains, §3 the Indian commercial/legal layer, §4 the
+  twelve-finding audit, §5 the gap table.)*
+  1. **Two findings are NEW, in one file, and both block customer #1 —
+     not customer #2.** `workbench/control_plane/src/auth.ts`: **(a)** sign-in is
+     pinned to **one Microsoft Entra directory** (*"the tenant-level app registration
+     ensures only users in the Fracktal Microsoft 365 directory can sign in"*) — a
+     paying customer's staff are not in our directory, so **today the product can
+     onboard exactly one customer: us**; **(b)** auth **fails OPEN** when unconfigured
+     (*"if no AUTH_MICROSOFT_ENTRA_ID_ID is set, middleware allows all traffic"*) —
+     a mis-provisioned production box is wide open and reads as working. **No existing
+     ticket covered either.** Now **CP-0**, ordered ahead of the whole WS-31 sequence.
+  2. **There is no signup.** No `signup`/`register`/`onboard` route exists in the app
+     tree; the only way in is `ensure_owner_bootstrap()` promoting an
+     `EXECUTIVE_EMAILS` address (`acb_auth/access.py:581`). Invite-only is a product
+     decision; *no signup at all* is a missing product. Now **CP-2a**, with
+     provisioning required to be **idempotent and resumable**.
+  3. **Not every old convenience is a defect, and one must NOT be "fixed".**
+     `ProviderKeyStore._resolve_org` resolving "the sole organization" and **raising
+     once a second exists** (`acb_llm/key_store.py:124`) is the correct pattern — it
+     **fails closed and names its successor**. Recorded so a future agent does not
+     helpfully replace it with a silent default. `colleague_onboarding.md` likewise
+     stays as-is: it is the **internal staff** path and must not be merged with the
+     customer path, because a customer is not a colleague — no shared directory, no
+     shared threat model.
+  4. **Three build-order changes with legal, not architectural, reasons**
+     (`saas_operations_doctrine.md` §3, sources dated in §9 — re-check before relying):
+     **(a)** capture **GSTIN + registered state at signup**, in the org-creating slice
+     — SaaS is an 18% service supply and B2B invoices need both; **(b)** the **RBI
+     E-mandate Framework 2026** clears recurring debits without OTP only to
+     **₹15,000/transaction**, which makes ~25 seats at ₹600 a real product boundary,
+     makes annual billing a friction escape rather than just a discount, and means
+     **auto-top-up above the cap will fail exactly when a customer is out of credits
+     mid-workflow** — so cap the default top-up below it and treat a failed mandate as
+     the §3.3 soft-block path; **(c)** **model the DPDP consent record now**, while the
+     tables are empty — *model training / product improvement / benchmarking are named
+     secondary purposes needing their own consent*, which for an AI product is the
+     sharp edge (Consent Manager obligations Nov 2026, full compliance May 2027).
+  5. **Two capability domains have NO owner** and need one before customer #1:
+     **compliance** (§3.3, and it carries a date) and **per-tenant restore** (D31 /
+     `saas_multitenancy.md` §6.6 — a whole-cluster restore rolls every other customer
+     back). Naming them here is not the same as ticketing them; both still need a
+     seven-point contract before dispatch.
+  6. **The audit is the record; do not re-run it from the same starting point.**
+     Findings 6, 7, 9, 10 and 12 were already tracked (MT-1i, §6.3, D31, D32.7, D10) and
+     are listed in §4 only so one table answers "what did we assume as a personal app".
+
+- **D32 — The platform engine: eight calls taken 2026-08-12** *(owner-directed in
+  session — "Command Center is evolving to a SaaS platform… I want to rework the way
+  we set up model access"; the sub-calls marked `agent-taken` were delegated
+  explicitly: "you can take the decisions accordingly". Owning spec:
+  **`specs/platform_control_plane.md`** (WS-31).)*
+  1. **⚠️ `saas_multitenancy.md` §3.1 is REVERSED.** Its blockquote —
+     *"Do not reintroduce a separate proxy. The gateway's /v1 already IS the
+     proxy"* — no longer binds. **The reason it gave still binds**: CommandCenter
+     must not grow a second tenancy boundary, and it does not, because the Router
+     sits OUTSIDE CC as a supplier and never resolves a CC session. What §3.1 did
+     not weigh is **§5.1's silo rollout**: with one deployment per customer,
+     "meter inside CommandCenter" puts the rate card, the margin and the credit
+     balance on the customer's own box, N times over. A meter the metered party
+     hosts is a suggestion. §3.1 carries a banner pointing here.
+  2. **The Control Plane is ONE CENTRAL SERVICE, built at full scope now** —
+     org registry, subscriptions, seats, AI metering and routing together, not AI
+     alone. This is `§0.9.2`'s Control plane extracted from each deployment rather
+     than a new concept, and it pulls MT-2/MT-4 forward of their board position.
+     *(Owner chose full scope over the narrower agent recommendation; the size
+     was flagged and accepted.)*
+  3. **D15 is untouched.** Tenancy stays a ROW (`organization_id` + FORCE RLS at
+     the seam); the deployment stays a PLACEMENT. Silo-vs-pooled remains a
+     `tenant_placement` row. The Control Plane is what makes that indirection
+     worth having — it can move a customer between placements; N sovereign
+     deployments cannot.
+  4. **Identity: the Control Plane owns the registry; CommandCenter keeps issuing
+     sessions** (`agent-taken`). Global `user_identity`/`org_membership` authority
+     moves central; NextAuth Google SSO and the session cookie stay exactly where
+     they are, resolving against the registry on sign-in and caching the answer
+     into migration 159's (currently inert) tables as a projection. **No
+     authentication server is built and nothing on the live auth path is cut
+     over.** Cost accepted: deprovisioning is cache-TTL fast, not instant. The
+     full-IdP option is not foreclosed — the registry table is the same either way.
+  5. **Seat semantics, defined once** (`agent-taken`): purchased =
+     `SUM(seat_grant)`, assigned = live `COUNT(seat_assignment)`, available =
+     the difference. **Membership is the Core seat (D19.3, unchanged)** and a seat
+     is consumed at **first successful sign-in resolution**, not at invitation —
+     an invited person who never signs in costs nothing. D19.3's hard cap is
+     carried verbatim: over-assignment is a **409 with a buy-more payload**, never
+     an auto-upgrade.
+  6. **Credits roll over indefinitely while the subscription is active**
+     (`agent-taken`, owner-stated intent "credits that roll over monthly").
+     Balance is a ledger sum, so rollover is the default and expiry is what would
+     need machinery. Not refundable in cash; expire only at `cancelled` + export
+     window. No purchase-lot tracking until a grant with an expiry exists.
+     **D19.2 is carried unchanged** — ₹10 credit, fractional draw at provider
+     cost × 2, INR-native rate card, LLM + per-minute STT metered, embeddings and
+     WhatsApp per-number fees absorbed into package prices.
+  7. **Model access is reworked: customers never see a model** (`agent-taken`).
+     Tiers are the only vocabulary outside the Router; `_TIER_ALIAS_MAP`
+     (`acb_llm/client.py:86`) becomes a cache of a Router-published **tier
+     capabilities document**, not truth. The customer-facing provider/model/tier
+     picker is **removed from the product** (it was correct for a personal
+     application where the operator was the user). A bare model id is **rejected
+     400, not coerced** — silent coercion (`_model_resolution.py:35`) hides a
+     misconfigured agent behind a bill. Consequence: adding `tier-vision` /
+     `tier-embed` / `tier-voice` later is a data change, so **this decision
+     deliberately does not decide them**.
+  8. **Per-member metering and WS-16 Phase E are ONE mechanism**, as the board
+     already required ("design once, serve both"). Credits are an **org pool**;
+     a per-member cap is a policy against the pool, never a sub-wallet, so
+     unallocated headroom is never stranded. Default on exhaustion is **degrade to
+     `tier-fast`**, not block — which is itself an argument for keeping tiers.
+  > 🔴 **Unchanged prerequisite:** per-org keys are meaningless until
+  > `GATEWAY_INTERNAL_TOKEN` is split from `LITELLM_MASTER_KEY` (§6, measured
+  > 2026-08-05 as byte-identical). Owner's act, via redeploy.
 
 - **D31 — D15 re-tested against Odoo, Salesforce and SAP; it stands. One gap found.**
   *(owner-raised 2026-08-11 — "Odoo is also a large complex app with multiple sub-apps

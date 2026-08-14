@@ -1420,7 +1420,37 @@ their own calendars, so their answers legitimately differ. `deep_work` likewise,
 `energy`. **`actual_start`/`actual_end` are the genuinely arguable pair** — "how long did this
 take" is a question a PM tool must answer at the task level, while "when did *I* work on it" is
 mine — and they are flagged here as an owner question rather than resolved by an agent reading
-a rule.
+a rule. ✅ **ANSWERED — D-PM-30, shared.**
+
+**D-PM-30 — `actual_start` / `actual_end` are SHARED, on `pm_tasks`.**
+`DECISION (2026-08-13, owner-ruled.)` 🔴 **This overrides §7.5.1's row**, which sent them to
+`pm_task_personal` alongside timeboxing on the argument that two people on one task book their
+own calendars.
+
+The override follows D-PM-29's own rule rather than contradicting it: a field's default home is
+`pm_tasks`, personal placement is the exception and must earn itself, and *"how long did this
+task take"* is a property of the **work**, not of a person. Projects has `estimate_mins` and
+**no actuals at all** today, which means it cannot answer *"did this take as long as we said?"*
+— the question a PM tool exists to answer, and one that a per-member column can never answer at
+the task level.
+
+⚠️ **What this does NOT decide.** Per-person time tracking ("Ana logged 3h, Ben logged 1h") is
+a **timesheet**, a separate concern with its own rows, and nothing here forecloses it. The two
+are not alternatives: a shared actual is when the work started and stopped; a timesheet is who
+spent what on it. Timeboxing (`scheduled_start`/`scheduled_end`/`flexible`) and `deep_work`
+stay personal, unmoved — those genuinely differ between two people on one task.
+
+**D-PM-31 — the task search minimum is 3 characters, not 2.**
+`DECISION (2026-08-13, owner-ruled.)` WS-27be left this open and the open state was the worst
+of the three available: `MIN_QUERY = 2` **accepts** a two-character query that the `pg_trgm`
+index physically **cannot serve** (a trigram is three characters), so the shortest query the
+product allows is the longest one it has to answer with a sequential scan — 127 ms, measured
+at 60k rows.
+
+Raising it to 3 makes every accepted search index-served. The cost is stated rather than
+buried: typing two characters now returns `{"rows": []}` rather than a slow result, on both
+`/projects/search` and the list endpoint's `?q=` (WS-27be moved `MIN_QUERY` to `filters.py` so
+one constant governs both — that is what makes this a one-line change rather than two).
 
 ---
 
@@ -2424,15 +2454,52 @@ resolving icons through `<Icon name>`, using only semantic tokens; call sites im
 never the library's, or the library's defaults become a second design system. **R7:** the
 conformance suite gains a rule naming the import restriction, or it is advisory.
 
-**D-PM-16 (owed) — org-wide vocabularies.** Plane's tags, custom fields and task types
-carry a **nullable** project scope, so a vocabulary is either workspace-wide or
-project-local, with paired partial-unique constraints. Ours are all `project_id NOT NULL`.
-⚠️ **This is the most expensive item in this section if we get it wrong.** Dropping NOT
-NULL later is trivial; what is not trivial is merging the duplicate rows twelve projects
-will each have accumulated — their own "Bug", "urgent", "Client" — which is a
-judgement-call migration nobody can automate. **Even if the answer is "no, vocabularies
-stay per-project", record it as a decision now**, because the answer is what stops the
-merge ever becoming necessary.
+**D-PM-16 — org-wide vocabularies. ✅ OWNER-RULED 2026-08-14: adopt the nullable project
+scope.** Plane's tags, custom fields and task types carry a **nullable** project scope, so a
+vocabulary row is either org-wide or project-local, with paired partial-unique constraints.
+Ours were all `project_id NOT NULL`. ⚠️ This was the most expensive item in its section if
+got wrong: dropping NOT NULL later is trivial, but merging the duplicate rows twelve root
+projects will each have accumulated — their own "Bug", "urgent", "Client" — is a
+judgement-call migration nobody can automate. The ruling is what stops that merge ever
+becoming necessary.
+
+**`project_id IS NULL` means org-wide.** Three findings from the audit that set the shape:
+
+✅ **There is no R5 gap, and this is what makes the ruling cheap.** All three tables already
+carry `organization_id NOT NULL` from **migration 161** (`161_projects_tenancy.sql:109/120/121`,
+backfilled at 341/352/353, tightened at 368/379/380). So a row with `project_id IS NULL` is
+still tenant-anchored — it is org-wide *within one organization*, never global. Had the tenant
+anchor been reached only through `project_id → pm_projects`, nulling it would have produced
+untenanted rows visible to every tenant, and this ruling would have needed a migration to fix
+that first.
+
+⚠️ **These are ROOT-project scoped, not per-project.** `pm_custom_fields` and `pm_tags` both say
+so in their own headers ("configuration is root-scoped and the subtree inherits… so a task moved
+between subprojects keeps tags that still mean something"). So the duplication being prevented
+is per **root** project, and the new axis is root-local vs org-wide — there is no third level.
+
+🔴 **Shadowing must be ruled, because for tags one name is one string.** `pm_tasks.tags` stores
+the tag's **display text**, not a foreign key ("the exact text stored in every `pm_tasks.tags`
+entry for this tag"). An org-wide `bug` and a root-local `bug` are therefore *the same tag* on
+every task, while being two registry rows carrying two colours. The union must resolve to
+exactly one row per identity or the colour is ambiguous — the same class of failure the table's
+own comment warns about for `' bug'` versus `'bug'`. **Rule: most specific wins — a root-local
+row shadows an org-wide row of the same identity**, and it needs a test, not a convention.
+
+Constraint shape, paired per table, on each table's existing identity (`name` for task types,
+**`lower(name)`** for tags because tag identity is already case-insensitive, `field_key` for
+custom fields):
+
+```
+UNIQUE (project_id,      <identity>) WHERE project_id IS NOT NULL   -- root-local
+UNIQUE (organization_id, <identity>) WHERE project_id IS NULL       -- org-wide
+```
+
+**R6 — this is an expand, and it contracts nothing.** Dropping NOT NULL only widens what is
+accepted, so old code (which always writes a `project_id`) keeps working unchanged, and old
+readers filtering `WHERE project_id = :x` simply do not see org-wide rows — invisible, not
+broken. **Ship dark**: the read-path union is harmless, so the flag belongs on the affordance
+that *creates* an org-wide row, which is the irreversible half.
 
 **D-PM-17 (owed) — the i18n discipline (not i18n itself).** Plane's numbers are one
 forecast: 28 namespaces × 19 locales ≈ **5,181 keys per locale**, for a surface *smaller*
@@ -3195,13 +3262,53 @@ at the tool layer**, not a sentence in a system prompt — and the UI contract a
 a library (WS-27av). Shapes the Action Broker and agent dispatch together, which is why it is a
 decision and not a ticket.
 
-**D-PM-20 (owed) — optimistic concurrency on `pm_tasks`.** Neither reference has any: no
-version column, no etag, read-modify-write throughout. **With agents writing concurrently with
-humans — which is the entire point of our product — last-write-wins is a data-loss design**,
-and a revert affordance (WS-27az) makes it worse by replaying stale values. An `updated_at`
-precondition on PATCH is nearly free *now* and breaks every client at once if added later.
-⚠️ It interacts with the delta feed: migration 168's `updated_at` serves both, so one semantic
-has to be chosen for both.
+~~**D-PM-20 (owed)**~~ ✅ **D-PM-20 — ANSWERED 2026-08-13: an `updated_at` precondition on
+PATCH, and NO version column.** Neither reference has any concurrency control: no version
+column, no etag, read-modify-write throughout. **With agents writing concurrently with humans —
+which is the entire point of our product — last-write-wins is a data-loss design**, and a
+revert affordance (WS-27az) makes it worse by replaying stale values. The precondition is
+nearly free *now* and breaks every client at once if added later.
+
+`DECISION (2026-08-13, owner-selected as the next item; the shape below is the agent's, taken
+after the audit that follows.)`
+
+**The audit that made this decidable** (measured against `e294ce7`):
+
+| Question | Answer |
+|---|---|
+| Any concurrency control today? | **None.** The eight 409s in the package are constraint conflicts (a status in use, a duplicate field key), not preconditions. |
+| Does `updated_at` move on every write? | **Yes by default** — `core.update_row` appends `updated_at = now()` unless `touch=False`. |
+| How many opt out? | **Exactly two**, both stamping `recurrence_spawned_at`. |
+| Task write endpoints needing it | **8** across `tasks.py`, `bulk.py`, `relations.py`. |
+
+🔴 **The "one semantic must cover both" worry resolves cleanly, and that is the finding.** The
+two `touch=False` sites are correct for **both** consumers at once: a recurrence bookkeeping
+stamp should not make a delta client re-pull, *and* it should not invalidate a human's pending
+edit either. So one `updated_at` genuinely serves the feed's keyset cursor and the write
+precondition — there is no conflict to arbitrate, which is what makes this buildable rather
+than a redesign.
+
+**The shape:**
+
+* **`If-Match: <updated_at>`** on the task PATCH — the value the client last read, echoed back.
+  A mismatch is **412 Precondition Failed** carrying the current row, so the client can show
+  *"someone changed this while you were editing"* with the actual values rather than a bare
+  refusal.
+* **No new column.** `updated_at` already exists, already moves on every write that matters, and
+  already serves the delta cursor. A `version INT` would be a second monotonic fact about one
+  row — the CLAUDE.md §5 defect, and one that would then need its own migration and its own
+  backfill.
+* **Absent header = no precondition**, deliberately. Making it mandatory on day one breaks every
+  existing caller at once, which is the exact failure this decision exists to avoid. It is
+  advisory first and tightened in a later release (R6's discipline applied to an API rather than
+  a schema).
+* ⚠️ **Timestamp granularity is the trap to measure, not assume.** `updated_at` is
+  `timestamptz`; two writes inside the same microsecond would be indistinguishable. R8: prove
+  the round-trip preserves enough precision through asyncpg **and** through the JSON encoder
+  before claiming the precondition is exact.
+
+**Not in scope:** bulk edit's semantics (what a partial precondition failure means across
+thirty tasks is its own question), and WS-27az's revert.
 
 #### 9.5.4 Added to the refusal list, with reasons
 
@@ -3515,6 +3622,221 @@ otherwise author three times over.
 Per-project state **history** (who paused it, when, why) — `pm_activities` is project-less today
 (§3.8 is a task timeline), so a project-level audit trail is its own ticket, not a side effect of
 this one. Also out: any change to `DELETE /nodes/{id}`'s semantics beyond its ranking in the UI.
+
+---
+
+### 9.10 WS-27bi — the PATCH precondition (minted 2026-08-13, D-PM-20)
+
+**WS-27bi — `If-Match` on the task PATCH.** 🟢 AGENT-SAFE. **No migration, no new column.**
+D-PM-20 is answered; the audit behind it is in that decision and is not repeated here.
+
+> **Done when:**
+> * `PATCH /projects/tasks/{id}` honours **`If-Match: <updated_at>`** — matching proceeds,
+>   mismatching answers **412** with the current row in the body so a client can show what
+>   changed rather than only that something did.
+> * **An absent header still succeeds.** Advisory first; mandatory is a later release. A
+>   precondition made compulsory on day one breaks every existing caller at once, which is the
+>   failure this whole decision exists to prevent.
+> * **No `version` column is added.** `updated_at` already moves on every write that matters
+>   (`core.update_row`, `touch=True` by default) and already serves migration 168's keyset
+>   cursor. A second monotonic fact about one row is the CLAUDE.md §5 defect.
+> * The two `touch=False` sites stay untouched and a test says why: a `recurrence_spawned_at`
+>   stamp must neither wake a delta client nor invalidate a human's pending edit.
+> * ⚠️ **R8 — measure the granularity, do not assume it.** `updated_at` is `timestamptz`; prove
+>   a round-trip through asyncpg **and** the JSON encoder preserves enough precision that two
+>   writes cannot collide into one token. A precondition that silently compares truncated values
+>   is worse than none, because it reports safety it does not have.
+> * The delta feed's cursor behaviour is unchanged, asserted rather than assumed.
+>
+> **Not in scope:** bulk edit (what a partial precondition failure means across thirty tasks is
+> its own question) and WS-27az's revert.
+
+#### 9.10.1 The R8 measurement — done 2026-08-14, and it moved two fences
+
+Measured on a real Postgres 16 through asyncpg and `fastapi.encoders.jsonable_encoder`, not
+reasoned about. **Verdict: the precondition is implementable** — parse the token in Python, bind
+it as a `datetime`, let Postgres compare it as `timestamptz`. That round trip is exact for all
+three token shapes:
+
+| Case | Encoder token | Compares equal in pg |
+|---|---|---|
+| ordinary microseconds | `2026-08-14T09:21:49.448124+00:00` | ✅ |
+| trailing-zero microseconds | `2026-03-04T05:06:07.100000+00:00` | ✅ |
+| `microsecond == 0` | `2026-01-01T00:00:00+00:00` | ✅ |
+
+Three things the measurement found that reading the code would not have:
+
+🔴 **A naive (offset-stripped) token silently compares `True`.** asyncpg reinterprets a
+tz-less `datetime` in the session zone, which on a UTC box happens to match. A client that
+drops the offset therefore gets a precondition that *appears* to work and would start
+mis-comparing under any session-TZ change. This is precisely the "reports safety it does not
+have" failure the decision was written against. **Fence: reject a naive token with 400 — never
+accept it.** Test: a token with the offset stripped must not pass.
+
+🔴 **`::text` and the JSON encoder disagree.** Postgres renders the trailing-zero case as
+`2026-03-04 05:06:07.1+00` (5 fractional digits, zeros trimmed); the encoder renders
+`.100000`. As strings they differ; as `timestamptz` they are equal. **Fence: the token is
+never produced by `::text` and never string-compared** — compare in the database, or between
+parsed `datetime`s. A string comparison passes every test written against ordinary
+microseconds and fails ~1 row in 10 on a trailing zero.
+
+⚠️ **asyncpg refuses a `str` bound where a `timestamptz` is inferred** (`invalid input for
+query argument`). This is a helpful failure, not an obstacle: it makes the parse step
+mandatory rather than optional, so the string-comparison mistake above is hard to make by
+accident on this stack.
+
+#### 9.10.2 A finding for the board — `now()` can move backwards (NOT this ticket)
+
+While measuring, an overlapping-transaction case reproduced on the real database:
+
+```
+T1 txn now() = 09:22:18.560649      (starts first)
+T2 txn now() = 09:22:18.762134      (starts 201ms later, writes, commits FIRST)
+after T2 commit : 09:22:18.762134
+after T1 commit : 09:22:18.560649   <-- WENT BACKWARDS by 201ms
+```
+
+`now()` is the **transaction-start** timestamp, so a transaction that opens early and commits
+late stamps `updated_at` with a time earlier than a row already written by a newer,
+faster-committing transaction.
+
+**This does not harm the precondition** — and that is the reason it does not expand this
+ticket's scope. `If-Match` compares one exact value; a backwards stamp still differs from the
+client's token, so the client still gets its 412 and refetches. The precondition never reports
+"unchanged" when the row changed.
+
+**It is a real gap in migration 168's keyset cursor**, which is already-merged code: a delta
+client whose cursor has advanced past `.762` will never be handed the row later stamped
+`.560`, and that change is silently dropped from the stream. Reachable only when two write
+transactions to the same row overlap and the older commits last — short request transactions
+make it rare, not impossible.
+
+Per CLAUDE.md §5 this is recorded as a **finding for the board, not a refactor**: it predates
+this work, and fixing it (`clock_timestamp()`, or a sequence) is a change to the delta feed's
+contract that deserves its own row and its own decision.
+
+---
+
+### 9.11 WS-27bj — org-wide vocabularies (minted 2026-08-14, D-PM-16)
+
+**WS-27bj — nullable project scope on the three vocabularies.** 🟡 **Migration + read-path
+change.** D-PM-16 is ruled; its audit is recorded there and is not repeated here. Take the
+migration number at build time and re-check it at merge (**R1** — three collisions in two weeks).
+
+> **Done when:**
+> * `project_id` is **nullable** on `pm_task_types`, `pm_custom_fields` and `pm_tags`, with the
+>   paired partial-unique indexes from D-PM-16 replacing each table's current whole-table
+>   `UNIQUE`. `organization_id` stays `NOT NULL` on all three — **an org-wide row is org-wide
+>   within one tenant, never global**, and a test says so by trying to read another tenant's
+>   org-wide row and getting nothing.
+> * A project's effective vocabulary is **org-wide ∪ root-local**, and **root-local shadows
+>   org-wide on the same identity** (D-PM-16). ⚠️ For tags this is a correctness rule, not a
+>   preference: `pm_tasks.tags` stores display text, so both rows describe the *same* tag on
+>   every task and the union must yield exactly one colour. A test asserts the shadowed row is
+>   the one that renders.
+> * Identity matches each table's existing rule — `lower(name)` for tags (already
+>   case-insensitive), `name` for task types, `field_key` for custom fields. **Not** a new
+>   normalisation invented here.
+> * ⚠️ **R8 — verify the partial uniques against a real database.** Two partial indexes that
+>   between them permit a duplicate is exactly the bug a hermetic fake cannot see, because a
+>   fake agrees with whatever SQL it is handed. Prove all four cases: two org-wide duplicates
+>   rejected, two root-local duplicates rejected, org-wide + root-local of the same name
+>   **accepted** (that is the shadowing case, not a violation), and the same name under two
+>   different tenants accepted.
+> * **R6 — expand only.** Old writers always send a `project_id` and keep working; old readers
+>   filtering `project_id = :x` do not see org-wide rows. No contraction in this release, and
+>   the header names the later one if any.
+> * **Ship dark**: the flag gates the affordance that *creates* an org-wide row, not the read
+>   union. Creating one is the half that is hard to walk back.
+
+> **Not in scope:** migrating any existing per-project row up to org-wide (that is the
+> judgement call D-PM-16 exists to avoid ever needing, and it is the owner's, not an agent's),
+> and the admin UI for managing org-wide vocabularies — the seam lands first.
+
+#### 9.11.1 As built — slice 2, the read path (2026-08-14)
+
+Slice 1 was migration `172_projects_org_vocabularies.sql`. Slice 2 is the Python half: one
+seam in `core.py` (`vocabulary_scope`, `shadowed`, `org_wide_exists`, `refuse_org_wide_write`,
+`org_vocabularies_enabled`) and three readers that use it — `admin.list_types`,
+`custom_fields.load_definitions`, `tags.load_registry_rows`/`list_tags`.
+
+**The union lands on the SEAM, not on the list endpoint.** `load_definitions` has four callers
+— the list, the create's duplicate check, the export's column set, and `apply_values`'
+validation of what a task may store. An org-wide field that listed but whose values were then
+refused as an unknown key would be the worst of both, so the union sits where all four meet.
+
+**Three decisions inside the slice, each with its reason:**
+
+* **The org arm's tenant is read from `:root`'s own project row**, not passed as a second
+  parameter. That makes `vocabulary_scope()` a pure function of `:root`, so no caller can
+  compose it correctly-but-without the tenant — and the anchor is then a row the caller has
+  already been through `load_visible_project` for, which is a stronger fact than an org id
+  passed alongside.
+* **Only a SAME-SCOPE clash is refused on create.** A project registering its own "bug" while
+  the organization also has one is the shadowing D-PM-16 permits (172's R8 case 3), not a
+  duplicate. ⚠️ The org-wide arm cannot ask the effective list at all — `shadowed` hides a
+  shadowed org-wide row by design — so it asks the table through `org_wide_exists`.
+* **An org-wide row is created deliberately and edited nowhere.** `refuse_org_wide_write` is a
+  guard rather than a policy: every rename/merge/delete path hands `str(row.project_id)` to a
+  uuid cast, and for an org-wide row that is the literal string `"None"` → an unhandled cast
+  error, i.e. a 500 where a refusal belongs. The admin surface stays out of scope.
+
+**Gates on the create:** the flag (`PROJECTS_ORG_VOCABULARIES`, default OFF, read at call
+time) **and** `admin:settings:manage`. The permission is not decoration — an org-wide row lands
+in every project in the organization, including ones the writer cannot see, which crosses the
+visibility boundary the rest of the package respects. A manager holds `data:org:read` and does
+not get this.
+
+##### R8 — verified against a real Postgres, from the live clause builders
+
+The probe was **generated by calling `vocabulary_scope()` and `VOCABULARY_IDENTITY`**, never by
+retyping the SQL: a verification that retypes the statement proves the retyping. Migration 172
+was applied to the throwaway cluster from its own file, then:
+
+| Case | Result |
+|---|---|
+| the union, from A's root | 4 rows — `bug` (local) **and** `Bug` (org) both present; B's `theirs` absent |
+| the tenant fence, from B's root | only `theirs` — A's org-wide rows invisible |
+| `list_tags` in full (aliased scope + the usage count) | `org-only` = **2**, A's tasks only, not 3 and not 0 |
+| `org_wide_exists` cross-tenant | A `t`, B `f`, and case-insensitive (`'BUG'` finds `'Bug'`) |
+| an unknown `:root` | 0 rows — fails **closed** |
+
+⚠️ Case 1 returning **both** spellings is correct and worth stating: the union is SQL, the
+shadowing is Python. Pushing the tie-break into a `DISTINCT ON` would work and was rejected so
+the rule can be asserted directly rather than inferred from an `ORDER BY` somebody later tidies.
+
+##### Mutation — fourteen mutants, and the two that got through first
+
+Every fence was proved by breaking it. **Two survived the first pass**, and both were the
+hermetic-fake failure R8 exists for:
+
+1. **The usage-count correlation.** Reverting `t.root_project_id = CAST(:root AS uuid)` to
+   `= g.project_id` — the spelling that reports every org-wide tag as used by **0 tasks** —
+   left all 57 tests green, because the mirror computed the count itself and agreed with either
+   statement. Fixed by having the mirror read the correlation *off the statement*.
+2. **The explicit tenant on an org-wide INSERT.** Dropping it left the tests green because the
+   fake fell back to its own organization; the real 161 trigger "does NOT invent a tenant" —
+   with a NULL parent it returns `NEW` unchanged and `NOT NULL` refuses. Fixed by narrowing the
+   fake's fallback to the two rows that genuinely must tenant themselves (a root project, and
+   an org-wide vocabulary row).
+
+The live probe had already proved the correct behaviour in both cases. What was missing was a
+test that would go **red** if someone undid it — which is the difference between verified and
+fenced, and is why the mutation pass is not optional here.
+
+##### Two findings for the board, neither fixed in this slice
+
+* 🔴 **`TagRow` is declared TWICE on the frontend** — `lib/tags.ts` and `lib/api.ts` — and
+  `page.tsx` passes rows between them. The two are assignable only while they agree, which is
+  how widening one surfaced the other. Both were widened; collapsing two public wire types is
+  its own change (CLAUDE.md §5).
+* The `MAX_TAGS_PER_PROJECT` / `MAX_FIELDS` caps now count the **effective** set. A picker
+  showing 500 tags is unusable whichever scope contributed them, and counting only the local
+  half would let the real number reach 1000. Stated because it is a behaviour change for a
+  tenant that adopts many org-wide entries.
+
+> **Still owed on WS-27bj:** the admin surface for managing org-wide vocabularies (explicitly
+> out of scope above), which is also what would let an org-wide row be edited or retired.
 
 ---
 
@@ -6391,6 +6713,73 @@ Frontend only — **no migration, no API change**; slice 1's endpoints are the o
 differently.** That distinction is the whole reason the Playwright case exists: `statusAccent`'s
 own header records a colour column that was stored correctly for months while every lane drew
 the same grey, and no unit test could have seen it.
+
+---
+
+### 11.37 WS-27bg repair — the three guards disagreed about WHICH project (found and fixed 2026-08-13, after #437 merged)
+
+**A defect in merged code, found by re-reading slice 1 before building slice 3.** No migration.
+
+#### What was wrong
+
+Slice 1 gave the three automation paths one predicate — and then handed each of them a
+*different row*:
+
+| Path | Read | Effect |
+|---|---|---|
+| `run_lifecycle_sweep` | the **ROOT** project, then acted on the whole subtree by `root_project_id` | read too **high** |
+| `spawn_successor` | the task's **immediate** project | read too **low** |
+| `agent_dispatch.on_event` | the task's **immediate** project | read too **low** |
+
+So the subtree in between was governed by nobody, and it failed in **both** directions:
+
+* a task in an **active subproject** beneath a **paused root** was correctly skipped by the
+  sweep and **still spawned successors and still dispatched agents** — while `ProjectTree`
+  drew that very subproject as *"Paused — inherited from a parent project"*. **The product
+  said paused and the automation ran.**
+* a stale task in a **paused subproject** beneath an **active root** was **swept and closed
+  anyway**, because the sweep's candidate query selects by `root_project_id`.
+
+Reproduced on a real database before any fix was written, rather than argued from the code.
+
+#### The fix
+
+`core.is_runnable_with_ancestors(db, project_id)` — one `WITH RECURSIVE` walk up the parent
+chain reduced by `bool_and`, i.e. *"the most restrictive ancestor wins"* as SQL. It is the
+server's copy of `app/projects/lib/tree.ts::effectiveState`, which slice 2's UI already used.
+Consumed by both guards; the sweep's candidate query gains the same predicate as a `NOT EXISTS`
+so **every task earns its own verdict from its own project's chain** rather than inheriting the
+root's. Still derives, still writes nothing (D-PM-26). `is_runnable` survives for the
+single-row case and now says in its docstring that it knows nothing about ancestors.
+
+#### 🔴 The fence was DEAD on its first version, and only a mutation found it
+
+The four new live checks passed **with the recursion deleted**. The fixtures (`T_REPEAT`,
+`T_AGENT`) sat directly in `ROOT`, so pausing `ROOT` paused their own *immediate* project and
+the ancestor walk was never exercised at all. Moving them into the grandchild — and re-arming
+the series, which an earlier check had stamped — makes the mutation turn both checks red.
+
+This is the second time in this workstream that a fence looked like coverage and was not (the
+Toast slice's keyed-re-fire assertion was the first). Both were found the same way: **by
+breaking the code on purpose and checking the test noticed.** A test written after the fix,
+never run against the bug, asserts that today's behaviour is today's behaviour.
+
+⚠️ A second, smaller test defect the same run: direction 2 initially read `T_STALE`'s closure
+from **an earlier check's sweep** rather than its own. A fixture reused across checks must be
+returned to a known state, or the later check measures the earlier one's leftovers.
+
+#### Verification
+
+* `tests/live/live_ws27bg.py` — now **31 checks green** (27 + 4), against real Postgres.
+* Both directions asserted, each with its paired positive control (*"and the SAME task IS
+  swept once its own project is running"*), because a guard that refuses everything passes a
+  one-sided test.
+* **Mutation-measured twice**: deleting the recursion left the first version green (fence dead),
+  and turns the repaired version **red on both checks**.
+* Hermetic: the fake was taught the chain query explicitly rather than left to fall through.
+  ⚠️ Falling through would have answered `None` → `False` → *"nothing is ever runnable"*,
+  silently disabling recurrence and dispatch across the whole suite while every assertion still
+  read as a real refusal. `tests/unit` 5999 passed / 51 skipped.
 
 ---
 

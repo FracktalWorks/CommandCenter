@@ -71,8 +71,13 @@ _CONFLICT_RE = re.compile(r"ON\s+CONFLICT\s*\(([^)]*)\)", re.I)
 
 #: ``<col> = CAST(:param AS uuid)``, with an optional table alias.
 _UUID_EQ = re.compile(r"(?:\w+\.)?(\w+)\s*=\s*CAST\(:(\w+)\s+AS\s+uuid\)", re.I)
-#: ``lower(<col>) = :param``
-_LOWER_EQ = re.compile(r"lower\((?:\w+\.)?(\w+)\)\s*=\s*:(\w+)", re.I)
+#: ``lower(<col>) = :param``, and ``lower(<col>) = lower(:param)`` — the second
+#: spelling is `core.VOCABULARY_IDENTITY`'s, which lowers BOTH sides so the
+#: column half and the bound half cannot drift apart. Both mean the same
+#: case-insensitive comparison, and this mirror already lowers both.
+_LOWER_EQ = re.compile(
+    r"lower\((?:\w+\.)?(\w+)\)\s*=\s*(?:lower\()?:(\w+)\)?", re.I
+)
 #: ``<col> = :param`` — never inside a lower() or a CAST.
 _PLAIN_EQ = re.compile(r"(?<!lower\()\b(?:\w+\.)?(\w+)\s*=\s*:(\w+)\b")
 #: ``<col> = ANY(CAST(:param AS uuid[]))`` — a bounded id-set membership test
@@ -94,6 +99,16 @@ _EITHER_END = re.compile(
 )
 #: ``<col> IS [NOT] NULL``
 _IS_NULL = re.compile(r"\b(?:\w+\.)?(\w+)\s+IS\s+(NOT\s+)?NULL", re.I)
+#: WS-27bj — the tenant anchor on an org-wide vocabulary read: the root
+#: project's own `organization_id`, read from `pm_projects` rather than taken as
+#: a parameter (`core.vocabulary_scope`).
+_PROJECT_TENANT_SUBSELECT = re.compile(
+    r"SELECT\s+p\.organization_id\s+FROM\s+pm_projects\s+p", re.I
+)
+#: …and the union half, present only when the clause offers BOTH scopes.
+_VOCABULARY_UNION = re.compile(
+    r"project_id\s*=\s*CAST\(:root\s+AS\s+uuid\)\s+OR\s", re.I
+)
 #: ``<col> ILIKE :q``
 _ILIKE = re.compile(r"(?:\w+\.)?(\w+)\s+ILIKE\s+:(\w+)", re.I)
 #: ``<col> < now()`` — the date half of the `overdue` filter. Unmirrored until
@@ -298,6 +313,43 @@ def _strip_subqueries(where: str) -> tuple[str, list[str]]:
     return "".join(out), blocks
 
 
+def _depth_zero(statement: str) -> str:
+    """``statement`` with every parenthesised group blanked out.
+
+    Index-preserving — every removed character becomes a space — so a match
+    found in the result slices the ORIGINAL.
+    """
+    out: list[str] = []
+    depth = 0
+    for char in statement:
+        if char == "(":
+            depth += 1
+            out.append(" ")
+        elif char == ")":
+            depth -= 1
+            out.append(" ")
+        else:
+            out.append(" " if depth else char)
+    return "".join(out)
+
+
+def _where_clause(statement: str) -> str | None:
+    """The OUTER query's WHERE clause, or ``None``.
+
+    ⚠️ Located at parenthesis depth ZERO, not by a plain regex. A subquery in
+    the SELECT list carries a WHERE of its own that comes FIRST in the text —
+    ``tags.list_tags`` computes each tag's usage count that way — and a plain
+    search hands back that one instead. Every predicate of the real query then
+    reads as a predicate of the subquery's table (``t.root_project_id`` against
+    a ``pm_tags`` row), so the mirror answers with **no rows at all** and the
+    failure looks like a broken route rather than a mis-read statement.
+    """
+    match = _WHERE_RE.search(_depth_zero(statement))
+    if match is None:
+        return None
+    return statement[match.start(1):match.end(1)]
+
+
 def _values_exprs(statement: str) -> list[str]:
     """The expressions inside ``VALUES (...)``, in order, split on depth-1 commas.
 
@@ -356,9 +408,15 @@ def _literal(expr: str) -> Any:
 class _Result:
     """The slice of the SQLAlchemy result surface these routes use."""
 
-    def __init__(self, rows: list[Any], scalar: Any = None):
+    def __init__(self, rows: list[Any], scalar: Any = None,
+                 rowcount: int | None = None):
         self._rows = rows
         self._scalar = scalar
+        #: How many rows the statement AFFECTED — which is not always how many
+        #: it returns. `ON CONFLICT DO NOTHING` hands back the row that was
+        #: already there while affecting nothing, and `tags.register` reports
+        #: "how many were created" straight off this number.
+        self.rowcount = len(rows) if rowcount is None else rowcount
 
     def fetchone(self) -> Any:
         return self._rows[0] if self._rows else None
@@ -391,9 +449,19 @@ _DEFAULTS: dict[str, dict[str, Any]] = {
     },
     "pm_project_grants": {},
     "pm_task_statuses": {"color": "gray", "position": 0, "is_default": False},
+    # `is_epic` mirrors migration 168:230 (`NOT NULL DEFAULT false`). Absent
+    # here, a seeded type reached `TypeModel.is_epic: bool` as None and 422'd.
     "pm_task_types": {"is_default": False, "is_system": False, "icon": None,
-                      "color": None},
+                      "color": None, "is_epic": False},
     "pm_task_counters": {"last_value": 0},
+    # WS-27bj — the two vocabularies no fake-backed suite reached until the
+    # effective-vocabulary union gave them behaviour worth exercising here.
+    # Mirrors migrations 156 and 155; `color` carries 156's own DEFAULT.
+    "pm_tags": {"color": "gray", "description": None, "created_by": None},
+    "pm_custom_fields": {
+        "description": None, "field_type": "text", "options": [],
+        "position": 0, "created_by": None,
+    },
     "pm_tasks": {
         "source": "manual", "parent_task_id": None, "type_id": None,
         "description": None, "importance": None, "estimate_mins": None,
@@ -425,6 +493,9 @@ _DEFAULTS: dict[str, dict[str, Any]] = {
 _TIMESTAMPED = {
     "pm_projects", "pm_tasks", "pm_task_statuses", "pm_task_types",
     "pm_activities", "pm_views", "pm_intake", "pm_view_user_state",
+    # WS-27bj. Both carry `updated_at NOT NULL DEFAULT now()` (155:63, 156:50),
+    # and `update_row` stamps it on every write to them.
+    "pm_tags", "pm_custom_fields",
 }
 
 
@@ -484,13 +555,28 @@ class FakeProjectsDB:
         candidates = [parent] if parent else []
         if table == "pm_activities":
             candidates.append(("pm_projects", "project_id"))
+        named_a_parent = False
         for parent_table, column in candidates:
             parent_id = row.get(column)
             if parent_id is None:
                 continue
+            named_a_parent = True
             for candidate in self.rows(parent_table):
                 if str(candidate.get("id")) == str(parent_id):
                     return candidate.get("organization_id")
+        # ⚠️ The fallback is for a row the APPLICATION must tenant itself, and
+        # 161's trigger is explicit that it "does NOT invent a tenant": with a
+        # NULL parent it returns NEW unchanged and `NOT NULL` refuses the insert.
+        # Two rows are legitimately in that position — a ROOT project, and (since
+        # WS-27bj) an ORG-WIDE vocabulary row with no `project_id` — and both are
+        # required to pass the tenant explicitly.
+        #
+        # Handing them this fake's own organization instead made the mirror agree
+        # with a route that had stopped passing one: an org-wide INSERT that
+        # dropped the tenant kept its 61 green tests here and would have hit
+        # `organization_id NOT NULL` against Postgres.
+        if candidates and not named_a_parent and table != "pm_projects":
+            return None
         return self.organization_id
 
     def statements_touching(self, needle: str) -> list[str]:
@@ -749,7 +835,11 @@ class FakeProjectsDB:
         return self._select(statement, table, args)
 
     def _table(self, sql: str) -> str:
-        match = _FROM_RE.search(sql)
+        # ⚠️ At parenthesis depth ZERO, for the same reason `_where_clause` is:
+        # a SELECT-list subquery names its own table first (`tags.list_tags`
+        # counts usage out of `pm_tasks`), and reading that one means filtering
+        # the wrong table and answering with no rows.
+        match = _FROM_RE.search(_depth_zero(sql)) or _FROM_RE.search(sql)
         if match is None:  # pragma: no cover — every statement names a table
             raise AssertionError(f"fake could not find a table in: {sql}")
         return match.group(1)
@@ -1099,9 +1189,14 @@ class FakeProjectsDB:
             keys = [k.strip() for k in conflict.group(1).split(",")]
             for row in self.tables.setdefault(table, []):
                 if all(str(row.get(k)) == str(values.get(k)) for k in keys):
-                    if "DO UPDATE" in statement.upper():
+                    updated = "DO UPDATE" in statement.upper()
+                    if updated:
                         row.update({k: v for k, v in values.items() if v is not None})
-                    return _Result([SimpleNamespace(**row)])
+                    # DO NOTHING affects nothing, so `rowcount` is 0 — the number
+                    # `tags.register` reports as "created".
+                    return _Result(
+                        [SimpleNamespace(**row)], rowcount=1 if updated else 0,
+                    )
 
         row = {"id": str(uuid4()), **_DEFAULTS.get(table, {}), **values}
         # Migration 161's `pm_organization_from_parent` trigger, mirrored: a
@@ -1166,6 +1261,35 @@ class FakeProjectsDB:
         return _Result([SimpleNamespace(**r) for r in matched])
 
     def _select(self, statement: str, table: str, args: dict) -> _Result:
+        # `WITH RECURSIVE chain AS (…) SELECT bool_and(…)` — WS-27bg's
+        # ancestor-runnable verdict (`core.is_runnable_with_ancestors`).
+        #
+        # Answered explicitly rather than left to fall through, because the
+        # fall-through answer is `None` → False → "nothing is ever runnable",
+        # which silently disables recurrence and agent dispatch across the whole
+        # suite while every assertion still reads as a real refusal. That is the
+        # hermetic-fake failure mode this file keeps re-learning: a fake that
+        # cannot answer a query must not answer it *plausibly*.
+        if re.match(r"^\s*WITH\s+RECURSIVE\s+chain\b", statement, re.I):
+            pid = str(args.get("pid") or "")
+            verdict: bool | None = None
+            seen: set[str] = set()
+            while pid and pid not in seen:
+                seen.add(pid)
+                row = next(
+                    (r for r in self.rows("pm_projects") if str(r["id"]) == pid),
+                    None,
+                )
+                if row is None:
+                    break
+                ok = (
+                    str(row.get("status") or "active") == "active"
+                    and row.get("archived_at") is None
+                )
+                verdict = ok if verdict is None else (verdict and ok)
+                pid = str(row.get("parent_project_id") or "")
+            return _Result([], scalar=verdict)
+
         # `WITH RECURSIVE sub AS (…) SELECT count(*) FROM sub` — the subtree
         # size, asked by the project delete before it destroys anything. It does
         # not start with SELECT, so the generic count path never sees it and the
@@ -1209,7 +1333,37 @@ class FakeProjectsDB:
             return _Result([], scalar=len(matched))
         matched = self._ordered(statement, matched)
         matched = self._paged(statement, matched, args)
-        return _Result([SimpleNamespace(**r) for r in matched])
+        rows = [SimpleNamespace(**r) for r in matched]
+
+        # WS-27m — `tags.list_tags` computes each tag's usage as a correlated
+        # subquery in the SELECT list, which no text mirror can read; answered
+        # explicitly, the same convention as the personal inbox above.
+        #
+        # ⚠️ Counted against `:root`, mirroring the statement rather than the
+        # row. An org-wide tag (WS-27bj) has no `project_id`, so a mirror that
+        # correlated on the ROW would report every org-wide tag as used by 0
+        # tasks — and would then agree with the very bug that scoping prevents.
+        if "AS task_count" in statement:
+            # ⚠️ WHAT the count correlates on is READ OFF THE STATEMENT, not
+            # assumed. Computing it from `:root` regardless would make this
+            # mirror agree with `t.root_project_id = g.project_id` too — and
+            # that spelling reports every org-wide tag (WS-27bj: no project_id)
+            # as used by 0 tasks, which is the number people decide merges on.
+            # A mirror that answers the same for both spellings is a dead fence;
+            # this one was dead until a mutant walked through it.
+            correlates_on_row = "t.root_project_id = g.project_id" in statement
+            for row in rows:
+                scope = (
+                    str(row.project_id) if correlates_on_row
+                    else str(args.get("root"))
+                )
+                row.task_count = sum(
+                    1 for task in self.rows("pm_tasks")
+                    if str(task.get("root_project_id")) == scope
+                    and task.get("archived_at") is None
+                    and row.name in list(task.get("tags") or [])
+                )
+        return _Result(rows)
 
     # visibility ---------------------------------------------------------
     def visible_project_ids(
@@ -1377,10 +1531,9 @@ class FakeProjectsDB:
         readable clause; only if NEITHER did do we refuse.
         """
         rows = list(self.tables.get(table, []))
-        clause = _WHERE_RE.search(statement)
-        if clause is None:
+        where = _where_clause(statement)
+        if where is None:
             return rows
-        where = clause.group(1)
         top, blocks = _strip_subqueries(where)
 
         rows, seen_sub = self._apply_subqueries(rows, table, blocks, where, args)
@@ -1398,6 +1551,43 @@ class FakeProjectsDB:
         args: dict,
     ) -> tuple[list[dict], bool]:
         seen = False
+
+        # ── WS-27bj — the effective-vocabulary scope (`core.vocabulary_scope`)
+        #
+        # `org-wide ∪ root-local`, with the org arm anchored on the ROOT
+        # PROJECT's tenant. Modelled as the UNION it is: the generic column
+        # scanner would read `project_id = :root` and `project_id IS NULL` as an
+        # AND and match nothing, so every vocabulary list would come back empty
+        # and every test would fail for a reason that is not the code's.
+        #
+        # ⚠️ Keyed on the tenant subselect, never assumed. A route that keeps
+        # `project_id = :root` and drops the org arm stops matching org-wide
+        # rows here too, so the union tests go red rather than this mirror
+        # inventing a feature the SQL no longer has.
+        if any(_PROJECT_TENANT_SUBSELECT.search(b) for b in blocks):
+            seen = True
+            root = str(args.get("root"))
+            root_org = next(
+                (str(p.get("organization_id"))
+                 for p in self.rows("pm_projects") if str(p.get("id")) == root),
+                None,
+            )
+            in_tenant = [
+                r for r in rows
+                if root_org is not None
+                and str(r.get("organization_id")) == root_org
+            ]
+            if any(_VOCABULARY_UNION.search(b) for b in blocks):
+                rows = [
+                    r for r in rows
+                    if str(r.get("project_id")) == root
+                    or (r.get("project_id") is None and r in in_tenant)
+                ]
+            else:
+                # `core.org_wide_exists` and the org-wide re-read: the tenant
+                # subselect without the union. `project_id IS NULL` and the
+                # identity comparison are plain columns the scanner handles.
+                rows = in_tenant
 
         # ⚠️ The tenant, composed ABOVE the grant closure (WS-29b). Read from
         # the statement with the closure's own body removed first, because that

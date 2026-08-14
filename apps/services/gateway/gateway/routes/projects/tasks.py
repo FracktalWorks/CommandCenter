@@ -22,7 +22,7 @@ from __future__ import annotations
 from typing import Any
 
 from acb_auth import UserContext, get_current_user
-from fastapi import Depends, HTTPException
+from fastapi import Depends, Header, HTTPException
 from gateway.routes.projects.core import (
     CLOSING_CATEGORIES,
     DIRECTIONS,
@@ -50,6 +50,7 @@ from gateway.routes.projects.core import (
     now,
     record_activity,
     record_field_change,
+    require_precondition,
     require_row,
     require_status_in_project,
     resolve_visibility,
@@ -73,12 +74,12 @@ from gateway.routes.projects.notifications import (
     new_mentions,
     notify,
 )
-from gateway.routes.projects.watchers import ensure_watchers
 from gateway.routes.projects.relations import (
     DIRECTED_TYPES,
     assert_no_block_cycle,
 )
 from gateway.routes.projects.tags import apply_task_tags
+from gateway.routes.projects.watchers import ensure_watchers
 from pydantic import BaseModel
 from sqlalchemy import text
 
@@ -315,6 +316,7 @@ async def create_task(
 async def patch_task(
     task_id: str, payload: TaskIn,
     user: UserContext = Depends(get_current_user),
+    if_match: str | None = Header(None, alias="If-Match"),
 ) -> dict:
     """Update a task. A body that moves ``status_id`` is a status TRANSITION.
 
@@ -341,6 +343,11 @@ async def patch_task(
     async with _tenant_session() as db:
         vis = await resolve_visibility(db, user)
         before = await load_visible_task(db, vis, task_id)
+
+        # WS-27bi / D-PM-20. Checked HERE — after the visibility load, before any
+        # write — so a caller who cannot see the task still gets 404 and never
+        # learns from a 412 that it exists (R5: 404, never 403).
+        require_precondition(before, if_match, row_to_dict(before, TaskModel))
 
         # WS-27l. Merged against the definitions on the task's OWN root, not the
         # caller's current project: a task opened from My work can belong to a

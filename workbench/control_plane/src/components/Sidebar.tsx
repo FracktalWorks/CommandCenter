@@ -7,6 +7,7 @@ import { useSession, signOut } from "next-auth/react";
 import { NAV_SECTIONS, visibleSections, type NavPane, type NavSection } from "@/lib/nav";
 import { useAccess } from "@/components/AccessProvider";
 import Icon from "@/components/Icon";
+import OrgBrandLockup from "@/components/OrgBrandLockup";
 import ThemeToggle from "@/components/ThemeToggle";
 
 /** Mirrors gateway/routes/apps/pins.py's PinnedApp — GET /api/apps/pins. */
@@ -120,17 +121,10 @@ export default function Sidebar() {
       {/* Header */}
       <div className={`flex items-center border-b border-sidebar-border ${collapsed ? "justify-center p-3" : "justify-between px-4 py-4"}`}>
         {!collapsed && (
-          <Link href="/" className="block min-w-0">
-            <div className="flex items-center gap-2">
-              <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-primary text-primary-foreground">
-                <Icon name="Command" size={15} strokeWidth={2.5} />
-              </span>
-              <div>
-                <div className="text-sm font-semibold tracking-tight text-sidebar-foreground leading-tight">CommandCenter</div>
-                <div className="text-[10px] text-muted-foreground leading-tight">Control Plane</div>
-              </div>
-            </div>
-          </Link>
+          // The customer's mark when they have uploaded one, ours when they
+          // have not. `maxWidth` is what stops a wide wordmark from pushing the
+          // collapse control off the 256px rail.
+          <OrgBrandLockup fallbackCaption="Control Plane" maxWidth={152} />
         )}
         <button
           onClick={() => setCollapsed((c) => !c)}

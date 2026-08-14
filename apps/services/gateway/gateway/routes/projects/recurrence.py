@@ -35,7 +35,7 @@ from gateway.routes.projects.core import (
     actor,
     clean_payload,
     insert_row,
-    is_runnable,
+    is_runnable_with_ancestors,
     load_default_status,
     load_visible_task,
     next_task_number,
@@ -318,11 +318,12 @@ async def spawn_successor(db: Any, task: Any, *, actor_id: str) -> str | None:
     # is skipped while the project sleeps, and closing a task again after the
     # project resumes must still be able to produce a successor. Stamping here
     # would silently kill the series at the moment somebody paused the project.
-    project = (await db.execute(
-        text("SELECT status, archived_at FROM pm_projects WHERE id = CAST(:pid AS uuid)"),
-        {"pid": str(getattr(task, "project_id", "") or "")},
-    )).fetchone()
-    if not is_runnable(project):
+    # Ancestor-aware, not just this task's own project: a series must not
+    # advance inside an active subproject of a PAUSED department. Reading the
+    # immediate row alone was the slice-1 defect (see the function's docstring).
+    if not await is_runnable_with_ancestors(
+        db, getattr(task, "project_id", None)
+    ):
         return None
 
     row = (await db.execute(

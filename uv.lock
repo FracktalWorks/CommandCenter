@@ -28,11 +28,12 @@ members = [
     "agent-orchestrator",
     "agent-task-manager",
     "agent-whatsapp-assistant",
-    "project-docs",
     "email-ingestion",
     "gateway",
     "ingestion",
     "orchestrator",
+    "platform-api",
+    "project-docs",
     "reconciler",
     "skill-clickup-sync",
     "skill-task-gtd",
@@ -429,79 +430,6 @@ requires-dist = [
     { name = "acb-skills", editable = "packages/acb_skills" },
     { name = "agent-framework-core", specifier = ">=1.8.0" },
     { name = "agent-framework-openai", specifier = ">=1.7.0" },
-]
-
-[[package]]
-name = "project-docs"
-version = "0.0.1"
-source = { virtual = "." }
-dependencies = [
-    { name = "acb-audit" },
-    { name = "acb-auth" },
-    { name = "acb-common" },
-    { name = "acb-graph" },
-    { name = "acb-llm" },
-    { name = "acb-memory" },
-    { name = "acb-skills" },
-    { name = "action-broker" },
-    { name = "bcrypt" },
-    { name = "gateway" },
-    { name = "ingestion" },
-    { name = "orchestrator" },
-    { name = "python-multipart" },
-    { name = "reconciler" },
-    { name = "skill-clickup-sync" },
-    { name = "skill-task-gtd" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "httpx" },
-    { name = "ipython" },
-    { name = "mypy" },
-    { name = "pre-commit" },
-    { name = "pytest" },
-    { name = "pytest-asyncio" },
-    { name = "pytest-cov" },
-    { name = "radon" },
-    { name = "ruff" },
-    { name = "types-requests" },
-    { name = "xenon" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "acb-audit", editable = "packages/acb_audit" },
-    { name = "acb-auth", editable = "packages/acb_auth" },
-    { name = "acb-common", editable = "packages/acb_common" },
-    { name = "acb-graph", editable = "packages/acb_graph" },
-    { name = "acb-llm", editable = "packages/acb_llm" },
-    { name = "acb-memory", editable = "packages/acb_memory" },
-    { name = "acb-skills", editable = "packages/acb_skills" },
-    { name = "action-broker", editable = "apps/services/action_broker" },
-    { name = "bcrypt", specifier = ">=5.0.0" },
-    { name = "gateway", editable = "apps/services/gateway" },
-    { name = "ingestion", editable = "apps/services/ingestion" },
-    { name = "orchestrator", editable = "apps/services/orchestrator" },
-    { name = "python-multipart", specifier = ">=0.0.32" },
-    { name = "reconciler", editable = "apps/services/reconciler" },
-    { name = "skill-clickup-sync", editable = "apps/skills/skill-clickup-sync" },
-    { name = "skill-task-gtd", editable = "apps/skills/skill-task-gtd" },
-]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "httpx", specifier = ">=0.27" },
-    { name = "ipython", specifier = ">=8.29" },
-    { name = "mypy", specifier = ">=1.13" },
-    { name = "pre-commit", specifier = ">=4.0" },
-    { name = "pytest", specifier = ">=8.3" },
-    { name = "pytest-asyncio", specifier = ">=0.24" },
-    { name = "pytest-cov", specifier = ">=5.0" },
-    { name = "radon", specifier = ">=6.0" },
-    { name = "ruff", specifier = ">=0.7" },
-    { name = "types-requests" },
-    { name = "xenon", specifier = ">=0.9" },
 ]
 
 [[package]]
@@ -2348,6 +2276,27 @@ wheels = [
 ]
 
 [[package]]
+name = "platform-api"
+version = "0.0.1"
+source = { editable = "apps/services/platform" }
+dependencies = [
+    { name = "cryptography" },
+    { name = "fastapi" },
+    { name = "litellm" },
+    { name = "psycopg", extra = ["binary"] },
+    { name = "sqlalchemy" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "cryptography", specifier = ">=42" },
+    { name = "fastapi", specifier = ">=0.115" },
+    { name = "litellm", specifier = ">=1.0" },
+    { name = "psycopg", extras = ["binary"], specifier = ">=3.1" },
+    { name = "sqlalchemy", specifier = ">=2.0" },
+]
+
+[[package]]
 name = "platformdirs"
 version = "4.9.6"
 source = { registry = "https://pypi.org/simple" }
@@ -2429,6 +2378,81 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/36/d6/9262a7ebb1d980a2db0cd505bb902bb3e66acd8a1cb763a4c2921f2f6a5b/primp-1.3.1-cp310-abi3-win32.whl", hash = "sha256:09ada1752629fe89d7b128beeb59cb641f404af462e24177ba36aed1cf322299", size = 4270373, upload-time = "2026-05-23T17:38:44.98Z" },
     { url = "https://files.pythonhosted.org/packages/8f/68/f0c6a60fadff0c185aef232b951a6fa4bbb64511facc48d34734db14f16f/primp-1.3.1-cp310-abi3-win_amd64.whl", hash = "sha256:c0d1e294466cd5ec7ef173eedf8df25cbdc050138d40447a906e92b8553e7765", size = 4661498, upload-time = "2026-05-23T17:39:32.213Z" },
     { url = "https://files.pythonhosted.org/packages/7f/1d/232a52abc77384ac66b9c1741691dec3659b1207bb6c5e55c1e9b59d22f1/primp-1.3.1-cp310-abi3-win_arm64.whl", hash = "sha256:43304cb41cbb46f361de49faf1cbdba57f969f628c9297239c7ed8ef0cac420f", size = 4624481, upload-time = "2026-05-23T17:38:42.724Z" },
+]
+
+[[package]]
+name = "project-docs"
+version = "0.0.1"
+source = { virtual = "." }
+dependencies = [
+    { name = "acb-audit" },
+    { name = "acb-auth" },
+    { name = "acb-common" },
+    { name = "acb-graph" },
+    { name = "acb-llm" },
+    { name = "acb-memory" },
+    { name = "acb-skills" },
+    { name = "action-broker" },
+    { name = "bcrypt" },
+    { name = "gateway" },
+    { name = "ingestion" },
+    { name = "orchestrator" },
+    { name = "platform-api" },
+    { name = "python-multipart" },
+    { name = "reconciler" },
+    { name = "skill-clickup-sync" },
+    { name = "skill-task-gtd" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "httpx" },
+    { name = "ipython" },
+    { name = "mypy" },
+    { name = "pre-commit" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+    { name = "pytest-cov" },
+    { name = "radon" },
+    { name = "ruff" },
+    { name = "types-requests" },
+    { name = "xenon" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "acb-audit", editable = "packages/acb_audit" },
+    { name = "acb-auth", editable = "packages/acb_auth" },
+    { name = "acb-common", editable = "packages/acb_common" },
+    { name = "acb-graph", editable = "packages/acb_graph" },
+    { name = "acb-llm", editable = "packages/acb_llm" },
+    { name = "acb-memory", editable = "packages/acb_memory" },
+    { name = "acb-skills", editable = "packages/acb_skills" },
+    { name = "action-broker", editable = "apps/services/action_broker" },
+    { name = "bcrypt", specifier = ">=5.0.0" },
+    { name = "gateway", editable = "apps/services/gateway" },
+    { name = "ingestion", editable = "apps/services/ingestion" },
+    { name = "orchestrator", editable = "apps/services/orchestrator" },
+    { name = "platform-api", editable = "apps/services/platform" },
+    { name = "python-multipart", specifier = ">=0.0.32" },
+    { name = "reconciler", editable = "apps/services/reconciler" },
+    { name = "skill-clickup-sync", editable = "apps/skills/skill-clickup-sync" },
+    { name = "skill-task-gtd", editable = "apps/skills/skill-task-gtd" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "httpx", specifier = ">=0.27" },
+    { name = "ipython", specifier = ">=8.29" },
+    { name = "mypy", specifier = ">=1.13" },
+    { name = "pre-commit", specifier = ">=4.0" },
+    { name = "pytest", specifier = ">=8.3" },
+    { name = "pytest-asyncio", specifier = ">=0.24" },
+    { name = "pytest-cov", specifier = ">=5.0" },
+    { name = "radon", specifier = ">=6.0" },
+    { name = "ruff", specifier = ">=0.7" },
+    { name = "types-requests" },
+    { name = "xenon", specifier = ">=0.9" },
 ]
 
 [[package]]

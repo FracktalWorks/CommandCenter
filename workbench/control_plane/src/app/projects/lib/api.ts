@@ -131,7 +131,16 @@ export interface ViewRow {
 /** WS-27m — a registered tag. `task_count` is present on the list endpoint. */
 export interface TagRow {
   id: string;
-  project_id: string;
+  /**
+   * `null` means ORG-WIDE (WS-27bj / D-PM-16).
+   *
+   * ⚠️ This is the SECOND declaration of this shape — `lib/tags.ts` has one too,
+   * and the two are assignable only while they agree. Widening one and not the
+   * other is what surfaced the duplication: `page.tsx` passes rows between them.
+   * Recorded as a board finding rather than merged here; collapsing two public
+   * wire types is its own change.
+   */
+  project_id: string | null;
   name: string;
   color: string;
   description?: string | null;
@@ -143,7 +152,8 @@ export interface TagRow {
 /** WS-27l — a custom field definition. Shape mirrors the gateway's row. */
 export interface FieldRow {
   id: string;
-  project_id: string;
+  /** `null` means ORG-WIDE — see `TagRow.project_id` (WS-27bj / D-PM-16). */
+  project_id: string | null;
   field_key: string;
   name: string;
   description?: string | null;

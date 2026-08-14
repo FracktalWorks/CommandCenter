@@ -20,7 +20,18 @@ Usage in routes
         ...
 
 Headers (set by Next.js SSO proxy):
-    X-User-Email   -- the Google-verified email (fracktal.in domain)
+    X-User-Email   -- the SSO-verified email of the signed-in member.
+                     ⚠️ **No domain is implied and none is checked.** This line
+                     used to read "the Google-verified email (fracktal.in
+                     domain)", which was wrong on both counts: the provider is
+                     NextAuth (Microsoft Entra and/or Google, `workbench/
+                     control_plane/src/auth.ts`), and since WS-31 CP-0 the
+                     product deliberately accepts identities from directories we
+                     do not own — a customer's staff are not in our directory
+                     (D33.1). Any code inferring tenancy, trust or membership
+                     from the domain part is wrong; the organization comes from
+                     the resolved session, never from the address
+                     (`user_management_contract.md` R11).
     X-User-Role    -- one of: executive | employee | agent
                      Falls back to "employee" if missing/unrecognised.
 

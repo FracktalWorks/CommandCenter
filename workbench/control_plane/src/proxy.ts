@@ -28,7 +28,7 @@
  */
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
-import { auth, isAuthEnabled } from "@/auth";
+import { auth, isAuthEnabled, isAuthConfigured } from "@/auth";
 
 /** NextAuth's own endpoints, which must stay reachable to sign anybody in. */
 const AUTH_ROUTES = "/api/auth";
@@ -37,10 +37,28 @@ const AUTH_ROUTES = "/api/auth";
 const PUBLIC_PAGES = new Set(["/signin", "/favicon.ico"]);
 
 export async function proxy(req: NextRequest) {
-  // If Microsoft credentials are not configured, run wide open (dev mode).
+  // The laptop case, and ONLY the laptop case, runs open. This used to be
+  // `!isAuthEnabled` where that merely meant "no client id configured", so a
+  // production box whose auth env went missing served every route to anyone
+  // (D33.1). `isAuthEnabled` is now false only when NODE_ENV is non-production
+  // as well — see `auth.ts`.
   if (!isAuthEnabled) return NextResponse.next();
 
   const { pathname } = req.nextUrl;
+
+  // Enforcing, but with nothing to enforce with: a production deployment that
+  // lost (or never got) its auth configuration. Refuse everything, loudly.
+  //
+  // Not a redirect to /signin: that page cannot sign anybody in without a
+  // provider, so it would be an infinite loop presented as a login screen —
+  // which reads to an operator as "auth is working". 503 says the true thing,
+  // and says it to health checks too.
+  if (!isAuthConfigured) {
+    return NextResponse.json(
+      { error: "Authentication is not configured on this deployment" },
+      { status: 503 },
+    );
+  }
 
   if (pathname.startsWith(AUTH_ROUTES) || pathname.startsWith("/_next")) {
     return NextResponse.next();

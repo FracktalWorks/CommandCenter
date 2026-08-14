@@ -35,6 +35,7 @@ correct in the UI and silently empties the timeline — the CRM learned this in
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal
@@ -52,6 +53,8 @@ from fastapi import APIRouter, HTTPException, Query
 # comes from the request context — bound once in `_with_resolved_access` —
 # so no call site passes one (H2). A call outside a bound request raises
 # `TenantUnbound` rather than defaulting: fail closed, never "the usual org".
+# ⚠️ It reads as UNUSED inside this module — it is a re-export. `ruff --fix`
+# deletes it and takes 25 test modules with it; do not let a linter "tidy" it.
 from gateway.db import tenant_session as _tenant_session
 from pydantic import BaseModel
 from sqlalchemy import text
@@ -127,11 +130,63 @@ def is_runnable(project: Any) -> bool:
     """The Python half of :func:`runnable_project_clause`, same two axes.
 
     Takes a row or a mapping so it serves both a fetched record and a payload.
+
+    ⚠️ **This judges ONE row and knows nothing about its ancestors.** For any
+    decision about whether a task's work is live, use
+    :func:`is_runnable_with_ancestors` — see the defect note there.
     """
     if project is None:
         return False
     get = project.get if isinstance(project, dict) else lambda k: getattr(project, k, None)
     return get("status") in RUNNABLE_STATUSES and get("archived_at") is None
+
+
+#: One project's ancestor chain, itself included, reduced to a single verdict.
+#:
+#: `bool_and` over the chain: the whole chain must be runnable for the answer to
+#: be true, which is "the most restrictive ancestor wins" expressed as SQL.
+#: NULL-safe — `bool_and` of an empty chain is NULL, which :func:`
+#: is_runnable_with_ancestors` reads as False, so a project id that resolves to
+#: nothing fails closed rather than running work in a project nobody can find.
+_ANCESTOR_RUNNABLE_SQL = """
+WITH RECURSIVE chain AS (
+    SELECT id, parent_project_id, status, archived_at
+      FROM pm_projects WHERE id = CAST(:pid AS uuid)
+    UNION ALL
+    SELECT p.id, p.parent_project_id, p.status, p.archived_at
+      FROM pm_projects p JOIN chain c ON p.id = c.parent_project_id
+)
+SELECT bool_and(status = 'active' AND archived_at IS NULL) FROM chain
+"""
+
+
+async def is_runnable_with_ancestors(db: Any, project_id: Any) -> bool:
+    """Is this project runnable, **and every project above it**?
+
+    🔴 **This exists because the WS-27bg slice-1 guards were inconsistent with
+    each other, and with the UI.** Measured 2026-08-13 on a real database: the
+    lifecycle sweep reads the ROOT project's state, while the recurrence spawn
+    and the agent dispatch each read the task's IMMEDIATE project. So a task in
+    an *active* subproject beneath a *paused* root was skipped by the sweep and
+    **still spawned successors and still dispatched agents** — while
+    `ProjectTree` drew that very subproject as "Paused — inherited from a parent
+    project". The product said paused and the automation ran.
+
+    A project's state governs its whole subtree, exactly as a
+    `pm_project_grants` row on a root does (§3.2), and
+    `app/projects/lib/tree.ts::effectiveState` is the same rule on the client.
+    Three places computing "is this work live" from three different rows is the
+    CLAUDE.md §5 defect; this is the one answer.
+
+    ⚠️ Still derives, still writes nothing (D-PM-26). The walk is bounded by the
+    tree's real depth, which the cycle check keeps finite.
+    """
+    if not project_id:
+        return False
+    row = (await db.execute(
+        text(_ANCESTOR_RUNNABLE_SQL), {"pid": str(project_id)},
+    )).scalar()
+    return bool(row)
 
 #: `pm_task_statuses.category` — the machine-readable half of a status. Name and
 #: colour are the owner's; this is what completion, the personal mirror (§6.1)
@@ -302,7 +357,11 @@ class StatusModel(BaseModel):
 
 class TypeModel(BaseModel):
     id: str
-    project_id: str
+    #: ``None`` is ORG-WIDE (WS-27bj, migration 175) — and it is on the wire
+    #: because a client cannot otherwise tell a row it may edit from one that
+    #: belongs to the whole organization, which is exactly the difference
+    #: between an enabled pencil and a 409.
+    project_id: str | None = None
     name: str
     icon: str | None = None
     color: str | None = None
@@ -1002,12 +1061,309 @@ async def require_row(db: Any, table: str, record_id: str, what: str) -> Any:
     return row
 
 
+# ── The write precondition — D-PM-20 / WS-27bi ───────────────────────────────
+#
+# ``If-Match: <updated_at>``. No ``version`` column: ``update_row`` already moves
+# ``updated_at`` on every write that matters, and a second monotonic fact about
+# one row is the CLAUDE.md §5 defect.
+#
+# ⚠️ The two rules below are not stylistic — both were MEASURED against a real
+# database (spec §9.10.1), and both are cases where the obvious implementation
+# reports a safety it does not have:
+#
+#   1. A NAIVE (offset-stripped) token must be REFUSED, not accepted. asyncpg
+#      reinterprets a tz-less datetime in the session zone, so on a UTC box a
+#      stripped offset silently compares EQUAL. It would pass every test and
+#      begin mis-comparing the moment the session TZ moved.
+#   2. The token is never rendered by pg's ``::text`` and never string-compared.
+#      Postgres trims trailing zeros (``.1``) where the JSON encoder does not
+#      (``.100000``): equal as instants, different as strings. Comparing the
+#      parsed ``datetime`` objects is exact, and comparing the strings passes
+#      every test written against ordinary microseconds.
+
+
+def parse_precondition(token: str) -> datetime:
+    """Parse an ``If-Match`` token, refusing anything that cannot compare safely."""
+    raw = token.strip()
+    if raw.startswith('"') and raw.endswith('"') and len(raw) > 1:
+        raw = raw[1:-1]          # tolerate the quoted ETag spelling
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail="If-Match must be an ISO-8601 timestamp with a UTC offset, "
+                   "as returned in the row's 'updated_at'.",
+        ) from None
+    if parsed.tzinfo is None:
+        # Rule 1. This is the whole point of the header being measured.
+        raise HTTPException(
+            status_code=400,
+            detail="If-Match must carry a UTC offset. A timestamp without one "
+                   "is ambiguous and would compare against the wrong instant.",
+        )
+    return parsed
+
+
+def require_precondition(row: Any, if_match: str | None, current: dict) -> None:
+    """Enforce ``If-Match`` against ``row.updated_at``.
+
+    An ABSENT header still succeeds (D-PM-20): advisory now, mandatory in a later
+    release. Made compulsory on day one it would break every existing caller at
+    once, which is the failure this decision exists to prevent — R6's
+    expand-then-tighten discipline applied to an API rather than a schema.
+    """
+    # Absent means absent. ⚠️ Not merely ``is None``: FastAPI only resolves a
+    # ``Header(...)`` default through the HTTP layer, so an endpoint called
+    # DIRECTLY -- which most of this package's tests do -- receives the sentinel
+    # object itself. Treating that as a supplied token turned 18 existing tests
+    # into 400s the first time this was wired.
+    if not isinstance(if_match, str):
+        return
+    expected = parse_precondition(if_match)
+    if row.updated_at != expected:          # rule 2: instants, never strings
+        raise HTTPException(
+            status_code=412,
+            detail={
+                "error": "precondition_failed",
+                "message": "This row changed since you loaded it.",
+                "current": current,
+            },
+        )
+
+
 async def count_where(db: Any, table: str, column: str, value: str) -> int:
     total = (await db.execute(
         text(f"SELECT count(*) FROM {table} WHERE {column} = CAST(:value AS uuid)"),
         {"value": value},
     )).scalar()
     return int(total or 0)
+
+
+# ── Org-wide vocabularies — WS-27bj / D-PM-16 ───────────────────────────────
+#
+# Migration 175 made ``project_id`` nullable on ``pm_task_types``,
+# ``pm_custom_fields`` and ``pm_tags``. **NULL means org-wide**; a value keeps
+# meaning the root project it always meant. A project's EFFECTIVE vocabulary is
+# ``org-wide ∪ root-local``, and root-local **shadows** org-wide on the same
+# identity.
+#
+# ⚠️ For tags the shadowing is a CORRECTNESS rule, not a preference.
+# ``pm_tasks.tags`` stores display TEXT, not a foreign key (migration 156), so an
+# org-wide "bug" and a root-local "bug" are the *same tag on every task* while
+# being two registry rows with two colours. A union that returned both would make
+# "what colour is this tag" unanswerable — and whichever row a renderer happened
+# to hit first would be the answer, which is the bug that looks like a flicker.
+#
+# One seam, three tables, deliberately: this package already carries one status
+# vocabulary, one visibility clause and one task store, and a second way to scope
+# a vocabulary is the CLAUDE.md §5 defect.
+
+#: Each vocabulary table → how a row's identity WITHIN one scope is written, over
+#: the **column** and over the **bound value**. Each mirrors the rule that table
+#: already had before 175 (`lower(name)` for tags, `name` for types, `field_key`
+#: for fields) rather than inventing a new normalisation, and each is one half of
+#: migration 175's index pair.
+#:
+#: ⚠️ The two halves are ONE entry so they cannot drift. Lowering the column but
+#: not the parameter matches nothing and reports "no such tag" — a silent wrong
+#: answer rather than an error, which is the shape that survives review.
+VOCABULARY_IDENTITY: dict[str, tuple[str, str]] = {
+    "pm_task_types": ("name", ":value"),
+    "pm_custom_fields": ("field_key", ":value"),
+    "pm_tags": ("lower(name)", "lower(:value)"),
+}
+
+
+def vocabulary_scope(alias: str = "") -> str:
+    """The WHERE arm selecting one project's effective vocabulary.
+
+    Binds ``:root`` and nothing else, on purpose — see below.
+
+    ⚠️ **The tenant is composed onto the org-wide arm explicitly**, exactly as
+    :func:`task_visibility_clause` composes it above the grant closure. The
+    root-local arm is anchored by ``project_id`` — a project the caller was
+    already shown — but ``project_id IS NULL`` is anchored by *nothing* on its
+    own. Leaving it to RLS alone would make one forgotten ``FORCE ROW LEVEL
+    SECURITY`` on one table the difference between a tenant's private vocabulary
+    and every tenant's, and that is not a failure a test of this endpoint would
+    show. Two independent fences, on purpose.
+
+    The tenant is read from ``:root``'s own project row rather than taken as a
+    second parameter, and that is the safer of the two: it makes the clause a
+    pure function of the root, so no caller can compose it correctly-but-without
+    the tenant. Every one of them has already put ``:root`` through
+    :func:`load_visible_project`, so the anchor is a row the caller was
+    demonstrably allowed to see — a stronger fact than an org id passed
+    alongside. The cost is a primary-key point read on an already-planned query.
+    """
+    project = f"{alias}.project_id" if alias else "project_id"
+    org = f"{alias}.organization_id" if alias else "organization_id"
+    return (
+        f"({project} = CAST(:root AS uuid)"
+        f" OR ({project} IS NULL AND {org} = ("
+        f"      SELECT p.organization_id FROM pm_projects p"
+        f"       WHERE p.id = CAST(:root AS uuid))))"
+    )
+
+
+async def org_wide_exists(db: Any, table: str, root: str, value: Any) -> bool:
+    """Does the tenant already hold an ORG-WIDE row with this identity?
+
+    Needed because :func:`shadowed` deliberately hides the org-wide row when a
+    root-local one covers it, so a create path that checked the effective list
+    would not see the row its INSERT is about to collide with — and migration
+    175's ``uq_*_org_*`` index would answer that with an IntegrityError, i.e. a
+    500 where a 409 naming the clash belongs.
+
+    ``table`` indexes :data:`VOCABULARY_IDENTITY`, so the interpolated fragments
+    come from that literal map and never from caller input.
+    """
+    column, bind = VOCABULARY_IDENTITY[table]
+    row = (await db.execute(
+        text(
+            f"SELECT 1 FROM {table} "
+            f" WHERE project_id IS NULL AND {column} = {bind} "
+            f"   AND organization_id = (SELECT p.organization_id FROM pm_projects p"
+            f"                           WHERE p.id = CAST(:root AS uuid))"
+        ),
+        {"root": root, "value": value},
+    )).fetchone()
+    return row is not None
+
+
+def is_org_wide(row: Any) -> bool:
+    """Is this vocabulary row the tenant's rather than one project's?"""
+    return getattr(row, "project_id", None) is None
+
+
+def shadowed(rows: list[Any], identity: Callable[[Any], Any]) -> list[Any]:
+    """``org-wide ∪ root-local`` collapsed so each identity appears **once**.
+
+    Root-local wins. Pure, and separate from the SQL, because the interesting
+    case is the one a query would hide: the same identity arriving twice. A
+    ``DISTINCT ON`` would do it in the database and would be perfectly correct —
+    it is written here instead so the tie-break can be asserted directly rather
+    than inferred from an ``ORDER BY`` somebody may later "tidy" into the wrong
+    order. The row counts are bounded (40 fields, 500 tags), so this costs
+    nothing.
+
+    Incoming order is preserved, and a shadowed row keeps the POSITION its
+    org-wide twin held rather than jumping to where the local row sorted: the
+    list is alphabetical by name and the two share a name, so the position is the
+    same either way — but stating it means a later reorder cannot quietly become
+    a reshuffle.
+    """
+    winners: dict[Any, Any] = {}
+    order: list[Any] = []
+    for row in rows:
+        key = identity(row)
+        if key not in winners:
+            winners[key] = row
+            order.append(key)
+        elif is_org_wide(winners[key]) and not is_org_wide(row):
+            winners[key] = row
+    return [winners[key] for key in order]
+
+
+def refuse_org_wide_write(row: Any, what: str) -> None:
+    """Refuse a per-project mutation aimed at an org-wide row.
+
+    ⚠️ **This is a guard, not a policy choice.** Every rename/merge/delete path
+    in this package reads ``str(existing.project_id)`` and hands it to a
+    ``CAST(:root AS uuid)``. For an org-wide row that is ``str(None)`` — the
+    literal string ``"None"`` — which Postgres answers with an unhandled cast
+    error, i.e. a 500 on a route that should have said no. Refusing by name is
+    what turns that into an answer.
+
+    Managing org-wide vocabularies is explicitly out of scope for WS-27bj
+    (§9.11): the seam lands first, the admin surface follows. Until it does, an
+    org-wide row is created deliberately and edited nowhere, which is the
+    conservative half of "ship dark".
+    """
+    if is_org_wide(row):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"'{getattr(row, 'name', what)}' is an organization-wide {what} "
+                "and cannot be changed from inside one project. Org-wide "
+                "vocabularies are managed for the whole organization."
+            ),
+        )
+
+
+#: The permission that may write the tenant's shared vocabulary.
+#:
+#: An org-wide row lands in **every project in the organization**, including ones
+#: the writer cannot see. That crosses the visibility boundary the rest of this
+#: package is built to respect, so it is not enough to hold a grant on the
+#: project the request came through. ``admin:settings:manage`` is owner/admin
+#: only (migration 130 line 201) — a manager holds ``data:org:read`` and does not
+#: get this.
+ORG_VOCABULARY_WRITE = "admin:settings:manage"
+
+#: The env switch spelling this package inherits from ``ACTION_BROKER_ENFORCE``.
+_ORG_VOCABULARY_FLAG = "PROJECTS_ORG_VOCABULARIES"
+
+_TRUTHY = frozenset({"1", "on", "true", "yes"})
+
+
+def org_vocabularies_enabled() -> bool:
+    """Is the affordance that CREATES an org-wide row released? Default **OFF**.
+
+    Ship dark (§9.11, `engineering_practice.md` §2): the flag gates the create,
+    never the read union. Creating an org-wide row is the half that is hard to
+    walk back — it appears in every project at once, and un-creating it means
+    deciding what happens to the tasks that started using it — whereas reading a
+    union that is empty until something creates a row is a no-op by construction.
+
+    Read at CALL time, not import time, so the flip is a restart rather than a
+    release and a test can set it around one call. Same idiom as
+    ``routes/tasks/providers.py``'s ``ACTION_BROKER_ENFORCE``.
+    """
+    import os
+
+    return (os.environ.get(_ORG_VOCABULARY_FLAG) or "").strip().lower() in _TRUTHY
+
+
+def require_known_tenant(vis: Visibility, what: str) -> None:
+    """Refuse to mint an org-wide row for a caller with no resolved tenant.
+
+    ``Visibility.organization_id`` is ``None`` for somebody the directory has no
+    ``app_user`` row for — a mention recipient, a service identity nobody
+    onboarded. For READS that fails closed by construction (``column = NULL`` is
+    never true, so they see nothing). A WRITE has no such luck: the insert would
+    reach ``organization_id NOT NULL`` and surface as a 500 on a request that was
+    simply not answerable.
+    """
+    if vis.organization_id is None:
+        raise HTTPException(
+            status_code=403,
+            detail=f"An organization-wide {what} needs a caller the directory "
+                   f"knows; this account has no organization.",
+        )
+
+
+def require_org_vocabulary_write(user: Any) -> None:
+    """Both gates for minting an org-wide row: the flag, then the permission."""
+    if not org_vocabularies_enabled():
+        # 403 rather than R5's 404, and the distinction is worth stating: R5
+        # makes 404 the answer so an error code cannot become an oracle for what
+        # exists in another department. A dark FEATURE is not a resource and
+        # leaks nothing about anybody — answering 404 here would only send a
+        # caller hunting for a project that is sitting right in front of them.
+        raise HTTPException(
+            status_code=403,
+            detail="Organization-wide vocabularies are not enabled here.",
+        )
+    if not (user is not None and user.has_permission(ORG_VOCABULARY_WRITE)):
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "An organization-wide entry applies to every project in the "
+                "organization, so it needs organization settings permission."
+            ),
+        )
 
 
 # ── Hierarchy — the two self-FKs, and their only rules ──────────────────────

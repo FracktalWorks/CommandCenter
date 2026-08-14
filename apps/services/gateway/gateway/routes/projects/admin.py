@@ -32,13 +32,18 @@ from gateway.routes.projects.core import (
     clean_payload,
     count_where,
     load_visible_project,
+    refuse_org_wide_write,
+    require_known_tenant,
+    require_org_vocabulary_write,
     require_row,
     resolve_visibility,
     root_project_id,
     router,
     row_to_dict,
+    shadowed,
     update_row,
     validate_choice,
+    vocabulary_scope,
 )
 from pydantic import BaseModel
 from sqlalchemy import text
@@ -57,6 +62,11 @@ class TypeIn(BaseModel):
     icon: str | None = None
     color: str | None = None
     is_default: bool | None = None
+    #: WS-27bj. ``"org"`` mints an org-wide type; anything else, including the
+    #: default, keeps today's per-project behaviour verbatim. A field rather than
+    #: a second endpoint so there stays ONE create path — a parallel one is how
+    #: the two drift on the next validation somebody adds.
+    scope: str | None = None
     #: WS-27ae / P-28. Unlike `is_system`, this IS the caller's to set: it says
     #: "this type is a top level", which is a workflow decision a project makes
     #: about its own vocabulary. `is_system` stays a hard-coded literal below,
@@ -206,16 +216,23 @@ async def delete_status(
 async def list_types(
     project_id: str, user: UserContext = Depends(get_current_user),
 ) -> dict:
+    """This project's EFFECTIVE task types: org-wide ∪ root-local (WS-27bj).
+
+    A root-local type shadows an org-wide one of the same name, so a project that
+    has always had its own "Bug" keeps its own icon and colour after the
+    organization gains one.
+    """
     async with _tenant_session() as db:
         vis = await resolve_visibility(db, user)
         root = await _root_for(db, vis, project_id)
         rows = (await db.execute(
             text(
-                "SELECT * FROM pm_task_types WHERE project_id = CAST(:root AS uuid) "
+                f"SELECT * FROM pm_task_types WHERE {vocabulary_scope()} "
                 "ORDER BY name"
             ),
             {"root": root},
         )).fetchall()
+        rows = shadowed(rows, lambda r: r.name)
         return {
             "rows": [row_to_dict(r, TypeModel) for r in rows], "total": len(rows),
         }
@@ -230,20 +247,49 @@ async def create_type(
     name = str(values.get("name") or "").strip()
     if not name:
         raise HTTPException(status_code=422, detail="A task type needs a name.")
+    org_wide = values.get("scope") == "org"
+    if org_wide:
+        require_org_vocabulary_write(user)
+        if values.get("is_default"):
+            # "Exactly one default per project" is a per-project invariant
+            # (`_clear_other_defaults`), and an org-wide default would be a
+            # second answer to the same question for every project at once.
+            # Which type a project starts tasks in is that project's call.
+            raise HTTPException(
+                status_code=422,
+                detail="An organization-wide task type cannot be the default; "
+                       "the default is each project's own choice.",
+            )
 
     async with _tenant_session() as db:
         vis = await resolve_visibility(db, user)
         root = await _root_for(db, vis, project_id)
+        if org_wide:
+            require_known_tenant(vis, "task type")
+        # ⚠️ The tenant is passed EXPLICITLY for an org-wide row, and it has to
+        # be. Migration 161's trigger derives `organization_id` from the parent
+        # project, so with no `project_id` nothing fills it and `NOT NULL`
+        # refuses the insert. That is the migration's stated design — "the
+        # application must decide the tenant exactly once", as it already does
+        # for a root project — not a gap. It comes from the resolved visibility,
+        # never from the payload (R5: never trust a tenant from request input).
+        #
+        # The per-project arm passes it too, so there is one statement rather
+        # than two. That is not a no-op: 161's trigger switches from FILLING the
+        # column to VERIFYING it against the parent project, which turns a
+        # cross-tenant insert into a refusal instead of a stored row.
         row = (await db.execute(
             text(
                 "INSERT INTO pm_task_types "
-                "(project_id, name, icon, color, is_default, is_epic, "
-                " is_system) "
-                "VALUES (CAST(:root AS uuid), :name, :icon, :color, "
-                "        :is_default, :is_epic, false) RETURNING *"
+                "(project_id, organization_id, name, icon, color, is_default, "
+                " is_epic, is_system) "
+                "VALUES (CAST(:root AS uuid), CAST(:org AS uuid), :name, :icon, "
+                "        :color, :is_default, :is_epic, false) RETURNING *"
             ),
             {
-                "root": root, "name": name,
+                "root": None if org_wide else root,
+                "org": vis.organization_id,
+                "name": name,
                 "icon": values.get("icon"), "color": values.get("color"),
                 "is_default": bool(values.get("is_default")),
                 "is_epic": bool(values.get("is_epic")),
@@ -263,8 +309,14 @@ async def patch_type(
     user: UserContext = Depends(get_current_user),
 ) -> dict:
     values = clean_payload(payload)
+    # `scope` selects where a NEW row lands; it is not a column and re-scoping an
+    # existing row is not this ticket's (see `refuse_org_wide_write`). Dropped
+    # rather than refused: it arrives from a client reusing one form model for
+    # both verbs, which is a shape, not a mistake.
+    values.pop("scope", None)
     async with _tenant_session() as db:
         existing = await require_row(db, "pm_task_types", type_id, "Task type")
+        refuse_org_wide_write(existing, "task type")
         vis = await resolve_visibility(db, user)
         await load_visible_project(db, vis, str(existing.project_id))
         if getattr(existing, "is_system", False) and "name" in values:
@@ -311,6 +363,7 @@ async def delete_type(
     """
     async with _tenant_session() as db:
         existing = await require_row(db, "pm_task_types", type_id, "Task type")
+        refuse_org_wide_write(existing, "task type")
         vis = await resolve_visibility(db, user)
         await load_visible_project(db, vis, str(existing.project_id))
         if getattr(existing, "is_system", False):

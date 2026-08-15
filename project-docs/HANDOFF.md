@@ -67,10 +67,13 @@ this file grows a graveyard and the graveyard is what goes stale.
 # OPEN
 
 ### H-1 · Deploy: `main` is many migrations ahead of every box · [OWNER]
-- **Check:** compare `ls infra/postgres/*.sql | tail -1` against
+- **Check:** compare `ls infra/postgres/[0-9]*.sql | sort -V | tail -1` against
   `SELECT max(filename) FROM schema_migrations;` on a box. A gap means still
   pending. ⚠️ From a clean checkout with no box access an agent can only get the
   first half — report the gap as unverified rather than closing this.
+  ⚠️ The `[0-9]*` glob and `sort -V` are both load-bearing: a bare `*.sql | tail
+  -1` answers `schema.generated.sql`, which sorts after every numbered migration
+  and is not one. That is what the first draft of this Check did.
 - **Why:** #437 merged 2026-08-13 and was never deployed; everything since has
   stacked behind it, and the pile grows every day. **We cannot roll back** (R6),
   so the longer the gap the more lands at once. Deploy applies migrations before
@@ -163,11 +166,13 @@ this file grows a graveyard and the graveyard is what goes stale.
 - **Added:** 2026-08-14 · session that built WS-27bj
 
 ### H-9 · `schema.generated.sql` regeneration is overdue · [AGENT]
-- **Check:** `ls -l infra/postgres/schema.generated.sql` and compare its mtime
-  and content against `ls infra/postgres/*.sql | tail -1` → a generated file
-  older than the newest migration means still pending. (⚠️ The path is
-  `infra/postgres/`, not `docs/` — the first draft of this Check guessed `docs/`
-  and would have silently "passed" on a missing file.)
+- **Check:** compare `ls -l infra/postgres/schema.generated.sql` against
+  `ls infra/postgres/[0-9]*.sql | sort -V | tail -1` → a generated file older
+  than the newest migration means still pending. Measured 2026-08-14: generated
+  2026-08-12, newest migration 176. (⚠️ Two bugs already found in this one line:
+  the path is `infra/postgres/`, not `docs/` — a `docs/` Check would have
+  silently "passed" on a missing file — and a bare `*.sql` glob answers
+  `schema.generated.sql` itself.)
 - **Why:** Stale since roughly migration 113; the ladder is now at 175. A
   generated artefact that lags by sixty migrations is worse than absent, because
   it is read as current.

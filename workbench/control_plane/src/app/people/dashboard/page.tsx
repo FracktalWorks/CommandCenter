@@ -34,6 +34,11 @@ import { accentForHue } from "@/lib/statusAccent";
 import { Avatar } from "../components/Avatar";
 import { type WorkRow, peopleApi } from "../lib/api";
 import {
+  type SuggestionsResponse,
+  describeCandidate,
+  describePickup,
+} from "../lib/suggestions";
+import {
   type DashboardResponse,
   type DashboardRow,
   PILL_HUE,
@@ -60,6 +65,8 @@ export default function WorkloadDashboardPage() {
   const [filter, setFilter] = useState<Pill | null>(null);
   const [department, setDepartment] = useState<string | null>(null);
   const [openId, setOpenId] = useState<string | null>(null);
+  const [sug, setSug] = useState<SuggestionsResponse | null>(null);
+  const [assigned, setAssigned] = useState<string | null>(null);
 
   // The read, inline with a `live` guard rather than a `useCallback` the effect
   // then calls. Both shapes exist in this tree; only this one satisfies
@@ -88,6 +95,38 @@ export default function WorkloadDashboardPage() {
       live = false;
     };
   }, []);
+
+  // WS-28j3 — fetched after the board, not with it: the board is the page
+  // and must not wait on the suggester's extra queries.
+  useEffect(() => {
+    if (!data) return;
+    let live = true;
+    (async () => {
+      try {
+        const res = await peopleApi.suggestions();
+        if (live) setSug(res);
+      } catch {
+        if (live) setSug(null); // the board stands on its own
+      }
+    })();
+    return () => {
+      live = false;
+    };
+  }, [data]);
+
+  /**
+   * §5.7.4's "pre-filled assign action a human confirms" — the confirm IS the
+   * human act, and the write is the Projects app's ordinary assignees PUT.
+   */
+  async function assignHelper(taskId: string, title: string, helper: string) {
+    if (!window.confirm(`Assign ${helper} to “${title}”?`)) return;
+    try {
+      await peopleApi.assignHelper(taskId, helper);
+      setAssigned(`${helper} assigned to “${title}”.`);
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  }
 
   const rows = useMemo(() => sortRows(data?.rows ?? []), [data]);
   const totals = useMemo(() => pillTotals(rows), [rows]);
@@ -193,6 +232,103 @@ export default function WorkloadDashboardPage() {
           filter={department}
           onFilter={setDepartment}
         />
+      )}
+
+      {sug && (sug.at_risk.length > 0 || sug.pickups.length > 0) && (
+        <section className="rounded-xl border border-border">
+          <div className="border-b border-border p-3">
+            <h2 className="text-xs font-medium text-foreground">
+              Rebalancing suggestions
+            </h2>
+            <p className="text-[11px] text-muted-foreground">
+              Ranked by matched skill × spare hours × availability — every
+              number shown, nothing assigned without your confirm.
+              {sug.truncated ? " List trimmed; the worst cases are first." : ""}
+            </p>
+          </div>
+          {assigned && (
+            <p className="border-b border-border p-3 text-[11px] text-muted-foreground">
+              {assigned}
+            </p>
+          )}
+          {sug.at_risk.map((item) => (
+            <div key={item.task_id} className="border-b border-border p-3 last:border-0">
+              <p className="text-xs text-foreground">
+                {item.title}
+                {item.project_name ? (
+                  <span className="text-muted-foreground"> · {item.project_name}</span>
+                ) : null}
+                <span className="text-muted-foreground">
+                  {" "}— {item.holder.name} is short{" "}
+                  {item.shortfall_hours ? `${item.shortfall_hours}h` : "time"}
+                  {item.due_on ? ` before ${item.due_on}` : ""}
+                </span>
+              </p>
+              {item.candidates.length === 0 ? (
+                <p className="mt-1 text-[11px] text-muted-foreground">
+                  Nobody free has a matching skill on record — which may mean
+                  the skill exists and nobody wrote it down.
+                </p>
+              ) : (
+                <ul className="mt-1 flex flex-col gap-1">
+                  {item.candidates.map((c) => (
+                    <li
+                      key={c.email}
+                      className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground"
+                    >
+                      <span className="text-foreground">{c.name}</span>
+                      {describeCandidate(c)}
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        icon="UserPlus"
+                        onClick={() =>
+                          void assignHelper(item.task_id, item.title, c.email)
+                        }
+                      >
+                        Assign
+                      </Button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          ))}
+          {sug.pickups.map((pickup) => (
+            <div
+              key={pickup.email}
+              className="border-b border-border p-3 last:border-0"
+            >
+              <p className="text-xs text-foreground">
+                {pickup.name}
+                <span className="text-muted-foreground">
+                  {" "}is idle — could pick up:
+                </span>
+              </p>
+              <ul className="mt-1 flex flex-col gap-1">
+                {pickup.tasks.map((task) => (
+                  <li
+                    key={`${pickup.email}-${task.task_id}`}
+                    className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground"
+                  >
+                    <span className="text-foreground">{task.title}</span>
+                    {describePickup(task)}
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      icon="UserPlus"
+                      onClick={() =>
+                        void assignHelper(task.task_id, task.title, pickup.email)
+                      }
+                    >
+                      Assign
+                    </Button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
+        </section>
       )}
 
       {loading && (

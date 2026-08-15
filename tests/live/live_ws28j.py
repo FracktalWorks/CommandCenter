@@ -175,7 +175,7 @@ async def main() -> None:
                        title="Overdue thing", due=NOW - timedelta(days=3),
                        mins=6 * 60, number=1)
         await add_task(db, str(org.id), ids, "open", who=MINE,
-                       title="Tight thing", due=NOW + timedelta(days=1),
+                       title="Tight firmware thing", due=NOW + timedelta(days=1),
                        mins=30 * 60, number=2)
         await add_task(db, str(org.id), ids, "secret", who=MINE,
                        title="Hidden thing", due=NOW + timedelta(days=2),
@@ -242,7 +242,7 @@ async def main() -> None:
         # ── 5. `at risk` is the hours before the date, computed live ───────
         risky = srows["Priya WS28J"].at_risk
         check("the tight task is at risk", [t["title"] for t in risky],
-              ["Tight thing"])
+              ["Tight firmware thing"])
         check("…and it carries the shortfall, not just a flag",
               risky[0]["shortfall_hours"] > 0, True)
         check("…and its need includes the overdue work",
@@ -293,6 +293,35 @@ async def main() -> None:
         # One person per department here, so a spread is not a spread.
         check("a one-person department reports no spread",
               by_dept["Sales"]["spread"], None)
+
+        # ── 8c. The rebalancing suggestions (WS-28j3), over the same rows ──
+        from gateway.person_skills import replace_skills
+        from gateway.routes.people import suggestions as sugg
+        from acb_common.db import tenant_session as _ts
+        ravi_id = (await db.execute(text(
+            "SELECT id FROM gtd_people WHERE email = 'ravi@ws28j.invalid'"
+        ))).fetchone().id
+        async with _ts(str(org.id)) as scoped:
+            await replace_skills(scoped, str(ravi_id), [
+                {"skill": "firmware", "level": "proficient", "years": 3,
+                 "last_used_year": None, "evidence": "manual"}], "seed")
+        out_s = await sugg.get_suggestions(ADMIN)
+        risky_titles = [x.title for x in out_s.at_risk]
+        check("the at-risk task reaches the suggester",
+              "Tight firmware thing" in risky_titles, True)
+        item = next(x for x in out_s.at_risk
+                    if x.title == "Tight firmware thing")
+        check("…held by the right person", item.holder["name"], "Priya WS28J")
+        check("…with the skilled colleague as candidate",
+              [c.name for c in item.candidates], ["Ravi WS28J"])
+        cand = item.candidates[0]
+        check("…showing all three factors and their product",
+              (cand.skill_points, cand.spare_hours > 0,
+               cand.rank == round(cand.skill_points * cand.spare_hours, 2)),
+              (1.5, True, True))
+        check("…and the holder is never their own helper",
+              all(c.email != "priya@ws28j.invalid" for c in item.candidates),
+              True)
 
         # ── 9. A SECOND ORGANIZATION does not leak into either viewer ──────
         #

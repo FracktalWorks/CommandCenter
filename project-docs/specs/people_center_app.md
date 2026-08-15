@@ -1425,11 +1425,41 @@ not a second count (§5.9).
 (today), because somebody back tomorrow and somebody leaving on Thursday are both answers
 to *"can I give them a deadline this week"*, and neither is "away right now".
 
-**WS-28j3 — the rebalancing suggestions (§5.7.4).** 🟡 dispatchable after j2.
+**WS-28j3 — the rebalancing suggestions (§5.7.4).** ✅ **BUILT 2026-08-15**
+(`routes/people/suggestions.py`, the Rebalancing section on the dashboard page;
+11 hermetic cases and 5 more live checks on `live_ws28j.py`).
 Done when: helpers are ranked by skill × spare hours × availability, all three numbers are
 shown, the **§5.5 capability search is the ranker** rather than a new one, and every
 suggestion ends in a **pre-filled assign action a human confirms** — nothing in the diff
 writes an assignment (D-PC-13).
+
+**Four things the build settled:**
+
+- **One ranker, asserted by identity.** The skill half of every rank IS
+  `search.score_skills` — the test compares the function objects, not behaviour that could
+  coincide. Spare hours and availability multiply on top, and every factor travels on the
+  row: `matched_skills × skill_points · spare_hours · away → rank`, recomputable by the
+  reader.
+- **The helper window is the RISK HORIZON, not the calendar week.** Measured on the first
+  weekend live run: "spare hours this week" is zero for the entire roster every Saturday,
+  which would make the suggester a Monday-to-Friday feature. Help is needed before the
+  deadline, so candidate spare is available-minus-committed over today → +14 days
+  (`spare_hours_horizon`, a new dashboard-row field beside the week figure).
+- **No credible match beats a wrong one.** A candidate with no skill overlap is dropped,
+  not ranked last — offering a random free colleague is how suggestions teach people to
+  ignore them — and so is one with no spare hours. Away discounts (×0.25) but does not
+  erase: they are back within days, the away warning sits beside the number, and zero
+  would silently delete a match the reader might still choose.
+- **The confirmed assign goes through the Projects app's own endpoints** — the ordinary
+  task GET + assignees PUT, with the existing assignees riding along so helping never
+  silently unassigns the holder. The People surface holds no write path (fenced), and the
+  browser's `confirm()` is the human act §5.7.4 requires.
+
+The idle↔behind join is literal: an idle person's pickup list is unassigned tasks
+matching their skills (scoped by the VIEWER's grant closure — a pickup naming a task the
+viewer cannot open would leak exactly what the closure hides) **plus** the at-risk tasks
+above where they appear as a candidate. Caps are reported via `truncated`, never
+silent.
 
 **WS-28k — availability & absences (P-5, §5.8).** ✅ **BUILT 2026-08-13**
 (migration `174_people_absences.sql`, `routes/people/absences.py`, the availability

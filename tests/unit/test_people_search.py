@@ -221,6 +221,8 @@ def test_results_name_their_signals(monkeypatch) -> None:
     out = run(people_search.search_people("extruder firmware", user=HR))
     assert out.total == 1
     row = out.rows[0]
+    # §6.4: the assignee value travels so "Assign to…" can hand it on.
+    assert row.email == "priya@fracktal.in"
     kinds = {s["kind"] for s in row.signals}
     # skill + domain (PRIYA.domain='firmware' appears in the query) + resume
     # + semantic — all four, each labelled.

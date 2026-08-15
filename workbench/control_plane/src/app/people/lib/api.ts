@@ -478,6 +478,47 @@ export const peopleApi = {
     };
   },
 
+  /**
+   * WS-28j3 — the confirmed assign at the end of a suggestion (§5.7.4).
+   *
+   * NOT a second write path: these hit the Projects app's own endpoints
+   * through its own proxy — the same GET the panel uses to read the task and
+   * the same assignees PUT that replaces the set and emits
+   * `pm.task.assigned`. The helper exists because the suggestion lives on a
+   * People surface and runtime cross-app imports are not a thing this tree
+   * does; the ENDPOINT is the seam, and there is exactly one.
+   *
+   * The PUT replaces the whole set, so the existing assignees ride along —
+   * helping with a task must not silently unassign its holder.
+   */
+  assignHelper: async (taskId: string, helper: string) => {
+    const read = await fetch(`/api/projects/tasks/${taskId}`);
+    const task = read.ok ? await read.json() : null;
+    const current: string[] = (task?.assignees ?? []).map((a: string) =>
+      a.trim().toLowerCase()
+    );
+    const wanted = helper.trim().toLowerCase();
+    if (current.includes(wanted)) return;
+    const res = await fetch(`/api/projects/tasks/${taskId}/assignees`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ assignees: [...current, wanted] }),
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      const parsed = text ? JSON.parse(text) : null;
+      throw new PeopleApiError(
+        parsed?.detail ?? `Assign failed (${res.status})`,
+        res.status
+      );
+    }
+  },
+
+  suggestions: () =>
+    call<import("./suggestions").SuggestionsResponse>(
+      "dashboard/suggestions"
+    ),
+
   work: (id: string) =>
     call<{ rows: WorkRow[]; total: number; available: boolean }>(`${id}/work`),
 };

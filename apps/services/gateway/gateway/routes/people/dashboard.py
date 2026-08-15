@@ -93,6 +93,12 @@ class DashboardRow(BaseModel):
     contracted_hours: float = 0.0
     hours_available_this_week: float | None = None
     spare_hours_this_week: float | None = None
+    #: Spare over the RISK HORIZON (today → +HORIZON_DAYS), absences applied,
+    #: minus the estimates due inside it. The suggester's window (WS-28j3):
+    #: help is needed before the deadline, not before Sunday — and "this week"
+    #: is zero for the entire roster every Saturday (measured: the first live
+    #: run of the suggester on a weekend returned no candidates for anybody).
+    spare_hours_horizon: float | None = None
     next_due_at: str | None = None
     last_activity_at: str | None = None
     projects: list[dict[str, Any]] = []
@@ -283,6 +289,13 @@ def _row(*, person_id, name, email, department, team, avatar, kind, schedule,
     contracted = contracted_hours_per_week(schedule) if schedule else 0.0
     available = (working_hours_between(schedule, today, sunday, spans)
                  if schedule else None)
+    horizon_end = today + timedelta(days=HORIZON_DAYS)
+    committed_horizon = sum(
+        hours_of(t.get("estimate_mins")) for t in dated
+        if (d := t.get("_due")) is not None and d <= horizon_end)
+    available_horizon = (working_hours_between(schedule, today, horizon_end,
+                                               spans)
+                         if schedule else None)
     risky = at_risk_tasks(schedule, dated, spans, today) if schedule else []
 
     verdict = classify({
@@ -305,6 +318,9 @@ def _row(*, person_id, name, email, department, team, avatar, kind, schedule,
         hours_available_this_week=available,
         spare_hours_this_week=(None if available is None
                                else round(max(0.0, available - week_hours), 1)),
+        spare_hours_horizon=(None if available_horizon is None
+                             else round(max(0.0, available_horizon
+                                            - committed_horizon), 1)),
         next_due_at=next_due.isoformat() if next_due else None,
         last_activity_at=(last_activity.isoformat() if last_activity else None),
         projects=projects[:PROJECT_NAMES_SHOWN],

@@ -1071,11 +1071,35 @@ form-filling. The résumé signal quotes the matching LINE of the newest CV
 (`DISTINCT ON (person_id) … ORDER BY uploaded_at DESC`, verified live), because a claim
 with its evidence beside it can be argued with.
 
-**WS-28e — the Projects seams.** 🟢 AGENT-SAFE.
+**WS-28e — the Projects seams.** ✅ **BUILT 2026-08-15**
+(`routes/projects/assignees.py`, `AssigneePicker.tsx` in the task panel, the
+`?assignee=` pre-fill on `/projects`, "Assign work" on the person page and "Assign to…"
+on search results; 10 hermetic + 5 vitest cases and 8 live checks).
 Done when: the assignee picker is directory-backed and lists agents and directory-only
 people; capacity is derived from open assigned tasks with an honest no-estimates state;
 each row carries its availability warning (§6.1); and "Assign work" routes through the
 ordinary task-create flow.
+
+**Three things the build settled:**
+
+- **The picker suggests; free text still commits.** The server accepts any non-empty
+  string (that is what makes directory-only people and agents assignable at all), so the
+  picker must not invent a rule the API does not enforce — suggestions sit UNDER the same
+  input, warnings are shown and never block, and Enter/blur behave exactly as before.
+- **"No login — cannot see the task" is said BEFORE assigning** (D-PC-12). A contractor
+  can hold a task and appear on a board; they cannot sign in to see it, and silence here
+  becomes "why didn't they do it" a week later. The endpoint joins `app_user` on
+  `lower(email)` per page, not per row.
+- **The §6.4 pre-fill is visible and dismissible, and applies through the SAME assignees
+  PUT the panel uses.** `/projects?assignee=…` arms a chip above the new-task input —
+  "New tasks will be assigned to X ✕" — and the assignment happens after the ordinary
+  create, not as a hidden create-payload field. Silently assigning every new task to
+  somebody is how work lands on the wrong desk with nobody able to say why.
+
+The HR half (load, top skills, contracted hours, the overload warning) follows the
+CALLER's grant with `hr_visible` naming which emptiness an empty field is — the same
+projection discipline as every People read. The endpoint itself never writes (D-PC-13,
+fenced with the prose-stripping grep).
 
 **WS-28f — seats & roles matrix.** 🔴 **OWNER-GATE** for the write half: group membership
 writes are registered in `work_plan.md` §6 (d), and the "give this person a login" action
@@ -1401,11 +1425,41 @@ not a second count (§5.9).
 (today), because somebody back tomorrow and somebody leaving on Thursday are both answers
 to *"can I give them a deadline this week"*, and neither is "away right now".
 
-**WS-28j3 — the rebalancing suggestions (§5.7.4).** 🟡 dispatchable after j2.
+**WS-28j3 — the rebalancing suggestions (§5.7.4).** ✅ **BUILT 2026-08-15**
+(`routes/people/suggestions.py`, the Rebalancing section on the dashboard page;
+11 hermetic cases and 5 more live checks on `live_ws28j.py`).
 Done when: helpers are ranked by skill × spare hours × availability, all three numbers are
 shown, the **§5.5 capability search is the ranker** rather than a new one, and every
 suggestion ends in a **pre-filled assign action a human confirms** — nothing in the diff
 writes an assignment (D-PC-13).
+
+**Four things the build settled:**
+
+- **One ranker, asserted by identity.** The skill half of every rank IS
+  `search.score_skills` — the test compares the function objects, not behaviour that could
+  coincide. Spare hours and availability multiply on top, and every factor travels on the
+  row: `matched_skills × skill_points · spare_hours · away → rank`, recomputable by the
+  reader.
+- **The helper window is the RISK HORIZON, not the calendar week.** Measured on the first
+  weekend live run: "spare hours this week" is zero for the entire roster every Saturday,
+  which would make the suggester a Monday-to-Friday feature. Help is needed before the
+  deadline, so candidate spare is available-minus-committed over today → +14 days
+  (`spare_hours_horizon`, a new dashboard-row field beside the week figure).
+- **No credible match beats a wrong one.** A candidate with no skill overlap is dropped,
+  not ranked last — offering a random free colleague is how suggestions teach people to
+  ignore them — and so is one with no spare hours. Away discounts (×0.25) but does not
+  erase: they are back within days, the away warning sits beside the number, and zero
+  would silently delete a match the reader might still choose.
+- **The confirmed assign goes through the Projects app's own endpoints** — the ordinary
+  task GET + assignees PUT, with the existing assignees riding along so helping never
+  silently unassigns the holder. The People surface holds no write path (fenced), and the
+  browser's `confirm()` is the human act §5.7.4 requires.
+
+The idle↔behind join is literal: an idle person's pickup list is unassigned tasks
+matching their skills (scoped by the VIEWER's grant closure — a pickup naming a task the
+viewer cannot open would leak exactly what the closure hides) **plus** the at-risk tasks
+above where they appear as a candidate. Caps are reported via `truncated`, never
+silent.
 
 **WS-28k — availability & absences (P-5, §5.8).** ✅ **BUILT 2026-08-13**
 (migration `174_people_absences.sql`, `routes/people/absences.py`, the availability

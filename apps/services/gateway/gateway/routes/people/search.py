@@ -82,6 +82,9 @@ MIN_QUERY_CHARS = 2
 class SearchResult(BaseModel):
     person_id: str
     name: str
+    #: The assignee value — what §6.4's "Assign to…" hands to the task flow.
+    #: Directory tier: the directory already shows every colleague's address.
+    email: str | None = None
     title: str | None = None
     department: str | None = None
     avatar: str | None = None
@@ -286,7 +289,8 @@ async def search_people(
                 warnings.append(f"Engagement ends {end.isoformat()}")
 
             results.append(SearchResult(
-                person_id=pid, name=person.name, title=person.title,
+                person_id=pid, name=person.name,
+                email=getattr(person, "email", None), title=person.title,
                 department=person.department, avatar=person.avatar,
                 score=total, signals=signals, load=load,
                 contracted_hours=contracted_hours_per_week(schedule),

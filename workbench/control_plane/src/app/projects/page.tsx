@@ -271,6 +271,12 @@ function ProjectsWorkspace() {
   const searchParams = useSearchParams();
   const router = useRouter();
   const center = searchParams.get("center");
+  // WS-28e §6.4 — "Assign work" from the People Center lands here with the
+  // assignee pre-filled. Held in STATE seeded from the param rather than read
+  // live, so the ✕ can dismiss it without a navigation.
+  const [prefillAssignee, setPrefillAssignee] = useState<string | null>(
+    searchParams.get("assignee")
+  );
 
   // WS-27ag — the shell. `/projects` had no mobile branch at all: a 240px nav
   // beside a five-mode canvas, plus a third column when a task opened, inside
@@ -1163,7 +1169,16 @@ function ProjectsWorkspace() {
     try {
       // Status is deliberately not sent: the API picks the project's default,
       // so the browser never has to know which lane a new task starts in.
-      await projectsApi.createTask({ project_id: selected.id, title });
+      const created = await projectsApi.createTask({
+        project_id: selected.id,
+        title,
+      });
+      // WS-28e §6.4 — the pre-filled assignee, applied through the SAME
+      // assignees PUT the panel uses. Not a create-payload field: one write
+      // path for assignment, and the ordinary flow is the point.
+      if (prefillAssignee) {
+        await projectsApi.setAssignees(created.id, [prefillAssignee]);
+      }
       await loadProject(selected);
     } catch (err) {
       setError(String((err as Error).message));
@@ -1425,10 +1440,32 @@ function ProjectsWorkspace() {
         // exists, because a create form that asks six questions is a create
         // form people work around.
         <form onSubmit={submitTask} className="border-b border-border px-3 py-2">
+          {prefillAssignee ? (
+            // §6.4: the pre-fill is VISIBLE and dismissible — silently
+            // assigning every new task to somebody is how work lands on the
+            // wrong desk with nobody able to say why.
+            <p className="mb-1.5 flex items-center gap-1.5 text-[11px] text-muted-foreground">
+              <Icon name="UserPlus" className="size-3 shrink-0" />
+              New tasks will be assigned to{" "}
+              <span className="text-foreground">{prefillAssignee}</span>
+              <button
+                type="button"
+                aria-label="Stop pre-assigning"
+                onClick={() => setPrefillAssignee(null)}
+                className="opacity-70 hover:opacity-100"
+              >
+                <Icon name="X" className="size-3" />
+              </button>
+            </p>
+          ) : null}
           <input
             value={newTask}
             onChange={(e) => setNewTask(e.target.value)}
-            placeholder={`New task in ${selected.name}…`}
+            placeholder={
+              prefillAssignee
+                ? `New task for ${prefillAssignee} in ${selected.name}…`
+                : `New task in ${selected.name}…`
+            }
             aria-label="New task title"
             className="w-full rounded-md border border-border bg-background px-2 py-1.5 text-sm text-foreground"
           />

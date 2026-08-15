@@ -550,7 +550,43 @@ component, two entry points, so a field added to one cannot be missing from the 
   empty on your row, and what each one buys. Not a nag: the meter names the consequence
   ("no timezone means the scheduler assumes yours is the org default").
 
-### 5.4 Org chart 🟢 WS-28c
+### 5.4 Org chart ✅ BUILT (WS-28c, 2026-08-15)
+
+> **Build record.** `routes/people/chart.py` → `GET /people/chart` (flat node
+> list, directory tier — a fence pins the node model to exactly the ten
+> directory fields so an HR column cannot ride along) + `/people/chart` page
+> linked from the directory header. The TREE and both cycle guards live in
+> the client (`lib/chart.ts`), where the recursion is: `buildTree` terminates
+> on ANY input — a manager loop severs its smallest-id member into a flagged
+> root (same data, same tree) — and `wouldCycle` refuses a re-parent BEFORE
+> the request, bounded by a visited set so pre-existing bad data cannot hang
+> the check that exists to prevent bad data. Alumni are off the chart, so a
+> manager who left resolves to *no manager* and the orphan surfaces as a
+> ROOT — the same fact §5.10 lists as `manager_alumni`, shown rather than
+> smoothed. The Center overlay joins `org_group` through `app_user` on
+> lowered email; tints go through `categoricalAccent` (the `--cat-1…8` ramp,
+> AGENTS.md rule 7) and the mismatch rule is stated precisely: the free-text
+> department NAMES an existing group slug and the person is not in it — free
+> text naming no group is just text. Re-parenting is drag-to-drop behind
+> `can_manage`, human-confirmed, written through the ORDINARY person PATCH
+> (admin class §4.3) — no new write path, and the module's never-writes fence
+> proves it. **Adversarially reviewed 2026-08-15; findings fixed:**
+> 🔴 the legend's `org_group` read carried no tenant predicate — and
+> `org_group` is EXEMPT from the generated RLS (it has carried
+> `organization_id` since 138), so the query listed EVERY customer's
+> groups and fabricated department-mismatch warnings from another
+> tenant's slugs. Predicate now explicit (`current_setting`, fails
+> closed), asserted hermetically on the SQL shape and MEASURED live with
+> a second organization. Also: the drag wrote through the tasks-app door
+> (`feature:tasks`, which a chart holder need not hold) — now
+> `PATCH /api/people/{id}`; `ChartRow` hoisted to module scope (nested,
+> it rebuilt the whole tree DOM per keystroke and dropped keyboard
+> focus); NULL-status rows no longer vanish (`status <> 'alumni'` is
+> NULL for NULL); slug matching normalizes both sides (`r_d` vs "R&D").
+> ⚠️ Advisory, recorded not fixed: the server accepts a cycle from a
+> stale tab (no DB constraint) — the chart labels and survives it, but
+> "refused before the request" is client-side only. 6 hermetic +
+> 16 vitest cases; 8 live checks.
 
 `gtd_people.manager_id` is a self-FK, so the chart is the same recursive render the project
 tree already uses — and the same cycle guard applies (a manager loop is a hang, not a
@@ -740,7 +776,28 @@ Absences are self-writable (a person records their own) and admin-writable. They
 the capacity bar, the capability search's availability line, the assignee picker's warning,
 and the AI's "do not chase someone who is on holiday" rule (§6.7).
 
-### 5.9 People dashboard — the Center landing rollup 🟢 WS-28l
+### 5.9 People dashboard — the Center landing rollup ✅ BUILT (WS-28l, 2026-08-15)
+
+> **Build record.** `routes/people/overview.py` → `GET /people/overview` +
+> `/people/overview` page; the `centers.ts` "People dashboard" entry flipped
+> `live` per §9. "Projection, not new arithmetic" is asserted BY IDENTITY:
+> the load half is `get_dashboard`'s own `departments`/`org` rollup passed
+> through verbatim (whose `away` names already answer "who is away this
+> week"), the quality half is §5.10's `collect` — and the fence pins
+> `overview_mod.get_dashboard is people_dashboard.get_dashboard`, plus "the
+> module's only SELECT reads `gtd_people`". That one statement is the
+> headcount GROUP BY (department × status), the single figure no other
+> surface computes — deliberately including alumni, because the workload
+> dashboard excludes them by design and a HEADCOUNT that did would say the
+> company never loses anybody. Gated `admin:members:read` like the two
+> surfaces it projects. Found on the way: a literal NUL byte in the
+> headcount-matrix key separator — `sourceHygiene.test.ts` caught it and was
+> right to (ripgrep would have gone binary and every source fence would have
+> silently stopped reading the file); now the `\0` escape. 8 hermetic +
+> 5 vitest cases; live checks in `tests/live/live_ws28ml.py`.
+> **Review fix:** `roots` is §5.10's CAPPED list; the page now numbers
+> from `quality_counts.no_manager` (fenced), so the two figures on one
+> screen cannot disagree past 50 rows.
 
 What `centers.ts` already lists as *"People dashboard — who's in, who's out, open roles,
 onboarding in progress"*, narrowed to what exists: headcount by department and status,
@@ -749,7 +806,44 @@ unmanaged roots. It is a **projection of §5.7 and §5.10**, not new arithmetic 
 that computes its own version of a number the app already renders is how two numbers start
 disagreeing.
 
-### 5.10 Skills coverage & data quality 🟢 WS-28m
+### 5.10 Skills coverage & data quality ✅ BUILT (WS-28m, 2026-08-15)
+
+> **Build record.** `routes/people/quality.py` → `GET /people/quality` +
+> `/people/quality` page, no migration. **One matcher**: "declared but never
+> used on a task" is decided by the §5.5 ranker's own word boundary —
+> `skill_pattern` extracted from `score_skills` and asserted by IDENTITY — so
+> a skill cannot be *matched* by the ranker and *unused* by this panel at
+> once ('java' inside 'javascript' is not a use; 'c++' with its punctuation
+> is). The task scan is VIEWER-scoped through the dashboard's own
+> `_scope`/`_visibility` (D-PC-20) and states its basis: `tasks_scanned`,
+> `tasks_partial` (hit the 5000 cap), `scope_partial` (the viewer's slice) —
+> and an EMPTY scan proves nothing rather than declaring every skill unused
+> (the confident zero §6.2 refuses to draw). 148's quarantine paid off:
+> `email_conflict` rows listed distinct from `no_email`. Statuses outside
+> the vocabulary are hermetic-only — the live ladder has the CHECK
+> **VALIDATED**, so a bad status cannot even be seeded (measured: the door
+> refuses), which is exactly the legacy-rows-only tolerance 148 designed.
+> AI-relevant gaps = `AI_FIELDS` (timezone · working_hours · skills), the
+> self-fillable subset. D-PC-14 structurally: every list alphabetical **in
+> Python** (a fake skips an ORDER BY), pre-cap totals travel in `counts`,
+> `_PERFORMANCE` + never-writes fences on the stripped source. Gated
+> `admin:members:read` (§4.2). **Adversarially reviewed 2026-08-15; four
+> findings fixed, each measured on the live DB:** (1) coverage read only
+> the child table while `scripts/import_hr_people.py` and every pre-176
+> write fill only `gtd_people.skills` — the panel asserted "nobody claims
+> firmware" about a record whose array declares it; declared is now the
+> UNION of both sources (read-only — the D-PC-6 write path is untouched)
+> and the importer's bypass of the child table stays a board finding.
+> (2) A NULL status (reachable: 49 has no NOT NULL, 148's CHECK passes
+> NULL) was counted active by headcount, rendered as "" by bad_status and
+> hidden from every other list at once — now one story: its own `(none)`
+> bucket, listed as `(none)`, and kept in the working set so the row's
+> other defects still surface. (3) A failed scan rendered as "no visible
+> tasks" forever with nothing logged — now `scan_ran`/`scan_error` travel
+> and four states get four sentences. (4) The scan includes done work by
+> DESIGN (historical use is use — a different question from the
+> dashboard's `_OPEN`) and now says so. 24 hermetic + 10 vitest cases;
+> 30 live checks (`tests/live/live_ws28ml.py`, shared with WS-28l/c).
 
 Two questions with one surface, because both are "what is wrong with the record":
 

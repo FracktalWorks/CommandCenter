@@ -13,6 +13,9 @@ Spec: ``project-docs/specs/people_center_app.md`` §3, §6 · ticket WS-28b.
     GET   /people/schedule        → the company's working week
     PUT   /people/schedule        → edit it (admin:members:manage)
     GET   /people/dashboard       → the people-management dashboard rows
+    GET   /people/quality         → skills coverage & data quality (§5.10)
+    GET   /people/overview        → the Center landing rollup (§5.9)
+    GET   /people/chart           → the org chart's flat node list (§5.4)
     PATCH /people/{id}            → a class-checked write (admin OR the subject)
     POST  /people/{id}/resume     → the CV, same rule
 
@@ -67,6 +70,9 @@ from gateway.routes.people import dashboard as _dashboard  # noqa: F401
 from gateway.routes.people import search as _search  # noqa: F401
 from gateway.routes.people import skills as _skills  # noqa: F401
 from gateway.routes.people import suggestions as _suggestions  # noqa: F401
+from gateway.routes.people import quality as _quality  # noqa: F401
+from gateway.routes.people import overview as _overview  # noqa: F401
+from gateway.routes.people import chart as _chart  # noqa: F401
 from gateway.routes.people import directory as _directory  # noqa: F401
 from gateway.routes.people.core import router
 from gateway.routes.people.selfservice import router as self_router

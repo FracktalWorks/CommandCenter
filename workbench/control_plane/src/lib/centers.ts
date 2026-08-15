@@ -295,9 +295,14 @@ export const CENTERS: Center[] = [
       },
       {
         label: "People dashboard",
-        note: "Who's in, who's out, open roles, onboarding in progress",
+        note: "The Center landing — headcount, who's away, load spread, and the health of the record itself",
         icon: "LayoutDashboard",
-        status: "planned",
+        // WS-28l (§5.9): a projection of the workload rollup and the §5.10
+        // quality counts, narrowed to what exists — open roles and onboarding
+        // stay with their own planned entries below. Needs `admin:members:read`
+        // like the two surfaces it projects.
+        status: "live",
+        href: "/people/overview",
       },
       {
         label: "My profile",

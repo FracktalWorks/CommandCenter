@@ -550,7 +550,27 @@ component, two entry points, so a field added to one cannot be missing from the 
   empty on your row, and what each one buys. Not a nag: the meter names the consequence
   ("no timezone means the scheduler assumes yours is the org default").
 
-### 5.4 Org chart 🟢 WS-28c
+### 5.4 Org chart ✅ BUILT (WS-28c, 2026-08-15)
+
+> **Build record.** `routes/people/chart.py` → `GET /people/chart` (flat node
+> list, directory tier — a fence pins the node model to exactly the ten
+> directory fields so an HR column cannot ride along) + `/people/chart` page
+> linked from the directory header. The TREE and both cycle guards live in
+> the client (`lib/chart.ts`), where the recursion is: `buildTree` terminates
+> on ANY input — a manager loop severs its smallest-id member into a flagged
+> root (same data, same tree) — and `wouldCycle` refuses a re-parent BEFORE
+> the request, bounded by a visited set so pre-existing bad data cannot hang
+> the check that exists to prevent bad data. Alumni are off the chart, so a
+> manager who left resolves to *no manager* and the orphan surfaces as a
+> ROOT — the same fact §5.10 lists as `manager_alumni`, shown rather than
+> smoothed. The Center overlay joins `org_group` through `app_user` on
+> lowered email; tints go through `categoricalAccent` (the `--cat-1…8` ramp,
+> AGENTS.md rule 7) and the mismatch rule is stated precisely: the free-text
+> department NAMES an existing group slug and the person is not in it — free
+> text naming no group is just text. Re-parenting is drag-to-drop behind
+> `can_manage`, human-confirmed, written through the ORDINARY person PATCH
+> (admin class §4.3) — no new write path, and the module's never-writes fence
+> proves it. 6 hermetic + 14 vitest cases; 5 live checks (`live_ws28ml.py`).
 
 `gtd_people.manager_id` is a self-FK, so the chart is the same recursive render the project
 tree already uses — and the same cycle guard applies (a manager loop is a hang, not a

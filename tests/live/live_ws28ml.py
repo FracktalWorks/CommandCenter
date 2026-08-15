@@ -203,6 +203,36 @@ async def main() -> None:
         check("the landing's roots are §5.10's no_manager list",
               [r["name"] for r in land.roots], ["Asha WS28ML"])
 
+        # ── 4b. The org chart (WS-28c) over the same roster ────────────────
+        from gateway.routes.people import chart as chart_mod
+        grp = (await db.execute(text(
+            "INSERT INTO org_group (organization_id, slug, display_name, "
+            "                       created_by) "
+            "VALUES (CAST(:org AS uuid), 'ws28ml-sales', 'WS28ML Sales', "
+            "        'seed') RETURNING id"), {"org": str(org.id)})).fetchone()
+        ravi_user = (await db.execute(text(
+            "INSERT INTO app_user (email, display_name, status, "
+            "                      organization_id) "
+            "VALUES ('ravi@ws28ml.invalid', 'Ravi WS28ML', 'active', "
+            "        CAST(:org AS uuid)) RETURNING id"),
+            {"org": str(org.id)})).fetchone()
+        await db.execute(text(
+            "INSERT INTO org_group_member (group_id, user_id, added_by) "
+            "VALUES (CAST(:g AS uuid), CAST(:u AS uuid), 'seed')"),
+            {"g": str(grp.id), "u": str(ravi_user.id)})
+        await db.commit()
+        chart = await chart_mod.get_chart(user=ADMIN)
+        ours = {n.name: n for n in chart.nodes if n.name.endswith("WS28ML")}
+        check("alumni are off the chart", "Gone WS28ML" in ours, False)
+        check("a manager who left resolves to no manager — a visible root",
+              ours["Dev WS28ML"].manager_id, None)
+        check("a managed person keeps their manager",
+              ours["Priya WS28ML"].manager_id, asha)
+        check("the group overlay joins through app_user on lowered email",
+              ours["Ravi WS28ML"].groups, ["ws28ml-sales"])
+        check("the chart says whether this caller may re-parent",
+              chart.can_manage, True)
+
         # ── 5. The gate is the whole surface ────────────────────────────────
         for label, call in (("quality", quality_mod.get_quality),
                             ("overview", overview_mod.get_overview)):
@@ -225,6 +255,8 @@ async def cleanup(db) -> None:
     await db.execute(text("DELETE FROM pm_projects WHERE name LIKE 'WS28ML%'"))
     await db.execute(text(
         "DELETE FROM gtd_people WHERE name LIKE '%WS28ML'"))
+    await db.execute(text(
+        "DELETE FROM org_group WHERE slug LIKE 'ws28ml-%'"))
     await db.execute(text(
         "DELETE FROM app_user WHERE email LIKE '%@ws28ml.invalid'"))
 

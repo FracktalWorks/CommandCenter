@@ -523,6 +523,8 @@ export const peopleApi = {
 
   overview: () => call<import("./overview").OverviewResponse>("overview"),
 
+  chart: () => call<import("./chart").ChartResponse>("chart"),
+
   work: (id: string) =>
     call<{ rows: WorkRow[]; total: number; available: boolean }>(`${id}/work`),
 };

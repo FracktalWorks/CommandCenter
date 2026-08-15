@@ -103,6 +103,20 @@ describe("the Center overlay names the mismatch (§5.4)", () => {
   it("slugify matches the group-slug shape", () => {
     expect(slugify("R&D")).toBe("r-d");
   });
+
+  it("an underscore group slug still matches — both sides normalize", () => {
+    const out = departmentMismatch(
+      node("a", null, { department: "R&D" }),
+      new Set(["r_d"])
+    );
+    expect(out).toContain("not in the r_d group");
+    expect(
+      departmentMismatch(
+        node("a", null, { department: "R&D", groups: ["r_d"] }),
+        new Set(["r_d"])
+      )
+    ).toBeNull();
+  });
 });
 
 describe("focusIds — search keeps the path visible", () => {

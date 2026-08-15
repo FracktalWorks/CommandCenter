@@ -11,9 +11,10 @@
  * free-text department names a group the person is not in, the node SAYS so.
  *
  * Re-parenting is drag-to-drop behind `can_manage`, refused client-side when
- * it would close a loop, confirmed by a human, and written through the
- * ordinary person PATCH — the same door the person editor uses, never a
- * second write path.
+ * it would close a loop, confirmed by a human, and written through
+ * `PATCH /api/people/{id}` — the People router's own class-checked door, NOT
+ * the tasks-app one: a chart holder need never hold `feature:tasks`
+ * (adversarial review caught the wrong door here).
  */
 
 import { useEffect, useMemo, useState } from "react";
@@ -32,7 +33,105 @@ import {
   focusIds,
   wouldCycle,
 } from "../lib/chart";
-import { peopleWriteApi } from "../lib/write";
+
+interface RowProps {
+  tnode: TreeNode;
+  searching: boolean;
+  focus: ReadonlySet<string>;
+  collapsed: ReadonlySet<string>;
+  dragging: string | null;
+  canManage: boolean;
+  groupSlugs: ReadonlySet<string>;
+  onToggle: (id: string) => void;
+  onDragState: (id: string | null) => void;
+  onDropOn: (moved: string, target: string) => void;
+}
+
+/**
+ * Module-scope on purpose: declared inside the page it would get a new type
+ * identity per render, and React would unmount/rebuild the whole tree DOM on
+ * every keystroke — losing keyboard focus and any in-flight drag with it.
+ */
+function ChartRow(props: RowProps) {
+  const { tnode, searching, focus, collapsed, dragging, canManage, groupSlugs } =
+    props;
+  const n = tnode.node;
+  if (searching && !focus.has(n.id)) return null;
+  const isCollapsed = !searching && collapsed.has(n.id);
+  const mismatch = departmentMismatch(n, groupSlugs);
+  return (
+    <li>
+      <div
+        className={`flex items-center gap-2 rounded-md border border-border bg-card px-2 py-1.5 ${
+          dragging === n.id ? "opacity-50" : ""
+        }`}
+        draggable={canManage}
+        onDragStart={(e) => {
+          props.onDragState(n.id);
+          e.dataTransfer.setData("text/plain", n.id);
+        }}
+        onDragEnd={() => props.onDragState(null)}
+        onDragOver={(e) => {
+          if (canManage) e.preventDefault();
+        }}
+        onDrop={(e) => {
+          e.preventDefault();
+          const moved = e.dataTransfer.getData("text/plain");
+          props.onDragState(null);
+          if (moved) props.onDropOn(moved, n.id);
+        }}
+      >
+        {tnode.children.length > 0 ? (
+          <button
+            type="button"
+            onClick={() => props.onToggle(n.id)}
+            className="text-muted-foreground"
+            aria-label={isCollapsed ? "Expand" : "Collapse"}
+          >
+            <Icon name={isCollapsed ? "ChevronRight" : "ChevronDown"} size={14} />
+          </button>
+        ) : (
+          <span className="w-3.5" />
+        )}
+        <Avatar name={n.name} avatar={n.avatar} className="size-6 text-[10px]" />
+        <div className="min-w-0">
+          <p className="truncate text-sm">
+            {n.name}
+            {tnode.cycle ? (
+              <span className="ml-2 text-xs text-destructive">
+                manager loop — severed here
+              </span>
+            ) : null}
+          </p>
+          <p className="truncate text-xs text-muted-foreground">
+            {[n.title, n.department].filter(Boolean).join(" · ")}
+            {isCollapsed ? ` · ${tnode.children.length} reports` : ""}
+          </p>
+          {mismatch ? (
+            <p className="text-[11px] text-warning">{mismatch}</p>
+          ) : null}
+        </div>
+        <span className="ml-auto flex shrink-0 gap-1">
+          {n.groups.map((slug) => (
+            <span
+              key={slug}
+              className={`rounded-full border px-1.5 text-[10px] ${categoricalAccent(slug).chip}`}
+            >
+              {slug}
+            </span>
+          ))}
+        </span>
+      </div>
+      {!isCollapsed && tnode.children.length > 0 ? (
+        <ul className="ml-5 mt-1 flex flex-col gap-1 border-l border-border pl-3">
+          {tnode.children.map((c) => (
+            <ChartRow key={c.node.id} {...props} tnode={c} />
+          ))}
+        </ul>
+      ) : null}
+    </li>
+  );
+}
 
 export default function OrgChartPage() {
   const [res, setRes] = useState<ChartResponse | null>(null);
@@ -40,18 +139,6 @@ export default function OrgChartPage() {
   const [q, setQ] = useState("");
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [dragging, setDragging] = useState<string | null>(null);
-
-  async function load() {
-    try {
-      setRes(await peopleApi.chart());
-    } catch (err) {
-      setError(
-        err instanceof PeopleApiError
-          ? err.message
-          : String((err as Error).message)
-      );
-    }
-  }
 
   useEffect(() => {
     let live = true;
@@ -104,100 +191,28 @@ export default function OrgChartPage() {
       );
       return;
     }
-    if (
-      !window.confirm(`Move ${person.name} under ${manager.name}?`)
-    ) {
+    if (!window.confirm(`Move ${person.name} under ${manager.name}?`)) {
       return;
     }
     try {
-      await peopleWriteApi.update(personId, { manager_id: managerId });
-      await load();
+      await peopleApi.update(personId, { manager_id: managerId });
+      // A failed REFRESH after a successful write must not blank the chart:
+      // the write landed, the alert says the view is stale, the tree stays.
+      try {
+        setRes(await peopleApi.chart());
+      } catch {
+        window.alert("Saved, but refreshing the chart failed — reload to see it.");
+      }
     } catch (err) {
-      window.alert(String((err as Error).message));
+      window.alert(
+        err instanceof PeopleApiError
+          ? err.message
+          : String((err as Error).message)
+      );
     }
   }
 
-  function Node({ tnode, depth }: { tnode: TreeNode; depth: number }) {
-    const n = tnode.node;
-    const searching = q.trim().length > 0;
-    if (searching && !focus.has(n.id)) return null;
-    const isCollapsed = !searching && collapsed.has(n.id);
-    const mismatch = departmentMismatch(n, groupSlugs);
-    return (
-      <li>
-        <div
-          className={`flex items-center gap-2 rounded-md border border-border bg-card px-2 py-1.5 ${
-            dragging === n.id ? "opacity-50" : ""
-          }`}
-          draggable={res?.can_manage ?? false}
-          onDragStart={(e) => {
-            setDragging(n.id);
-            e.dataTransfer.setData("text/plain", n.id);
-          }}
-          onDragEnd={() => setDragging(null)}
-          onDragOver={(e) => {
-            if (res?.can_manage) e.preventDefault();
-          }}
-          onDrop={(e) => {
-            e.preventDefault();
-            const moved = e.dataTransfer.getData("text/plain");
-            setDragging(null);
-            if (moved) void reparent(moved, n.id);
-          }}
-        >
-          {tnode.children.length > 0 ? (
-            <button
-              type="button"
-              onClick={() => toggle(n.id)}
-              className="text-muted-foreground"
-              aria-label={isCollapsed ? "Expand" : "Collapse"}
-            >
-              <Icon name={isCollapsed ? "ChevronRight" : "ChevronDown"} size={14} />
-            </button>
-          ) : (
-            <span className="w-3.5" />
-          )}
-          <Avatar name={n.name} avatar={n.avatar} className="size-6 text-[10px]" />
-          <div className="min-w-0">
-            <p className="truncate text-sm">
-              {n.name}
-              {tnode.cycle ? (
-                <span className="ml-2 text-xs text-destructive">
-                  manager loop — severed here
-                </span>
-              ) : null}
-            </p>
-            <p className="truncate text-xs text-muted-foreground">
-              {[n.title, n.department].filter(Boolean).join(" · ")}
-              {isCollapsed ? ` · ${tnode.children.length} reports` : ""}
-            </p>
-            {mismatch ? (
-              <p className="text-[11px] text-warning">{mismatch}</p>
-            ) : null}
-          </div>
-          <span className="ml-auto flex shrink-0 gap-1">
-            {n.groups.map((slug) => (
-              <span
-                key={slug}
-                className={`rounded-full border px-1.5 text-[10px] ${categoricalAccent(slug).chip}`}
-              >
-                {slug}
-              </span>
-            ))}
-          </span>
-        </div>
-        {!isCollapsed && tnode.children.length > 0 ? (
-          <ul className="ml-5 mt-1 flex flex-col gap-1 border-l border-border pl-3">
-            {tnode.children.map((c) => (
-              <Node key={c.node.id} tnode={c} depth={depth + 1} />
-            ))}
-          </ul>
-        ) : null}
-      </li>
-    );
-  }
-
-  if (error) {
+  if (error && !res) {
     return (
       <main className="mx-auto w-full max-w-3xl p-4">
         <p className="text-sm text-muted-foreground">{error}</p>
@@ -258,7 +273,19 @@ export default function OrgChartPage() {
 
       <ul className="flex flex-col gap-1">
         {tree.roots.map((r) => (
-          <Node key={r.node.id} tnode={r} depth={0} />
+          <ChartRow
+            key={r.node.id}
+            tnode={r}
+            searching={q.trim().length > 0}
+            focus={focus}
+            collapsed={collapsed}
+            dragging={dragging}
+            canManage={res.can_manage}
+            groupSlugs={groupSlugs}
+            onToggle={toggle}
+            onDragState={setDragging}
+            onDropOn={(moved, target) => void reparent(moved, target)}
+          />
         ))}
       </ul>
     </main>

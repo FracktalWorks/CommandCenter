@@ -187,9 +187,15 @@ export default function PeopleOverviewPage() {
             Nothing wrong with the record.
           </p>
         )}
-        {res.roots.length > 1 ? (
+        {(res.quality_counts.no_manager ?? 0) > 1 ? (
+          // The NUMBER is the §5.10 count; `roots` is the capped name list —
+          // numbering from `.length` disagrees with the count past 50 rows.
           <p className="mt-1 text-xs text-muted-foreground">
-            {res.roots.length} unmanaged roots:{" "}
+            {res.quality_counts.no_manager} unmanaged roots
+            {res.roots.length < res.quality_counts.no_manager
+              ? ` (first ${res.roots.length})`
+              : ""}
+            :{" "}
             {res.roots.map((r, i) => (
               <span key={r.id}>
                 {i > 0 ? ", " : ""}

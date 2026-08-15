@@ -45,11 +45,19 @@ describe("describeQuality", () => {
 });
 
 describe("the landing is a projection (D-PC-14, §5.9)", () => {
+  const page = readFileSync(
+    join(__dirname, "..", "overview", "page.tsx"),
+    "utf-8"
+  );
+
   it("no .sort( in the page — server order is the order", () => {
-    const page = readFileSync(
-      join(__dirname, "..", "overview", "page.tsx"),
-      "utf-8"
-    );
     expect(page).not.toContain(".sort(");
+  });
+
+  it("roots are NUMBERED from the §5.10 count, never from the capped list", () => {
+    // Adversarial-review finding: `roots` is capped at 50; numbering from
+    // `.length` makes the same screen show two different totals past 50.
+    expect(page).toContain("quality_counts.no_manager} unmanaged roots");
+    expect(page).not.toContain("roots.length} unmanaged roots");
   });
 });

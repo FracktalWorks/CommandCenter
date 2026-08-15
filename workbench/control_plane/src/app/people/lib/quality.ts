@@ -62,6 +62,8 @@ export interface Coverage {
   tasks_scanned: number;
   tasks_partial: boolean;
   scope_partial: boolean;
+  scan_ran: boolean;
+  scan_error: boolean;
 }
 
 export interface Quality {
@@ -82,15 +84,22 @@ export interface QualityResponse {
 
 /**
  * What the "never used on a task" claim actually rests on — an unused-skill
- * finding over no scan, a sample, or somebody else's slice is a different
- * claim, and the panel must say which one it is making.
+ * finding over no scan, a failed scan, a sample, or somebody else's slice is
+ * a different claim each time, and the panel must say which one it is making.
+ * Four states, four sentences; none may draw as another.
  */
 export function describeScan(c: Coverage): string {
-  if (c.tasks_scanned === 0) {
-    return "Task scan did not run — no visible open tasks, so nothing here claims a skill is unused.";
+  if (c.scan_error) {
+    return "The task scan failed — nothing here claims a skill is unused. The error is logged server-side.";
   }
-  let line = `Checked against ${c.tasks_scanned.toLocaleString()} open task titles`;
-  if (c.tasks_partial) line += " (newest only — the scan hit its cap)";
+  if (!c.scan_ran) {
+    return "The task scan did not run — it needs declared skills and access to the Projects app.";
+  }
+  if (c.tasks_scanned === 0) {
+    return "No visible tasks to check against, so nothing here claims a skill is unused.";
+  }
+  let line = `Checked against ${c.tasks_scanned.toLocaleString()} task titles (done work included — historical use counts)`;
+  if (c.tasks_partial) line += ", newest only — the scan hit its cap";
   if (c.scope_partial) line += ", within the projects you can see";
   return `${line}.`;
 }

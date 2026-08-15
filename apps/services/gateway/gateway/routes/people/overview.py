@@ -53,7 +53,9 @@ class OverviewResponse(BaseModel):
     #: §5.10's pre-cap totals, verbatim — the panel behind them is /people/quality.
     quality_counts: dict[str, int]
     #: The org chart's roots (§5.9 "unmanaged roots") — §5.10's ``no_manager``
-    #: list, verbatim.
+    #: list, capped exactly as §5.10 caps it. The COUNT is
+    #: ``quality_counts["no_manager"]`` — the page must number from that,
+    #: never from ``len(roots)``, or the two figures disagree past 50 rows.
     roots: list[dict[str, Any]]
     partial: bool
     work_visible: bool
@@ -77,7 +79,10 @@ async def get_overview(
         counted = (await db.execute(text(
             "SELECT COALESCE(NULLIF(btrim(department), ''), 'Unassigned') "
             "         AS department, "
-            "       COALESCE(status, 'active') AS status, "
+            # NULL status is a data defect §5.10 lists, so headcount shows it
+            # as its own bucket rather than silently promoting it to active —
+            # the two numbers sit on one screen and must tell one story.
+            "       COALESCE(status, '(none)') AS status, "
             "       count(*) AS count "
             "  FROM gtd_people "
             " GROUP BY 1, 2 ORDER BY 1, 2"))).fetchall()

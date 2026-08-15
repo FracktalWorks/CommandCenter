@@ -62,8 +62,14 @@ class FakeDB:
     async def execute(self, sql: Any, params: dict | None = None) -> _Result:
         s = " ".join(str(sql).split())
         if "FROM gtd_people" in s:
-            assert "status <> 'alumni'" in s
+            # NULL must stay on the chart: bare `status <> 'alumni'` is NULL
+            # for a NULL status and silently drops the row.
+            assert "status IS NULL OR status <> 'alumni'" in s
             return _Result(self.people)
+        if "FROM org_group_member" in s or " FROM org_group " in s:
+            # ⚠️ org_group is EXEMPT from generated RLS — the tenant predicate
+            # must be explicit or the legend lists every customer's groups.
+            assert "current_setting('app.tenant_id'" in s
         if "FROM org_group_member" in s:
             return _Result(self.members)
         if "FROM org_group" in s:

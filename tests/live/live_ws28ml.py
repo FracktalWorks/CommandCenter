@@ -123,6 +123,11 @@ async def main() -> None:
         await db.execute(text(
             "UPDATE gtd_people SET email_conflict = 'dupe@ws28ml.invalid' "
             " WHERE id = CAST(:id AS uuid)"), {"id": quarantined})
+        # A NULL status is reachable (49 has no NOT NULL, 148's CHECK passes
+        # NULL) and must tell ONE story across the three surfaces.
+        await db.execute(text(
+            "UPDATE gtd_people SET status = NULL "
+            " WHERE id = CAST(:id AS uuid)"), {"id": quarantined})
         await db.commit()
 
         # ── 1. The status door really is shut (the CHECK is VALIDATED) ─────
@@ -178,8 +183,9 @@ async def main() -> None:
         check("148's quarantine is surfaced",
               [(c.name, c.email_conflict) for c in out.quality.email_conflict],
               [("Quarantined WS28ML", "dupe@ws28ml.invalid")])
-        check("no legacy status on this ladder — the list is empty",
-              out.quality.bad_status, [])
+        check("a NULL status is listed as (none), not hidden or blank",
+              [(r.name, r.status) for r in out.quality.bad_status],
+              [("Quarantined WS28ML", "(none)")])
         check("a manager who left is listed",
               [(r.name, r.manager_name) for r in out.quality.manager_alumni],
               [("Dev WS28ML", "Gone WS28ML")])
@@ -199,6 +205,9 @@ async def main() -> None:
         check("headcount counts alumni too",
               {(r.department, r.status): r.count for r in land.headcount}[
                   ("R&D", "alumni")], 1)
+        check("headcount shows a NULL status as its own bucket, not active",
+              {(r.department, r.status): r.count for r in land.headcount}[
+                  ("Sales", "(none)")], 1)
         check("total people", land.total_people, 7)
         check("the landing's roots are §5.10's no_manager list",
               [r["name"] for r in land.roots], ["Asha WS28ML"])
@@ -221,9 +230,26 @@ async def main() -> None:
             "VALUES (CAST(:g AS uuid), CAST(:u AS uuid), 'seed')"),
             {"g": str(grp.id), "u": str(ravi_user.id)})
         await db.commit()
+        # Another tenant's identically-shaped group must NOT reach the legend:
+        # org_group is EXEMPT from generated RLS, so the predicate is the
+        # endpoint's own — measured here, since the fake cannot see it.
+        other = (await db.execute(text(
+            "INSERT INTO organization (slug, display_name) "
+            "VALUES ('ws28ml-other', 'WS28ML Other') RETURNING id"))).fetchone()
+        await db.execute(text(
+            "INSERT INTO org_group (organization_id, slug, display_name, "
+            "                       created_by) "
+            "VALUES (CAST(:org AS uuid), 'ws28ml-leak', 'Leaked', 'seed')"),
+            {"org": str(other.id)})
+        await db.commit()
         chart = await chart_mod.get_chart(user=ADMIN)
+        slugs = [g.slug for g in chart.groups]
+        check("our group is on the legend", "ws28ml-sales" in slugs, True)
+        check("another tenant's group is NOT", "ws28ml-leak" in slugs, False)
         ours = {n.name: n for n in chart.nodes if n.name.endswith("WS28ML")}
         check("alumni are off the chart", "Gone WS28ML" in ours, False)
+        check("a NULL-status row stays on the chart",
+              "Quarantined WS28ML" in ours, True)
         check("a manager who left resolves to no manager — a visible root",
               ours["Dev WS28ML"].manager_id, None)
         check("a managed person keeps their manager",
@@ -259,6 +285,8 @@ async def cleanup(db) -> None:
         "DELETE FROM org_group WHERE slug LIKE 'ws28ml-%'"))
     await db.execute(text(
         "DELETE FROM app_user WHERE email LIKE '%@ws28ml.invalid'"))
+    await db.execute(text(
+        "DELETE FROM organization WHERE slug = 'ws28ml-other'"))
 
 
 if __name__ == "__main__":

@@ -570,7 +570,23 @@ component, two entry points, so a field added to one cannot be missing from the 
 > text naming no group is just text. Re-parenting is drag-to-drop behind
 > `can_manage`, human-confirmed, written through the ORDINARY person PATCH
 > (admin class §4.3) — no new write path, and the module's never-writes fence
-> proves it. 6 hermetic + 14 vitest cases; 5 live checks (`live_ws28ml.py`).
+> proves it. **Adversarially reviewed 2026-08-15; findings fixed:**
+> 🔴 the legend's `org_group` read carried no tenant predicate — and
+> `org_group` is EXEMPT from the generated RLS (it has carried
+> `organization_id` since 138), so the query listed EVERY customer's
+> groups and fabricated department-mismatch warnings from another
+> tenant's slugs. Predicate now explicit (`current_setting`, fails
+> closed), asserted hermetically on the SQL shape and MEASURED live with
+> a second organization. Also: the drag wrote through the tasks-app door
+> (`feature:tasks`, which a chart holder need not hold) — now
+> `PATCH /api/people/{id}`; `ChartRow` hoisted to module scope (nested,
+> it rebuilt the whole tree DOM per keystroke and dropped keyboard
+> focus); NULL-status rows no longer vanish (`status <> 'alumni'` is
+> NULL for NULL); slug matching normalizes both sides (`r_d` vs "R&D").
+> ⚠️ Advisory, recorded not fixed: the server accepts a cycle from a
+> stale tab (no DB constraint) — the chart labels and survives it, but
+> "refused before the request" is client-side only. 6 hermetic +
+> 16 vitest cases; 8 live checks.
 
 `gtd_people.manager_id` is a self-FK, so the chart is the same recursive render the project
 tree already uses — and the same cycle guard applies (a manager loop is a hang, not a
@@ -779,6 +795,9 @@ and the AI's "do not chase someone who is on holiday" rule (§6.7).
 > right to (ripgrep would have gone binary and every source fence would have
 > silently stopped reading the file); now the `\0` escape. 8 hermetic +
 > 5 vitest cases; live checks in `tests/live/live_ws28ml.py`.
+> **Review fix:** `roots` is §5.10's CAPPED list; the page now numbers
+> from `quality_counts.no_manager` (fenced), so the two figures on one
+> screen cannot disagree past 50 rows.
 
 What `centers.ts` already lists as *"People dashboard — who's in, who's out, open roles,
 onboarding in progress"*, narrowed to what exists: headcount by department and status,
@@ -808,8 +827,23 @@ disagreeing.
 > self-fillable subset. D-PC-14 structurally: every list alphabetical **in
 > Python** (a fake skips an ORDER BY), pre-cap totals travel in `counts`,
 > `_PERFORMANCE` + never-writes fences on the stripped source. Gated
-> `admin:members:read` (§4.2). 20 hermetic + 8 vitest cases; 20 live checks
-> (`tests/live/live_ws28ml.py`, shared with WS-28l).
+> `admin:members:read` (§4.2). **Adversarially reviewed 2026-08-15; four
+> findings fixed, each measured on the live DB:** (1) coverage read only
+> the child table while `scripts/import_hr_people.py` and every pre-176
+> write fill only `gtd_people.skills` — the panel asserted "nobody claims
+> firmware" about a record whose array declares it; declared is now the
+> UNION of both sources (read-only — the D-PC-6 write path is untouched)
+> and the importer's bypass of the child table stays a board finding.
+> (2) A NULL status (reachable: 49 has no NOT NULL, 148's CHECK passes
+> NULL) was counted active by headcount, rendered as "" by bad_status and
+> hidden from every other list at once — now one story: its own `(none)`
+> bucket, listed as `(none)`, and kept in the working set so the row's
+> other defects still surface. (3) A failed scan rendered as "no visible
+> tasks" forever with nothing logged — now `scan_ran`/`scan_error` travel
+> and four states get four sentences. (4) The scan includes done work by
+> DESIGN (historical use is use — a different question from the
+> dashboard's `_OPEN`) and now says so. 24 hermetic + 10 vitest cases;
+> 30 live checks (`tests/live/live_ws28ml.py`, shared with WS-28l/c).
 
 Two questions with one surface, because both are "what is wrong with the record":
 

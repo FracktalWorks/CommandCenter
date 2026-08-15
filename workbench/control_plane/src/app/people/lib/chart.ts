@@ -154,17 +154,20 @@ export function slugify(department: string): string {
  * real scoping, and where they disagree the chart SAYS so. One direction,
  * stated precisely: the department names an existing group and the person is
  * not in it. (Free text that names no group is not a mismatch — it is just
- * text.)
+ * text.) Both sides are compared through `slugify`, because `r_d` is a legal
+ * group slug and "R&D" must still find it.
  */
 export function departmentMismatch(
   node: ChartNode,
   groupSlugs: ReadonlySet<string>
 ): string | null {
   if (!node.department) return null;
-  const slug = slugify(node.department);
-  if (!groupSlugs.has(slug)) return null;
-  if (node.groups.includes(slug)) return null;
-  return `“${node.department}” by department, but not in the ${slug} group`;
+  const dept = slugify(node.department);
+  if (!dept) return null;
+  const match = [...groupSlugs].find((s) => slugify(s) === dept);
+  if (!match) return null;
+  if (node.groups.some((g) => slugify(g) === dept)) return null;
+  return `“${node.department}” by department, but not in the ${match} group`;
 }
 
 /**

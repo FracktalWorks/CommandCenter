@@ -171,7 +171,45 @@ def test_an_empty_scan_proves_nothing(monkeypatch) -> None:
     bind(monkeypatch, db)
     out = run(quality_mod.get_quality(user=HR))
     assert out.coverage.tasks_scanned == 0
+    assert out.coverage.scan_ran is True
+    assert out.coverage.scan_error is False
     assert out.coverage.unused_skills == []
+
+
+def test_a_failed_scan_says_so_not_no_visible_tasks(monkeypatch) -> None:
+    """Adversarial-review finding: a broken query must not render as 'no
+    visible tasks' forever with nothing logged anywhere."""
+
+    class BrokenDB(FakeDB):
+        async def execute(self, sql: Any, params: dict | None = None):
+            if "FROM pm_tasks" in str(sql):
+                raise RuntimeError("column does not exist")
+            return await super().execute(sql, params)
+
+    db = BrokenDB(skills=[skill_row("p1", "python")])
+    bind(monkeypatch, db)
+    out = run(quality_mod.get_quality(user=HR))
+    assert out.coverage.scan_error is True
+    assert out.coverage.scan_ran is False
+    assert out.coverage.unused_skills == []
+
+
+def test_array_only_skills_still_count_as_declared(monkeypatch) -> None:
+    """Adversarial-review finding: the importer and every pre-176 write fill
+    only `gtd_people.skills`; coverage over the child table alone asserted
+    "nobody claims firmware" about a record whose array declares it."""
+    db = FakeDB(roster=[BOSS, person(skills=["firmware"],
+                                     title="Firmware Wizard")],
+                skills=[])
+    bind(monkeypatch, db)
+    out = run(quality_mod.get_quality(user=HR))
+    solo = {s.skill: s.person.name for s in out.coverage.single_holder}
+    assert solo["firmware"] == "Priya"
+    # …and the declared term is not reported as hired-for-but-unclaimed.
+    assert all(t.term != "firmware" for t in out.coverage.title_terms)
+    # …and the person is not flagged as missing skills.
+    assert all("skills" not in r.missing
+               for r in out.quality.missing_ai_fields)
 
 
 def test_without_the_projects_feature_the_scan_does_not_run(monkeypatch) -> None:
@@ -220,6 +258,20 @@ def test_a_status_outside_the_vocabulary_is_listed(monkeypatch) -> None:
     out = run(quality_mod.get_quality(user=HR))
     assert [(r.name, r.status) for r in out.quality.bad_status] == [
         ("Priya", "on sabbatical")]
+
+
+def test_a_null_status_is_one_story_not_three(monkeypatch) -> None:
+    """Adversarial-review finding: a NULL status (49 has no NOT NULL, 148's
+    CHECK passes NULL) was counted as active by headcount, listed as “” by
+    bad_status, and hidden from every other quality list at once."""
+    db = FakeDB(roster=[BOSS, person(status=None, email=None)])
+    bind(monkeypatch, db)
+    out = run(quality_mod.get_quality(user=HR))
+    assert [(r.name, r.status) for r in out.quality.bad_status] == [
+        ("Priya", "(none)")]
+    # Still treated as part of the working org, so the row's OTHER defects
+    # keep surfacing rather than vanishing with the status.
+    assert [p.name for p in out.quality.no_email] == ["Priya"]
 
 
 def test_a_manager_who_left_is_listed(monkeypatch) -> None:

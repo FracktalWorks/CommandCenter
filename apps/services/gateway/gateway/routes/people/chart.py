@@ -28,8 +28,6 @@ Three decisions worth stating:
 
 from __future__ import annotations
 
-from typing import Any
-
 from acb_auth import UserContext, get_current_user
 from fastapi import Depends
 from gateway.routes.people.core import _tenant_session, router
@@ -72,27 +70,47 @@ async def get_chart(
 ) -> ChartResponse:
     async with _tenant_session() as db:
         rows = (await db.execute(text(
+            # `status IS NULL` stays ON the chart: NULL <> 'alumni' is NULL in
+            # SQL, which would silently drop the row §5.10 lists as a
+            # bad-status defect — a person must not vanish with their status.
             "SELECT id, name, title, department, team, avatar, email, "
             "       status, manager_id "
-            "  FROM gtd_people WHERE status <> 'alumni' "
+            "  FROM gtd_people "
+            " WHERE status IS NULL OR status <> 'alumni' "
             " ORDER BY lower(name)"))).fetchall()
+        # ⚠️ `org_group` is in the tenancy ratchet's EXEMPT list (it carries
+        # organization_id since 138) so NO RLS policy covers it — the tenant
+        # predicate must be explicit here, exactly as `routes/admin/groups.py`
+        # and `rooms.py` do, or this legend lists every customer's groups.
+        # `NULLIF(current_setting(…), '')` fails CLOSED when the GUC is
+        # unbound: NULL matches no row. (Found by the adversarial review.)
         groups = (await db.execute(text(
             "SELECT id, slug, display_name FROM org_group "
+            " WHERE organization_id = "
+            "       CAST(NULLIF(current_setting('app.tenant_id', true), '') "
+            "            AS uuid) "
             " ORDER BY slug"))).fetchall()
         membership: dict[str, list[str]] = {}
         if groups:
+            # org_group_member and app_user ARE policied, but the same
+            # explicit predicate keeps this correct on a cluster without
+            # FORCE RLS (the scratch DB) rather than safe by accident.
             members = (await db.execute(text(
-                "SELECT g.slug, lower(u.email) AS email "
+                "SELECT g.slug, lower(btrim(u.email)) AS email "
                 "  FROM org_group_member m "
                 "  JOIN org_group g ON g.id = m.group_id "
-                "  JOIN app_user u ON u.id = m.user_id"))).fetchall()
+                "  JOIN app_user u ON u.id = m.user_id "
+                " WHERE g.organization_id = "
+                "       CAST(NULLIF(current_setting('app.tenant_id', true), "
+                "                   '') AS uuid)"))).fetchall()
             for m in members:
-                membership.setdefault(m.email, []).append(m.slug)
+                if m.email:
+                    membership.setdefault(m.email, []).append(m.slug)
 
     current_ids = {str(r.id) for r in rows}
     nodes = []
     for r in rows:
-        email = (r.email or "").lower()
+        email = (r.email or "").strip().lower()
         nodes.append(ChartNode(
             id=str(r.id), name=r.name, title=r.title,
             department=r.department, team=r.team, avatar=r.avatar,

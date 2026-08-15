@@ -13,18 +13,34 @@ const coverage = (over: Record<string, unknown> = {}) => ({
   tasks_scanned: 4200,
   tasks_partial: false,
   scope_partial: false,
+  scan_ran: true,
+  scan_error: false,
   ...over,
 });
 
-describe("describeScan — the claim states its own basis", () => {
+describe("describeScan — four states, four sentences, none drawn as another", () => {
   it("names the scan size", () => {
-    expect(describeScan(coverage())).toContain("4,200 open task titles");
+    expect(describeScan(coverage())).toContain("4,200 task titles");
   });
 
   it("an empty scan refuses the claim rather than implying a clean bill", () => {
     expect(describeScan(coverage({ tasks_scanned: 0 }))).toContain(
-      "did not run"
+      "No visible tasks"
     );
+  });
+
+  it("a FAILED scan says failed, never 'no visible tasks'", () => {
+    const line = describeScan(
+      coverage({ scan_error: true, scan_ran: false, tasks_scanned: 0 })
+    );
+    expect(line).toContain("failed");
+    expect(line).not.toContain("No visible tasks");
+  });
+
+  it("a skipped scan says what it needs", () => {
+    expect(
+      describeScan(coverage({ scan_ran: false, tasks_scanned: 0 }))
+    ).toContain("did not run");
   });
 
   it("a capped scan says newest-only", () => {

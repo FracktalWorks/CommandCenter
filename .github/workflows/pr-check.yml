@@ -60,6 +60,15 @@ jobs:
       - name: plan-guard owner-gate enforcement (blocking)
         run: node .claude/hooks/plan-guard.test.mjs
 
+      # D39's fence, and it guards the same class of failure as the one above:
+      # session-handoff.mjs runs at the START of every session in every
+      # checkout, so a crash there is a repo nobody can open, and a parser that
+      # read past `# DONE` would resurrect closed work as live work every
+      # session. Both failures are silent, which is why they are tested rather
+      # than trusted. R7 — the rule names its fence.
+      - name: session-handoff queue injection (blocking)
+        run: node .claude/hooks/session-handoff.test.mjs
+
       # Non-blocking report: the FULL ruff check (all configured rules incl. the
       # ~1.3k-finding style backlog + C901 complexity hotspots). This is the
       # ratchet dashboard — the number should trend down; rules graduate to the

@@ -189,12 +189,43 @@ async function measureLockup(page: Page) {
 // `playwright.config.ts`. That was true for every spec in this directory, not
 // just this one.
 //
-// NEXT STEP for whoever picks this up: determine whether hydration fails
-// because of Playwright's request interception, the dev overlay, or the HMR
-// socket, by loading the dev server with NO routes registered and checking
-// whether `/api/auth/me` is requested. That single measurement splits the
-// remaining hypotheses; do not guess between them, which is how this note came
-// to be written twice.
+// ── MEASURED 2026-08-14. Three of the four hypotheses are DEAD. ────────────
+//
+// The measurement this note used to ask for was run. Recorded as eliminations
+// so nobody spends another session on a dead end:
+//
+//   ✗ Playwright's request interception — loading with ZERO routes registered
+//     gives the identical result (0 `/api/**` requests, no hydration). The
+//     interception is innocent.
+//   ✗ The container's HTTP proxy — launching Chromium with `--no-proxy-server`
+//     changes nothing. (`proxy: {server: "direct://"}` merely breaks navigation
+//     with ERR_PROXY_CONNECTION_FAILED; it is not a control, ignore it.)
+//   ✗ A truncated RSC stream — `/chat` answers 200 in ~94ms, 95 KB, closes
+//     cleanly, ends in `</body></html>` and carries its `__next_f.push`
+//     payload. The server half is complete.
+//
+// What the page actually does: 39 JS chunks load, **zero requests fail**, no
+// page errors, `window.next` and the React DevTools hook are both defined — so
+// React creates a root and attaches event delegation (5 elements carry
+// `__reactEvents`). But of 422 elements **zero carry `__reactFiber` or
+// `__reactProps`**, and `localStorage` is completely empty, so not even the
+// theming engine's mount effect ran. The root is created; the tree is never
+// hydrated.
+//
+// ⚠️ `__reactEvents` ALONE IS NOT HYDRATION, and reading it as such briefly
+// produced the opposite conclusion here. Count `__reactFiber` across the whole
+// tree; a handful of `__reactEvents` on the container is what an UN-hydrated
+// React root looks like.
+//
+// ► THE ONE HYPOTHESIS LEFT, with a mechanism: the dev runtime's HMR socket.
+//   The client opens `ws://<host>/_next/webpack-hmr` and the handshake fails
+//   with `ERR_INVALID_HTTP_RESPONSE`, while the server is **Next 16.2.6 on
+//   Turbopack** and the chunk it loaded is `[turbopack]_browser_dev_hmr-client`
+//   — a webpack-shaped endpoint against a Turbopack dev server. Whether that
+//   failure is the CAUSE of the stalled hydration or merely its loudest
+//   symptom is the next thing to measure, and it is genuinely open: a dead HMR
+//   socket does not normally block hydration, which is why this is stated as a
+//   lead and not a diagnosis.
 // ─────────────────────────────────────────────────────────────────────────────
 
 test.fixme(

@@ -15,7 +15,8 @@ know before reading anything else** — it deliberately duplicates nothing.
 | 2 | **`project-docs/work_plan.md` §1** | The agent-ready spec contract + standing rules **R1–R8**. Binding on every PR. |
 | 3 | **`project-docs/work_plan.md` §2** | The dispatch board: every workstream, its state, its gates. **This is the only current-state authority.** |
 | 4 | **`project-docs/work_plan.md` §6** | The owner-gate registry. Actions you must **refuse by name**. |
-| 5 | **`project-docs/work_plan.md` §3** | Decisions **D1–D31**. Recorded once, never re-litigated. Cite them; do not reopen them. |
+| 5 | **`project-docs/work_plan.md` §3** | Decisions **D1–D39**. Recorded once, never re-litigated. Cite them; do not reopen them. |
+| 5a | **`project-docs/HANDOFF.md`** | The cross-session **queue of actions** (D39) — injected at session start, so pending work is carried by the repo rather than by anyone's memory. ⚠️ **Actions, never state** — row 3 stays the only current-state authority. Run each entry's **Check** first and **delete** the ones that pass; `/handoff` is the workflow. |
 | 6 | **`project-docs/specs/engineering_practice.md`** | *How* we build: environments, release rings, migrations, testing, agent work-partitioning, security, definition of done. |
 | 7 | The **owning spec** named by your board row | Scope and acceptance for the thing you are building. |
 

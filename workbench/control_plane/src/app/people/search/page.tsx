@@ -145,6 +145,18 @@ export default function CapabilitySearchPage() {
               <span className="text-xs font-medium text-foreground">
                 {row.score}
               </span>
+              {/* WS-28e §6.4 — routes through the ordinary task-create flow
+                  with the assignee pre-filled (visible, dismissible there).
+                  Still no assign WRITE anywhere on this surface. */}
+              {row.email ? (
+                <Link
+                  href={`/projects?assignee=${encodeURIComponent(row.email)}`}
+                >
+                  <Button variant="secondary" size="sm" icon="FolderKanban">
+                    Assign to…
+                  </Button>
+                </Link>
+              ) : null}
             </div>
 
             {/* The argument, line by line — the fact and its points. */}

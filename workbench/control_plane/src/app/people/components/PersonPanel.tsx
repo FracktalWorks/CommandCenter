@@ -14,6 +14,7 @@
  * server put in `editable_fields`, which on a colleague's page (for an admin)
  * is a different set than on your own.
  */
+import Link from "next/link";
 import { useEffect, useState } from "react";
 
 import Button from "@/components/ui/Button";
@@ -104,6 +105,19 @@ export function PersonPanel({ personId, reloadKey = 0, onClose, onEdit }: Props)
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-1">
+          {/* WS-28e §6.4 — "Assign work" routes through the ORDINARY
+              task-create flow: /projects with the assignee pre-filled, where
+              the pre-fill is visible and dismissible. Nothing here writes an
+              assignment. Only for a person with an address — the assignee
+              column stores strings, and a person without one has nothing a
+              task can be assigned to. */}
+          {person.email ? (
+            <Link href={`/projects?assignee=${encodeURIComponent(person.email)}`}>
+              <Button variant="secondary" size="sm" icon="FolderKanban">
+                Assign work
+              </Button>
+            </Link>
+          ) : null}
           {/* Absent without `admin:members:manage`, never disabled (§3.2). */}
           {person.can_manage && onEdit ? (
             <Button

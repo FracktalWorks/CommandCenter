@@ -24,6 +24,8 @@ export interface SearchSignal {
 export interface CapabilityResult {
   person_id: string;
   name: string;
+  /** The assignee value "Assign to…" hands to the task flow (§6.4). */
+  email?: string | null;
   title?: string | null;
   department?: string | null;
   avatar?: string | null;

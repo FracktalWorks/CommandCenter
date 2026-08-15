@@ -30,6 +30,7 @@ it is blocked on WS-1's BO-1a and BO-1b, which the spec names as prerequisites.
 """
 
 from gateway.routes.projects import activities as _activities  # noqa: F401
+from gateway.routes.projects import assignees as _assignees  # noqa: F401
 from gateway.routes.projects import admin as _admin  # noqa: F401
 from gateway.routes.projects import attachments as _attachments  # noqa: F401
 from gateway.routes.projects import bulk as _bulk  # noqa: F401

@@ -297,6 +297,18 @@ export const projectsApi = {
   unarchiveProject: (projectId: string) =>
     call<ArchiveResult>(`nodes/${projectId}/unarchive`, { method: "POST" }),
 
+  /**
+   * The directory-backed assignee picker (WS-28e, people_center_app.md §6.1).
+   * People and agents in one response; the HR half (load, skills, contracted)
+   * follows the CALLER's grants and `hr_visible` says which emptiness an empty
+   * field is. Warnings are shown, never enforced — the picker warns and still
+   * lets you assign.
+   */
+  suggestAssignees: (q: string, due?: string | null) =>
+    call<import("./assignees").PickerResponse>(
+      `assignees?q=${encodeURIComponent(q)}${due ? `&due=${due}` : ""}`
+    ),
+
   createTask: (payload: Record<string, unknown>) =>
     call<TaskRow>("tasks", { method: "POST", body: JSON.stringify(payload) }),
 

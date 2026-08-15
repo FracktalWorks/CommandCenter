@@ -102,3 +102,64 @@ export function assigneeLabel(assignee: string): string {
   const value = normalize(assignee);
   return value.startsWith(AGENT_PREFIX) ? value.slice(AGENT_PREFIX.length) : value;
 }
+
+// ── WS-28e: the directory-backed picker (people_center_app.md §6.1) ─────────
+
+/** One suggestion row — a person or an agent, one vocabulary (D-PM-4). */
+export interface PickerRow {
+  /** The value the task stores: an email, or `agent:<name>`. */
+  assignee: string;
+  name: string;
+  kind: "person" | "agent" | string;
+  title?: string | null;
+  department?: string | null;
+  avatar?: string | null;
+  /** False = directory-only (D-PC-12): can hold the task, cannot sign in. */
+  has_login: boolean;
+  away?: { kind: string; until: string } | null;
+  /** HR tier — absent without `admin:members:read`. */
+  top_skills: string[];
+  load?: {
+    open_tasks: number;
+    estimated_hours: number;
+    unestimated: number;
+  } | null;
+  contracted_hours?: number | null;
+  /** §6.1's line: why this is or is not a good idea right now. Shown, never
+   * enforced — the assigner knows things the record does not. */
+  warnings: string[];
+  description?: string | null;
+}
+
+export interface PickerResponse {
+  people: PickerRow[];
+  agents: PickerRow[];
+  hr_visible: boolean;
+}
+
+/**
+ * The one line under a suggestion: load when visible, "no login" when true,
+ * warnings always. Empty string when there is nothing to say — a row with a
+ * blank subtitle beats one reading "undefined".
+ */
+export function describePickerRow(row: PickerRow): string {
+  const parts: string[] = [];
+  if (!row.has_login && row.kind === "person") {
+    // The task will not notify them — worth knowing BEFORE assigning, not
+    // after a silent week (D-PC-12).
+    parts.push("no login — cannot see the task");
+  }
+  if (row.load) {
+    let load = `${row.load.open_tasks} open`;
+    if (row.load.estimated_hours > 0 || row.contracted_hours) {
+      load += ` · ${row.load.estimated_hours}h`;
+      if (row.contracted_hours) load += ` of ${row.contracted_hours}h`;
+    }
+    if (row.load.unestimated > 0) {
+      load += ` · ${row.load.unestimated} unestimated`;
+    }
+    parts.push(load);
+  }
+  parts.push(...row.warnings);
+  return parts.join(" · ");
+}

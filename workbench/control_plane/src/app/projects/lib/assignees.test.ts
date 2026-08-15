@@ -7,6 +7,7 @@ import {
   parseAssignees,
   withAssignee,
   withoutAssignee,
+  describePickerRow,
 } from "./assignees";
 
 describe("normalize", () => {
@@ -110,5 +111,50 @@ describe("assigneeLabel", () => {
 
   it("shows a person by address", () => {
     expect(assigneeLabel("Priya@x.com")).toBe("priya@x.com");
+  });
+});
+
+describe("describePickerRow (WS-28e)", () => {
+  const base = {
+    assignee: "priya@fracktal.in",
+    name: "Priya",
+    kind: "person" as const,
+    has_login: true,
+    top_skills: [],
+    warnings: [],
+  };
+
+  it("says when the task will not notify them — BEFORE assigning", () => {
+    // D-PC-12: a contractor can hold the task and cannot sign in to see it.
+    // Silence here becomes "why didn't they do it" a week later.
+    expect(describePickerRow({ ...base, has_login: false })).toContain(
+      "no login — cannot see the task"
+    );
+  });
+
+  it("an agent without a login line is not called out", () => {
+    expect(
+      describePickerRow({ ...base, kind: "agent", has_login: false })
+    ).toBe("");
+  });
+
+  it("reads the load with its unestimated caveat", () => {
+    expect(
+      describePickerRow({
+        ...base,
+        load: { open_tasks: 4, estimated_hours: 50, unestimated: 2 },
+        contracted_hours: 40,
+      })
+    ).toBe("4 open · 50h of 40h · 2 unestimated");
+  });
+
+  it("carries the warnings verbatim — shown, never enforced", () => {
+    expect(
+      describePickerRow({ ...base, warnings: ["Away (holiday) until 2026-08-20"] })
+    ).toContain("Away (holiday) until 2026-08-20");
+  });
+
+  it("is empty when there is nothing to say", () => {
+    expect(describePickerRow(base)).toBe("");
   });
 });

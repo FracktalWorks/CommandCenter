@@ -75,6 +75,7 @@ import {
 } from "../lib/api";
 import { taskDeepLink, taskRef } from "../lib/card";
 import { isAutomated } from "../lib/lifecycle";
+import { AssigneePicker } from "./AssigneePicker";
 import { CustomFieldValues } from "./CustomFieldValues";
 import { TagPicker } from "./TagPicker";
 import { RepeatEditor } from "./RepeatEditor";
@@ -763,20 +764,22 @@ export function TaskPanel({
                     <span className="text-xs text-muted-foreground">Nobody yet</span>
                   ) : null}
                 </div>
-                <Input
-                  className="mt-1.5"
+                {/* WS-28e: directory-backed suggestions replace the bare
+                    input — people and agents, each row carrying its warning.
+                    Free text still commits exactly as before: the server
+                    accepts any non-empty string, and the picker must not
+                    invent a rule the API does not enforce. */}
+                <AssigneePicker
                   value={assignee}
                   disabled={busy}
-                  onChange={(e) => setAssignee(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      e.preventDefault();
-                      void addAssignees();
-                    }
+                  due={task.due_at ?? null}
+                  onChange={setAssignee}
+                  onCommitText={() => void addAssignees()}
+                  onPick={(who) => {
+                    setAssignee("");
+                    const next = withAssignee(assignees, who);
+                    if (next !== assignees) void saveAssignees(next);
                   }}
-                  onBlur={() => void addAssignees()}
-                  placeholder="email or agent:name"
-                  aria-label="Add an assignee"
                 />
               </FieldCell>
             </div>

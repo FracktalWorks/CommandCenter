@@ -90,7 +90,12 @@ async def main() -> None:
             tasks_people.PersonWrite(name="Ravi WS28K", email=THEIRS), ADMIN)
 
         # ── 1. A member with no grants records their own ───────────────────
-        monday = date(2026, 8, 10)
+        # NEXT Monday, computed — not a constant. The first version pinned
+        # date(2026, 8, 10) and went stale the night the session crossed
+        # midnight: the span fell wholly into the past and the person read
+        # correctly dropped it. A live harness that can only pass on the day
+        # it was written is a calendar, not a check.
+        monday = date.today() + timedelta(days=8 - date.today().isoweekday())
         created = await people_self.add_my_absence(
             absence(monday, monday + timedelta(days=4)), ME)
         check("an ungranted member records their own absence",

@@ -126,6 +126,15 @@ def _recency_weight(last_used_year: int | None, this_year: int) -> float:
     return RECENCY_STALE
 
 
+def skill_pattern(name: str) -> str:
+    """THE word-boundary for a skill name, written once. ``\\b`` is wrong for
+    this vocabulary ('c++', 'c#', 'node.js'), so the boundary is "not another
+    skill character" on both sides — and WS-28m's "declared but never used on a
+    task" check has to agree with this matcher exactly, or a skill could count
+    as matched by the ranker and unused by the coverage panel at once."""
+    return rf"(?<![a-z0-9+#./]){re.escape(name)}(?![a-z0-9+#./])"
+
+
 def score_skills(query: str, skill_rows: list[dict[str, Any]],
                  this_year: int) -> tuple[float, list[dict[str, Any]]]:
     """Signal 1 — pure, so WS-28j3's suggester can call it with a task's text
@@ -138,8 +147,7 @@ def score_skills(query: str, skill_rows: list[dict[str, Any]],
         name = (row.get("skill") or "").strip().lower()
         if len(name) < 2:
             continue
-        pattern = rf"(?<![a-z0-9+#./]){re.escape(name)}(?![a-z0-9+#./])"
-        if not re.search(pattern, hay):
+        if not re.search(skill_pattern(name), hay):
             continue
         level = row.get("level")
         weight = (LEVEL_WEIGHT.get(level, 1.0)

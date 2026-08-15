@@ -519,6 +519,10 @@ export const peopleApi = {
       "dashboard/suggestions"
     ),
 
+  quality: () => call<import("./quality").QualityResponse>("quality"),
+
+  overview: () => call<import("./overview").OverviewResponse>("overview"),
+
   work: (id: string) =>
     call<{ rows: WorkRow[]; total: number; available: boolean }>(`${id}/work`),
 };

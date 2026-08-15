@@ -740,7 +740,25 @@ Absences are self-writable (a person records their own) and admin-writable. They
 the capacity bar, the capability search's availability line, the assignee picker's warning,
 and the AI's "do not chase someone who is on holiday" rule (§6.7).
 
-### 5.9 People dashboard — the Center landing rollup 🟢 WS-28l
+### 5.9 People dashboard — the Center landing rollup ✅ BUILT (WS-28l, 2026-08-15)
+
+> **Build record.** `routes/people/overview.py` → `GET /people/overview` +
+> `/people/overview` page; the `centers.ts` "People dashboard" entry flipped
+> `live` per §9. "Projection, not new arithmetic" is asserted BY IDENTITY:
+> the load half is `get_dashboard`'s own `departments`/`org` rollup passed
+> through verbatim (whose `away` names already answer "who is away this
+> week"), the quality half is §5.10's `collect` — and the fence pins
+> `overview_mod.get_dashboard is people_dashboard.get_dashboard`, plus "the
+> module's only SELECT reads `gtd_people`". That one statement is the
+> headcount GROUP BY (department × status), the single figure no other
+> surface computes — deliberately including alumni, because the workload
+> dashboard excludes them by design and a HEADCOUNT that did would say the
+> company never loses anybody. Gated `admin:members:read` like the two
+> surfaces it projects. Found on the way: a literal NUL byte in the
+> headcount-matrix key separator — `sourceHygiene.test.ts` caught it and was
+> right to (ripgrep would have gone binary and every source fence would have
+> silently stopped reading the file); now the `\0` escape. 8 hermetic +
+> 5 vitest cases; live checks in `tests/live/live_ws28ml.py`.
 
 What `centers.ts` already lists as *"People dashboard — who's in, who's out, open roles,
 onboarding in progress"*, narrowed to what exists: headcount by department and status,
@@ -749,7 +767,29 @@ unmanaged roots. It is a **projection of §5.7 and §5.10**, not new arithmetic 
 that computes its own version of a number the app already renders is how two numbers start
 disagreeing.
 
-### 5.10 Skills coverage & data quality 🟢 WS-28m
+### 5.10 Skills coverage & data quality ✅ BUILT (WS-28m, 2026-08-15)
+
+> **Build record.** `routes/people/quality.py` → `GET /people/quality` +
+> `/people/quality` page, no migration. **One matcher**: "declared but never
+> used on a task" is decided by the §5.5 ranker's own word boundary —
+> `skill_pattern` extracted from `score_skills` and asserted by IDENTITY — so
+> a skill cannot be *matched* by the ranker and *unused* by this panel at
+> once ('java' inside 'javascript' is not a use; 'c++' with its punctuation
+> is). The task scan is VIEWER-scoped through the dashboard's own
+> `_scope`/`_visibility` (D-PC-20) and states its basis: `tasks_scanned`,
+> `tasks_partial` (hit the 5000 cap), `scope_partial` (the viewer's slice) —
+> and an EMPTY scan proves nothing rather than declaring every skill unused
+> (the confident zero §6.2 refuses to draw). 148's quarantine paid off:
+> `email_conflict` rows listed distinct from `no_email`. Statuses outside
+> the vocabulary are hermetic-only — the live ladder has the CHECK
+> **VALIDATED**, so a bad status cannot even be seeded (measured: the door
+> refuses), which is exactly the legacy-rows-only tolerance 148 designed.
+> AI-relevant gaps = `AI_FIELDS` (timezone · working_hours · skills), the
+> self-fillable subset. D-PC-14 structurally: every list alphabetical **in
+> Python** (a fake skips an ORDER BY), pre-cap totals travel in `counts`,
+> `_PERFORMANCE` + never-writes fences on the stripped source. Gated
+> `admin:members:read` (§4.2). 20 hermetic + 8 vitest cases; 20 live checks
+> (`tests/live/live_ws28ml.py`, shared with WS-28l).
 
 Two questions with one surface, because both are "what is wrong with the record":
 

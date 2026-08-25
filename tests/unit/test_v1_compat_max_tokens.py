@@ -21,6 +21,7 @@ import acb_common
 import litellm
 from acb_llm import client as llm_client
 from acb_llm import prompt_cache as _pc
+from acb_llm.model_limits import MODEL_CAPABILITIES
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from gateway.routes import v1_compat
@@ -125,18 +126,25 @@ def test_clamped_down_to_a_curated_models_real_cap() -> None:
     assert v1_compat._clamp_max_tokens(32_000, "openai/gpt-4o") == 16_384
 
 
-def test_a_stale_litellm_cap_never_clamps() -> None:
+def test_an_untrusted_litellm_cap_never_clamps() -> None:
     """The whole bug, in one assertion.
 
-    litellm claims deepseek-v4-pro caps at 8192 output tokens; the live model
-    emits 10940. Clamping to a registry number we don't vouch for would
-    re-create the exact mid-JSON truncation this default was raised to fix.
-    """
-    from litellm import model_cost
+    litellm shipped 8192 output tokens for deepseek-v4-pro while the live model
+    emitted 10940. Clamping to a registry number we don't vouch for would
+    re-create the exact mid-JSON truncation this default was raised to fix, so
+    the clamp consults the curated cap and never litellm's.
 
-    assert model_cost["deepseek/deepseek-v4-pro"]["max_output_tokens"] == 8192
+    ⚠️ The literal ``assert model_cost[...] == 8192`` that used to open this test
+    took the deploy down on 2026-08-25, when litellm corrected the entry to
+    393216. The clamp's BEHAVIOUR was never affected — 32000 sits under both the
+    old and the new number — so the assertion only ever coupled this suite to a
+    third party's release cadence. Pin the rule, not the vendor's current row.
+    """
+    curated = MODEL_CAPABILITIES["deepseek/deepseek-v4-pro"]["max_output"]
+    assert curated > 10_940, "curated cap must clear what the model provably emits"
+
     got = v1_compat._clamp_max_tokens(32_000, "deepseek/deepseek-v4-pro")
-    assert got == 32_000, "must not clamp to litellm's stale 8192"
+    assert got == 32_000, "a request under the curated cap must pass through intact"
 
 
 def test_unvetted_model_keeps_the_generous_ceiling() -> None:

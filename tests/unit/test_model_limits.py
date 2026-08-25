@@ -54,20 +54,27 @@ def test_curated_fills_gaps_litellm_does_not_know() -> None:
 # max_output: resolved by TRUST ORDER (under-claiming truncates tool calls)
 # ---------------------------------------------------------------------------
 
-def test_curated_max_output_beats_stale_litellm() -> None:
+def test_curated_max_output_wins_whatever_litellm_says() -> None:
     """The bug this whole workstream came from.
 
-    litellm claims deepseek-v4-pro maxes at 8192 output tokens. The live model
-    emits 10940 in one completion, so 8192 is provably wrong — believing it
-    truncated a tool call's JSON arguments mid-string and the agent produced no
-    text at all. A number we maintain outranks a number litellm hasn't updated.
-    """
-    from litellm import model_cost
+    litellm shipped 8192 max output tokens for deepseek-v4-pro while the live
+    model emitted 10940 in one completion — believing it truncated a tool call's
+    JSON arguments mid-string and the agent produced no text at all. A number we
+    maintain outranks litellm's, which is what this pins.
 
-    stale = model_cost["deepseek/deepseek-v4-pro"]["max_output_tokens"]
-    assert stale == 8192, "litellm changed; re-check whether curated still wins"
+    ⚠️ Deliberately asserts NOTHING about litellm's own current value. The
+    previous version opened with ``assert stale == 8192`` as a canary, and on
+    2026-08-25 it took the deploy down: litellm had corrected the entry to
+    393216 (= 384 * 1024 — the same 384K our curated table already carried, so
+    they now AGREE). A red build caused by a dependency's data changing is the
+    "sixth stale table" this module's own docstring exists to prevent, and the
+    trust order makes curated authoritative regardless of what litellm publishes
+    — so there is nothing for a canary here to protect.
+    """
+    curated = MODEL_CAPABILITIES["deepseek/deepseek-v4-pro"]["max_output"]
 
     limits = get_limits("deepseek/deepseek-v4-pro")
+    assert limits.max_output == curated, "curated table is the source, not litellm"
     assert limits.max_output > 10_940, "must exceed what the model provably emits"
     assert limits.max_output_source == "curated"
 

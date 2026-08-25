@@ -66,6 +66,67 @@ this file grows a graveyard and the graveyard is what goes stale.
 
 # OPEN
 
+### H-11 · 🔴 The CommandCenter VPS is running METORITE — take the box back · [OWNER]
+- **Check:** `curl -s https://api.commandcenter.fracktal.in/version` → a `sha`
+  that `git cat-file -e <sha>` cannot resolve in this repo means still pending.
+  Cross-check with
+  `gh api repos/Hathi-Labs/Metorite/commits/<sha> --jq .commit.message` — a hit
+  there names the Metorite commit the CommandCenter hostname is serving.
+  Second signal, no API needed:
+  `curl -s https://commandcenter.fracktal.in/signin | grep -o '<title>.*</title>'`
+  → `Metorite Control Plane` means still pending; `Command Center` means closed.
+- **Why:** 🔴 **CommandCenter is not down — it has been replaced in place.**
+  Measured 2026-08-26: `commandcenter.fracktal.in` and
+  `api.commandcenter.fracktal.in` both resolve to **187.127.179.143**
+  (Hostinger `srv1747539`, created 2026-06-10 — the original CommandCenter box),
+  and that box serves Metorite commit `0b6a0c6f` (`Hathi-Labs/Metorite` PR #103,
+  merged 2026-08-25T16:49Z) under the title *Metorite Control Plane*. Metorite
+  ALSO has its own correct box — `srv1914284` / **187.127.172.200**, created
+  2026-08-19, serving `api.metorite.com` + `app.metorite.com` healthily. So the
+  old box was never needed by Metorite and should be handed back.
+  The owner's symptom — "none of the apps are there, I can't reach my email" —
+  is not a grant, feature-catalog or RLS failure. It is a **different product**
+  answering on the CommandCenter hostname, and one actively excising the
+  connector apps (its newest merged work is *"WS-39 S3a-client slice 4: the
+  client-side connector excision"*).
+  ⚠️ **The data is on that box and both products share it.** Both repos declare
+  the identical compose project `acb`, container `acb-postgres`, database `acb`
+  and the same named volumes, so Metorite has been running against
+  CommandCenter's own Postgres. Metorite's ladder is identical through 176 and
+  adds **177–188**, which the deploy's `apply_migrations.sh` will have applied to
+  it. All twelve were scanned: **zero** `DROP TABLE` / `DROP COLUMN` /
+  `TRUNCATE` / `DELETE FROM` — every one is R6 expand-phase, and the two that
+  could have hurt are explicitly dark (184 RBAC identity re-key: *"`app_user.id`
+  stays the AUTHORITATIVE key; nothing reads `user_identity_id` yet"*; 185 only
+  `CREATE OR REPLACE`s a function). So the loss is expected to be **zero** — but
+  that is inferred from the migration text, **not yet verified against the box**.
+  ⚠️ **R1 collision now spans two repos on one database.** CommandCenter's next
+  migration will be numbered 177, and 177–188 are already taken in that DB by
+  Metorite. `schema_migrations` keys on filename, so both would apply and the
+  schema would diverge silently. This needs a decision before the next
+  CommandCenter migration is written, not at merge time.
+- **What to do (all of it OWNER — §6 covers VPS reach, deploy, cutover):**
+  1. Find how the box came to track Metorite — on 187.127.179.143 check
+     `git -C /opt/acb/app remote -v` and the pull unit
+     (`systemctl cat 'acb-*pull*'`). Expect the checkout and/or the timer to
+     point at `Hathi-Labs/Metorite` after the rename. Also check whether the
+     Metorite repo's `HOSTINGER_HOST` secret still names `.143` rather than
+     `.200` — if it does, every Metorite deploy re-takes this box.
+  2. Stop the bleed FIRST (`systemctl stop`/`disable` the pull timer) before
+     repointing anything, or the next 5-minute tick undoes the repair.
+  3. Snapshot/back up the `acb` Postgres volume before touching the ladder.
+     **We cannot roll back (R6)** and `BACKUP_REMOTE` is still unset, so today's
+     backups live only on this box.
+  4. Record `SELECT filename FROM schema_migrations ORDER BY filename;` — that
+     is the only authority on which of 177–188 actually landed, and it is the
+     input to the R1 decision above.
+  5. Repoint the checkout to `FracktalWorks/CommandCenter`, re-run the deploy,
+     and confirm by `/version` resolving in THIS repo — never by a green job
+     (CLAUDE.md §3.8).
+- **Authority:** `work_plan.md` §6 (VPS/deploy reach, cutover) · CLAUDE.md §3.8
+  (verify by evidence) · R1 · R6 · `project-docs/metorite_migration.md`
+- **Added:** 2026-08-26 · session that diagnosed the owner-reported outage
+
 ### H-1 · Deploy: `main` is many migrations ahead of every box · [OWNER]
 - **Check:** compare `ls infra/postgres/[0-9]*.sql | sort -V | tail -1` against
   `SELECT max(filename) FROM schema_migrations;` on a box. A gap means still

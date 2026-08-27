@@ -241,22 +241,42 @@ jobs:
             # as a fallback for the gateway signal only — it must never mask a
             # dead Caddy (that exact blind spot let a full outage ship green).
             # The 4GB box can be slow right after a rebuild — allow a warm-up.
-            echo "── Verifying public workbench + gateway health ──"
+            #
+            # ── …AND it must be OUR commit answering ──────────────────────
+            # Liveness is not identity. In Aug 2026 a forked product was
+            # deployed onto this box and served `/health` 200 with a 200
+            # workbench for two days — this function would have called that a
+            # successful deploy on every run, because "something answers" was
+            # the entire test. `/health` now carries the commit it is serving,
+            # so the question becomes "did MY commit ship?". A foreign stack,
+            # a gateway that never restarted, and a mid-apply SSH timeout all
+            # fail that question; all three passed the old one.
+            echo "── Verifying public workbench + gateway identity ──"
+            echo "   expecting sha=${GITHUB_SHA}"
             for i in $(seq 1 24); do
-              gw_ok=0
-              if curl -fsS --max-time 10 "$GATEWAY_URL/health" >/dev/null 2>&1; then
-                gw_ok=1
-              elif curl -fsS --max-time 10 "http://$SSH_HOST:8080/health" >/dev/null 2>&1; then
-                gw_ok=1
+              if ! body=$(curl -fsS --max-time 10 "$GATEWAY_URL/health" 2>/dev/null); then
+                body=$(curl -fsS --max-time 10 "http://$SSH_HOST:8080/health" 2>/dev/null || echo "")
               fi
+              gw_ok=0
+              [ -n "$body" ] && gw_ok=1
+              served_sha=$(printf '%s' "$body" \
+                | grep -o '"sha"[[:space:]]*:[[:space:]]*"[0-9a-f]\{40\}"' \
+                | grep -o '[0-9a-f]\{40\}' | head -1 || true)
               wb_code=$(curl -s -o /dev/null -m 10 -w '%{http_code}' "$WORKBENCH_URL/" 2>/dev/null || echo 000)
-              if [ "$gw_ok" = 1 ] && printf '%s' "$wb_code" | grep -qE '^[23]'; then
-                echo "  gateway healthy; workbench / -> HTTP $wb_code (poll $i)"
+              if [ "$gw_ok" = 1 ] && [ "$served_sha" = "$GITHUB_SHA" ] \
+                 && printf '%s' "$wb_code" | grep -qE '^[23]'; then
+                echo "  ✅ gateway serving ${served_sha}; workbench / -> HTTP $wb_code (poll $i)"
                 return 0
               fi
-              echo "  not healthy yet (gateway_ok=$gw_ok workbench=$wb_code, poll $i/24) — 10s…"
+              echo "  not there yet (gateway_ok=$gw_ok sha=${served_sha:-none} workbench=$wb_code, poll $i/24) — 10s…"
               sleep 10
             done
+            echo "  ❌ never converged on ${GITHUB_SHA}. Read the last sha= above:"
+            echo "     none    → the gateway did not restart, OR something that"
+            echo "               is not CommandCenter is answering this hostname."
+            echo "     <other> → the box serves a different commit. Check that"
+            echo "               HOSTINGER_HOST is the box you meant, and that a"
+            echo "               pull timer is not fighting this deploy."
             return 1
           }
 

@@ -176,15 +176,37 @@ this file grows a graveyard and the graveyard is what goes stale.
 - **Authority:** `work_plan.md` §2 WS-27 row
 - **Added:** 2026-08-14 · session that built WS-27bj
 
-### H-3 · Rotate the production SSH credentials pasted into a session · [OWNER]
+### H-3 · 🔴 Rotate the production root SSH password — disclosed TWICE · [OWNER]
 - **Check:** can the old password still authenticate? If nobody has rotated it,
-  it can. Treat as pending until rotation is confirmed.
-- **Why:** 🔴 Root credentials for the production VPS were pasted into an agent
-  transcript. They were **refused and never used** (`work_plan.md` §6), but a
-  secret in a transcript is a disclosed secret. Rotate, and replace root password
-  auth with a key while you are there.
+  it can. Treat as pending until rotation is confirmed. A second Check that
+  needs no secret: `ssh -o PreferredAuthentications=password -o PubkeyAuthentication=no
+  root@187.127.179.143` → a password PROMPT (rather than `Permission denied
+  (publickey)`) means password auth is still enabled and this is still open.
+- **Why:** 🔴 Root credentials for the production VPS have now been pasted into
+  an agent transcript **twice** — 2026-08-14 and again **2026-08-28**, the
+  second time for `root@187.127.179.143` while trying to unblock the H-11
+  recovery. Both times they were **refused and never used**
+  (`work_plan.md` §6). That refusal protects the box; it does **not** un-disclose
+  the secret. A password in a transcript is a leaked password, and this one now
+  sits in two.
+  ⚠️ **The recurrence is the finding.** It happened the second time for the
+  same reason as the first: an owner-gated repair felt urgent, and handing over
+  the password looked like the fastest way through. It will keep happening
+  while root-password auth remains possible, so the durable fix is not "be more
+  careful" — it is **key-only auth**, which makes the paste useless and
+  therefore pointless.
+- **What to do:**
+  1. `passwd root` on the box — new password, stored in a password manager,
+     never typed into a chat.
+  2. Set `PermitRootLogin prohibit-password` and `PasswordAuthentication no` in
+     `/etc/ssh/sshd_config`, then `systemctl restart sshd`. ⚠️ Confirm the
+     deploy key in `HOSTINGER_SSH_KEY` still authenticates **in a second
+     terminal before closing the first**, or this locks everyone out.
+  3. Rotating the password does **not** rotate `HOSTINGER_SSH_KEY`; that key is
+     unchanged since 2026-06-10 and is a separate decision.
 - **Authority:** `work_plan.md` §6 · `specs/engineering_practice.md` (security)
 - **Added:** 2026-08-14 · carried from the session that refused them
+  · second disclosure recorded 2026-08-28
 
 ### H-4 · WS-27bj: build the admin surface for org-wide vocabularies · [AGENT]
 - **Check:** `rg -n "refuse_org_wide_write" apps/services/gateway/gateway/routes/projects/`

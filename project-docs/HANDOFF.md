@@ -66,109 +66,53 @@ this file grows a graveyard and the graveyard is what goes stale.
 
 # OPEN
 
-### H-11 · 🔴 The CommandCenter VPS is serving METORITE — take the box back · [OWNER]
-- **Check:** `curl -s https://commandcenter.fracktal.in/signin | grep -o '<title>[^<]*</title>'`
-  → `Metorite Control Plane` means still pending; `CommandCenter Control Plane`
-  means closed. Once the box runs a build carrying the identity endpoint, the
-  stronger form is `curl -s https://api.commandcenter.fracktal.in/health` → its
-  `sha` must satisfy `git cat-file -e <sha>` **in this repo**.
-  ⚠️ **The original Check named `/version` and could never have closed.**
-  CommandCenter has no `/version` route at all — `tasks_lens`, a field in the
-  response the box returns, appears nowhere in this repository. `/version` is a
-  *Metorite* endpoint, so "the sha does not resolve" was going to stay true
-  after a perfect recovery, when the route would simply 404.
-- **Why:** 🔴 **CommandCenter is not down — it was replaced in place.**
-  `commandcenter.fracktal.in` and `api.commandcenter.fracktal.in` both resolve
-  to **187.127.179.143** (Hostinger `srv1747539`, the original CommandCenter
-  box), and that box serves Metorite under the title *Metorite Control Plane*.
-  The owner's symptom — "none of the apps are there, I can't reach my email" —
-  is not a grant, feature-catalog or RLS failure. It is a **different product**
-  answering on the CommandCenter hostname.
-  **Re-measured 2026-08-27 — three things changed since this entry was written:**
-  1. ✅ **The bleed has stopped.** Metorite now deploys to its own box,
-     **187.127.172.200** (`srv1914284`): `api.metorite.com` serves today's
-     Metorite HEAD, and all eight of Metorite's deploys on 2026-08-27 landed
-     there. `.143` has been **frozen since 2026-08-26T08:05Z** on Metorite
-     commit `d9fe3932` (their PR #112). Repointing it is no longer a race
-     against a 5-minute timer — but confirm the pull unit on the box before
-     relying on that.
-  2. 🔴 **A new risk that did not exist when this was written: deploying
-     CommandCenter right now could take out Metorite's *live* box.**
-     CommandCenter's `HOSTINGER_HOST` secret was **updated 2026-08-25T14:22Z**
-     — after two CommandCenter deploys failed/cancelled that afternoon, and
-     after Metorite's own `HOSTINGER_*` secrets were created earlier the same
-     day. Secret *values* are not readable, so **which box CommandCenter now
-     deploys to is unknown**. If it was repointed at `.200`, re-running the
-     CommandCenter deploy clobbers Metorite's production box — the same
-     accident, in the other direction. **Read that value before any deploy.**
-  3. ⚠️ **The R1 collision has grown.** CommandCenter's ladder ends at **176**;
-     Metorite's now ends at **192** (was 188). Metorite ran against
-     CommandCenter's own Postgres — both repos declare the identical compose
-     project `acb`, container `acb-postgres` and database `acb` — so `.143`'s
-     `schema_migrations` plausibly records **177–192**. CommandCenter's next
-     migration would be 177, which is taken. Decide this before the next
-     CommandCenter migration is written, not at merge time.
-  ⚠️ **On data loss — expected zero, one new file worth naming.** Metorite's
-  `190_gtd_retirement_drop.sql` (merged 2026-08-25T19:14Z, i.e. *inside* the
-  window when `.143` was deploying Metorite) does `DROP TABLE gtd_items` and
-  `gtd_waiting` — the tasks tables. It is **triple-guarded and fails safe**:
-  it returns early if the arming table is absent, returns early if
-  `gtd_retirement_arm` is empty (*"NOT ARMED — the drop is a deliberate act,
-  not a consequence of deploying"*), and RAISES rather than dropping if armed
-  with unmigrated rows. A deploy alone cannot fire it. So the tasks data is
-  expected intact — but that is read from the migration text, **not verified
-  against the box**, which is step 4 below.
-- **What to do (all of it OWNER — §6 covers VPS reach, deploy, cutover):**
-  1. **First, and before anything else: read `HOSTINGER_HOST` in BOTH repos.**
-     CommandCenter's must be `187.127.179.143` and Metorite's must be
-     `187.127.172.200`. Fix whichever is wrong. Deploying while
-     CommandCenter's points at `.200` is the one action here that would cause
-     a *second* outage rather than fixing the first.
-  2. On `.143`, check how it came to track Metorite — `git -C /opt/acb/app
-     remote -v` and the pull unit (`systemctl cat 'acb-*pull*'`). Metorite's
-     `d9fe3932` is literally *"the pull timer — the half that was never
-     shipped"*, so assume a timer exists and points at `Hathi-Labs/Metorite`.
-     Stop/disable it BEFORE repointing, or a tick undoes the repair.
-  3. Snapshot the `acb` Postgres volume before touching the ladder. **We cannot
-     roll back (R6)** and `BACKUP_REMOTE` is still unset, so today's backups
-     live only on that box.
-  4. Record the evidence, in this order — it is the input to the R1 decision
-     and the answer on data loss:
-     `SELECT filename FROM schema_migrations ORDER BY filename;`
-     `SELECT to_regclass('public.gtd_items');`  (non-null = tasks tables intact)
-     `SELECT count(*) FROM gtd_retirement_arm;` (0 = the drop was never armed)
-  5. Repoint the checkout to `FracktalWorks/CommandCenter` and re-run the
-     deploy. **Confirm by evidence, never by a green job** (CLAUDE.md §3.8):
-     the workbench title reads `CommandCenter Control Plane`, and
-     `/health`'s `sha` resolves in this repo.
-- **Authority:** `work_plan.md` §6 (VPS/deploy reach, cutover) · CLAUDE.md §3.8
-  (verify by evidence) · R1 · R6 · `project-docs/metorite_migration.md`
-- **Added:** 2026-08-26 · session that diagnosed the owner-reported outage
-  · re-measured and Check repaired 2026-08-27
+### H-12 · CommandCenter's next migration must be numbered 193+, never 177 · [AGENT]
+- **Check:** `ls infra/postgres/[0-9]*.sql | sort -V | tail -1` → if the next
+  number anyone would take is <= 192, this is still live. On the box:
+  `SELECT count(*) FROM schema_migrations WHERE filename ~ '^[0-9]+' AND
+  (substring(filename from '^[0-9]+'))::int BETWEEN 177 AND 192;` → 16 means the
+  range is occupied.
+- **Why:** While Metorite was deployed on this box (2026-08-25 → 08-28) its
+  deploys applied **177-192 into CommandCenter's own `acb` database**. Our ladder
+  ends at 176, so the obvious next number is 177 — which is taken, by a file with
+  a different name and different contents. `schema_migrations` keys on filename,
+  so ours WOULD apply; the two ladders would then diverge silently and forever.
+  Verified 2026-08-28: all 16 are present.
+- **Authority:** R1 · CLAUDE.md §3.7 · closed-out H-11
+- **Added:** 2026-08-28 · the session that took the box back
 
-### H-1 · Deploy: `main` is many migrations ahead of every box · [OWNER]
-- **Check:** compare `ls infra/postgres/[0-9]*.sql | sort -V | tail -1` against
-  `SELECT max(filename) FROM schema_migrations;` on a box. A gap means still
-  pending. ⚠️ From a clean checkout with no box access an agent can only get the
-  first half — report the gap as unverified rather than closing this.
-  ⚠️ The `[0-9]*` glob and `sort -V` are both load-bearing: a bare `*.sql | tail
-  -1` answers `schema.generated.sql`, which sorts after every numbered migration
-  and is not one. That is what the first draft of this Check did.
-- **Why:** #437 merged 2026-08-13 and was never deployed; everything since has
-  stacked behind it, and the pile grows every day. **We cannot roll back** (R6),
-  so the longer the gap the more lands at once. Deploy applies migrations before
-  restarting services, so the ORDER is safe — the risk is volume.
-  ⚠️ Deliberately does not name a migration range: a range here would be state,
-  which this file must never restate. It was written as "171–175" for one hour
-  and 176 landed inside it.
-- **Authority:** `work_plan.md` §2 WS-27 row · §6 (deploy is owner-gated)
-- **Added:** 2026-08-14
+### H-13 · A changed migration RE-RUNS, and one of ours contains a DELETE · [AGENT]
+- **Check:** `grep -n "DELETE FROM" infra/postgres/56_purge_synced_done_backlog.sql`
+  → present, plus `apply_migrations.sh` still re-applying on checksum mismatch
+  (`grep -n "CHANGED since it was applied" scripts/apply_migrations.sh`), means
+  still live.
+- **Why:** 🔴 **Measured, not theorised — it fired on 2026-08-28 and deleted
+  rows.** `apply_migrations.sh` re-applies any migration whose sha256 no longer
+  matches the ledger. Metorite's rebrand changed *comment text* in several of our
+  migrations, so on the restore deploy eleven files re-ran — including
+  `56_purge_synced_done_backlog.sql`, which is
+  `DELETE FROM gtd_items WHERE source <> 'LOCAL' AND disposition = 'DONE'`.
+  Two completed synced tasks were purged (818 → 816). Recoverable by a full
+  re-sync, per that migration's own header — this time.
+  ⚠️ **The general hazard:** re-apply-on-checksum-change assumes every migration
+  is idempotent. A migration containing an unguarded `DELETE`/`UPDATE` is not,
+  and a one-character comment edit is enough to fire it. Either migrations must
+  be guarded (`IF NOT EXISTS`, arming rows — cf. Metorite's 190, which refused to
+  drop because nobody armed it), or a checksum drift must REFUSE rather than
+  re-apply. That is a decision, not a patch.
+- **Authority:** R6 (cannot roll back) · R7 (name the fence) · `scripts/apply_migrations.sh`
+- **Added:** 2026-08-28 · the session that took the box back
 
 ### H-2 · Count archived projects on prod BEFORE migration 171 applies · [OWNER]
 - **Check:** `SELECT count(*) FROM pm_projects WHERE status = 'archived';` on
   prod. If 171 has already applied, this number is no longer recoverable this
   way and the query becomes `WHERE archived_root_id = id` — which answers a
   *different* question. Unanswered → still pending.
+- **STATUS 2026-08-28: the window has CLOSED and the number is lost.** 171 is
+  in the ledger on the box, so the pre-migration count is no longer
+  recoverable. Per this entry's own instruction, record that it was lost
+  rather than substituting the other query's answer. Kept only so nobody
+  re-derives a different number and believes it.
 - **Why:** ⚠️ **Time-sensitive and ordered against H-1.** 171 changes what
   "archived" means; the pre-migration count is the only baseline that can tell
   us whether the lifecycle sweep behaved. Not a deploy blocker — if H-1 happens
@@ -225,7 +169,9 @@ this file grows a graveyard and the graveyard is what goes stale.
   still dark.
 - **Why:** Default OFF and it gates **only** the affordance that *creates* an
   org-wide row, never the read union — which is already on and inert until a row
-  exists. Flipping it is a restart, not a release. Requires H-1 first.
+  exists. Flipping it is a restart, not a release. Its prerequisite (the box
+  running current `main`) was satisfied 2026-08-28 when the box was taken back
+  from Metorite — the old H-1 that this line used to name is closed.
 - **Authority:** `specs/project_management_app.md` §9.11 · `work_plan.md` §6
 - **Added:** 2026-08-14 · session that built WS-27bj
 

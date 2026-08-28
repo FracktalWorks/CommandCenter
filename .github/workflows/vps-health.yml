@@ -46,6 +46,13 @@ jobs:
       healthy: ${{ steps.probe.outputs.healthy }}
       report: ${{ steps.probe.outputs.report }}
     steps:
+      # Full history — the identity check below asks whether the commit the
+      # box is serving exists in OUR repository, which a shallow clone cannot
+      # answer (every older commit would read as foreign).
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
       - name: Probe gateway + workbench
         id: probe
         env:
@@ -79,6 +86,76 @@ jobs:
               echo "${name} OK (HTTP ${code})"
             fi
           done
+
+          # ── Identity: is it US answering, or merely SOMETHING? ───────────
+          # The loop above deliberately accepts any HTTP response ("only a
+          # total absence of response is an outage"). That is the correct rule
+          # for liveness — and it is exactly why this workflow reported green
+          # every hour for two days in Aug 2026 while a FORKED PRODUCT was
+          # deployed onto the CommandCenter box and served this hostname. The
+          # owner's apps were gone; every check we owned said healthy. Liveness
+          # and identity are two different questions and only one was asked.
+          #
+          # Two independent signals, because each covers the other's blind
+          # spot:
+          #   * the gateway's `/health` sha — strong, because a fork inherits
+          #     our string constants but cannot inherit our commit ids;
+          #     absent on any box older than the commit that added it.
+          #   * the workbench <title> — present on every build ever shipped,
+          #     but a fork that never rebrands would sail through it.
+          # Either one reading "foreign" is an outage.
+
+          IDENTITY="unverified"
+          served_sha="$(curl -s -m 25 "$GATEWAY_URL" 2>/dev/null \
+            | grep -o '"sha"[[:space:]]*:[[:space:]]*"[0-9a-f]\{40\}"' \
+            | grep -o '[0-9a-f]\{40\}' | head -1 || true)"
+          if [ -n "$served_sha" ]; then
+            if git cat-file -e "${served_sha}^{commit}" 2>/dev/null; then
+              IDENTITY="ours"
+              REPORT="${REPORT}- **identity**: OK — serving \`${served_sha}\`, a commit in this repo"$'\n'
+              echo "identity OK (${served_sha})"
+            else
+              IDENTITY="foreign"
+              HEALTHY=0
+              REPORT="${REPORT}- **identity**: 🔴 FOREIGN — \`${served_sha}\` is not a commit in this repository. Another product is deployed on this hostname."$'\n'
+              echo "::error::gateway is serving ${served_sha}, which is not a CommandCenter commit"
+            fi
+          fi
+
+          BRAND="unknown"
+          title="$(curl -s -m 25 "${WORKBENCH_URL}/signin" 2>/dev/null \
+            | grep -o '<title>[^<]*</title>' | head -1 | sed -e 's/<[^>]*>//g' || true)"
+          if [ -n "$title" ]; then
+            case "$title" in
+              *CommandCenter*)
+                BRAND="ours"
+                REPORT="${REPORT}- **brand**: OK — workbench titled \"${title}\""$'\n'
+                echo "brand OK (${title})"
+                ;;
+              *)
+                BRAND="foreign"
+                HEALTHY=0
+                REPORT="${REPORT}- **brand**: 🔴 FOREIGN — workbench titled \"${title}\", which is not CommandCenter."$'\n'
+                echo "::error::workbench is titled '${title}' — not CommandCenter"
+                ;;
+            esac
+          fi
+
+          # A box predating the identity endpoint is not itself an outage, but
+          # it must not read as a clean bill of health: until it redeploys the
+          # strong signal is unavailable and only the title defends the
+          # hostname. With neither signal, nothing here proves this is us —
+          # which is the state the Aug 2026 takeover would have presented, and
+          # it must not be silent.
+          if [ "$IDENTITY" = "unverified" ]; then
+            if [ "$BRAND" = "ours" ]; then
+              REPORT="${REPORT}- **identity**: unverified — \`/health\` carries no \`sha\`, so this box predates the identity endpoint. Brand says ours; redeploy to restore the strong check."$'\n'
+            else
+              HEALTHY=0
+              REPORT="${REPORT}- **identity**: 🔴 UNVERIFIED — \`/health\` carries no \`sha\`, and the workbench title did not identify CommandCenter either. Nothing here proves this hostname is serving us."$'\n'
+              echo "::error::nothing identifies this hostname as CommandCenter"
+            fi
+          fi
 
           echo "healthy=${HEALTHY}" >> "$GITHUB_OUTPUT"
           {
@@ -164,7 +241,7 @@ jobs:
           if [ "${HEALTHY}" = "1" ]; then
             if [ -n "$EXISTING" ]; then
               gh issue comment "$EXISTING" --repo "${{ github.repository }}" \
-                --body "Recovered — public endpoints are responding again as of $(date -u '+%Y-%m-%dT%H:%M:%SZ'). Closing."
+                --body "Recovered — CommandCenter is reachable **and** identified itself as of $(date -u '+%Y-%m-%dT%H:%M:%SZ'). Closing."
               gh issue close "$EXISTING" --repo "${{ github.repository }}"
               echo "Closed outage issue #$EXISTING"
             else
@@ -175,7 +252,9 @@ jobs:
 
           BODY_FILE="$(mktemp)"
           {
-            echo "The scheduled health check could not reach CommandCenter."
+            echo "The scheduled health check did not confirm that CommandCenter"
+            echo "is serving its hostnames. Read the per-signal lines below: an"
+            echo "UNREACHABLE line and a FOREIGN line are very different faults."
             echo
             printf '%s\n' "${REPORT}"
             echo "Checked at $(date -u '+%Y-%m-%dT%H:%M:%SZ') from a GitHub runner."
@@ -192,6 +271,23 @@ jobs:
             echo "   listener state captured every 10 minutes, including during the outage."
             echo "2. Re-run this workflow with **diagnose = true** to pull that log out over SSH."
             echo "3. Hostinger VPS metrics — if uptime keeps climbing, the box never rebooted."
+            echo
+            echo "### If a FOREIGN or UNVERIFIED identity line is above"
+            echo "The box is up and serving — it is just not serving **us**. This"
+            echo "is not an outage to restart your way out of; restarting the"
+            echo "services would only restart the other product. It happened on"
+            echo "2026-08-25, when a forked repo's deploy pointed at this box and"
+            echo "replaced CommandCenter in place for two days."
+            echo
+            echo "1. \`curl -s https://commandcenter.fracktal.in/signin | grep -o '<title>.*</title>'\`"
+            echo "   names the product actually being served."
+            echo "2. Check which box \`HOSTINGER_HOST\` points at in **both** repos"
+            echo "   before deploying anything — a deploy aimed at the wrong box"
+            echo "   is how the hostname was taken, and re-aiming it carelessly"
+            echo "   is how the OTHER product's box gets taken in revenge."
+            echo "3. On the box, \`git -C /opt/acb/app remote -v\` and the pull"
+            echo "   timer say which repository it now tracks. Stop the timer"
+            echo "   before repointing, or the next tick undoes the repair."
           } > "$BODY_FILE"
 
           if [ -n "$EXISTING" ]; then
@@ -199,7 +295,7 @@ jobs:
             echo "Commented on existing outage issue #$EXISTING"
           else
             gh issue create --repo "${{ github.repository }}" \
-              --title "VPS unreachable — $(date -u '+%Y-%m-%d %H:%M UTC')" \
+              --title "CommandCenter not confirmed serving — $(date -u '+%Y-%m-%d %H:%M UTC')" \
               --label "vps-outage" --body-file "$BODY_FILE"
           fi
           rm -f "$BODY_FILE"
@@ -207,5 +303,5 @@ jobs:
       - name: Fail the run if unhealthy
         if: ${{ needs.probe.outputs.healthy != '1' }}
         run: |
-          echo "::error::CommandCenter is unreachable — see the vps-outage issue."
+          echo "::error::CommandCenter not confirmed serving — see the vps-outage issue."
           exit 1

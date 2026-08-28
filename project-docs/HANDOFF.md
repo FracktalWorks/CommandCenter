@@ -66,29 +66,53 @@ this file grows a graveyard and the graveyard is what goes stale.
 
 # OPEN
 
-### H-1 · Deploy: `main` is many migrations ahead of every box · [OWNER]
-- **Check:** compare `ls infra/postgres/[0-9]*.sql | sort -V | tail -1` against
-  `SELECT max(filename) FROM schema_migrations;` on a box. A gap means still
-  pending. ⚠️ From a clean checkout with no box access an agent can only get the
-  first half — report the gap as unverified rather than closing this.
-  ⚠️ The `[0-9]*` glob and `sort -V` are both load-bearing: a bare `*.sql | tail
-  -1` answers `schema.generated.sql`, which sorts after every numbered migration
-  and is not one. That is what the first draft of this Check did.
-- **Why:** #437 merged 2026-08-13 and was never deployed; everything since has
-  stacked behind it, and the pile grows every day. **We cannot roll back** (R6),
-  so the longer the gap the more lands at once. Deploy applies migrations before
-  restarting services, so the ORDER is safe — the risk is volume.
-  ⚠️ Deliberately does not name a migration range: a range here would be state,
-  which this file must never restate. It was written as "171–175" for one hour
-  and 176 landed inside it.
-- **Authority:** `work_plan.md` §2 WS-27 row · §6 (deploy is owner-gated)
-- **Added:** 2026-08-14
+### H-12 · CommandCenter's next migration must be numbered 193+, never 177 · [AGENT]
+- **Check:** `ls infra/postgres/[0-9]*.sql | sort -V | tail -1` → if the next
+  number anyone would take is <= 192, this is still live. On the box:
+  `SELECT count(*) FROM schema_migrations WHERE filename ~ '^[0-9]+' AND
+  (substring(filename from '^[0-9]+'))::int BETWEEN 177 AND 192;` → 16 means the
+  range is occupied.
+- **Why:** While Metorite was deployed on this box (2026-08-25 → 08-28) its
+  deploys applied **177-192 into CommandCenter's own `acb` database**. Our ladder
+  ends at 176, so the obvious next number is 177 — which is taken, by a file with
+  a different name and different contents. `schema_migrations` keys on filename,
+  so ours WOULD apply; the two ladders would then diverge silently and forever.
+  Verified 2026-08-28: all 16 are present.
+- **Authority:** R1 · CLAUDE.md §3.7 · closed-out H-11
+- **Added:** 2026-08-28 · the session that took the box back
+
+### H-13 · A changed migration RE-RUNS, and one of ours contains a DELETE · [AGENT]
+- **Check:** `grep -n "DELETE FROM" infra/postgres/56_purge_synced_done_backlog.sql`
+  → present, plus `apply_migrations.sh` still re-applying on checksum mismatch
+  (`grep -n "CHANGED since it was applied" scripts/apply_migrations.sh`), means
+  still live.
+- **Why:** 🔴 **Measured, not theorised — it fired on 2026-08-28 and deleted
+  rows.** `apply_migrations.sh` re-applies any migration whose sha256 no longer
+  matches the ledger. Metorite's rebrand changed *comment text* in several of our
+  migrations, so on the restore deploy eleven files re-ran — including
+  `56_purge_synced_done_backlog.sql`, which is
+  `DELETE FROM gtd_items WHERE source <> 'LOCAL' AND disposition = 'DONE'`.
+  Two completed synced tasks were purged (818 → 816). Recoverable by a full
+  re-sync, per that migration's own header — this time.
+  ⚠️ **The general hazard:** re-apply-on-checksum-change assumes every migration
+  is idempotent. A migration containing an unguarded `DELETE`/`UPDATE` is not,
+  and a one-character comment edit is enough to fire it. Either migrations must
+  be guarded (`IF NOT EXISTS`, arming rows — cf. Metorite's 190, which refused to
+  drop because nobody armed it), or a checksum drift must REFUSE rather than
+  re-apply. That is a decision, not a patch.
+- **Authority:** R6 (cannot roll back) · R7 (name the fence) · `scripts/apply_migrations.sh`
+- **Added:** 2026-08-28 · the session that took the box back
 
 ### H-2 · Count archived projects on prod BEFORE migration 171 applies · [OWNER]
 - **Check:** `SELECT count(*) FROM pm_projects WHERE status = 'archived';` on
   prod. If 171 has already applied, this number is no longer recoverable this
   way and the query becomes `WHERE archived_root_id = id` — which answers a
   *different* question. Unanswered → still pending.
+- **STATUS 2026-08-28: the window has CLOSED and the number is lost.** 171 is
+  in the ledger on the box, so the pre-migration count is no longer
+  recoverable. Per this entry's own instruction, record that it was lost
+  rather than substituting the other query's answer. Kept only so nobody
+  re-derives a different number and believes it.
 - **Why:** ⚠️ **Time-sensitive and ordered against H-1.** 171 changes what
   "archived" means; the pre-migration count is the only baseline that can tell
   us whether the lifecycle sweep behaved. Not a deploy blocker — if H-1 happens
@@ -96,15 +120,37 @@ this file grows a graveyard and the graveyard is what goes stale.
 - **Authority:** `work_plan.md` §2 WS-27 row
 - **Added:** 2026-08-14 · session that built WS-27bj
 
-### H-3 · Rotate the production SSH credentials pasted into a session · [OWNER]
+### H-3 · 🔴 Rotate the production root SSH password — disclosed TWICE · [OWNER]
 - **Check:** can the old password still authenticate? If nobody has rotated it,
-  it can. Treat as pending until rotation is confirmed.
-- **Why:** 🔴 Root credentials for the production VPS were pasted into an agent
-  transcript. They were **refused and never used** (`work_plan.md` §6), but a
-  secret in a transcript is a disclosed secret. Rotate, and replace root password
-  auth with a key while you are there.
+  it can. Treat as pending until rotation is confirmed. A second Check that
+  needs no secret: `ssh -o PreferredAuthentications=password -o PubkeyAuthentication=no
+  root@187.127.179.143` → a password PROMPT (rather than `Permission denied
+  (publickey)`) means password auth is still enabled and this is still open.
+- **Why:** 🔴 Root credentials for the production VPS have now been pasted into
+  an agent transcript **twice** — 2026-08-14 and again **2026-08-28**, the
+  second time for `root@187.127.179.143` while trying to unblock the H-11
+  recovery. Both times they were **refused and never used**
+  (`work_plan.md` §6). That refusal protects the box; it does **not** un-disclose
+  the secret. A password in a transcript is a leaked password, and this one now
+  sits in two.
+  ⚠️ **The recurrence is the finding.** It happened the second time for the
+  same reason as the first: an owner-gated repair felt urgent, and handing over
+  the password looked like the fastest way through. It will keep happening
+  while root-password auth remains possible, so the durable fix is not "be more
+  careful" — it is **key-only auth**, which makes the paste useless and
+  therefore pointless.
+- **What to do:**
+  1. `passwd root` on the box — new password, stored in a password manager,
+     never typed into a chat.
+  2. Set `PermitRootLogin prohibit-password` and `PasswordAuthentication no` in
+     `/etc/ssh/sshd_config`, then `systemctl restart sshd`. ⚠️ Confirm the
+     deploy key in `HOSTINGER_SSH_KEY` still authenticates **in a second
+     terminal before closing the first**, or this locks everyone out.
+  3. Rotating the password does **not** rotate `HOSTINGER_SSH_KEY`; that key is
+     unchanged since 2026-06-10 and is a separate decision.
 - **Authority:** `work_plan.md` §6 · `specs/engineering_practice.md` (security)
 - **Added:** 2026-08-14 · carried from the session that refused them
+  · second disclosure recorded 2026-08-28
 
 ### H-4 · WS-27bj: build the admin surface for org-wide vocabularies · [AGENT]
 - **Check:** `rg -n "refuse_org_wide_write" apps/services/gateway/gateway/routes/projects/`
@@ -123,7 +169,9 @@ this file grows a graveyard and the graveyard is what goes stale.
   still dark.
 - **Why:** Default OFF and it gates **only** the affordance that *creates* an
   org-wide row, never the read union — which is already on and inert until a row
-  exists. Flipping it is a restart, not a release. Requires H-1 first.
+  exists. Flipping it is a restart, not a release. Its prerequisite (the box
+  running current `main`) was satisfied 2026-08-28 when the box was taken back
+  from Metorite — the old H-1 that this line used to name is closed.
 - **Authority:** `specs/project_management_app.md` §9.11 · `work_plan.md` §6
 - **Added:** 2026-08-14 · session that built WS-27bj
 

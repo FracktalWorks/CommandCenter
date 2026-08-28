@@ -2,8 +2,11 @@
 from __future__ import annotations
 
 import os
+import subprocess
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from functools import lru_cache
+from pathlib import Path
 
 from acb_auth import (UserContext, UserRole, get_current_user,
                       require_authenticated, require_role)
@@ -1213,6 +1216,59 @@ except Exception:  # pragma: no cover
 class Health(BaseModel):
     status: str
     env: str
+    # The commit this box is actually serving. `None` when it cannot be
+    # resolved (no git, no checkout) — absent evidence, never a fake answer.
+    sha: str | None = None
+
+
+@lru_cache(maxsize=1)
+def _deployed_sha() -> str | None:
+    """The commit this process is serving, resolved once at first probe.
+
+    **Why a liveness endpoint carries an identity.** `/health` answering 200
+    proves *something* is serving this hostname. It does not prove it is US.
+    On 2026-08-26 that gap ran for two days: a different product was deployed
+    onto the CommandCenter box, and every verifier we own went green through
+    it — the hourly `vps-health` probe (it only asks for any HTTP response),
+    and `deploy.yml`'s own `verify()` (it only asks that `/health` returns
+    200). Both would have blessed a deploy that shipped nothing onto a box
+    running someone else's code.
+
+    A SHA is the discriminator that survives that, and survives a *fork*
+    specifically: a rebranded fork inherits every string constant we could put
+    here, so a `product: "commandcenter"` field would keep saying the
+    reassuring thing after the takeover. A commit id cannot be inherited —
+    `git cat-file -e <sha>` in this repo is true only for our own history.
+    That is why the identity is a SHA and not a name.
+
+    Resolution order is explicit-then-derived: `ACB_GIT_SHA` lets the deploy
+    pin what it believes it shipped, and the git fallback covers the box,
+    which runs from a checkout. Cached because watchdogs poll this endpoint
+    and the answer cannot change without a restart.
+    """
+    pinned = os.environ.get("ACB_GIT_SHA", "").strip()
+    if pinned:
+        return pinned
+    try:
+        repo_root = Path(__file__).resolve().parents[4]
+        out = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+        sha = out.stdout.strip()
+        # 40 hex chars or nothing. A partial/garbage answer read as an
+        # identity is worse than no identity at all.
+        if out.returncode == 0 and len(sha) == 40 and all(
+            c in "0123456789abcdef" for c in sha
+        ):
+            return sha
+    except Exception:  # identity is best-effort, never fatal
+        pass
+    return None
 
 
 def _runtime_checks() -> dict[str, dict]:
@@ -1259,7 +1315,7 @@ def _runtime_checks() -> dict[str, dict]:
 
 @app.get("/health", response_model=Health, tags=["meta"])
 async def health() -> Health:
-    return Health(status="ok", env=get_settings().acb_env)
+    return Health(status="ok", env=get_settings().acb_env, sha=_deployed_sha())
 
 
 @app.get("/health/runtime", tags=["meta"])
